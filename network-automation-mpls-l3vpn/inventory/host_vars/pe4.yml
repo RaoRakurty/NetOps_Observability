@@ -1,0 +1,29 @@
+---
+hostname:        PE4
+loopback:        10.0.0.24
+isis_net:        "49.0001.0000.0000.0024.00"
+interfaces:
+  - { name: "TO-P8", port: "1/1/1", ip: "10.2.1.6/31", isis_metric: 10, mtu: 9000 }
+ce_facing_port: "1/1/2"
+vrf_attachments:
+  - vrf_name:        VRF-A
+    sap:             "1/1/2:100"
+    sap_description: "CE2-VRF-A"
+    interface_name:  "TO-CE2-VRFA"
+    ip:              "192.168.41.1/30"
+    ce_neighbor_ip:  "192.168.41.2"
+    ce_asn:          65002
+  - vrf_name:        VRF-B
+    sap:             "1/1/2:200"
+    sap_description: "CE2-VRF-B"
+    interface_name:  "TO-CE2-VRFB"
+    ip:              "192.168.42.1/30"
+    ce_neighbor_ip:  "192.168.42.2"
+    ce_asn:          65002
+  - vrf_name:        VRF-C
+    sap:             "1/1/2:300"
+    sap_description: "CE2-VRF-C"
+    interface_name:  "TO-CE2-VRFC"
+    ip:              "192.168.43.1/30"
+    ce_neighbor_ip:  "192.168.43.2"
+    ce_asn:          65002

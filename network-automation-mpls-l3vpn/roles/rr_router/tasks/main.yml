@@ -1,0 +1,14 @@
+---
+- name: "Render config for {{ inventory_hostname }}"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../templates/rr_router.j2"
+    dest: "{{ build_dir }}/{{ inventory_hostname }}.cfg"
+  delegate_to: localhost
+  become: false
+  tags: [render, rr]
+
+- name: "Push config to {{ inventory_hostname }}"
+  nokia.sros.config:
+    src: "{{ build_dir }}/{{ inventory_hostname }}.cfg"
+  when: deploy | default(false) | bool
+  tags: [deploy, rr]

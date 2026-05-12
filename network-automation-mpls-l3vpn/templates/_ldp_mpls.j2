@@ -1,0 +1,31 @@
+{# ===== MPLS + LDP for the underlay LSP fabric =========================== #}
+configure
+    router
+        mpls
+{% for intf in interfaces | default([]) %}
+            interface "{{ intf.name }}"
+                no shutdown
+            exit
+{% endfor %}
+            no shutdown
+        exit
+
+        ldp
+            tcp-session-parameters
+            exit
+            interface-parameters
+                hello-timeout {{ ldp.hello_timeout }}
+                keepalive-timeout {{ ldp.keepalive_timeout }}
+{% for intf in interfaces | default([]) %}
+                interface "{{ intf.name }}"
+                    no shutdown
+                exit
+{% endfor %}
+            exit
+{% if ldp.graceful_restart %}
+            graceful-restart
+{% endif %}
+            no shutdown
+        exit
+    exit
+exit all

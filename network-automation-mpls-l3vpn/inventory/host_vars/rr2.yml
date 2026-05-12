@@ -1,0 +1,6 @@
+---
+hostname:        RR2
+loopback:        10.0.0.32
+isis_net:        "49.0001.0000.0000.0032.00"
+interfaces:
+  - { name: "TO-P7", port: "1/1/1", ip: "10.3.1.2/31", isis_metric: 100, mtu: 9000 }

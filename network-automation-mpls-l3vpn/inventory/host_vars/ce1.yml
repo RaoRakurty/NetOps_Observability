@@ -1,0 +1,19 @@
+---
+# CE1 — multihomed to PE1 + PE2, eBGP per VRF (one neighbor per VLAN/VRF)
+hostname:        CE1
+local_asn:       65001
+loopback:        10.0.0.41
+
+# Customer-side loopbacks injected per service so we can prove e2e reach
+service_loopbacks:
+  - { vrf: VRF-A, ip: "172.16.1.1/32" }
+  - { vrf: VRF-B, ip: "172.16.2.1/32" }
+  - { vrf: VRF-C, ip: "172.16.3.1/32" }
+
+uplinks:
+  - { name: "TO-PE1-VRFA", port: "1/1/1", vlan: 100, ip: "192.168.11.2/30", peer_ip: "192.168.11.1", peer_asn: 65000, vrf: VRF-A, advertise: "172.16.1.1/32" }
+  - { name: "TO-PE1-VRFB", port: "1/1/1", vlan: 200, ip: "192.168.12.2/30", peer_ip: "192.168.12.1", peer_asn: 65000, vrf: VRF-B, advertise: "172.16.2.1/32" }
+  - { name: "TO-PE1-VRFC", port: "1/1/1", vlan: 300, ip: "192.168.13.2/30", peer_ip: "192.168.13.1", peer_asn: 65000, vrf: VRF-C, advertise: "172.16.3.1/32" }
+  - { name: "TO-PE2-VRFA", port: "1/1/2", vlan: 100, ip: "192.168.21.2/30", peer_ip: "192.168.21.1", peer_asn: 65000, vrf: VRF-A, advertise: "172.16.1.1/32" }
+  - { name: "TO-PE2-VRFB", port: "1/1/2", vlan: 200, ip: "192.168.22.2/30", peer_ip: "192.168.22.1", peer_asn: 65000, vrf: VRF-B, advertise: "172.16.2.1/32" }
+  - { name: "TO-PE2-VRFC", port: "1/1/2", vlan: 300, ip: "192.168.23.2/30", peer_ip: "192.168.23.1", peer_asn: 65000, vrf: VRF-C, advertise: "172.16.3.1/32" }

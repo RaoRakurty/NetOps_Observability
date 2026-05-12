@@ -1,0 +1,82 @@
+# =============================================================================
+# Containerlab topology — MPLS L3VPN reference fabric (Nokia SR-OS / SR Linux)
+# -----------------------------------------------------------------------------
+# Pre-requisites
+#   * containerlab >= 0.50
+#   * vrnetlab/vr-sros image built locally:
+#       https://containerlab.dev/manual/kinds/vr-sros/
+#     OR substitute kind: nokia_srlinux for a free alternative
+# Bring-up
+#   sudo containerlab deploy -t lab/topology.clab.yml
+# Tear-down
+#   sudo containerlab destroy -t lab/topology.clab.yml --cleanup
+# =============================================================================
+
+name: mpls-l3vpn
+
+mgmt:
+  network: clab-mgmt
+  ipv4-subnet: 172.20.20.0/24
+
+topology:
+  defaults:
+    kind: vr-sros
+    image: vrnetlab/vr-sros:23.10.R1
+    license: /opt/nokia-license.txt
+    type: sr-1
+
+  nodes:
+    # ---- 8 P routers ------------------------------------------------------
+    p1: { mgmt-ipv4: 172.20.20.11 }
+    p2: { mgmt-ipv4: 172.20.20.12 }
+    p3: { mgmt-ipv4: 172.20.20.13 }
+    p4: { mgmt-ipv4: 172.20.20.14 }
+    p5: { mgmt-ipv4: 172.20.20.15 }
+    p6: { mgmt-ipv4: 172.20.20.16 }
+    p7: { mgmt-ipv4: 172.20.20.17 }
+    p8: { mgmt-ipv4: 172.20.20.18 }
+
+    # ---- 4 PE routers -----------------------------------------------------
+    pe1: { mgmt-ipv4: 172.20.20.21 }
+    pe2: { mgmt-ipv4: 172.20.20.22 }
+    pe3: { mgmt-ipv4: 172.20.20.23 }
+    pe4: { mgmt-ipv4: 172.20.20.24 }
+
+    # ---- 2 Route Reflectors ----------------------------------------------
+    rr1: { mgmt-ipv4: 172.20.20.31 }
+    rr2: { mgmt-ipv4: 172.20.20.32 }
+
+    # ---- 2 CE routers ----------------------------------------------------
+    ce1: { mgmt-ipv4: 172.20.20.41 }
+    ce2: { mgmt-ipv4: 172.20.20.42 }
+
+  # ---------------------------------------------------------------------------
+  # Links — must mirror the per-host_vars interface table
+  # ---------------------------------------------------------------------------
+  links:
+    # Core mesh (top row)
+    - endpoints: ["p1:eth1", "p2:eth1"]
+    - endpoints: ["p2:eth2", "p3:eth1"]
+    - endpoints: ["p3:eth2", "p4:eth1"]
+    # Core mesh (bottom row)
+    - endpoints: ["p5:eth2", "p6:eth1"]
+    - endpoints: ["p6:eth3", "p7:eth2"]
+    - endpoints: ["p7:eth3", "p8:eth2"]
+    # Vertical core links
+    - endpoints: ["p1:eth2", "p5:eth1"]
+    - endpoints: ["p2:eth3", "p6:eth2"]
+    - endpoints: ["p3:eth3", "p7:eth1"]
+    - endpoints: ["p4:eth2", "p8:eth1"]
+    # PE attachments
+    - endpoints: ["pe1:eth1", "p1:eth3"]
+    - endpoints: ["pe2:eth1", "p5:eth3"]
+    - endpoints: ["pe3:eth1", "p4:eth3"]
+    - endpoints: ["pe4:eth1", "p8:eth3"]
+    # RR attachments
+    - endpoints: ["rr1:eth1", "p2:eth4"]
+    - endpoints: ["rr2:eth1", "p7:eth4"]
+    # CE multihoming
+    - endpoints: ["ce1:eth1", "pe1:eth2"]
+    - endpoints: ["ce1:eth2", "pe2:eth2"]
+    - endpoints: ["ce2:eth1", "pe3:eth2"]
+    - endpoints: ["ce2:eth2", "pe4:eth2"]

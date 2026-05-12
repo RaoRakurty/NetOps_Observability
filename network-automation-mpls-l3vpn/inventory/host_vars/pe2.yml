@@ -1,0 +1,29 @@
+---
+hostname:        PE2
+loopback:        10.0.0.22
+isis_net:        "49.0001.0000.0000.0022.00"
+interfaces:
+  - { name: "TO-P5", port: "1/1/1", ip: "10.2.1.2/31", isis_metric: 10, mtu: 9000 }
+ce_facing_port: "1/1/2"
+vrf_attachments:
+  - vrf_name:        VRF-A
+    sap:             "1/1/2:100"
+    sap_description: "CE1-VRF-A"
+    interface_name:  "TO-CE1-VRFA"
+    ip:              "192.168.21.1/30"
+    ce_neighbor_ip:  "192.168.21.2"
+    ce_asn:          65001
+  - vrf_name:        VRF-B
+    sap:             "1/1/2:200"
+    sap_description: "CE1-VRF-B"
+    interface_name:  "TO-CE1-VRFB"
+    ip:              "192.168.22.1/30"
+    ce_neighbor_ip:  "192.168.22.2"
+    ce_asn:          65001
+  - vrf_name:        VRF-C
+    sap:             "1/1/2:300"
+    sap_description: "CE1-VRF-C"
+    interface_name:  "TO-CE1-VRFC"
+    ip:              "192.168.23.1/30"
+    ce_neighbor_ip:  "192.168.23.2"
+    ce_asn:          65001

@@ -1,0 +1,32 @@
+{# ===== Flat ISIS L2 core (P, PE, RR all share area {{ isis.area_id }}) ===== #}
+configure
+    router
+        isis
+            area-id {{ isis.area_id }}
+            level-capability {{ isis.level }}
+            net {{ isis_net }}
+            level {{ isis.level | replace('level-','') }}
+                wide-metrics-only
+            exit
+{% if isis.authentication.enabled %}
+            authentication-key "{{ isis.authentication.key }}"
+            authentication-type {{ isis.authentication.type }}
+{% endif %}
+            traffic-engineering
+            interface "system"
+                passive
+            exit
+{% for intf in interfaces | default([]) %}
+            interface "{{ intf.name }}"
+                interface-type point-to-point
+                level {{ isis.level | replace('level-','') }}
+                    metric {{ intf.isis_metric | default(10) }}
+                    hello-interval {{ isis.hello_interval }}
+                    hello-multiplier {{ isis.hello_multiplier }}
+                exit
+            exit
+{% endfor %}
+            no shutdown
+        exit
+    exit
+exit all

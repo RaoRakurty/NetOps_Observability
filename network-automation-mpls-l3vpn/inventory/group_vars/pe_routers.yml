@@ -1,0 +1,15 @@
+---
+# =============================================================================
+# Group: pe_routers — Provider-Edge routers
+# =============================================================================
+device_role:        pe
+runs_isis:          true
+runs_ldp:           true
+runs_mpls:          true
+runs_bgp:           true
+runs_vrfs:          true
+
+# PE peers iBGP only with the route reflectors (no full mesh)
+bgp_peers:
+  - { name: "TO-RR1", ip: "10.0.0.31", role: rr_client }
+  - { name: "TO-RR2", ip: "10.0.0.32", role: rr_client }

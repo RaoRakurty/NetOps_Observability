@@ -1,0 +1,18 @@
+{# ===========================================================
+    PE-router master template — ISIS + LDP + MP-iBGP + VPRNs
+   =========================================================== #}
+{% include "_header.j2" %}
+
+{% include "_ports.j2" %}
+
+{% include "_interfaces.j2" %}
+
+{% include "_isis.j2" %}
+
+{% include "_ldp_mpls.j2" %}
+
+{% include "_bgp_pe.j2" %}
+
+{% include "_vprn.j2" %}
+
+admin save

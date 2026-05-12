@@ -1,0 +1,17 @@
+{# ===========================================================
+    Route-Reflector master template
+    ISIS + LDP for IGP/LSP + RR for VPNv4/VPNv6
+   =========================================================== #}
+{% include "_header.j2" %}
+
+{% include "_ports.j2" %}
+
+{% include "_interfaces.j2" %}
+
+{% include "_isis.j2" %}
+
+{% include "_ldp_mpls.j2" %}
+
+{% include "_bgp_rr.j2" %}
+
+admin save

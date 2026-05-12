@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# Render AND push configs to live SR-OS routers.
+# Requires: ansible-galaxy collection install nokia.sros
+#
+# Usage:
+#   ansible-playbook playbooks/deploy_configs.yml -e deploy=true
+#   ansible-playbook playbooks/deploy_configs.yml -e deploy=true --limit pe1
+# =============================================================================
+
+- name: "Deploy P-router configs"
+  hosts: p_routers
+  gather_facts: false
+  vars:
+    deploy: true
+  roles:
+    - common
+    - p_router
+
+- name: "Deploy PE-router configs"
+  hosts: pe_routers
+  gather_facts: false
+  vars:
+    deploy: true
+  roles:
+    - common
+    - pe_router
+
+- name: "Deploy RR-router configs"
+  hosts: rr_routers
+  gather_facts: false
+  vars:
+    deploy: true
+  roles:
+    - common
+    - rr_router
+
+- name: "Deploy CE-router configs"
+  hosts: ce_routers
+  gather_facts: false
+  vars:
+    deploy: true
+  roles:
+    - common
+    - ce_router

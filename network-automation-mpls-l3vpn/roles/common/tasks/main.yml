@@ -1,0 +1,10 @@
+---
+# Tasks shared by every device — runs before role-specific tasks
+- name: "Ensure build directory exists"
+  ansible.builtin.file:
+    path: "{{ build_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true

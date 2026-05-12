@@ -1,0 +1,42 @@
+---
+# =============================================================================
+# Run a battery of show commands and collect the output for review.
+# =============================================================================
+
+- name: "Verify SP fabric"
+  hosts: sp_network
+  gather_facts: false
+  tasks:
+    - name: "Collect ISIS / LDP / BGP / MPLS state"
+      nokia.sros.command:
+        commands:
+          - show router isis adjacency
+          - show router ldp session
+          - show router mpls lsp
+          - show router bgp summary
+      register: out
+
+    - name: "Save per-device verification log"
+      ansible.builtin.copy:
+        content: "{{ out.stdout | join('\n\n') }}"
+        dest: "{{ build_dir }}/{{ inventory_hostname }}.verify.log"
+      delegate_to: localhost
+      become: false
+
+- name: "Verify CE end-to-end"
+  hosts: ce_routers
+  gather_facts: false
+  tasks:
+    - name: "Show eBGP and reachability per VRF"
+      nokia.sros.command:
+        commands: "{{ ['show service service-using'] +
+                       (vrfs | map(attribute='service_id') | map('regex_replace','^(.*)$','show router \\1 bgp summary') | list) +
+                       (vrfs | map(attribute='service_id') | map('regex_replace','^(.*)$','show router \\1 route-table') | list) }}"
+      register: ce_out
+
+    - name: "Save CE verification log"
+      ansible.builtin.copy:
+        content: "{{ ce_out.stdout | join('\n\n') }}"
+        dest: "{{ build_dir }}/{{ inventory_hostname }}.verify.log"
+      delegate_to: localhost
+      become: false

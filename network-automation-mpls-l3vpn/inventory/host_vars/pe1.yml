@@ -1,0 +1,36 @@
+---
+# PE1 — left-side PE, multihomed to CE1
+hostname:        PE1
+loopback:        10.0.0.21
+isis_net:        "49.0001.0000.0000.0021.00"
+
+# Core-facing interface (runs ISIS + LDP)
+interfaces:
+  - { name: "TO-P1", port: "1/1/1", ip: "10.2.1.0/31", isis_metric: 10, mtu: 9000 }
+
+# Customer-facing physical port — sub-interfaces (one per VRF) live in vrf_attachments
+ce_facing_port: "1/1/2"
+
+# VRF attachments — bind a VPRN service to a CE-facing sub-interface
+vrf_attachments:
+  - vrf_name:        VRF-A
+    sap:             "1/1/2:100"          # dot1q VLAN 100
+    sap_description: "CE1-VRF-A"
+    interface_name:  "TO-CE1-VRFA"
+    ip:              "192.168.11.1/30"
+    ce_neighbor_ip:  "192.168.11.2"
+    ce_asn:          65001
+  - vrf_name:        VRF-B
+    sap:             "1/1/2:200"
+    sap_description: "CE1-VRF-B"
+    interface_name:  "TO-CE1-VRFB"
+    ip:              "192.168.12.1/30"
+    ce_neighbor_ip:  "192.168.12.2"
+    ce_asn:          65001
+  - vrf_name:        VRF-C
+    sap:             "1/1/2:300"
+    sap_description: "CE1-VRF-C"
+    interface_name:  "TO-CE1-VRFC"
+    ip:              "192.168.13.1/30"
+    ce_neighbor_ip:  "192.168.13.2"
+    ce_asn:          65001

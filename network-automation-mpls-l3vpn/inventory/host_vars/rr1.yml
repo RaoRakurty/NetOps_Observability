@@ -1,0 +1,7 @@
+---
+# RR1 — Route Reflector for the SP MP-iBGP fabric
+hostname:        RR1
+loopback:        10.0.0.31
+isis_net:        "49.0001.0000.0000.0031.00"
+interfaces:
+  - { name: "TO-P2", port: "1/1/1", ip: "10.3.1.0/31", isis_metric: 100, mtu: 9000 }

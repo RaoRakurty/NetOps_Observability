@@ -1,0 +1,15 @@
+{# ===========================================================
+    P-router master template — Core LSR (ISIS + LDP, no BGP)
+   =========================================================== #}
+{% include "_header.j2" %}
+
+{% include "_ports.j2" %}
+
+{% include "_interfaces.j2" %}
+
+{% include "_isis.j2" %}
+
+{% include "_ldp_mpls.j2" %}
+
+{# Save config to flash so it survives reload #}
+admin save

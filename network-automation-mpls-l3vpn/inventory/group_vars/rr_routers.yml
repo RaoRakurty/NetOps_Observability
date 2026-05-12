@@ -1,0 +1,13 @@
+---
+# =============================================================================
+# Group: rr_routers — Route Reflectors (control-plane only for VPNv4/VPNv6)
+# =============================================================================
+device_role:        rr
+runs_isis:          true
+runs_ldp:           true
+runs_mpls:          true
+runs_bgp:           true
+runs_vrfs:          false        # RRs reflect routes but do not host VRFs
+
+# RRs peer with every PE plus each other.
+# Built dynamically in the template from groups['pe_routers'] + the other RR.

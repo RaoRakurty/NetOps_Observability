@@ -1,0 +1,9 @@
+---
+hostname:        P2
+loopback:        10.0.0.2
+isis_net:        "49.0001.0000.0000.0002.00"
+interfaces:
+  - { name: "TO-P1",  port: "1/1/1", ip: "10.1.1.1/31",  isis_metric: 10, mtu: 9000 }
+  - { name: "TO-P3",  port: "1/1/2", ip: "10.1.1.2/31",  isis_metric: 10, mtu: 9000 }
+  - { name: "TO-P6",  port: "1/1/3", ip: "10.1.2.2/31",  isis_metric: 10, mtu: 9000 }
+  - { name: "TO-RR1", port: "1/1/4", ip: "10.3.1.1/31",  isis_metric: 10, mtu: 9000 }

@@ -1,0 +1,10 @@
+---
+# =============================================================================
+# Group: p_routers — pure MPLS LSRs in the core
+# =============================================================================
+device_role:        p
+runs_isis:          true
+runs_ldp:           true
+runs_mpls:          true
+runs_bgp:           false        # P routers do NOT run BGP
+runs_vrfs:          false

@@ -1,0 +1,68 @@
+---
+# =============================================================================
+# Global variables — apply to every device in the topology
+# =============================================================================
+# Change these values to re-IP, re-AS, or re-key the entire fabric. Every
+# template references them through the role/host_vars hierarchy.
+# =============================================================================
+
+# ---- Service-provider AS (the MPLS core) ------------------------------------
+sp_as:                65000
+
+# ---- ISIS core parameters ---------------------------------------------------
+isis:
+  area_id:            "49.0001"
+  level:              level-2          # flat L2-only ISIS core
+  metric_style:       wide
+  ref_bandwidth:      400000           # in Mbps, used for auto-cost
+  hello_interval:     10
+  hello_multiplier:   3
+  authentication:
+    enabled:          true
+    key:              "isis-core-key"
+    type:             message-digest
+
+# ---- LDP (label distribution) ----------------------------------------------
+ldp:
+  enabled:            true
+  hello_timeout:      15
+  keepalive_timeout:  45
+  graceful_restart:   true
+
+# ---- MP-iBGP (Route Reflector design) --------------------------------------
+bgp:
+  router_reflectors:
+    - { name: rr1, loopback: 10.0.0.31 }
+    - { name: rr2, loopback: 10.0.0.32 }
+  cluster_id:         1.1.1.1
+  address_families:
+    - vpn-ipv4
+    - vpn-ipv6
+  graceful_restart:   true
+  bfd:                true
+
+# ---- VRF / VPRN service definitions ----------------------------------------
+# Each entry creates a VPRN service on every PE that lists the VRF. RT/RD
+# values follow the ASN:nn convention so adding a new VRF is a one-line job.
+vrfs:
+  - name:             VRF-A
+    service_id:       100
+    rd:               "65000:100"
+    rt_import:        "target:65000:100"
+    rt_export:        "target:65000:100"
+    description:      "Customer-A — full mesh"
+  - name:             VRF-B
+    service_id:       200
+    rd:               "65000:200"
+    rt_import:        "target:65000:200"
+    rt_export:        "target:65000:200"
+    description:      "Customer-B — full mesh"
+  - name:             VRF-C
+    service_id:       300
+    rd:               "65000:300"
+    rt_import:        "target:65000:300"
+    rt_export:        "target:65000:300"
+    description:      "Customer-C — full mesh"
+
+# ---- Output directory for rendered configs ---------------------------------
+build_dir:            "{{ playbook_dir }}/../output"

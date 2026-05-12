@@ -1,0 +1,44 @@
+{# ===== Physical port enable + L2 mode (network for SP, hybrid for CE) ==== #}
+configure
+{% set seen_ports = [] %}
+{% for intf in interfaces | default([]) %}
+{% if intf.port not in seen_ports %}
+    port {{ intf.port }}
+        ethernet
+            mode network
+            mtu  {{ intf.mtu | default(9000) }}
+        exit
+        no shutdown
+    exit
+{% set _ = seen_ports.append(intf.port) %}
+{% endif %}
+{% endfor %}
+
+{% if device_role == 'pe' and ce_facing_port is defined %}
+    port {{ ce_facing_port }}
+        ethernet
+            mode hybrid
+            encap-type dot1q
+            mtu  9212
+        exit
+        no shutdown
+    exit
+{% endif %}
+
+{% if device_role == 'ce' %}
+{% set ce_phys = [] %}
+{% for u in uplinks | default([]) %}
+{% if u.port not in ce_phys %}
+    port {{ u.port }}
+        ethernet
+            mode access
+            encap-type dot1q
+            mtu 9212
+        exit
+        no shutdown
+    exit
+{% set _ = ce_phys.append(u.port) %}
+{% endif %}
+{% endfor %}
+{% endif %}
+exit all

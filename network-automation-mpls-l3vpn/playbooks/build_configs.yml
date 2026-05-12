@@ -1,0 +1,54 @@
+---
+# =============================================================================
+# Render every device config locally — no SSH to the routers required.
+# Output lands in ./output/<hostname>.cfg.
+#
+# Usage:
+#   ansible-playbook playbooks/build_configs.yml
+#   ansible-playbook playbooks/build_configs.yml --limit pe_routers
+# =============================================================================
+
+- name: "Render P-router configs"
+  hosts: p_routers
+  gather_facts: false
+  connection: local
+  roles:
+    - common
+    - p_router
+
+- name: "Render PE-router configs"
+  hosts: pe_routers
+  gather_facts: false
+  connection: local
+  roles:
+    - common
+    - pe_router
+
+- name: "Render RR-router configs"
+  hosts: rr_routers
+  gather_facts: false
+  connection: local
+  roles:
+    - common
+    - rr_router
+
+- name: "Render CE-router configs"
+  hosts: ce_routers
+  gather_facts: false
+  connection: local
+  roles:
+    - common
+    - ce_router
+
+- name: "Summary"
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: "Show rendered files"
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../output"
+        patterns: "*.cfg"
+      register: rendered
+    - name: "Print"
+      ansible.builtin.debug:
+        msg: "Rendered {{ rendered.matched }} config files in ./output/"

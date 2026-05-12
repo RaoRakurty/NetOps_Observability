@@ -1,0 +1,10 @@
+---
+# =============================================================================
+# Group: ce_routers — Customer-Edge routers (eBGP multi-homed)
+# =============================================================================
+device_role:        ce
+runs_isis:          false
+runs_ldp:           false
+runs_mpls:          false
+runs_bgp:           true
+runs_vrfs:          false        # CEs are in the customer's global table

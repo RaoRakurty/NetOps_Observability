@@ -1,0 +1,86 @@
+{# ===== CE-side configuration =========================================== #}
+{# Each CE uplink is a dot1q sub-interface in its own VPRN-equivalent,     #}
+{# but on the CE we use a single VPRN per VRF to keep the routing tables  #}
+{# isolated and to mirror real-world enterprise multi-VRF CE behavior.    #}
+configure
+    router
+        autonomous-system {{ local_asn }}
+        router-id {{ loopback }}
+        interface "system"
+            address {{ loopback }}/32
+        exit
+    exit
+exit all
+
+configure
+    service
+{% for vrf in vrfs %}
+{% set vrf_links = uplinks | selectattr('vrf','equalto',vrf.name) | list %}
+{% set vrf_lo    = service_loopbacks | selectattr('vrf','equalto',vrf.name) | first %}
+{% if vrf_links | length > 0 %}
+        vprn {{ vrf.service_id }} customer 1 create
+            description "{{ hostname }}-{{ vrf.name }}"
+            router-id {{ loopback }}
+            interface "lo-{{ vrf.name }}" create
+                address {{ vrf_lo.ip }}
+                loopback
+            exit
+{% for link in vrf_links %}
+            interface "{{ link.name }}" create
+                address {{ link.ip }}
+                sap {{ link.port }}:{{ link.vlan }} create
+                    description "{{ link.name }}"
+                exit
+            exit
+{% endfor %}
+            bgp
+                family ipv4
+                group "TO-PE"
+                    local-as {{ local_asn }}
+{% for link in vrf_links %}
+                    neighbor {{ link.peer_ip }}
+                        peer-as {{ link.peer_asn }}
+                        description "EBGP-{{ link.name }}"
+                        type external
+                        family ipv4
+                        export "EXPORT-{{ vrf.name }}"
+                    exit
+{% endfor %}
+                exit
+                no shutdown
+            exit
+            no shutdown
+        exit
+{% endif %}
+{% endfor %}
+    exit
+exit all
+
+{# ----- Export policies so the CE advertises its loopbacks ------------ #}
+configure
+    router
+        policy-options
+            begin
+{% for vrf in vrfs %}
+{% set vrf_lo = service_loopbacks | selectattr('vrf','equalto',vrf.name) | first %}
+{% if vrf_lo %}
+            prefix-list "PL-{{ vrf.name }}"
+                prefix {{ vrf_lo.ip }} exact
+            exit
+            policy-statement "EXPORT-{{ vrf.name }}"
+                entry 10
+                    from
+                        prefix-list "PL-{{ vrf.name }}"
+                    exit
+                    action accept
+                    exit
+                exit
+                default-action reject
+                exit
+            exit
+{% endif %}
+{% endfor %}
+            commit
+        exit
+    exit
+exit all

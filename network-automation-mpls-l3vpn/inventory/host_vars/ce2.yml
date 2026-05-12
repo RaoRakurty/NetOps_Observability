@@ -1,0 +1,15 @@
+---
+hostname:        CE2
+local_asn:       65002
+loopback:        10.0.0.42
+service_loopbacks:
+  - { vrf: VRF-A, ip: "172.17.1.1/32" }
+  - { vrf: VRF-B, ip: "172.17.2.1/32" }
+  - { vrf: VRF-C, ip: "172.17.3.1/32" }
+uplinks:
+  - { name: "TO-PE3-VRFA", port: "1/1/1", vlan: 100, ip: "192.168.31.2/30", peer_ip: "192.168.31.1", peer_asn: 65000, vrf: VRF-A, advertise: "172.17.1.1/32" }
+  - { name: "TO-PE3-VRFB", port: "1/1/1", vlan: 200, ip: "192.168.32.2/30", peer_ip: "192.168.32.1", peer_asn: 65000, vrf: VRF-B, advertise: "172.17.2.1/32" }
+  - { name: "TO-PE3-VRFC", port: "1/1/1", vlan: 300, ip: "192.168.33.2/30", peer_ip: "192.168.33.1", peer_asn: 65000, vrf: VRF-C, advertise: "172.17.3.1/32" }
+  - { name: "TO-PE4-VRFA", port: "1/1/2", vlan: 100, ip: "192.168.41.2/30", peer_ip: "192.168.41.1", peer_asn: 65000, vrf: VRF-A, advertise: "172.17.1.1/32" }
+  - { name: "TO-PE4-VRFB", port: "1/1/2", vlan: 200, ip: "192.168.42.2/30", peer_ip: "192.168.42.1", peer_asn: 65000, vrf: VRF-B, advertise: "172.17.2.1/32" }
+  - { name: "TO-PE4-VRFC", port: "1/1/2", vlan: 300, ip: "192.168.43.2/30", peer_ip: "192.168.43.1", peer_asn: 65000, vrf: VRF-C, advertise: "172.17.3.1/32" }

@@ -1,0 +1,47 @@
+{# ===== VPRN (L3VPN) services on a PE — one per VRF defined in vrfs ====== #}
+{# Loops the global vrfs[] list and only renders services for which        #}
+{# this PE has at least one vrf_attachment matching that vrf_name.         #}
+configure
+    service
+{% for vrf in vrfs %}
+{% set my_attachments = vrf_attachments | default([]) | selectattr('vrf_name','equalto',vrf.name) | list %}
+{% if my_attachments | length > 0 %}
+        vprn {{ vrf.service_id }} customer 1 create
+            description "{{ vrf.description }}"
+            route-distinguisher {{ vrf.rd }}
+            vrf-target export {{ vrf.rt_export }} import {{ vrf.rt_import }}
+            auto-bind-tunnel
+                resolution any
+            exit
+
+{% for a in my_attachments %}
+            interface "{{ a.interface_name }}" create
+                address {{ a.ip }}
+                sap {{ a.sap }} create
+                    description "{{ a.sap_description }}"
+                exit
+            exit
+{% endfor %}
+
+            bgp
+                family ipv4
+                group "CE"
+                    local-as {{ sp_as }}
+{% for a in my_attachments %}
+                    neighbor {{ a.ce_neighbor_ip }}
+                        peer-as {{ a.ce_asn }}
+                        description "EBGP-CE-{{ a.vrf_name }}"
+                        type external
+                        family ipv4
+                    exit
+{% endfor %}
+                exit
+                no shutdown
+            exit
+
+            no shutdown
+        exit
+{% endif %}
+{% endfor %}
+    exit
+exit all

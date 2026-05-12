@@ -1,0 +1,17 @@
+{# ===== Router (L3) interfaces in the global routing table ================ #}
+configure
+    router
+        interface "system"
+            address {{ loopback }}/32
+            no shutdown
+        exit
+{% for intf in interfaces | default([]) %}
+        interface "{{ intf.name }}"
+            address {{ intf.ip }}
+            port   {{ intf.port }}
+            mtu    {{ intf.mtu | default(9000) }}
+            no shutdown
+        exit
+{% endfor %}
+    exit
+exit all

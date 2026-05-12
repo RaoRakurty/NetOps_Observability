@@ -1,0 +1,31 @@
+{# ===== MP-iBGP from PE  →  Route Reflectors (VPNv4 + VPNv6) ============= #}
+configure
+    router
+        autonomous-system {{ sp_as }}
+        router-id {{ loopback }}
+        bgp
+            connect-retry 10
+            min-route-advertisement 1
+            rapid-withdrawal
+            family vpn-ipv4 vpn-ipv6
+            group "RR"
+                type internal
+                local-address {{ loopback }}
+                peer-as {{ sp_as }}
+                family vpn-ipv4 vpn-ipv6
+{% if bgp.bfd %}
+                bfd-enable
+{% endif %}
+{% if bgp.graceful_restart %}
+                graceful-restart
+{% endif %}
+{% for rr in bgp.router_reflectors %}
+                neighbor {{ rr.loopback }}
+                    description "TO-{{ rr.name | upper }}"
+                exit
+{% endfor %}
+            exit
+            no shutdown
+        exit
+    exit
+exit all

@@ -1,0 +1,45 @@
+{# ===== MP-iBGP Route Reflector — accepts every PE as a client =========== #}
+configure
+    router
+        autonomous-system {{ sp_as }}
+        router-id {{ loopback }}
+        bgp
+            cluster {{ bgp.cluster_id }}
+            connect-retry 10
+            min-route-advertisement 1
+            rapid-withdrawal
+            family vpn-ipv4 vpn-ipv6
+
+            {# ---- PE clients (built dynamically from inventory) ---- #}
+            group "PE-CLIENTS"
+                type internal
+                local-address {{ loopback }}
+                peer-as {{ sp_as }}
+                family vpn-ipv4 vpn-ipv6
+                cluster {{ bgp.cluster_id }}
+{% if bgp.bfd %}
+                bfd-enable
+{% endif %}
+{% for pe in groups['pe_routers'] | default([]) %}
+                neighbor {{ hostvars[pe].loopback }}
+                    description "RRC-{{ pe | upper }}"
+                exit
+{% endfor %}
+            exit
+
+            {# ---- RR-to-RR mesh (non-client) ---- #}
+            group "RR-MESH"
+                type internal
+                local-address {{ loopback }}
+                peer-as {{ sp_as }}
+                family vpn-ipv4 vpn-ipv6
+{% for peer_rr in bgp.router_reflectors if peer_rr.name != hostname | lower %}
+                neighbor {{ peer_rr.loopback }}
+                    description "TO-{{ peer_rr.name | upper }}"
+                exit
+{% endfor %}
+            exit
+            no shutdown
+        exit
+    exit
+exit all
