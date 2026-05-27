@@ -1,0 +1,27 @@
+groups:
+  - name: network
+    interval: 30s
+    rules:
+      - alert: DeviceUnreachable
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Device {{ $labels.device_id }} is unreachable"
+
+      - alert: HighCPU
+        expr: cpu_usage > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.device_id }}: {{ $value }}%"
+
+      - alert: HighMemory
+        expr: memory_usage > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory on {{ $labels.device_id }}: {{ $value }}%"

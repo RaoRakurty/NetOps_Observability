@@ -1,0 +1,113 @@
+# Vector — ROUTER tier.
+#
+# Consumes the netops.* topics from Redpanda and fans into the storage
+# tier. Decoupling consumers via Kafka means:
+#   * Storage outages don't drop ingestion — events buffer on Redpanda.
+#   * Replay is one Vector restart + offset reset away.
+#   * We can add new consumers (a SIEM, a data lake) without touching
+#     the aggregator.
+
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+# ----------------------------------------------------------------------------
+# SOURCES — one Kafka consumer group per signal.
+# ----------------------------------------------------------------------------
+
+sources:
+  kafka_applogs:
+    type: kafka
+    bootstrap_servers: "redpanda:9092"
+    topics: ["netops.applogs"]
+    group_id: "netops-router-applogs"
+    decoding: { codec: json }
+
+  kafka_syslog:
+    type: kafka
+    bootstrap_servers: "redpanda:9092"
+    topics: ["netops.syslog"]
+    group_id: "netops-router-syslog"
+    decoding: { codec: json }
+
+  kafka_flows:
+    type: kafka
+    bootstrap_servers: "redpanda:9092"
+    topics: ["netops.flows"]
+    group_id: "netops-router-flows"
+    decoding: { codec: json }
+
+  kafka_metrics:
+    type: kafka
+    bootstrap_servers: "redpanda:9092"
+    topics: ["netops.metrics"]
+    group_id: "netops-router-metrics"
+    decoding: { codec: json }
+
+# ----------------------------------------------------------------------------
+# TRANSFORMS — none beyond passthrough; the aggregator already normalized.
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# SINKS — write to the right storage backend per signal.
+# ----------------------------------------------------------------------------
+
+sinks:
+  # Application + container logs → OpenSearch index `netops-applogs-YYYY.MM.DD`
+  opensearch_applogs:
+    type: elasticsearch
+    inputs: [kafka_applogs]
+    endpoints: ["http://opensearch:9200"]
+    mode: bulk
+    bulk:
+      index: "netops-applogs-%Y.%m.%d"
+      action: index
+    api_version: v7
+    healthcheck: { enabled: false }
+
+  # Syslog from network devices → OpenSearch index `netops-syslog-YYYY.MM.DD`
+  opensearch_syslog:
+    type: elasticsearch
+    inputs: [kafka_syslog]
+    endpoints: ["http://opensearch:9200"]
+    mode: bulk
+    bulk:
+      index: "netops-syslog-%Y.%m.%d"
+      action: index
+    api_version: v7
+    healthcheck: { enabled: false }
+
+  # Flow records — write to BOTH OpenSearch (for ad-hoc search) and
+  # ClickHouse (for analytics). OpenSearch handles "show me flows from
+  # 10.0.0.5 in the last hour"; ClickHouse handles "top talkers by
+  # month, grouped by AS_dst".
+  opensearch_flows:
+    type: elasticsearch
+    inputs: [kafka_flows]
+    endpoints: ["http://opensearch:9200"]
+    mode: bulk
+    bulk:
+      index: "netops-flows-%Y.%m.%d"
+      action: index
+    api_version: v7
+    healthcheck: { enabled: false }
+
+  clickhouse_flows:
+    type: clickhouse
+    inputs: [kafka_flows]
+    endpoint: "http://clickhouse:8123"
+    database: netops
+    table: flows
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: false }
+
+  # SNMP / telemetry metrics → VictoriaMetrics remote-write.
+  victoria_metrics:
+    type: prometheus_remote_write
+    inputs: [kafka_metrics]
+    endpoint: "http://victoria:8428/api/v1/write"
+    healthcheck: { enabled: false }

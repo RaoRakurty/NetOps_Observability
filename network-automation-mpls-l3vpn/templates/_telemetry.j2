@@ -1,0 +1,107 @@
+{# ===== Telemetry: gRPC/gNMI + SNMP + syslog + streaming ================= #}
+{# Driven entirely from group_vars/all.yml -> telemetry.*                   #}
+{# Toggle a sub-section off with .enabled: false in YAML.                   #}
+{% if telemetry.enabled %}
+
+{# ---------- gRPC + gNMI (dial-in) ---------------------------------------- #}
+{% if telemetry.grpc.enabled %}
+configure
+    system
+        grpc
+            port {{ telemetry.grpc.port }}
+{% if telemetry.grpc.allow_unsecure %}
+            allow-unsecure-connection
+{% endif %}
+{% for svc in telemetry.grpc.services %}
+            {{ svc }}
+                no shutdown
+            exit
+{% endfor %}
+            no shutdown
+        exit
+    exit
+exit all
+{% endif %}
+
+{# ---------- Streaming telemetry (dial-out) ------------------------------- #}
+{% if telemetry.streaming.enabled %}
+configure
+    system
+        telemetry
+            destination-group "COLLECTOR" create
+                destination {{ telemetry.streaming.collector_ip }} port {{ telemetry.streaming.collector_port }} create
+                exit
+            exit
+            sensor-groups
+                sensor-group "FABRIC-METRICS" create
+{% for path in telemetry.streaming.sensor_paths %}
+                    sensor "{{ path }}" create
+                    exit
+{% endfor %}
+                exit
+            exit
+            persistent-subscriptions
+                subscription "SUB-{{ hostname }}" create
+                    sensor-group "FABRIC-METRICS"
+                    destination-group "COLLECTOR"
+                    local-source-address {{ loopback }}
+                    mode sample
+                    sample-interval {{ telemetry.streaming.sample_interval_ms }}
+                    encoding json-ietf
+                    no shutdown
+                exit
+            exit
+        exit
+    exit
+exit all
+{% endif %}
+
+{# ---------- SNMP v2c ----------------------------------------------------- #}
+{% if telemetry.snmp.enabled %}
+configure
+    system
+        snmp
+            no shutdown
+        exit
+        security
+            snmp
+                community "{{ telemetry.snmp.community_ro }}" rwa version v2c
+            exit
+        exit
+        contact "{{ telemetry.snmp.contact }}"
+        location "{{ telemetry.snmp.location }}"
+    exit
+
+    log
+{% for tgt in telemetry.snmp.trap_targets %}
+        snmp-trap-group {{ loop.index }} create
+            description "SNMP trap target {{ loop.index }}"
+            trap-target "TRAP-{{ loop.index }}" address {{ tgt.ip }} port {{ tgt.port }} snmpv2c notify-community "{{ tgt.community }}"
+        exit
+{% endfor %}
+    exit
+exit all
+{% endif %}
+
+{# ---------- Remote syslog ----------------------------------------------- #}
+{% if telemetry.syslog.enabled %}
+configure
+    log
+{% for srv in telemetry.syslog.servers %}
+        syslog {{ loop.index }} create
+            description "Remote syslog target {{ loop.index }}"
+            address {{ srv.ip }}
+            port {{ srv.port }}
+            level {{ srv.level }}
+        exit
+        log-id {{ 100 + loop.index }} create
+            from main security change
+            to syslog {{ loop.index }}
+            no shutdown
+        exit
+{% endfor %}
+    exit
+exit all
+{% endif %}
+
+{% endif %}{# telemetry.enabled #}

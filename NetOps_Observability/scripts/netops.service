@@ -1,0 +1,18 @@
+[Unit]
+Description=NetOps Observability stack
+Documentation=file:///opt/netops/NetOps_Observability/docs/DEPLOY_LINUX.md
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/opt/netops/NetOps_Observability/deployment/docker
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=600
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

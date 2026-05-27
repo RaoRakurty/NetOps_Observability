@@ -1,0 +1,39 @@
+# goflow2 configuration.
+#
+# goflow2 is CloudFlare-originated (now under netsampler) and decodes
+# NetFlow v5, NetFlow v9, IPFIX, and sFlow into a common JSON schema.
+# It writes one JSON record per flow to stdout, which Vector picks up
+# via docker_logs.
+#
+# Default listener ports (we expose all three):
+#   NetFlow v5/v9 : udp/2055
+#   IPFIX         : udp/4739
+#   sFlow         : udp/6343
+#
+# When wiring Kafka later, switch the transport to `kafka://` here and
+# point Vector at the broker instead of scraping container stdout.
+
+formatter:
+  type: json
+  fields:
+    - type
+    - time_received_ns
+    - sampler_address
+    - src_addr
+    - dst_addr
+    - src_port
+    - dst_port
+    - proto
+    - bytes
+    - packets
+    - in_if
+    - out_if
+    - src_as
+    - dst_as
+    - sampling_rate
+    - vlan_id
+
+transport:
+  type: file
+  file:
+    path: stdout

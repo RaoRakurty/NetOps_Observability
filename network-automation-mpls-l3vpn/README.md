@@ -57,7 +57,7 @@ network-automation-mpls-l3vpn/
 ├── templates/
 │   ├── _header.j2 _ports.j2 _interfaces.j2
 │   ├── _isis.j2 _ldp_mpls.j2
-│   ├── _bgp_pe.j2 _bgp_rr.j2 _vprn.j2 _ce.j2
+│   ├── _bgp_pe.j2 _bgp_rr.j2 _vprn.j2 _ce.j2 _telemetry.j2
 │   ├── p_router.j2  pe_router.j2  rr_router.j2  ce_router.j2
 ├── roles/
 │   ├── common/   p_router/   pe_router/   rr_router/   ce_router/
@@ -128,6 +128,12 @@ Append one entry to the `vrfs:` list in `inventory/group_vars/all.yml`:
 ### Re-IPing the fabric
 Every IP comes from the host_vars `interfaces[]`/`vrf_attachments[]`. There are
 no addresses hard-coded inside any template.
+
+### Tuning or disabling telemetry
+All telemetry (gRPC/gNMI, SNMPv2c, syslog, streaming subscriptions) is driven
+by the `telemetry:` block in `inventory/group_vars/all.yml`. Point the
+`streaming.collector_ip` at your Telegraf / gNMIc collector, change SNMP
+community strings, or set any `*.enabled: false` to opt out of a sub-system.
 
 ### Switching to SR-MPLS or BGP-LU
 Each protocol partial (`_isis.j2`, `_ldp_mpls.j2`, `_bgp_pe.j2`, etc.) is

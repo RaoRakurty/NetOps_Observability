@@ -1,0 +1,16 @@
+# Example device inventory — copy into ../devices.yaml and edit.
+devices:
+  core-router-01:
+    address: 10.0.0.1
+    preferred_protocol: snmp
+    credential_ref: corp-snmp-v3
+    labels:
+      site: hq
+      role: core
+  edge-switch-04:
+    address: 10.0.1.4
+    preferred_protocol: gnmi
+    credential_ref: corp-gnmi
+    labels:
+      site: hq
+      role: edge

@@ -8,7 +8,7 @@ import os, glob, sys
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # project root (parent of scripts/)
 INV  = os.path.join(ROOT, "inventory")
 TPL  = os.path.join(ROOT, "templates")
 OUT  = os.path.join(ROOT, "output")

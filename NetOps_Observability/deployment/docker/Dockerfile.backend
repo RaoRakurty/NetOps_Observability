@@ -1,0 +1,16 @@
+# Multi-stage build for the Go API.
+#
+# Stage 1 compiles a fully static binary so the runtime image can be
+# distroless / scratch. Stage 2 ships only the binary, the CA bundle,
+# and a non-root user.
+
+FROM golang:1.22-alpine AS build
+WORKDIR /src
+COPY src/backend/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api .
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/api /api
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/api"]

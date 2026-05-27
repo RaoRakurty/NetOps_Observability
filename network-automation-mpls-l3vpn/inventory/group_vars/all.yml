@@ -64,5 +64,51 @@ vrfs:
     rt_export:        "target:65000:300"
     description:      "Customer-C — full mesh"
 
+# ---- Telemetry --------------------------------------------------------------
+# Enables gNMI/gRPC streaming, SNMPv2c polling and remote syslog on every
+# device.  Set `telemetry.enabled: false` to disable everywhere, or override
+# any sub-key in a role's group_vars / per-host vars to opt out selectively.
+telemetry:
+  enabled:          true
+
+  # ---- gRPC + gNMI dial-in (collectors connect TO the router) -------------
+  grpc:
+    enabled:        true
+    port:           57400
+    allow_unsecure: true                 # set false in production + add TLS cert
+    services:
+      - gnmi
+      - md-cli                           # CLI-over-gRPC (handy for automation)
+
+  # ---- Dial-out streaming subscriptions (router pushes TO collector) ------
+  streaming:
+    enabled:        true
+    collector_ip:   192.0.2.10           # change to your Telegraf / gNMIc IP
+    collector_port: 57400
+    sample_interval_ms: 10000
+    sensor_paths:
+      - "/state/system"
+      - "/state/router[router-name=Base]/interface"
+      - "/state/router[router-name=Base]/bgp"
+      - "/state/router[router-name=Base]/isis"
+      - "/state/router[router-name=Base]/ldp"
+      - "/state/router[router-name=Base]/mpls"
+      - "/state/service/vprn"            # per-VRF state — useful on PEs
+
+  # ---- SNMP v2c (classic polling for NMS like LibreNMS / Zabbix) ----------
+  snmp:
+    enabled:        true
+    community_ro:   "ro-public"
+    contact:        "noc@example.com"
+    location:       "Lab"
+    trap_targets:
+      - { ip: 192.0.2.20, port: 162, community: "ro-public" }
+
+  # ---- Remote syslog ------------------------------------------------------
+  syslog:
+    enabled:        true
+    servers:
+      - { ip: 192.0.2.30, port: 514, level: info }
+
 # ---- Output directory for rendered configs ---------------------------------
 build_dir:            "{{ playbook_dir }}/../output"

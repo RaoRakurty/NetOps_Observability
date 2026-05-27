@@ -1,0 +1,150 @@
+# Vector — AGGREGATION tier.
+#
+# Receives from the three edge collectors (syslog-ng, Telegraf, goflow2)
+# plus container stdout. Parses, normalizes, enriches with device
+# metadata, buffers, and ships to Redpanda topics keyed by signal type:
+#
+#   syslog     → topic netops.syslog
+#   metrics    → topic netops.metrics
+#   netflow    → topic netops.flows
+#   applogs    → topic netops.applogs
+#
+# vector-router (separate process) consumes these topics and fans into
+# the storage tier (OpenSearch, ClickHouse, VictoriaMetrics).
+
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+# ----------------------------------------------------------------------------
+# SOURCES
+# ----------------------------------------------------------------------------
+
+sources:
+  # Container stdout/stderr — application logs (the Go API, frontend
+  # nginx, etc.). Excludes goflow2 because we route those via the
+  # docker_flows filter below.
+  docker:
+    type: docker_logs
+
+  # syslog-ng forwards parsed events here in RFC5424 frame.
+  syslog_in:
+    type: syslog
+    address: 0.0.0.0:6601
+    mode: tcp
+
+  # Telegraf socket_writer with influx data_format.
+  metrics_in:
+    type: socket
+    address: 0.0.0.0:9094
+    mode: tcp
+    decoding:
+      codec: influxdb
+
+  # Vector's own internal metrics for the operator dashboard.
+  internal_metrics:
+    type: internal_metrics
+    scrape_interval_secs: 30
+
+# ----------------------------------------------------------------------------
+# TRANSFORMS — parsing, normalization, enrichment
+# ----------------------------------------------------------------------------
+
+transforms:
+  # Split goflow2's stdout from the rest of the Docker stream.
+  docker_flows:
+    type: filter
+    inputs: [docker]
+    condition: |
+      contains(string!(.container_name ?? ""), "goflow2")
+
+  docker_applogs:
+    type: filter
+    inputs: [docker]
+    condition: |
+      !contains(string!(.container_name ?? ""), "goflow2")
+
+  # Parse app log lines as JSON when possible so structured fields are
+  # available downstream (level, component, msg).
+  applogs_normalized:
+    type: remap
+    inputs: [docker_applogs]
+    source: |
+      msg = string!(.message ?? "")
+      parsed, err = parse_json(msg)
+      if err == null && is_object(parsed) {
+        . = merge(., object!(parsed)) ?? .
+      }
+      .level     = string(.level)     ?? "info"
+      .component = string(.component) ?? "container"
+      .service   = string(.compose_service) ?? string(.container_name) ?? "unknown"
+
+  flows_normalized:
+    type: remap
+    inputs: [docker_flows]
+    source: |
+      msg = string!(.message ?? "")
+      parsed, err = parse_json(msg)
+      if err == null && is_object(parsed) {
+        . = merge(., object!(parsed)) ?? .
+      }
+      .signal = "netflow"
+
+  syslog_normalized:
+    type: remap
+    inputs: [syslog_in]
+    source: |
+      .signal   = "syslog"
+      .hostname = string(.hostname) ?? "unknown"
+      .severity = string(.severity) ?? "info"
+      .appname  = string(.appname)  ?? "unknown"
+
+  metrics_normalized:
+    type: remap
+    inputs: [metrics_in]
+    source: |
+      .signal = "metrics"
+
+# ----------------------------------------------------------------------------
+# SINKS — Redpanda topics. Each signal goes to its own topic so router
+# consumers can subscribe independently.
+# ----------------------------------------------------------------------------
+
+sinks:
+  kafka_applogs:
+    type: kafka
+    inputs: [applogs_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.applogs"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_syslog:
+    type: kafka
+    inputs: [syslog_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.syslog"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_flows:
+    type: kafka
+    inputs: [flows_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.flows"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_metrics:
+    type: kafka
+    inputs: [metrics_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.metrics"
+    encoding: { codec: json }
+    compression: snappy
+
+  # Operator metrics out to Prometheus.
+  prometheus_exporter:
+    type: prometheus_exporter
+    inputs: [internal_metrics]
+    address: 0.0.0.0:9598

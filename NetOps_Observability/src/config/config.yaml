@@ -1,0 +1,65 @@
+# NetOps Observability — main configuration.
+# Values surrounded by ${...} are interpolated from environment variables
+# (typically supplied via deployment/docker/.env that install.py generates).
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  enable_cors: true
+
+database:
+  host: ${DB_HOST}
+  port: ${DB_PORT}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  name: ${DB_NAME}
+  max_connections: 25
+
+redis:
+  host: ${REDIS_HOST}
+  port: ${REDIS_PORT}
+
+tsdb:
+  type: victoria
+  url: ${VICTORIA_URL}
+  retention: ${VICTORIA_RETENTION}
+
+discovery:
+  sources:
+    netbox:
+      enabled: ${NETBOX_TOKEN:+true}
+      url: ${NETBOX_URL}
+      token: ${NETBOX_TOKEN}
+      poll_interval: 60s
+      timeout: 10s
+      site_filter: []
+      tag_filter: [monitored]
+
+    snmp:
+      enabled: ${ENABLE_SNMP_DISCOVERY}
+      cidr_ranges:
+        - 10.0.0.0/8
+      timeout: 2s
+      retries: 1
+
+    static:
+      enabled: true
+      path: /config/devices.yaml
+
+collectors:
+  snmp:
+    enabled: ${ENABLE_SNMP_COLLECTION}
+    timeout: 5s
+  gnmi:
+    enabled: ${ENABLE_GNMI_COLLECTION}
+  netconf:
+    enabled: ${ENABLE_NETCONF_COLLECTION}
+
+alerts:
+  enabled: true
+  eval_interval: 30s
+  rules_file: /config/rules.yaml
+
+logging:
+  level: info
+  format: json

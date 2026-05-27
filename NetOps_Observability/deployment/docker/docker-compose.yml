@@ -1,0 +1,399 @@
+# NetOps Observability — full stack.
+# Compose v2 schema (no top-level `version:` key per Compose spec).
+#
+# Build context for the api, frontend, and correlation services is the
+# repository root (../../). The Dockerfiles sit next to this compose
+# file so each build sees the slice of tree it needs.
+#
+# Topology (top → bottom):
+#
+#   Edge ingestion : syslog-ng  Telegraf  goflow2
+#                       \         |         /
+#   Aggregation  :          vector-aggregator
+#                                  |
+#   Event bus    :              redpanda
+#                                  |
+#   Routing      :           vector-router
+#                          /        |        \
+#   Storage      : opensearch  clickhouse  victoriametrics
+#                       |          |             |
+#   API/UI       :         go-api  +  frontend  +  correlation (python)
+#                                  |
+#                                nginx
+
+name: netops
+
+# ---- shared anchors ---------------------------------------------------------
+
+x-restart: &restart unless-stopped
+
+services:
+
+  # =========================================================================
+  # APP-STATE STORES (used by the Go API)
+  # =========================================================================
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:?DB_USER required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
+      POSTGRES_DB: ${DB_NAME:-netops}
+    volumes:
+      - ../../data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [netops]
+    restart: *restart
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - ../../data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # CORE EVENT BUS
+  # =========================================================================
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.4
+    command:
+      - "redpanda start"
+      - "--smp 1"
+      - "--memory 512M"
+      - "--reserve-memory 0M"
+      - "--overprovisioned"
+      - "--node-id 0"
+      - "--check=false"
+      - "--kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092"
+      - "--advertise-kafka-addr internal://redpanda:9092,external://localhost:19092"
+      - "--pandaproxy-addr 0.0.0.0:8082"
+      - "--schema-registry-addr 0.0.0.0:8081"
+      - "--rpc-addr 0.0.0.0:33145"
+      - "--advertise-rpc-addr redpanda:33145"
+    ports:
+      - "${REDPANDA_KAFKA_PORT:-19092}:19092"
+      - "${REDPANDA_PROXY_PORT:-18082}:8082"
+    volumes:
+      - ../../data/redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # EDGE INGESTION TIER (per reference architecture)
+  # =========================================================================
+
+  # syslog-ng — edge ingestion for Syslog. Listens on 514 (UDP+TCP) and
+  # forwards to vector-aggregator's syslog source.
+  syslog-ng:
+    image: balabit/syslog-ng:4.7.1
+    command: ["-F", "-edv"]
+    volumes:
+      - ./syslog-ng/syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:ro
+    ports:
+      - "${SYSLOG_PORT:-5514}:514/udp"
+      - "${SYSLOG_PORT:-5514}:514/tcp"
+    depends_on: [vector-aggregator]
+    networks: [netops]
+    restart: *restart
+
+  # Telegraf — edge SNMP poller. Reads device list from config, polls
+  # SNMP, emits InfluxDB line protocol over TCP to vector-aggregator.
+  telegraf:
+    image: telegraf:1.31-alpine
+    command: ["--config", "/etc/telegraf/telegraf.conf"]
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on: [vector-aggregator]
+    networks: [netops]
+    restart: *restart
+
+  # goflow2 — edge collector for NetFlow v5/v9, IPFIX, sFlow. Decodes
+  # binary protocols into JSON, writes to stdout. vector-aggregator
+  # picks them up via docker_logs.
+  goflow2:
+    image: netsampler/goflow2:v2.2.1
+    command:
+      - "-listen"
+      - "netflow://:2055,sflow://:6343,netflow://:4739"
+      - "-format"
+      - "json"
+      - "-transport"
+      - "file"
+      - "-transport.file"
+      - "/dev/stdout"
+    ports:
+      - "${NETFLOW_PORT:-2055}:2055/udp"
+      - "${IPFIX_PORT:-4739}:4739/udp"
+      - "${SFLOW_PORT:-6343}:6343/udp"
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # VECTOR — AGGREGATION + ROUTING
+  # =========================================================================
+
+  # Aggregator: collects from syslog-ng, Telegraf, goflow2, and docker
+  # container stdout. Parses, normalizes, enriches with device metadata,
+  # buffers, ships to Redpanda topics.
+  vector-aggregator:
+    image: timberio/vector:0.40.0-alpine
+    command: ["--config", "/etc/vector/vector.yaml"]
+    volumes:
+      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      redpanda: { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
+  # Router: reads Kafka topics back out and fans into the storage tier.
+  vector-router:
+    image: timberio/vector:0.40.0-alpine
+    command: ["--config", "/etc/vector/vector.yaml"]
+    volumes:
+      - ./vector-router/vector.yaml:/etc/vector/vector.yaml:ro
+    depends_on:
+      redpanda:    { condition: service_healthy }
+      opensearch:  { condition: service_started }
+      clickhouse:  { condition: service_started }
+      victoria:    { condition: service_started }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # HOT SEARCH LAYER — OpenSearch (replaces Loki)
+  # =========================================================================
+
+  opensearch:
+    image: opensearchproject/opensearch:2.16.0
+    environment:
+      cluster.name: netops-search
+      node.name: opensearch
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      DISABLE_SECURITY_PLUGIN: "true"    # dev default; flip for prod and add certs
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile:  { soft: 65536, hard: 65536 }
+    volumes:
+      - ../../data/opensearch:/usr/share/opensearch/data
+    networks: [netops]
+    restart: *restart
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.16.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+      SERVER_BASEPATH: /search
+      SERVER_REWRITEBASEPATH: "true"
+    depends_on: [opensearch]
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # METRICS LAYER — VictoriaMetrics
+  # =========================================================================
+
+  victoria:
+    image: victoriametrics/victoria-metrics:v1.101.0
+    command:
+      - "--retentionPeriod=${VICTORIA_RETENTION:-30d}"
+      - "--storageDataPath=/victoria"
+    volumes:
+      - ../../data/victoria:/victoria
+    networks: [netops]
+    restart: *restart
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.external-url=http://localhost:8000/prometheus/"
+      - "--web.route-prefix=/"
+    volumes:
+      - ../../src/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../src/config/rules.yaml:/etc/prometheus/rules.yaml:ro
+      - ../../data/prometheus:/prometheus
+    networks: [netops]
+    restart: *restart
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+      GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
+    volumes:
+      - ../../data/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [prometheus, victoria]
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # ANALYTICS / OLAP LAYER — ClickHouse
+  # =========================================================================
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_DB: netops
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ../../data/clickhouse:/var/lib/clickhouse
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # CORRELATION + AI ENGINE — Python/FastAPI
+  # =========================================================================
+
+  correlation:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.correlation
+    environment:
+      KAFKA_BOOTSTRAP: "redpanda:9092"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      POSTGRES_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-netops}"
+      LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
+    depends_on:
+      redpanda:   { condition: service_healthy }
+      opensearch: { condition: service_started }
+      clickhouse: { condition: service_started }
+      postgres:   { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # APPLICATION TIER
+  # =========================================================================
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.backend
+    environment:
+      LISTEN_ADDR: ":8080"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-netops}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      VICTORIA_URL: "http://victoria:8428"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CORRELATION_URL: "http://correlation:8000"
+      STATIC_DEVICES_PATH: /config/devices.yaml
+      RULES_FILE: /config/rules.yaml
+      NETBOX_URL: ${NETBOX_URL:-}
+      NETBOX_TOKEN: ${NETBOX_TOKEN:-}
+      ENABLE_SNMP_DISCOVERY: ${ENABLE_SNMP_DISCOVERY:-true}
+      SNMP_CIDR_RANGES: ${SNMP_CIDR_RANGES:-10.0.0.0/8}
+      ENABLE_SNMP_COLLECTION: ${ENABLE_SNMP_COLLECTION:-true}
+      ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
+      ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # Notification channels
+      FEATURE_SLACK_NOTIFICATIONS: ${FEATURE_SLACK_NOTIFICATIONS:-false}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      FEATURE_PAGERDUTY_NOTIFICATIONS: ${FEATURE_PAGERDUTY_NOTIFICATIONS:-false}
+      PAGERDUTY_KEY: ${PAGERDUTY_KEY:-}
+      FEATURE_EMAIL_NOTIFICATIONS: ${FEATURE_EMAIL_NOTIFICATIONS:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_TO: ${SMTP_TO:-}
+      FEATURE_TWILIO_NOTIFICATIONS: ${FEATURE_TWILIO_NOTIFICATIONS:-false}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      TWILIO_TO_NUMBERS: ${TWILIO_TO_NUMBERS:-}
+      FEATURE_SNS_NOTIFICATIONS: ${FEATURE_SNS_NOTIFICATIONS:-false}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-}
+      SNS_PHONE_NUMBERS: ${SNS_PHONE_NUMBERS:-}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN:-}
+      # AI Copilot
+      FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}
+      COPILOT_API_KEY: ${COPILOT_API_KEY:-}
+      COPILOT_MODEL: ${COPILOT_MODEL:-claude-sonnet-4-5}
+      # App secrets and bootstrap admin
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      USERS_FILE: /data/users.json
+    volumes:
+      - ../../src/config:/config:ro
+      - ../../data/api:/data
+    depends_on:
+      postgres:    { condition: service_healthy }
+      redis:       { condition: service_healthy }
+      opensearch:  { condition: service_started }
+      clickhouse:  { condition: service_started }
+    networks: [netops]
+    restart: *restart
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.frontend
+    networks: [netops]
+    restart: *restart
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${BASE_PORT:-8000}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - frontend
+      - prometheus
+      - grafana
+      - opensearch-dashboards
+    networks: [netops]
+    restart: *restart
+
+networks:
+  netops:
+    driver: bridge

@@ -1,0 +1,10 @@
+# DEPRECATED — replaced by Vector.
+#
+# Promtail was the original log shipper. As of the ingestion-layer
+# refactor (Vector + goflow2 + Syslog), this file is no longer used:
+# the `promtail` service has been removed from docker-compose.yml, and
+# Vector (deployment/docker/vector/vector.yaml) now handles container-
+# log scraping, Syslog reception, and routing flow records to Loki.
+#
+# This file is kept in the tree only to document the prior layout for
+# anyone reading old git history. Safe to delete.

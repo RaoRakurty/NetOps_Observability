@@ -1,0 +1,16 @@
+# Generated at install time
+deployment/docker/.env
+data/
+
+# Build artifacts
+src/frontend/dist/
+src/frontend/node_modules/
+src/backend/api
+src/backend/*.test
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~

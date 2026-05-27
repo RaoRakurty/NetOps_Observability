@@ -1,0 +1,15 @@
+# Rendered configs
+output/*.cfg
+output/*.log
+
+# Ansible
+*.retry
+.ansible/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
