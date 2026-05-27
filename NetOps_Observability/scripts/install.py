@@ -58,12 +58,18 @@ def generate_token(bytes_: int = 32) -> str:
 
 def check_docker() -> None:
     if shutil.which("docker") is None:
+        _maybe_bootstrap_ubuntu("docker is not installed.")
+        # If the bootstrap ran, we still exit afterwards — the user must
+        # re-login for the docker group to take effect. _maybe_bootstrap
+        # never returns normally on a missing Docker.
         fail("docker is not installed. See https://docs.docker.com/get-docker/")
+
     res = subprocess.run(
         ["docker", "compose", "version"],
         capture_output=True, text=True,
     )
     if res.returncode != 0:
+        _maybe_bootstrap_ubuntu("Docker Compose v2 plugin is not available.")
         fail(
             "Docker Compose v2 plugin is not available. The legacy "
             "`docker-compose` binary is not supported by this installer. "
@@ -71,6 +77,65 @@ def check_docker() -> None:
             "https://docs.docker.com/compose/install/"
         )
     ok(f"docker compose: {res.stdout.strip()}")
+
+
+# ---- host bootstrap (Ubuntu / Debian) ---------------------------------------
+
+def _is_debian_family() -> bool:
+    """True if the host is Ubuntu, Debian, or a derivative."""
+    osr = Path("/etc/os-release")
+    if not osr.exists():
+        return False
+    try:
+        text = osr.read_text()
+    except OSError:
+        return False
+    return (
+        "ID=ubuntu" in text
+        or "ID=debian" in text
+        or "ID_LIKE=debian" in text
+        or 'ID_LIKE="debian"' in text
+    )
+
+
+def _maybe_bootstrap_ubuntu(reason: str) -> None:
+    """Offer to run scripts/bootstrap-ubuntu.sh when Docker is missing on
+    a Debian-family host. Exits the installer afterwards either way —
+    the user has to log out + back in for the docker group to take
+    effect before re-running install.py."""
+    if not _is_debian_family():
+        return  # caller will fall through to the generic fail() message
+    here = Path(__file__).resolve().parent
+    script = here / "bootstrap-ubuntu.sh"
+    if not script.exists():
+        return
+
+    print()
+    warn(reason)
+    print(f"\n  This is an Ubuntu/Debian host, and {script.name} can install everything")
+    print( "  the stack needs (Docker Engine, Compose v2, OpenSearch sysctl, docker group).")
+    print( "  You'll be prompted for your sudo password.")
+    print()
+    try:
+        ans = input("  Install Docker now? [y/N] ").strip().lower()
+    except EOFError:
+        ans = "n"
+    if ans not in ("y", "yes"):
+        fail("aborted. Install Docker manually, then re-run install.py.")
+
+    info(f"running: sudo bash {script} --yes")
+    res = subprocess.run(["sudo", "bash", str(script), "--yes"])
+    if res.returncode != 0:
+        fail(f"bootstrap-ubuntu.sh failed (exit {res.returncode}).")
+
+    print()
+    print("==============================================================")
+    print("  Docker is installed. Two more things to do:")
+    print("    1. Log out and back in   (so docker group membership applies)")
+    print("       — or run:  newgrp docker")
+    print("    2. Re-run: python3 scripts/install.py")
+    print("==============================================================")
+    sys.exit(0)
 
 # ---- scaffold validation ----------------------------------------------------
 
@@ -86,6 +151,8 @@ REQUIRED_PATHS = [
     "src/backend/password.go",
     "src/backend/users.go",
     "src/backend/go.mod",
+    # Scripts
+    "scripts/bootstrap-ubuntu.sh",
     # Frontend
     "src/frontend/package.json",
     "src/frontend/src/App.tsx",
