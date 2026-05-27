@@ -154,12 +154,20 @@ func withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
-			writeError(w, http.StatusUnauthorized, errors.New("missing bearer token"))
-			return
+		// /api/events is a WebSocket — the browser's WS API can't set the
+		// Authorization header, so we accept ?token=<jwt> there.
+		var token string
+		if r.URL.Path == "/api/events" {
+			token = r.URL.Query().Get("token")
 		}
-		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		if token == "" {
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") {
+				writeError(w, http.StatusUnauthorized, errors.New("missing bearer token"))
+				return
+			}
+			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		}
 		claims, err := verifyJWT(token, jwtSecret())
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err)

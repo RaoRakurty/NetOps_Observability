@@ -45,6 +45,12 @@ export type Rule = {
   annotations?: Record<string, string>;
 };
 
+export type MetricTile = {
+  title: string;
+  value: string;
+  trend?: string;
+};
+
 export type Health = {
   status: string;
   version: string;
@@ -207,6 +213,11 @@ export const api = {
   credentials: () => request<Record<string, boolean>>("/api/credentials"),
   refreshDiscovery: () =>
     request<{ status: string }>("/api/discovery/refresh", { method: "POST" }),
+
+  // Dashboard tile data — same shape /api/events emits via
+  // { type: "metric_update", data: <tile> }.
+  metricTiles: () =>
+    request<MetricTile[]>("/api/metrics"),
 
   // Logs (OpenSearch)
   searchLogs: (opts: LogSearchOpts) =>

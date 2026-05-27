@@ -27,7 +27,7 @@ const version = "0.1.0-scaffold"
 
 // server bundles the HTTP server with the long-running subsystems
 // (discovery aggregator, collector pool, alert engine, notifier, user
-// store for auth).
+// store for auth, and the live-events WebSocket hub).
 type server struct {
 	startedAt   time.Time
 	discovery   *DiscoveryAggregator
@@ -35,6 +35,7 @@ type server struct {
 	alerts      *alerts.Engine
 	notifier    *notify.Dispatcher
 	users       *userStore
+	hub         *Hub
 }
 
 func newServer() *server {
@@ -104,6 +105,7 @@ func newServer() *server {
 		alerts:     engine,
 		notifier:   notifier,
 		users:      users,
+		hub:        NewHub(),
 	}
 }
 
@@ -116,6 +118,8 @@ func main() {
 	srv.discovery.Start(ctx)
 	srv.collectors.Start(ctx)
 	srv.alerts.Start(ctx)
+	go srv.startBroadcaster(ctx.Done())
+	go srv.watchAlertsForBroadcast(ctx)
 
 	mux := http.NewServeMux()
 	srv.routes(mux)
@@ -170,6 +174,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
+	// Dashboard live data
+	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
+	mux.HandleFunc("/api/events", s.handleEvents)
+	// Prometheus scrape endpoint
 	mux.HandleFunc("/metrics", s.handlePromMetrics)
 }
 

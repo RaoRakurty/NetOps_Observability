@@ -150,6 +150,10 @@ REQUIRED_PATHS = [
     "src/backend/jwt.go",
     "src/backend/password.go",
     "src/backend/users.go",
+    "src/backend/events.go",
+    "src/backend/dashboard.go",
+    # Ops scripts
+    "scripts/update.sh",
     "src/backend/go.mod",
     # Scripts
     "scripts/bootstrap-ubuntu.sh",

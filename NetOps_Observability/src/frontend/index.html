@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NetOps Observability</title>
+    <!--
+      Tailwind via Play CDN — gives us the utility classes the glassy
+      Dashboard tab uses without adding a PostCSS build step. For a
+      production hardening pass, swap this for the proper Tailwind
+      install (npm install -D tailwindcss + tailwind.config.js +
+      postcss). The class set we use is small enough that the JIT
+      compile cost on first render is negligible.
+    -->
+    <script src="https://cdn.tailwindcss.com"></script>
   </head>
   <body>
     <div id="root"></div>
