@@ -37,6 +37,7 @@ type server struct {
 	alerts      *alerts.Engine
 	notifier    *notify.Dispatcher
 	users       *userStore
+	saved       *savedStore
 	hub         *Hub
 }
 
@@ -100,6 +101,11 @@ func newServer() *server {
 		log.Printf("seed admin (non-fatal): %v", err)
 	}
 
+	saved, err := newSavedStore(envOr("SAVED_FILE", "/data/saved.json"))
+	if err != nil {
+		log.Fatalf("saved store: %v", err)
+	}
+
 	return &server{
 		startedAt:  time.Now().UTC(),
 		discovery:  d,
@@ -107,6 +113,7 @@ func newServer() *server {
 		alerts:     engine,
 		notifier:   notifier,
 		users:      users,
+		saved:      saved,
 		hub:        NewHub(),
 	}
 }
@@ -174,6 +181,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/findings", s.handleFindings)
+	mux.HandleFunc("/api/saved", s.handleSaved)
+	mux.HandleFunc("/api/saved/", s.handleSavedByID)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Dashboard live data

@@ -80,6 +80,17 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal, size]);
 
+  const saveSearch = async () => {
+    const name = window.prompt("Name this saved search:", query === "*" ? "All logs" : query);
+    if (!name) return;
+    try {
+      await api.createSaved("saved_search", name, { query, signal });
+      window.alert(`Saved "${name}". Find it under Search → Saved.`);
+    } catch (e) {
+      window.alert(`Save failed: ${(e as Error).message}`);
+    }
+  };
+
   const lines = useMemo(() => {
     return hits.map((h) => {
       const src = h._source || {};
@@ -109,7 +120,7 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
             e.preventDefault();
             run();
           }}
-          style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto", gap: 8 }}
+          style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto auto", gap: 8 }}
         >
           <input
             value={query}
@@ -142,6 +153,9 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
           </select>
           <button disabled={busy} type="submit">
             {busy ? "Searching…" : "Search"}
+          </button>
+          <button type="button" onClick={saveSearch} title="Save this search">
+            ★ Save
           </button>
         </form>
         {error && (

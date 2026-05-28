@@ -21,10 +21,14 @@ Make it look "elite, transparent, modern" like Datadog/Grafana.
   ECharts views so trends read vividly; a single dark ECharts theme.
 - Tokens centralized so future theming (light mode, accent swap) is trivial.
 
-## Phase 3 — Saved-objects backend (Postgres)
-`saved_searches`, `dashboards`, `reports` tables + `/api/saved/*` CRUD. Makes
-Search → Dashboard → Report one continuous flow. Native savable Dashboards
-section. (Postgres is currently underused.)
+## ✅ Phase 3 — Saved-objects backend (done)
+`/api/saved` + `/api/saved/{id}` CRUD over a file-backed `savedStore`
+(stdlib-only, mirrors the user store; swap to Postgres later with no
+API-surface change). One object model for `saved_search` / `dashboard` /
+`report` with an opaque JSON body. Wired end-to-end for **saved searches**:
+Search has a ★ Save action and a Search → **Saved** sub-view that lists,
+re-opens (applies the query to the global omni-search), and deletes them.
+Dashboards/reports reuse the same store — their builder UIs are future work.
 
 ## ✅ Phase 4 — Native analytics (done)
 `/api/metrics/{query,query_range,names}` Go proxy to a Prometheus-compatible

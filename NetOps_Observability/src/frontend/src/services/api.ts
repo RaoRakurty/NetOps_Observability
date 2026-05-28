@@ -262,6 +262,28 @@ export const api = {
     });
     return request<PromRangeResponse>(`/api/metrics/query_range?${p.toString()}`);
   },
+
+  // Saved objects (searches / dashboards / reports) — Postgres-swappable
+  // file-backed store on the API.
+  listSaved: (type?: string) =>
+    request<SavedObject[]>(`/api/saved${type ? `?type=${encodeURIComponent(type)}` : ""}`),
+  createSaved: (type: SavedType, name: string, body: unknown) =>
+    request<SavedObject>("/api/saved", {
+      method: "POST",
+      body: JSON.stringify({ type, name, body }),
+    }),
+  deleteSaved: (id: string) => request<void>(`/api/saved/${id}`, { method: "DELETE" }),
+};
+
+export type SavedType = "saved_search" | "dashboard" | "report";
+export type SavedObject = {
+  id: string;
+  type: SavedType;
+  name: string;
+  owner: string;
+  body: any;
+  created_at: string;
+  updated_at: string;
 };
 
 export type PromNamesResponse = { status: string; data: string[] };

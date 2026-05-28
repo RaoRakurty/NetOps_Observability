@@ -11,6 +11,7 @@ import Alerts from "./tabs/Alerts";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
 import Logs from "./tabs/Logs";
+import SavedSearches from "./tabs/SavedSearches";
 import Flows from "./tabs/Flows";
 import MetricsExplorer from "./tabs/MetricsExplorer";
 import PrometheusTab from "./tabs/Prometheus";
@@ -49,6 +50,7 @@ export const NAV: NavSection[] = [
     icon: "search",
     children: [
       { id: "logs", label: "Search", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
+      { id: "saved", label: "Saved", render: () => <SavedSearches /> },
       { id: "advanced", label: "Advanced (OSD)", render: () => <SearchDashboardsTab /> },
     ],
   },
