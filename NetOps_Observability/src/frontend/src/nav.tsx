@@ -39,13 +39,13 @@ export const NAV: NavSection[] = [
   {
     id: "overview",
     label: "Overview",
-    icon: "⌂",
+    icon: "overview",
     render: () => <Dashboard />,
   },
   {
     id: "search",
     label: "Search",
-    icon: "🔍",
+    icon: "search",
     children: [
       { id: "logs", label: "Search", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       { id: "advanced", label: "Advanced (OSD)", render: () => <SearchDashboardsTab /> },
@@ -54,7 +54,7 @@ export const NAV: NavSection[] = [
   {
     id: "analytics",
     label: "Analytics",
-    icon: "📈",
+    icon: "analytics",
     children: [
       { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "metrics", label: "Metrics", render: () => <PrometheusTab /> },
@@ -63,7 +63,7 @@ export const NAV: NavSection[] = [
   {
     id: "datasets",
     label: "Datasets",
-    icon: "🗂",
+    icon: "datasets",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
       { id: "collectors", label: "Collectors", render: () => <Collectors /> },
@@ -72,7 +72,7 @@ export const NAV: NavSection[] = [
   {
     id: "dashboards",
     label: "Dashboards",
-    icon: "📊",
+    icon: "dashboards",
     children: [
       { id: "saved", label: "Saved", render: () => <SavedDashboards /> },
       { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
@@ -81,7 +81,7 @@ export const NAV: NavSection[] = [
   {
     id: "alerts",
     label: "Alerts",
-    icon: "🚨",
+    icon: "alerts",
     children: [
       { id: "triggered", label: "Triggered", render: () => <Alerts /> },
       { id: "rules", label: "Rules", render: () => <Rules /> },
@@ -91,26 +91,26 @@ export const NAV: NavSection[] = [
   {
     id: "reports",
     label: "Reports",
-    icon: "📄",
+    icon: "reports",
     render: () => <Reports />,
   },
   {
     id: "topology",
     label: "Topology",
-    icon: "🗺",
+    icon: "topology",
     render: () => <Topology />,
   },
   {
     id: "copilot",
     label: "Copilot",
-    icon: "✦",
+    icon: "copilot",
     action: "copilot",
     footer: true,
   },
   {
     id: "settings",
     label: "Settings",
-    icon: "⚙",
+    icon: "settings",
     render: () => <Settings />,
     footer: true,
   },

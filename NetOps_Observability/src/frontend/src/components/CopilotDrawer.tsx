@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import Copilot from "../tabs/Copilot";
 import { useShell } from "../context/shell";
+import Icon from "./Icon";
 
 // Copilot as a right-side slide-over (Datadog-style), available from any
 // section instead of being a separate destination tab.
@@ -23,9 +24,11 @@ export default function CopilotDrawer() {
       />
       <aside className={`drawer${copilotOpen ? " open" : ""}`} aria-hidden={!copilotOpen}>
         <div className="drawer-head">
-          <span>✦ Copilot</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <Icon name="copilot" size={16} /> Copilot
+          </span>
           <button className="drawer-close" onClick={() => setCopilotOpen(false)} title="Close (Esc)">
-            ✕
+            <Icon name="close" size={16} />
           </button>
         </div>
         <div className="drawer-body">{copilotOpen && <Copilot />}</div>

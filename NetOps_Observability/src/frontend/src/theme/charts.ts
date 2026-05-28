@@ -15,8 +15,8 @@ export const CHART_PALETTE = [
   "#fb923c", // orange
 ];
 
-const AXIS = "#8a93a0";
-const GRID = "rgba(255,255,255,0.06)";
+const AXIS = "#667085";
+const GRID = "rgba(17,24,39,0.07)";
 
 export function hexToRgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -34,14 +34,14 @@ export function paletteColor(i = 0): string {
 export const chartBase = {
   backgroundColor: "transparent",
   color: CHART_PALETTE,
-  textStyle: { color: "#c7cdd6", fontFamily: "inherit" },
+  textStyle: { color: "#475467", fontFamily: "inherit" },
   tooltip: {
-    backgroundColor: "rgba(18, 22, 28, 0.94)",
-    borderColor: "#2c333d",
+    backgroundColor: "#ffffff",
+    borderColor: "#e4e7ec",
     borderWidth: 1,
-    textStyle: { color: "#e6e8eb" },
+    textStyle: { color: "#1a2230" },
   },
-  legend: { textStyle: { color: AXIS }, inactiveColor: "#454c57" },
+  legend: { textStyle: { color: AXIS }, inactiveColor: "#c2c8d0" },
 };
 
 // Reusable axis styling for cartesian charts.

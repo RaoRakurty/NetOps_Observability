@@ -1,5 +1,6 @@
 import { NAV, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
+import Icon from "./Icon";
 
 type Props = {
   activeSection: string;
@@ -23,7 +24,7 @@ export default function Sidebar({ activeSection, collapsed, onToggle }: Props) {
         title={collapsed ? s.label : undefined}
         onClick={() => (isCopilot ? setCopilotOpen(!copilotOpen) : navigate(routeFor(s)))}
       >
-        <span className="nav-icon">{s.icon}</span>
+        <span className="nav-icon"><Icon name={s.icon} size={18} /></span>
         {!collapsed && <span className="nav-label">{s.label}</span>}
       </button>
     );
@@ -35,7 +36,9 @@ export default function Sidebar({ activeSection, collapsed, onToggle }: Props) {
       <div className="nav-footer">
         {footer.map(item)}
         <button className="nav-item nav-collapse" onClick={onToggle} title="Collapse sidebar">
-          <span className="nav-icon">{collapsed ? "»" : "«"}</span>
+          <span className="nav-icon">
+            <Icon name={collapsed ? "chevron-right" : "chevron-left"} size={18} />
+          </span>
           {!collapsed && <span className="nav-label">Collapse</span>}
         </button>
       </div>

@@ -184,7 +184,7 @@ export default function Dashboard() {
                   {
                     type: "pie",
                     radius: ["55%", "75%"],
-                    itemStyle: { borderColor: "#0c0e13", borderWidth: 2 },
+                    itemStyle: { borderColor: "#ffffff", borderWidth: 2 },
                     label: { show: false },
                     data: sevData,
                   },

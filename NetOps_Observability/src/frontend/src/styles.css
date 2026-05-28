@@ -1,27 +1,30 @@
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-  color-scheme: dark;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  color-scheme: light;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 
-  /* Layered, slightly cool dark surfaces — depth via translucency. */
-  --bg: #0c0e13;
-  --panel: rgba(255, 255, 255, 0.035);
-  --panel-solid: #161a21;
-  --panel-border: rgba(255, 255, 255, 0.09);
-  --fg: #e8eaed;
-  --muted: #8b94a3;
-  --accent: #4f9eff;
-  --good: #3ddc97;
-  --warn: #ffb454;
-  --bad: #ff6b81;
+  /* Clean light surfaces — soft grey page, crisp white panels. */
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --panel-solid: #ffffff;
+  --panel-border: #e4e7ec;
+  --fg: #1a2230;
+  --muted: #667085;
+  --accent: #4f46e5;            /* indigo */
+  --hover: rgba(17, 24, 39, 0.05);
+  --good: #059669;
+  --warn: #d97706;
+  --bad: #e11d48;
 
   /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
-  --sev-critical: #ff4d6d;  --sev-critical-bg: rgba(255, 77, 109, 0.16);
-  --sev-error:    #ff7849;  --sev-error-bg:    rgba(255, 120, 73, 0.16);
-  --sev-warning:  #ffb454;  --sev-warning-bg:  rgba(255, 180, 84, 0.16);
-  --sev-notice:   #c08cff;  --sev-notice-bg:   rgba(192, 140, 255, 0.16);
-  --sev-info:     #4f9eff;  --sev-info-bg:     rgba(79, 158, 255, 0.16);
-  --sev-debug:    #7e8aa0;  --sev-debug-bg:    rgba(126, 138, 160, 0.16);
-  --sev-ok:       #3ddc97;  --sev-ok-bg:       rgba(61, 220, 151, 0.16);
+  --sev-critical: #e11d48;  --sev-critical-bg: rgba(225, 29, 72, 0.10);
+  --sev-error:    #ea580c;  --sev-error-bg:    rgba(234, 88, 12, 0.10);
+  --sev-warning:  #d97706;  --sev-warning-bg:  rgba(217, 119, 6, 0.12);
+  --sev-notice:   #7c3aed;  --sev-notice-bg:   rgba(124, 58, 237, 0.10);
+  --sev-info:     #2563eb;  --sev-info-bg:     rgba(37, 99, 235, 0.10);
+  --sev-debug:    #64748b;  --sev-debug-bg:    rgba(100, 116, 139, 0.12);
+  --sev-ok:       #059669;  --sev-ok-bg:       rgba(5, 150, 105, 0.10);
 }
 
 * { box-sizing: border-box; }
@@ -51,7 +54,7 @@ body {
   grid-area: topbar;
   display: flex; align-items: center; gap: 16px;
   padding: 0 16px;
-  background: rgba(16, 19, 25, 0.7);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--panel-border);
@@ -88,17 +91,17 @@ body {
   background: transparent; border: 1px solid transparent; color: var(--fg);
   padding: 4px 8px; border-radius: 8px; font-size: 13px;
 }
-.user-btn:hover { background: rgba(255,255,255,0.04); }
+.user-btn:hover { background: var(--hover); }
 .avatar {
   width: 24px; height: 24px; border-radius: 50%; background: var(--accent);
-  color: #06101e; font-weight: 700; font-size: 12px;
+  color: #fff; font-weight: 700; font-size: 12px;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .menu-pop {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 50;
   background: var(--panel-solid); border: 1px solid var(--panel-border);
   border-radius: 10px; min-width: 180px; padding: 6px;
-  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  box-shadow: 0 12px 32px rgba(17,24,39,0.12);
 }
 .menu-head { padding: 8px 10px; font-size: 12px; border-bottom: 1px solid var(--panel-border); margin-bottom: 4px; }
 .menu-pop button {
@@ -106,13 +109,13 @@ body {
   border: 0; color: var(--fg); padding: 8px 10px; border-radius: 6px;
   cursor: pointer; font-size: 13px;
 }
-.menu-pop button:hover { background: rgba(255,255,255,0.05); }
+.menu-pop button:hover { background: var(--hover); }
 
 /* ----- Sidebar ----- */
 .sidebar {
   grid-area: sidebar;
   display: flex; flex-direction: column; justify-content: space-between;
-  background: rgba(16, 19, 25, 0.6); border-right: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.85); border-right: 1px solid var(--panel-border);
   padding: 10px 8px; overflow-x: hidden;
 }
 .nav-main, .nav-footer { display: flex; flex-direction: column; gap: 2px; }
@@ -122,8 +125,8 @@ body {
   padding: 9px 10px; border-radius: 8px; cursor: pointer;
   font-size: 13px; text-align: left; white-space: nowrap;
 }
-.nav-item:hover { background: rgba(255,255,255,0.05); }
-.nav-item.active { background: rgba(79,158,255,0.15); border-color: rgba(79,158,255,0.4); color: var(--accent); }
+.nav-item:hover { background: var(--hover); }
+.nav-item.active { background: rgba(79,70,229,0.10); border-color: rgba(79,70,229,0.32); color: var(--accent); }
 .nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; }
 .nav-collapse { color: var(--muted); }
 
@@ -198,10 +201,10 @@ body {
 
 .dash-btn {
   padding: 7px 14px; border-radius: 8px; font-size: 13px; cursor: pointer;
-  color: var(--fg); background: rgba(255,255,255,0.05); border: 1px solid var(--panel-border);
+  color: var(--fg); background: #fff; border: 1px solid var(--panel-border);
 }
-.dash-btn:hover { background: rgba(255,255,255,0.09); }
-.dash-btn.accent { background: rgba(79,158,255,0.16); border-color: rgba(79,158,255,0.4); color: var(--accent); }
+.dash-btn:hover { background: var(--hover); }
+.dash-btn.accent { background: rgba(79,70,229,0.10); border-color: rgba(79,70,229,0.32); color: var(--accent); }
 
 /* 12-column responsive grid of panels. */
 .ov-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
@@ -266,9 +269,9 @@ th { color: var(--muted); font-weight: 500; }
   padding: 2px 9px; border-radius: 999px; font-size: 11px;
   font-weight: 600; letter-spacing: 0.02em; text-transform: capitalize;
 }
-.badge.good { background: rgba(61,220,151,0.15); color: var(--good); }
-.badge.warn { background: rgba(255,180,84,0.15); color: var(--warn); }
-.badge.bad  { background: rgba(255,107,129,0.15); color: var(--bad); }
+.badge.good { background: var(--sev-ok-bg); color: var(--good); }
+.badge.warn { background: var(--sev-warning-bg); color: var(--warn); }
+.badge.bad  { background: var(--sev-critical-bg); color: var(--bad); }
 
 /* Severity badges — solid hue text on a translucent same-hue chip, with a
    leading dot. Used across Logs, Alerts, and Findings. */
@@ -293,6 +296,6 @@ tr[class*="sevrow-"] td:first-child { box-shadow: inset 3px 0 0 transparent; }
 .sevrow-info     td:first-child { box-shadow: inset 3px 0 0 var(--sev-info); }
 .sevrow-debug    td:first-child { box-shadow: inset 3px 0 0 var(--sev-debug); }
 .sevrow-ok       td:first-child { box-shadow: inset 3px 0 0 var(--sev-ok); }
-.sevrow-critical { background: rgba(255, 77, 109, 0.06); }
-.sevrow-error    { background: rgba(255, 120, 73, 0.05); }
-tr[class*="sevrow-"]:hover { background: rgba(255,255,255,0.03); }
+.sevrow-critical { background: rgba(225, 29, 72, 0.05); }
+.sevrow-error    { background: rgba(234, 88, 12, 0.05); }
+tr[class*="sevrow-"]:hover { background: var(--hover); }

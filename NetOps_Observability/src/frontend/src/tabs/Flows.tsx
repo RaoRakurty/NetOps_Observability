@@ -181,8 +181,8 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
                 {
                   type: "pie",
                   radius: ["50%", "72%"],
-                  itemStyle: { borderColor: "#0c0e13", borderWidth: 2 },
-                  label: { color: "#c7cdd6" },
+                  itemStyle: { borderColor: "#ffffff", borderWidth: 2 },
+                  label: { color: "#475467" },
                   data: byProto.map((p, i) => ({
                     name: PROTO_NAMES[p.proto] ?? `IP/${p.proto}`,
                     value: p.bytes_total,

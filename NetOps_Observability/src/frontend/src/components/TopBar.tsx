@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AuthUser, Health } from "../services/api";
 import { useShell, TIME_RANGES } from "../context/shell";
+import Icon from "./Icon";
 
 type Props = {
   health: Health | null;
@@ -37,12 +38,12 @@ export default function TopBar({ health, user, onLogout }: Props) {
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="brand-mark">◧</span>
+        <span className="brand-mark"><Icon name="logo" size={20} /></span>
         <span className="brand-name">NetOps</span>
       </div>
 
       <form className="omni" onSubmit={submitSearch}>
-        <span className="omni-icon">🔍</span>
+        <span className="omni-icon"><Icon name="search" size={15} /></span>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
