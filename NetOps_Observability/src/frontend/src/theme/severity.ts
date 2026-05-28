@@ -55,3 +55,19 @@ export function severityClass(raw: string | number | null | undefined): string {
 export function severityRowClass(raw: string | number | null | undefined): string {
   return `sevrow-${severityKey(raw)}`;
 }
+
+// Hex colors per severity — kept in sync with the --sev-* CSS tokens. Use in
+// charts (ECharts) where a concrete color is needed rather than a class.
+export const SEVERITY_COLOR: Record<SeverityKey, string> = {
+  critical: "#ff4d6d",
+  error: "#ff7849",
+  warning: "#ffb454",
+  notice: "#c08cff",
+  info: "#4f9eff",
+  debug: "#7e8aa0",
+  ok: "#3ddc97",
+};
+
+export function severityColor(raw: string | number | null | undefined): string {
+  return SEVERITY_COLOR[severityKey(raw)];
+}

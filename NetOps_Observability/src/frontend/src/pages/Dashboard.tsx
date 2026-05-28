@@ -1,33 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  api,
-  Alert,
-  MetricTile,
-  getToken,
-} from "../services/api";
+import ReactECharts from "echarts-for-react";
+import { api, Alert, MetricTile, getToken } from "../services/api";
+import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
+import { severityClass, severityColor, severityKey } from "../theme/severity";
 
-// GlassyNetOpsDashboard — the main NOC view.
+// Operations Overview — a Datadog-style board: a clean flat background with
+// many compact panels (KPIs, live throughput, traffic trend, top talkers,
+// severity mix, active alerts) laid out in a responsive 12-column grid.
 //
-// Two data paths:
-//
-//   1) REST (initial render): /api/metrics + /api/alerts so the page is
-//      useful immediately, before the socket connects.
-//   2) WebSocket (live updates): /api/events streams three event types —
-//      metric_update, alert, telemetry. The hub broadcasts to every
-//      connected client every few seconds.
-//
-// The browser WebSocket API can't set an Authorization header, so we
-// pass the JWT in a `?token=` query string. The Go auth middleware
-// recognises that specifically for /api/events.
+// Data paths:
+//   1) REST on mount: metric tiles, alerts, and flow analytics.
+//   2) WebSocket /api/events: live metric_update / alert / telemetry events.
+// All styling is bundled CSS (no external CDN), so it renders offline.
 
-const TRAFFIC_BUCKETS = 24;
+const TRAFFIC_BUCKETS = 30;
+
+type TopTalker = { src: string; dst: string; bytes_total: number };
+type TsRow = { bucket: string; bytes_total: number };
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<MetricTile[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [traffic, setTraffic] = useState<number[]>(
-    Array.from({ length: TRAFFIC_BUCKETS }, () => 0),
-  );
+  const [traffic, setTraffic] = useState<number[]>(Array.from({ length: TRAFFIC_BUCKETS }, () => 0));
+  const [top, setTop] = useState<TopTalker[]>([]);
+  const [ts, setTs] = useState<TsRow[]>([]);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -36,12 +32,19 @@ export default function Dashboard() {
     let alive = true;
     (async () => {
       try {
-        const [m, a] = await Promise.all([api.metricTiles(), api.alerts()]);
+        const [m, a, t, series] = await Promise.all([
+          api.metricTiles(),
+          api.alerts(),
+          api.topTalkers(3600, 6).catch(() => null),
+          api.flowsTimeseries(3600, 60).catch(() => null),
+        ]);
         if (!alive) return;
         setMetrics(m ?? []);
-        setAlerts((a ?? []).slice(0, 10));
+        setAlerts((a ?? []).slice(0, 12));
+        setTop(((t?.data as TopTalker[]) ?? []).slice(0, 6));
+        setTs((series?.data as TsRow[]) ?? []);
       } catch (e) {
-        console.error("dashboard initial load failed", e);
+        console.error("overview initial load failed", e);
       }
     })();
     return () => {
@@ -52,18 +55,13 @@ export default function Dashboard() {
   // ---- WebSocket live stream ----------------------------------------------
   useEffect(() => {
     const token = getToken();
-    if (!token) return; // auth gate will already be showing the login screen
-
+    if (!token) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}/api/events?token=${encodeURIComponent(token)}`;
-
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(`${proto}//${location.host}/api/events?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
-
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);
-
     ws.onmessage = (event) => {
       let msg: { type?: string; data?: any } = {};
       try {
@@ -73,7 +71,6 @@ export default function Dashboard() {
       }
       switch (msg.type) {
         case "metric_update":
-          // Upsert by title.
           setMetrics((prev) => {
             const tile = msg.data as MetricTile;
             const i = prev.findIndex((m) => m.title === tile.title);
@@ -84,14 +81,13 @@ export default function Dashboard() {
           });
           break;
         case "alert":
-          setAlerts((prev) => [msg.data as Alert, ...prev].slice(0, 10));
+          setAlerts((prev) => [msg.data as Alert, ...prev].slice(0, 12));
           break;
         case "telemetry":
           setTraffic((prev) => [...prev.slice(1), Number(msg.data?.value ?? 0)]);
           break;
       }
     };
-
     return () => {
       try {
         ws.close();
@@ -101,152 +97,172 @@ export default function Dashboard() {
     };
   }, []);
 
-  const maxTraffic = Math.max(1, ...traffic);
+  // Group active alerts by severity for the donut.
+  const sevCounts = alerts.reduce<Record<string, number>>((acc, a) => {
+    const k = severityKey(a.severity);
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {});
+  const sevData = Object.entries(sevCounts).map(([k, v]) => ({
+    name: k,
+    value: v,
+    itemStyle: { color: severityColor(k) },
+  }));
 
   return (
-    <div className="min-h-[80vh] -m-6 rounded-3xl bg-[radial-gradient(circle_at_top_left,_#1e293b,_#020617_55%)] text-white overflow-hidden relative">
-      {/* Ambient glow */}
-      <div className="pointer-events-none absolute top-0 left-0 w-96 h-96 bg-cyan-500/20 blur-3xl rounded-full" />
-      <div className="pointer-events-none absolute bottom-0 right-0 w-96 h-96 bg-fuchsia-500/20 blur-3xl rounded-full" />
+    <div className="ov">
+      <div className="ov-head">
+        <h1 className="ov-title">
+          Operations Overview <span>real-time NOC</span>
+        </h1>
+        <div className="ov-actions">
+          <span className={`live-pill ${connected ? "on" : "off"}`} title="WebSocket /api/events">
+            <span className="d" />
+            {connected ? "LIVE" : "OFFLINE"}
+          </span>
+          <button className="dash-btn" onClick={() => (location.hash = "#/search/logs")}>
+            Search
+          </button>
+          <button className="dash-btn accent" onClick={() => (location.hash = "#/alerts/rules")}>
+            + Rule
+          </button>
+        </div>
+      </div>
 
-      <div className="relative z-10 p-8">
-        {/* Header */}
-        <header className="flex items-start justify-between mb-10 gap-6 flex-wrap">
-          <div>
-            <h1 className="text-4xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-cyan-300 via-white to-fuchsia-300 bg-clip-text text-transparent">
-              CortexFlow Live
-            </h1>
-            <p className="text-slate-300 mt-2 text-base md:text-lg">
-              Real-time NetOps · Streaming Telemetry · AI Correlation
-            </p>
+      <div className="ov-grid">
+        {/* KPI tiles */}
+        {metrics.length === 0 && (
+          <div className="panel col-12 panel-empty">Waiting for metrics…</div>
+        )}
+        {metrics.map((m) => (
+          <div className="panel kpi-tile col-3" key={m.title}>
+            <h3>{m.title}</h3>
+            <div className="kpi-num">{m.value}</div>
+            {m.trend && <div className={`kpi-trend ${trendClass(m.trend)}`}>{m.trend}</div>}
           </div>
-          <div className="flex items-center gap-3">
-            <span
-              className={[
-                "inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs border",
-                connected
-                  ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-                  : "border-rose-400/40 bg-rose-400/10 text-rose-300",
-              ].join(" ")}
-              title="WebSocket /api/events"
-            >
-              <span
-                className={[
-                  "w-2 h-2 rounded-full",
-                  connected ? "bg-emerald-400 animate-pulse" : "bg-rose-400",
-                ].join(" ")}
-              />
-              {connected ? "LIVE" : "OFFLINE"}
-            </span>
-            <button
-              className="px-4 py-2 rounded-2xl bg-white/10 border border-white/20 backdrop-blur-xl text-sm hover:bg-white/15 transition"
-              onClick={() => (location.hash = "logs")}
-            >
-              Global Search
-            </button>
-            <button
-              className="px-4 py-2 rounded-2xl bg-cyan-400/20 border border-cyan-300/30 backdrop-blur-xl text-sm hover:bg-cyan-400/30 transition"
-              onClick={() => (location.hash = "rules")}
-            >
-              + Automation
-            </button>
-          </div>
-        </header>
+        ))}
 
-        {/* Metric tiles */}
-        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
-          {metrics.length === 0 && (
-            <div className="col-span-full text-slate-400 italic text-center py-8">
-              Waiting for metrics…
-            </div>
-          )}
-          {metrics.map((m) => (
-            <div
-              key={m.title}
-              className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-2xl shadow-[0_4px_30px_rgba(0,0,0,0.2)]"
-            >
-              <p className="text-slate-300 text-xs uppercase tracking-wider">
-                {m.title}
-              </p>
-              <div className="mt-4 flex justify-between items-end gap-3">
-                <h2 className="text-4xl font-bold">{m.value}</h2>
-                <span
-                  className={[
-                    "text-sm",
-                    m.trend === "critical"
-                      ? "text-rose-300"
-                      : m.trend === "warning"
-                      ? "text-amber-300"
-                      : "text-cyan-300",
-                  ].join(" ")}
-                >
-                  {m.trend}
-                </span>
-              </div>
-            </div>
-          ))}
-        </section>
-
-        {/* Live telemetry */}
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-2xl mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl md:text-2xl font-bold">
-              Live Telemetry Stream
-            </h3>
-            <span className="text-xs text-slate-400">
-              last {TRAFFIC_BUCKETS} ticks · pushed every 2s
-            </span>
-          </div>
-          <div className="h-[220px] flex items-end gap-2">
-            {traffic.map((h, i) => {
-              const pct = Math.max(2, Math.round((h / maxTraffic) * 100));
-              return (
-                <div
-                  key={i}
-                  className="flex-1 bg-gradient-to-t from-cyan-500 to-fuchsia-400 rounded-t-xl transition-all"
-                  style={{ height: `${pct}%` }}
-                  title={`${h}`}
-                />
-              );
-            })}
-          </div>
+        {/* Live throughput (WebSocket telemetry) */}
+        <div className="panel col-8">
+          <h3>Live throughput · last {TRAFFIC_BUCKETS} ticks</h3>
+          <ReactECharts
+            style={{ height: 240 }}
+            option={{
+              ...chartBase,
+              grid: { left: 44, right: 12, top: 16, bottom: 24 },
+              tooltip: { ...chartBase.tooltip, trigger: "axis" },
+              xAxis: { type: "category", show: false, data: traffic.map((_, i) => i) },
+              yAxis: { type: "value", ...axisStyle },
+              series: [
+                {
+                  type: "line",
+                  smooth: true,
+                  showSymbol: false,
+                  lineStyle: { color: paletteColor(0), width: 2 },
+                  itemStyle: { color: paletteColor(0) },
+                  areaStyle: { color: areaGradient(0) },
+                  data: traffic,
+                },
+              ],
+            }}
+          />
         </div>
 
-        {/* Live alerts */}
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-2xl">
-          <h3 className="text-xl md:text-2xl font-bold mb-4">Live Alerts</h3>
-          {alerts.length === 0 ? (
-            <div className="text-slate-400 italic py-4">
-              All clear — no active alerts.
-            </div>
+        {/* Active-alert severity mix */}
+        <div className="panel col-4">
+          <h3>Alerts by severity</h3>
+          {sevData.length === 0 ? (
+            <div className="panel-empty">All clear</div>
           ) : (
-            <div className="space-y-3">
-              {alerts.map((a, i) => (
-                <div
-                  key={a.id ?? i}
-                  className="p-4 rounded-2xl bg-black/30 border border-white/10 flex items-start gap-3"
-                >
-                  <span
-                    className={[
-                      "shrink-0 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider",
-                      sevClasses(a.severity),
-                    ].join(" ")}
-                  >
-                    {a.severity || "info"}
-                  </span>
-                  <div className="flex-1">
-                    <div className="text-sm">
-                      {a.summary || (a as any).message || "(no summary)"}
-                    </div>
-                    <div className="text-xs text-slate-400 mt-1">
-                      {a.rule}
-                      {a.device_id ? ` · ${a.device_id}` : ""}
-                      {a.fired_at ? ` · ${new Date(a.fired_at).toLocaleString()}` : ""}
-                    </div>
+            <ReactECharts
+              style={{ height: 240 }}
+              option={{
+                ...chartBase,
+                tooltip: { ...chartBase.tooltip, trigger: "item", formatter: "{b}: {c}" },
+                legend: { ...chartBase.legend, bottom: 0 },
+                series: [
+                  {
+                    type: "pie",
+                    radius: ["55%", "75%"],
+                    itemStyle: { borderColor: "#0c0e13", borderWidth: 2 },
+                    label: { show: false },
+                    data: sevData,
+                  },
+                ],
+              }}
+            />
+          )}
+        </div>
+
+        {/* Traffic over time (flows) */}
+        <div className="panel col-6">
+          <h3>Traffic over time</h3>
+          {ts.length === 0 ? (
+            <div className="panel-empty">No flow data yet.</div>
+          ) : (
+            <ReactECharts
+              style={{ height: 220 }}
+              option={{
+                ...chartBase,
+                grid: { left: 56, right: 12, top: 16, bottom: 24 },
+                tooltip: { ...chartBase.tooltip, trigger: "axis" },
+                xAxis: { type: "time", ...axisStyle },
+                yAxis: { type: "value", name: "bytes", ...axisStyle },
+                series: [
+                  {
+                    type: "line",
+                    smooth: true,
+                    showSymbol: false,
+                    lineStyle: { color: paletteColor(1), width: 2 },
+                    itemStyle: { color: paletteColor(1) },
+                    areaStyle: { color: areaGradient(1) },
+                    data: ts.map((r) => [r.bucket, r.bytes_total]),
+                  },
+                ],
+              }}
+            />
+          )}
+        </div>
+
+        {/* Top talkers (flows) */}
+        <div className="panel col-6">
+          <h3>Top talkers · last 1h</h3>
+          {top.length === 0 ? (
+            <div className="panel-empty">No flow data yet.</div>
+          ) : (
+            <table className="mini-table">
+              <tbody>
+                {top.map((r, i) => (
+                  <tr key={i}>
+                    <td className="mono">{r.src}</td>
+                    <td className="mono">{r.dst}</td>
+                    <td style={{ textAlign: "right" }}>{Number(r.bytes_total).toLocaleString()} B</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Active alerts */}
+        <div className="panel col-12">
+          <h3>Active alerts</h3>
+          {alerts.length === 0 ? (
+            <div className="panel-empty">All clear — no active alerts.</div>
+          ) : (
+            alerts.map((a, i) => (
+              <div className="mini-row" key={a.id ?? i}>
+                <span className={`badge ${severityClass(a.severity)}`}>{a.severity || "info"}</span>
+                <div className="mini-body">
+                  <div className="mini-title">{a.summary || (a as any).message || "(no summary)"}</div>
+                  <div className="mini-meta">
+                    {a.rule}
+                    {a.device_id ? ` · ${a.device_id}` : ""}
+                    {a.fired_at ? ` · ${new Date(a.fired_at).toLocaleString()}` : ""}
                   </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))
           )}
         </div>
       </div>
@@ -254,13 +270,10 @@ export default function Dashboard() {
   );
 }
 
-function sevClasses(sev?: string): string {
-  switch (sev) {
-    case "critical":
-      return "bg-rose-500/20 text-rose-200 border border-rose-400/30";
-    case "warning":
-      return "bg-amber-500/20 text-amber-200 border border-amber-400/30";
-    default:
-      return "bg-cyan-500/20 text-cyan-200 border border-cyan-400/30";
-  }
+function trendClass(trend?: string): string {
+  const k = severityKey(trend);
+  if (k === "critical" || k === "error") return "t-crit";
+  if (k === "warning") return "t-warn";
+  if (/clear|ok|live|up|healthy/i.test(trend ?? "")) return "t-ok";
+  return "";
 }
