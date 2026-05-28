@@ -154,6 +154,7 @@ REQUIRED_PATHS = [
     "src/backend/dashboard.go",
     # Ops scripts
     "scripts/update.sh",
+    "scripts/reset-admin.sh",
     "src/backend/go.mod",
     # Scripts
     "scripts/bootstrap-ubuntu.sh",
@@ -205,6 +206,20 @@ def write_env(env_path: Path, port: int, *, force: bool) -> dict[str, str]:
     if env_path.exists() and not force:
         info(f".env already exists at {env_path} — keeping existing secrets")
         return _parse_env(env_path)
+
+    # When forcing a fresh .env, also wipe the user store. Otherwise the
+    # bootstrap admin keeps the password from the FIRST .env it was
+    # seeded with, and the new ADMIN_INITIAL_PASSWORD in .env won't
+    # unlock the dashboard. Removing users.json causes the api container
+    # to re-seed on its next start with the current .env value.
+    if force:
+        users_file = env_path.parent.parent.parent / "data" / "api" / "users.json"
+        if users_file.exists():
+            try:
+                users_file.unlink()
+                info(f"removed {users_file} so admin re-seeds with new password")
+            except OSError as e:
+                warn(f"couldn't remove {users_file}: {e} (run scripts/reset-admin.sh later)")
 
     secrets_map = {
         "DB_PASSWORD":              generate_password(28),
