@@ -63,7 +63,8 @@ transforms:
     type: remap
     inputs: [docker_applogs]
     source: |
-      msg = string!(.message ?? "")
+      # docker_logs source guarantees .message; no need to coalesce.
+      msg = string!(.message)
       parsed, err = parse_json(msg)
       if err == null && is_object(parsed) {
         . = merge(., object!(parsed)) ?? .
@@ -76,7 +77,7 @@ transforms:
     type: remap
     inputs: [docker_flows]
     source: |
-      msg = string!(.message ?? "")
+      msg = string!(.message)
       parsed, err = parse_json(msg)
       if err == null && is_object(parsed) {
         . = merge(., object!(parsed)) ?? .

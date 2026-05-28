@@ -170,6 +170,10 @@ services:
   vector-router:
     image: timberio/vector:0.40.0-alpine
     command: ["--config", "/etc/vector/vector.yaml"]
+    environment:
+      # ClickHouse credentials are interpolated into vector.yaml at startup.
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
     volumes:
       - ./vector-router/vector.yaml:/etc/vector/vector.yaml:ro
     depends_on:
