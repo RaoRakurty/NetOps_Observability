@@ -250,4 +250,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ messages, system }),
     }),
+
+  // Native metrics (Prometheus-compatible API via the Go proxy).
+  metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
+  metricsQueryRange: (query: string, startSec: number, endSec: number, stepSec: number) => {
+    const p = new URLSearchParams({
+      query,
+      start: String(startSec),
+      end: String(endSec),
+      step: String(stepSec),
+    });
+    return request<PromRangeResponse>(`/api/metrics/query_range?${p.toString()}`);
+  },
+};
+
+export type PromNamesResponse = { status: string; data: string[] };
+export type PromSeries = { metric: Record<string, string>; values: [number, string][] };
+export type PromRangeResponse = {
+  status: string;
+  data?: { resultType: string; result: PromSeries[] };
+  error?: string;
 };

@@ -178,6 +178,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Dashboard live data
 	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
+	mux.HandleFunc("/api/metrics/query", s.handleMetricsQuery)
+	mux.HandleFunc("/api/metrics/query_range", s.handleMetricsQueryRange)
+	mux.HandleFunc("/api/metrics/names", s.handleMetricsNames)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	// Prometheus scrape endpoint
 	mux.HandleFunc("/metrics", s.handlePromMetrics)

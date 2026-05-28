@@ -12,6 +12,7 @@ import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
 import Logs from "./tabs/Logs";
 import Flows from "./tabs/Flows";
+import MetricsExplorer from "./tabs/MetricsExplorer";
 import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
@@ -57,7 +58,8 @@ export const NAV: NavSection[] = [
     icon: "analytics",
     children: [
       { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
-      { id: "metrics", label: "Metrics", render: () => <PrometheusTab /> },
+      { id: "metrics", label: "Metrics", render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} /> },
+      { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
     ],
   },
   {

@@ -26,9 +26,12 @@ Make it look "elite, transparent, modern" like Datadog/Grafana.
 Search → Dashboard → Report one continuous flow. Native savable Dashboards
 section. (Postgres is currently underused.)
 
-## Phase 4 — Native analytics
-`/api/metrics/query[_range]` proxy to VictoriaMetrics; an ECharts Metrics
-Explorer so Analytics renders natively instead of iframing Prometheus.
+## ✅ Phase 4 — Native analytics (done)
+`/api/metrics/{query,query_range,names}` Go proxy to a Prometheus-compatible
+backend (METRICS_URL, defaults to Prometheus; point at VictoriaMetrics once
+SNMP/remote_write feeds it). Analytics → Metrics is now a native ECharts
+Metrics Explorer (PromQL input + name autocomplete + global-time-range),
+with the raw Prometheus UI kept under Analytics → Prometheus.
 
 ## Phase 5 — Reports + global search
 Server-side report scheduler delivering via the existing `notify/` dispatcher;
