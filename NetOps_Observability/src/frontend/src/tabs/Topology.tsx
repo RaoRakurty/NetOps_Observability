@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, Device } from "../services/api";
+import { chartBase, paletteColor } from "../theme/charts";
 
 // Topology view — renders the device inventory as a force-directed
 // graph. Edges aren't populated yet (the Device model doesn't carry
@@ -20,7 +21,7 @@ export default function Topology() {
     name: d.name || d.id,
     symbolSize: 24,
     itemStyle: { color: colorForSource(d.source) },
-    label: { show: true, color: "#e6e8eb" },
+    label: { show: true, color: "#475467" },
     category: d.source,
   }));
 
@@ -43,9 +44,9 @@ export default function Topology() {
         <ReactECharts
           style={{ height: 600 }}
           option={{
-            backgroundColor: "transparent",
-            tooltip: {},
-            legend: [{ data: categories.map((c) => c.name), textStyle: { color: "#8a93a0" } }],
+            ...chartBase,
+            tooltip: { ...chartBase.tooltip },
+            legend: [{ data: categories.map((c) => c.name), textStyle: { color: "#667085" } }],
             series: [
               {
                 type: "graph",
@@ -57,7 +58,7 @@ export default function Topology() {
                 data: nodes,
                 links,
                 edgeSymbol: ["none", "arrow"],
-                lineStyle: { color: "#4f9eff", opacity: 0.6 },
+                lineStyle: { color: paletteColor(0), opacity: 0.5 },
               },
             ],
           }}

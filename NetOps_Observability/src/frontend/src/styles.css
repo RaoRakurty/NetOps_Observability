@@ -33,7 +33,24 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.011em;              /* subtle optical tightening for Inter */
+  font-feature-settings: "cv11", "ss01"; /* Inter's nicer 1, l, a glyphs */
 }
+
+/* ----- Typography scale — elegant, modern, consistent ----- */
+h1, h2, h3, h4 { letter-spacing: -0.02em; font-weight: 700; line-height: 1.2; }
+/* Numeric figures align and read cleaner with tabular, lined numerals. */
+.kpi-num, .kpi .value, .kpi-tile .kpi-num {
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em; font-weight: 700;
+}
+/* Micro section-label used by panel/card headers — one consistent treatment. */
+.card > h2, .panel > h3 {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted);
+}
+code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 
 :root { --sidebar-w: 208px; --topbar-h: 52px; }
 
@@ -257,6 +274,9 @@ body {
 .kpi .value { font-size: 28px; font-weight: 600; margin-top: 6px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+}
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--panel-border); }
 th { color: var(--muted); font-weight: 500; }
 

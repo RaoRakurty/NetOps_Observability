@@ -115,10 +115,10 @@ export default function Copilot() {
                 margin: "10px 0",
                 padding: 10,
                 borderRadius: 8,
-                background: m.role === "user" ? "rgba(79,158,255,0.10)" : "rgba(74,208,139,0.08)",
+                background: m.role === "user" ? "rgba(79,70,229,0.07)" : "var(--bg)",
                 border:
                   "1px solid " +
-                  (m.role === "user" ? "rgba(79,158,255,0.30)" : "rgba(74,208,139,0.25)"),
+                  (m.role === "user" ? "rgba(79,70,229,0.22)" : "var(--panel-border)"),
                 whiteSpace: "pre-wrap",
                 fontSize: 13,
               }}
