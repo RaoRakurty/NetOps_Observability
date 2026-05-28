@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS netops.flows
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, sampler_address, src_addr, dst_addr)
-TTL ts + INTERVAL 90 DAY
+-- ts is DateTime64(3); TTL expressions must be Date/DateTime, so cast it.
+TTL toDateTime(ts) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
 
 -- ---------------------------------------------------------------------------
@@ -80,4 +81,4 @@ CREATE TABLE IF NOT EXISTS netops.findings
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, severity, score)
-TTL ts + INTERVAL 90 DAY;
+TTL toDateTime(ts) + INTERVAL 90 DAY;
