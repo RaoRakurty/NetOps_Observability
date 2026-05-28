@@ -6,14 +6,14 @@
 #   * Replay is one Vector restart + offset reset away.
 #   * We can add new consumers (a SIEM, a data lake) without touching
 #     the aggregator.
+#
+# Metrics (Telegraf) bypass Kafka and go directly to VictoriaMetrics
+# via Telegraf's own remote_write — Vector's kafka sink doesn't fit
+# the Metric encoding model cleanly. See telegraf.conf.
 
 api:
   enabled: true
   address: 0.0.0.0:8686
-
-# ----------------------------------------------------------------------------
-# SOURCES — one Kafka consumer group per signal.
-# ----------------------------------------------------------------------------
 
 sources:
   kafka_applogs:
@@ -37,23 +37,8 @@ sources:
     group_id: "netops-router-flows"
     decoding: { codec: json }
 
-  kafka_metrics:
-    type: kafka
-    bootstrap_servers: "redpanda:9092"
-    topics: ["netops.metrics"]
-    group_id: "netops-router-metrics"
-    decoding: { codec: json }
-
-# ----------------------------------------------------------------------------
-# TRANSFORMS — none beyond passthrough; the aggregator already normalized.
-# ----------------------------------------------------------------------------
-
-# ----------------------------------------------------------------------------
-# SINKS — write to the right storage backend per signal.
-# ----------------------------------------------------------------------------
-
 sinks:
-  # Application + container logs → OpenSearch index `netops-applogs-YYYY.MM.DD`
+  # Application + container logs → OpenSearch
   opensearch_applogs:
     type: elasticsearch
     inputs: [kafka_applogs]
@@ -65,7 +50,7 @@ sinks:
     api_version: v7
     healthcheck: { enabled: false }
 
-  # Syslog from network devices → OpenSearch index `netops-syslog-YYYY.MM.DD`
+  # Syslog from network devices → OpenSearch
   opensearch_syslog:
     type: elasticsearch
     inputs: [kafka_syslog]
@@ -77,10 +62,7 @@ sinks:
     api_version: v7
     healthcheck: { enabled: false }
 
-  # Flow records — write to BOTH OpenSearch (for ad-hoc search) and
-  # ClickHouse (for analytics). OpenSearch handles "show me flows from
-  # 10.0.0.5 in the last hour"; ClickHouse handles "top talkers by
-  # month, grouped by AS_dst".
+  # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
     type: elasticsearch
     inputs: [kafka_flows]
@@ -103,11 +85,4 @@ sinks:
       user: "${CLICKHOUSE_USER}"
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
-    healthcheck: { enabled: false }
-
-  # SNMP / telemetry metrics → VictoriaMetrics remote-write.
-  victoria_metrics:
-    type: prometheus_remote_write
-    inputs: [kafka_metrics]
-    endpoint: "http://victoria:8428/api/v1/write"
     healthcheck: { enabled: false }

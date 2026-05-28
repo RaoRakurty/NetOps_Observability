@@ -1,16 +1,17 @@
 # Vector — AGGREGATION tier.
 #
-# Receives from the three edge collectors (syslog-ng, Telegraf, goflow2)
-# plus container stdout. Parses, normalizes, enriches with device
-# metadata, buffers, and ships to Redpanda topics keyed by signal type:
+# Receives from edge collectors (syslog-ng, goflow2) plus container
+# stdout. Parses, normalizes, enriches, buffers, ships to Redpanda
+# topics keyed by signal:
 #
-#   syslog     → topic netops.syslog
-#   metrics    → topic netops.metrics
-#   netflow    → topic netops.flows
-#   applogs    → topic netops.applogs
+#   syslog   → topic netops.syslog
+#   netflow  → topic netops.flows
+#   applogs  → topic netops.applogs
 #
-# vector-router (separate process) consumes these topics and fans into
-# the storage tier (OpenSearch, ClickHouse, VictoriaMetrics).
+# Metrics (Telegraf SNMP) go DIRECTLY to VictoriaMetrics via Telegraf's
+# own outputs.http remote_write plugin — they don't flow through Vector
+# because the Vector kafka sink doesn't gracefully accept Metric events
+# in the encoding mode we want. See telegraf.conf.
 
 api:
   enabled: true
@@ -21,9 +22,8 @@ api:
 # ----------------------------------------------------------------------------
 
 sources:
-  # Container stdout/stderr — application logs (the Go API, frontend
-  # nginx, etc.). Excludes goflow2 because we route those via the
-  # docker_flows filter below.
+  # Container stdout/stderr — application logs (Go API, frontend nginx, etc).
+  # Excludes goflow2 below via the docker_flows filter.
   docker:
     type: docker_logs
 
@@ -33,15 +33,8 @@ sources:
     address: 0.0.0.0:6601
     mode: tcp
 
-  # Telegraf socket_writer with influx data_format.
-  metrics_in:
-    type: socket
-    address: 0.0.0.0:9094
-    mode: tcp
-    decoding:
-      codec: influxdb
-
-  # Vector's own internal metrics for the operator dashboard.
+  # Vector's own internal metrics. Exposed at /metrics on port 9598
+  # so Prometheus can scrape it (added as a target in prometheus.yml).
   internal_metrics:
     type: internal_metrics
     scrape_interval_secs: 30
@@ -99,15 +92,8 @@ transforms:
       .severity = string(.severity) ?? "info"
       .appname  = string(.appname)  ?? "unknown"
 
-  metrics_normalized:
-    type: remap
-    inputs: [metrics_in]
-    source: |
-      .signal = "metrics"
-
 # ----------------------------------------------------------------------------
-# SINKS — Redpanda topics. Each signal goes to its own topic so router
-# consumers can subscribe independently.
+# SINKS — Redpanda topics, one per signal.
 # ----------------------------------------------------------------------------
 
 sinks:
@@ -135,15 +121,7 @@ sinks:
     encoding: { codec: json }
     compression: snappy
 
-  kafka_metrics:
-    type: kafka
-    inputs: [metrics_normalized]
-    bootstrap_servers: "redpanda:9092"
-    topic: "netops.metrics"
-    encoding: { codec: json }
-    compression: snappy
-
-  # Operator metrics out to Prometheus.
+  # Operator metrics — exposed for Prometheus to scrape.
   prometheus_exporter:
     type: prometheus_exporter
     inputs: [internal_metrics]

@@ -340,11 +340,50 @@ def _parse_env(path: Path) -> dict[str, str]:
 # ---- data dirs --------------------------------------------------------------
 
 def ensure_data_dirs(root: Path) -> None:
-    for name in (
-        "postgres", "redis", "victoria", "grafana", "prometheus",
-        "redpanda", "opensearch", "clickhouse", "api",
-    ):
-        (root / "data" / name).mkdir(parents=True, exist_ok=True)
+    """Create per-service subdirectories under data/ and (where we know
+    the container runs as a non-root user) chown them to that UID/GID.
+
+    Container UIDs are derived from each upstream image:
+        prometheus  65534 (nobody)
+        grafana       472 (grafana)
+        opensearch   1000 (opensearch)
+        clickhouse    101 (clickhouse)
+        victoria     1000
+        redpanda      101
+    The other services (postgres, redis, api correlation store) either
+    chown their own data dirs on first boot or write as root."""
+    owners: dict[str, tuple[int, int] | None] = {
+        "postgres":   None,             # initdb chowns its own
+        "redis":      None,             # writes as redis user via its own init
+        "victoria":   (1000, 1000),
+        "grafana":    (472, 472),
+        "prometheus": (65534, 65534),
+        "redpanda":   (101, 101),
+        "opensearch": (1000, 1000),
+        "clickhouse": (101, 101),
+        "api":        None,             # Go API runs as nonroot but writes JSON only
+    }
+    for name, uid_gid in owners.items():
+        d = root / "data" / name
+        d.mkdir(parents=True, exist_ok=True)
+        if uid_gid is not None:
+            try:
+                os.chown(d, uid_gid[0], uid_gid[1])
+                # Be permissive on existing contents too, in case this is a
+                # re-run after a previous failed install left files behind.
+                for child in d.rglob("*"):
+                    try: os.chown(child, uid_gid[0], uid_gid[1])
+                    except OSError: pass
+            except PermissionError:
+                # Not root — note it but continue. The relevant containers
+                # will fail to start until the user fixes ownership.
+                warn(
+                    f"can't chown data/{name} to {uid_gid[0]}:{uid_gid[1]} "
+                    f"(not root). The {name} container may fail to start."
+                )
+                info(
+                    f"  Fix: sudo chown -R {uid_gid[0]}:{uid_gid[1]} {d}"
+                )
     ok("data/ directories ready")
 
 
