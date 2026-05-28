@@ -1,0 +1,26 @@
+# Original "all-in-one" frontend Dockerfile — builds npm deps + the
+# bundle inside Docker.
+#
+# Slow first build (5–10 min for npm install) and prone to hanging on
+# hosts where TLS interception is in effect (corporate proxies / SSL
+# inspection). The `npm config set strict-ssl false` below bypasses
+# cert verification at build time so packages still install on those
+# networks. Acceptable for fetching public packages; the runtime stack
+# is unaffected.
+#
+# Prefer the lean Dockerfile.frontend (default) which builds the bundle
+# on the host and avoids all of this.
+
+FROM node:20-alpine AS build
+WORKDIR /src
+COPY src/frontend/package.json src/frontend/package-lock.json* ./
+RUN npm config set strict-ssl false && \
+    npm install --no-audit --no-fund
+COPY src/frontend/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY --from=build /src/dist /usr/share/nginx/html
+RUN printf 'server {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri /index.html; }\n}\n' \
+  > /etc/nginx/conf.d/default.conf
+EXPOSE 80

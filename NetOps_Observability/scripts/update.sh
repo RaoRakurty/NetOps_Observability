@@ -83,24 +83,7 @@ if [[ $YES -ne 1 ]]; then
     esac
 fi
 
-# ---- 1: backup --------------------------------------------------------------
-
-if [[ $NO_BACKUP -eq 0 ]]; then
-    step "backing up before upgrade"
-    mkdir -p "$BACKUP_DIR"
-    STAMP="$(date +%F-%H%M%S)"
-    OUT="$BACKUP_DIR/pre-upgrade-${STAMP}.tar.zst"
-    if [[ -x "$ROOT/scripts/backup.sh" ]]; then
-        "$ROOT/scripts/backup.sh" "$OUT"
-    else
-        # Minimal fallback if backup.sh isn't present yet (very old install).
-        warn "backup.sh missing — falling back to a raw tar of data/ and .env"
-        tar -C "$ROOT" -cf - data deployment/docker/.env | zstd -T0 -19 -o "$OUT"
-        ok "wrote $OUT"
-    fi
-fi
-
-# ---- 2: validate scaffold ---------------------------------------------------
+# ---- 1: validate scaffold (no .env / docker required) ----------------------
 
 step "validating scaffold"
 python3 - <<'PY'
@@ -111,7 +94,11 @@ spec.loader.exec_module(mod)
 mod.validate_scaffold(pathlib.Path(".").resolve())
 PY
 
-# ---- 3: reconcile .env ------------------------------------------------------
+# ---- 2: reconcile .env  ---  MUST happen before any `docker compose`
+# invocation, because compose parses docker-compose.yml at startup and
+# fails with "variable XYZ required" if .env is missing keys the YAML
+# references via ${...:?required}. Reconciliation appends missing keys
+# with safe defaults; existing values are never touched.
 
 step "reconciling .env with current installer template"
 python3 - <<'PY'
@@ -196,6 +183,27 @@ for k, v in missing:
     redacted = v if "PASSWORD" not in k and "TOKEN" not in k and "KEY" not in k else f"<{len(v)} chars>"
     print(f"    {k}={redacted}")
 PY
+
+# ---- 3: backup --------------------------------------------------------------
+#
+# Now safe to run — .env is complete, so docker compose can parse the
+# YAML. backup.sh internally skips logical dumps (postgres / clickhouse)
+# when those containers aren't currently running, so a pre-first-success
+# upgrade still gets a meaningful data-dir snapshot.
+
+if [[ $NO_BACKUP -eq 0 ]]; then
+    step "backing up before upgrade"
+    mkdir -p "$BACKUP_DIR"
+    STAMP="$(date +%F-%H%M%S)"
+    OUT="$BACKUP_DIR/pre-upgrade-${STAMP}.tar.zst"
+    if [[ -x "$ROOT/scripts/backup.sh" ]]; then
+        "$ROOT/scripts/backup.sh" "$OUT"
+    else
+        warn "backup.sh missing — falling back to a raw tar of data/ and .env"
+        tar -C "$ROOT" -cf - data deployment/docker/.env | zstd -T0 -19 -o "$OUT"
+        ok "wrote $OUT"
+    fi
+fi
 
 # ---- 4 + 5: pull + build ----------------------------------------------------
 

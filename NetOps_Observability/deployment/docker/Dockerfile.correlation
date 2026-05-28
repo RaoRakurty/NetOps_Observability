@@ -1,9 +1,19 @@
 # Correlation/AI Engine — Python/FastAPI.
+#
+# The pip install step uses --trusted-host so the build works on
+# corporate networks that do TLS interception (re-signed HTTPS) without
+# requiring the corporate CA to be present inside the build container.
+# This is a build-time-only relaxation; runtime TLS to external APIs is
+# unaffected.
 
 FROM python:3.12-slim AS build
 WORKDIR /app
 COPY src/correlation/requirements.txt ./
-RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
+RUN pip install --no-cache-dir --root-user-action=ignore \
+        --trusted-host pypi.org \
+        --trusted-host files.pythonhosted.org \
+        --trusted-host pypi.python.org \
+        -r requirements.txt
 
 FROM python:3.12-slim
 WORKDIR /app
