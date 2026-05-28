@@ -32,9 +32,13 @@ else
     echo "→ no users.json present (will be created fresh)"
 fi
 
-# 2. Restart the api service so it re-seeds.
-echo "→ restarting api"
-(cd "$COMPOSE_DIR" && docker compose restart api)
+# 2. Force-recreate the api container so it picks up the CURRENT .env.
+# `docker compose restart` would not re-read env vars — it just bounces
+# the existing container with whatever env it had at create time. That
+# bug meant the api kept the old ADMIN_INITIAL_PASSWORD even after
+# .env was rotated. --force-recreate guarantees a fresh env.
+echo "→ recreating api with current .env"
+(cd "$COMPOSE_DIR" && docker compose up -d --force-recreate api)
 
 # Wait for the seed log line.
 echo "→ waiting for api to seed admin…"
