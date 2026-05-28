@@ -68,20 +68,23 @@ services:
 
   redpanda:
     image: redpandadata/redpanda:v24.2.4
-    command:
-      - "redpanda start"
-      - "--smp 1"
-      - "--memory 512M"
-      - "--reserve-memory 0M"
-      - "--overprovisioned"
-      - "--node-id 0"
-      - "--check=false"
-      - "--kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092"
-      - "--advertise-kafka-addr internal://redpanda:9092,external://localhost:19092"
-      - "--pandaproxy-addr 0.0.0.0:8082"
-      - "--schema-registry-addr 0.0.0.0:8081"
-      - "--rpc-addr 0.0.0.0:33145"
-      - "--advertise-rpc-addr redpanda:33145"
+    # YAML folded-string form so docker compose shell-splits the flags.
+    # The previous list form treated each "--flag value" pair as one
+    # argv, which redpanda's CLI rejected on startup → restart loop.
+    command: >
+      redpanda start
+      --smp 1
+      --memory 512M
+      --reserve-memory 0M
+      --overprovisioned
+      --node-id 0
+      --check=false
+      --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      --pandaproxy-addr 0.0.0.0:8082
+      --schema-registry-addr 0.0.0.0:8081
+      --rpc-addr 0.0.0.0:33145
+      --advertise-rpc-addr redpanda:33145
     ports:
       - "${REDPANDA_KAFKA_PORT:-19092}:19092"
       - "${REDPANDA_PROXY_PORT:-18082}:8082"
@@ -244,7 +247,10 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
       GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
+      # Default empty so Grafana boots on networks that block plugin
+      # downloads (corporate TLS interception). Set
+      # GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env to enable.
+      GF_INSTALL_PLUGINS: ${GRAFANA_PLUGINS:-}
     volumes:
       - ../../data/grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
