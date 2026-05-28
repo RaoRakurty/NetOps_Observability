@@ -8,6 +8,11 @@ src/frontend/node_modules/
 src/backend/api
 src/backend/*.test
 
+# Watchdog private config + runtime state
+scripts/stack-watchdog.env
+scripts/.stack-watchdog.state
+scripts/stack-watchdog.log
+
 # Editor / OS
 .idea/
 .vscode/

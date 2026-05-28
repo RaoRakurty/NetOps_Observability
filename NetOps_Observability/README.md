@@ -101,6 +101,39 @@ OPENSEARCH_URL=http://localhost:9200 scripts/bootstrap-opensearch.sh
 See `docs/QUICK_REFERENCE.md`, `docs/STREAMING.md`,
 `docs/ANALYTICS.md`, and `docs/COPILOT.md` for more.
 
+## Stack monitoring (watchdog)
+
+`scripts/stack-watchdog.sh` is an external watchdog — deliberately
+independent of the stack's own notifiers, which can't report their own
+death. Run from cron once a minute, it checks every compose service is
+running/healthy plus probes the dashboard, then:
+
+* **Healthy** → pings a healthchecks.io heartbeat URL. If the host or its
+  network dies the pings stop and healthchecks.io (off-host) alerts you —
+  a dead-man's-switch for total outages a local check can't catch.
+* **Down** → hits healthchecks.io `/fail` and pushes an
+  [ntfy.sh](https://ntfy.sh) notification to your phone naming the dead
+  service. Alerts fire only on up↔down transitions, not every minute.
+
+Setup:
+
+```
+# 1. Configure (topic + optional heartbeat URL); file is gitignored
+cp scripts/stack-watchdog.env.example scripts/stack-watchdog.env
+$EDITOR scripts/stack-watchdog.env        # set NTFY_TOPIC, HC_PING_URL
+
+# 2. Confirm phone delivery (subscribe to the topic in the ntfy app first)
+scripts/stack-watchdog.sh --test
+
+# 3. Schedule it
+( crontab -l 2>/dev/null; \
+  echo "* * * * * $PWD/scripts/stack-watchdog.sh >> $PWD/scripts/stack-watchdog.log 2>&1" ) | crontab -
+```
+
+For the off-host dead-man's-switch, create a check at
+https://healthchecks.io (period 1m, grace ~3m), point its integration at
+ntfy, and paste its ping URL into `HC_PING_URL`.
+
 ## License
 
 Internal project — license not specified.

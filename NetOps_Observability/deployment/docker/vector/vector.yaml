@@ -70,9 +70,14 @@ transforms:
         # merge() of two objects can't fail; no ?? . needed.
         . = merge(., object!(parsed))
       }
+      # Promote the compose service label before dropping the label map.
+      .service   = string(.label."com.docker.compose.service") ?? string(.container_name) ?? "unknown"
+      # Drop the Docker label map: its dotted keys (com.docker.compose.*)
+      # collide in OpenSearch, which reads dots as nested objects and rejects
+      # every applog doc with a mapping conflict. Not needed downstream.
+      del(.label)
       .level     = string(.level)     ?? "info"
       .component = string(.component) ?? "container"
-      .service   = string(.compose_service) ?? string(.container_name) ?? "unknown"
 
   flows_normalized:
     type: remap
@@ -83,6 +88,8 @@ transforms:
       if err == null && is_object(parsed) {
         . = merge(., object!(parsed))
       }
+      # Same dotted-key collision as applogs — drop the Docker label map.
+      del(.label)
       .signal = "netflow"
 
   syslog_normalized:
