@@ -45,17 +45,18 @@ sources:
 
 transforms:
   # Split goflow2's stdout from the rest of the Docker stream.
+  # docker_logs source guarantees .container_name, so no ?? "" needed.
   docker_flows:
     type: filter
     inputs: [docker]
     condition: |
-      contains(string!(.container_name ?? ""), "goflow2")
+      contains(string!(.container_name), "goflow2")
 
   docker_applogs:
     type: filter
     inputs: [docker]
     condition: |
-      !contains(string!(.container_name ?? ""), "goflow2")
+      !contains(string!(.container_name), "goflow2")
 
   # Parse app log lines as JSON when possible so structured fields are
   # available downstream (level, component, msg).
@@ -63,11 +64,11 @@ transforms:
     type: remap
     inputs: [docker_applogs]
     source: |
-      # docker_logs source guarantees .message; no need to coalesce.
       msg = string!(.message)
       parsed, err = parse_json(msg)
       if err == null && is_object(parsed) {
-        . = merge(., object!(parsed)) ?? .
+        # merge() of two objects can't fail; no ?? . needed.
+        . = merge(., object!(parsed))
       }
       .level     = string(.level)     ?? "info"
       .component = string(.component) ?? "container"
@@ -80,7 +81,7 @@ transforms:
       msg = string!(.message)
       parsed, err = parse_json(msg)
       if err == null && is_object(parsed) {
-        . = merge(., object!(parsed)) ?? .
+        . = merge(., object!(parsed))
       }
       .signal = "netflow"
 
