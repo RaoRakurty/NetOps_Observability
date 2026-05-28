@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, Finding } from "../services/api";
+import { severityClass, severityRowClass } from "../theme/severity";
 
 // Findings are written by the Correlation/AI service into ClickHouse
 // table netops.findings. This tab is a triage queue — most-recent first.
@@ -57,12 +58,12 @@ export default function Findings() {
           </thead>
           <tbody>
             {items.map((f) => (
-              <tr key={f.id}>
+              <tr key={f.id} className={severityRowClass(f.severity)}>
                 <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
                   {new Date(f.ts).toLocaleString()}
                 </td>
                 <td>
-                  <span className={`badge ${sevClass(f.severity)}`}>{f.severity}</span>
+                  <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span>
                 </td>
                 <td>{f.kind}</td>
                 <td style={{ fontFamily: "ui-monospace, monospace" }}>{f.device || "—"}</td>
@@ -76,10 +77,4 @@ export default function Findings() {
       )}
     </div>
   );
-}
-
-function sevClass(s: string) {
-  if (s === "critical") return "bad";
-  if (s === "warning") return "warn";
-  return "good";
 }

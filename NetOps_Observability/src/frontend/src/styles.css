@@ -1,15 +1,27 @@
 :root {
   font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-  color-scheme: light dark;
-  --bg: #0f1115;
-  --panel: #181c22;
-  --panel-border: #262b33;
-  --fg: #e6e8eb;
-  --muted: #8a93a0;
+  color-scheme: dark;
+
+  /* Layered, slightly cool dark surfaces — depth via translucency. */
+  --bg: #0c0e13;
+  --panel: rgba(255, 255, 255, 0.035);
+  --panel-solid: #161a21;
+  --panel-border: rgba(255, 255, 255, 0.09);
+  --fg: #e8eaed;
+  --muted: #8b94a3;
   --accent: #4f9eff;
-  --good: #4ad08b;
-  --warn: #f5b04a;
-  --bad: #ff5d6c;
+  --good: #3ddc97;
+  --warn: #ffb454;
+  --bad: #ff6b81;
+
+  /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
+  --sev-critical: #ff4d6d;  --sev-critical-bg: rgba(255, 77, 109, 0.16);
+  --sev-error:    #ff7849;  --sev-error-bg:    rgba(255, 120, 73, 0.16);
+  --sev-warning:  #ffb454;  --sev-warning-bg:  rgba(255, 180, 84, 0.16);
+  --sev-notice:   #c08cff;  --sev-notice-bg:   rgba(192, 140, 255, 0.16);
+  --sev-info:     #4f9eff;  --sev-info-bg:     rgba(79, 158, 255, 0.16);
+  --sev-debug:    #7e8aa0;  --sev-debug-bg:    rgba(126, 138, 160, 0.16);
+  --sev-ok:       #3ddc97;  --sev-ok-bg:       rgba(61, 220, 151, 0.16);
 }
 
 * { box-sizing: border-box; }
@@ -20,45 +32,149 @@ body {
   color: var(--fg);
 }
 
-.app {
+:root { --sidebar-w: 208px; --topbar-h: 52px; }
+
+/* ----- App shell: top bar across the top, sidebar + main below ----- */
+.shell {
   display: grid;
-  grid-template-rows: auto auto 1fr;
-  min-height: 100vh;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar main";
+  height: 100vh;
+}
+.shell.collapsed { --sidebar-w: 56px; }
+
+/* ----- Top bar ----- */
+.topbar {
+  grid-area: topbar;
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 16px;
+  background: rgba(16, 19, 25, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--panel-border);
+}
+.brand { display: flex; align-items: center; gap: 8px; min-width: 160px; }
+.brand-mark { color: var(--accent); font-size: 20px; }
+.brand-name { font-weight: 700; letter-spacing: 0.02em; }
+
+.omni {
+  flex: 1; max-width: 720px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 0 10px;
+}
+.omni:focus-within { border-color: var(--accent); }
+.omni-icon { color: var(--muted); font-size: 13px; }
+.omni input {
+  flex: 1; background: transparent; border: 0; color: var(--fg);
+  padding: 8px 0; font-size: 13px; outline: none;
 }
 
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--panel-border);
-  background: var(--panel);
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.range-picker {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 6px 8px; font-size: 12px;
 }
-.app-header h1 { font-size: 16px; margin: 0; }
-.app-header .health {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--muted);
-}
-.app-header .health .dot {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--good);
-}
-.app-header .health.bad .dot { background: var(--bad); }
+.health { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.health.bad .dot { background: var(--bad); }
 
-.tabs {
-  display: flex; gap: 4px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--panel-border);
-  background: var(--panel);
-  overflow-x: auto;
-}
-.tabs button {
+.user-menu { position: relative; }
+.user-btn {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
   background: transparent; border: 1px solid transparent; color: var(--fg);
-  padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  padding: 4px 8px; border-radius: 8px; font-size: 13px;
 }
-.tabs button:hover { background: rgba(255,255,255,0.04); }
-.tabs button.active { background: rgba(79,158,255,0.15); border-color: var(--accent); color: var(--accent); }
+.user-btn:hover { background: rgba(255,255,255,0.04); }
+.avatar {
+  width: 24px; height: 24px; border-radius: 50%; background: var(--accent);
+  color: #06101e; font-weight: 700; font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.menu-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 50;
+  background: var(--panel-solid); border: 1px solid var(--panel-border);
+  border-radius: 10px; min-width: 180px; padding: 6px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+}
+.menu-head { padding: 8px 10px; font-size: 12px; border-bottom: 1px solid var(--panel-border); margin-bottom: 4px; }
+.menu-pop button {
+  display: block; width: 100%; text-align: left; background: transparent;
+  border: 0; color: var(--fg); padding: 8px 10px; border-radius: 6px;
+  cursor: pointer; font-size: 13px;
+}
+.menu-pop button:hover { background: rgba(255,255,255,0.05); }
 
+/* ----- Sidebar ----- */
+.sidebar {
+  grid-area: sidebar;
+  display: flex; flex-direction: column; justify-content: space-between;
+  background: rgba(16, 19, 25, 0.6); border-right: 1px solid var(--panel-border);
+  padding: 10px 8px; overflow-x: hidden;
+}
+.nav-main, .nav-footer { display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px;
+  background: transparent; border: 1px solid transparent; color: var(--fg);
+  padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  font-size: 13px; text-align: left; white-space: nowrap;
+}
+.nav-item:hover { background: rgba(255,255,255,0.05); }
+.nav-item.active { background: rgba(79,158,255,0.15); border-color: rgba(79,158,255,0.4); color: var(--accent); }
+.nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; }
+.nav-collapse { color: var(--muted); }
+
+/* ----- Main content ----- */
+.main { grid-area: main; overflow: auto; background: var(--bg); display: flex; flex-direction: column; }
+.main-head {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bg); border-bottom: 1px solid var(--panel-border);
+  padding: 12px 24px 0;
+}
+.crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.crumb-section { font-weight: 600; }
+.crumb-sep { color: var(--muted); }
+.crumb-leaf { color: var(--muted); }
+.subnav { display: flex; gap: 4px; margin-top: 10px; }
+.subnav button {
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--muted); padding: 8px 10px; cursor: pointer; font-size: 13px;
+}
+.subnav button:hover { color: var(--fg); }
+.subnav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.page { padding: 20px 24px; max-width: 1400px; width: 100%; }
 .content { padding: 24px; max-width: 1280px; margin: 0 auto; width: 100%; }
+
+.empty-state { text-align: center; padding: 56px 24px; }
+.empty-state-icon { font-size: 40px; opacity: 0.6; }
+
+/* ----- Copilot slide-over ----- */
+.drawer-scrim {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  opacity: 0; pointer-events: none; transition: opacity 0.18s ease; z-index: 80;
+}
+.drawer-scrim.open { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 0; right: 0; height: 100vh; width: min(460px, 92vw);
+  background: var(--panel-solid); border-left: 1px solid var(--panel-border);
+  transform: translateX(100%); transition: transform 0.2s ease; z-index: 90;
+  display: flex; flex-direction: column;
+}
+.drawer.open { transform: translateX(0); }
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--panel-border); font-weight: 600;
+}
+.drawer-close {
+  background: transparent; border: 0; color: var(--muted);
+  font-size: 16px; cursor: pointer;
+}
+.drawer-close:hover { color: var(--fg); }
+.drawer-body { flex: 1; overflow: auto; padding: 16px; }
 .card {
   background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 10px; padding: 16px; margin-bottom: 16px;
@@ -80,7 +196,38 @@ th { color: var(--muted); font-weight: 500; }
 .iframe-wrap { background: white; border-radius: 8px; overflow: hidden; height: calc(100vh - 220px); }
 .iframe-wrap iframe { width: 100%; height: 100%; border: 0; }
 
-.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
-.badge.good { background: rgba(74,208,139,0.15); color: var(--good); }
-.badge.warn { background: rgba(245,176,74,0.15); color: var(--warn); }
-.badge.bad  { background: rgba(255,93,108,0.15); color: var(--bad); }
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 9px; border-radius: 999px; font-size: 11px;
+  font-weight: 600; letter-spacing: 0.02em; text-transform: capitalize;
+}
+.badge.good { background: rgba(61,220,151,0.15); color: var(--good); }
+.badge.warn { background: rgba(255,180,84,0.15); color: var(--warn); }
+.badge.bad  { background: rgba(255,107,129,0.15); color: var(--bad); }
+
+/* Severity badges — solid hue text on a translucent same-hue chip, with a
+   leading dot. Used across Logs, Alerts, and Findings. */
+.badge.sev-critical { background: var(--sev-critical-bg); color: var(--sev-critical); }
+.badge.sev-error    { background: var(--sev-error-bg);    color: var(--sev-error); }
+.badge.sev-warning  { background: var(--sev-warning-bg);  color: var(--sev-warning); }
+.badge.sev-notice   { background: var(--sev-notice-bg);   color: var(--sev-notice); }
+.badge.sev-info     { background: var(--sev-info-bg);     color: var(--sev-info); }
+.badge.sev-debug    { background: var(--sev-debug-bg);    color: var(--sev-debug); }
+.badge.sev-ok       { background: var(--sev-ok-bg);       color: var(--sev-ok); }
+.badge[class*="sev-"]::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 6px currentColor;
+}
+
+/* Severity row accent — a colored left bar + faint tint on the worst rows. */
+tr[class*="sevrow-"] td:first-child { box-shadow: inset 3px 0 0 transparent; }
+.sevrow-critical td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical); }
+.sevrow-error    td:first-child { box-shadow: inset 3px 0 0 var(--sev-error); }
+.sevrow-warning  td:first-child { box-shadow: inset 3px 0 0 var(--sev-warning); }
+.sevrow-notice   td:first-child { box-shadow: inset 3px 0 0 var(--sev-notice); }
+.sevrow-info     td:first-child { box-shadow: inset 3px 0 0 var(--sev-info); }
+.sevrow-debug    td:first-child { box-shadow: inset 3px 0 0 var(--sev-debug); }
+.sevrow-ok       td:first-child { box-shadow: inset 3px 0 0 var(--sev-ok); }
+.sevrow-critical { background: rgba(255, 77, 109, 0.06); }
+.sevrow-error    { background: rgba(255, 120, 73, 0.05); }
+tr[class*="sevrow-"]:hover { background: rgba(255,255,255,0.03); }

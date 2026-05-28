@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit } from "../services/api";
+import { severityClass, severityRowClass } from "../theme/severity";
 
 const RANGES: { label: string; minutes: number }[] = [
   { label: "Last 15m", minutes: 15 },
@@ -15,28 +16,35 @@ const SIGNALS: { id: "" | "applogs" | "syslog" | "flows"; label: string }[] = [
   { id: "flows", label: "Flows" },
 ];
 
-export default function Logs() {
-  const [query, setQuery] = useState("*");
+type Props = {
+  // Supplied by the shell so the global omni-search and time-range govern
+  // this view. When undefined the component works standalone.
+  initialQuery?: string;
+  rangeMinutes?: number;
+};
+
+export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
+  const [query, setQuery] = useState(initialQuery ?? "*");
   const [signal, setSignal] = useState<"" | "applogs" | "syslog" | "flows">("");
-  const [minutes, setMinutes] = useState(15);
+  const [minutes, setMinutes] = useState(rangeMinutes ?? 15);
   const [size, setSize] = useState(200);
   const [hits, setHits] = useState<OSHit[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async () => {
+  const run = async (q = query, m = minutes, sig = signal, sz = size) => {
     setBusy(true);
     setError(null);
     try {
       const end = new Date();
-      const start = new Date(end.getTime() - minutes * 60_000);
+      const start = new Date(end.getTime() - m * 60_000);
       const r = await api.searchLogs({
-        query,
+        query: q,
         from: start.toISOString(),
         to: end.toISOString(),
-        size,
-        signal,
+        size: sz,
+        signal: sig,
       });
       setHits(r?.hits?.hits ?? []);
       setTotal(r?.hits?.total?.value ?? null);
@@ -48,6 +56,29 @@ export default function Logs() {
       setBusy(false);
     }
   };
+
+  // React to the global search query / time range: re-run with the
+  // external query (also fires once on mount).
+  useEffect(() => {
+    const q = initialQuery ?? "*";
+    const m = rangeMinutes ?? minutes;
+    setQuery(q);
+    setMinutes(m);
+    run(q, m, signal, size);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery, rangeMinutes]);
+
+  // Local filter changes (signal/size) re-run with whatever's in the box,
+  // without clobbering a query the user typed here. Skips the mount run.
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    run(query, minutes, signal, size);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signal, size]);
 
   const lines = useMemo(() => {
     return hits.map((h) => {
@@ -93,13 +124,15 @@ export default function Logs() {
               </option>
             ))}
           </select>
-          <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
-            {RANGES.map((r) => (
-              <option key={r.minutes} value={r.minutes}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+          {rangeMinutes === undefined && (
+            <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
+              {RANGES.map((r) => (
+                <option key={r.minutes} value={r.minutes}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          )}
           <select value={size} onChange={(e) => setSize(Number(e.target.value))}>
             {[100, 200, 500, 1000, 5000].map((n) => (
               <option key={n} value={n}>
@@ -140,7 +173,7 @@ export default function Logs() {
               </thead>
               <tbody>
                 {lines.map((r, i) => (
-                  <tr key={i}>
+                  <tr key={i} className={severityRowClass(r.level)}>
                     <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
                       {new Date(r.ts).toLocaleString()}
                     </td>
@@ -148,7 +181,7 @@ export default function Logs() {
                       {r.source}
                     </td>
                     <td>
-                      <span className={`badge ${badgeClass(r.level)}`}>{r.level || "—"}</span>
+                      <span className={`badge ${severityClass(r.level)}`}>{r.level || "—"}</span>
                     </td>
                     <td
                       style={{
@@ -169,11 +202,4 @@ export default function Logs() {
       </div>
     </>
   );
-}
-
-function badgeClass(level: string) {
-  const l = level.toLowerCase();
-  if (l.includes("err") || l === "critical" || l === "crit" || l === "alert" || l === "emerg") return "bad";
-  if (l.includes("warn") || l === "notice") return "warn";
-  return "good";
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../services/api";
+import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
 
 type TopTalkerRow = {
   src: string;
@@ -29,12 +30,18 @@ const PROTO_NAMES: Record<number, string> = {
   132: "SCTP",
 };
 
-export default function Flows() {
-  const [since, setSince] = useState(3600);
+// sinceSeconds is supplied by the shell's global time range; when omitted
+// the component manages its own range selector.
+export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) {
+  const [since, setSince] = useState(sinceSeconds ?? 3600);
   const [top, setTop] = useState<TopTalkerRow[]>([]);
   const [byProto, setByProto] = useState<ProtoRow[]>([]);
   const [ts, setTs] = useState<TsRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (sinceSeconds !== undefined) setSince(sinceSeconds);
+  }, [sinceSeconds]);
 
   useEffect(() => {
     let alive = true;
@@ -70,16 +77,18 @@ export default function Flows() {
           Queries run against ClickHouse via <code>/api/flows/*</code>. Counts are
           scaled by each device's sampling rate.
         </p>
-        <select
-          value={since}
-          onChange={(e) => setSince(Number(e.target.value))}
-          style={{ width: 200 }}
-        >
-          <option value={900}>Last 15 minutes</option>
-          <option value={3600}>Last 1 hour</option>
-          <option value={21600}>Last 6 hours</option>
-          <option value={86400}>Last 24 hours</option>
-        </select>
+        {sinceSeconds === undefined && (
+          <select
+            value={since}
+            onChange={(e) => setSince(Number(e.target.value))}
+            style={{ width: 200 }}
+          >
+            <option value={900}>Last 15 minutes</option>
+            <option value={3600}>Last 1 hour</option>
+            <option value={21600}>Last 6 hours</option>
+            <option value={86400}>Last 24 hours</option>
+          </select>
+        )}
         {error && <p style={{ color: "var(--bad)" }}>{error}</p>}
       </div>
 
@@ -91,23 +100,35 @@ export default function Flows() {
           <ReactECharts
             style={{ height: 300 }}
             option={{
-              tooltip: { trigger: "axis" },
-              xAxis: { type: "time", axisLine: { lineStyle: { color: "#8a93a0" } } },
-              yAxis: {
-                type: "value",
-                name: "bytes",
-                axisLine: { lineStyle: { color: "#8a93a0" } },
-                splitLine: { lineStyle: { color: "#262b33" } },
-              },
-              backgroundColor: "transparent",
+              ...chartBase,
+              tooltip: { ...chartBase.tooltip, trigger: "axis" },
+              legend: { ...chartBase.legend, data: ["Bytes", "Packets"], top: 0, right: 0 },
+              grid: { left: 64, right: 64, top: 36, bottom: 28 },
+              xAxis: { type: "time", ...axisStyle },
+              yAxis: [
+                { type: "value", name: "bytes", ...axisStyle },
+                { type: "value", name: "packets", ...axisStyle, splitLine: { show: false } },
+              ],
               series: [
                 {
+                  name: "Bytes",
                   type: "line",
                   showSymbol: false,
                   smooth: true,
-                  lineStyle: { color: "#4f9eff" },
-                  areaStyle: { color: "rgba(79,158,255,0.15)" },
+                  lineStyle: { color: paletteColor(0), width: 2 },
+                  itemStyle: { color: paletteColor(0) },
+                  areaStyle: { color: areaGradient(0) },
                   data: ts.map((r) => [r.bucket, r.bytes_total]),
+                },
+                {
+                  name: "Packets",
+                  type: "line",
+                  yAxisIndex: 1,
+                  showSymbol: false,
+                  smooth: true,
+                  lineStyle: { color: paletteColor(1), width: 2 },
+                  itemStyle: { color: paletteColor(1) },
+                  data: ts.map((r) => [r.bucket, r.packets_total]),
                 },
               ],
             }}
@@ -153,16 +174,19 @@ export default function Flows() {
           <ReactECharts
             style={{ height: 280 }}
             option={{
-              tooltip: { trigger: "item" },
-              backgroundColor: "transparent",
+              ...chartBase,
+              tooltip: { ...chartBase.tooltip, trigger: "item", formatter: "{b}: {d}%" },
+              legend: { ...chartBase.legend, bottom: 0 },
               series: [
                 {
                   type: "pie",
-                  radius: ["50%", "70%"],
-                  label: { color: "#e6e8eb" },
-                  data: byProto.map((p) => ({
+                  radius: ["50%", "72%"],
+                  itemStyle: { borderColor: "#0c0e13", borderWidth: 2 },
+                  label: { color: "#c7cdd6" },
+                  data: byProto.map((p, i) => ({
                     name: PROTO_NAMES[p.proto] ?? `IP/${p.proto}`,
                     value: p.bytes_total,
+                    itemStyle: { color: paletteColor(i) },
                   })),
                 },
               ],

@@ -1,52 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, Health } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
-import Header from "./components/Header";
-import TabNavigation, { Tab } from "./components/TabNavigation";
+import { ShellContext, ShellState, TimeRange, TIME_RANGES, SectionCtx } from "./context/shell";
+import { resolveRoute } from "./nav";
+import TopBar from "./components/TopBar";
+import Sidebar from "./components/Sidebar";
+import SubNav from "./components/SubNav";
+import CopilotDrawer from "./components/CopilotDrawer";
 import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
-import Devices from "./pages/Devices";
-import Topology from "./tabs/Topology";
-import Collectors from "./tabs/Collectors";
-import Alerts from "./tabs/Alerts";
-import Rules from "./tabs/Rules";
-import Findings from "./tabs/Findings";
-import Logs from "./tabs/Logs";
-import Flows from "./tabs/Flows";
-import PrometheusTab from "./tabs/Prometheus";
-import GrafanaTab from "./tabs/Grafana";
-import SearchDashboardsTab from "./tabs/SearchDashboards";
-import Copilot from "./tabs/Copilot";
-import Settings from "./tabs/Settings";
-
-const TABS: Tab[] = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "devices", label: "Devices" },
-  { id: "topology", label: "Topology" },
-  { id: "collectors", label: "Collectors" },
-  { id: "alerts", label: "Alerts" },
-  { id: "rules", label: "Rules" },
-  { id: "findings", label: "Findings" },
-  { id: "logs", label: "Logs" },
-  { id: "flows", label: "Flows" },
-  { id: "copilot", label: "Copilot" },
-  { id: "prometheus", label: "Prometheus" },
-  { id: "grafana", label: "Grafana" },
-  { id: "search", label: "OS Dashboards" },
-  { id: "settings", label: "Settings" },
-];
 
 export default function App() {
   const { user, loading, refresh, logout } = useAuth();
-  const [tab, setTab] = useState<string>(() => location.hash.replace("#", "") || "dashboard");
   const [health, setHealth] = useState<Health | null>(null);
 
+  // Shell state — the single source of truth that unifies the sections.
+  const [hash, setHash] = useState<string>(() => location.hash || "#/overview");
+  const [range, setRange] = useState<TimeRange>(TIME_RANGES[1]); // Last 1 hour
+  const [query, setQuery] = useState<string>("*");
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
   useEffect(() => {
-    const onHash = () => setTab(location.hash.replace("#", "") || "dashboard");
+    const onHash = () => setHash(location.hash || "#/overview");
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // Poll backend health for the top-bar indicator.
   useEffect(() => {
     if (!user) return;
     let alive = true;
@@ -66,10 +46,14 @@ export default function App() {
     };
   }, [user]);
 
-  const select = (id: string) => {
-    location.hash = id;
-    setTab(id);
+  const navigate = (route: string) => {
+    location.hash = `#/${route.replace(/^#?\/?/, "")}`;
   };
+
+  const shell: ShellState = useMemo(
+    () => ({ range, setRange, query, setQuery, copilotOpen, setCopilotOpen, navigate }),
+    [range, query, copilotOpen],
+  );
 
   if (loading) {
     return <div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>;
@@ -78,26 +62,32 @@ export default function App() {
     return <Login onLoggedIn={refresh} />;
   }
 
+  const { section, leaf } = resolveRoute(hash);
+  const ctx: SectionCtx = { rangeMinutes: range.minutes, query };
+  const view = leaf ? leaf.render(ctx) : section.render ? section.render(ctx) : null;
+
   return (
-    <div className="app">
-      <Header health={health} user={user} onLogout={logout} />
-      <TabNavigation tabs={TABS} active={tab} onSelect={select} />
-      <div className="content">
-        {tab === "dashboard" && <Dashboard />}
-        {tab === "devices" && <Devices />}
-        {tab === "topology" && <Topology />}
-        {tab === "collectors" && <Collectors />}
-        {tab === "alerts" && <Alerts />}
-        {tab === "rules" && <Rules />}
-        {tab === "findings" && <Findings />}
-        {tab === "logs" && <Logs />}
-        {tab === "flows" && <Flows />}
-        {tab === "copilot" && <Copilot />}
-        {tab === "prometheus" && <PrometheusTab />}
-        {tab === "grafana" && <GrafanaTab />}
-        {tab === "search" && <SearchDashboardsTab />}
-        {tab === "settings" && <Settings />}
+    <ShellContext.Provider value={shell}>
+      <div className={`shell${collapsed ? " collapsed" : ""}`}>
+        <TopBar health={health} user={user} onLogout={logout} />
+        <Sidebar
+          activeSection={section.id}
+          collapsed={collapsed}
+          onToggle={() => setCollapsed((c) => !c)}
+        />
+        <main className="main">
+          <div className="main-head">
+            <div className="crumbs">
+              <span className="crumb-section">{section.label}</span>
+              {leaf && <span className="crumb-sep">/</span>}
+              {leaf && <span className="crumb-leaf">{leaf.label}</span>}
+            </div>
+            <SubNav section={section} activeLeaf={leaf?.id} />
+          </div>
+          <div className="page">{view}</div>
+        </main>
+        <CopilotDrawer />
       </div>
-    </div>
+    </ShellContext.Provider>
   );
 }

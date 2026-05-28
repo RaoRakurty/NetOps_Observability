@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, Alert } from "../services/api";
+import { severityClass, severityRowClass } from "../theme/severity";
 
 export default function Alerts() {
   const [items, setItems] = useState<Alert[]>([]);
@@ -39,9 +40,11 @@ export default function Alerts() {
           </thead>
           <tbody>
             {items.map((a) => (
-              <tr key={a.id}>
+              <tr key={a.id} className={severityRowClass(a.severity)}>
                 <td>{a.rule}</td>
-                <td>{a.severity}</td>
+                <td>
+                  <span className={`badge ${severityClass(a.severity)}`}>{a.severity}</span>
+                </td>
                 <td>{a.device_id ?? "—"}</td>
                 <td>{a.summary}</td>
                 <td>{new Date(a.fired_at).toLocaleString()}</td>

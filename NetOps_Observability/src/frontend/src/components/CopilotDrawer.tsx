@@ -1,0 +1,35 @@
+import { useEffect } from "react";
+import Copilot from "../tabs/Copilot";
+import { useShell } from "../context/shell";
+
+// Copilot as a right-side slide-over (Datadog-style), available from any
+// section instead of being a separate destination tab.
+export default function CopilotDrawer() {
+  const { copilotOpen, setCopilotOpen } = useShell();
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCopilotOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setCopilotOpen]);
+
+  return (
+    <>
+      <div
+        className={`drawer-scrim${copilotOpen ? " open" : ""}`}
+        onClick={() => setCopilotOpen(false)}
+      />
+      <aside className={`drawer${copilotOpen ? " open" : ""}`} aria-hidden={!copilotOpen}>
+        <div className="drawer-head">
+          <span>✦ Copilot</span>
+          <button className="drawer-close" onClick={() => setCopilotOpen(false)} title="Close (Esc)">
+            ✕
+          </button>
+        </div>
+        <div className="drawer-body">{copilotOpen && <Copilot />}</div>
+      </aside>
+    </>
+  );
+}
