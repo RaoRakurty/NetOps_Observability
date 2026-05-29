@@ -251,6 +251,10 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
       GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Allow the dashboard to embed Grafana in an <iframe>. Without this
+      # Grafana sends X-Frame-Options: deny and the UI shows "refused to
+      # connect". Served same-origin under /grafana/ via nginx.
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
       # Default empty so Grafana boots on networks that block plugin
       # downloads (corporate TLS interception). Set
       # GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env to enable.
