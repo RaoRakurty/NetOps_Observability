@@ -81,6 +81,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .brand-name { font-weight: 700; letter-spacing: 0.02em; }
 
 .omni {
+  position: relative;
   flex: 1; max-width: 720px;
   display: flex; align-items: center; gap: 8px;
   background: var(--bg); border: 1px solid var(--panel-border);
@@ -91,6 +92,37 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .omni input {
   flex: 1; background: transparent; border: 0; color: var(--fg);
   padding: 8px 0; font-size: 13px; outline: none;
+}
+
+/* Global search results dropdown */
+.omni-pop {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60;
+  background: var(--panel-solid); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 6px; max-height: 60vh; overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(17,24,39,0.16);
+}
+.omni-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  text-align: left; background: transparent; border: 0; cursor: pointer;
+  color: var(--fg); padding: 8px 10px; border-radius: 8px; font-size: 13px;
+}
+.omni-item.active { background: var(--hover); }
+.omni-kind {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
+  color: var(--accent); background: rgba(79,70,229,0.10);
+}
+.omni-kind.k-alert { color: var(--bad); background: rgba(220,38,38,0.10); }
+.omni-kind.k-device { color: #0891b2; background: rgba(8,145,178,0.10); }
+.omni-kind.k-saved { color: #d97706; background: rgba(217,119,6,0.10); }
+.omni-kind.k-logs { color: var(--muted); background: var(--hover); }
+.omni-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.omni-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.omni-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.omni-tag {
+  flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); border: 1px solid var(--panel-border);
+  border-radius: 5px; padding: 2px 6px;
 }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }

@@ -38,6 +38,7 @@ type server struct {
 	notifier    *notify.Dispatcher
 	users       *userStore
 	saved       *savedStore
+	reports     *reportScheduler
 	hub         *Hub
 }
 
@@ -106,7 +107,7 @@ func newServer() *server {
 		log.Fatalf("saved store: %v", err)
 	}
 
-	return &server{
+	srv := &server{
 		startedAt:  time.Now().UTC(),
 		discovery:  d,
 		collectors: pool,
@@ -116,6 +117,8 @@ func newServer() *server {
 		saved:      saved,
 		hub:        NewHub(),
 	}
+	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
+	return srv
 }
 
 func main() {
@@ -127,6 +130,9 @@ func main() {
 	srv.discovery.Start(ctx)
 	srv.collectors.Start(ctx)
 	srv.alerts.Start(ctx)
+	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
+		srv.reports.Start(ctx)
+	}
 	go srv.startBroadcaster(ctx.Done())
 	go srv.watchAlertsForBroadcast(ctx)
 
@@ -183,6 +189,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/saved", s.handleSaved)
 	mux.HandleFunc("/api/saved/", s.handleSavedByID)
+	mux.HandleFunc("/api/search/global", s.handleGlobalSearch)
+	mux.HandleFunc("/api/reports/runs", s.handleReportRuns)
+	mux.HandleFunc("/api/reports/run", s.handleReportRunNow)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Dashboard live data

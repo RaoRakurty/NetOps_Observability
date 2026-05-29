@@ -273,7 +273,46 @@ export const api = {
       body: JSON.stringify({ type, name, body }),
     }),
   deleteSaved: (id: string) => request<void>(`/api/saved/${id}`, { method: "DELETE" }),
+
+  // Global omni-search — resolves a free-text query to jump targets
+  // (devices, alerts, saved objects) plus a raw log-search handoff.
+  globalSearch: (q: string) =>
+    request<GlobalSearchResponse>(`/api/search/global?q=${encodeURIComponent(q)}`),
+
+  // Reports — saved objects (type=report) delivered on a schedule by the
+  // server-side scheduler via the notify dispatcher.
+  reportRuns: () => request<Record<string, ReportRun>>("/api/reports/runs"),
+  runReport: (id: string) =>
+    request<ReportRun>("/api/reports/run", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    }),
 };
+
+export type ReportKind = "alerts_summary" | "device_inventory" | "health_summary";
+export type ReportBody = {
+  kind: ReportKind;
+  interval_minutes: number;
+  severity: string;
+  enabled: boolean;
+  description?: string;
+};
+export type ReportRun = {
+  last_run?: string;
+  next_run?: string;
+  status?: string;
+  detail?: string;
+};
+
+export type GlobalResultKind = "device" | "alert" | "saved" | "logs";
+export type GlobalResult = {
+  kind: GlobalResultKind;
+  id: string;
+  title: string;
+  sub: string;
+  route: string;
+};
+export type GlobalSearchResponse = { query: string; results: GlobalResult[] };
 
 export type SavedType = "saved_search" | "dashboard" | "report";
 export type SavedObject = {

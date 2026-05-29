@@ -37,9 +37,22 @@ SNMP/remote_write feeds it). Analytics → Metrics is now a native ECharts
 Metrics Explorer (PromQL input + name autocomplete + global-time-range),
 with the raw Prometheus UI kept under Analytics → Prometheus.
 
-## Phase 5 — Reports + global search
-Server-side report scheduler delivering via the existing `notify/` dispatcher;
-`/api/search/global` omni-box resolving devices, alerts, and saved objects.
+## ✅ Phase 5 — Reports + global search (done)
+- **Global search**: `/api/search/global` resolves a free-text query to jump
+  targets — devices, active alerts, saved objects — plus a raw log-search
+  handoff. The top-bar omni-search now shows a live, keyboard-navigable results
+  dropdown (debounced) that routes straight to the matching section, instead of
+  only running a Lucene log query. See `search_global.go` + `TopBar.tsx`.
+- **Reports**: a `report` saved object carries `{kind, interval_minutes,
+  severity, enabled, description}`; the server-side `reportScheduler`
+  (`report_scheduler.go`) ticks each minute, renders a point-in-time summary
+  (alerts / device inventory / stack health) from in-memory state, and delivers
+  it through the existing `notify/` dispatcher (Slack/email/PagerDuty/…) by
+  reusing the `models.Alert` shape. Run-state (last/next fire, status) is
+  file-backed in `data/report_runs.json`, kept out of the frontend-owned body.
+  `GET /api/reports/runs` + `POST /api/reports/run` back the Reports builder UI
+  (create, monitor, **Send now**, delete). Gated by `ENABLE_REPORT_SCHEDULER`
+  (default on).
 
 ## Backlog / cross-cutting ideas
 - Light theme + per-user theme preference.
