@@ -24,8 +24,8 @@ func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
 	sql := `
 SELECT src_addr AS src,
        dst_addr AS dst,
-       sum(bytes * sampling_rate)   AS bytes_total,
-       sum(packets * sampling_rate) AS packets_total,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
@@ -40,8 +40,8 @@ func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	sql := `
 SELECT proto,
-       sum(bytes * sampling_rate)   AS bytes_total,
-       sum(packets * sampling_rate) AS packets_total,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
@@ -56,8 +56,8 @@ func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
 	step := durationQuery(r, "step", time.Minute)
 	sql := `
 SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` SECOND) AS bucket,
-       sum(bytes * sampling_rate)   AS bytes_total,
-       sum(packets * sampling_rate) AS packets_total
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total
   FROM netops.flows
  WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
  GROUP BY bucket

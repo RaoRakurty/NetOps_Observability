@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#
+# Appe2etest — one-command end-to-end test for the NetOps Observability stack.
+#
+# Seeds synthetic traffic down every real ingest path, waits for it to flow
+# through Vector into storage, then runs the tier + API smoke test and prints
+# a PASS/WARN/FAIL summary. Use it after a deploy, a config change, or just to
+# confirm "is everything actually working and populated?".
+#
+# It is a thin orchestrator over the two scripts that do the work:
+#   seed-test-traffic.py   syslog / netflow / metrics / findings / alert-demo
+#   smoke-test.py          probes nginx, API, OpenSearch, VictoriaMetrics,
+#                          Prometheus, Grafana, ClickHouse, Redpanda,
+#                          correlation, and the full API surface
+#
+# USAGE
+#   ./Appe2etest                         # seed + smoke test (anonymous API checks)
+#   ./Appe2etest -p 'Versa123@'          # also verify 200-level auth'd endpoints
+#   ./Appe2etest --alert-demo            # additionally fire HighCPU/Memory/Unreachable
+#   ./Appe2etest --no-seed               # smoke test only, don't generate traffic
+#   ./Appe2etest --host 10.1.2.3 -p PW   # target a remote stack
+#
+# OPTIONS
+#   -p, --password PW   admin password → mints a token so auth'd routes are
+#                       checked for 200 (otherwise they report WARN at 401)
+#   -u, --user NAME     admin username (default: admin)
+#   -t, --token JWT     use an existing bearer token instead of logging in
+#       --host HOST     stack host (default: 127.0.0.1)
+#       --port PORT     nginx port (default: 8000)
+#       --count N       rough volume per seed target (default: 120)
+#       --no-seed       skip traffic generation
+#       --alert-demo    push breaching metrics so the alert rules fire
+#       --wait SECONDS  pause between seeding and testing (default: 12)
+#   -h, --help          show this help
+#
+# Exit code is the smoke test's: non-zero if any check FAILs.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+SEED="$HERE/seed-test-traffic.py"
+SMOKE="$HERE/smoke-test.py"
+
+HOST="127.0.0.1"
+PORT="8000"
+COUNT="120"
+WAIT="12"
+USER="admin"
+PASSWORD=""
+TOKEN=""
+DO_SEED=1
+DO_ALERTS=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--password) PASSWORD="$2"; shift 2 ;;
+        -u|--user)     USER="$2"; shift 2 ;;
+        -t|--token)    TOKEN="$2"; shift 2 ;;
+        --host)        HOST="$2"; shift 2 ;;
+        --port)        PORT="$2"; shift 2 ;;
+        --count)       COUNT="$2"; shift 2 ;;
+        --wait)        WAIT="$2"; shift 2 ;;
+        --no-seed)     DO_SEED=0; shift ;;
+        --alert-demo)  DO_ALERTS=1; shift ;;
+        -h|--help)     sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; /^set -euo/d'; exit 0 ;;
+        *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+    esac
+done
+
+BASE="http://${HOST}:${PORT}"
+PY="$(command -v python3 || command -v python)"
+
+echo "=============================================================="
+echo " Appe2etest — NetOps end-to-end test → ${BASE}"
+echo "=============================================================="
+
+# 1. Mint a token (so the smoke test can verify auth'd 200s).
+if [[ -z "$TOKEN" && -n "$PASSWORD" ]]; then
+    echo "→ logging in as ${USER} to mint a token…"
+    TOKEN="$(curl -s -X POST "${BASE}/api/auth/login" \
+        -H 'Content-Type: application/json' \
+        -d "{\"username\":\"${USER}\",\"password\":\"${PASSWORD}\"}" \
+        | "$PY" -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)"
+    if [[ -n "$TOKEN" ]]; then
+        echo "  token acquired."
+    else
+        echo "  ! login failed — auth'd routes will report WARN (401)." >&2
+    fi
+fi
+
+# 2. Seed traffic.
+if [[ "$DO_SEED" -eq 1 ]]; then
+    echo
+    echo "→ seeding test traffic (count≈${COUNT})…"
+    "$PY" "$SEED" --host "$HOST" --count "$COUNT" || echo "  ! some seed targets failed (continuing)" >&2
+    if [[ "$DO_ALERTS" -eq 1 ]]; then
+        echo "→ pushing breaching metrics (alert-demo)…"
+        "$PY" "$SEED" alert-demo --host "$HOST" --count 6 || true
+    fi
+    echo "→ waiting ${WAIT}s for Vector → storage…"
+    sleep "$WAIT"
+else
+    echo "→ --no-seed: skipping traffic generation"
+fi
+
+# 3. Smoke test (token, if any, flows through the env).
+echo
+echo "→ running smoke test…"
+NETOPS_TOKEN="$TOKEN" NETOPS_HOST="$HOST" BASE_PORT="$PORT" \
+    "$PY" "$SMOKE" --host "$HOST" --port "$PORT"

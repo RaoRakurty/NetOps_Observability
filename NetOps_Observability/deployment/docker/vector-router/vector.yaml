@@ -37,6 +37,26 @@ sources:
     group_id: "netops-router-flows"
     decoding: { codec: json }
 
+transforms:
+  # goflow2 renders the IP protocol as a NAME ("TCP"/"UDP"/"ICMP"…), but the
+  # ClickHouse flows.proto column is UInt8 (the IANA number). Without this
+  # coercion every flow batch fails the CH insert with a 400 and is dropped —
+  # which is why netops.flows stayed empty. Map the common names to numbers;
+  # leave already-numeric values (NetFlow v9/IPFIX) untouched.
+  flows_decoded:
+    type: remap
+    inputs: [kafka_flows]
+    source: |
+      proto_names = {
+        "HOPOPT": 0, "ICMP": 1, "IGMP": 2, "TCP": 6, "UDP": 17,
+        "GRE": 47, "ESP": 50, "AH": 51, "ICMPv6": 58, "EIGRP": 88,
+        "OSPF": 89, "SCTP": 132
+      }
+      if is_string(.proto) {
+        num = get(proto_names, [string!(.proto)]) ?? 0
+        .proto = to_int(num) ?? 0
+      }
+
 sinks:
   # Application + container logs → OpenSearch
   opensearch_applogs:
@@ -65,7 +85,7 @@ sinks:
   # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
     type: elasticsearch
-    inputs: [kafka_flows]
+    inputs: [flows_decoded]
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:
@@ -76,7 +96,7 @@ sinks:
 
   clickhouse_flows:
     type: clickhouse
-    inputs: [kafka_flows]
+    inputs: [flows_decoded]
     endpoint: "http://clickhouse:8123"
     database: netops
     table: flows

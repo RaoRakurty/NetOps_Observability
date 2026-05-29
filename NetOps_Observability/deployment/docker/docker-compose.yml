@@ -323,6 +323,11 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       VICTORIA_URL: "http://victoria:8428"
+      # Native Metrics Explorer + alert evaluator query this Prometheus-API
+      # endpoint. Point it at VictoriaMetrics (drop-in /api/v1/query) so the
+      # SNMP/device telemetry Telegraf remote_writes there is visible — see
+      # ROADMAP Phase 4. Override to http://prometheus:9090 for scrape metrics.
+      METRICS_URL: ${METRICS_URL:-http://victoria:8428}
       OPENSEARCH_URL: "http://opensearch:9200"
       CLICKHOUSE_URL: "http://clickhouse:8123"
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
