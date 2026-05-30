@@ -44,11 +44,16 @@ export type NavSection = {
 //   + raw-tool escape hatches: Grafana/Prometheus/OpenSearch) pinned at the
 //   bottom. Order here is the sidebar order.
 export const NAV: NavSection[] = [
+  // Overview — the home landing. The modular panel board lives at the top;
+  // curated saved Dashboards are nested beneath it (expand in the sidebar).
   {
     id: "overview",
     label: "Overview",
     icon: "overview",
-    render: () => <Dashboard />,
+    children: [
+      { id: "board", label: "Overview", render: () => <Dashboard /> },
+      { id: "dashboards", label: "Dashboards", render: () => <SavedDashboards /> },
+    ],
   },
   // Explore — ad-hoc, query-first work across the data types (Grafana
   // "Explore" / Datadog "Metrics Explorer"), kept distinct from Dashboards.
@@ -62,13 +67,6 @@ export const NAV: NavSection[] = [
       { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "saved", label: "Saved", render: () => <SavedSearches /> },
     ],
-  },
-  // Dashboards — curated, saved views only (the universal label).
-  {
-    id: "dashboards",
-    label: "Dashboards",
-    icon: "dashboards",
-    render: () => <SavedDashboards />,
   },
   // Alerts — active state vs rule definitions vs correlated incidents
   // (Zabbix "Problems"/"Alerts", Splunk "Active"/"Detectors").

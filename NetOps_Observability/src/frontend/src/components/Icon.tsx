@@ -96,6 +96,7 @@ const PATHS: Record<string, JSX.Element> = {
   logo: <path d="M2 12h4l3 8 4-16 3 8h6" />,
   "chevron-left": <path d="m15 18-6-6 6-6" />,
   "chevron-right": <path d="m9 18 6-6-6-6" />,
+  "chevron-down": <path d="m6 9 6 6 6-6" />,
   close: (
     <>
       <line x1="18" y1="6" x2="6" y2="18" />

@@ -86,7 +86,7 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 func routeForSaved(typ string) string {
 	switch typ {
 	case "dashboard":
-		return "dashboards/saved"
+		return "overview/dashboards"
 	case "report":
 		return "reports"
 	default:

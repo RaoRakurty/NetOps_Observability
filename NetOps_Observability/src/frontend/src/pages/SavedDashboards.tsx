@@ -1,7 +1,7 @@
 // Saved dashboards — native, composable dashboards built from panels
 // (KPIs, log searches, flow charts, metric queries) and persisted as
 // saved objects. Phase 1 reserves the slot; the curated Grafana boards
-// remain available under Dashboards → Grafana in the meantime.
+// remain available under Administration → Grafana in the meantime.
 
 export default function SavedDashboards() {
   return (
@@ -14,7 +14,7 @@ export default function SavedDashboards() {
       </p>
       <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 16 }}>
         Native dashboards persist as saved objects (Phase 2). For now, the
-        curated operational boards live under <strong>Dashboards → Grafana</strong>.
+        curated operational boards live under <strong>Administration → Grafana</strong>.
       </p>
     </div>
   );

@@ -72,6 +72,7 @@ export default function App() {
         <TopBar health={health} user={user} onLogout={logout} />
         <Sidebar
           activeSection={section.id}
+          activeLeaf={leaf?.id}
           collapsed={collapsed}
           onToggle={() => setCollapsed((c) => !c)}
         />
@@ -79,8 +80,8 @@ export default function App() {
           <div className="main-head">
             <div className="crumbs">
               <span className="crumb-section">{section.label}</span>
-              {leaf && <span className="crumb-sep">/</span>}
-              {leaf && <span className="crumb-leaf">{leaf.label}</span>}
+              {leaf && leaf.label !== section.label && <span className="crumb-sep">/</span>}
+              {leaf && leaf.label !== section.label && <span className="crumb-leaf">{leaf.label}</span>}
             </div>
             <SubNav section={section} activeLeaf={leaf?.id} />
           </div>
