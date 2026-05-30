@@ -31,15 +31,15 @@ const version = "0.1.0-scaffold"
 // (discovery aggregator, collector pool, alert engine, notifier, user
 // store for auth, and the live-events WebSocket hub).
 type server struct {
-	startedAt   time.Time
-	discovery   *DiscoveryAggregator
-	collectors  *collectors.Pool
-	alerts      *alerts.Engine
-	notifier    *notify.Dispatcher
-	users       *userStore
-	saved       *savedStore
-	reports     *reportScheduler
-	hub         *Hub
+	startedAt  time.Time
+	discovery  *DiscoveryAggregator
+	collectors *collectors.Pool
+	alerts     *alerts.Engine
+	notifier   *notify.Dispatcher
+	users      *userStore
+	saved      *savedStore
+	reports    *reportScheduler
+	hub        *Hub
 }
 
 func newServer() *server {
@@ -52,10 +52,27 @@ func newServer() *server {
 		d.Register(NewNetboxSource(os.Getenv("NETBOX_URL"), os.Getenv("NETBOX_TOKEN")))
 	}
 
-	pool := collectors.NewPool()
+	// Feed collectors the live device inventory so they poll real targets.
+	pool := collectors.NewPool(func() []collectors.Target {
+		devs := d.Devices()
+		out := make([]collectors.Target, 0, len(devs))
+		for _, dev := range devs {
+			if dev.Address == "" {
+				continue
+			}
+			out = append(out, collectors.Target{
+				ID:       dev.ID,
+				Address:  dev.Address,
+				Protocol: dev.PreferredProtocol,
+			})
+		}
+		return out
+	})
 	pool.Enable("snmp", os.Getenv("ENABLE_SNMP_COLLECTION") == "true")
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
+	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
+	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 
 	notifier := notify.NewDispatcher()
 	if os.Getenv("FEATURE_SLACK_NOTIFICATIONS") == "true" {
@@ -186,6 +203,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/top", s.handleFlowsTopTalkers)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
+	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/saved", s.handleSaved)
 	mux.HandleFunc("/api/saved/", s.handleSavedByID)

@@ -84,6 +84,30 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
 	proxyClickHouse(w, sql)
 }
 
+// handleTunnels returns the latest sample for each overlay tunnel (IPsec /
+// SD-WAN / GRE) the collectors have reported, newest first. "LIMIT 1 BY id"
+// collapses the time series to the current state per tunnel. Optional
+// ?status=up|down filters; ?limit caps the rows. Empty until a collector
+// populates netops.tunnels — the view renders whatever real data arrives.
+func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
+	limit := intQuery(r, "limit", 200, 1, 2000)
+	where := ""
+	if st := r.URL.Query().Get("status"); st == "up" || st == "down" {
+		where = " WHERE status = '" + st + "' "
+	}
+	sql := `
+SELECT id, type, local_device, local_addr, remote_device, remote_addr,
+       status, latency_ms, jitter_ms, loss_pct, qoe, uptime_s,
+       toString(ts) AS ts
+  FROM netops.tunnels
+` + where + `
+ ORDER BY ts DESC
+ LIMIT 1 BY id
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+	proxyClickHouse(w, sql)
+}
+
 // proxyClickHouse runs sql against ClickHouse over its HTTP interface.
 func proxyClickHouse(w http.ResponseWriter, sql string) {
 	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")

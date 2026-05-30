@@ -3,7 +3,42 @@
 # from Netbox or SNMP scanning. Set `override: true` to make a static
 # entry take precedence over any discovered metadata with the same id.
 
-devices: {}
+# Each collector polls only the devices whose `preferred_protocol` matches it
+# (snmp/gnmi/netconf); a device with no preferred_protocol is polled by SNMP.
+# These lab entries have placeholder addresses, so they appear as targets but
+# won't be reachable until pointed at real devices (or a simulator). Replace
+# addresses/credentials with your own.
+devices:
+  edge-rtr-01:
+    address: 10.20.0.1
+    preferred_protocol: snmp
+    labels:
+      site: lab
+      role: edge
+  edge-rtr-02:
+    address: 10.20.0.2
+    preferred_protocol: snmp
+    labels:
+      site: lab
+      role: edge
+  core-sw-01:
+    address: 10.20.1.1
+    preferred_protocol: gnmi
+    labels:
+      site: lab
+      role: core
+  dist-sw-03:
+    address: 10.20.2.3
+    preferred_protocol: netconf
+    labels:
+      site: lab
+      role: distribution
+  fw-edge-01:
+    address: 10.20.3.1
+    preferred_protocol: netconf
+    labels:
+      site: lab
+      role: firewall
 
 # Example (uncomment and adapt):
 #

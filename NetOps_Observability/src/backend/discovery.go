@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"netops/backend/collectors"
 	"netops/backend/models"
 )
 
@@ -36,6 +37,10 @@ type DiscoveryAggregator struct {
 	cache   map[string]models.Device
 	refresh chan struct{}
 	stats   map[string]sourceStats
+	// detected holds vendors learned via SNMP sysObjectID detection, keyed by
+	// device id. Re-applied on every source poll so a re-poll (which rebuilds
+	// the cache entry from the source) doesn't wipe a detected vendor.
+	detected map[string]string
 }
 
 type sourceStats struct {
@@ -46,9 +51,10 @@ type sourceStats struct {
 
 func NewDiscoveryAggregator() *DiscoveryAggregator {
 	return &DiscoveryAggregator{
-		cache:   make(map[string]models.Device),
-		refresh: make(chan struct{}, 1),
-		stats:   make(map[string]sourceStats),
+		cache:    make(map[string]models.Device),
+		refresh:  make(chan struct{}, 1),
+		stats:    make(map[string]sourceStats),
+		detected: make(map[string]string),
 	}
 }
 
@@ -69,6 +75,77 @@ func (a *DiscoveryAggregator) Start(ctx context.Context) {
 	for _, src := range sources {
 		go a.pollLoop(ctx, src)
 	}
+	if os.Getenv("ENABLE_VENDOR_DETECTION") == "true" {
+		go a.vendorLoop(ctx)
+	}
+}
+
+// vendorLoop periodically fills in the vendor of any inventory device that
+// doesn't have one yet, via SNMP sysObjectID detection — the authoritative
+// signal (LibreNMS/Observium/Datadog all lead with it). Devices whose source
+// already supplies a vendor (Netbox, static YAML) are left untouched.
+func (a *DiscoveryAggregator) vendorLoop(ctx context.Context) {
+	community := os.Getenv("SNMP_COMMUNITY")
+	if community == "" {
+		community = "public"
+	}
+	a.enrichVendors(ctx, community)
+	t := time.NewTicker(2 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.enrichVendors(ctx, community)
+		}
+	}
+}
+
+func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community string) {
+	// Snapshot the devices still needing detection (don't hold the lock during
+	// the SNMP round-trips).
+	type todo struct{ id, addr string }
+	a.mu.RLock()
+	var pending []todo
+	for id, d := range a.cache {
+		if d.Address == "" || d.Vendor != "" {
+			continue
+		}
+		if _, done := a.detected[id]; done {
+			continue
+		}
+		pending = append(pending, todo{id, d.Address})
+	}
+	a.mu.RUnlock()
+
+	for _, p := range pending {
+		dctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		vendor, descr := collectors.DetectVendor(dctx, p.addr, community)
+		cancel()
+		if vendor == "" {
+			continue // leave it for a later cycle (negative result not cached)
+		}
+		a.mu.Lock()
+		a.detected[p.id] = vendor
+		if d, ok := a.cache[p.id]; ok && d.Vendor == "" {
+			d.Vendor = vendor
+			if d.OS == "" && descr != "" {
+				d.OS = truncateDescr(descr)
+			}
+			a.cache[p.id] = d
+		}
+		a.mu.Unlock()
+	}
+}
+
+// truncateDescr keeps sysDescr short enough for the inventory's OS column.
+func truncateDescr(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 120 {
+		return s[:120]
+	}
+	return s
 }
 
 func (a *DiscoveryAggregator) pollLoop(ctx context.Context, src DiscoverySource) {
@@ -108,6 +185,11 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 		}
 		d.Source = src.Name()
 		d.LastSeen = time.Now().UTC()
+		if d.Vendor == "" {
+			if v, ok := a.detected[d.ID]; ok {
+				d.Vendor = v
+			}
+		}
 		a.cache[d.ID] = d
 	}
 }
@@ -185,13 +267,13 @@ func (s *StaticSource) Poll(_ context.Context) ([]models.Device, error) {
 
 // ParseStaticDevices reads a YAML file shaped like:
 //
-//   devices:
-//     core-router-01:
-//       address: 10.0.0.1
-//       preferred_protocol: snmp
-//       credential_ref: corp-snmp
-//       labels:
-//         site: hq
+//	devices:
+//	  core-router-01:
+//	    address: 10.0.0.1
+//	    preferred_protocol: snmp
+//	    credential_ref: corp-snmp
+//	    labels:
+//	      site: hq
 //
 // We accept this narrow shape only — the parser is hand-rolled to keep
 // the build dependency-free. Swap for `gopkg.in/yaml.v3` when you need
@@ -340,8 +422,8 @@ func NewSNMPSource(cidrs string) *SNMPSource {
 	return &SNMPSource{cidrRanges: clean}
 }
 
-func (s *SNMPSource) Name() string                                  { return "snmp" }
-func (s *SNMPSource) Interval() time.Duration                       { return 5 * time.Minute }
+func (s *SNMPSource) Name() string                                    { return "snmp" }
+func (s *SNMPSource) Interval() time.Duration                         { return 5 * time.Minute }
 func (s *SNMPSource) Poll(_ context.Context) ([]models.Device, error) { return nil, nil }
 
 // =============================================================================
@@ -367,9 +449,9 @@ func (n *NetboxSource) Interval() time.Duration { return 60 * time.Second }
 
 // netboxDevice is the subset of /dcim/devices/ we care about.
 type netboxDevice struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`
-	PrimaryIP    *struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	PrimaryIP *struct {
 		Address string `json:"address"`
 	} `json:"primary_ip"`
 	DeviceType *struct {
@@ -392,9 +474,9 @@ type netboxDevice struct {
 }
 
 type netboxResp struct {
-	Count   int             `json:"count"`
-	Next    *string         `json:"next"`
-	Results []netboxDevice  `json:"results"`
+	Count   int            `json:"count"`
+	Next    *string        `json:"next"`
+	Results []netboxDevice `json:"results"`
 }
 
 func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {

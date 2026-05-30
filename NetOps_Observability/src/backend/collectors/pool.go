@@ -21,12 +21,18 @@ type Collector interface {
 
 // Status is a snapshot of a collector's recent behaviour, exposed via API.
 type Status struct {
-	Name        string    `json:"name"`
-	Enabled     bool      `json:"enabled"`
-	Healthy     bool      `json:"healthy"`
-	LastTick    time.Time `json:"last_tick,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
-	Targets     int       `json:"targets"`
+	Name string `json:"name"`
+	// Kind separates transport/protocol collectors (snmp/gnmi/netconf), shown
+	// in the Collectors tab, from feature collectors like tunnel discovery that
+	// have their own views. "protocol" | "discovery".
+	Kind           string    `json:"kind,omitempty"`
+	Enabled        bool      `json:"enabled"`
+	Healthy        bool      `json:"healthy"`
+	LastTick       time.Time `json:"last_tick,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+	Targets        int       `json:"targets"`
+	Reachable      int       `json:"reachable"`
+	LastPollMillis int64     `json:"last_poll_ms,omitempty"`
 }
 
 // Pool holds the configured collectors and runs the enabled ones.
@@ -36,14 +42,18 @@ type Pool struct {
 	enabled    map[string]bool
 }
 
-func NewPool() *Pool {
+// NewPool builds the collector set. targets supplies the live device
+// inventory each collector polls (pass nil for none).
+func NewPool(targets TargetFunc) *Pool {
 	p := &Pool{
 		collectors: make(map[string]Collector),
 		enabled:    make(map[string]bool),
 	}
-	p.register(NewSNMP())
-	p.register(NewGNMI())
-	p.register(NewNETCONF())
+	p.register(NewSNMP(targets))
+	p.register(NewGNMI(targets))
+	p.register(NewNETCONF(targets))
+	p.register(NewTunnels(targets))
+	p.register(NewSNMPMetrics(targets))
 	return p
 }
 

@@ -1,41 +1,11 @@
 package collectors
 
-import (
-	"context"
-	"sync"
-	"time"
-)
+import "time"
 
-// NETCONF collector — SSH-based RPC against YANG models. Implement Run with
-// scrapli-netconf or a custom SSH session when the integration is needed.
-type NETCONF struct {
-	mu     sync.RWMutex
-	status Status
-}
-
-func NewNETCONF() *NETCONF {
-	return &NETCONF{status: Status{Name: "netconf", Healthy: true}}
-}
-
-func (n *NETCONF) Name() string { return "netconf" }
-
-func (n *NETCONF) Run(ctx context.Context) error {
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case t := <-ticker.C:
-			n.mu.Lock()
-			n.status.LastTick = t.UTC()
-			n.mu.Unlock()
-		}
-	}
-}
-
-func (n *NETCONF) Status() Status {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	return n.status
+// NETCONF is an SSH/YANG collector. Full NETCONF RPCs need an SSH client
+// (golang.org/x/crypto/ssh, outside the zero-dependency scope); the stdlib
+// layer probes the NETCONF SSH port over TCP (default 830) for reachability
+// and records latency.
+func NewNETCONF(targets TargetFunc) Collector {
+	return newPoller("netconf", 120*time.Second, 830, tcpProbe, byProtocol(targets, "netconf"))
 }
