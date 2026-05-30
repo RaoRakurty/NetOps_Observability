@@ -98,8 +98,25 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 var errJWT = errors.New("invalid token")
 
 type jwtClaims struct {
-	Sub  string `json:"sub"`
-	Role string `json:"role"`
-	Iat  int64  `json:"iat"`
-	Exp  int64  `json:"exp"`
+	Sub    string   `json:"sub"`
+	Role   string   `json:"role"`
+	Tenant string   `json:"tenant,omitempty"` // tenant id the principal is bound to
+	Scopes []string `json:"scopes,omitempty"` // API-key scopes (empty for human sessions)
+	Iat    int64    `json:"iat"`
+	Exp    int64    `json:"exp"`
+}
+
+// hasScope reports whether the principal carries an API-key scope. Human
+// sessions carry none, so they fall through to RBAC role checks instead.
+func (c jwtClaims) hasScope(want string) bool {
+	for _, s := range c.Scopes {
+		if s == want || s == "admin:*" {
+			return true
+		}
+		// "read:*" satisfies any "read:<x>"; "write:*" any "write:<x>".
+		if strings.HasSuffix(s, ":*") && strings.HasPrefix(want, strings.TrimSuffix(s, "*")) {
+			return true
+		}
+	}
+	return false
 }

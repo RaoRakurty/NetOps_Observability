@@ -228,6 +228,7 @@ def write_env(env_path: Path, port: int, *, force: bool) -> dict[str, str]:
         "GRAFANA_ADMIN_PASSWORD":   generate_password(20),
         "CLICKHOUSE_PASSWORD":      generate_password(24),
         "ADMIN_INITIAL_PASSWORD":   generate_password(16),
+        "KEYCLOAK_ADMIN_PASSWORD":  generate_password(20),
     }
 
     body = f"""# NetOps Observability — environment.
@@ -309,6 +310,40 @@ AWS_SECRET_ACCESS_KEY=
 AWS_REGION=                    # e.g. us-east-1
 SNS_PHONE_NUMBERS=             # comma-separated E.164 numbers, OR set SNS_TOPIC_ARN
 SNS_TOPIC_ARN=
+
+# ITSM — ServiceNow auto-ticketing. Opens a deduped incident when an alert at
+# or above SERVICENOW_MIN_SEVERITY fires and auto-resolves it when the alert
+# clears. See docs/ITSM_INTEGRATION.md.
+FEATURE_SERVICENOW_NOTIFICATIONS=false
+SERVICENOW_INSTANCE_URL=       # e.g. https://dev12345.service-now.com
+SERVICENOW_USER=
+SERVICENOW_PASSWORD=
+SERVICENOW_MIN_SEVERITY=critical   # critical|error|warning|notice|info
+SERVICENOW_ASSIGNMENT_GROUP=
+
+# SSO — OIDC/SAML/LDAP brokered by Keycloak (opt-in). The Go API only verifies
+# the resulting tokens (stdlib RS256/JWKS), so the backend stays dependency-free.
+# To enable: create the keycloak DB once
+#   docker compose exec postgres createdb -U $DB_USER keycloak
+# then `docker compose --profile sso up -d keycloak`, configure a realm + OIDC
+# client, and set OIDC_ENABLED=true with the values below. See docs/IDENTITY_ACCESS.md.
+OIDC_ENABLED=false
+OIDC_ISSUER=                   # e.g. http://localhost:{port}/auth/realms/netops
+OIDC_CLIENT_ID=netops
+OIDC_CLIENT_SECRET=
+OIDC_REDIRECT_URL=             # e.g. http://localhost:{port}/api/auth/sso/callback
+OIDC_POST_LOGIN_URL=/
+OIDC_PROVIDERS=                # extra IdP buttons: id:Label:kind,comma-separated
+OIDC_ADMIN_ROLES=super-admin,admin,netops-admin
+OIDC_OPERATOR_ROLES=operator,netops-operator
+OIDC_DEFAULT_ROLE=read-only
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD={secrets_map["KEYCLOAK_ADMIN_PASSWORD"]}
+KEYCLOAK_DB_NAME=keycloak
+
+# Token lifetimes
+ACCESS_TOKEN_TTL=1h
+REFRESH_TOKEN_TTL=168h
 
 # AI Copilot (chat pane in the dashboard). Leave FEATURE_COPILOT=false
 # to disable. Provider can be 'anthropic' or 'openai'.

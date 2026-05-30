@@ -1,12 +1,20 @@
-import { useState } from "react";
-import { api } from "../services/api";
+import { useEffect, useState } from "react";
+import { api, SSOConfig } from "../services/api";
 import { BRAND, BRAND_TAGLINE } from "../brand";
 
 export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    () => sessionStorage.getItem("netops_sso_error"),
+  );
+  const [sso, setSso] = useState<SSOConfig | null>(null);
+
+  useEffect(() => {
+    sessionStorage.removeItem("netops_sso_error");
+    api.ssoConfig().then(setSso).catch(() => setSso(null));
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,6 +84,32 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
+
+        {sso?.enabled && sso.providers.length > 0 && (
+          <>
+            <div
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                margin: "16px 0 12px", color: "var(--muted)", fontSize: 11,
+              }}
+            >
+              <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+              or
+              <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+            </div>
+            {sso.providers.map((p) => (
+              <button
+                key={p.id || "default"}
+                type="button"
+                onClick={() => { window.location.href = api.ssoLoginUrl(p.id); }}
+                style={{ width: "100%", marginTop: 8, padding: 10 }}
+                title={`Sign in via ${p.kind.toUpperCase()}`}
+              >
+                Sign in with {p.name}
+              </button>
+            ))}
+          </>
+        )}
 
         <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 16 }}>
           First-time install? Initial credentials are in{" "}

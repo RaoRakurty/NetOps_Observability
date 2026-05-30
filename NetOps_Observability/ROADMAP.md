@@ -63,21 +63,42 @@ with the raw Prometheus UI kept under Analytics → Prometheus.
   (create, monitor, **Send now**, delete). Gated by `ENABLE_REPORT_SCHEDULER`
   (default on).
 
-## ▶ Phase 6 — Identity, Access, API & ITSM (design + scaffolding)
-Enterprise readiness. UI previews are live under **Administration**
-(`tabs/admin.tsx`, clearly marked *Planned*); the build plans are written:
-- **Auth + multi-tenancy + granular RBAC** — local accounts → Postgres, tenants,
+## ✅ Phase 6 — Identity, Access, API & ITSM (done)
+Enterprise readiness, all live under **Administration** (`tabs/admin.tsx`) and
+the Go API — every piece honors the stdlib-only backend rule (federation is
+pushed out to Keycloak; the API only verifies tokens).
+- ✅ **Auth + granular RBAC** — file-backed local accounts (→ Postgres later),
   module-level permissions (none/read/write/admin), built-in **and** custom
   roles. See [`docs/IDENTITY_ACCESS.md`](docs/IDENTITY_ACCESS.md).
-- **SSO** — OAuth2/OIDC, SAML 2.0, LDAP/AD via **Keycloak** as the identity
-  broker (keeps the Go backend stdlib-only); JWT RS256 with configurable expiry
-  + rotating refresh tokens.
-- **API Access** — inbuilt programmatic API: scoped, tenant-bound API keys,
-  OpenAPI reference + GraphQL explorer. See [`docs/API_ACCESS.md`](docs/API_ACCESS.md).
-- **ITSM** — ServiceNow + Jira bi-directional ticketing on the existing
-  `notify/` framework. See [`docs/ITSM_INTEGRATION.md`](docs/ITSM_INTEGRATION.md).
+- ✅ **True multi-tenancy** — every device carries a `tenant_id`; a tenant-bound
+  principal can **never** see or mutate another tenant's devices (or their
+  alerts). Super-admins / global principals see across tenants; shared/global
+  resources stay visible to all. Tokens carry the tenant claim; enforced at the
+  API boundary (`tenancy.go`, with `tenancy_test.go` covering the leak cases).
+- ✅ **Token auth** — short access token (`ACCESS_TOKEN_TTL`, default 1h) +
+  rotating, single-use refresh token (7d) with replay detection that revokes the
+  lineage (`refresh.go`); the SPA auto-renews. Keycloak-issued **RS256** tokens
+  are verified against the IdP JWKS in pure stdlib (`jwks.go`).
+- ✅ **SSO — OIDC, SAML 2.0, LDAP/AD via Keycloak** — Authorization-Code flow
+  (`oidc.go`): `/api/auth/sso/{config,login,callback}`. SAML/LDAP IdPs are
+  selected with `kc_idp_hint`; the callback verifies the ID token, JIT-provisions
+  the user (role mapped from Keycloak roles/groups) and re-issues a native
+  session. Login page + Administration → Authentication render the live
+  providers. Keycloak ships as an opt-in compose service (`--profile sso`).
+- ✅ **API Access** — scoped, tenant-bound API keys (Bearer / `X-API-Key`) whose
+  RBAC role is derived from their scopes; a live **OpenAPI 3** document at
+  `/api/openapi.json` with an in-app reference. See [`docs/API_ACCESS.md`](docs/API_ACCESS.md).
+- ✅ **ITSM — ServiceNow auto-ticketing** — bi-directional: alerts at/above a
+  configurable threshold open a deduped incident and **auto-resolve** it when the
+  alert clears; open-ticket state is persisted across restarts; live status +
+  open incidents surface in Administration → ITSM (`notify/servicenow.go`).
+  See [`docs/ITSM_INTEGRATION.md`](docs/ITSM_INTEGRATION.md).
 
-## Backlog / cross-cutting ideas
+## ▶ Phase 7 — Backlog / cross-cutting ideas
+- **Jira** ITSM connector (mirror the ServiceNow auto-ticketing shape).
+- Extend tenant scoping from devices/alerts to flows, findings and saved objects.
+- GraphiQL-style in-app GraphQL explorer; per-key rate limits + usage stats.
+- Move the file-backed identity/saved stores onto Postgres (no API change).
 - Dark-mode toggle (tokens already centralized; add a `[data-theme]` swap).
 - Density toggle (comfortable / compact tables).
 - Keyboard command palette (⌘K) over the omni-search.

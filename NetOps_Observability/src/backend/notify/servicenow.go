@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,43 +16,128 @@ import (
 	"netops/backend/models"
 )
 
-// ServiceNow opens an ITSM incident (ticket) when a CRITICAL alert fires.
+// ServiceNow is an ITSM connector that AUTO-TICKETS alerts bi-directionally:
 //
-// It is a notify.Channel like the others, but self-filters to critical severity
-// so only real, page-worthy alerts cut a ticket. A small in-memory dedup set
-// keyed by alert fingerprint (rule+device) prevents a flapping alert from
-// spawning duplicate incidents within the process lifetime; cleared when the
-// alert resolves (Dispatch is called again with ResolvedAt set — see engine).
+//   - an alert at/above the configured severity threshold opens an incident via
+//     the ServiceNow Table API (deduped by fingerprint so a flapping alert never
+//     spawns duplicates);
+//   - when that alert clears, the SAME incident is auto-resolved (state →
+//     Resolved with close notes), closing the loop without a human touching it.
 //
-// Auth is HTTP Basic against the ServiceNow Table API; swap for OAuth by
-// replacing setAuth. Configure via FEATURE_SERVICENOW_NOTIFICATIONS=true +
-// SERVICENOW_INSTANCE_URL + SERVICENOW_USER + SERVICENOW_PASSWORD.
+// Open-ticket state is persisted to disk (WithStateFile) so dedup and auto-close
+// survive an API restart. Auth is HTTP Basic against the Table API; swap for
+// OAuth by replacing the SetBasicAuth calls. Configure via
+// FEATURE_SERVICENOW_NOTIFICATIONS=true + SERVICENOW_INSTANCE_URL +
+// SERVICENOW_USER + SERVICENOW_PASSWORD (+ optional SERVICENOW_MIN_SEVERITY,
+// SERVICENOW_ASSIGNMENT_GROUP). See docs/ITSM_INTEGRATION.md.
 type ServiceNow struct {
-	instanceURL string // e.g. https://dev12345.service-now.com
-	user        string
-	password    string
-	client      *http.Client
+	instanceURL     string // e.g. https://dev12345.service-now.com
+	user            string
+	password        string
+	client          *http.Client
+	threshold       int    // minimum severity rank that cuts a ticket
+	thresholdName   string // human label for the threshold
+	assignmentGroup string
+	statePath       string
 
 	mu   sync.Mutex
-	open map[string]string // fingerprint -> incident number/sys_id
+	open map[string]*ServiceNowTicket // fingerprint -> ticket
+}
+
+// ServiceNowTicket links a NetOps alert fingerprint to its ServiceNow incident.
+type ServiceNowTicket struct {
+	Fingerprint string    `json:"fingerprint"`
+	Number      string    `json:"number"`
+	SysID       string    `json:"sys_id"`
+	Severity    string    `json:"severity"`
+	Device      string    `json:"device,omitempty"`
+	Summary     string    `json:"summary,omitempty"`
+	OpenedAt    time.Time `json:"opened_at"`
+	State       string    `json:"state"` // pending | open
 }
 
 func NewServiceNow(instanceURL, user, password string) *ServiceNow {
 	return &ServiceNow{
-		instanceURL: strings.TrimRight(instanceURL, "/"),
-		user:        user,
-		password:    password,
-		client:      &http.Client{Timeout: 15 * time.Second},
-		open:        make(map[string]string),
+		instanceURL:   strings.TrimRight(instanceURL, "/"),
+		user:          user,
+		password:      password,
+		client:        &http.Client{Timeout: 15 * time.Second},
+		threshold:     severityRank("critical"),
+		thresholdName: "critical",
+		open:          make(map[string]*ServiceNowTicket),
 	}
+}
+
+// WithThreshold sets the minimum severity that cuts a ticket (default critical).
+func (s *ServiceNow) WithThreshold(sev string) *ServiceNow {
+	sev = strings.ToLower(strings.TrimSpace(sev))
+	if sev == "" {
+		return s
+	}
+	s.threshold = severityRank(sev)
+	s.thresholdName = sev
+	return s
+}
+
+// WithStateFile makes open tickets durable across restarts.
+func (s *ServiceNow) WithStateFile(path string) *ServiceNow {
+	if path == "" {
+		return s
+	}
+	s.statePath = path
+	s.loadState()
+	return s
+}
+
+func (s *ServiceNow) WithAssignmentGroup(g string) *ServiceNow {
+	s.assignmentGroup = strings.TrimSpace(g)
+	return s
 }
 
 func (s *ServiceNow) Name() string { return "servicenow" }
 
-// isCritical reports whether an alert is severe enough to warrant a ticket.
-func isCritical(sev string) bool {
-	return strings.EqualFold(strings.TrimSpace(sev), "critical")
+// Configured reports whether the connector has an instance URL.
+func (s *ServiceNow) Configured() bool { return s != nil && s.instanceURL != "" }
+
+// ThresholdName is the minimum severity that cuts a ticket.
+func (s *ServiceNow) ThresholdName() string { return s.thresholdName }
+
+// Tickets returns the currently-open incidents (newest first) for the status UI.
+func (s *ServiceNow) Tickets() []ServiceNowTicket {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ServiceNowTicket, 0, len(s.open))
+	for _, t := range s.open {
+		if t.State == "open" {
+			out = append(out, *t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt.After(out[j].OpenedAt) })
+	return out
 }
+
+// severityRank orders the product's severity ladder so a threshold can be
+// "this and worse". Unknown severities sort low (won't ticket).
+func severityRank(sev string) int {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return 5
+	case "error":
+		return 4
+	case "warning":
+		return 3
+	case "notice":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func isCritical(sev string) bool { return severityRank(sev) >= severityRank("critical") }
+
+func (s *ServiceNow) meets(sev string) bool { return severityRank(sev) >= s.threshold }
 
 func fingerprint(a models.Alert) string {
 	if a.ID != "" {
@@ -59,8 +147,13 @@ func fingerprint(a models.Alert) string {
 }
 
 func (s *ServiceNow) Send(a models.Alert) error {
-	// Only critical alerts cut a ticket.
-	if !isCritical(a.Severity) {
+	// Resolution events for a tracked ticket are handled even if the alert's
+	// severity is below threshold at clear time; otherwise only threshold-
+	// meeting alerts are relevant.
+	if a.ResolvedAt != nil {
+		return s.resolve(fingerprint(a))
+	}
+	if !s.meets(a.Severity) {
 		return nil
 	}
 	if s.instanceURL == "" {
@@ -68,60 +161,73 @@ func (s *ServiceNow) Send(a models.Alert) error {
 	}
 	fp := fingerprint(a)
 
-	// Resolution event: close-out is a follow-up; for now just forget the
-	// fingerprint so a genuine re-fire can open a fresh ticket.
-	if a.ResolvedAt != nil {
-		s.mu.Lock()
-		delete(s.open, fp)
-		s.mu.Unlock()
-		return nil
-	}
-
-	// Dedup: skip if this alert already has an open ticket this process.
+	// Dedup: reserve the slot before the network call so concurrent dispatches
+	// don't race into two incidents.
 	s.mu.Lock()
 	if _, exists := s.open[fp]; exists {
 		s.mu.Unlock()
 		return nil
 	}
-	// Reserve the slot before the network call so concurrent dispatches don't race.
-	s.open[fp] = "pending"
+	s.open[fp] = &ServiceNowTicket{Fingerprint: fp, State: "pending"}
 	s.mu.Unlock()
 
-	num, err := s.createIncident(a)
+	num, sysID, err := s.createIncident(a)
 	if err != nil {
-		// Roll back the reservation so a later retry can succeed.
 		s.mu.Lock()
 		delete(s.open, fp)
 		s.mu.Unlock()
 		return err
 	}
 	s.mu.Lock()
-	s.open[fp] = num
+	s.open[fp] = &ServiceNowTicket{
+		Fingerprint: fp, Number: num, SysID: sysID, Severity: a.Severity,
+		Device: a.DeviceID, Summary: a.Summary, OpenedAt: time.Now().UTC(), State: "open",
+	}
+	s.saveLocked()
 	s.mu.Unlock()
 	return nil
 }
 
-// createIncident POSTs to the ServiceNow Table API and returns the incident
-// number on success.
-func (s *ServiceNow) createIncident(a models.Alert) (string, error) {
-	// Critical → impact/urgency 1 (= priority 1 / Critical in ServiceNow).
+// resolve auto-closes the incident bound to fp (if any) and forgets it. The
+// local forget is unconditional so a genuine re-fire can open a fresh ticket
+// even if ServiceNow is briefly unreachable.
+func (s *ServiceNow) resolve(fp string) error {
+	s.mu.Lock()
+	t, ok := s.open[fp]
+	if ok {
+		delete(s.open, fp)
+		s.saveLocked()
+	}
+	s.mu.Unlock()
+	if !ok || t.SysID == "" || s.instanceURL == "" {
+		return nil
+	}
+	return s.resolveIncident(t.SysID)
+}
+
+// createIncident POSTs to the Table API and returns (number, sys_id).
+func (s *ServiceNow) createIncident(a models.Alert) (string, string, error) {
+	impact, urgency := severityToImpactUrgency(a.Severity)
 	payload := map[string]string{
 		"short_description": fmt.Sprintf("[%s] %s", strings.ToUpper(a.Severity), a.Summary),
 		"description":       incidentBody(a),
-		"impact":            "1",
-		"urgency":           "1",
+		"impact":            impact,
+		"urgency":           urgency,
 		"category":          "network",
 		"caller_id":         s.user,
 	}
 	if a.DeviceID != "" {
 		payload["cmdb_ci"] = a.DeviceID // best-effort CI match by name/id
 	}
+	if s.assignmentGroup != "" {
+		payload["assignment_group"] = s.assignmentGroup
+	}
 	buf, _ := json.Marshal(payload)
 
 	url := s.instanceURL + "/api/now/table/incident"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -129,11 +235,11 @@ func (s *ServiceNow) createIncident(a models.Alert) (string, error) {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("servicenow returned %d", resp.StatusCode)
+		return "", "", fmt.Errorf("servicenow returned %d", resp.StatusCode)
 	}
 	var out struct {
 		Result struct {
@@ -142,13 +248,97 @@ func (s *ServiceNow) createIncident(a models.Alert) (string, error) {
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", "", err
 	}
 	num := out.Result.Number
 	if num == "" {
 		num = out.Result.SysID
 	}
-	return num, nil
+	return num, out.Result.SysID, nil
+}
+
+// resolveIncident PATCHes an incident to the Resolved state with close notes.
+func (s *ServiceNow) resolveIncident(sysID string) error {
+	payload := map[string]string{
+		"state":       "6", // Resolved
+		"close_code":  "Resolved by caller",
+		"close_notes": "Auto-resolved by NetOps/Netra: the underlying alert cleared.",
+		"work_notes":  "Alert cleared; incident auto-resolved by NetOps/Netra.",
+	}
+	buf, _ := json.Marshal(payload)
+	url := s.instanceURL + "/api/now/table/incident/" + sysID
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(s.user, s.password)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("servicenow resolve returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// severityToImpactUrgency maps the NetOps ladder onto ServiceNow's 1(high)..3(low).
+func severityToImpactUrgency(sev string) (impact, urgency string) {
+	switch severityRank(sev) {
+	case 5: // critical
+		return "1", "1"
+	case 4: // error
+		return "2", "1"
+	case 3: // warning
+		return "2", "2"
+	default:
+		return "3", "3"
+	}
+}
+
+// ---- state persistence -----------------------------------------------------
+
+func (s *ServiceNow) saveLocked() {
+	if s.statePath == "" {
+		return
+	}
+	list := make([]ServiceNowTicket, 0, len(s.open))
+	for _, t := range s.open {
+		if t.State == "open" {
+			list = append(list, *t)
+		}
+	}
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o755); err != nil {
+		return
+	}
+	tmp := s.statePath + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err == nil {
+		_ = os.Rename(tmp, s.statePath)
+	}
+}
+
+func (s *ServiceNow) loadState() {
+	b, err := os.ReadFile(s.statePath)
+	if err != nil {
+		return
+	}
+	var list []ServiceNowTicket
+	if err := json.Unmarshal(b, &list); err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range list {
+		t := list[i]
+		s.open[t.Fingerprint] = &t
+	}
 }
 
 func incidentBody(a models.Alert) string {

@@ -15,6 +15,7 @@ type Device struct {
 	OS                string            `json:"os,omitempty"`
 	PreferredProtocol string            `json:"preferred_protocol,omitempty"`
 	CredentialRef     string            `json:"credential_ref,omitempty"`
+	TenantID          string            `json:"tenant_id,omitempty"` // owning tenant ("" = global/shared)
 	Labels            map[string]string `json:"labels,omitempty"`
 	Source            string            `json:"source"`
 	LastSeen          time.Time         `json:"last_seen"`

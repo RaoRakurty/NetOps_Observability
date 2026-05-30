@@ -1,10 +1,18 @@
-# Identity & Access (design)
+# Identity & Access
 
-> **Status: design / scaffolding.** The UI for this lives under
-> **Administration** (`src/frontend/src/tabs/admin.tsx`) as *planned previews*.
-> This document is the build plan. Today's working auth is the single-admin JWT
-> flow in [`AUTH.md`](AUTH.md); everything here extends it without throwing it
-> away.
+> **Status: implemented.** Local accounts, granular RBAC, multi-tenancy, rotating
+> refresh tokens and SSO (OIDC/SAML/LDAP via Keycloak) are live in the Go API and
+> under **Administration** (`src/frontend/src/tabs/admin.tsx`). This document is
+> both the design rationale and the as-built reference. The identity stores are
+> file-backed today (swappable to Postgres behind the same methods).
+>
+> **As-built quick map**
+> - Local auth + RBAC: `auth.go`, `rbac.go`, `identity_handlers.go`, `users.go`
+> - Rotating refresh tokens: `refresh.go` (single-use, 7d, replay → revoke lineage)
+> - SSO broker flow: `oidc.go`; RS256/JWKS verify: `jwks.go`
+> - Multi-tenancy isolation: `tenancy.go` (+ `tenancy_test.go`)
+> - Endpoints: `POST /api/auth/login` · `POST /api/auth/refresh` ·
+>   `GET /api/auth/sso/{config,login,callback}` · `GET /api/auth/permissions`
 
 The goal: turn the current single-admin login into a real, enterprise-ready
 identity layer — **multi-tenant**, with **granular RBAC**, **built-in and custom
@@ -160,7 +168,57 @@ policy** and are set via env / tenant settings.
   (`auth_source` set, `pw_hash` null); optional SCIM endpoint for push-sync.
 
 The Go backend gains **zero** third-party modules for this — it only learns to
-verify RS256 against a JWKS URL (stdlib `crypto/rsa` + `encoding/json`).
+verify RS256 against a JWKS URL (stdlib `crypto/rsa` + `encoding/json`, see
+`jwks.go`).
+
+### As-built: bringing SSO up
+
+Keycloak ships as an **opt-in** compose service (it isn't in the default stack):
+
+```bash
+# 1. Create Keycloak's database in the bundled Postgres (one-time):
+docker compose exec postgres createdb -U "$DB_USER" keycloak
+
+# 2. Start the broker:
+docker compose --profile sso up -d keycloak     # serves under /auth
+
+# 3. In Keycloak: create a realm (e.g. `netops`), an OIDC *confidential* client
+#    with redirect URI http://<host>:8000/api/auth/sso/callback, and (optionally)
+#    add SAML/LDAP identity providers + a role/group mapper.
+
+# 4. Point the API at it via .env, then `docker compose up -d api`:
+OIDC_ENABLED=true
+OIDC_ISSUER=http://<host>:8000/auth/realms/netops
+OIDC_CLIENT_ID=netops
+OIDC_CLIENT_SECRET=<from Keycloak>
+OIDC_REDIRECT_URL=http://<host>:8000/api/auth/sso/callback
+# Optional extra IdP buttons (id:Label:kind), e.g. a SAML and an LDAP provider:
+OIDC_PROVIDERS=corp-saml:Corp SSO:saml,corp-ad:Active Directory:ldap
+```
+
+The login page and **Administration → Authentication** then render the live
+providers; a Keycloak realm role in `OIDC_ADMIN_ROLES`/`OIDC_OPERATOR_ROLES`
+maps a federated user onto a NetOps built-in role at first login.
+
+---
+
+## Multi-tenancy (as-built)
+
+Tenant isolation is enforced at the API boundary, not just hidden in the UI:
+
+- Every device carries a `tenant_id` (`models.Device`); empty = global/shared.
+- Access tokens carry the principal's `tenant` claim (set at login / refresh /
+  SSO callback from the user's tenant).
+- A principal is **cross-tenant** (sees everything) when it is a super-admin or
+  is unbound / bound to the `global` tenant — that covers the seeded admin and
+  platform operators. Everyone else is **strictly scoped**: `GET /api/devices`
+  returns only their tenant's (and shared/global) devices, `GET /api/alerts` is
+  filtered to alerts on devices they can see, fetching another tenant's device by
+  id returns **404** (never confirm it exists), and a scoped principal can only
+  create devices inside its own tenant and delete only its own (not shared ones).
+- API keys are tenant-bound, so a machine client is scoped the same way.
+
+See `tenancy.go`; the cross-tenant leak cases are pinned by `tenancy_test.go`.
 
 ---
 

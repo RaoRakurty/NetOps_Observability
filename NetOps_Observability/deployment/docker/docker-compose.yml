@@ -63,6 +63,41 @@ services:
     restart: *restart
 
   # =========================================================================
+  # IDENTITY BROKER (optional — Single Sign-On)
+  # =========================================================================
+  #
+  # Keycloak is the AUTHENTICATION plane: it speaks OIDC, SAML 2.0 and LDAP/AD
+  # and brokers external IdPs (Okta, Azure AD, Google), while the Go API stays
+  # stdlib-only and only validates the resulting tokens (see
+  # docs/IDENTITY_ACCESS.md). It is opt-in so the default stack stays lean:
+  #
+  #   docker compose --profile sso up -d keycloak
+  #
+  # Then create a realm + an OIDC client for NetOps and set OIDC_ENABLED=true
+  # and the OIDC_* vars in .env (the api service reads them).
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    profiles: ["sso"]
+    command: ["start", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      # Override KEYCLOAK_ADMIN_PASSWORD in .env before enabling SSO. A soft
+      # default (not `:?`) is used on purpose: a hard-required var would break the
+      # DEFAULT `docker compose up`, since Compose interpolates the whole file
+      # regardless of the `sso` profile gating this service.
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-before-enabling-sso}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${DB_USER}
+      KC_DB_PASSWORD: ${DB_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /auth
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
   # CORE EVENT BUS
   # =========================================================================
 
@@ -368,6 +403,28 @@ services:
       AWS_REGION: ${AWS_REGION:-}
       SNS_PHONE_NUMBERS: ${SNS_PHONE_NUMBERS:-}
       SNS_TOPIC_ARN: ${SNS_TOPIC_ARN:-}
+      # ITSM — ServiceNow auto-ticketing (open on alert, auto-resolve on clear)
+      FEATURE_SERVICENOW_NOTIFICATIONS: ${FEATURE_SERVICENOW_NOTIFICATIONS:-false}
+      SERVICENOW_INSTANCE_URL: ${SERVICENOW_INSTANCE_URL:-}
+      SERVICENOW_USER: ${SERVICENOW_USER:-}
+      SERVICENOW_PASSWORD: ${SERVICENOW_PASSWORD:-}
+      SERVICENOW_MIN_SEVERITY: ${SERVICENOW_MIN_SEVERITY:-critical}
+      SERVICENOW_ASSIGNMENT_GROUP: ${SERVICENOW_ASSIGNMENT_GROUP:-}
+      SERVICENOW_STATE_FILE: /data/servicenow_tickets.json
+      # SSO — OIDC/SAML/LDAP brokered by Keycloak (the API only verifies tokens).
+      # Bring Keycloak up with: docker compose --profile sso up -d keycloak
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-netops}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      OIDC_POST_LOGIN_URL: ${OIDC_POST_LOGIN_URL:-/}
+      OIDC_PROVIDERS: ${OIDC_PROVIDERS:-}
+      OIDC_ADMIN_ROLES: ${OIDC_ADMIN_ROLES:-super-admin,admin,netops-admin}
+      OIDC_OPERATOR_ROLES: ${OIDC_OPERATOR_ROLES:-operator,netops-operator}
+      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-read-only}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1h}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
       # AI Copilot
       FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}

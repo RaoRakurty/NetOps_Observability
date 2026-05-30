@@ -162,6 +162,30 @@ export function setRefresh(t: string | null): void {
   else localStorage.setItem(REFRESH_KEY, t);
 }
 
+// captureSSORedirect inspects the URL fragment the SSO callback redirects to
+// (#token=…&refresh=…&sso=1, or #sso_error=…) and, on success, stores the
+// session and clears the fragment. Call once at startup before rendering.
+// Returns an error string when the SSO round-trip failed, else null.
+export function captureSSORedirect(): string | null {
+  const hash = window.location.hash.replace(/^#/, "");
+  if (!hash.includes("token=") && !hash.includes("sso_error=")) return null;
+  const p = new URLSearchParams(hash);
+  const err = p.get("sso_error");
+  const clear = () => history.replaceState(null, "", window.location.pathname + window.location.search);
+  if (err) {
+    clear();
+    return err;
+  }
+  const token = p.get("token");
+  const refresh = p.get("refresh");
+  if (token) {
+    setToken(token);
+    setRefresh(refresh);
+    clear();
+  }
+  return null;
+}
+
 // Single-flight refresh: many requests can 401 at once; only one /refresh runs.
 let refreshInFlight: Promise<boolean> | null = null;
 async function doRefresh(rt: string): Promise<boolean> {
@@ -268,6 +292,11 @@ export const api = {
     setRefresh(null);
     fireAuthChange(false);
   },
+  // SSO (OIDC/SAML/LDAP via Keycloak). Config is public; the login flow is a
+  // full-page redirect (the browser must follow 302s to the IdP and back).
+  ssoConfig: () => request<SSOConfig>("/api/auth/sso/config"),
+  ssoLoginUrl: (idp?: string) => `/api/auth/sso/login${idp ? `?idp=${encodeURIComponent(idp)}` : ""}`,
+
   me: () => request<AuthUser>("/api/auth/me"),
   changePassword: (current_password: string, new_password: string) =>
     request<{ status: string }>("/api/auth/change-password", {
@@ -392,6 +421,10 @@ export const api = {
     request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note }) }),
   deleteTenant: (id: string) => request<void>(`/api/tenants/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
+  // Self-describing API + ITSM connector status.
+  openapi: () => request<OpenAPISpec>("/api/openapi.json"),
+  itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),
+
   listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
   createApiKey: (label: string, scopes: string[], tenant_id?: string) =>
     request<{ key: ApiKey; secret: string }>("/api/apikeys", {
@@ -511,6 +544,36 @@ export type SavedObject = {
   body: any;
   created_at: string;
   updated_at: string;
+};
+
+// ----- SSO / API / ITSM -----
+export type SSOProvider = { id: string; name: string; kind: "oidc" | "saml" | "ldap" };
+export type SSOConfig = { enabled: boolean; providers: SSOProvider[] };
+
+export type OpenAPIOperation = { tags?: string[]; summary?: string };
+export type OpenAPISpec = {
+  openapi: string;
+  info: { title: string; version: string; description?: string };
+  paths: Record<string, Record<string, OpenAPIOperation>>;
+};
+
+export type ServiceNowTicket = {
+  fingerprint: string;
+  number: string;
+  sys_id: string;
+  severity: string;
+  device?: string;
+  summary?: string;
+  opened_at: string;
+  state: string;
+};
+export type ServiceNowStatus = {
+  enabled: boolean;
+  configured: boolean;
+  threshold?: string;
+  auto_close?: boolean;
+  open?: ServiceNowTicket[];
+  open_count?: number;
 };
 
 export type PromNamesResponse = { status: string; data: string[] };

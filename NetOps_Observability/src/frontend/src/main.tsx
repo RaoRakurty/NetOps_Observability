@@ -6,7 +6,13 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import App from "./App";
+import { captureSSORedirect } from "./services/api";
 import "./styles.css";
+
+// If we arrived here from the SSO callback redirect, capture the session from
+// the URL fragment (and stash any error for Login to show) before first render.
+const ssoError = captureSSORedirect();
+if (ssoError) sessionStorage.setItem("netops_sso_error", ssoError);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

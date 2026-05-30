@@ -21,11 +21,11 @@ import (
 
 type User struct {
 	Username     string    `json:"username"`
-	Role         string    `json:"role"`           // role id (legacy: "admin" | "viewer")
+	Role         string    `json:"role"` // role id (legacy: "admin" | "viewer")
 	Email        string    `json:"email,omitempty"`
 	DisplayName  string    `json:"display_name,omitempty"`
 	TenantID     string    `json:"tenant_id,omitempty"`
-	Status       string    `json:"status,omitempty"` // active | invited | disabled
+	Status       string    `json:"status,omitempty"`      // active | invited | disabled
 	AuthSource   string    `json:"auth_source,omitempty"` // local | oidc | saml | ldap
 	PasswordHash string    `json:"password_hash"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -168,6 +168,58 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 	s.users[strings.ToLower(u.Username)] = u
 	if err := s.flushLocked(); err != nil {
 		delete(s.users, strings.ToLower(u.Username))
+		return User{}, err
+	}
+	return u, nil
+}
+
+// UpsertFederated provisions or refreshes a user authenticated by an external
+// IdP (via Keycloak). On first login it creates a passwordless account
+// (auth_source != local); on subsequent logins it refreshes the profile and the
+// IdP-derived role so Keycloak role/group changes propagate. A pre-existing
+// LOCAL account of the same name is never silently converted or re-roled — the
+// federated login is accepted against it but local management wins.
+func (s *userStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return User{}, errors.New("username required")
+	}
+	if source == "" {
+		source = "oidc"
+	}
+	key := strings.ToLower(username)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u, ok := s.users[key]; ok {
+		if u.AuthSource != "local" {
+			// Federated account — keep it in sync with the IdP.
+			if email != "" {
+				u.Email = email
+			}
+			if displayName != "" {
+				u.DisplayName = displayName
+			}
+			if role != "" {
+				u.Role = role
+			}
+			u.AuthSource = source
+			s.users[key] = u
+			if err := s.flushLocked(); err != nil {
+				return User{}, err
+			}
+		}
+		return u, nil
+	}
+	if tenant == "" {
+		tenant = TenantGlobal
+	}
+	u := User{
+		Username: username, Role: role, Email: email, DisplayName: displayName,
+		TenantID: tenant, Status: "active", AuthSource: source, CreatedAt: time.Now().UTC(),
+	}
+	s.users[key] = u
+	if err := s.flushLocked(); err != nil {
+		delete(s.users, key)
 		return User{}, err
 	}
 	return u, nil

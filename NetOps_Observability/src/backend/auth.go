@@ -93,10 +93,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ttl := accessTokenTTL()
 	tok, err := signJWT(jwtClaims{
-		Sub:  user.Username,
-		Role: user.Role,
-		Iat:  time.Now().Unix(),
-		Exp:  time.Now().Add(ttl).Unix(),
+		Sub:    user.Username,
+		Role:   user.Role,
+		Tenant: user.TenantID,
+		Iat:    time.Now().Unix(),
+		Exp:    time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -141,7 +142,7 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	ttl := accessTokenTTL()
 	tok, err := signJWT(jwtClaims{
-		Sub: user.Username, Role: user.Role,
+		Sub: user.Username, Role: user.Role, Tenant: user.TenantID,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
@@ -228,6 +229,9 @@ var publicPaths = []string{
 	"/api/auth/login",
 	"/api/auth/refresh",
 	"/api/auth/logout",
+	"/api/auth/sso/config",
+	"/api/auth/sso/login",
+	"/api/auth/sso/callback",
 	"/metrics",
 }
 
@@ -269,26 +273,46 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		}
 		// Machine clients present an API key (ntk_…). Resolve it to a synthetic
-		// principal scoped read-only by default (scope→level enforcement is a
-		// follow-up; see docs/API_ACCESS.md).
+		// principal carrying the key's tenant + scopes; the RBAC role is derived
+		// from the scopes (see docs/API_ACCESS.md). Scope checks gate the
+		// scope-protected endpoints (e.g. write:incidents).
 		if strings.HasPrefix(token, keyPrefix) {
 			k, ok := s.apiKeys.Verify(token)
 			if !ok {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid or revoked API key"))
 				return
 			}
-			claims := jwtClaims{Sub: "apikey:" + k.ID, Role: RoleReadOnly}
+			claims := jwtClaims{
+				Sub:    "apikey:" + k.ID,
+				Role:   roleFromScopes(k.Scopes),
+				Tenant: k.TenantID,
+				Scopes: k.Scopes,
+			}
 			ctx := context.WithValue(r.Context(), userCtxKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
+		// Our own session tokens are HS256. Try that first (the common path).
 		claims, err := verifyJWT(token, jwtSecret())
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, err)
+		if err == nil {
+			ctx := context.WithValue(r.Context(), userCtxKey, claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		ctx := context.WithValue(r.Context(), userCtxKey, claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		// Otherwise, if SSO is configured, accept a Keycloak-signed RS256 Bearer
+		// (service accounts / direct API clients) verified against its JWKS.
+		if s.oidc.ready() {
+			if oc, verr := s.oidc.jwks.verifyRS256(token, s.oidc.issuer, s.oidc.clientID); verr == nil {
+				ctx := context.WithValue(r.Context(), userCtxKey, jwtClaims{
+					Sub:    firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub),
+					Role:   s.oidc.roleFor(oc),
+					Tenant: s.oidc.defaultTenant,
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, err)
 	})
 }
 

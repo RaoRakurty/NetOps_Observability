@@ -44,6 +44,8 @@ type server struct {
 	snmpCreds  *snmpCredStore
 	saved      *savedStore
 	reports    *reportScheduler
+	oidc       *oidcProvider
+	servicenow *notify.ServiceNow
 	hub        *Hub
 }
 
@@ -123,14 +125,20 @@ func newServer() *server {
 			os.Getenv("SNS_TOPIC_ARN"),
 		))
 	}
-	// ITSM: critical alerts open a ServiceNow incident (the channel self-filters
-	// to critical severity and dedups by fingerprint). See notify/servicenow.go.
+	// ITSM: alerts at/above the configured threshold auto-open a ServiceNow
+	// incident and auto-resolve it when the alert clears (bi-directional
+	// autoticketing). State persists across restarts. See notify/servicenow.go.
+	var serviceNow *notify.ServiceNow
 	if os.Getenv("FEATURE_SERVICENOW_NOTIFICATIONS") == "true" {
-		notifier.Register(notify.NewServiceNow(
+		serviceNow = notify.NewServiceNow(
 			os.Getenv("SERVICENOW_INSTANCE_URL"),
 			os.Getenv("SERVICENOW_USER"),
 			os.Getenv("SERVICENOW_PASSWORD"),
-		))
+		).
+			WithThreshold(os.Getenv("SERVICENOW_MIN_SEVERITY")).
+			WithStateFile(envOr("SERVICENOW_STATE_FILE", "/data/servicenow_tickets.json")).
+			WithAssignmentGroup(os.Getenv("SERVICENOW_ASSIGNMENT_GROUP"))
+		notifier.Register(serviceNow)
 	}
 
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
@@ -186,6 +194,8 @@ func newServer() *server {
 		refresh:    refresh,
 		snmpCreds:  snmpCreds,
 		saved:      saved,
+		oidc:       newOIDCProvider(),
+		servicenow: serviceNow,
 		hub:        NewHub(),
 	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
@@ -248,6 +258,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/auth/permissions", s.handlePermissions)
+	// SSO (OIDC/SAML/LDAP via Keycloak) — config + Authorization Code flow.
+	mux.HandleFunc("/api/auth/sso/config", s.handleSSOConfig)
+	mux.HandleFunc("/api/auth/sso/login", s.handleSSOLogin)
+	mux.HandleFunc("/api/auth/sso/callback", s.handleSSOCallback)
 	// Identity & access (admin-gated): users, roles, tenants, API keys.
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/", s.handleUserByID)
@@ -282,6 +296,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/reports/run", s.handleReportRunNow)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
+	// Self-describing API + ITSM connector status.
+	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/api/itsm/servicenow", s.handleITSMServiceNow)
 	// Dashboard live data
 	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
 	mux.HandleFunc("/api/metrics/query", s.handleMetricsQuery)
@@ -308,14 +325,23 @@ func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
+	claims, _ := userFrom(r.Context())
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.discovery.Devices())
+		// Tenant isolation: scoped principals only see their tenant's (and
+		// shared/global) devices.
+		writeJSON(w, http.StatusOK, visibleDevices(s.discovery.Devices(), claims))
 	case http.MethodPost:
 		var d models.Device
 		if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		// A scoped principal can only create devices inside its own tenant; it
+		// may not assign a device to another tenant. Cross-tenant principals may
+		// set any tenant_id explicitly.
+		if tenant, cross := principalTenant(claims); !cross {
+			d.TenantID = tenant
 		}
 		s.discovery.Upsert(d)
 		writeJSON(w, http.StatusCreated, d)
@@ -331,15 +357,28 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	claims, _ := userFrom(r.Context())
+	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
 		d, ok := s.discovery.Get(id)
-		if !ok {
+		// 404 (not 403) for out-of-tenant devices: don't reveal that the id
+		// exists in another tenant.
+		if !ok || !canSeeDevice(d, tenant, cross) {
 			http.NotFound(w, r)
 			return
 		}
 		writeJSON(w, http.StatusOK, d)
 	case http.MethodDelete:
+		// A scoped principal may only delete a device owned by its own tenant
+		// (not shared/global ones, which belong to no single tenant).
+		if !cross {
+			d, ok := s.discovery.Get(id)
+			if !ok || deviceTenant(d) != tenant {
+				http.NotFound(w, r)
+				return
+			}
+		}
 		s.discovery.Delete(id)
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -352,8 +391,21 @@ func (s *server) handleCollectors(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.collectors.Status())
 }
 
-func (s *server) handleAlerts(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.alerts.Active())
+func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	claims, _ := userFrom(r.Context())
+	active := s.alerts.Active()
+	// Tenant isolation: a scoped principal only sees alerts on devices it can
+	// see (alerts with no device — e.g. stack-level — stay visible).
+	if ids, cross := s.visibleDeviceIDs(claims); !cross {
+		filtered := make([]models.Alert, 0, len(active))
+		for _, a := range active {
+			if a.DeviceID == "" || ids[a.DeviceID] {
+				filtered = append(filtered, a)
+			}
+		}
+		active = filtered
+	}
+	writeJSON(w, http.StatusOK, active)
 }
 
 func (s *server) handleRules(w http.ResponseWriter, r *http.Request) {

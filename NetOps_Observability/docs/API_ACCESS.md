@@ -1,7 +1,10 @@
-# API Access (design)
+# API Access
 
-> **Status: design / scaffolding.** UI preview lives at **Administration → API
-> Access** (`src/frontend/src/tabs/admin.tsx`). This is the build plan.
+> **Status: implemented.** Scoped, tenant-bound API keys, token auth with
+> rotating refresh, and a live **OpenAPI 3** document (`GET /api/openapi.json`,
+> rendered in **Administration → API Access**) are all live. A GraphiQL explorer
+> and per-key rate limits remain follow-ups. Backend: `apikeys.go`, `openapi.go`,
+> `auth.go`, `refresh.go`.
 
 NetOps is **API-first**: every action in the dashboard is already a documented
 HTTP call against the Go API. This document makes that programmatic surface a

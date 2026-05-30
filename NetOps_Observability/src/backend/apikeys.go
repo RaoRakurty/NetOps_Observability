@@ -26,8 +26,8 @@ type APIKey struct {
 	ID         string     `json:"id"`
 	TenantID   string     `json:"tenant_id"`
 	Label      string     `json:"label"`
-	Hash       string     `json:"hash"`              // sha256 hex of the secret
-	Prefix     string     `json:"prefix"`            // first chars, for display
+	Hash       string     `json:"hash"`   // sha256 hex of the secret
+	Prefix     string     `json:"prefix"` // first chars, for display
 	Scopes     []string   `json:"scopes"`
 	CreatedBy  string     `json:"created_by"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -54,6 +54,24 @@ func (k APIKey) public() publicAPIKey {
 		Scopes: k.Scopes, CreatedBy: k.CreatedBy, CreatedAt: k.CreatedAt,
 		LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt,
 	}
+}
+
+// roleFromScopes derives the RBAC role an API key principal acts under from its
+// scope list. Keys are read-only by default; a write: scope grants operator-
+// level write on the product modules, and admin:* grants super-admin. This keeps
+// a key from ever exceeding what its scopes describe (see docs/API_ACCESS.md).
+func roleFromScopes(scopes []string) string {
+	role := RoleReadOnly
+	for _, s := range scopes {
+		s = strings.ToLower(strings.TrimSpace(s))
+		switch {
+		case s == "admin:*":
+			return RoleSuperAdmin
+		case strings.HasPrefix(s, "write:"):
+			role = RoleOperator
+		}
+	}
+	return role
 }
 
 func hashKey(secret string) string {

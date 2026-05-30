@@ -1,7 +1,14 @@
-# ITSM & Ticketing (design)
+# ITSM & Ticketing
 
-> **Status: design / scaffolding.** UI preview lives at **Administration →
-> Integrations** (`src/frontend/src/tabs/admin.tsx`). This is the build plan.
+> **Status: ServiceNow implemented; Jira planned.** ServiceNow auto-ticketing is
+> live (`notify/servicenow.go`): alerts at/above a configurable severity open a
+> deduped incident via the Table API and **auto-resolve** it when the alert
+> clears, with open-ticket state persisted across restarts and live status under
+> **Administration → ITSM** (`GET /api/itsm/servicenow`). Configure via env:
+> `FEATURE_SERVICENOW_NOTIFICATIONS=true`, `SERVICENOW_INSTANCE_URL`,
+> `SERVICENOW_USER`, `SERVICENOW_PASSWORD`, optional `SERVICENOW_MIN_SEVERITY`
+> (default `critical`) and `SERVICENOW_ASSIGNMENT_GROUP`. Jira and full inbound
+> (poll/webhook) state-sync remain the build plan below.
 
 Turn NetOps alerts and correlated incidents into tickets in the customer's
 system of record — **ServiceNow** and **Jira** — with bi-directional sync. This

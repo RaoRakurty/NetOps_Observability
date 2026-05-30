@@ -1,25 +1,19 @@
-// Administration — Identity, Access, API and ITSM.
-//
-// Users · Roles · Tenants · API Access are LIVE: they read/write the Go API
-// (file-backed identity stores; see docs/IDENTITY_ACCESS.md + docs/API_ACCESS.md
-// and src/backend/{users,rbac,tenants,apikeys}.go). Authentication (SSO/SAML/
-// LDAP via Keycloak) and ITSM Integrations remain planned previews because they
-// require external systems.
+// Administration — Identity, Access, API and ITSM. All sections are LIVE against
+// the Go API:
+//   - Users · Roles · Tenants · API Access  → file-backed identity stores
+//     (src/backend/{users,rbac,tenants,apikeys}.go)
+//   - Authentication → live SSO config (/api/auth/sso/config); OIDC/SAML/LDAP
+//     are brokered by Keycloak (oidc.go) with rotating refresh tokens (refresh.go)
+//   - API Access → live OpenAPI reference (/api/openapi.json, openapi.go)
+//   - ITSM → live ServiceNow auto-ticketing status (/api/itsm/servicenow)
+// Only Jira (ITSM) remains a planned preview.
+// See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
-import { ReactNode, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, Role, Tenant, ApiKey } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
-
-function Planned({ children }: { children: ReactNode }) {
-  return (
-    <div className="planned-banner">
-      <span className="badge accent-badge">Planned</span>
-      <span>{children}</span>
-    </div>
-  );
-}
 
 function AdminHead({ title, sub }: { title: string; sub: string }) {
   return (
@@ -328,48 +322,109 @@ export function ApiAccessAdmin() {
           </tbody>
         </table>
       </div>
+      <OpenAPIReference />
       <div className="ov-grid">
-        <div className="panel col-6"><h3>REST API</h3><p className="mini-meta">All UI data is served from documented <code>/api/*</code> endpoints. OpenAPI reference + "try it" console is a follow-up.</p></div>
-        <div className="panel col-6"><h3>GraphQL</h3><p className="mini-meta">Single endpoint at <code>/api/graphql</code> (schema stubbed in the Go API); an in-app explorer is a follow-up.</p></div>
+        <div className="panel col-6"><h3>GraphQL</h3><p className="mini-meta">Single typed endpoint at <code>/api/graphql</code> (devices/alerts/findings/health). A GraphiQL explorer is a follow-up.</p></div>
+        <div className="panel col-6"><h3>Authentication</h3><p className="mini-meta">Present a key as <code>Authorization: Bearer ntk_…</code> or <code>X-API-Key</code>. Keys resolve to the same tenant + RBAC context as a user — a key never exceeds its scopes.</p></div>
       </div>
     </>
   );
 }
 
-// ---- Authentication (SSO / SAML / LDAP) — planned --------------------------
+// OpenAPIReference renders a live, grouped index of the REST surface from the
+// generated /api/openapi.json — no external Swagger UI / CDN (offline-friendly).
+function OpenAPIReference() {
+  const [spec, err] = useReload(() => api.openapi());
+  if (err) return null;
+  const groups: Record<string, { method: string; path: string; summary?: string }[]> = {};
+  for (const [path, ops] of Object.entries(spec?.paths ?? {})) {
+    for (const [method, op] of Object.entries(ops)) {
+      const tag = op.tags?.[0] ?? "Other";
+      (groups[tag] ||= []).push({ method: method.toUpperCase(), path, summary: op.summary });
+    }
+  }
+  const METHOD_COLOR: Record<string, string> = {
+    GET: "var(--sev-info)", POST: "var(--good)", PUT: "var(--sev-warning)", PATCH: "var(--sev-warning)", DELETE: "var(--bad)",
+  };
+  return (
+    <div className="card">
+      <div className="admin-card-head">
+        <h2>REST API reference</h2>
+        <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer">openapi.json ↗</a>
+      </div>
+      <p className="mini-meta" style={{ marginTop: 0 }}>
+        {spec?.info?.title} · v{spec?.info?.version} · OpenAPI {spec?.openapi}. Generated from the Go handlers; import it into Postman or any OpenAPI client.
+      </p>
+      <div className="ov-grid">
+        {Object.entries(groups).map(([tag, rows]) => (
+          <div className="panel col-6" key={tag}>
+            <h3>{tag}</h3>
+            <table>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td className="mono" style={{ color: METHOD_COLOR[r.method] || "var(--muted)", fontWeight: 700, width: 70 }}>{r.method}</td>
+                    <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{r.path}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-const PROVIDERS = [
-  { id: "local", name: "Local accounts", desc: "Username + password with JWT. Active now; always available as a fallback.", on: true, tag: "Active" },
-  { id: "oidc", name: "OAuth 2.0 / OIDC", desc: "Sign in with any OIDC IdP (Okta, Google, Azure AD) via Keycloak.", on: false, tag: "Planned" },
-  { id: "saml", name: "SAML 2.0", desc: "Enterprise SSO for SAML IdPs. Per-tenant metadata & attribute mapping.", on: false, tag: "Planned" },
-  { id: "ldap", name: "LDAP / Active Directory", desc: `Bind + group sync to map AD groups onto ${BRAND} roles.`, on: false, tag: "Planned" },
-];
+// ---- Authentication (SSO / SAML / LDAP via Keycloak) -----------------------
+
+// kindTag labels a federated provider by how Keycloak brokers it.
+const KIND_LABEL: Record<string, string> = { oidc: "OAuth 2.0 / OIDC", saml: "SAML 2.0", ldap: "LDAP / Active Directory" };
 
 export function AuthenticationAdmin() {
+  const [sso] = useReload(() => api.ssoConfig());
+  const enabled = !!sso?.enabled;
+  const providers = sso?.providers ?? [];
+
   return (
     <>
-      <AdminHead title="Authentication" sub="How people sign in. Local accounts work today; OIDC/SAML/LDAP via Keycloak as the identity broker." />
-      <Planned>
-        Token-based auth (JWT) with configurable expiry and refresh tokens.
-        Keycloak federates OIDC, SAML and LDAP/AD so the Go API only validates tokens.
-      </Planned>
+      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work; OIDC/SAML/LDAP are brokered by Keycloak — the Go API only validates the resulting tokens." />
+      <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
+        <span className="badge good">{enabled ? "SSO enabled" : "Active"}</span>
+        <span>
+          JWT auth with rotating, single-use refresh tokens (reuse detection) is live.
+          {enabled
+            ? " Single Sign-On is configured: the providers below appear on the login screen."
+            : " Single Sign-On is available — set OIDC_ENABLED=true + the Keycloak realm details to light up the providers below."}
+        </span>
+      </div>
       <div className="ov-grid">
-        {PROVIDERS.map((p) => (
-          <div className="panel col-6 provider-card" key={p.id}>
+        <div className="panel col-6 provider-card">
+          <div className="provider-head">
+            <h3>Local accounts</h3>
+            <span className="badge good">Active</span>
+          </div>
+          <p className="mini-meta">Username + password (PBKDF2) with JWT. Always available as a fallback even when an external IdP is down.</p>
+        </div>
+        {(enabled ? providers : [{ id: "oidc", name: "OAuth 2.0 / OIDC", kind: "oidc" }, { id: "saml", name: "SAML 2.0", kind: "saml" }, { id: "ldap", name: "LDAP / Active Directory", kind: "ldap" }]).map((p) => (
+          <div className="panel col-6 provider-card" key={p.id || p.kind}>
             <div className="provider-head">
-              <h3>{p.name}</h3>
-              <span className={`badge ${p.on ? "good" : "accent-badge"}`}>{p.tag}</span>
+              <h3>{p.name || KIND_LABEL[p.kind]}</h3>
+              <span className={`badge ${enabled ? "good" : "accent-badge"}`}>{enabled ? "Enabled" : "Available"}</span>
             </div>
-            <p className="mini-meta">{p.desc}</p>
+            <p className="mini-meta">{KIND_LABEL[p.kind] || p.kind} via Keycloak. {p.kind === "saml" ? "Per-IdP metadata & attribute mapping configured in Keycloak." : p.kind === "ldap" ? "Bind + group sync maps directory groups onto roles." : "Authorization Code flow; Okta/Azure AD/Google brokered upstream."}</p>
+            {enabled && (
+              <a className="dash-btn" href={api.ssoLoginUrl(p.id)} style={{ marginTop: 10, display: "inline-block" }}>Test sign-in →</a>
+            )}
           </div>
         ))}
       </div>
       <div className="card">
         <h2>Token policy</h2>
-        <dl className="kv-form preview-dim">
-          <dt>Access token TTL</dt><dd>24 hours <span className="mini-meta">(JWT_SECRET-signed; configurable)</span></dd>
-          <dt>Refresh token TTL</dt><dd>planned — rotating, 7 days</dd>
-          <dt>Signing algorithm</dt><dd className="mono">HS256 today → RS256 with Keycloak</dd>
+        <dl className="kv-form">
+          <dt>Access token TTL</dt><dd>1 hour <span className="mini-meta">(ACCESS_TOKEN_TTL; signed with JWT_SECRET)</span></dd>
+          <dt>Refresh token TTL</dt><dd>rotating, 7 days <span className="mini-meta">(single-use; reuse revokes the lineage)</span></dd>
+          <dt>Federated tokens</dt><dd className="mono">RS256, verified against Keycloak JWKS</dd>
         </dl>
       </div>
     </>
@@ -379,31 +434,75 @@ export function AuthenticationAdmin() {
 // ---- ITSM Integrations — planned -------------------------------------------
 
 const ITSM = [
-  { id: "servicenow", name: "ServiceNow", desc: "Open/sync incidents from alerts; bi-directional status & CMDB lookup.", tag: "Planned" },
+  { id: "servicenow", name: "ServiceNow", desc: "Critical alerts cut an incident via the Table API (deduped by fingerprint) and auto-resolve when the alert clears. Enable with FEATURE_SERVICENOW_NOTIFICATIONS. Bi-directional sync & CMDB lookup are next.", tag: "Available" },
   { id: "jira", name: "Jira", desc: "Create issues from incidents; map severity → priority; transition on resolve.", tag: "Planned" },
   { id: "pagerduty", name: "PagerDuty", desc: "On-call routing & escalation (notifier already exists in the backend).", tag: "Available" },
   { id: "slack", name: "Slack", desc: "Channel notifications & alert actions (notifier already exists).", tag: "Available" },
 ];
 
 export function IntegrationsAdmin() {
+  const [sn] = useReload(() => api.itsmServiceNow());
+  const live = !!sn?.configured;
+
   return (
     <>
       <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
-      <Planned>
-        ServiceNow & Jira ticketing with bi-directional sync, built on the existing
-        notifier framework (Slack/PagerDuty/email/SNS/Twilio).
-      </Planned>
-      <div className="ov-grid">
-        {ITSM.map((i) => (
-          <div className="panel col-6 provider-card" key={i.id}>
-            <div className="provider-head">
-              <h3>{i.name}</h3>
-              <span className={`badge ${i.tag === "Available" ? "good" : "accent-badge"}`}>{i.tag}</span>
-            </div>
-            <p className="mini-meta">{i.desc}</p>
-            <button className="dash-btn" disabled style={{ marginTop: 10 }}>Configure</button>
+      <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
+        <span className="badge good">Active</span>
+        <span>
+          ServiceNow auto-ticketing is live: an alert at/above the threshold opens
+          a deduped incident and auto-resolves it when the alert clears. Jira is planned.
+        </span>
+      </div>
+
+      {sn?.enabled && (
+        <div className="card">
+          <div className="admin-card-head">
+            <h2>ServiceNow — live</h2>
+            <span className="badge good">connected</span>
           </div>
-        ))}
+          <dl className="kv-form">
+            <dt>Ticket threshold</dt><dd className="mono">{sn.threshold} and worse</dd>
+            <dt>Auto-resolve</dt><dd>{sn.auto_close ? "on — incident closed when the alert clears" : "off"}</dd>
+            <dt>Open incidents</dt><dd>{sn.open_count ?? 0}</dd>
+          </dl>
+          {(sn.open?.length ?? 0) > 0 && (
+            <table>
+              <thead><tr><th>Incident</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
+              <tbody>
+                {sn.open!.map((t) => (
+                  <tr key={t.fingerprint}>
+                    <td className="mono" style={{ fontWeight: 600 }}>{t.number}</td>
+                    <td><span className="badge">{t.severity}</span></td>
+                    <td className="mono">{t.device || "—"}</td>
+                    <td>{t.summary || "—"}</td>
+                    <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      <div className="ov-grid">
+        {ITSM.map((i) => {
+          // ServiceNow flips to a "connected" badge once the connector is live.
+          const tag = i.id === "servicenow" && live ? "Connected" : i.tag;
+          const good = tag === "Available" || tag === "Connected";
+          return (
+            <div className="panel col-6 provider-card" key={i.id}>
+              <div className="provider-head">
+                <h3>{i.name}</h3>
+                <span className={`badge ${good ? "good" : "accent-badge"}`}>{tag}</span>
+              </div>
+              <p className="mini-meta">{i.desc}</p>
+              <button className="dash-btn" disabled style={{ marginTop: 10 }}>
+                {i.id === "servicenow" ? "Configured via env" : "Configure"}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </>
   );
