@@ -679,4 +679,15 @@ tbody tr.dt-row:hover { background: var(--hover); }
 .scope-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .scope-chip input { margin: 0; }
 
+/* SNMP credential form — responsive 3-col grid of labelled fields. */
+.snmp-form { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); }
+.snmp-form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-meta); color: var(--muted); }
+.snmp-form .snmp-wide { grid-column: span 2; }
+.snmp-form input, .snmp-form select {
+  padding: 7px 10px; font-size: var(--fs-sm); color: var(--fg);
+  border: 1px solid var(--panel-border); border-radius: var(--r-2); background: var(--bg);
+}
+.snmp-form input:focus, .snmp-form select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+@media (max-width: 900px) { .snmp-form { grid-template-columns: 1fr 1fr; } .snmp-form .snmp-wide { grid-column: span 2; } }
+
 button:disabled { opacity: 0.55; cursor: not-allowed; }

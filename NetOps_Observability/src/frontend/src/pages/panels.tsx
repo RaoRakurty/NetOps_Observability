@@ -284,13 +284,21 @@ function KpiTiles() {
   if (tiles.length === 0) return <Empty msg="Waiting for metrics…" />;
   return (
     <div className="stat-grid">
-      {tiles.map((m: MetricTile) => (
-        <div className="stat s-accent" key={m.title}>
-          <span className="stat-label">{m.title}</span>
-          <span className="stat-value">{m.value}</span>
-          {m.trend && <span className="stat-sub">{m.trend}</span>}
-        </div>
-      ))}
+      {tiles.map((m: MetricTile) => {
+        // Color the tile by status: red when something is down/threatening,
+        // green when explicitly all-clear, accent otherwise.
+        const cls =
+          m.trend === "critical" ? "s-bad"
+          : m.trend === "all up" || m.trend === "clear" ? "s-good"
+          : "s-accent";
+        return (
+          <div className={`stat ${cls}`} key={m.title}>
+            <span className="stat-label">{m.title}</span>
+            <span className="stat-value">{m.value}</span>
+            {m.trend && <span className="stat-sub">{m.trend}</span>}
+          </div>
+        );
+      })}
     </div>
   );
 }

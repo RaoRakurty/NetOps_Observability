@@ -7,6 +7,7 @@ import Reports from "./pages/Reports";
 import SavedDashboards from "./pages/SavedDashboards";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
+import SnmpCredentials from "./tabs/SnmpCredentials";
 import Alerts from "./tabs/Alerts";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
@@ -97,6 +98,7 @@ export const NAV: NavSection[] = [
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
       { id: "collectors", label: "Collectors", render: () => <Collectors /> },
+      { id: "snmp", label: "SNMP Credentials", render: () => <SnmpCredentials /> },
     ],
   },
   {

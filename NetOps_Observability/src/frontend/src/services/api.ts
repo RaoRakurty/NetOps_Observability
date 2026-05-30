@@ -145,6 +145,7 @@ export type OpenAIChatResponse = {
 export type CopilotChatResponse = AnthropicChatResponse | OpenAIChatResponse;
 
 export const TOKEN_KEY = "netops_token";
+export const REFRESH_KEY = "netops_refresh";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -152,6 +153,42 @@ export function getToken(): string | null {
 export function setToken(t: string | null): void {
   if (t === null) localStorage.removeItem(TOKEN_KEY);
   else localStorage.setItem(TOKEN_KEY, t);
+}
+export function getRefresh(): string | null {
+  return localStorage.getItem(REFRESH_KEY);
+}
+export function setRefresh(t: string | null): void {
+  if (t === null) localStorage.removeItem(REFRESH_KEY);
+  else localStorage.setItem(REFRESH_KEY, t);
+}
+
+// Single-flight refresh: many requests can 401 at once; only one /refresh runs.
+let refreshInFlight: Promise<boolean> | null = null;
+async function doRefresh(rt: string): Promise<boolean> {
+  try {
+    const res = await fetch("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: rt }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    setToken(data.token);
+    setRefresh(data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function tryRefresh(): Promise<boolean> {
+  const rt = getRefresh();
+  if (!rt) return Promise.resolve(false);
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh(rt).finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
 }
 
 type AuthListener = (signedIn: boolean) => void;
@@ -164,7 +201,7 @@ function fireAuthChange(signedIn: boolean) {
   for (const fn of authListeners) fn(signedIn);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((init?.headers as Record<string, string>) ?? {}),
@@ -174,10 +211,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
-    // Token expired or invalid. Clear and notify listeners so App.tsx
-    // can swap to the Login screen.
-    if (token) {
+    // Access token expired? Trade the refresh token for a fresh one and retry
+    // the original request exactly once. Skip for the auth endpoints themselves.
+    const isAuthEndpoint = path.startsWith("/api/auth/login") || path.startsWith("/api/auth/refresh");
+    if (!retried && !isAuthEndpoint && getRefresh()) {
+      if (await tryRefresh()) return request<T>(path, init, true);
+    }
+    // Refresh unavailable/failed — clear and notify so App swaps to Login.
+    if (token || getRefresh()) {
       setToken(null);
+      setRefresh(null);
       fireAuthChange(false);
     }
     const text = await res.text().catch(() => "");
@@ -197,7 +240,7 @@ export type AuthUser = {
   role: string;
   last_login_at?: string;
 };
-export type LoginResponse = { token: string; user: AuthUser };
+export type LoginResponse = { token: string; refresh_token?: string; expires_in?: number; user: AuthUser };
 
 export const api = {
   // ---- auth ----
@@ -207,11 +250,22 @@ export const api = {
       body: JSON.stringify({ username, password }),
     });
     setToken(r.token);
+    setRefresh(r.refresh_token ?? null);
     fireAuthChange(true);
     return r;
   },
-  logout: () => {
+  logout: async () => {
+    const rt = getRefresh();
+    if (rt) {
+      // Best-effort server-side revoke of the refresh token.
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      }).catch(() => {});
+    }
     setToken(null);
+    setRefresh(null);
     fireAuthChange(false);
   },
   me: () => request<AuthUser>("/api/auth/me"),
@@ -345,6 +399,44 @@ export const api = {
       body: JSON.stringify({ label, scopes, tenant_id }),
     }),
   revokeApiKey: (id: string) => request<void>(`/api/apikeys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ----- SNMP credential profiles -----
+  snmpOptions: () => request<SNMPOptions>("/api/snmp/options"),
+  listSnmpCreds: () => request<SNMPCredential[]>("/api/snmp/credentials"),
+  saveSnmpCred: (c: SNMPCredential) =>
+    c.id
+      ? request<SNMPCredential>(`/api/snmp/credentials/${encodeURIComponent(c.id)}`, { method: "PUT", body: JSON.stringify(c) })
+      : request<SNMPCredential>("/api/snmp/credentials", { method: "POST", body: JSON.stringify(c) }),
+  deleteSnmpCred: (id: string) => request<void>(`/api/snmp/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+
+export type SNMPOptions = {
+  versions: string[];
+  security_levels: string[];
+  auth_protocols: string[];
+  priv_protocols: string[];
+};
+// Secrets (community/auth_key/priv_key) are write-only: sent on save, never
+// returned. has_* booleans report whether one is stored.
+export type SNMPCredential = {
+  id?: string;
+  name: string;
+  version: string; // v1 | v2c | v3
+  port?: number;
+  timeout_ms?: number;
+  retries?: number;
+  community?: string;
+  has_community?: boolean;
+  security_name?: string;
+  security_level?: string;
+  auth_protocol?: string;
+  auth_key?: string;
+  has_auth_key?: boolean;
+  priv_protocol?: string;
+  priv_key?: string;
+  has_priv_key?: boolean;
+  context?: string;
+  created_at?: string;
 };
 
 // ----- Identity & access types -----
