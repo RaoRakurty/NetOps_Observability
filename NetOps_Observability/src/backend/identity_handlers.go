@@ -11,19 +11,24 @@ import (
 	"strings"
 )
 
-// requireAdmin gates a handler on administration:admin. Returns the caller's
-// claims on success; writes 401/403 and returns ok=false otherwise.
-func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+// requirePerm gates a handler on a (module, level). Returns the caller's claims
+// on success; writes 401/403 and returns ok=false otherwise.
+func (s *server) requirePerm(w http.ResponseWriter, r *http.Request, module string, level int) (jwtClaims, bool) {
 	claims, ok := userFrom(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
 		return jwtClaims{}, false
 	}
-	if !s.roles.Allows(claims.Role, "administration", LevelAdmin) {
-		writeError(w, http.StatusForbidden, errors.New("administration admin permission required"))
+	if !s.roles.Allows(claims.Role, module, level) {
+		writeError(w, http.StatusForbidden, errors.New(module+" "+levelName(level)+" permission required"))
 		return jwtClaims{}, false
 	}
 	return claims, true
+}
+
+// requireAdmin gates a handler on administration:admin.
+func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+	return s.requirePerm(w, r, "administration", LevelAdmin)
 }
 
 // handlePermissions returns the caller's effective module→level grid so the

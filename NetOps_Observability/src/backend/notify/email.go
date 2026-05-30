@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -16,15 +17,23 @@ import (
 // that demand SSL-on-connect (port 465), set SMTP_TLS_ON_CONNECT=true
 // and the dialer will wrap the conn before HELO.
 type Email struct {
-	host     string // "smtp.example.com:587"
-	from     string
-	user     string
-	password string
-	to       []string
+	host         string // "smtp.example.com:587"
+	from         string
+	user         string
+	password     string
+	to           []string
+	tlsOnConnect bool // true for SSL-on-connect (port 465)
 }
 
 func NewEmail(host, from string) *Email {
 	return &Email{host: host, from: from}
+}
+
+// WithTLSOnConnect enables implicit TLS (SSL-on-connect, typically port 465)
+// instead of STARTTLS. Required by Gmail:465, Office365 SSL, etc.
+func (e *Email) WithTLSOnConnect(on bool) *Email {
+	e.tlsOnConnect = on
+	return e
 }
 
 // WithAuth sets PLAIN credentials. Safe to call after NewEmail.
@@ -59,12 +68,54 @@ func (e *Email) Send(a models.Alert) error {
 
 	msg := buildRFC5322(e.from, e.to, subject, body)
 
+	host, _, _ := net.SplitHostPort(e.host)
 	var auth smtp.Auth
 	if e.user != "" {
-		host, _, _ := net.SplitHostPort(e.host)
 		auth = smtp.PlainAuth("", e.user, e.password, host)
 	}
+	if e.tlsOnConnect {
+		return e.sendTLSOnConnect(host, auth, []byte(msg))
+	}
+	// STARTTLS path (port 587/25).
 	return smtp.SendMail(e.host, auth, e.from, e.to, []byte(msg))
+}
+
+// sendTLSOnConnect dials an implicit-TLS connection (port 465) before HELO,
+// which smtp.SendMail can't do on its own.
+func (e *Email) sendTLSOnConnect(host string, auth smtp.Auth, msg []byte) error {
+	conn, err := tls.Dial("tcp", e.host, &tls.Config{ServerName: host})
+	if err != nil {
+		return err
+	}
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if auth != nil {
+		if err := c.Auth(auth); err != nil {
+			return err
+		}
+	}
+	if err := c.Mail(e.from); err != nil {
+		return err
+	}
+	for _, rcpt := range e.to {
+		if err := c.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 func buildEmailBody(a models.Alert) string {

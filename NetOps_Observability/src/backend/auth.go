@@ -12,11 +12,23 @@ import (
 
 // auth.go — login + middleware.
 //
-// Tokens are JWTs signed with HS256 using the JWT_SECRET. Tokens carry
-// the username (sub), role, issued-at, and expiry. The expiry is 24h
-// from issue; clients re-login when it lapses.
+// Tokens are JWTs signed with HS256 using the JWT_SECRET, carrying the username
+// (sub), role, issued-at and expiry. Access tokens are short-lived; clients
+// trade a rotating refresh token (see refresh.go) for a fresh one at
+// /api/auth/refresh. Both lifetimes are env-configurable.
 
-const tokenTTL = 24 * time.Hour
+// durEnv parses a Go duration from env (e.g. "15m", "12h"), falling back to def.
+func durEnv(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
+
+func accessTokenTTL() time.Duration  { return durEnv("ACCESS_TOKEN_TTL", time.Hour) }
+func refreshTokenTTL() time.Duration { return durEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour) }
 
 type ctxKey int
 
@@ -30,8 +42,10 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Token string    `json:"token"`
-	User  publicUser `json:"user"`
+	Token        string     `json:"token"`
+	RefreshToken string     `json:"refresh_token,omitempty"`
+	ExpiresIn    int        `json:"expires_in"` // access token lifetime, seconds
+	User         publicUser `json:"user"`
 }
 
 type publicUser struct {
@@ -77,19 +91,84 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
+	ttl := accessTokenTTL()
 	tok, err := signJWT(jwtClaims{
 		Sub:  user.Username,
 		Role: user.Role,
 		Iat:  time.Now().Unix(),
-		Exp:  time.Now().Add(tokenTTL).Unix(),
+		Exp:  time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	refresh, err := s.refresh.Issue(user.Username)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	s.users.TouchLogin(user.Username)
 	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role})
-	writeJSON(w, http.StatusOK, loginResponse{Token: tok, User: toPublic(user)})
+	writeJSON(w, http.StatusOK, loginResponse{
+		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
+	})
+}
+
+// handleRefresh trades a valid (rotating) refresh token for a fresh access
+// token + a new refresh token. Reachable without an access token.
+func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	newRefresh, username, err := s.refresh.Rotate(req.RefreshToken)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	user, ok := s.users.Get(username)
+	if !ok || user.Status == "disabled" {
+		writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
+		return
+	}
+	ttl := accessTokenTTL()
+	tok, err := signJWT(jwtClaims{
+		Sub: user.Username, Role: user.Role,
+		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
+	}, jwtSecret())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, loginResponse{
+		Token: tok, RefreshToken: newRefresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
+	})
+}
+
+// handleLogout revokes the presented refresh token. Idempotent; reachable
+// without a valid access token (the access token may already be expired).
+func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.RefreshToken != "" {
+		s.refresh.Revoke(req.RefreshToken)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +226,8 @@ var publicPaths = []string{
 	"/admin/health",
 	"/admin/version",
 	"/api/auth/login",
+	"/api/auth/refresh",
+	"/api/auth/logout",
 	"/metrics",
 }
 

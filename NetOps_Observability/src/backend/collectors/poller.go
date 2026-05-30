@@ -25,9 +25,10 @@ import (
 
 // Target is one device the collectors poll.
 type Target struct {
-	ID       string
-	Address  string // host or host:port
-	Protocol string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
+	ID        string
+	Address   string // host or host:port
+	Protocol  string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
+	Community string // resolved SNMP v2c community ("" => SNMP_COMMUNITY/"public")
 }
 
 // TargetFunc returns the current set of devices to poll.
@@ -56,8 +57,10 @@ func byProtocol(all TargetFunc, proto string) TargetFunc {
 	}
 }
 
-// probeFunc checks one target address; nil error means reachable/healthy.
-type probeFunc func(ctx context.Context, addr string) error
+// probeFunc checks one target; nil error means reachable/healthy. The dialable
+// addr (host:port) is precomputed; the full Target carries per-device details
+// like the SNMP community.
+type probeFunc func(ctx context.Context, addr string, t Target) error
 
 type poller struct {
 	name     string
@@ -117,7 +120,7 @@ func (p *poller) pollOnce(ctx context.Context) {
 	for _, tg := range targets {
 		addr := withPort(tg.Address, p.port)
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		err := p.probe(cctx, addr)
+		err := p.probe(cctx, addr, tg)
 		cancel()
 		up := 0
 		if err == nil {
@@ -162,7 +165,7 @@ func withPort(addr string, def int) string {
 }
 
 // tcpProbe dials the address over TCP — proves the protocol port is open.
-func tcpProbe(ctx context.Context, addr string) error {
+func tcpProbe(ctx context.Context, addr string, _ Target) error {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -173,8 +176,13 @@ func tcpProbe(ctx context.Context, addr string) error {
 
 // snmpProbe sends a real SNMP v2c GET for sysUpTimeInstance and waits for a
 // well-formed reply — a genuine SNMP poll, not just a UDP no-op.
-func snmpProbe(ctx context.Context, addr string) error {
-	community := os.Getenv("SNMP_COMMUNITY")
+func snmpProbe(ctx context.Context, addr string, t Target) error {
+	// Per-device community (from its credential profile) wins; fall back to the
+	// global SNMP_COMMUNITY, then "public".
+	community := t.Community
+	if community == "" {
+		community = os.Getenv("SNMP_COMMUNITY")
+	}
 	if community == "" {
 		community = "public"
 	}

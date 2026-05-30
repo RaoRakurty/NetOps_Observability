@@ -64,14 +64,14 @@ func TestTCPProbe(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := tcpProbe(ctx, ln.Addr().String()); err != nil {
+	if err := tcpProbe(ctx, ln.Addr().String(), Target{}); err != nil {
 		t.Errorf("probe of live listener failed: %v", err)
 	}
 
 	// A port nobody is listening on should error promptly.
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	if err := tcpProbe(ctx2, "127.0.0.1:1"); err == nil {
+	if err := tcpProbe(ctx2, "127.0.0.1:1", Target{}); err == nil {
 		t.Errorf("probe of dead port unexpectedly succeeded")
 	}
 }

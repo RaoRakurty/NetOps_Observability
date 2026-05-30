@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -24,26 +25,52 @@ func (s *server) handleMetricTiles(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.currentMetricTiles())
 }
 
-// currentMetricTiles snapshots the system state into the dashboard
-// tile shape. Add tiles by appending — the frontend simply renders
-// whatever the array contains.
+// currentMetricTiles snapshots the system state into the dashboard tile shape.
+// The headline KPIs are operations-first: fleet size, what's DOWN right now,
+// active security/critical threats, and site coverage. Add tiles by appending —
+// the frontend renders whatever the array contains.
 func (s *server) currentMetricTiles() []MetricTile {
-	devices := len(s.discovery.Devices())
-	alerts := len(s.alerts.Active())
-	rules := len(s.alerts.Rules())
+	devs := s.discovery.Devices()
+	devices := len(devs)
 
-	collectorsOn := 0
+	// Devices down: unreachable targets summed across protocol collectors
+	// (targets a poller knows about minus the ones it can currently reach).
+	down := 0
 	for _, c := range s.collectors.Status() {
-		if c.Enabled {
-			collectorsOn++
+		if c.Kind != "" && c.Kind != "protocol" {
+			continue
+		}
+		if d := c.Targets - c.Reachable; d > 0 {
+			down += d
+		}
+	}
+
+	// Critical threats: active alerts at critical severity (the security/
+	// page-worthy signal, distinct from the full alert count).
+	threats := 0
+	for _, a := range s.alerts.Active() {
+		if strings.EqualFold(strings.TrimSpace(a.Severity), "critical") {
+			threats++
+		}
+	}
+
+	// Sites: distinct site/location labels across the fleet.
+	siteSet := map[string]struct{}{}
+	for _, d := range devs {
+		site := d.Labels["site"]
+		if site == "" {
+			site = d.Labels["location"]
+		}
+		if site != "" {
+			siteSet[site] = struct{}{}
 		}
 	}
 
 	return []MetricTile{
-		{Title: "Devices",        Value: fmt.Sprintf("%d", devices),      Trend: trendForCount(devices)},
-		{Title: "Active Alerts",  Value: fmt.Sprintf("%d", alerts),       Trend: trendForAlerts(alerts)},
-		{Title: "Collectors",     Value: fmt.Sprintf("%d", collectorsOn), Trend: "live"},
-		{Title: "Alert Rules",    Value: fmt.Sprintf("%d", rules),        Trend: ""},
+		{Title: "Devices", Value: fmt.Sprintf("%d", devices), Trend: trendForCount(devices)},
+		{Title: "Devices Down", Value: fmt.Sprintf("%d", down), Trend: trendForBad(down, "all up")},
+		{Title: "Critical Threats", Value: fmt.Sprintf("%d", threats), Trend: trendForBad(threats, "clear")},
+		{Title: "Sites", Value: fmt.Sprintf("%d", len(siteSet)), Trend: ""},
 	}
 }
 
@@ -54,15 +81,13 @@ func trendForCount(n int) string {
 	return "+"
 }
 
-func trendForAlerts(n int) string {
-	switch {
-	case n == 0:
-		return "all clear"
-	case n > 0 && n < 5:
-		return "warning"
-	default:
-		return "critical"
+// trendForBad returns an "all good" label at zero, else "critical" so the
+// frontend tints the tile red (kpi-trend.t-crit).
+func trendForBad(n int, okLabel string) string {
+	if n == 0 {
+		return okLabel
 	}
+	return "critical"
 }
 
 // ----------------------------------------------------------------------------

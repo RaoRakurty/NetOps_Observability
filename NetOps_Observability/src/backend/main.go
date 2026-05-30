@@ -40,6 +40,8 @@ type server struct {
 	roles      *roleStore
 	tenants    *tenantStore
 	apiKeys    *apiKeyStore
+	refresh    *refreshStore
+	snmpCreds  *snmpCredStore
 	saved      *savedStore
 	reports    *reportScheduler
 	hub        *Hub
@@ -55,7 +57,12 @@ func newServer() *server {
 		d.Register(NewNetboxSource(os.Getenv("NETBOX_URL"), os.Getenv("NETBOX_TOKEN")))
 	}
 
-	// Feed collectors the live device inventory so they poll real targets.
+	// SNMP credential store is created below; capture a pointer the target
+	// builder can resolve device credential_refs against (set after init).
+	var snmpCredsRef *snmpCredStore
+
+	// Feed collectors the live device inventory so they poll real targets,
+	// resolving each device's SNMP credential profile to its v2c community.
 	pool := collectors.NewPool(func() []collectors.Target {
 		devs := d.Devices()
 		out := make([]collectors.Target, 0, len(devs))
@@ -63,10 +70,17 @@ func newServer() *server {
 			if dev.Address == "" {
 				continue
 			}
+			community := ""
+			if snmpCredsRef != nil && dev.CredentialRef != "" {
+				if c, ok := snmpCredsRef.Resolve(dev.CredentialRef); ok {
+					community = c.Community
+				}
+			}
 			out = append(out, collectors.Target{
-				ID:       dev.ID,
-				Address:  dev.Address,
-				Protocol: dev.PreferredProtocol,
+				ID:        dev.ID,
+				Address:   dev.Address,
+				Protocol:  dev.PreferredProtocol,
+				Community: community,
 			})
 		}
 		return out
@@ -88,7 +102,8 @@ func newServer() *server {
 		notifier.Register(
 			notify.NewEmail(os.Getenv("SMTP_HOST"), os.Getenv("SMTP_FROM")).
 				WithAuth(os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS")).
-				WithRecipients(os.Getenv("SMTP_TO")),
+				WithRecipients(os.Getenv("SMTP_TO")).
+				WithTLSOnConnect(os.Getenv("SMTP_TLS_ON_CONNECT") == "true"),
 		)
 	}
 	if os.Getenv("FEATURE_TWILIO_NOTIFICATIONS") == "true" {
@@ -106,6 +121,15 @@ func newServer() *server {
 			os.Getenv("AWS_REGION"),
 			os.Getenv("SNS_PHONE_NUMBERS"),
 			os.Getenv("SNS_TOPIC_ARN"),
+		))
+	}
+	// ITSM: critical alerts open a ServiceNow incident (the channel self-filters
+	// to critical severity and dedups by fingerprint). See notify/servicenow.go.
+	if os.Getenv("FEATURE_SERVICENOW_NOTIFICATIONS") == "true" {
+		notifier.Register(notify.NewServiceNow(
+			os.Getenv("SERVICENOW_INSTANCE_URL"),
+			os.Getenv("SERVICENOW_USER"),
+			os.Getenv("SERVICENOW_PASSWORD"),
 		))
 	}
 
@@ -134,6 +158,15 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
 	}
+	refresh, err := newRefreshStore(envOr("REFRESH_FILE", "/data/refresh_tokens.json"), refreshTokenTTL())
+	if err != nil {
+		log.Fatalf("refresh store: %v", err)
+	}
+	snmpCreds, err := newSNMPCredStore(envOr("SNMP_CREDS_FILE", "/data/snmp_credentials.json"))
+	if err != nil {
+		log.Fatalf("snmp cred store: %v", err)
+	}
+	snmpCredsRef = snmpCreds // make profiles resolvable by the target builder
 
 	saved, err := newSavedStore(envOr("SAVED_FILE", "/data/saved.json"))
 	if err != nil {
@@ -150,6 +183,8 @@ func newServer() *server {
 		roles:      roles,
 		tenants:    tenants,
 		apiKeys:    apiKeys,
+		refresh:    refresh,
+		snmpCreds:  snmpCreds,
 		saved:      saved,
 		hub:        NewHub(),
 	}
@@ -210,6 +245,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/me", s.handleMe)
 	mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
+	mux.HandleFunc("/api/auth/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/auth/permissions", s.handlePermissions)
 	// Identity & access (admin-gated): users, roles, tenants, API keys.
 	mux.HandleFunc("/api/users", s.handleUsers)
@@ -220,6 +257,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tenants/", s.handleTenantByID)
 	mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/apikeys/", s.handleAPIKeyByID)
+	// SNMP credential profiles (v1/v2c/v3) — infrastructure-gated.
+	mux.HandleFunc("/api/snmp/options", s.handleSNMPOptions)
+	mux.HandleFunc("/api/snmp/credentials", s.handleSNMPCreds)
+	mux.HandleFunc("/api/snmp/credentials/", s.handleSNMPCredByID)
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)
