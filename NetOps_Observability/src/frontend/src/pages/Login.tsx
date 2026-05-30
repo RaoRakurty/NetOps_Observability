@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../services/api";
+import { BRAND, BRAND_TAGLINE } from "../brand";
 
 export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");
@@ -35,9 +36,9 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
         className="card"
         style={{ width: 360, padding: 32, margin: 0 }}
       >
-        <h1 style={{ marginTop: 0, fontSize: 20 }}>NetOps Observability</h1>
-        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 0 }}>
-          Sign in to continue.
+        <h1 style={{ marginTop: 0, fontSize: 26, letterSpacing: "-0.02em" }}>{BRAND}</h1>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}>
+          {BRAND_TAGLINE} · sign in to continue.
         </p>
 
         <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--muted)" }}>

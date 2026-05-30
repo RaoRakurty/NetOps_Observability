@@ -118,11 +118,6 @@ export default function TopBar({ health, user, onLogout }: Props) {
 
   return (
     <header className="topbar">
-      <div className="brand">
-        <span className="brand-mark"><Icon name="logo" size={20} /></span>
-        <span className="brand-name">NetOps</span>
-      </div>
-
       <form className="omni" onSubmit={submitSearch} ref={omniRef}>
         <span className="omni-icon"><Icon name="search" size={15} /></span>
         <input

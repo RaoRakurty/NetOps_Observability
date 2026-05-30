@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PANELS, PANEL_ORDER, PanelDef } from "./panels";
+import { PANELS, PANEL_CATEGORIES, PanelDef } from "./panels";
 
 // Operations Overview — a modular, Datadog/Zabbix-style board. The layout is a
 // list of panels the user composes themselves: add from the panel library,
@@ -8,23 +8,30 @@ import { PANELS, PANEL_ORDER, PanelDef } from "./panels";
 
 type Item = { key: string; type: string; span: number };
 
-const LS_KEY = "netops.overview.layout.v2";
+// Bumped to v4: denser, fuller default board (more panels, smaller spans) so
+// the Overview reads like a packed NOC wall rather than a sparse page. Older
+// custom layouts are superseded once on upgrade.
+const LS_KEY = "netops.overview.layout.v4";
 
-// A rich, communicative default — mirrors what NOC overviews ship with:
-// KPIs, resource gauges, a severity-coded alert row, traffic, top hosts,
-// availability/health, active alerts, and the topology.
+// A rich, dense default in NOC reading order: top-line KPIs, then what's wrong
+// right now (severity), resource gauges, a traffic row, an inventory/health row,
+// the alert + incident streams side by side, and the topology.
 const DEFAULT_LAYOUT: Item[] = [
   { key: "d-kpis", type: "kpis", span: 12 },
+  { key: "d-sev", type: "alerts-severity", span: 12 },
   { key: "d-cpu", type: "gauge-cpu", span: 3 },
   { key: "d-mem", type: "gauge-mem", span: 3 },
   { key: "d-sto", type: "gauge-storage", span: 3 },
   { key: "d-net", type: "gauge-network", span: 3 },
-  { key: "d-sev", type: "alerts-severity", span: 12 },
   { key: "d-traffic", type: "traffic", span: 8 },
   { key: "d-tophosts", type: "top-hosts", span: 4 },
+  { key: "d-proto", type: "flows-proto", span: 4 },
+  { key: "d-tunnels", type: "tunnels-health", span: 4 },
+  { key: "d-vendor", type: "devices-vendor", span: 4 },
   { key: "d-avail", type: "site-availability", span: 4 },
   { key: "d-perf", type: "stack-performance", span: 8 },
-  { key: "d-alerts", type: "active-alerts", span: 12 },
+  { key: "d-alerts", type: "active-alerts", span: 6 },
+  { key: "d-incidents", type: "incidents", span: 6 },
   { key: "d-topo", type: "topology", span: 12 },
 ];
 
@@ -101,10 +108,17 @@ export default function Dashboard() {
 
       {picking && (
         <div className="panel-picker">
-          {PANEL_ORDER.map((type) => (
-            <button key={type} onClick={() => add(type)}>
-              + {(PANELS[type] as PanelDef).title}
-            </button>
+          {PANEL_CATEGORIES.map(({ category, types }) => (
+            <div className="panel-picker-group" key={category}>
+              <div className="panel-picker-label">{category}</div>
+              <div className="panel-picker-items">
+                {types.map((type) => (
+                  <button key={type} onClick={() => add(type)}>
+                    + {(PANELS[type] as PanelDef).title}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       )}

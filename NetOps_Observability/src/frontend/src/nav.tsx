@@ -19,6 +19,14 @@ import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
+import {
+  UsersAdmin,
+  RolesAdmin,
+  TenantsAdmin,
+  AuthenticationAdmin,
+  ApiAccessAdmin,
+  IntegrationsAdmin,
+} from "./tabs/admin";
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -123,6 +131,14 @@ export const NAV: NavSection[] = [
     footer: true,
     children: [
       { id: "settings", label: "Settings", render: () => <Settings /> },
+      // Identity & access (planned scaffolding — see tabs/admin.tsx + docs/).
+      { id: "users", label: "Users", render: () => <UsersAdmin /> },
+      { id: "roles", label: "Roles", render: () => <RolesAdmin /> },
+      { id: "tenants", label: "Tenants", render: () => <TenantsAdmin /> },
+      { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
+      { id: "api", label: "API Access", render: () => <ApiAccessAdmin /> },
+      { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
+      // Raw-backend escape hatches.
       { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
       { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
       { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },

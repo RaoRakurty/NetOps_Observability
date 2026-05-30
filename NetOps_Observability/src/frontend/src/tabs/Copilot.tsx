@@ -6,6 +6,7 @@ import {
   AnthropicChatResponse,
   OpenAIChatResponse,
 } from "../services/api";
+import { BRAND } from "../brand";
 
 // AI Copilot — chat pane. Posts to /api/copilot/chat. The backend
 // dispatches to Anthropic or OpenAI based on COPILOT_PROVIDER.
@@ -92,7 +93,7 @@ export default function Copilot() {
   return (
     <>
       <div className="card" style={{ display: "flex", flexDirection: "column", height: "65vh" }}>
-        <h2>NetOps Copilot</h2>
+        <h2>{BRAND} Copilot</h2>
         <div
           style={{
             flex: 1,

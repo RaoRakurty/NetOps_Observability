@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NAV, NavLeaf, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
+import { BRAND } from "../brand";
 import Icon from "./Icon";
 
 type Props = {
@@ -78,6 +79,10 @@ export default function Sidebar({ activeSection, activeLeaf, collapsed, onToggle
 
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+      <button className="rail-brand" onClick={() => navigate(routeFor(main[0]))} title={BRAND}>
+        <span className="rail-brand-mark"><Icon name="logo" size={20} /></span>
+        {!collapsed && <span className="rail-brand-name">{BRAND}</span>}
+      </button>
       <nav className="nav-main">{main.map(item)}</nav>
       <div className="nav-footer">
         {footer.map(item)}

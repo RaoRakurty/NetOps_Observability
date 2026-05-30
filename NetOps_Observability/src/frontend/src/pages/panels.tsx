@@ -7,8 +7,8 @@
 
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import { api, Alert, MetricTile, PromRangeResponse, CollectorStatus } from "../services/api";
-import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
+import { api, Alert, MetricTile, PromRangeResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
+import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import Topology from "../tabs/Topology";
 
@@ -76,23 +76,37 @@ function MetricGauge({
     return api.metricsQueryRange(query, s, e, st);
   });
   const v = res ? latestFromProm(res) : null;
-  // Color stops: for "good high" flip the gradient.
-  const stops = goodHigh
-    ? [[0.5, SEVERITY_COLOR.critical], [0.8, SEVERITY_COLOR.warning], [1, SEVERITY_COLOR.ok]]
-    : [[0.7, SEVERITY_COLOR.ok], [0.9, SEVERITY_COLOR.warning], [1, SEVERITY_COLOR.critical]];
+  // Glassy progress color by current value (light tint → vivid), keyed to the
+  // good/bad direction. Modern "elite glass" hues, brighter than the severity
+  // tokens so the wheel reads lively rather than dark.
+  const pct = v === null ? 0 : Math.min(1, Math.max(0, v / max));
+  const band = (() => {
+    const t = goodHigh ? 1 - pct : pct; // t: 0 = healthy, 1 = bad
+    if (t < 0.7) return ["#34d399", "#10b981"]; // emerald
+    if (t < 0.9) return ["#fbbf24", "#f59e0b"]; // amber
+    return ["#fb7185", "#f43f5e"];               // rose
+  })();
+  const progressColor = {
+    type: "linear", x: 0, y: 0, x2: 1, y2: 1,
+    colorStops: [{ offset: 0, color: band[0] }, { offset: 1, color: band[1] }],
+  };
   return (
     <ReactECharts
-      style={{ height: 200 }}
+      style={{ height: 190 }}
       option={{
         series: [
           {
             type: "gauge",
             min: 0,
             max,
-            startAngle: 215,
-            endAngle: -35,
-            progress: { show: true, width: 40, roundCap: true },
-            axisLine: { lineStyle: { width: 40, color: stops } },
+            // Big, full wheel that fills the card. Thick rounded arc on a light
+            // glassy track — the Datadog/Grafana modern-gauge look.
+            center: ["50%", "60%"],
+            radius: "118%",
+            startAngle: 220,
+            endAngle: -40,
+            progress: { show: true, width: 30, roundCap: true, itemStyle: { color: progressColor, shadowBlur: 10, shadowColor: hexToRgba(band[1], 0.45) } },
+            axisLine: { roundCap: true, lineStyle: { width: 30, color: [[1, "#eef1f6"]] } },
             pointer: { show: false },
             axisTick: { show: false },
             splitLine: { show: false },
@@ -101,13 +115,11 @@ function MetricGauge({
             title: { show: false },
             detail: {
               valueAnimation: true,
-              fontSize: 28,
-              fontWeight: 700,
-              offsetCenter: [0, 0],
+              offsetCenter: [0, "-4%"],
               formatter: v === null ? "—" : `{v|${Math.round(v)}}{u|${unit}}`,
               rich: {
-                v: { fontSize: 30, fontWeight: 800, color: "var(--fg)" },
-                u: { fontSize: 13, color: "var(--muted)", padding: [0, 0, 4, 2] },
+                v: { fontSize: 38, fontWeight: 800, color: "var(--fg)" },
+                u: { fontSize: 16, color: "var(--muted)", padding: [0, 0, 6, 2] },
               },
             },
             data: [{ value: v ?? 0 }],
@@ -291,33 +303,134 @@ function TopologyPanel() {
   );
 }
 
+// ---- donut: a shared colorful ring used by several panels ------------------
+
+function Donut({ rows, unit }: { rows: { name: string; value: number }[]; unit?: string }) {
+  if (rows.length === 0) return <Empty msg="No data yet." />;
+  return (
+    <ReactECharts
+      style={{ height: 190 }}
+      option={{
+        ...chartBase,
+        tooltip: { ...chartBase.tooltip, trigger: "item", formatter: `{b}: {c}${unit ? " " + unit : ""} ({d}%)` },
+        legend: { ...chartBase.legend, type: "scroll", orient: "vertical", right: 4, top: "center", itemWidth: 9, itemHeight: 9, textStyle: { color: "#667085", fontSize: 12 } },
+        series: [{
+          type: "pie", radius: ["52%", "76%"], center: ["38%", "50%"],
+          avoidLabelOverlap: true, label: { show: false }, labelLine: { show: false },
+          itemStyle: { borderColor: "#fff", borderWidth: 2 },
+          data: rows.map((r, i) => ({ ...r, itemStyle: { color: paletteColor(i) } })),
+        }],
+      }}
+    />
+  );
+}
+
+// ---- flows by protocol (ClickHouse) ----------------------------------------
+
+function FlowsByProto() {
+  const res = usePolled(() => api.flowsByProto(3600), 30000);
+  const rows = ((res?.data as { proto: string; bytes_total: number }[]) ?? [])
+    .map((r) => ({ name: r.proto || "other", value: Number(r.bytes_total) }))
+    .filter((r) => r.value > 0)
+    .slice(0, 8);
+  return <Donut rows={rows} unit="B" />;
+}
+
+// ---- device inventory by vendor --------------------------------------------
+
+function DevicesByVendor() {
+  const devices = usePolled(() => api.devices(), 30000) ?? [];
+  const by: Record<string, number> = {};
+  for (const d of devices as Device[]) by[d.vendor || "unknown"] = (by[d.vendor || "unknown"] ?? 0) + 1;
+  const rows = Object.entries(by).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  return <Donut rows={rows} unit="devices" />;
+}
+
+// ---- tunnels health (IPsec / SD-WAN) ---------------------------------------
+
+function TunnelsHealth() {
+  const res = usePolled(() => api.tunnels(500), 20000);
+  const rows = (res?.data as Tunnel[]) ?? [];
+  if (rows.length === 0) return <Empty msg="No tunnel telemetry yet." />;
+  const up = rows.filter((t) => String(t.status).toLowerCase() === "up").length;
+  const down = rows.length - up;
+  const lats = rows.map((t) => Number(t.latency_ms)).filter((n) => Number.isFinite(n) && n > 0);
+  const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : null;
+  const worst = lats.length ? Math.round(Math.max(...lats)) : null;
+  return (
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="stat s-good"><span className="stat-label">Tunnels up</span><span className="stat-value">{up}</span></div>
+      <div className={`stat ${down ? "s-bad" : "s-good"}`}><span className="stat-label">Tunnels down</span><span className="stat-value">{down}</span></div>
+      <div className="stat s-accent"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
+      <div className={`stat ${worst && worst > 120 ? "s-warn" : "s-accent"}`}><span className="stat-label">Worst latency</span><span className="stat-value">{worst ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
+    </div>
+  );
+}
+
+// ---- recent incidents (correlation findings) -------------------------------
+
+function RecentIncidents() {
+  const res = usePolled(() => api.findings(12), 20000);
+  const rows = ((res?.data as Finding[]) ?? []).slice(0, 8);
+  if (rows.length === 0) return <Empty msg="No correlated incidents." />;
+  return (
+    <div className="alerts-scroll">
+      {rows.map((f, i) => (
+        <div className="mini-row" key={f.id ?? i}>
+          <span className={`badge ${severityClass(f.severity)}`}>{f.severity || "info"}</span>
+          <div className="mini-body">
+            <div className="mini-title">{f.summary || f.kind || "(incident)"}</div>
+            <div className="mini-meta">
+              {f.device}{f.component ? ` · ${f.component}` : ""}
+              {f.ts ? ` · ${new Date(f.ts).toLocaleString()}` : ""}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---- registry --------------------------------------------------------------
+
+export type PanelCategory = "Health & KPIs" | "Resources" | "Alerts" | "Traffic" | "Inventory" | "Topology";
 
 export type PanelDef = {
   type: string;
   title: string;
   defaultSpan: number; // 3 | 4 | 6 | 8 | 12
+  category: PanelCategory;
   render: () => JSX.Element;
 };
 
 export const PANELS: Record<string, PanelDef> = {
-  "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, render: () => <AlertsSeverity /> },
-  "gauge-cpu": { type: "gauge-cpu", title: "CPU", defaultSpan: 3, render: () => <MetricGauge query="avg(device_cpu_percent)" /> },
-  "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, render: () => <MetricGauge query="avg(device_mem_percent)" /> },
-  "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, render: () => <MetricGauge query="avg(device_storage_percent)" /> },
-  "gauge-network": { type: "gauge-network", title: "Network util", defaultSpan: 3, render: () => <MetricGauge query="avg(device_if_util_percent)" /> },
-  "site-availability": { type: "site-availability", title: "Site availability", defaultSpan: 3, render: () => <SiteAvailability /> },
-  "stack-performance": { type: "stack-performance", title: "Stack performance", defaultSpan: 6, render: () => <StackPerformance /> },
-  traffic: { type: "traffic", title: "Traffic in / out", defaultSpan: 8, render: () => <TrafficInOut /> },
-  "top-hosts": { type: "top-hosts", title: "Top hosts", defaultSpan: 4, render: () => <TopHosts /> },
-  "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 12, render: () => <ActiveAlerts /> },
-  kpis: { type: "kpis", title: "KPIs", defaultSpan: 12, render: () => <KpiTiles /> },
-  topology: { type: "topology", title: "Topology", defaultSpan: 12, render: () => <TopologyPanel /> },
+  kpis: { type: "kpis", title: "KPIs", defaultSpan: 12, category: "Health & KPIs", render: () => <KpiTiles /> },
+  "site-availability": { type: "site-availability", title: "Site availability", defaultSpan: 3, category: "Health & KPIs", render: () => <SiteAvailability /> },
+  "stack-performance": { type: "stack-performance", title: "Stack performance", defaultSpan: 6, category: "Health & KPIs", render: () => <StackPerformance /> },
+  "gauge-cpu": { type: "gauge-cpu", title: "CPU", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_cpu_percent)" /> },
+  "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_mem_percent)" /> },
+  "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_storage_percent)" /> },
+  "gauge-network": { type: "gauge-network", title: "Network util", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_if_util_percent)" /> },
+  "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity /> },
+  "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts /> },
+  incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents /> },
+  traffic: { type: "traffic", title: "Traffic in / out", defaultSpan: 8, category: "Traffic", render: () => <TrafficInOut /> },
+  "top-hosts": { type: "top-hosts", title: "Top hosts", defaultSpan: 4, category: "Traffic", render: () => <TopHosts /> },
+  "flows-proto": { type: "flows-proto", title: "Traffic by protocol", defaultSpan: 4, category: "Traffic", render: () => <FlowsByProto /> },
+  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth /> },
+  "devices-vendor": { type: "devices-vendor", title: "Devices by vendor", defaultSpan: 4, category: "Inventory", render: () => <DevicesByVendor /> },
+  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel /> },
 };
 
-// Order shown in the "Add panel" picker.
-export const PANEL_ORDER = [
-  "gauge-cpu", "gauge-mem", "gauge-storage", "gauge-network",
-  "alerts-severity", "active-alerts", "traffic", "top-hosts",
-  "site-availability", "stack-performance", "kpis", "topology",
+// Category groups for the "Add panel" picker, in display order.
+export const PANEL_CATEGORIES: { category: PanelCategory; types: string[] }[] = [
+  { category: "Health & KPIs", types: ["kpis", "site-availability", "stack-performance"] },
+  { category: "Resources", types: ["gauge-cpu", "gauge-mem", "gauge-storage", "gauge-network"] },
+  { category: "Alerts", types: ["alerts-severity", "active-alerts", "incidents"] },
+  { category: "Traffic", types: ["traffic", "top-hosts", "flows-proto", "tunnels-health"] },
+  { category: "Inventory", types: ["devices-vendor"] },
+  { category: "Topology", types: ["topology"] },
 ];
+
+// Flat order (derived) — kept for any callers that still want a simple list.
+export const PANEL_ORDER = PANEL_CATEGORIES.flatMap((c) => c.types);

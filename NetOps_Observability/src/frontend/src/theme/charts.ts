@@ -1,18 +1,19 @@
 // Shared ECharts theming so every graph in the app reads as one product —
-// a vivid, modern categorical palette on a transparent dark canvas, in the
-// spirit of Datadog / Grafana.
+// a vivid, modern categorical palette tuned for the LIGHT canvas (saturated
+// enough to feel alive on white, still AA-legible), in the spirit of
+// Datadog / Grafana. Ordered so adjacent series stay maximally distinct.
 
 export const CHART_PALETTE = [
-  "#4f9eff", // blue
-  "#3ddc97", // green
-  "#ffb454", // amber
-  "#ff6b81", // pink-red
-  "#a78bfa", // violet
-  "#22d3ee", // cyan
-  "#f472b6", // magenta
-  "#facc15", // yellow
-  "#5eead4", // teal
-  "#fb923c", // orange
+  "#4f46e5", // indigo (brand)
+  "#06b6d4", // cyan
+  "#f59e0b", // amber
+  "#ec4899", // pink
+  "#10b981", // emerald
+  "#8b5cf6", // violet
+  "#ef4444", // red
+  "#0ea5e9", // sky
+  "#f97316", // orange
+  "#14b8a6", // teal
 ];
 
 const AXIS = "#667085";
@@ -62,8 +63,21 @@ export function areaGradient(i = 0) {
     x2: 0,
     y2: 1,
     colorStops: [
-      { offset: 0, color: hexToRgba(c, 0.38) },
-      { offset: 1, color: hexToRgba(c, 0.02) },
+      { offset: 0, color: hexToRgba(c, 0.45) },
+      { offset: 1, color: hexToRgba(c, 0.0) },
     ],
+  };
+}
+
+// Datadog-style line series defaults: thin smooth stroke, no markers, a soft
+// area wash keyed to the series hue. Spread into any line series object.
+export function lineSeriesDefaults(i = 0) {
+  return {
+    type: "line",
+    smooth: true,
+    showSymbol: false,
+    lineStyle: { width: 2, color: paletteColor(i) },
+    itemStyle: { color: paletteColor(i) },
+    areaStyle: { color: areaGradient(i) },
   };
 }

@@ -314,6 +314,75 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ id }),
     }),
+
+  // ----- Identity & access (admin) -----
+  permissions: () => request<{ role: string; permissions: Record<string, number> }>("/api/auth/permissions"),
+
+  listUsers: () => request<AdminUser[]>("/api/users"),
+  createUser: (u: Partial<AdminUser> & { password?: string }) =>
+    request<AdminUser>("/api/users", { method: "POST", body: JSON.stringify(u) }),
+  updateUser: (username: string, patch: Partial<AdminUser> & { password?: string }) =>
+    request<AdminUser>(`/api/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteUser: (username: string) =>
+    request<void>(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
+
+  listRoles: () => request<{ modules: string[]; roles: Role[] }>("/api/roles"),
+  saveRole: (r: Role) =>
+    r.id
+      ? request<Role>(`/api/roles/${encodeURIComponent(r.id)}`, { method: "PUT", body: JSON.stringify(r) })
+      : request<Role>("/api/roles", { method: "POST", body: JSON.stringify(r) }),
+  deleteRole: (id: string) => request<void>(`/api/roles/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  listTenants: () => request<Tenant[]>("/api/tenants"),
+  createTenant: (name: string, note?: string) =>
+    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note }) }),
+  deleteTenant: (id: string) => request<void>(`/api/tenants/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
+  createApiKey: (label: string, scopes: string[], tenant_id?: string) =>
+    request<{ key: ApiKey; secret: string }>("/api/apikeys", {
+      method: "POST",
+      body: JSON.stringify({ label, scopes, tenant_id }),
+    }),
+  revokeApiKey: (id: string) => request<void>(`/api/apikeys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+
+// ----- Identity & access types -----
+export type AdminUser = {
+  username: string;
+  role: string;
+  email?: string;
+  display_name?: string;
+  tenant_id?: string;
+  status?: string;
+  auth_source?: string;
+  created_at?: string;
+  last_login_at?: string;
+};
+export type Role = {
+  id?: string;
+  name: string;
+  builtin?: boolean;
+  description?: string;
+  permissions: Record<string, number>; // module -> 0..3
+};
+export type Tenant = {
+  id: string;
+  name: string;
+  slug: string;
+  note?: string;
+  created_at?: string;
+};
+export type ApiKey = {
+  id: string;
+  tenant_id: string;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  created_by: string;
+  created_at: string;
+  last_used_at?: string;
+  revoked_at?: string;
 };
 
 export type ReportKind = "alerts_summary" | "device_inventory" | "health_summary";
