@@ -16,12 +16,15 @@ export type Device = {
 };
 
 export type CollectorStatus = {
+  kind?: string; // "protocol" | "discovery"
   name: string;
   enabled: boolean;
   healthy: boolean;
   last_tick?: string;
   last_error?: string;
   targets: number;
+  reachable?: number;
+  last_poll_ms?: number;
 };
 
 export type Alert = {
@@ -101,6 +104,25 @@ export type Finding = {
   component: string;
   summary: string;
   description: string;
+};
+
+// Overlay tunnel (IPsec / SD-WAN / GRE) — one current row per tunnel, served
+// from netops.tunnels. Numeric fields may arrive as JSON strings from
+// ClickHouse (UInt64), so coerce with Number() at the call site.
+export type Tunnel = {
+  ts: string;
+  id: string;
+  type: string; // ipsec | sdwan | gre
+  local_device: string;
+  local_addr: string;
+  remote_device: string;
+  remote_addr: string;
+  status: string; // up | down
+  latency_ms: number;
+  jitter_ms: number;
+  loss_pct: number;
+  qoe: number;
+  uptime_s: number;
 };
 
 // ---------- Copilot ----------
@@ -238,6 +260,11 @@ export const api = {
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s`,
     ),
+  tunnels: (limit = 200, status?: string) => {
+    const p = new URLSearchParams({ limit: String(limit) });
+    if (status) p.set("status", status);
+    return request<ClickHouseResponse<Tunnel>>(`/api/tunnels?${p}`);
+  },
   findings: (limit = 100, severity?: string) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (severity) p.set("severity", severity);

@@ -19,6 +19,22 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </>
   ),
+  // Explore — a compass, the modern convention for ad-hoc/query-first views.
+  explore: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88" />
+    </>
+  ),
+  // Infrastructure — a server stack for the device fleet.
+  infrastructure: (
+    <>
+      <rect x="2" y="3" width="20" height="8" rx="2" />
+      <rect x="2" y="13" width="20" height="8" rx="2" />
+      <line x1="6" y1="7" x2="6.01" y2="7" />
+      <line x1="6" y1="17" x2="6.01" y2="17" />
+    </>
+  ),
   analytics: (
     <>
       <path d="M3 3v18h18" />
@@ -97,7 +113,7 @@ export default function Icon({ name, size = 18, className }: Props) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

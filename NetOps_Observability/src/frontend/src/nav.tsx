@@ -13,6 +13,7 @@ import Findings from "./tabs/Findings";
 import Logs from "./tabs/Logs";
 import SavedSearches from "./tabs/SavedSearches";
 import Flows from "./tabs/Flows";
+import Tunnels from "./tabs/Tunnels";
 import MetricsExplorer from "./tabs/MetricsExplorer";
 import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
@@ -36,7 +37,12 @@ export type NavSection = {
   footer?: boolean; // pinned to the bottom of the sidebar
 };
 
-// The information architecture. Order here is the sidebar order.
+// The information architecture. Labels/grouping follow the conventions shared
+// by Datadog, Zabbix 7, Splunk Observability and Grafana:
+//   Overview · Explore (ad-hoc query) · Dashboards (curated) · Alerts ·
+//   Infrastructure (fleet) · Topology · Reports, with Administration (settings
+//   + raw-tool escape hatches: Grafana/Prometheus/OpenSearch) pinned at the
+//   bottom. Order here is the sidebar order.
 export const NAV: NavSection[] = [
   {
     id: "overview",
@@ -44,52 +50,56 @@ export const NAV: NavSection[] = [
     icon: "overview",
     render: () => <Dashboard />,
   },
+  // Explore — ad-hoc, query-first work across the data types (Grafana
+  // "Explore" / Datadog "Metrics Explorer"), kept distinct from Dashboards.
   {
-    id: "search",
-    label: "Search",
-    icon: "search",
+    id: "explore",
+    label: "Explore",
+    icon: "explore",
     children: [
-      { id: "logs", label: "Search", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
-      { id: "saved", label: "Saved", render: () => <SavedSearches /> },
-      { id: "advanced", label: "Advanced (OSD)", render: () => <SearchDashboardsTab /> },
-    ],
-  },
-  {
-    id: "analytics",
-    label: "Analytics",
-    icon: "analytics",
-    children: [
-      { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
+      { id: "logs", label: "Logs", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       { id: "metrics", label: "Metrics", render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} /> },
-      { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
+      { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
+      { id: "saved", label: "Saved", render: () => <SavedSearches /> },
     ],
   },
+  // Dashboards — curated, saved views only (the universal label).
   {
-    id: "datasets",
-    label: "Datasets",
-    icon: "datasets",
+    id: "dashboards",
+    label: "Dashboards",
+    icon: "dashboards",
+    render: () => <SavedDashboards />,
+  },
+  // Alerts — active state vs rule definitions vs correlated incidents
+  // (Zabbix "Problems"/"Alerts", Splunk "Active"/"Detectors").
+  {
+    id: "alerts",
+    label: "Alerts",
+    icon: "alerts",
+    children: [
+      { id: "active", label: "Active", render: () => <Alerts /> },
+      { id: "rules", label: "Rules", render: () => <Rules /> },
+      { id: "incidents", label: "Incidents", render: () => <Findings /> },
+    ],
+  },
+  // Infrastructure — the device fleet + collection health (Datadog
+  // "Infrastructure", Zabbix "Hosts"/"Data collection").
+  {
+    id: "infrastructure",
+    label: "Infrastructure",
+    icon: "infrastructure",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
       { id: "collectors", label: "Collectors", render: () => <Collectors /> },
     ],
   },
   {
-    id: "dashboards",
-    label: "Dashboards",
-    icon: "dashboards",
+    id: "topology",
+    label: "Topology",
+    icon: "topology",
     children: [
-      { id: "saved", label: "Saved", render: () => <SavedDashboards /> },
-      { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
-    ],
-  },
-  {
-    id: "alerts",
-    label: "Alerts",
-    icon: "alerts",
-    children: [
-      { id: "triggered", label: "Triggered", render: () => <Alerts /> },
-      { id: "rules", label: "Rules", render: () => <Rules /> },
-      { id: "incidents", label: "Incidents", render: () => <Findings /> },
+      { id: "map", label: "Map", render: () => <Topology /> },
+      { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },
     ],
   },
   {
@@ -99,24 +109,26 @@ export const NAV: NavSection[] = [
     render: () => <Reports />,
   },
   {
-    id: "topology",
-    label: "Topology",
-    icon: "topology",
-    render: () => <Topology />,
-  },
-  {
     id: "copilot",
     label: "Copilot",
     icon: "copilot",
     action: "copilot",
     footer: true,
   },
+  // Administration — config + power-user escape hatches to the raw backend
+  // tools, kept out of the day-to-day monitoring sections (as Grafana/Datadog
+  // do: backends live under admin/connections, not next to dashboards).
   {
-    id: "settings",
-    label: "Settings",
+    id: "admin",
+    label: "Administration",
     icon: "settings",
-    render: () => <Settings />,
     footer: true,
+    children: [
+      { id: "settings", label: "Settings", render: () => <Settings /> },
+      { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
+      { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
+      { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
+    ],
   },
 ];
 

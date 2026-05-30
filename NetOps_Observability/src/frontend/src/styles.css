@@ -351,3 +351,124 @@ tr[class*="sevrow-"] td:first-child { box-shadow: inset 3px 0 0 transparent; }
 .sevrow-critical { background: rgba(225, 29, 72, 0.05); }
 .sevrow-error    { background: rgba(234, 88, 12, 0.05); }
 tr[class*="sevrow-"]:hover { background: var(--hover); }
+
+/* ===========================================================================
+   KPI / table kit — big stat cards, heat-shaded cells, sortable headers.
+   Datadog-style: huge severity-colored numerals + conditional cell tints.
+   =========================================================================== */
+
+/* ----- Stat cards: a label over a large status-colored numeral ----- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+.stat {
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 12px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.stat-label {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.stat-value {
+  font-size: 44px; font-weight: 800; line-height: 1; color: var(--fg);
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+}
+.stat-sub { font-size: 12px; color: var(--muted); }
+.stat.s-good   .stat-value { color: var(--good); }
+.stat.s-bad    .stat-value { color: var(--bad); }
+.stat.s-warn   .stat-value { color: var(--warn); }
+.stat.s-accent .stat-value { color: var(--accent); }
+.stat.s-muted  .stat-value { color: var(--muted); }
+
+/* ----- Conditional / heat-shaded table cells ----- */
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+th.num { text-align: right; }
+td.cell-ok   { background: var(--sev-ok-bg);       color: var(--good); font-weight: 600; }
+td.cell-warn { background: var(--sev-warning-bg);  color: var(--warn); font-weight: 600; }
+td.cell-bad  { background: var(--sev-critical-bg); color: var(--bad);  font-weight: 600; }
+
+/* ----- Sortable headers ----- */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--fg); }
+th .sort-arrow { font-size: 9px; margin-left: 4px; opacity: 0.35; }
+th.sorted { color: var(--accent); }
+th.sorted .sort-arrow { opacity: 1; }
+
+/* ----- DataTable toolbar (inline search + row count) ----- */
+.dt-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 12px;
+}
+.dt-search {
+  display: flex; align-items: center; gap: 8px; flex: 1; max-width: 280px;
+  background: var(--bg); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 0 10px;
+}
+.dt-search:focus-within { border-color: var(--accent); }
+.dt-search input {
+  flex: 1; background: transparent; border: 0; outline: none;
+  padding: 7px 0; font-size: 13px; color: var(--fg);
+}
+.dt-search .omni-icon { color: var(--muted); }
+.dt-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.dt-row { cursor: default; }
+tbody tr.dt-row:hover { background: var(--hover); }
+
+/* ----- Vendor-grouped inventory ----- */
+.vendor-group { margin-top: 18px; }
+.vendor-group:first-of-type { margin-top: 8px; }
+.vendor-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 2px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.vendor-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.vendor-name {
+  font-size: 13px; font-weight: 700; color: var(--fg);
+  text-transform: capitalize; letter-spacing: 0.01em;
+}
+.vendor-count {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 1px 8px;
+}
+
+/* ----- Modular dashboard: panel tools, picker, severity counts ----- */
+.panel-tools {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 10px;
+}
+.panel-tools h3 { margin: 0; }
+.panel-tools-btns { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+.panel:hover .panel-tools-btns { opacity: 1; }
+.panel-tools-btns button {
+  background: transparent; border: 1px solid var(--panel-border); color: var(--muted);
+  border-radius: 6px; width: 24px; height: 24px; cursor: pointer;
+  font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.panel-tools-btns button:hover { color: var(--fg); border-color: var(--accent); }
+
+.panel-picker {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 12px; padding: 12px; margin-bottom: 14px;
+}
+.panel-picker button {
+  background: var(--bg); border: 1px solid var(--panel-border); color: var(--fg);
+  border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+}
+.panel-picker button:hover { border-color: var(--accent); color: var(--accent); }
+
+.sev-counts { display: flex; gap: 12px; flex-wrap: wrap; }
+.sev-count {
+  flex: 1; min-width: 100px;
+  background: var(--bg); border: 1px solid var(--panel-border);
+  border-left: 4px solid var(--muted);
+  border-radius: 10px; padding: 12px 16px;
+}
+.sev-count .n { font-size: 34px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.sev-count .l { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-top: 4px; }
+
+.alerts-scroll { max-height: 320px; overflow: auto; }
