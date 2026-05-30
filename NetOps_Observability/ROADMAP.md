@@ -12,14 +12,23 @@ Overview · Search · Analytics · Datasets · Dashboards · Alerts · Reports �
 Topology. See `src/frontend/src/nav.tsx`.
 
 ## ▶ Phase 2 — Visual design system (in progress)
-Make it look "elite, transparent, modern" like Datadog/Grafana.
-- A refined dark palette built on **semi-transparent, layered** surfaces.
+Adopt **Datadog's whole look & feel** — not just for the topology, but the
+entire shell: dark nav rail + **light content canvas**, dense-but-legible
+type, soft-elevated cards, vibrant accents.
+- **Light canvas + dark rail** (Datadog convention; the earlier all-dark idea
+  was retired after reviewing Datadog references). Brand lockup moved into the
+  rail; topbar is now omni-search + global time-range + user.
+- **Design tokens** (`styles.css :root`): type scale (`--fs-*`), space
+  (`--sp-*`), radius (`--r-*`), rail palette, vivid accent + gradient
+  (`--accent-grad`), elevation shadows. Reference tokens, don't hardcode.
 - **Severity color system** (critical / error / warning / notice / info /
   debug) applied consistently to **Logs** and **Alerts/Findings** — badges,
-  row accents, and dots.
-- A **varied categorical chart palette** (8–12 modern hues) shared across all
-  ECharts views so trends read vividly; a single dark ECharts theme.
-- Tokens centralized so future theming (light mode, accent swap) is trivial.
+  row accents, dots; concrete hex in `theme/severity.ts`.
+- A **vivid categorical chart palette** (10 saturated hues) + area-gradient and
+  line-series helpers in `theme/charts.ts`, shared across every ECharts view.
+- **Topology** redrawn Datadog "Network Path"-style: role-tiered node cards
+  health-tinted by worst active alert, latency-colored tunnel edges with `ms`
+  labels, click-to-inspect detail panel.
 
 ## ✅ Phase 3 — Saved-objects backend (done)
 `/api/saved` + `/api/saved/{id}` CRUD over a file-backed `savedStore`
@@ -54,8 +63,22 @@ with the raw Prometheus UI kept under Analytics → Prometheus.
   (create, monitor, **Send now**, delete). Gated by `ENABLE_REPORT_SCHEDULER`
   (default on).
 
+## ▶ Phase 6 — Identity, Access, API & ITSM (design + scaffolding)
+Enterprise readiness. UI previews are live under **Administration**
+(`tabs/admin.tsx`, clearly marked *Planned*); the build plans are written:
+- **Auth + multi-tenancy + granular RBAC** — local accounts → Postgres, tenants,
+  module-level permissions (none/read/write/admin), built-in **and** custom
+  roles. See [`docs/IDENTITY_ACCESS.md`](docs/IDENTITY_ACCESS.md).
+- **SSO** — OAuth2/OIDC, SAML 2.0, LDAP/AD via **Keycloak** as the identity
+  broker (keeps the Go backend stdlib-only); JWT RS256 with configurable expiry
+  + rotating refresh tokens.
+- **API Access** — inbuilt programmatic API: scoped, tenant-bound API keys,
+  OpenAPI reference + GraphQL explorer. See [`docs/API_ACCESS.md`](docs/API_ACCESS.md).
+- **ITSM** — ServiceNow + Jira bi-directional ticketing on the existing
+  `notify/` framework. See [`docs/ITSM_INTEGRATION.md`](docs/ITSM_INTEGRATION.md).
+
 ## Backlog / cross-cutting ideas
-- Light theme + per-user theme preference.
+- Dark-mode toggle (tokens already centralized; add a `[data-theme]` swap).
 - Density toggle (comfortable / compact tables).
 - Keyboard command palette (⌘K) over the omni-search.
 - Per-section saved time-range presets.
