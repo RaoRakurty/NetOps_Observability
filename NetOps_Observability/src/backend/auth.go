@@ -37,11 +37,27 @@ type loginResponse struct {
 type publicUser struct {
 	Username    string    `json:"username"`
 	Role        string    `json:"role"`
+	Email       string    `json:"email,omitempty"`
+	DisplayName string    `json:"display_name,omitempty"`
+	TenantID    string    `json:"tenant_id,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	AuthSource  string    `json:"auth_source,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
 }
 
 func toPublic(u User) publicUser {
-	return publicUser{Username: u.Username, Role: u.Role, LastLoginAt: u.LastLoginAt}
+	return publicUser{
+		Username:    u.Username,
+		Role:        u.Role,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		TenantID:    u.TenantID,
+		Status:      u.Status,
+		AuthSource:  u.AuthSource,
+		CreatedAt:   u.CreatedAt,
+		LastLoginAt: u.LastLoginAt,
+	}
 }
 
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +150,7 @@ var publicPaths = []string{
 	"/metrics",
 }
 
-func withAuth(next http.Handler) http.Handler {
+func (s *server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Pass through CORS preflight unchanged.
 		if r.Method == http.MethodOptions {
@@ -162,11 +178,28 @@ func withAuth(next http.Handler) http.Handler {
 		}
 		if token == "" {
 			auth := r.Header.Get("Authorization")
+			if h := r.Header.Get("X-API-Key"); h != "" && auth == "" {
+				auth = "Bearer " + h
+			}
 			if !strings.HasPrefix(auth, "Bearer ") {
 				writeError(w, http.StatusUnauthorized, errors.New("missing bearer token"))
 				return
 			}
 			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		}
+		// Machine clients present an API key (ntk_…). Resolve it to a synthetic
+		// principal scoped read-only by default (scope→level enforcement is a
+		// follow-up; see docs/API_ACCESS.md).
+		if strings.HasPrefix(token, keyPrefix) {
+			k, ok := s.apiKeys.Verify(token)
+			if !ok {
+				writeError(w, http.StatusUnauthorized, errors.New("invalid or revoked API key"))
+				return
+			}
+			claims := jwtClaims{Sub: "apikey:" + k.ID, Role: RoleReadOnly}
+			ctx := context.WithValue(r.Context(), userCtxKey, claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
 		claims, err := verifyJWT(token, jwtSecret())
 		if err != nil {

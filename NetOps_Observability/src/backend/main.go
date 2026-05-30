@@ -37,6 +37,9 @@ type server struct {
 	alerts     *alerts.Engine
 	notifier   *notify.Dispatcher
 	users      *userStore
+	roles      *roleStore
+	tenants    *tenantStore
+	apiKeys    *apiKeyStore
 	saved      *savedStore
 	reports    *reportScheduler
 	hub        *Hub
@@ -119,6 +122,19 @@ func newServer() *server {
 		log.Printf("seed admin (non-fatal): %v", err)
 	}
 
+	roles, err := newRoleStore(envOr("ROLES_FILE", "/data/roles.json"))
+	if err != nil {
+		log.Fatalf("role store: %v", err)
+	}
+	tenants, err := newTenantStore(envOr("TENANTS_FILE", "/data/tenants.json"))
+	if err != nil {
+		log.Fatalf("tenant store: %v", err)
+	}
+	apiKeys, err := newAPIKeyStore(envOr("APIKEYS_FILE", "/data/apikeys.json"))
+	if err != nil {
+		log.Fatalf("api key store: %v", err)
+	}
+
 	saved, err := newSavedStore(envOr("SAVED_FILE", "/data/saved.json"))
 	if err != nil {
 		log.Fatalf("saved store: %v", err)
@@ -131,6 +147,9 @@ func newServer() *server {
 		alerts:     engine,
 		notifier:   notifier,
 		users:      users,
+		roles:      roles,
+		tenants:    tenants,
+		apiKeys:    apiKeys,
 		saved:      saved,
 		hub:        NewHub(),
 	}
@@ -158,7 +177,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(withLogging(withAuth(mux))),
+		Handler:           withCORS(withLogging(srv.withAuth(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -191,6 +210,16 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/me", s.handleMe)
 	mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
+	mux.HandleFunc("/api/auth/permissions", s.handlePermissions)
+	// Identity & access (admin-gated): users, roles, tenants, API keys.
+	mux.HandleFunc("/api/users", s.handleUsers)
+	mux.HandleFunc("/api/users/", s.handleUserByID)
+	mux.HandleFunc("/api/roles", s.handleRoles)
+	mux.HandleFunc("/api/roles/", s.handleRoleByID)
+	mux.HandleFunc("/api/tenants", s.handleTenants)
+	mux.HandleFunc("/api/tenants/", s.handleTenantByID)
+	mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
+	mux.HandleFunc("/api/apikeys/", s.handleAPIKeyByID)
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)
