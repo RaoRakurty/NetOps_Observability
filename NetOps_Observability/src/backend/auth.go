@@ -282,6 +282,13 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid or revoked API key"))
 				return
 			}
+			// Per-key rate limit (fixed window / minute). 429 + Retry-After when
+			// the key exceeds its cap; surfaced live in Administration → API Access.
+			if ok, retry := s.apiKeys.Allow(k.ID, s.apiKeys.effectiveLimit(k)); !ok {
+				w.Header().Set("Retry-After", intToString(retry))
+				writeError(w, http.StatusTooManyRequests, errors.New("API key rate limit exceeded"))
+				return
+			}
 			claims := jwtClaims{
 				Sub:    "apikey:" + k.ID,
 				Role:   roleFromScopes(k.Scopes),

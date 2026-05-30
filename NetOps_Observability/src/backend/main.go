@@ -46,10 +46,17 @@ type server struct {
 	reports    *reportScheduler
 	oidc       *oidcProvider
 	servicenow *notify.ServiceNow
+	jira       *notify.Jira
 	hub        *Hub
 }
 
 func newServer() *server {
+	// Select where the identity/saved stores persist (file by default; Postgres
+	// when STORE_BACKEND=postgres). Must run before any store is constructed.
+	if err := initStoreBackend(); err != nil {
+		log.Fatalf("store backend: %v", err)
+	}
+
 	d := NewDiscoveryAggregator()
 	d.Register(NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
 	if os.Getenv("ENABLE_SNMP_DISCOVERY") == "true" {
@@ -140,6 +147,23 @@ func newServer() *server {
 			WithAssignmentGroup(os.Getenv("SERVICENOW_ASSIGNMENT_GROUP"))
 		notifier.Register(serviceNow)
 	}
+	// ITSM: Jira auto-ticketing — same bi-directional shape as ServiceNow
+	// (open on threshold, transition to done when the alert clears). Either or
+	// both connectors can run at once. See notify/jira.go.
+	var jiraConn *notify.Jira
+	if os.Getenv("FEATURE_JIRA_NOTIFICATIONS") == "true" {
+		jiraConn = notify.NewJira(
+			os.Getenv("JIRA_BASE_URL"),
+			os.Getenv("JIRA_EMAIL"),
+			os.Getenv("JIRA_API_TOKEN"),
+			os.Getenv("JIRA_PROJECT_KEY"),
+		).
+			WithIssueType(os.Getenv("JIRA_ISSUE_TYPE")).
+			WithThreshold(os.Getenv("JIRA_MIN_SEVERITY")).
+			WithResolveTransition(os.Getenv("JIRA_RESOLVE_TRANSITION")).
+			WithStateFile(envOr("JIRA_STATE_FILE", "/data/jira_tickets.json"))
+		notifier.Register(jiraConn)
+	}
 
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
 
@@ -196,6 +220,7 @@ func newServer() *server {
 		saved:      saved,
 		oidc:       newOIDCProvider(),
 		servicenow: serviceNow,
+		jira:       jiraConn,
 		hub:        NewHub(),
 	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
@@ -299,6 +324,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/itsm/servicenow", s.handleITSMServiceNow)
+	mux.HandleFunc("/api/itsm/jira", s.handleITSMJira)
 	// Dashboard live data
 	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
 	mux.HandleFunc("/api/metrics/query", s.handleMetricsQuery)

@@ -38,3 +38,32 @@ func (s *server) handleITSMServiceNow(w http.ResponseWriter, r *http.Request) {
 		"auto_close": true,
 	})
 }
+
+func (s *server) handleITSMJira(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requirePerm(w, r, "alerts", LevelRead); !ok {
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.jira == nil || !s.jira.Configured() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled":    false,
+			"configured": false,
+			"open":       []notify.JiraTicket{},
+		})
+		return
+	}
+	tickets := s.jira.Tickets()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    true,
+		"configured": true,
+		"project":    s.jira.ProjectKey(),
+		"threshold":  s.jira.ThresholdName(),
+		"open":       tickets,
+		"open_count": len(tickets),
+		"auto_close": true,
+	})
+}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -50,7 +49,7 @@ func newUserStore(path string) (*userStore, error) {
 }
 
 func (s *userStore) load() error {
-	b, err := os.ReadFile(s.path)
+	b, err := kvLoad(s.path)
 	if err != nil {
 		return err
 	}
@@ -65,9 +64,6 @@ func (s *userStore) load() error {
 }
 
 func (s *userStore) flushLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	list := make([]User, 0, len(s.users))
 	for _, u := range s.users {
 		list = append(list, u)
@@ -76,12 +72,7 @@ func (s *userStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	// Atomic write: write to temp file then rename.
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return kvSave(s.path, b)
 }
 
 func (s *userStore) Get(username string) (User, bool) {

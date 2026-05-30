@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -158,7 +157,7 @@ func newSNMPCredStore(path string) (*snmpCredStore, error) {
 }
 
 func (s *snmpCredStore) load() error {
-	b, err := os.ReadFile(s.path)
+	b, err := kvLoad(s.path)
 	if err != nil {
 		return err
 	}
@@ -173,9 +172,6 @@ func (s *snmpCredStore) load() error {
 }
 
 func (s *snmpCredStore) flushLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	list := make([]SNMPCredential, 0, len(s.creds))
 	for _, c := range s.creds {
 		list = append(list, c)
@@ -185,11 +181,7 @@ func (s *snmpCredStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return kvSave(s.path, b)
 }
 
 func (s *snmpCredStore) List() []publicSNMPCredential {

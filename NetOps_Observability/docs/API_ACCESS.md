@@ -1,10 +1,10 @@
 # API Access
 
 > **Status: implemented.** Scoped, tenant-bound API keys, token auth with
-> rotating refresh, and a live **OpenAPI 3** document (`GET /api/openapi.json`,
-> rendered in **Administration → API Access**) are all live. A GraphiQL explorer
-> and per-key rate limits remain follow-ups. Backend: `apikeys.go`, `openapi.go`,
-> `auth.go`, `refresh.go`.
+> rotating refresh, a live **OpenAPI 3** document (`GET /api/openapi.json`), an
+> in-app **GraphQL explorer**, and **per-key rate limits + usage stats** are all
+> live and rendered under **Administration → API Access**. Backend: `apikeys.go`,
+> `openapi.go`, `graphql.go`, `auth.go`, `refresh.go`.
 
 NetOps is **API-first**: every action in the dashboard is already a documented
 HTTP call against the Go API. This document makes that programmatic surface a
@@ -59,21 +59,28 @@ A client either uses a long-lived **API key** (machine) or the
 
 - **OpenAPI 3:** serve a generated spec at `/api/openapi.json` and embed a
   reference ("try it" console) in the API Access page. Generated from the Go
-  handlers (annotations or a small registry) so it can't drift.
-- **GraphQL:** promote the existing stub to a real schema and ship an in-app
-  explorer (GraphiQL-style) at `/api/graphql`. One endpoint, typed, introspectable.
-- **Rate limits & quotas:** per-key rate limiting (nginx `limit_req` keyed on the
-  key id, and/or app-level token bucket); surfaced in the UI per key.
+  handlers (annotations or a small registry) so it can't drift. **Done.**
+- **GraphQL:** typed endpoint at `/api/graphql` (devices/alerts/rules/health +
+  `__schema`), tenant-scoped, with an in-app **GraphiQL-style explorer** in the
+  API Access page (query editor, example queries, JSON result pane — no external
+  CDN bundle). **Done.** Promoting the naïve dispatch to a full schema/resolver
+  is the remaining follow-up.
+- **Rate limits & quotas:** app-level **per-key rate limiting** (fixed window /
+  minute) enforced in the auth middleware — over-cap calls get `429` +
+  `Retry-After`. Each key has its own cap (or inherits `APIKEY_RATE_LIMIT_PER_MIN`,
+  default 600; 0 = unlimited). Live current-minute usage and lifetime call counts
+  are surfaced per key in the UI. **Done.**
 
 ---
 
 ## Build order
 
-1. `api_keys` table + key middleware (resolve key → RBAC context).
-2. API Access UI wired to key CRUD (generate / list / revoke).
-3. OpenAPI generation + embedded reference.
-4. GraphQL schema + explorer.
-5. Per-key rate limiting + usage stats.
+1. ~~`api_keys` table + key middleware (resolve key → RBAC context).~~ **Done.**
+2. ~~API Access UI wired to key CRUD (generate / list / revoke).~~ **Done.**
+3. ~~OpenAPI generation + embedded reference.~~ **Done.**
+4. ~~GraphQL endpoint + in-app explorer.~~ **Done** (real schema/resolver is the
+   remaining polish).
+5. ~~Per-key rate limiting + usage stats.~~ **Done.**
 
 Depends on the RBAC context from steps 1–2 of `IDENTITY_ACCESS.md`.
 

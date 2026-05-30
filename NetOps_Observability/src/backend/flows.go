@@ -21,6 +21,11 @@ func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
 	limit := intQuery(r, "limit", 20, 1, 500)
 	since := durationQuery(r, "since", time.Hour)
 
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
 	sql := `
 SELECT src_addr AS src,
        dst_addr AS dst,
@@ -28,7 +33,7 @@ SELECT src_addr AS src,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
  GROUP BY src, dst
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
@@ -38,13 +43,18 @@ SELECT src_addr AS src,
 
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
 	sql := `
 SELECT proto,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
@@ -54,12 +64,17 @@ SELECT proto,
 func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	step := durationQuery(r, "step", time.Minute)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
 	sql := `
 SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` SECOND) AS bucket,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
  GROUP BY bucket
  ORDER BY bucket
  FORMAT JSON`
@@ -69,9 +84,23 @@ SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` S
 func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	limit := intQuery(r, "limit", 100, 1, 1000)
 	sev := r.URL.Query().Get("severity")
-	where := ""
+	var conds []string
 	if sev != "" {
-		where = " WHERE severity = '" + strings.ReplaceAll(sev, "'", "") + "' "
+		conds = append(conds, "severity = '"+strings.ReplaceAll(sev, "'", "")+"'")
+	}
+	// Tenant isolation: a scoped principal only sees findings on devices it can
+	// view (matched by the finding's `device` column against the device id/name).
+	claims, _ := userFrom(r.Context())
+	if keys, cross := s.visibleDeviceKeys(claims); !cross {
+		if len(keys) == 0 {
+			writeEmptyClickHouse(w)
+			return
+		}
+		conds = append(conds, "device IN ("+sqlInList(keys)+")")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
 	sql := `
 SELECT toString(ts) AS ts, id, kind, severity, score, device,
@@ -84,6 +113,42 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
 	proxyClickHouse(w, sql)
 }
 
+// flowTenantClause builds the SQL fragment that restricts flow rows to a scoped
+// principal's devices (matched on src_addr/dst_addr). It returns ("", false) for
+// cross-tenant principals (no restriction) and ("", true) when the principal has
+// no visible device addresses (caller should short-circuit to an empty result).
+func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
+	claims, _ := userFrom(r.Context())
+	addrs, cross := s.visibleDeviceAddrs(claims)
+	if cross {
+		return "", false
+	}
+	if len(addrs) == 0 {
+		return "", true
+	}
+	in := sqlInList(addrs)
+	return " AND (src_addr IN (" + in + ") OR dst_addr IN (" + in + "))", false
+}
+
+// sqlInList renders values as a quoted, comma-separated SQL list with single
+// quotes escaped. Inputs come from the device inventory (not the client), but we
+// escape regardless to keep the query well-formed and injection-safe.
+func sqlInList(vals []string) string {
+	parts := make([]string, 0, len(vals))
+	for _, v := range vals {
+		parts = append(parts, "'"+strings.ReplaceAll(v, "'", "''")+"'")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// writeEmptyClickHouse emits an empty result set in the same envelope shape the
+// ClickHouse HTTP JSON format uses, so the SPA's `.data` access is unaffected.
+func writeEmptyClickHouse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+}
+
 // handleTunnels returns the latest sample for each overlay tunnel (IPsec /
 // SD-WAN / GRE) the collectors have reported, newest first. "LIMIT 1 BY id"
 // collapses the time series to the current state per tunnel. Optional
@@ -91,9 +156,24 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
 // populates netops.tunnels — the view renders whatever real data arrives.
 func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	limit := intQuery(r, "limit", 200, 1, 2000)
-	where := ""
+	var conds []string
 	if st := r.URL.Query().Get("status"); st == "up" || st == "down" {
-		where = " WHERE status = '" + st + "' "
+		conds = append(conds, "status = '"+st+"'")
+	}
+	// Tenant isolation: a scoped principal only sees tunnels terminating on a
+	// device it can view (local or remote endpoint).
+	claims, _ := userFrom(r.Context())
+	if keys, cross := s.visibleDeviceKeys(claims); !cross {
+		if len(keys) == 0 {
+			writeEmptyClickHouse(w)
+			return
+		}
+		in := sqlInList(keys)
+		conds = append(conds, "(local_device IN ("+in+") OR remote_device IN ("+in+"))")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
 	sql := `
 SELECT id, type, local_device, local_addr, remote_device, remote_addr,

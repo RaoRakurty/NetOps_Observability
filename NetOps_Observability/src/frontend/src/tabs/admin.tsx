@@ -5,8 +5,8 @@
 //   - Authentication → live SSO config (/api/auth/sso/config); OIDC/SAML/LDAP
 //     are brokered by Keycloak (oidc.go) with rotating refresh tokens (refresh.go)
 //   - API Access → live OpenAPI reference (/api/openapi.json, openapi.go)
-//   - ITSM → live ServiceNow auto-ticketing status (/api/itsm/servicenow)
-// Only Jira (ITSM) remains a planned preview.
+//   - ITSM → live ServiceNow + Jira auto-ticketing status
+//     (/api/itsm/servicenow, /api/itsm/jira)
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
@@ -256,6 +256,7 @@ export function ApiAccessAdmin() {
   const [keys, err, reload, setErr] = useReload(() => api.listApiKeys());
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read:metrics"]);
+  const [rate, setRate] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
 
   const toggleScope = (s: string) =>
@@ -264,9 +265,11 @@ export function ApiAccessAdmin() {
     if (!label.trim()) return;
     setErr(null);
     try {
-      const res = await api.createApiKey(label.trim(), scopes);
+      const limit = rate.trim() ? Math.max(0, parseInt(rate, 10) || 0) : undefined;
+      const res = await api.createApiKey(label.trim(), scopes, limit);
       setSecret(res.secret);
       setLabel("");
+      setRate("");
       reload();
     } catch (e) { setErr((e as Error).message); }
   };
@@ -290,6 +293,14 @@ export function ApiAccessAdmin() {
         )}
         <div className="admin-form">
           <input placeholder="key label (e.g. ci-pipeline)" value={label} onChange={(e) => setLabel(e.target.value)} />
+          <input
+            type="number"
+            min={0}
+            style={{ maxWidth: 170 }}
+            placeholder="rate limit / min (blank = default)"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+          />
           <button className="dash-btn accent" onClick={generate}>Generate key</button>
         </div>
         <div className="scope-row">
@@ -304,30 +315,117 @@ export function ApiAccessAdmin() {
         <div className="admin-card-head"><h2>API keys</h2></div>
         <table>
           <thead>
-            <tr><th>Label</th><th>Key</th><th>Scopes</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr>
+            <tr><th>Label</th><th>Key</th><th>Scopes</th><th>Rate / min</th><th>Usage</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
-            {(keys ?? []).map((k) => (
+            {(keys ?? []).map((k) => {
+              const cap = k.rate_limit_per_min || 0;
+              const near = cap > 0 && k.window_used >= cap * 0.8;
+              return (
               <tr key={k.id}>
                 <td style={{ fontWeight: 600 }}>{k.label}</td>
                 <td className="mono">{k.prefix}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.scopes || []).join(", ") || "—"}</td>
+                <td className="mono">
+                  {cap > 0
+                    ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span>
+                    : <span className="mini-meta">unlimited</span>}
+                </td>
+                <td className="mono">{(k.use_count ?? 0).toLocaleString()}</td>
                 <td>{k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}</td>
                 <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : "never"}</td>
                 <td>{k.revoked_at ? <span className="badge warn">revoked</span> : <span className="badge good">active</span>}</td>
                 <td>{!k.revoked_at && <button className="dash-btn" onClick={() => revoke(k)}>Revoke</button>}</td>
               </tr>
-            ))}
-            {(keys ?? []).length === 0 && <tr><td colSpan={7} className="panel-empty">No API keys yet.</td></tr>}
+            );})}
+            {(keys ?? []).length === 0 && <tr><td colSpan={9} className="panel-empty">No API keys yet.</td></tr>}
           </tbody>
         </table>
+        <p className="mini-meta" style={{ marginTop: 8 }}>
+          Each key is rate-limited per minute (fixed window) — leave the field blank to inherit the
+          server default (<code>APIKEY_RATE_LIMIT_PER_MIN</code>), or set 0 for unlimited. Over-cap
+          calls get <code>429 Too Many Requests</code> with a <code>Retry-After</code>. The Rate
+          column shows live current-minute usage; Usage is lifetime authenticated calls.
+        </p>
       </div>
+      <GraphQLExplorer />
       <OpenAPIReference />
       <div className="ov-grid">
-        <div className="panel col-6"><h3>GraphQL</h3><p className="mini-meta">Single typed endpoint at <code>/api/graphql</code> (devices/alerts/findings/health). A GraphiQL explorer is a follow-up.</p></div>
         <div className="panel col-6"><h3>Authentication</h3><p className="mini-meta">Present a key as <code>Authorization: Bearer ntk_…</code> or <code>X-API-Key</code>. Keys resolve to the same tenant + RBAC context as a user — a key never exceeds its scopes.</p></div>
       </div>
     </>
+  );
+}
+
+// GraphQLExplorer is an in-app, GraphiQL-style console for the typed
+// /api/graphql endpoint. No external GraphiQL/CDN bundle — a query editor, a set
+// of example queries, and a JSON result pane, all behind the same auth as the
+// rest of the SPA. The backend supports devices/alerts/rules/health (+ __schema).
+const GQL_EXAMPLES: { label: string; query: string }[] = [
+  { label: "Devices", query: "{ devices { id name address vendor } }" },
+  { label: "Active alerts", query: "{ alerts { id rule severity device_id summary } }" },
+  { label: "Rules", query: "{ rules { id severity } }" },
+  { label: "Health", query: "{ health }" },
+  { label: "Schema", query: "{ __schema }" },
+];
+
+function GraphQLExplorer() {
+  const [query, setQuery] = useState(GQL_EXAMPLES[0].query);
+  const [result, setResult] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await api.graphql(query);
+      setResult(JSON.stringify(res, null, 2));
+    } catch (e) {
+      setErr((e as Error).message);
+      setResult("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head">
+        <h2>GraphQL explorer</h2>
+        <a className="dash-btn" href="/api/graphql" target="_blank" rel="noreferrer">/api/graphql ↗</a>
+      </div>
+      <p className="mini-meta" style={{ marginTop: 0 }}>
+        Single typed endpoint over <code>devices</code> · <code>alerts</code> · <code>rules</code> ·{" "}
+        <code>health</code> (+ <code>__schema</code> introspection). Results are tenant-scoped, just like REST.
+      </p>
+      <div className="scope-row" style={{ marginBottom: 10 }}>
+        {GQL_EXAMPLES.map((ex) => (
+          <button key={ex.label} className="scope-chip" onClick={() => setQuery(ex.query)}>{ex.label}</button>
+        ))}
+      </div>
+      <div className="ov-grid">
+        <div className="panel col-6" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <textarea
+            spellCheck={false}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            rows={9}
+            className="mono"
+            style={{ width: "100%", resize: "vertical", fontSize: "var(--fs-meta)", padding: 10, borderRadius: "var(--r-2)", border: "1px solid var(--panel-border)", background: "var(--panel)", color: "var(--fg)" }}
+          />
+          <div>
+            <button className="dash-btn accent" onClick={run} disabled={busy}>{busy ? "Running…" : "Run query"}</button>
+          </div>
+          <ErrLine msg={err} />
+        </div>
+        <div className="panel col-6">
+          <pre className="mono" style={{ margin: 0, maxHeight: 280, overflow: "auto", fontSize: "var(--fs-meta)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {result || "// run a query to see the JSON response"}
+          </pre>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -435,14 +533,16 @@ export function AuthenticationAdmin() {
 
 const ITSM = [
   { id: "servicenow", name: "ServiceNow", desc: "Critical alerts cut an incident via the Table API (deduped by fingerprint) and auto-resolve when the alert clears. Enable with FEATURE_SERVICENOW_NOTIFICATIONS. Bi-directional sync & CMDB lookup are next.", tag: "Available" },
-  { id: "jira", name: "Jira", desc: "Create issues from incidents; map severity → priority; transition on resolve.", tag: "Planned" },
+  { id: "jira", name: "Jira", desc: "Alerts at/above the threshold open a deduped Jira issue (REST v2) and transition to Done when the alert clears. Enable with FEATURE_JIRA_NOTIFICATIONS + JIRA_PROJECT_KEY.", tag: "Available" },
   { id: "pagerduty", name: "PagerDuty", desc: "On-call routing & escalation (notifier already exists in the backend).", tag: "Available" },
   { id: "slack", name: "Slack", desc: "Channel notifications & alert actions (notifier already exists).", tag: "Available" },
 ];
 
 export function IntegrationsAdmin() {
   const [sn] = useReload(() => api.itsmServiceNow());
-  const live = !!sn?.configured;
+  const [jira] = useReload(() => api.itsmJira());
+  const snLive = !!sn?.configured;
+  const jiraLive = !!jira?.configured;
 
   return (
     <>
@@ -450,8 +550,8 @@ export function IntegrationsAdmin() {
       <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
         <span className="badge good">Active</span>
         <span>
-          ServiceNow auto-ticketing is live: an alert at/above the threshold opens
-          a deduped incident and auto-resolves it when the alert clears. Jira is planned.
+          ServiceNow and Jira auto-ticketing are both live: an alert at/above the
+          threshold opens a deduped ticket and auto-resolves it when the alert clears.
         </span>
       </div>
 
@@ -485,10 +585,44 @@ export function IntegrationsAdmin() {
         </div>
       )}
 
+      {jira?.enabled && (
+        <div className="card">
+          <div className="admin-card-head">
+            <h2>Jira — live</h2>
+            <span className="badge good">connected</span>
+          </div>
+          <dl className="kv-form">
+            <dt>Project</dt><dd className="mono">{jira.project || "—"}</dd>
+            <dt>Ticket threshold</dt><dd className="mono">{jira.threshold} and worse</dd>
+            <dt>Auto-resolve</dt><dd>{jira.auto_close ? "on — issue transitioned to Done when the alert clears" : "off"}</dd>
+            <dt>Open issues</dt><dd>{jira.open_count ?? 0}</dd>
+          </dl>
+          {(jira.open?.length ?? 0) > 0 && (
+            <table>
+              <thead><tr><th>Issue</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
+              <tbody>
+                {jira.open!.map((t) => (
+                  <tr key={t.fingerprint}>
+                    <td className="mono" style={{ fontWeight: 600 }}>{t.key}</td>
+                    <td><span className="badge">{t.severity}</span></td>
+                    <td className="mono">{t.device || "—"}</td>
+                    <td>{t.summary || "—"}</td>
+                    <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
       <div className="ov-grid">
         {ITSM.map((i) => {
-          // ServiceNow flips to a "connected" badge once the connector is live.
-          const tag = i.id === "servicenow" && live ? "Connected" : i.tag;
+          // ServiceNow/Jira flip to a "connected" badge once the connector is live.
+          const tag =
+            (i.id === "servicenow" && snLive) || (i.id === "jira" && jiraLive)
+              ? "Connected"
+              : i.tag;
           const good = tag === "Available" || tag === "Connected";
           return (
             <div className="panel col-6 provider-card" key={i.id}>
@@ -498,7 +632,7 @@ export function IntegrationsAdmin() {
               </div>
               <p className="mini-meta">{i.desc}</p>
               <button className="dash-btn" disabled style={{ marginTop: 10 }}>
-                {i.id === "servicenow" ? "Configured via env" : "Configure"}
+                {i.id === "servicenow" || i.id === "jira" ? "Configured via env" : "Configure"}
               </button>
             </div>
           );

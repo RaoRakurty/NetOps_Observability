@@ -45,14 +45,28 @@ func (s *server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"data": map[string]any{}}
 	data := resp["data"].(map[string]any)
 
+	// Tenant isolation: a scoped principal sees only its own devices/alerts here,
+	// matching the REST surface (this endpoint is behind the same auth middleware).
+	claims, _ := userFrom(r.Context())
+
 	// Naïve string-match dispatch. Replace with a real parser when we
 	// promote this from scaffold to product.
 	q := req.Query
 	if contains(q, "devices") {
-		data["devices"] = s.discovery.Devices()
+		data["devices"] = visibleDevices(s.discovery.Devices(), claims)
 	}
 	if contains(q, "alerts") {
-		data["alerts"] = s.alerts.Active()
+		active := s.alerts.Active()
+		if ids, cross := s.visibleDeviceIDs(claims); !cross {
+			filtered := active[:0:0]
+			for _, a := range active {
+				if a.DeviceID == "" || ids[a.DeviceID] {
+					filtered = append(filtered, a)
+				}
+			}
+			active = filtered
+		}
+		data["alerts"] = active
 	}
 	if contains(q, "rules") {
 		data["rules"] = s.alerts.Rules()

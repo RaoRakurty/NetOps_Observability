@@ -283,9 +283,10 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 // ---- api keys --------------------------------------------------------------
 
 type createAPIKeyRequest struct {
-	Label    string   `json:"label"`
-	TenantID string   `json:"tenant_id"`
-	Scopes   []string `json:"scopes"`
+	Label           string   `json:"label"`
+	TenantID        string   `json:"tenant_id"`
+	Scopes          []string `json:"scopes"`
+	RateLimitPerMin int      `json:"rate_limit_per_min"`
 }
 
 func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +303,7 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		rec, secret, err := s.apiKeys.Create(req.TenantID, req.Label, claims.Sub, req.Scopes)
+		rec, secret, err := s.apiKeys.Create(req.TenantID, req.Label, claims.Sub, req.Scopes, req.RateLimitPerMin)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return

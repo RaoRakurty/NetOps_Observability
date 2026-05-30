@@ -94,12 +94,37 @@ pushed out to Keycloak; the API only verifies tokens).
   open incidents surface in Administration → ITSM (`notify/servicenow.go`).
   See [`docs/ITSM_INTEGRATION.md`](docs/ITSM_INTEGRATION.md).
 
-## ▶ Phase 7 — Backlog / cross-cutting ideas
-- **Jira** ITSM connector (mirror the ServiceNow auto-ticketing shape).
-- Extend tenant scoping from devices/alerts to flows, findings and saved objects.
-- GraphiQL-style in-app GraphQL explorer; per-key rate limits + usage stats.
-- Move the file-backed identity/saved stores onto Postgres (no API change).
-- Dark-mode toggle (tokens already centralized; add a `[data-theme]` swap).
-- Density toggle (comfortable / compact tables).
-- Keyboard command palette (⌘K) over the omni-search.
-- Per-section saved time-range presets.
+## ✅ Phase 7 — Backlog / cross-cutting ideas (done)
+- ✅ **Jira ITSM connector** — `notify/jira.go` mirrors the ServiceNow shape:
+  bi-directional auto-ticketing (open at/above threshold via REST v2, transition
+  to Done on clear), deduped by fingerprint, file-backed open-ticket state, live
+  status in Administration → ITSM (`GET /api/itsm/jira`). Either/both connectors
+  run at once. See [`docs/ITSM_INTEGRATION.md`](docs/ITSM_INTEGRATION.md).
+- ✅ **Tenant scoping extended** past devices/alerts to **flows** (by device
+  address), **findings/tunnels** (by device id/name), **saved objects**
+  (`tenant_id`, scoped list + mutate), GraphQL, and global search. Leak cases
+  pinned by `tenancy_saved_test.go` + `tenancy_flows_test.go`.
+- ✅ **GraphQL explorer + per-key rate limits + usage stats** — an in-app,
+  GraphiQL-style console (query editor + examples + JSON pane) over the typed,
+  tenant-scoped `/api/graphql`; per-API-key fixed-window rate limiting (429 +
+  `Retry-After`) with live current-minute usage and lifetime call counts in
+  Administration → API Access. See [`docs/API_ACCESS.md`](docs/API_ACCESS.md).
+- ✅ **Postgres-ready identity/saved stores** — all JSON-blob stores persist
+  through one pluggable backend (`kvstore.go`): file by default, Postgres with
+  `STORE_BACKEND=postgres` (`pgkv.go`, stdlib `database/sql` only — the default
+  build stays dependency-free), **no API change**. See the *Storage backend*
+  section of [`docs/IDENTITY_ACCESS.md`](docs/IDENTITY_ACCESS.md).
+- ✅ **Dark-mode toggle** — `[data-theme]` swap over the centralized tokens
+  (`theme/prefs.ts`), in the user menu, persisted, no flash on load.
+- ✅ **Density toggle** — comfortable / compact tables via `[data-density]`.
+- ✅ **Keyboard command palette (⌘K)** — `components/CommandPalette.tsx`: jump to
+  any section, run actions (theme/density/Copilot), or search devices/alerts/
+  saved live; arrow-key navigable.
+- ✅ **Per-section saved time-range presets** — each section remembers its own
+  range, plus user-defined custom presets in the picker (`theme/timeprefs.ts`).
+
+## ▶ Phase 8 — Further backlog
+- Promote the GraphQL naïve dispatch to a real schema + resolvers.
+- ITSM inbound state-sync loop (poll/webhook) reflecting ticket state onto
+  incidents; field-mapping editor; CMDB enrichment for ServiceNow.
+- Postgres backend: ship a committed `-tags pg` driver import + migrations.

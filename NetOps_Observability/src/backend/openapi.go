@@ -50,6 +50,7 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/apikeys", "Identity", "List API keys (administration:admin)"},
 	{"POST", "/api/apikeys", "Identity", "Mint a scoped API key (administration:admin)"},
 	{"GET", "/api/itsm/servicenow", "ITSM", "ServiceNow connector status + open tickets"},
+	{"GET", "/api/itsm/jira", "ITSM", "Jira connector status + open issues"},
 	{"POST", "/api/graphql", "Query", "GraphQL endpoint (devices/alerts/findings/health)"},
 }
 

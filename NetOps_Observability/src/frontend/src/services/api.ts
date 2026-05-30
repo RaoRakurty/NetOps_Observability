@@ -424,14 +424,22 @@ export const api = {
   // Self-describing API + ITSM connector status.
   openapi: () => request<OpenAPISpec>("/api/openapi.json"),
   itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),
+  itsmJira: () => request<JiraStatus>("/api/itsm/jira"),
 
   listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
-  createApiKey: (label: string, scopes: string[], tenant_id?: string) =>
+  createApiKey: (label: string, scopes: string[], rate_limit_per_min?: number, tenant_id?: string) =>
     request<{ key: ApiKey; secret: string }>("/api/apikeys", {
       method: "POST",
-      body: JSON.stringify({ label, scopes, tenant_id }),
+      body: JSON.stringify({ label, scopes, rate_limit_per_min, tenant_id }),
     }),
   revokeApiKey: (id: string) => request<void>(`/api/apikeys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // GraphQL — single typed endpoint; powers the in-app explorer.
+  graphql: (query: string, variables?: Record<string, unknown>) =>
+    request<{ data?: Record<string, unknown>; errors?: unknown }>("/api/graphql", {
+      method: "POST",
+      body: JSON.stringify({ query, variables }),
+    }),
 
   // ----- SNMP credential profiles -----
   snmpOptions: () => request<SNMPOptions>("/api/snmp/options"),
@@ -504,6 +512,9 @@ export type ApiKey = {
   label: string;
   prefix: string;
   scopes: string[];
+  rate_limit_per_min: number; // effective per-minute cap (0 = unlimited)
+  use_count: number; // lifetime authenticated calls
+  window_used: number; // calls counted in the current minute
   created_by: string;
   created_at: string;
   last_used_at?: string;
@@ -573,6 +584,26 @@ export type ServiceNowStatus = {
   threshold?: string;
   auto_close?: boolean;
   open?: ServiceNowTicket[];
+  open_count?: number;
+};
+
+export type JiraTicket = {
+  fingerprint: string;
+  key: string;
+  issue_id: string;
+  severity: string;
+  device?: string;
+  summary?: string;
+  opened_at: string;
+  state: string;
+};
+export type JiraStatus = {
+  enabled: boolean;
+  configured: boolean;
+  project?: string;
+  threshold?: string;
+  auto_close?: boolean;
+  open?: JiraTicket[];
   open_count?: number;
 };
 

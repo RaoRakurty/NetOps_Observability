@@ -24,6 +24,7 @@ const maxGlobalResults = 24
 func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	results := []globalResult{}
+	claims, _ := userFrom(r.Context())
 
 	add := func(g globalResult) {
 		if len(results) < maxGlobalResults {
@@ -32,8 +33,8 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if q != "" {
-		// Devices (in-memory discovery aggregator).
-		for _, d := range s.discovery.Devices() {
+		// Devices (in-memory discovery aggregator) — tenant-scoped.
+		for _, d := range visibleDevices(s.discovery.Devices(), claims) {
 			m := toMap(d)
 			if blobContains(m, q) {
 				add(globalResult{
@@ -41,12 +42,17 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 					ID:    str(m["id"]),
 					Title: firstNonEmpty(str(m["name"]), str(m["id"])),
 					Sub:   firstNonEmpty(str(m["address"]), str(m["source"])),
-					Route: "datasets/devices",
+					Route: "infrastructure/devices",
 				})
 			}
 		}
-		// Active alerts.
+		// Active alerts — only on devices the principal can see (device-less
+		// alerts stay visible, matching handleAlerts).
+		visibleIDs, crossAlerts := s.visibleDeviceIDs(claims)
 		for _, a := range s.alerts.Active() {
+			if !crossAlerts && a.DeviceID != "" && !visibleIDs[a.DeviceID] {
+				continue
+			}
 			m := toMap(a)
 			if blobContains(m, q) {
 				add(globalResult{
@@ -54,12 +60,12 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 					ID:    str(m["id"]),
 					Title: firstNonEmpty(str(m["summary"]), str(m["rule"]), "alert"),
 					Sub:   strings.TrimSpace(str(m["severity"]) + " " + str(m["device_id"])),
-					Route: "alerts/triggered",
+					Route: "alerts/active",
 				})
 			}
 		}
-		// Saved objects (name or body match).
-		for _, o := range s.saved.List("") {
+		// Saved objects (name or body match) — tenant-scoped.
+		for _, o := range visibleSaved(s.saved.List(""), claims) {
 			if strings.Contains(strings.ToLower(o.Name), q) ||
 				strings.Contains(strings.ToLower(string(o.Body)), q) {
 				add(globalResult{
@@ -76,7 +82,7 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 			Kind:  "logs",
 			Title: "Search logs for \"" + r.URL.Query().Get("q") + "\"",
 			Sub:   "OpenSearch",
-			Route: "search/logs",
+			Route: "explore/logs",
 		})
 	}
 
@@ -90,7 +96,7 @@ func routeForSaved(typ string) string {
 	case "report":
 		return "reports"
 	default:
-		return "search/saved"
+		return "explore/saved"
 	}
 }
 

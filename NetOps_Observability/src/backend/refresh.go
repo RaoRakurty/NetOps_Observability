@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -62,7 +61,7 @@ func randHex(nBytes int) string {
 }
 
 func (s *refreshStore) load() error {
-	b, err := os.ReadFile(s.path)
+	b, err := kvLoad(s.path)
 	if err != nil {
 		return err
 	}
@@ -77,9 +76,6 @@ func (s *refreshStore) load() error {
 }
 
 func (s *refreshStore) flushLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	list := make([]refreshToken, 0, len(s.toks))
 	for _, t := range s.toks {
 		list = append(list, t)
@@ -89,11 +85,7 @@ func (s *refreshStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return kvSave(s.path, b)
 }
 
 // gcLocked drops tokens that expired more than a day ago, keeping the file small.

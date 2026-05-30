@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -53,7 +52,7 @@ func newTenantStore(path string) (*tenantStore, error) {
 }
 
 func (s *tenantStore) load() error {
-	b, err := os.ReadFile(s.path)
+	b, err := kvLoad(s.path)
 	if err != nil {
 		return err
 	}
@@ -68,9 +67,6 @@ func (s *tenantStore) load() error {
 }
 
 func (s *tenantStore) flushLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	list := make([]Tenant, 0, len(s.tenants))
 	for _, t := range s.tenants {
 		list = append(list, t)
@@ -80,11 +76,7 @@ func (s *tenantStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return kvSave(s.path, b)
 }
 
 func (s *tenantStore) List() []Tenant {

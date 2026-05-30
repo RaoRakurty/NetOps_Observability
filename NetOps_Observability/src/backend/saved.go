@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -26,6 +25,7 @@ type SavedObject struct {
 	Type      string          `json:"type"` // saved_search | dashboard | report
 	Name      string          `json:"name"`
 	Owner     string          `json:"owner"`
+	TenantID  string          `json:"tenant_id,omitempty"` // owning tenant ("" = global/shared)
 	Body      json.RawMessage `json:"body"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
@@ -55,7 +55,7 @@ func newSavedStore(path string) (*savedStore, error) {
 }
 
 func (s *savedStore) load() error {
-	b, err := os.ReadFile(s.path)
+	b, err := kvLoad(s.path)
 	if err != nil {
 		return err
 	}
@@ -70,9 +70,6 @@ func (s *savedStore) load() error {
 }
 
 func (s *savedStore) flushLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	list := make([]SavedObject, 0, len(s.items))
 	for _, o := range s.items {
 		list = append(list, o)
@@ -81,11 +78,7 @@ func (s *savedStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return kvSave(s.path, b)
 }
 
 // List returns objects, newest first, optionally filtered by type.
@@ -109,7 +102,7 @@ func (s *savedStore) Get(id string) (SavedObject, bool) {
 	return o, ok
 }
 
-func (s *savedStore) Create(typ, name, owner string, body json.RawMessage) (SavedObject, error) {
+func (s *savedStore) Create(typ, name, owner, tenant string, body json.RawMessage) (SavedObject, error) {
 	if !validSavedTypes[typ] {
 		return SavedObject{}, errors.New("invalid type")
 	}
@@ -122,6 +115,7 @@ func (s *savedStore) Create(typ, name, owner string, body json.RawMessage) (Save
 		Type:      typ,
 		Name:      name,
 		Owner:     owner,
+		TenantID:  tenant,
 		Body:      body,
 		CreatedAt: now,
 		UpdatedAt: now,

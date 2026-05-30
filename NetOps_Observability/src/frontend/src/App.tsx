@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Health } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
-import { ShellContext, ShellState, TimeRange, TIME_RANGES, SectionCtx } from "./context/shell";
+import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
+import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
 import { resolveRoute } from "./nav";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import SubNav from "./components/SubNav";
 import CopilotDrawer from "./components/CopilotDrawer";
+import CommandPalette from "./components/CommandPalette";
 import Login from "./pages/Login";
 
 export default function App() {
@@ -15,7 +17,15 @@ export default function App() {
 
   // Shell state — the single source of truth that unifies the sections.
   const [hash, setHash] = useState<string>(() => location.hash || "#/overview");
-  const [range, setRange] = useState<TimeRange>(TIME_RANGES[1]); // Last 1 hour
+  // Per-section time-range memory: each section restores the range it was last
+  // viewed with (theme/timeprefs.ts). setRange persists under the active section.
+  const sectionId = useMemo(() => resolveRoute(hash).section.id, [hash]);
+  const sectionRef = useRef(sectionId);
+  const [range, setRangeState] = useState<TimeRange>(() => rangeForSection(sectionId));
+  const setRange = (r: TimeRange) => {
+    rememberSectionRange(sectionRef.current, r.minutes);
+    setRangeState(r);
+  };
   const [query, setQuery] = useState<string>("*");
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -45,6 +55,14 @@ export default function App() {
       clearInterval(id);
     };
   }, [user]);
+
+  // When the active section changes, restore that section's remembered range.
+  useEffect(() => {
+    if (sectionRef.current !== sectionId) {
+      sectionRef.current = sectionId;
+      setRangeState(rangeForSection(sectionId));
+    }
+  }, [sectionId]);
 
   const navigate = (route: string) => {
     location.hash = `#/${route.replace(/^#?\/?/, "")}`;
@@ -88,6 +106,7 @@ export default function App() {
           <div className="page">{view}</div>
         </main>
         <CopilotDrawer />
+        <CommandPalette />
       </div>
     </ShellContext.Provider>
   );

@@ -691,3 +691,116 @@ tbody tr.dt-row:hover { background: var(--hover); }
 @media (max-width: 900px) { .snmp-form { grid-template-columns: 1fr 1fr; } .snmp-form .snmp-wide { grid-column: span 2; } }
 
 button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ===== Display preferences: dark theme + compact density ====================
+   These swap purely via [data-theme]/[data-density] on <html> over the same
+   centralized tokens — no component changes. See theme/prefs.ts. The nav rail
+   is already a dark indigo-slate, so dark mode mainly remaps the light canvas
+   (bg/panel/fg/border) to slate equivalents and keeps the severity hues. */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0e1320;
+  --panel: #161d2e;
+  --panel-solid: #161d2e;
+  --panel-border: #273149;
+  --fg: #e7ebf3;
+  --muted: #9aa6bf;
+  --hover: rgba(255, 255, 255, 0.06);
+
+  /* Severity hues stay vivid; lift the translucent fills for the darker canvas. */
+  --sev-critical-bg: rgba(244, 63, 94, 0.16);
+  --sev-error-bg:    rgba(251, 146, 60, 0.16);
+  --sev-warning-bg:  rgba(251, 191, 36, 0.16);
+  --sev-notice-bg:   rgba(167, 139, 250, 0.16);
+  --sev-info-bg:     rgba(96, 165, 250, 0.16);
+  --sev-debug-bg:    rgba(148, 163, 184, 0.18);
+  --sev-ok-bg:       rgba(52, 211, 153, 0.16);
+
+  /* Slightly brighter accents read better on slate. */
+  --accent: #818cf8;
+  --accent-soft:   rgba(129, 140, 248, 0.16);
+  --accent-soft-2: rgba(167, 139, 250, 0.16);
+
+  /* Shadows need more depth on a dark canvas. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* A couple of light-mode hardcodes that need a dark counterpart. */
+:root[data-theme="dark"] th { border-bottom-color: var(--panel-border); }
+
+/* Compact density: tighten the body font and the table/card rhythm so more
+   rows fit on screen, without touching the comfortable defaults. */
+:root[data-density="compact"] {
+  --fs-base: 14px;
+  --sp-3: 9px;
+}
+:root[data-density="compact"] th,
+:root[data-density="compact"] td { padding: 3px 8px; }
+:root[data-density="compact"] table { font-size: var(--fs-meta); }
+:root[data-density="compact"] .card { padding: var(--sp-2) var(--sp-3); }
+:root[data-density="compact"] .kpi { padding: var(--sp-2) var(--sp-3); }
+
+/* ----- Preference toggles in the user menu ----- */
+.pref-row { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; }
+.pref-row > .pref-label { font-size: var(--fs-meta); color: var(--muted); flex: 1; }
+.pref-seg { display: inline-flex; border: 1px solid var(--panel-border); border-radius: var(--r-1); overflow: hidden; }
+.pref-seg button {
+  display: inline-block; width: auto; border: 0; border-radius: 0;
+  background: var(--panel); color: var(--muted); cursor: pointer;
+  padding: 3px 9px; font-size: var(--fs-micro); font-weight: 600;
+}
+.pref-seg button.on { background: var(--accent-soft); color: var(--accent); }
+
+/* ===== ⌘K command palette =================================================== */
+.cmdk-backdrop {
+  position: fixed; inset: 0; z-index: 200; display: flex; justify-content: center;
+  align-items: flex-start; padding-top: 12vh;
+  background: rgba(10, 14, 24, 0.45); backdrop-filter: blur(2px);
+}
+.cmdk {
+  width: min(640px, 92vw); background: var(--panel-solid);
+  border: 1px solid var(--panel-border); border-radius: var(--r-4);
+  box-shadow: var(--shadow-pop); overflow: hidden;
+}
+.cmdk-input { display: flex; align-items: center; gap: var(--sp-2); padding: 12px 14px; border-bottom: 1px solid var(--panel-border); color: var(--muted); }
+.cmdk-input input {
+  flex: 1; border: 0; outline: none; background: transparent; color: var(--fg);
+  font-size: var(--fs-md); padding: 2px 0;
+}
+.cmdk-kbd {
+  font-size: 10px; color: var(--muted); border: 1px solid var(--panel-border);
+  border-radius: 4px; padding: 1px 5px; background: var(--bg);
+}
+.cmdk-list { max-height: 52vh; overflow: auto; padding: 6px; }
+.cmdk-empty { padding: 18px; text-align: center; color: var(--muted); font-size: var(--fs-sm); }
+.cmdk-item {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; text-align: left;
+  background: transparent; border: 0; cursor: pointer; color: var(--fg);
+  padding: 8px 10px; border-radius: var(--r-2); font-size: var(--fs-sm);
+}
+.cmdk-item.active { background: var(--accent-soft); }
+.cmdk-kind {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+  color: var(--accent); background: var(--accent-soft);
+}
+.cmdk-kind.k-alert { color: var(--bad); background: var(--sev-critical-bg); }
+.cmdk-kind.k-logs { color: var(--muted); background: var(--hover); }
+.cmdk-kind.k-action { color: var(--accent-2); background: var(--accent-soft-2); }
+.cmdk-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cmdk-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmdk-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmdk-tag {
+  font-size: 10px; color: var(--muted); border: 1px solid var(--panel-border);
+  border-radius: 5px; padding: 1px 6px; flex-shrink: 0;
+}
+
+/* ⌘K hint inside the omni-search. */
+.omni-kbd {
+  flex: none; font-size: 10px; color: var(--muted); background: var(--bg);
+  border: 1px solid var(--panel-border); border-radius: 5px; padding: 1px 5px;
+}

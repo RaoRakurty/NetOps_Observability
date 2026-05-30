@@ -411,6 +411,16 @@ services:
       SERVICENOW_MIN_SEVERITY: ${SERVICENOW_MIN_SEVERITY:-critical}
       SERVICENOW_ASSIGNMENT_GROUP: ${SERVICENOW_ASSIGNMENT_GROUP:-}
       SERVICENOW_STATE_FILE: /data/servicenow_tickets.json
+      # ITSM — Jira auto-ticketing (open on alert, transition to Done on clear)
+      FEATURE_JIRA_NOTIFICATIONS: ${FEATURE_JIRA_NOTIFICATIONS:-false}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      JIRA_ISSUE_TYPE: ${JIRA_ISSUE_TYPE:-Task}
+      JIRA_MIN_SEVERITY: ${JIRA_MIN_SEVERITY:-critical}
+      JIRA_RESOLVE_TRANSITION: ${JIRA_RESOLVE_TRANSITION:-}
+      JIRA_STATE_FILE: /data/jira_tickets.json
       # SSO — OIDC/SAML/LDAP brokered by Keycloak (the API only verifies tokens).
       # Bring Keycloak up with: docker compose --profile sso up -d keycloak
       OIDC_ENABLED: ${OIDC_ENABLED:-false}
@@ -425,6 +435,13 @@ services:
       OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-read-only}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1h}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
+      # Identity/saved-object store backend: file (default) or postgres (needs a
+      # driver compiled in — see pgkv.go). DATABASE_URL/DRIVER apply when postgres.
+      STORE_BACKEND: ${STORE_BACKEND:-file}
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_DRIVER: ${DATABASE_DRIVER:-postgres}
+      # Default per-API-key rate limit (requests/minute; 0 = unlimited)
+      APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
       # AI Copilot
       FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}

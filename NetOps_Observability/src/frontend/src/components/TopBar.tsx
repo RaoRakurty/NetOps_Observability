@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
-import { useShell, TIME_RANGES } from "../context/shell";
+import { useShell } from "../context/shell";
+import { usePrefs } from "../theme/prefs";
+import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
 import Icon from "./Icon";
 
 type Props = {
@@ -29,11 +31,13 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // so it behaves like Splunk/Datadog's global search, not just a log query.
 export default function TopBar({ health, user, onLogout }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
+  const { theme, setTheme, density, setDensity } = usePrefs();
   const [draft, setDraft] = useState(query);
   const [menuOpen, setMenuOpen] = useState(false);
   const [results, setResults] = useState<GlobalResult[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [ranges, setRanges] = useState(() => allRanges());
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
 
@@ -79,7 +83,7 @@ export default function TopBar({ health, user, onLogout }: Props) {
 
   const runLogSearch = () => {
     setQuery(draft.trim() || "*");
-    navigate("search/logs");
+    navigate("explore/logs");
     setOpen(false);
   };
 
@@ -128,6 +132,7 @@ export default function TopBar({ health, user, onLogout }: Props) {
           placeholder="Search logs, devices, alerts, saved…"
           spellCheck={false}
         />
+        <kbd className="omni-kbd" title="Command palette">⌘K</kbd>
         {open && results.length > 0 && (
           <div className="omni-pop">
             {results.map((g, i) => (
@@ -156,16 +161,30 @@ export default function TopBar({ health, user, onLogout }: Props) {
         <select
           className="range-picker"
           value={range.minutes}
-          onChange={(e) =>
-            setRange(TIME_RANGES.find((r) => r.minutes === Number(e.target.value)) ?? range)
-          }
-          title="Global time range"
+          onChange={(e) => {
+            if (e.target.value === "__add") {
+              const raw = window.prompt("New time-range preset — enter minutes (e.g. 30, 720, 4320):");
+              const mins = raw ? parseInt(raw, 10) : NaN;
+              if (mins && mins > 0) {
+                setRanges(addCustomPreset(mins));
+                setRange(rangeFromMinutes(mins));
+              }
+              return;
+            }
+            setRange(rangeFromMinutes(Number(e.target.value)));
+          }}
+          title="Time range (remembered per section)"
         >
-          {TIME_RANGES.map((r) => (
+          {/* If the current range isn't in the preset list (a one-off), show it. */}
+          {!ranges.some((r) => r.minutes === range.minutes) && (
+            <option value={range.minutes}>{range.label}</option>
+          )}
+          {ranges.map((r) => (
             <option key={r.minutes} value={r.minutes}>
               {r.label}
             </option>
           ))}
+          <option value="__add">＋ Add preset…</option>
         </select>
 
         <span className={`health${ok ? "" : " bad"}`} title={ok ? `v${health?.version}` : "Disconnected"}>
@@ -184,6 +203,20 @@ export default function TopBar({ health, user, onLogout }: Props) {
               <div className="menu-head">
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
+              </div>
+              <div className="pref-row">
+                <span className="pref-label">Theme</span>
+                <span className="pref-seg">
+                  <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
+                  <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
+                </span>
+              </div>
+              <div className="pref-row">
+                <span className="pref-label">Density</span>
+                <span className="pref-seg">
+                  <button className={density === "comfortable" ? "on" : ""} onClick={() => setDensity("comfortable")}>Cozy</button>
+                  <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Compact</button>
+                </span>
               </div>
               <button onClick={() => { setMenuOpen(false); navigate("settings"); }}>Settings</button>
               <button onClick={onLogout}>Sign out</button>

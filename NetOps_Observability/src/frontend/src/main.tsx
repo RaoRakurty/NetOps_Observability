@@ -7,7 +7,11 @@ import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import App from "./App";
 import { captureSSORedirect } from "./services/api";
+import { applyPrefs } from "./theme/prefs";
 import "./styles.css";
+
+// Reflect the saved theme/density onto <html> before first paint (no flash).
+applyPrefs();
 
 // If we arrived here from the SSO callback redirect, capture the session from
 // the URL fragment (and stash any error for Login to show) before first render.

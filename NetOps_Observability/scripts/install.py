@@ -321,6 +321,18 @@ SERVICENOW_PASSWORD=
 SERVICENOW_MIN_SEVERITY=critical   # critical|error|warning|notice|info
 SERVICENOW_ASSIGNMENT_GROUP=
 
+# ITSM — Jira auto-ticketing. Same bi-directional shape as ServiceNow: opens a
+# deduped issue at/above JIRA_MIN_SEVERITY and transitions it to Done when the
+# alert clears. Auth is an Atlassian email + API token. See docs/ITSM_INTEGRATION.md.
+FEATURE_JIRA_NOTIFICATIONS=false
+JIRA_BASE_URL=                 # e.g. https://yourorg.atlassian.net
+JIRA_EMAIL=
+JIRA_API_TOKEN=
+JIRA_PROJECT_KEY=              # e.g. NETOPS
+JIRA_ISSUE_TYPE=Task
+JIRA_MIN_SEVERITY=critical     # critical|error|warning|notice|info
+JIRA_RESOLVE_TRANSITION=       # transition name/id to close; blank = auto-detect
+
 # SSO — OIDC/SAML/LDAP brokered by Keycloak (opt-in). The Go API only verifies
 # the resulting tokens (stdlib RS256/JWKS), so the backend stays dependency-free.
 # To enable: create the keycloak DB once
@@ -341,9 +353,22 @@ KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD={secrets_map["KEYCLOAK_ADMIN_PASSWORD"]}
 KEYCLOAK_DB_NAME=keycloak
 
+# Identity/saved-object persistence backend. "file" (default) keeps the JSON
+# stores on the data volume; "postgres" moves them into a single key/value table
+# with NO API change. Postgres needs a driver compiled in — see pgkv.go /
+# docs/IDENTITY_ACCESS.md — so the default build stays stdlib-only.
+STORE_BACKEND=file
+# DATABASE_URL=postgres://netops:netops@postgres:5432/netops?sslmode=disable
+# DATABASE_DRIVER=postgres
+
 # Token lifetimes
 ACCESS_TOKEN_TTL=1h
 REFRESH_TOKEN_TTL=168h
+
+# Default per-API-key rate limit (requests/minute, fixed window). Per-key
+# overrides are set when minting a key in Administration → API Access. 0 = no
+# app-level limit. Over-cap calls return 429 + Retry-After.
+APIKEY_RATE_LIMIT_PER_MIN=600
 
 # AI Copilot (chat pane in the dashboard). Leave FEATURE_COPILOT=false
 # to disable. Provider can be 'anthropic' or 'openai'.

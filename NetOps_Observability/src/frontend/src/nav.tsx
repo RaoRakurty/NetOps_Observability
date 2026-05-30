@@ -168,3 +168,32 @@ export function routeFor(section: NavSection, leaf?: NavLeaf): string {
   if (section.children) return `${section.id}/${(leaf ?? section.children[0]).id}`;
   return section.id;
 }
+
+// A flat, navigable destination — one entry per leaf (or per leafless section).
+// Powers the ⌘K command palette. `action` mirrors NavSection.action (copilot).
+export type NavDestination = {
+  label: string; // "Section · Leaf"
+  section: string; // section label, for grouping/secondary text
+  route: string; // hash route (without leading #/)
+  action?: "copilot";
+};
+
+// navDestinations flattens NAV into the list of places ⌘K can jump to.
+export function navDestinations(): NavDestination[] {
+  const out: NavDestination[] = [];
+  for (const s of NAV) {
+    if (s.action) {
+      out.push({ label: s.label, section: s.label, route: s.id, action: s.action });
+      continue;
+    }
+    if (s.children) {
+      for (const l of s.children) {
+        const label = l.label === s.label ? s.label : `${s.label} · ${l.label}`;
+        out.push({ label, section: s.label, route: `${s.id}/${l.id}` });
+      }
+    } else {
+      out.push({ label: s.label, section: s.label, route: s.id });
+    }
+  }
+  return out;
+}

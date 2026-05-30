@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -148,7 +147,7 @@ func newRoleStore(path string) (*roleStore, error) {
 }
 
 func (s *roleStore) load() error {
-	b, err := os.ReadFile(s.path)
+	b, err := kvLoad(s.path)
 	if err != nil {
 		return err
 	}
@@ -163,9 +162,6 @@ func (s *roleStore) load() error {
 }
 
 func (s *roleStore) flushLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	list := make([]Role, 0, len(s.roles))
 	for _, r := range s.roles {
 		list = append(list, r)
@@ -175,11 +171,7 @@ func (s *roleStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return kvSave(s.path, b)
 }
 
 func (s *roleStore) List() []Role {

@@ -136,7 +136,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAPIKeyStore: %v", err)
 	}
-	rec, secret, err := ks.Create("acme", "ci", "root", []string{"read:metrics"})
+	rec, secret, err := ks.Create("acme", "ci", "root", []string{"read:metrics"}, 0)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -155,4 +155,53 @@ func TestAPIKeyLifecycle(t *testing.T) {
 	if _, ok := ks.Verify(secret); ok {
 		t.Error("revoked key must not verify")
 	}
+}
+
+func TestAPIKeyRateLimitAndUsage(t *testing.T) {
+	ks, err := newAPIKeyStore(filepath.Join(t.TempDir(), "apikeys.json"))
+	if err != nil {
+		t.Fatalf("newAPIKeyStore: %v", err)
+	}
+	// A key capped at 3/min: the 4th call in the same window is rejected.
+	rec, secret, err := ks.Create("acme", "tight", "root", []string{"read:metrics"}, 3)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if ok, _ := ks.Allow(rec.ID, ks.effectiveLimit(mustKey(t, ks, rec.ID))); !ok {
+			t.Fatalf("call %d within cap should be allowed", i+1)
+		}
+	}
+	if ok, retry := ks.Allow(rec.ID, 3); ok || retry <= 0 {
+		t.Errorf("4th call should be rate-limited with a positive Retry-After, got ok=%v retry=%d", ok, retry)
+	}
+
+	// Usage count climbs on each successful Verify; window usage shows in List.
+	for i := 0; i < 2; i++ {
+		if _, ok := ks.Verify(secret); !ok {
+			t.Fatal("key should verify")
+		}
+	}
+	for _, p := range ks.List() {
+		if p.ID == rec.ID {
+			if p.UseCount != 2 {
+				t.Errorf("expected use_count 2, got %d", p.UseCount)
+			}
+			if p.RateLimitPerMin != 3 {
+				t.Errorf("expected effective limit 3, got %d", p.RateLimitPerMin)
+			}
+		}
+	}
+
+	// A limit of 0 means unlimited — Allow never rejects.
+	if ok, _ := ks.Allow("unbounded", 0); !ok {
+		t.Error("limit 0 should be unlimited")
+	}
+}
+
+func mustKey(t *testing.T, ks *apiKeyStore, id string) APIKey {
+	t.Helper()
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	return ks.keys[id]
 }
