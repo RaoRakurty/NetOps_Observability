@@ -101,6 +101,29 @@ transforms:
       .severity = string(.severity) ?? "info"
       .appname  = string(.appname)  ?? "unknown"
 
+      # Vendor classification from the log signature (heuristic). The
+      # authoritative vendor still comes from SNMP sysObjectID at discovery;
+      # this labels each log — and any log-only device — by its distinctive
+      # syslog format, so logs are filterable/colorable by vendor downstream.
+      # Order matters: the distinctive formats are tested before Cisco's
+      # generic "%FAC-SEV-MNEMONIC" (which Arista EOS also emits).
+      msg = string(.message) ?? ""
+      app = downcase(.appname)
+      vendor = "unknown"
+      if match(msg, r'devname=\S+') && match(msg, r'logid=') {
+        vendor = "fortinet"
+      } else if match(msg, r',(TRAFFIC|THREAT|SYSTEM|CONFIG|HIPMATCH),') {
+        vendor = "paloalto"
+      } else if match(msg, r'\[junos@2636') || match(msg, r'\bRT_FLOW') ||
+                includes(["mgd", "rpd", "chassisd", "eventd", "dcd", "kmd", "l2cpd"], app) {
+        vendor = "juniper"
+      } else if includes(["ebra", "mlag", "mrouted", "stp", "lldp", "sand", "fwk"], app) {
+        vendor = "arista"
+      } else if match(msg, r'%[A-Z][A-Z0-9_]+-[0-7]-[A-Z0-9_]+') {
+        vendor = "cisco"
+      }
+      .vendor = vendor
+
 # ----------------------------------------------------------------------------
 # SINKS — Redpanda topics, one per signal.
 # ----------------------------------------------------------------------------

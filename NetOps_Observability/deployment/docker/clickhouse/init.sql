@@ -61,6 +61,38 @@ FROM netops.flows
 GROUP BY hour, src_addr, dst_addr;
 
 -- ---------------------------------------------------------------------------
+-- Overlay tunnels (IPsec / SD-WAN / GRE) between devices.
+--
+-- One row per collector poll of a tunnel. Populated from device telemetry —
+-- SNMP (CISCO-IPSEC-FLOW-MONITOR-MIB cipSecTunnelTable), SD-WAN BFD/OMP
+-- sessions, or gNMI/NETCONF YANG paths. The Tunnels view reads the latest
+-- sample per tunnel id (ORDER BY ts DESC LIMIT 1 BY id). skip_unknown_fields
+-- on the sink means new fields land with a plain ALTER TABLE ADD COLUMN.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.tunnels
+(
+    ts             DateTime64(3) DEFAULT now64(3),
+    id             String,                  -- stable tunnel id (local-remote-type)
+    type           LowCardinality(String),  -- 'ipsec' | 'sdwan' | 'gre'
+    local_device   String,
+    local_addr     String,
+    remote_device  String,
+    remote_addr    String,
+    status         LowCardinality(String),  -- 'up' | 'down'
+    latency_ms     Float32,
+    jitter_ms      Float32,
+    loss_pct       Float32,
+    qoe            Float32,                  -- quality-of-experience score 0..10
+    uptime_s       UInt64
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(ts)
+ORDER BY (ts, id)
+TTL toDateTime(ts) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
+
+-- ---------------------------------------------------------------------------
 -- Correlation findings — populated by the Python correlation service.
 -- Surfaces in the UI as ranked incident cards.
 -- ---------------------------------------------------------------------------
