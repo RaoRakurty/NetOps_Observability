@@ -18,30 +18,35 @@ type CatalogGroup = { group: string; items: CatalogItem[] };
 // Curated catalog. `base` is the underlying metric name used to check whether
 // the series exists in the store (so we never show a dead quick-pick); `q` is
 // the PromQL actually run. Mirrors Datadog's "pick a metric, get a graph".
+// Queries aggregate per device (avg/sum/max by device|source) so a chart shows
+// one clean line per device rather than dozens of raw per-core / per-interface
+// series — the difference between a readable graph and noise. unit drives axis
+// + tooltip formatting.
 const CATALOG: CatalogGroup[] = [
   {
     group: "Device health (SNMP)",
     items: [
-      { label: "CPU utilization", q: "device_cpu_percent", base: "device_cpu_percent", unit: "%" },
-      { label: "Memory used", q: "device_mem_used_kb", base: "device_mem_used_kb", unit: "KB" },
-      { label: "Memory %", q: "device_mem_percent", base: "device_mem_percent", unit: "%" },
-      { label: "Temperature", q: "device_temp_celsius", base: "device_temp_celsius", unit: "°C" },
+      { label: "CPU utilization", q: "avg by (device) (device_cpu_percent)", base: "device_cpu_percent", unit: "%" },
+      { label: "Memory %", q: "avg by (device) (device_mem_percent)", base: "device_mem_percent", unit: "%" },
+      { label: "Memory used", q: "sum by (device) (device_mem_used_kb)", base: "device_mem_used_kb", unit: "KB" },
+      { label: "Temperature", q: "max by (device) (device_temp_celsius)", base: "device_temp_celsius", unit: "°C" },
     ],
   },
   {
     group: "Interfaces (SNMP)",
     items: [
-      { label: "Ingress bit/s", q: "rate(device_if_in_octets[5m]) * 8", base: "device_if_in_octets", unit: "bps" },
-      { label: "Egress bit/s", q: "rate(device_if_out_octets[5m]) * 8", base: "device_if_out_octets", unit: "bps" },
-      { label: "Oper status", q: "device_if_oper_status", base: "device_if_oper_status" },
+      { label: "Ingress bit/s", q: "sum by (device) (rate(device_if_in_octets[5m]) * 8)", base: "device_if_in_octets", unit: "bps" },
+      { label: "Egress bit/s", q: "sum by (device) (rate(device_if_out_octets[5m]) * 8)", base: "device_if_out_octets", unit: "bps" },
+      { label: "In errors/s", q: "sum by (device) (rate(device_if_in_errors[5m]))", base: "device_if_in_errors", unit: "/s" },
+      { label: "In discards/s", q: "sum by (device) (rate(device_if_in_discards[5m]))", base: "device_if_in_discards", unit: "/s" },
     ],
   },
   {
     group: "gNMI streaming",
     items: [
-      { label: "gNMI ingress bit/s", q: "rate(gnmi_interfaces_interface_state_counters_in_octets[5m]) * 8", base: "gnmi_interfaces_interface_state_counters_in_octets", unit: "bps" },
-      { label: "gNMI egress bit/s", q: "rate(gnmi_interfaces_interface_state_counters_out_octets[5m]) * 8", base: "gnmi_interfaces_interface_state_counters_out_octets", unit: "bps" },
-      { label: "SR Linux CPU", q: "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant", base: "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant", unit: "%" },
+      { label: "gNMI ingress bit/s", q: "sum by (source) (rate(gnmi_interfaces_interface_state_counters_in_octets[5m]) * 8)", base: "gnmi_interfaces_interface_state_counters_in_octets", unit: "bps" },
+      { label: "gNMI egress bit/s", q: "sum by (source) (rate(gnmi_interfaces_interface_state_counters_out_octets[5m]) * 8)", base: "gnmi_interfaces_interface_state_counters_out_octets", unit: "bps" },
+      { label: "SR Linux CPU", q: "avg by (source) (gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant)", base: "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant", unit: "%" },
     ],
   },
   {
@@ -148,7 +153,7 @@ function MetricPicker({ names, onPick }: { names: string[]; onPick: (n: string) 
 }
 
 export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
-  const [query, setQuery] = useState("device_cpu_percent");
+  const [query, setQuery] = useState("avg by (device) (device_cpu_percent)");
   const [unit, setUnit] = useState<string | undefined>("%");
   const [series, setSeries] = useState<PromSeries[]>([]);
   const [names, setNames] = useState<string[]>([]);
