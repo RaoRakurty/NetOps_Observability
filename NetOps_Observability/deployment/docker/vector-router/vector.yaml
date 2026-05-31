@@ -53,8 +53,9 @@ transforms:
         "OSPF": 89, "SCTP": 132
       }
       if is_string(.proto) {
-        num = get(proto_names, [string!(.proto)]) ?? 0
-        .proto = to_int(num) ?? 0
+        .proto = to_int(get(proto_names, [.proto]) ?? 0) ?? 0
+      } else {
+        .proto = to_int(.proto) ?? 0
       }
 
 sinks:
