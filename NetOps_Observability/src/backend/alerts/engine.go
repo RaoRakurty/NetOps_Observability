@@ -5,8 +5,11 @@ package alerts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -100,27 +103,113 @@ func (e *Engine) loop(ctx context.Context) {
 
 func (e *Engine) evaluateAll() {
 	rules := e.Rules()
+	now := time.Now().UTC()
+
+	e.mu.RLock()
+	prev := e.active
+	e.mu.RUnlock()
+
+	next := make(map[string]models.Alert)
 	for _, r := range rules {
-		fired, err := Evaluate(r)
-		if err != nil || !fired {
+		samples, err := Evaluate(r)
+		if err != nil || len(samples) == 0 {
 			continue
 		}
-		alert := models.Alert{
-			ID:       r.Name,
-			Rule:     r.Name,
-			Severity: r.Severity,
-			Summary:  r.Annotations["summary"],
-			Labels:   r.Labels,
-			FiredAt:  time.Now().UTC(),
-		}
-		e.mu.Lock()
-		_, already := e.active[alert.ID]
-		e.active[alert.ID] = alert
-		e.mu.Unlock()
-		if !already && e.notifier != nil {
-			e.notifier.Dispatch(alert)
+		for _, s := range samples {
+			labels := mergeLabels(r.Labels, s.Labels)
+			sev := r.Severity
+			if sev == "" {
+				sev = labels["severity"]
+			}
+			id := r.Name
+			if fp := fingerprint(s.Labels); fp != "" {
+				id = r.Name + "|" + fp
+			}
+			firedAt := now
+			if p, ok := prev[id]; ok { // preserve the original fire time
+				firedAt = p.FiredAt
+			}
+			next[id] = models.Alert{
+				ID:       id,
+				Rule:     r.Name,
+				Severity: sev,
+				Summary:  renderSummary(r.Annotations["summary"], s.Labels, s.Value),
+				Labels:   labels,
+				DeviceID: s.Labels["device"],
+				FiredAt:  firedAt,
+			}
 		}
 	}
+
+	// Swap in the freshly-computed active set (this also resolves alerts whose
+	// series stopped firing), then dispatch only the newly-firing ones.
+	e.mu.Lock()
+	e.active = next
+	e.mu.Unlock()
+	if e.notifier != nil {
+		for id, a := range next {
+			if _, existed := prev[id]; !existed {
+				e.notifier.Dispatch(a)
+			}
+		}
+	}
+}
+
+// mergeLabels overlays metric labels onto the rule's labels (severity, etc.),
+// dropping the internal __name__.
+func mergeLabels(ruleLabels, metric map[string]string) map[string]string {
+	out := make(map[string]string, len(ruleLabels)+len(metric))
+	for k, v := range ruleLabels {
+		out[k] = v
+	}
+	for k, v := range metric {
+		if k != "__name__" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// fingerprint is a stable per-series key from the metric labels.
+func fingerprint(metric map[string]string) string {
+	keys := make([]string, 0, len(metric))
+	for k := range metric {
+		if k != "__name__" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+metric[k])
+	}
+	return strings.Join(parts, ",")
+}
+
+var (
+	tmplLabel = regexp.MustCompile(`\{\{\s*\$labels\.([A-Za-z0-9_]+)\s*\}\}`)
+	tmplValue = regexp.MustCompile(`\{\{[^}]*\$value[^}]*\}\}`)
+	tmplAny   = regexp.MustCompile(`\{\{[^}]*\}\}`)
+)
+
+// renderSummary expands a Prometheus-style annotation template against a firing
+// series' labels and value, so the UI shows "High CPU on leaf1 (arista): 92%"
+// instead of raw {{ $labels.device }} placeholders.
+func renderSummary(tmpl string, labels map[string]string, value float64) string {
+	if tmpl == "" {
+		return tmpl
+	}
+	s := tmplLabel.ReplaceAllStringFunc(tmpl, func(m string) string {
+		if sub := tmplLabel.FindStringSubmatch(m); sub != nil {
+			if v, ok := labels[sub[1]]; ok {
+				return v
+			}
+		}
+		return "?"
+	})
+	s = tmplValue.ReplaceAllString(s, fmt.Sprintf("%g", value))
+	s = tmplAny.ReplaceAllString(s, "") // strip any leftover templating
+	return strings.TrimSpace(s)
 }
 
 func (e *Engine) Health() map[string]any {

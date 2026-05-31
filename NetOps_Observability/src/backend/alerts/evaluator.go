@@ -24,14 +24,25 @@ import (
 // patterns), we'll plug a separate Evaluator implementation in later
 // and dispatch on rule prefix; for now everything goes through
 // VictoriaMetrics.
-func Evaluate(r Rule) (bool, error) {
+// Sample is one firing series: its label set and instant value.
+type Sample struct {
+	Labels map[string]string
+	Value  float64
+}
+
+// Evaluate runs the rule's PromQL as an instant query against VictoriaMetrics
+// and returns every series that matched — the firing instances, each with its
+// labels and value. An empty slice means the rule is not firing (PromQL
+// comparison operators already filter to series where the predicate holds).
+// Callers render one alert per Sample, so summaries can resolve $labels/$value.
+func Evaluate(r Rule) ([]Sample, error) {
 	if strings.TrimSpace(r.Expr) == "" {
-		return false, errors.New("empty expression")
+		return nil, errors.New("empty expression")
 	}
 	endpoint := envOr("VICTORIA_URL", "http://victoria:8428")
 	u, err := url.Parse(strings.TrimRight(endpoint, "/") + "/api/v1/query")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	q := url.Values{}
 	q.Set("query", r.Expr)
@@ -41,11 +52,11 @@ func Evaluate(r Rule) (bool, error) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Get(u.String())
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return false, fmt.Errorf("victoria %d", resp.StatusCode)
+		return nil, fmt.Errorf("victoria %d", resp.StatusCode)
 	}
 
 	var body struct {
@@ -56,20 +67,31 @@ func Evaluate(r Rule) (bool, error) {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return false, err
+		return nil, err
 	}
 	if body.Status != "success" {
-		return false, fmt.Errorf("victoria reply status=%q", body.Status)
+		return nil, fmt.Errorf("victoria reply status=%q", body.Status)
 	}
 
-	// result is a JSON array. Vector-type result: [{"metric":{...},
-	// "value":[ts, "value"]}, ...]. Empty array = no series matched the
-	// predicate = rule shouldn't fire.
-	var arr []any
-	if err := json.Unmarshal(body.Data.Result, &arr); err != nil {
-		return false, err
+	// Vector result: [{"metric":{...}, "value":[ts, "value"]}, ...].
+	var raw []struct {
+		Metric map[string]string `json:"metric"`
+		Value  []any             `json:"value"`
 	}
-	return len(arr) > 0, nil
+	if err := json.Unmarshal(body.Data.Result, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Sample, 0, len(raw))
+	for _, m := range raw {
+		s := Sample{Labels: m.Metric}
+		if len(m.Value) == 2 {
+			if vs, ok := m.Value[1].(string); ok {
+				s.Value, _ = strconv.ParseFloat(vs, 64)
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 func envOr(key, fallback string) string {
