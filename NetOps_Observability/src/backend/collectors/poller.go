@@ -205,40 +205,12 @@ func tcpProbe(ctx context.Context, addr string, _ Target) error {
 	return c.Close()
 }
 
-// snmpProbe sends a real SNMP v2c GET for sysUpTimeInstance and waits for a
-// well-formed reply — a genuine SNMP poll, not just a UDP no-op.
+// snmpProbe does a real SNMP GET of sysUpTime to prove reachability, using the
+// device's resolved credentials — v2c community or full v3 USM. creds() supplies
+// the v2c community fallback (SNMP_COMMUNITY / "public").
 func snmpProbe(ctx context.Context, addr string, t Target) error {
-	// Per-device community (from its credential profile) wins; fall back to the
-	// global SNMP_COMMUNITY, then "public".
-	community := t.Community
-	if community == "" {
-		community = os.Getenv("SNMP_COMMUNITY")
-	}
-	if community == "" {
-		community = "public"
-	}
-	pkt := buildSNMPGet(community, sysUpTimeOID, 1)
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "udp", addr)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
-	}
-	if _, err := c.Write(pkt); err != nil {
-		return err
-	}
-	buf := make([]byte, 2048)
-	n, err := c.Read(buf)
-	if err != nil {
-		return err
-	}
-	if n < 2 || buf[0] != 0x30 { // expect a SEQUENCE reply
-		return fmt.Errorf("malformed SNMP response")
-	}
-	return nil
+	_, err := snmpGet(ctx, addr, t.creds(), sysUpTimeOID)
+	return err
 }
 
 // emitMetrics POSTs Prometheus-exposition samples to VictoriaMetrics so the
