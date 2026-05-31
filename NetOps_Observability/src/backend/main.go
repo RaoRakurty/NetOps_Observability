@@ -79,16 +79,14 @@ func newServer() *server {
 			if dev.Address == "" {
 				continue
 			}
+			// Communities come only from UI-configured credential profiles
+			// (resolved via the device's credential_ref). An empty community
+			// falls back to the global SNMP_COMMUNITY in the poller.
 			community := ""
 			if snmpCredsRef != nil && dev.CredentialRef != "" {
 				if c, ok := snmpCredsRef.Resolve(dev.CredentialRef); ok {
 					community = c.Community
 				}
-			}
-			// Fallback for static inventory: a per-device `snmp_community` label
-			// (lets devices.yaml set a community without a full credential profile).
-			if community == "" {
-				community = dev.Labels["snmp_community"]
 			}
 			out = append(out, collectors.Target{
 				ID:        dev.ID,
