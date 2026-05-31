@@ -177,6 +177,18 @@ func newServer() *server {
 	); err != nil {
 		log.Printf("seed admin (non-fatal): %v", err)
 	}
+	// Break-glass admin recovery: when ADMIN_RESET_PASSWORD is set, force the
+	// bootstrap admin's password on boot (SeedAdmin only ever seeds a *new* admin,
+	// so a rotated/forgotten password otherwise locks everyone out). Unset it
+	// again after recovering. Logged loudly on purpose.
+	if pw := os.Getenv("ADMIN_RESET_PASSWORD"); pw != "" {
+		adminUser := envOr("ADMIN_USERNAME", "admin")
+		if err := users.ResetPassword(adminUser, pw); err != nil {
+			log.Printf("admin password reset (non-fatal): %v", err)
+		} else {
+			log.Printf("SECURITY: reset password for admin %q via ADMIN_RESET_PASSWORD — unset this env now", adminUser)
+		}
+	}
 
 	roles, err := newRoleStore(envOr("ROLES_FILE", "/data/roles.json"))
 	if err != nil {

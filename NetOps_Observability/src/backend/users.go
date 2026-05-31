@@ -32,20 +32,41 @@ type User struct {
 }
 
 type userStore struct {
-	mu    sync.RWMutex
-	path  string
-	users map[string]User
+	mu       sync.RWMutex
+	path     string
+	users    map[string]User
+	maxUsers int // 0 = unlimited
 }
 
 func newUserStore(path string) (*userStore, error) {
 	if path == "" {
 		path = "/data/users.json"
 	}
-	s := &userStore{path: path, users: make(map[string]User)}
+	s := &userStore{path: path, users: make(map[string]User), maxUsers: maxUsersLimit()}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// maxUsersLimit reads the configurable account cap from MAX_USERS (0/unset =
+// unlimited). A cap is best practice for abuse/resource control and licensing —
+// e.g. Versa caps a single VOS at 256 tenants — so the limit is exposed but
+// defaults to unlimited to preserve existing behavior. Negative/garbage → 0.
+func maxUsersLimit() int {
+	if v := os.Getenv("MAX_USERS"); v != "" {
+		if n, err := parseIntStrict(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// atCapLocked reports whether adding another LOCAL/admin-created account would
+// exceed the configured cap. Caller must hold s.mu. Federated JIT provisioning
+// (UpsertFederated) is intentionally exempt so the cap never locks out SSO.
+func (s *userStore) atCapLocked() bool {
+	return s.maxUsers > 0 && len(s.users) >= s.maxUsers
 }
 
 func (s *userStore) load() error {
@@ -105,6 +126,9 @@ func (s *userStore) Create(username, password, role string) (User, error) {
 	if _, exists := s.users[strings.ToLower(username)]; exists {
 		return User{}, fmt.Errorf("user %q already exists", username)
 	}
+	if s.atCapLocked() {
+		return User{}, fmt.Errorf("user limit reached (MAX_USERS=%d)", s.maxUsers)
+	}
 	s.users[strings.ToLower(username)] = u
 	if err := s.flushLocked(); err != nil {
 		delete(s.users, strings.ToLower(username))
@@ -155,6 +179,9 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 	defer s.mu.Unlock()
 	if _, exists := s.users[strings.ToLower(u.Username)]; exists {
 		return User{}, fmt.Errorf("user %q already exists", u.Username)
+	}
+	if s.atCapLocked() {
+		return User{}, fmt.Errorf("user limit reached (MAX_USERS=%d)", s.maxUsers)
 	}
 	s.users[strings.ToLower(u.Username)] = u
 	if err := s.flushLocked(); err != nil {

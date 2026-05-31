@@ -442,6 +442,8 @@ services:
       DATABASE_DRIVER: ${DATABASE_DRIVER:-postgres}
       # Default per-API-key rate limit (requests/minute; 0 = unlimited)
       APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
+      # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)
+      MAX_USERS: ${MAX_USERS:-0}
       # AI Copilot
       FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}
@@ -452,6 +454,8 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      # Break-glass admin password recovery on boot (unset after use). See main.go.
+      ADMIN_RESET_PASSWORD: ${ADMIN_RESET_PASSWORD:-}
       USERS_FILE: /data/users.json
     volumes:
       - ../../src/config:/config:ro

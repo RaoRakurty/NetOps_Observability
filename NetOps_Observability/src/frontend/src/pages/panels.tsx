@@ -10,6 +10,7 @@ import ReactECharts from "echarts-for-react";
 import { api, Alert, MetricTile, PromRangeResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
+import { usePrefs } from "../theme/prefs";
 import Topology from "../tabs/Topology";
 
 // ---- shared helpers --------------------------------------------------------
@@ -71,6 +72,7 @@ function MetricGauge({
   max?: number;
   goodHigh?: boolean; // true => high is good (e.g. availability)
 }) {
+  const { theme } = usePrefs(); // re-render the wheel when the theme flips
   const res = usePolled(() => {
     const [s, e, st] = nowWindow(300);
     return api.metricsQueryRange(query, s, e, st);
@@ -78,9 +80,11 @@ function MetricGauge({
   const v = res ? latestFromProm(res) : null;
   // Glassy progress color by current value (light tint → vivid), keyed to the
   // good/bad direction. Modern "elite glass" hues, brighter than the severity
-  // tokens so the wheel reads lively rather than dark.
+  // tokens so the wheel reads lively rather than dark. When there's no data the
+  // ring shows a soft indigo "idle" gradient instead of dead grey.
   const pct = v === null ? 0 : Math.min(1, Math.max(0, v / max));
   const band = (() => {
+    if (v === null) return ["#a5b4fc", "#818cf8"]; // idle indigo (no data yet)
     const t = goodHigh ? 1 - pct : pct; // t: 0 = healthy, 1 = bad
     if (t < 0.7) return ["#34d399", "#10b981"]; // emerald
     if (t < 0.9) return ["#fbbf24", "#f59e0b"]; // amber
@@ -90,8 +94,19 @@ function MetricGauge({
     type: "linear", x: 0, y: 0, x2: 1, y2: 1,
     colorStops: [{ offset: 0, color: band[0] }, { offset: 1, color: band[1] }],
   };
+  // Theme-aware glassy track: a soft cool gradient on light, deep slate on dark
+  // (the old flat #eef1f6 looked wrong against the dark canvas). A faint idle
+  // ring is always drawn so the wheel never reads as empty grey.
+  const dark = theme === "dark";
+  const trackColor = {
+    type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+    colorStops: dark
+      ? [{ offset: 0, color: "#2a3550" }, { offset: 1, color: "#1d2740" }]
+      : [{ offset: 0, color: "#eef1f8" }, { offset: 1, color: "#e3e8f2" }],
+  };
   return (
     <ReactECharts
+      notMerge
       style={{ height: 190 }}
       option={{
         series: [
@@ -105,8 +120,8 @@ function MetricGauge({
             radius: "118%",
             startAngle: 220,
             endAngle: -40,
-            progress: { show: true, width: 30, roundCap: true, itemStyle: { color: progressColor, shadowBlur: 10, shadowColor: hexToRgba(band[1], 0.45) } },
-            axisLine: { roundCap: true, lineStyle: { width: 30, color: [[1, "#eef1f6"]] } },
+            progress: { show: true, width: 30, roundCap: true, itemStyle: { color: progressColor, shadowBlur: 12, shadowColor: hexToRgba(band[1], 0.5) } },
+            axisLine: { roundCap: true, lineStyle: { width: 30, color: [[1, trackColor]] } },
             pointer: { show: false },
             axisTick: { show: false },
             splitLine: { show: false },
@@ -118,8 +133,8 @@ function MetricGauge({
               offsetCenter: [0, "-4%"],
               formatter: v === null ? "—" : `{v|${Math.round(v)}}{u|${unit}}`,
               rich: {
-                v: { fontSize: 38, fontWeight: 800, color: "var(--fg)" },
-                u: { fontSize: 16, color: "var(--muted)", padding: [0, 0, 6, 2] },
+                v: { fontSize: 38, fontWeight: 800, color: dark ? "#e7ebf3" : "#161d29" },
+                u: { fontSize: 16, color: dark ? "#9aa6bf" : "#586173", padding: [0, 0, 6, 2] },
               },
             },
             data: [{ value: v ?? 0 }],

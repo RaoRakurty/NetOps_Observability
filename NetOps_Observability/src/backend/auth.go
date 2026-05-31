@@ -27,8 +27,14 @@ func durEnv(key string, def time.Duration) time.Duration {
 	return def
 }
 
-func accessTokenTTL() time.Duration  { return durEnv("ACCESS_TOKEN_TTL", time.Hour) }
-func refreshTokenTTL() time.Duration { return durEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour) }
+// Token lifetimes are env-configurable but clamped to safe, standards-aligned
+// bounds — see token_policy.go.
+func accessTokenTTL() time.Duration {
+	return boundedDurEnv("ACCESS_TOKEN_TTL", time.Hour, accessTTLMin, accessTTLMax, accessTTLRecommended)
+}
+func refreshTokenTTL() time.Duration {
+	return boundedDurEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour, refreshTTLMin, refreshTTLMax, refreshTTLRecommended)
+}
 
 type ctxKey int
 
