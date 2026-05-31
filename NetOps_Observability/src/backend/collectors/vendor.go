@@ -42,12 +42,12 @@ var enterpriseVendor = map[int]string{
 // unrecognizable sysDescr).
 func DetectVendor(ctx context.Context, addr, community string) (vendor, sysDescr string) {
 	addr = withPort(addr, 161)
-	if v, err := snmpGet(ctx, addr, community, sysObjectIDOID); err == nil && v.tag == 0x06 {
+	if v, err := snmpGet(ctx, addr, v2c(community), sysObjectIDOID); err == nil && v.tag == 0x06 {
 		if ent, ok := enterpriseOf(decodeOID(v.raw)); ok {
 			vendor = enterpriseVendor[ent] // "" if enterprise not in the table
 		}
 	}
-	if d, err := snmpGet(ctx, addr, community, sysDescrOID); err == nil {
+	if d, err := snmpGet(ctx, addr, v2c(community), sysDescrOID); err == nil {
 		sysDescr = d.str()
 		if vendor == "" {
 			vendor = vendorFromDescr(sysDescr)
@@ -98,9 +98,12 @@ func vendorFromDescr(d string) string {
 	return ""
 }
 
-// snmpGet issues a single SNMP v2c GET and returns the first varbind's value.
-// Errors on transport failure or an SNMP exception value (noSuchObject etc.).
-func snmpGet(ctx context.Context, addr, community string, oid []int) (berVal, error) {
+// snmpGet issues a single SNMP GET (v2c or v3 per creds) and returns the first
+// varbind's value. Errors on transport failure or an SNMP exception value.
+func snmpGet(ctx context.Context, addr string, creds snmpCreds, oid []int) (berVal, error) {
+	if creds.isV3() {
+		return snmpGetV3(ctx, addr, creds, oid)
+	}
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
@@ -110,7 +113,7 @@ func snmpGet(ctx context.Context, addr, community string, oid []int) (berVal, er
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(dl)
 	}
-	if _, err := c.Write(buildSNMPGet(community, oid, 1)); err != nil {
+	if _, err := c.Write(buildSNMPGet(creds.Community, oid, 1)); err != nil {
 		return berVal{}, err
 	}
 	buf := make([]byte, 4096)

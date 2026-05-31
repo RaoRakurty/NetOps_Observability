@@ -10,7 +10,7 @@ devices:
     address: 172.40.40.11
     preferred_protocol: snmp
     vendor: nokia
-    credential_ref: nokia-v2c
+    credential_ref: nokia-v3
     labels:
       site: clos-lab
       role: spine
@@ -18,7 +18,7 @@ devices:
     address: 172.40.40.12
     preferred_protocol: snmp
     vendor: nokia
-    credential_ref: nokia-v2c
+    credential_ref: nokia-v3
     labels:
       site: clos-lab
       role: spine
@@ -26,7 +26,7 @@ devices:
     address: 172.40.40.21
     preferred_protocol: snmp
     vendor: arista
-    credential_ref: arista-v2c
+    credential_ref: arista-v3
     labels:
       site: clos-lab
       role: leaf
@@ -34,7 +34,7 @@ devices:
     address: 172.40.40.22
     preferred_protocol: snmp
     vendor: arista
-    credential_ref: arista-v2c
+    credential_ref: arista-v3
     labels:
       site: clos-lab
       role: leaf
@@ -42,7 +42,7 @@ devices:
     address: 172.40.40.23
     preferred_protocol: snmp
     vendor: arista
-    credential_ref: arista-v2c
+    credential_ref: arista-v3
     labels:
       site: clos-lab
       role: leaf
@@ -50,7 +50,7 @@ devices:
     address: 172.40.40.24
     preferred_protocol: snmp
     vendor: arista
-    credential_ref: arista-v2c
+    credential_ref: arista-v3
     labels:
       site: clos-lab
       role: leaf
@@ -66,7 +66,7 @@ devices:
     address: 172.40.40.32
     preferred_protocol: snmp
     vendor: arista
-    credential_ref: arista-v2c
+    credential_ref: arista-v3
     labels:
       site: clos-lab
       role: wan
@@ -74,7 +74,7 @@ devices:
     address: 172.40.40.51
     preferred_protocol: snmp
     vendor: cisco
-    credential_ref: cisco-v2c
+    credential_ref: cisco-v3
     labels:
       site: clos-lab
       role: lan
@@ -82,7 +82,7 @@ devices:
     address: 172.40.40.52
     preferred_protocol: snmp
     vendor: cisco
-    credential_ref: cisco-v2c
+    credential_ref: cisco-v3
     labels:
       site: clos-lab
       role: lan
@@ -90,7 +90,7 @@ devices:
     address: 172.40.40.41
     preferred_protocol: snmp
     vendor: fortinet
-    credential_ref: fortinet-v2c
+    credential_ref: fortinet-v3
     labels:
       site: clos-lab
       role: firewall

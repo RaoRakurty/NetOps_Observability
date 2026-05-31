@@ -79,21 +79,32 @@ func newServer() *server {
 			if dev.Address == "" {
 				continue
 			}
-			// Communities come only from UI-configured credential profiles
-			// (resolved via the device's credential_ref). An empty community
-			// falls back to the global SNMP_COMMUNITY in the poller.
-			community := ""
+			// SNMP credentials come only from UI-configured credential profiles
+			// (resolved via the device's credential_ref). A v3 profile threads
+			// full USM params; a v1/v2c profile threads the community. An empty
+			// community falls back to the global SNMP_COMMUNITY in the poller.
+			tgt := collectors.Target{
+				ID:       dev.ID,
+				Address:  dev.Address,
+				Protocol: dev.PreferredProtocol,
+			}
 			if snmpCredsRef != nil && dev.CredentialRef != "" {
 				if c, ok := snmpCredsRef.Resolve(dev.CredentialRef); ok {
-					community = c.Community
+					if c.Version == "v3" {
+						tgt.SNMPVersion = 3
+						tgt.V3User = c.SecurityName
+						tgt.V3Level = c.SecurityLevel
+						tgt.V3AuthProto = c.AuthProtocol
+						tgt.V3AuthKey = c.AuthKey
+						tgt.V3PrivProto = c.PrivProtocol
+						tgt.V3PrivKey = c.PrivKey
+						tgt.V3Context = c.Context
+					} else {
+						tgt.Community = c.Community
+					}
 				}
 			}
-			out = append(out, collectors.Target{
-				ID:        dev.ID,
-				Address:   dev.Address,
-				Protocol:  dev.PreferredProtocol,
-				Community: community,
-			})
+			out = append(out, tgt)
 		}
 		return out
 	})

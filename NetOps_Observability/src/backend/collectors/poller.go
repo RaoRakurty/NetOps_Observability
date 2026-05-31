@@ -29,6 +29,37 @@ type Target struct {
 	Address   string // host or host:port
 	Protocol  string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
 	Community string // resolved SNMP v2c community ("" => SNMP_COMMUNITY/"public")
+
+	// SNMPv3 USM (set when the device's credential profile is v3; takes
+	// precedence over Community). See snmpCreds.
+	SNMPVersion int // 0/2 => v2c, 3 => v3
+	V3User      string
+	V3Level     string // noAuthNoPriv | authNoPriv | authPriv
+	V3AuthProto string
+	V3AuthKey   string
+	V3PrivProto string
+	V3PrivKey   string
+	V3Context   string
+}
+
+// creds builds the engine credentials for this target (v3 if configured, else
+// v2c with the resolved community / global default).
+func (t Target) creds() snmpCreds {
+	if t.SNMPVersion == 3 {
+		return snmpCreds{
+			Version: 3, User: t.V3User, Level: t.V3Level,
+			AuthProto: t.V3AuthProto, AuthKey: t.V3AuthKey,
+			PrivProto: t.V3PrivProto, PrivKey: t.V3PrivKey, Context: t.V3Context,
+		}
+	}
+	community := t.Community
+	if community == "" {
+		community = os.Getenv("SNMP_COMMUNITY")
+	}
+	if community == "" {
+		community = "public"
+	}
+	return v2c(community)
 }
 
 // TargetFunc returns the current set of devices to poll.

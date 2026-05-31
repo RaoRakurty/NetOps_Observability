@@ -3,7 +3,6 @@ package collectors
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -62,11 +61,6 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if c.targets != nil {
 		targets = c.targets()
 	}
-	envCommunity := os.Getenv("SNMP_COMMUNITY")
-	if envCommunity == "" {
-		envCommunity = "public"
-	}
-
 	start := time.Now()
 	now := start.UnixMilli()
 	reachable := 0
@@ -75,18 +69,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 
 	for _, tg := range targets {
 		addr := withPort(tg.Address, 161)
-		// Per-device community (resolved from the device's credential profile /
-		// label by the target builder); fall back to the global SNMP_COMMUNITY.
-		// Essential for a multi-vendor fleet where each device has its own RO
-		// community (cisco-public, arista-public, srl-public, …).
-		community := tg.Community
-		if community == "" {
-			community = envCommunity
-		}
-		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Per-device credentials (v2c community or full v3 USM) resolved from the
+		// device's credential profile by the target builder. Essential for a
+		// multi-vendor fleet where each device has its own creds.
+		creds := tg.creds()
+		dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 
 		ent, entOK := 0, false
-		if v, err := snmpGet(dctx, addr, community, sysObjectIDOID); err == nil && v.tag == 0x06 {
+		if v, err := snmpGet(dctx, addr, creds, sysObjectIDOID); err == nil && v.tag == 0x06 {
 			ent, entOK = enterpriseOf(decodeOID(v.raw))
 		} else if err != nil {
 			cancel()
@@ -100,7 +90,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 			for _, m := range prof.Metrics {
 				if m.Table {
-					rows, err := snmpWalkColumn(dctx, addr, community, m.OID)
+					rows, err := snmpWalkColumn(dctx, addr, creds, m.OID)
 					if err != nil {
 						continue
 					}
@@ -109,7 +99,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 							m.Name, tg.ID, vendor, idx, valueInt(v), now))
 					}
 				} else {
-					v, err := snmpGet(dctx, addr, community, append(append([]int(nil), m.OID...), 0))
+					v, err := snmpGet(dctx, addr, creds, append(append([]int(nil), m.OID...), 0))
 					if err != nil {
 						continue
 					}

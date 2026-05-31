@@ -204,7 +204,7 @@ func TestSnmpWalkColumn(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	got, err := snmpWalkColumn(ctx, conn.LocalAddr().String(), "public", col)
+	got, err := snmpWalkColumn(ctx, conn.LocalAddr().String(), v2c("public"), col)
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}

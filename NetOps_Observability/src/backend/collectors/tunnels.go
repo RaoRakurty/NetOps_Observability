@@ -205,7 +205,11 @@ func firstVarbind(pkt []byte) (oid []int, valTag byte, val []byte, err error) {
 // snmpWalkColumn GetNext-walks one MIB column subtree, returning a map keyed by
 // the row index (the OID arcs trailing the column OID). One UDP socket is
 // reused for the whole walk; ctx's deadline bounds the column's total time.
-func snmpWalkColumn(ctx context.Context, addr, community string, col []int) (map[string]berVal, error) {
+func snmpWalkColumn(ctx context.Context, addr string, creds snmpCreds, col []int) (map[string]berVal, error) {
+	if creds.isV3() {
+		return snmpWalkColumnV3(ctx, addr, creds, col)
+	}
+	community := creds.Community
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
@@ -287,8 +291,8 @@ type endpoint struct {
 // walkInterfaces reads the IF-MIB for one device. ifOperStatus is the required
 // walk (it proves SNMP works); the rest are best-effort enrichment so a device
 // missing ifXTable still yields up/down status.
-func walkInterfaces(ctx context.Context, addr, community string) (map[string]*iface, error) {
-	oper, err := snmpWalkColumn(ctx, addr, community, oidIfOper)
+func walkInterfaces(ctx context.Context, addr string, creds snmpCreds) (map[string]*iface, error) {
+	oper, err := snmpWalkColumn(ctx, addr, creds, oidIfOper)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +301,7 @@ func walkInterfaces(ctx context.Context, addr, community string) (map[string]*if
 		ifaces[idx] = &iface{index: idx, oper: v.int()}
 	}
 	enrich := func(col []int, set func(*iface, berVal)) {
-		if m, err := snmpWalkColumn(ctx, addr, community, col); err == nil {
+		if m, err := snmpWalkColumn(ctx, addr, creds, col); err == nil {
 			for idx, v := range m {
 				if f := ifaces[idx]; f != nil {
 					set(f, v)
@@ -315,10 +319,10 @@ func walkInterfaces(ctx context.Context, addr, community string) (map[string]*if
 
 // walkTunnelEndpoints reads the optional TUNNEL-MIB tunnelIfTable, keyed by
 // ifIndex so it joins onto walkInterfaces. Entirely best-effort.
-func walkTunnelEndpoints(ctx context.Context, addr, community string) map[string]*endpoint {
+func walkTunnelEndpoints(ctx context.Context, addr string, creds snmpCreds) map[string]*endpoint {
 	out := make(map[string]*endpoint)
 	add := func(col []int, set func(*endpoint, berVal)) {
-		if m, err := snmpWalkColumn(ctx, addr, community, col); err == nil {
+		if m, err := snmpWalkColumn(ctx, addr, creds, col); err == nil {
 			for idx, v := range m {
 				e := out[idx]
 				if e == nil {
@@ -473,11 +477,6 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 	if c.targets != nil {
 		targets = c.targets()
 	}
-	community := os.Getenv("SNMP_COMMUNITY")
-	if community == "" {
-		community = "public"
-	}
-
 	start := time.Now()
 	reachable := 0
 	var lastErr string
@@ -485,15 +484,16 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 
 	for _, tg := range targets {
 		addr := withPort(tg.Address, 161)
+		creds := tg.creds()
 		dctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		ifaces, err := walkInterfaces(dctx, addr, community)
+		ifaces, err := walkInterfaces(dctx, addr, creds)
 		if err != nil {
 			cancel()
 			lastErr = err.Error()
 			continue
 		}
 		reachable++
-		endpoints := walkTunnelEndpoints(dctx, addr, community)
+		endpoints := walkTunnelEndpoints(dctx, addr, creds)
 		cancel()
 
 		local := hostOnly(tg.Address)
