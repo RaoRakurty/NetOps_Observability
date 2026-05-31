@@ -74,6 +74,79 @@ function fmtVal(v: number, unit?: string): string {
   return unit ? `${s}${unit === "%" || unit === "°C" ? "" : " "}${unit}` : s;
 }
 
+// unitFor guesses a display unit from a raw metric name (best-effort).
+function unitFor(name: string): string | undefined {
+  const n = name.toLowerCase();
+  if (n.includes("percent") || n.endsWith("_pct")) return "%";
+  if (n.includes("celsius") || n.includes("temp")) return "°C";
+  if (n.includes("_kb") || n.includes("kbyte")) return "KB";
+  return undefined;
+}
+
+// MetricPicker — a modern searchable combobox over the metric catalog. Opens on
+// click, filters as you type, scrolls, and selects on click. Replaces the
+// browser <datalist>, which forced you to clear the field before browsing.
+function MetricPicker({ names, onPick }: { names: string[]; onPick: (n: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onEsc);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onEsc); };
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    const list = f ? names.filter((n) => n.toLowerCase().includes(f)) : names;
+    return list;
+  }, [names, filter]);
+  const shown = filtered.slice(0, 400);
+
+  return (
+    <div className="combo" ref={ref}>
+      <button type="button" className="combo-btn" onClick={() => setOpen((o) => !o)} title="Browse all metrics">
+        Browse metrics <span style={{ opacity: 0.6 }}>({names.length})</span> ▾
+      </button>
+      {open && (
+        <div className="combo-menu">
+          <input
+            autoFocus
+            className="combo-search"
+            placeholder="Filter metrics…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <div className="combo-list">
+            {shown.length === 0 ? (
+              <div className="combo-empty">No metric matches “{filter}”.</div>
+            ) : (
+              shown.map((n) => (
+                <div
+                  key={n}
+                  className="combo-item"
+                  onClick={() => { onPick(n); setOpen(false); setFilter(""); }}
+                >
+                  {n}
+                </div>
+              ))
+            )}
+            {filtered.length > shown.length && (
+              <div className="combo-empty">+{filtered.length - shown.length} more — refine the filter</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
   const [query, setQuery] = useState("device_cpu_percent");
   const [unit, setUnit] = useState<string | undefined>("%");
@@ -198,18 +271,18 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
 
         <form
           onSubmit={(e) => { e.preventDefault(); run(); }}
-          style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}
+          style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 8 }}
         >
+          <MetricPicker
+            names={names}
+            onPick={(n) => { setQuery(n); run(n, rangeMinutes, unitFor(n)); }}
+          />
           <input
-            list="metric-names"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="PromQL, e.g. rate(device_if_in_octets[5m]) * 8"
             style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
           />
-          <datalist id="metric-names">
-            {names.slice(0, 2000).map((n) => <option key={n} value={n} />)}
-          </datalist>
           <button disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
         </form>
         {error && (
