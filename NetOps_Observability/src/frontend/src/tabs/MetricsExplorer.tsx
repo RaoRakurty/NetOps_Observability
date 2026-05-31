@@ -159,6 +159,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
   const [names, setNames] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [live, setLive] = useState(false);
   const ran = useRef(false);
 
   useEffect(() => {
@@ -199,6 +200,15 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeMinutes]);
 
+  // Live mode — re-poll every 5s so the chart streams/draws in real time
+  // (Versa-style live monitoring). Cleared when toggled off or unmounted.
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => run(query, rangeMinutes, unit), 5000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, query, rangeMinutes, unit]);
+
   const pick = (it: CatalogItem) => {
     setQuery(it.q);
     run(it.q, rangeMinutes, it.unit);
@@ -215,6 +225,8 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
     };
     return {
       ...chartBase,
+      animationDuration: 900,
+      animationEasing: "cubicOut",
       grid: { left: 64, right: 16, top: 24, bottom: 28 },
       tooltip: {
         ...chartBase.tooltip,
@@ -235,6 +247,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
         smooth: true,
         lineStyle: { color: paletteColor(i), width: 2 },
         itemStyle: { color: paletteColor(i) },
+        areaStyle: { color: paletteColor(i), opacity: 0.12 },
         data: s.values.map(([t, v]) => [t * 1000, Number(v)]),
       })),
     };
@@ -276,7 +289,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
 
         <form
           onSubmit={(e) => { e.preventDefault(); run(); }}
-          style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 8 }}
+          style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 8 }}
         >
           <MetricPicker
             names={names}
@@ -289,6 +302,14 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
             style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
           />
           <button disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
+          <button
+            type="button"
+            onClick={() => setLive((l) => !l)}
+            className={live ? "chip chip-active" : "chip"}
+            title="Stream the chart live (refresh every 5s)"
+          >
+            {live ? "● Live" : "○ Live"}
+          </button>
         </form>
         {error && (
           <p style={{ color: "var(--bad)", marginTop: 12 }}>

@@ -83,17 +83,24 @@ function MetricGauge({
   // tokens so the wheel reads lively rather than dark. When there's no data the
   // ring shows a soft indigo "idle" gradient instead of dead grey.
   const pct = v === null ? 0 : Math.min(1, Math.max(0, v / max));
-  const band = (() => {
-    if (v === null) return ["#a5b4fc", "#818cf8"]; // idle indigo (no data yet)
-    const t = goodHigh ? 1 - pct : pct; // t: 0 = healthy, 1 = bad
-    if (t < 0.7) return ["#34d399", "#10b981"]; // emerald
-    if (t < 0.9) return ["#fbbf24", "#f59e0b"]; // amber
-    return ["#fb7185", "#f43f5e"];               // rose
-  })();
-  const progressColor = {
-    type: "linear", x: 0, y: 0, x2: 1, y2: 1,
-    colorStops: [{ offset: 0, color: band[0] }, { offset: 1, color: band[1] }],
-  };
+  // Multi-colored arc: a vivid teal→green→amber→orange→rose sweep along the
+  // wheel (Datadog/Grafana style), so the ring reads lively and the fill colour
+  // naturally tracks severity as it grows. Idle (no data) shows soft indigo.
+  const progressColor = v === null
+    ? { type: "linear", x: 0, y: 0, x2: 1, y2: 1, colorStops: [{ offset: 0, color: "#a5b4fc" }, { offset: 1, color: "#818cf8" }] }
+    : {
+        type: "linear", x: 0, y: 0, x2: 1, y2: 0,
+        colorStops: [
+          { offset: 0.0, color: "#22d3ee" }, // cyan
+          { offset: 0.35, color: "#34d399" }, // emerald
+          { offset: 0.6, color: "#fbbf24" }, // amber
+          { offset: 0.8, color: "#fb923c" }, // orange
+          { offset: 1.0, color: "#f43f5e" }, // rose
+        ],
+      };
+  // Glow hue tracks the current value's severity band.
+  const t = goodHigh ? 1 - pct : pct;
+  const glow = v === null ? "#818cf8" : t < 0.7 ? "#10b981" : t < 0.9 ? "#f59e0b" : "#f43f5e";
   // Theme-aware glassy track: a soft cool gradient on light, deep slate on dark
   // (the old flat #eef1f6 looked wrong against the dark canvas). A faint idle
   // ring is always drawn so the wheel never reads as empty grey.
@@ -120,7 +127,7 @@ function MetricGauge({
             radius: "118%",
             startAngle: 220,
             endAngle: -40,
-            progress: { show: true, width: 30, roundCap: true, itemStyle: { color: progressColor, shadowBlur: 12, shadowColor: hexToRgba(band[1], 0.5) } },
+            progress: { show: true, width: 30, roundCap: true, itemStyle: { color: progressColor, shadowBlur: 12, shadowColor: hexToRgba(glow, 0.5) } },
             axisLine: { roundCap: true, lineStyle: { width: 30, color: [[1, trackColor]] } },
             pointer: { show: false },
             axisTick: { show: false },
@@ -446,8 +453,8 @@ export const PANELS: Record<string, PanelDef> = {
   "stack-performance": { type: "stack-performance", title: "Stack performance", defaultSpan: 6, category: "Health & KPIs", render: () => <StackPerformance /> },
   "gauge-cpu": { type: "gauge-cpu", title: "CPU", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_cpu_percent)" /> },
   "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_mem_percent)" /> },
-  "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_storage_percent)" /> },
-  "gauge-network": { type: "gauge-network", title: "Network util", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_if_util_percent)" /> },
+  "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(device_storage_used) / sum(device_storage_size)" /> },
+  "gauge-network": { type: "gauge-network", title: "Bandwidth utilization", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(rate(device_if_in_octets[5m]) * 8) / sum(device_if_speed * 1000000)" /> },
   "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity /> },
   "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts /> },
   incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents /> },
