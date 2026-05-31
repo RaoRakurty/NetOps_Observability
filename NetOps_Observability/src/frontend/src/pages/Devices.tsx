@@ -25,6 +25,23 @@ function vendorColor(vendor: string): string {
   return `hsl(${hue} 65% 55%)`;
 }
 
+// Map the backend discovery-source id to an operator-friendly label + badge
+// tone, so the Source column reads as "how this device was learned" rather than
+// a bare slug. Backend sets these in discovery.go (StaticSource.Name() etc.);
+// unknown values fall through to the raw id with a neutral badge.
+const SOURCE_META: Record<string, { label: string; tone: string }> = {
+  static: { label: "Static (seed file)", tone: "" },
+  snmp: { label: "SNMP discovery", tone: "good" },
+  netbox: { label: "NetBox", tone: "accent" },
+  manual: { label: "Manual", tone: "warn" },
+};
+function sourceLabel(s: string): string {
+  return SOURCE_META[s]?.label ?? (s || "—");
+}
+function sourceTone(s: string): string {
+  return SOURCE_META[s]?.tone ?? "";
+}
+
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [busy, setBusy] = useState(false);
@@ -149,7 +166,12 @@ export default function Devices() {
                       <td>{d.model || "—"}</td>
                       <td>{d.os || "—"}</td>
                       <td>
-                        <span className="badge good">{d.source}</span>
+                        <span
+                          className={`badge ${sourceTone(d.source)}`}
+                          title={`Discovery source: ${d.source || "unknown"}`}
+                        >
+                          {sourceLabel(d.source)}
+                        </span>
                       </td>
                       <td>{new Date(d.last_seen).toLocaleString()}</td>
                       <td>

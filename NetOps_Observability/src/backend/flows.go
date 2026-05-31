@@ -61,6 +61,31 @@ SELECT proto,
 	proxyClickHouse(w, sql)
 }
 
+// handleFlowsByType breaks traffic down by flow-protocol family
+// (netflow / ipfix / sflow) using the flow_type column the vector-router VRL
+// derives from goflow2's `type`. Lets the UI prove all three flow sources are
+// actually arriving, not just "flows".
+func (s *server) handleFlowsByType(w http.ResponseWriter, r *http.Request) {
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	sql := `
+SELECT flow_type,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows,
+       uniqExact(sampler_address) AS exporters
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
+ GROUP BY flow_type
+ ORDER BY flows DESC
+ FORMAT JSON`
+	proxyClickHouse(w, sql)
+}
+
 func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	step := durationQuery(r, "step", time.Minute)

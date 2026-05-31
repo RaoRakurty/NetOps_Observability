@@ -44,6 +44,7 @@ type server struct {
 	snmpCreds  *snmpCredStore
 	saved      *savedStore
 	reports    *reportScheduler
+	copilotCfg *copilotConfigStore
 	oidc       *oidcProvider
 	servicenow *notify.ServiceNow
 	jira       *notify.Jira
@@ -108,7 +109,11 @@ func newServer() *server {
 		}
 		return out
 	})
-	pool.Enable("snmp", os.Getenv("ENABLE_SNMP_COLLECTION") == "true")
+	// ENABLE_SNMP_COLLECTION drives both SNMP version collectors; the v2c/v3
+	// split is by per-device credential profile, not a separate toggle.
+	snmpOn := os.Getenv("ENABLE_SNMP_COLLECTION") == "true"
+	pool.Enable("snmpv2c", snmpOn)
+	pool.Enable("snmpv3", snmpOn)
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
@@ -250,6 +255,7 @@ func newServer() *server {
 		hub:        NewHub(),
 	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
+	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
 	return srv
 }
 
@@ -337,6 +343,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
 	mux.HandleFunc("/api/flows/top", s.handleFlowsTopTalkers)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
+	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
@@ -345,7 +352,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/search/global", s.handleGlobalSearch)
 	mux.HandleFunc("/api/reports/runs", s.handleReportRuns)
 	mux.HandleFunc("/api/reports/run", s.handleReportRunNow)
+	mux.HandleFunc("/api/reports/channels", s.handleReportChannels)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
+	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

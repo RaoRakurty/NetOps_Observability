@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,18 +42,30 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID       string   `json:"id"`
+		Channels []string `json:"channels,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
 		writeError(w, http.StatusBadRequest, errors.New("id required"))
 		return
 	}
-	run, err := s.reports.RunNow(strings.TrimSpace(req.ID))
+	run, err := s.reports.RunNow(strings.TrimSpace(req.ID), req.Channels)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+// handleReportChannels: GET /api/reports/channels — the notify channels actually
+// configured, so the "Send now" UI offers only real delivery destinations.
+func (s *server) handleReportChannels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.notifier.Names())
 }
 
 // Report scheduler — the server-side half of Phase 5.
@@ -70,11 +84,19 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 // reportSpec is the slice of a report's JSON body the scheduler reads. The
 // frontend may carry additional fields freely; unknown keys are ignored.
 type reportSpec struct {
-	Kind            string `json:"kind"`             // alerts_summary | device_inventory | health_summary
+	// Kind selects the renderer. Operational: alerts_summary | device_inventory |
+	// health_summary. Executive (added for the exec reporting backlog, modelled
+	// on Datadog/Zabbix scheduled reports): wan_utilization | security_threats |
+	// device_utilization | latency_jitter_sla.
+	Kind            string `json:"kind"`
 	IntervalMinutes int    `json:"interval_minutes"` // cadence; <=0 disables scheduling
 	Severity        string `json:"severity"`         // severity stamped on the delivered message
 	Enabled         bool   `json:"enabled"`
 	Description     string `json:"description"`
+	// Channels optionally restricts delivery to named notify channels (email,
+	// slack, pagerduty, sns, twilio…). Empty => all configured channels. Used by
+	// scheduled runs and as the default for "Send now".
+	Channels []string `json:"channels,omitempty"`
 }
 
 // reportRun records the scheduler's per-report state.
@@ -160,8 +182,10 @@ func (rs *reportScheduler) tick() {
 }
 
 // RunNow delivers a report immediately, ignoring its schedule, and reschedules
-// the next automatic delivery from now. Powers the UI's "Send now".
-func (rs *reportScheduler) RunNow(id string) (reportRun, error) {
+// the next automatic delivery from now. Powers the UI's "Send now". channels
+// optionally restricts delivery to specific notify channels for this one send
+// (nil/empty => the report's configured channels, falling back to all).
+func (rs *reportScheduler) RunNow(id string, channels []string) (reportRun, error) {
 	o, ok := rs.saved.Get(id)
 	if !ok || o.Type != "report" {
 		return reportRun{}, errors.New("report not found")
@@ -170,15 +194,19 @@ func (rs *reportScheduler) RunNow(id string) (reportRun, error) {
 	if err != nil {
 		return reportRun{}, fmt.Errorf("invalid report body: %w", err)
 	}
+	if len(channels) > 0 {
+		spec.Channels = channels // one-off override for this manual send
+	}
 	rs.deliver(o, spec, time.Now().UTC())
 	return rs.Run(id), nil
 }
 
-// deliver renders and dispatches a report, then records the outcome.
+// deliver renders and dispatches a report, then records the outcome. Delivery
+// honours spec.Channels (empty => all configured channels).
 func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time) {
 	msg := rs.render(o, spec, now)
-	rs.notifier.Dispatch(msg)
-	log.Printf("report %q (%s) delivered", o.Name, o.ID)
+	sent := rs.notifier.DispatchTo(msg, spec.Channels)
+	log.Printf("report %q (%s) delivered to %d channel(s)", o.Name, o.ID, sent)
 
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -188,7 +216,11 @@ func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time
 		run.NextRun = now.Add(time.Duration(spec.IntervalMinutes) * time.Minute)
 	}
 	run.Status = "ok"
-	run.Detail = msg.Summary
+	if len(spec.Channels) > 0 {
+		run.Detail = fmt.Sprintf("%s — sent to %d channel(s): %s", msg.Summary, sent, strings.Join(spec.Channels, ", "))
+	} else {
+		run.Detail = fmt.Sprintf("%s — sent to %d channel(s)", msg.Summary, sent)
+	}
 	rs.runs[o.ID] = run
 	rs.flushLocked()
 }
@@ -206,6 +238,14 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 		summary, body = rs.renderDevices()
 	case "health_summary":
 		summary, body = rs.renderHealth(now)
+	case "wan_utilization":
+		summary, body = rs.renderWANUtilization()
+	case "security_threats":
+		summary, body = rs.renderSecurityThreats()
+	case "device_utilization":
+		summary, body = rs.renderDeviceUtilization()
+	case "latency_jitter_sla":
+		summary, body = rs.renderLatencyJitterSLA()
 	default: // alerts_summary
 		summary, body = rs.renderAlerts()
 	}
@@ -280,6 +320,240 @@ func (rs *reportScheduler) renderHealth(now time.Time) (string, string) {
 	summary := fmt.Sprintf("uptime %s · %d devices · %d active alerts", uptime, devs, active)
 	b := fmt.Sprintf("API uptime: %s\nDevices discovered: %d\nActive alerts: %d\n", uptime, devs, active)
 	return summary, b
+}
+
+// ---- Executive reports -----------------------------------------------------
+//
+// These read point-in-time analytics the stack already collects: tunnel/overlay
+// telemetry and findings from ClickHouse (netops.tunnels, netops.findings) and
+// device resource metrics from VictoriaMetrics. Each renderer degrades to a
+// clear "no data" line if its backend is empty/unreachable, so a report never
+// fails — it reports the gap, mirroring how Datadog/Zabbix scheduled summaries
+// behave.
+
+// renderWANUtilization summarises per-WAN/overlay link load + health from the
+// tunnels telemetry (status, loss, qoe) — the closest the stack has to circuit
+// utilisation until per-circuit bandwidth counters land.
+func (rs *reportScheduler) renderWANUtilization() (string, string) {
+	rows := chQuery(`
+SELECT local_device, remote_device, type, status,
+       round(loss_pct,2), round(qoe,2)
+  FROM netops.tunnels
+ ORDER BY ts DESC
+ LIMIT 1 BY id
+ FORMAT TSV`)
+	if len(rows) == 0 {
+		return "no WAN/overlay links reporting", "No tunnel/overlay telemetry yet.\n"
+	}
+	up := 0
+	var b strings.Builder
+	for i, r := range rows {
+		c := strings.Split(r, "\t")
+		if len(c) < 6 {
+			continue
+		}
+		if c[3] == "up" {
+			up++
+		}
+		if i < 25 {
+			fmt.Fprintf(&b, "• %s↔%s [%s] %s — loss %s%%, QoE %s\n",
+				c[0], c[1], c[2], c[3], c[4], c[5])
+		}
+	}
+	if len(rows) > 25 {
+		fmt.Fprintf(&b, "…and %d more\n", len(rows)-25)
+	}
+	summary := fmt.Sprintf("%d WAN/overlay link(s), %d up", len(rows), up)
+	return summary, b.String()
+}
+
+// renderSecurityThreats rolls up correlation findings (severity breakdown +
+// recent items) and critical active alerts — the executive "are we under
+// threat" view.
+func (rs *reportScheduler) renderSecurityThreats() (string, string) {
+	sev := chQuery(`
+SELECT severity, count()
+  FROM netops.findings
+ WHERE ts >= now() - INTERVAL 24 HOUR
+ GROUP BY severity
+ ORDER BY count() DESC
+ FORMAT TSV`)
+	recent := chQuery(`
+SELECT severity, device, summary
+  FROM netops.findings
+ WHERE ts >= now() - INTERVAL 24 HOUR
+ ORDER BY ts DESC
+ LIMIT 10
+ FORMAT TSV`)
+	var b strings.Builder
+	total := 0
+	if len(sev) == 0 {
+		b.WriteString("No findings in the last 24h.\n")
+	} else {
+		b.WriteString("By severity (24h):\n")
+		for _, r := range sev {
+			c := strings.Split(r, "\t")
+			if len(c) == 2 {
+				fmt.Fprintf(&b, "  %s: %s\n", c[0], c[1])
+				total += atoiSafe(c[1])
+			}
+		}
+	}
+	if len(recent) > 0 {
+		b.WriteString("\nRecent:\n")
+		for _, r := range recent {
+			c := strings.Split(r, "\t")
+			if len(c) >= 3 {
+				fmt.Fprintf(&b, "• [%s] %s — %s\n", c[0], c[1], c[2])
+			}
+		}
+	}
+	crit := 0
+	for _, a := range rs.alerts.Active() {
+		if strings.EqualFold(a.Severity, "critical") {
+			crit++
+		}
+	}
+	fmt.Fprintf(&b, "\nCritical active alerts: %d\n", crit)
+	return fmt.Sprintf("%d finding(s)/24h · %d critical alert(s)", total, crit), b.String()
+}
+
+// renderDeviceUtilization lists the busiest devices by CPU and memory from the
+// metrics VictoriaMetrics already stores (SNMP + gNMI collectors).
+func (rs *reportScheduler) renderDeviceUtilization() (string, string) {
+	cpu := vmTopk(`topk(10, device_cpu_percent)`, "%")
+	mem := vmTopk(`topk(10, device_mem_percent)`, "%")
+	if len(cpu) == 0 && len(mem) == 0 {
+		return "no device utilisation metrics", "No CPU/memory metrics reporting yet.\n"
+	}
+	var b strings.Builder
+	if len(cpu) > 0 {
+		b.WriteString("Top CPU:\n")
+		for _, l := range cpu {
+			b.WriteString("  " + l + "\n")
+		}
+	}
+	if len(mem) > 0 {
+		b.WriteString("\nTop memory:\n")
+		for _, l := range mem {
+			b.WriteString("  " + l + "\n")
+		}
+	}
+	return fmt.Sprintf("%d device(s) by CPU, %d by memory", len(cpu), len(mem)), b.String()
+}
+
+// renderLatencyJitterSLA reports per-link latency/jitter/loss and a simple SLA
+// (% of links currently up) from the tunnels telemetry.
+func (rs *reportScheduler) renderLatencyJitterSLA() (string, string) {
+	rows := chQuery(`
+SELECT local_device, remote_device, status,
+       round(latency_ms,2), round(jitter_ms,2), round(loss_pct,2)
+  FROM netops.tunnels
+ ORDER BY ts DESC
+ LIMIT 1 BY id
+ FORMAT TSV`)
+	if len(rows) == 0 {
+		return "no latency/SLA telemetry", "No tunnel latency/jitter telemetry yet.\n"
+	}
+	up := 0
+	var b strings.Builder
+	for i, r := range rows {
+		c := strings.Split(r, "\t")
+		if len(c) < 6 {
+			continue
+		}
+		if c[2] == "up" {
+			up++
+		}
+		if i < 25 {
+			fmt.Fprintf(&b, "• %s↔%s [%s] latency %sms, jitter %sms, loss %s%%\n",
+				c[0], c[1], c[2], c[3], c[4], c[5])
+		}
+	}
+	sla := 100.0
+	if len(rows) > 0 {
+		sla = float64(up) / float64(len(rows)) * 100
+	}
+	summary := fmt.Sprintf("%d link(s), %d up, SLA %.2f%%", len(rows), up, sla)
+	fmt.Fprintf(&b, "\nAvailability SLA: %.2f%% (%d/%d up)\n", sla, up, len(rows))
+	return summary, b.String()
+}
+
+// chQuery runs a read-only query against ClickHouse over HTTP and returns the
+// non-empty result lines. Best-effort: any error yields nil so the caller emits
+// a clean "no data" report rather than failing.
+func chQuery(sql string) []string {
+	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil
+	}
+	req, err := http.NewRequest(http.MethodPost, u.String(), strings.NewReader(sql))
+	if err != nil {
+		return nil
+	}
+	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), os.Getenv("CLICKHOUSE_PASSWORD"))
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	b, _ := io.ReadAll(resp.Body)
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// vmTopk runs an instant PromQL query against VictoriaMetrics and formats each
+// returned series as "<device> <value><unit>". Best-effort (nil on error).
+func vmTopk(query, unit string) []string {
+	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
+	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(query)
+	resp, err := (&http.Client{Timeout: 6 * time.Second}).Get(endpoint)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  [2]any            `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return nil
+	}
+	var lines []string
+	for _, r := range out.Data.Result {
+		name := firstNonEmpty(r.Metric["device"], r.Metric["instance"], r.Metric["host"], "device")
+		val := ""
+		if s, ok := r.Value[1].(string); ok {
+			val = s
+		}
+		lines = append(lines, fmt.Sprintf("%s %s%s", name, val, unit))
+	}
+	return lines
+}
+
+func atoiSafe(s string) int {
+	n := 0
+	for _, ch := range strings.TrimSpace(s) {
+		if ch < '0' || ch > '9' {
+			return n
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n
 }
 
 // Run returns the recorded run-state for a report (zero value if none yet).

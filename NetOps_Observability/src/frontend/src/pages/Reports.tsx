@@ -10,6 +10,11 @@ const KINDS: { value: ReportKind; label: string; hint: string }[] = [
   { value: "alerts_summary", label: "Active alerts summary", hint: "Counts by severity + the most recent alerts." },
   { value: "device_inventory", label: "Device inventory", hint: "Discovered devices and their addresses." },
   { value: "health_summary", label: "Stack health", hint: "API uptime, device count, active-alert count." },
+  // Executive reports (modelled on Datadog/Zabbix scheduled summaries).
+  { value: "wan_utilization", label: "WAN circuit utilization", hint: "Per-WAN/overlay link load, status, loss & QoE." },
+  { value: "security_threats", label: "Security threats", hint: "Findings by severity (24h) + critical alerts." },
+  { value: "device_utilization", label: "Device utilization", hint: "Top devices by CPU and memory." },
+  { value: "latency_jitter_sla", label: "Latency, jitter & SLA", hint: "Per-link latency/jitter/loss + availability SLA." },
 ];
 
 const INTERVALS: { value: number; label: string }[] = [
@@ -42,13 +47,22 @@ export default function Reports() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Configured notify channels + the "Send now" channel-picker state.
+  const [channels, setChannels] = useState<string[]>([]);
+  const [picker, setPicker] = useState<{ report: SavedObject; selected: string[] } | null>(null);
+  const [sending, setSending] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [list, runState] = await Promise.all([api.listSaved("report"), api.reportRuns()]);
+      const [list, runState, chans] = await Promise.all([
+        api.listSaved("report"),
+        api.reportRuns(),
+        api.reportChannels().catch(() => [] as string[]),
+      ]);
       setItems(list);
       setRuns(runState ?? {});
+      setChannels(chans ?? []);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -77,14 +91,41 @@ export default function Reports() {
     }
   };
 
-  const sendNow = async (o: SavedObject) => {
+  // Send now: if delivery channels are configured, open the picker so the
+  // operator chooses where it goes; otherwise deliver straight away (the server
+  // falls back to all channels). Selecting none in the picker also means "all".
+  const sendNow = (o: SavedObject) => {
+    if (channels.length === 0) {
+      void deliver(o, []);
+      return;
+    }
+    setPicker({ report: o, selected: [...channels] });
+  };
+
+  const deliver = async (o: SavedObject, chans: string[]) => {
+    setSending(true);
     try {
-      const run = await api.runReport(o.id);
+      const run = await api.runReport(o.id, chans);
       setRuns((prev) => ({ ...prev, [o.id]: run }));
+      setPicker(null);
     } catch (err) {
       window.alert(`Send failed: ${(err as Error).message}`);
+    } finally {
+      setSending(false);
     }
   };
+
+  const toggleChannel = (name: string) =>
+    setPicker((p) =>
+      !p
+        ? p
+        : {
+            ...p,
+            selected: p.selected.includes(name)
+              ? p.selected.filter((c) => c !== name)
+              : [...p.selected, name],
+          },
+    );
 
   const remove = async (o: SavedObject) => {
     if (!window.confirm(`Delete report "${o.name}"?`)) return;
@@ -217,6 +258,67 @@ export default function Reports() {
           </table>
         )}
       </div>
+
+      {picker && (
+        <div
+          className="modal-backdrop"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => !sending && setPicker(null)}
+        >
+          <div
+            className="card"
+            style={{ minWidth: 360, maxWidth: 460 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Send “{picker.report.name}”</h3>
+            <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 0 }}>
+              Choose delivery channels. Leave all unchecked to send to every
+              configured channel.
+            </p>
+            <div style={{ display: "grid", gap: 6, margin: "12px 0" }}>
+              {channels.map((c) => (
+                <label key={c} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={picker.selected.includes(c)}
+                    onChange={() => toggleChannel(c)}
+                  />
+                  <span style={{ textTransform: "capitalize" }}>{c}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setPicker(null)} disabled={sending}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                onClick={() => deliver(picker.report, picker.selected)}
+                disabled={sending}
+                title={
+                  picker.selected.length
+                    ? `Send to: ${picker.selected.join(", ")}`
+                    : "Send to all configured channels"
+                }
+              >
+                {sending
+                  ? "Sending…"
+                  : picker.selected.length
+                  ? `Send to ${picker.selected.length} channel${picker.selected.length === 1 ? "" : "s"}`
+                  : "Send to all"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

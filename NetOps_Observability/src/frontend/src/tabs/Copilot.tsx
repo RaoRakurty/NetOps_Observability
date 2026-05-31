@@ -5,6 +5,7 @@ import {
   CopilotChatResponse,
   AnthropicChatResponse,
   OpenAIChatResponse,
+  CopilotConfig,
 } from "../services/api";
 import { BRAND } from "../brand";
 
@@ -24,12 +25,38 @@ export default function Copilot() {
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  // Runtime provider/model config (admin-configurable; key stays server-side).
+  const [cfg, setCfg] = useState<CopilotConfig | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [savingCfg, setSavingCfg] = useState(false);
+
   useEffect(() => {
     api
       .credentials()
       .then((c) => setEnabled(Boolean(c?.copilot)))
       .catch(() => setEnabled(false));
+    api.copilotConfig().then(setCfg).catch(() => setCfg(null));
   }, []);
+
+  const saveCfg = async () => {
+    if (!cfg) return;
+    setSavingCfg(true);
+    setError(null);
+    try {
+      const saved = await api.setCopilotConfig({
+        provider: cfg.provider,
+        model: cfg.model,
+        system: cfg.system,
+      });
+      setCfg((c) => ({ ...(c ?? saved), ...saved }));
+      setShowSettings(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSavingCfg(false);
+    }
+  };
+  const modelChoices = cfg?.model_suggestions?.[cfg.provider] ?? [];
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -93,7 +120,94 @@ export default function Copilot() {
   return (
     <>
       <div className="card" style={{ display: "flex", flexDirection: "column", height: "65vh" }}>
-        <h2>{BRAND} Copilot</h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ margin: 0 }}>{BRAND} Copilot</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {cfg && (
+              <span
+                style={{ color: "var(--muted)", fontSize: 11 }}
+                title={cfg.key_present ? "API key configured" : "No API key set — assistant is dormant"}
+              >
+                {cfg.provider} · {cfg.model}{" "}
+                <span className={`badge ${cfg.feature_enabled && cfg.key_present ? "good" : "warn"}`}>
+                  {!cfg.feature_enabled ? "disabled" : cfg.key_present ? "ready" : "no key"}
+                </span>
+              </span>
+            )}
+            <button type="button" onClick={() => setShowSettings((v) => !v)} title="Assistant settings">
+              ⚙
+            </button>
+          </div>
+        </div>
+
+        {showSettings && cfg && (
+          <div
+            style={{
+              margin: "10px 0",
+              padding: 12,
+              border: "1px solid var(--panel-border)",
+              borderRadius: 8,
+              background: "var(--bg)",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Assistant settings</h3>
+            <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
+              Runs on Claude by default. The API key is held server-side (
+              <code>COPILOT_API_KEY</code>) and never shown here.
+            </p>
+            <div style={{ display: "grid", gap: 10, maxWidth: 460 }}>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span style={{ color: "var(--muted)", fontSize: 11 }}>Provider</span>
+                <select
+                  value={cfg.provider}
+                  onChange={(e) => {
+                    const provider = e.target.value;
+                    const sugg = cfg.model_suggestions?.[provider] ?? [];
+                    setCfg({ ...cfg, provider, model: sugg[0] ?? cfg.model });
+                  }}
+                >
+                  {(cfg.providers ?? ["anthropic", "openai"]).map((p) => (
+                    <option key={p} value={p}>
+                      {p === "anthropic" ? "Anthropic (Claude)" : p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span style={{ color: "var(--muted)", fontSize: 11 }}>Model</span>
+                <input
+                  list="copilot-models"
+                  value={cfg.model}
+                  onChange={(e) => setCfg({ ...cfg, model: e.target.value })}
+                  placeholder="model id"
+                />
+                <datalist id="copilot-models">
+                  {modelChoices.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </label>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span style={{ color: "var(--muted)", fontSize: 11 }}>System prompt override (optional)</span>
+                <textarea
+                  rows={3}
+                  value={cfg.system ?? ""}
+                  onChange={(e) => setCfg({ ...cfg, system: e.target.value })}
+                  placeholder="Leave blank to use the built-in NetOps system prompt."
+                  style={{ fontFamily: "inherit", fontSize: 13 }}
+                />
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={saveCfg} disabled={savingCfg}>
+                  {savingCfg ? "Saving…" : "Save settings"}
+                </button>
+                <button type="button" onClick={() => setShowSettings(false)} disabled={savingCfg}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div
           style={{
             flex: 1,

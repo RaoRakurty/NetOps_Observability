@@ -57,6 +57,18 @@ transforms:
       } else {
         .proto = to_int(.proto) ?? 0
       }
+      # Preserve the flow protocol family (goflow2 `type`) so the UI can tell
+      # NetFlow vs IPFIX vs sFlow apart — they otherwise share one schema.
+      ft = to_string(.type) ?? ""
+      if starts_with(ft, "NETFLOW") {
+        .flow_type = "netflow"
+      } else if ft == "IPFIX" {
+        .flow_type = "ipfix"
+      } else if starts_with(ft, "SFLOW") {
+        .flow_type = "sflow"
+      } else {
+        .flow_type = "unknown"
+      }
 
 sinks:
   # Application + container logs → OpenSearch

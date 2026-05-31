@@ -1,0 +1,37 @@
+# Nokia SR Linux — sFlow export to the NetOps collector.
+# Apply to: spine1 (source-address 172.40.40.11), spine2 (172.40.40.12).
+#
+# Live audit (2026-05-31) showed sFlow ALREADY configured:
+#     system sflow admin-state enable
+#     system sflow sample-rate 1000
+#     system sflow collector 1 collector-address 172.40.40.122 port 6343
+#     interface ethernet-1/{1..4,10} sflow admin-state enable
+# ...yet ZERO sFlow reaches goflow2. The most likely cause is that the collector
+# entry has no network-instance / source-address, so SRL tries to send the
+# samples out the *default* network-instance, which has no route to the mgmt
+# collector. Pin it to the mgmt netinst and the mgmt source IP:
+
+enter candidate
+    # --- the fix: bind the sFlow collector to the mgmt VRF + source IP ---
+    set / system sflow collector 1 collector-address 172.40.40.122
+    set / system sflow collector 1 port 6343
+    set / system sflow collector 1 network-instance mgmt
+    set / system sflow collector 1 source-address 172.40.40.11   # spine2 => 172.40.40.12
+
+    # (already present — included for idempotency)
+    set / system sflow admin-state enable
+    set / system sflow sample-rate 1000
+commit save
+
+# Verify on-box:
+#   info from state system sflow collector 1
+#   tools system sflow            (some releases expose counters)
+#
+# NOTE on sampler_address: SR Linux in containerlab uses a software datapath;
+# with no traffic on the fabric links you may only get periodic counter-samples.
+# Generate test traffic between dc-host and lan-host to force flow-samples.
+#
+# NOTE on docker NAT: goflow2 is a container on .122 with the UDP ports
+# published. Inbound DNAT preserves the source IP, so the sampler should show
+# 172.40.40.11/.12. If it instead shows 172.18.0.1 (the bridge gateway),
+# disable masquerade hairpin for these ports or run goflow2 with host networking.

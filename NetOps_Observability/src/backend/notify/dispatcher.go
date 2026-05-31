@@ -6,6 +6,7 @@ package notify
 
 import (
 	"log"
+	"strings"
 	"sync"
 
 	"netops/backend/models"
@@ -50,4 +51,50 @@ func (d *Dispatcher) Dispatch(a models.Alert) {
 			}
 		}(c)
 	}
+}
+
+// Names returns the names of all registered channels — lets the UI present the
+// delivery destinations actually configured (so "Send now" only offers real
+// channels rather than a hard-coded list).
+func (d *Dispatcher) Names() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]string, 0, len(d.channels))
+	for _, c := range d.channels {
+		out = append(out, c.Name())
+	}
+	return out
+}
+
+// DispatchTo sends the alert only to the named channels (case-insensitive match
+// on Channel.Name). An empty/nil selection falls back to Dispatch (all
+// channels). Returns the number of channels the alert was dispatched to, so
+// callers (e.g. "Send now") can report "delivered to N destination(s)".
+func (d *Dispatcher) DispatchTo(a models.Alert, names []string) int {
+	if len(names) == 0 {
+		d.Dispatch(a)
+		return len(d.Names())
+	}
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	d.mu.RLock()
+	channels := make([]Channel, len(d.channels))
+	copy(channels, d.channels)
+	d.mu.RUnlock()
+
+	sent := 0
+	for _, c := range channels {
+		if !want[strings.ToLower(c.Name())] {
+			continue
+		}
+		sent++
+		go func(c Channel) {
+			if err := c.Send(a); err != nil {
+				log.Printf("notify %s: %v", c.Name(), err)
+			}
+		}(c)
+	}
+	return sent
 }

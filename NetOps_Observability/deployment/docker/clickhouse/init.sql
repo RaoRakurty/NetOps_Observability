@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS netops.flows
     src_as          UInt32,
     dst_as          UInt32,
     sampling_rate   UInt32,
-    vlan_id         UInt16
+    vlan_id         UInt16,
+    flow_type       LowCardinality(String) DEFAULT 'unknown'  -- netflow | ipfix | sflow
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)

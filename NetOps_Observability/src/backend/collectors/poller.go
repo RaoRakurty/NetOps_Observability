@@ -88,6 +88,27 @@ func byProtocol(all TargetFunc, proto string) TargetFunc {
 	}
 }
 
+// byProtocolVersion narrows byProtocol further to a single SNMP version class:
+// v3 == true keeps only USM v3 targets (SNMPVersion 3); v3 == false keeps the
+// community-string versions (SNMPVersion 0/1/2). This lets the v2c and v3 SNMP
+// collectors report independent target/reachable counts in the Collectors view.
+func byProtocolVersion(all TargetFunc, proto string, v3 bool) TargetFunc {
+	base := byProtocol(all, proto)
+	if base == nil {
+		return nil
+	}
+	return func() []Target {
+		var out []Target
+		for _, t := range base() {
+			isV3 := t.SNMPVersion == 3
+			if isV3 == v3 {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+}
+
 // probeFunc checks one target; nil error means reachable/healthy. The dialable
 // addr (host:port) is precomputed; the full Target carries per-device details
 // like the SNMP community.
@@ -203,6 +224,48 @@ func tcpProbe(ctx context.Context, addr string, _ Target) error {
 		return err
 	}
 	return c.Close()
+}
+
+// sshBannerProbe dials the NETCONF-over-SSH port and reads the server's SSH
+// identification string. Per RFC 4253 §4.2 an SSH server sends "SSH-2.0-<impl>"
+// (or "SSH-1.99-…") in cleartext immediately on connect, before any key exchange
+// or authentication — so we can confirm a real NETCONF/SSH transport is
+// answering without credentials. This is a materially stronger signal than a
+// bare TCP connect (which a firewall or half-open port would also satisfy) and
+// is exactly how credential-less monitors (Nagios/Zabbix) verify NETCONF/830.
+//
+// A genuine *active NETCONF session count* would need the authenticated
+// RFC 6022 ietf-netconf-monitoring /netconf-state/sessions <get> — that requires
+// a full SSH client (golang.org/x/crypto/ssh), which is outside the backend's
+// stdlib-only budget; the banner probe is the faithful stdlib-only layer.
+func sshBannerProbe(ctx context.Context, addr string, _ Target) error {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	if dl, ok := ctx.Deadline(); ok {
+		_ = c.SetReadDeadline(dl)
+	} else {
+		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	}
+
+	// The identification string is CRLF-terminated and capped at 255 bytes
+	// (RFC 4253). Read a bounded chunk and look for the "SSH-" prefix; servers
+	// may emit banner/comment lines first, so scan the lines we got.
+	buf := make([]byte, 512)
+	n, err := c.Read(buf)
+	if n == 0 && err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(buf[:n]), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "SSH-") {
+			return nil // a real SSH/NETCONF transport answered
+		}
+	}
+	return fmt.Errorf("no SSH identification banner from %s", addr)
 }
 
 // snmpProbe does a real SNMP GET of sysUpTime to prove reachability, using the

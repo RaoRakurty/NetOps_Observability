@@ -118,3 +118,27 @@ func TestWithPort(t *testing.T) {
 		t.Errorf("withPort existing-port: got %q", got)
 	}
 }
+
+// byProtocolVersion underpins the SNMP v2c/v3 collector split: v3==false keeps
+// the community versions (SNMPVersion 0/1/2), v3==true keeps USM v3 only, and
+// the protocol filter still applies (a gnmi device never leaks in).
+func TestByProtocolVersion(t *testing.T) {
+	all := func() []Target {
+		return []Target{
+			{ID: "v2c-a", Protocol: "snmp", SNMPVersion: 2},
+			{ID: "v2c-blank", Protocol: "snmp", SNMPVersion: 0}, // 0 => community v2c
+			{ID: "v3-a", Protocol: "snmp", SNMPVersion: 3},
+			{ID: "gnmi", Protocol: "gnmi", SNMPVersion: 3}, // wrong protocol, excluded
+		}
+	}
+	if got := byProtocolVersion(all, "snmp", false)(); len(got) != 2 ||
+		got[0].ID != "v2c-a" || got[1].ID != "v2c-blank" {
+		t.Errorf("v2c filter: got %d targets %v", len(got), got)
+	}
+	if got := byProtocolVersion(all, "snmp", true)(); len(got) != 1 || got[0].ID != "v3-a" {
+		t.Errorf("v3 filter: got %d targets %v", len(got), got)
+	}
+	if byProtocolVersion(nil, "snmp", true) != nil {
+		t.Error("byProtocolVersion(nil,...) should return nil")
+	}
+}

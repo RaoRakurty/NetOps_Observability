@@ -1,6 +1,21 @@
 import { useEffect, useState } from "react";
 import { api, CollectorStatus } from "../services/api";
 
+// Friendly display names for collector ids. Unknown ids fall back to the raw
+// name uppercased, so new collectors still render sensibly.
+const COLLECTOR_LABELS: Record<string, string> = {
+  snmpv2c: "SNMP v2c",
+  snmpv3: "SNMP v3",
+  snmpmetrics: "SNMP metrics",
+  gnmi: "gNMI",
+  netconf: "NETCONF",
+  tunnels: "Tunnels",
+};
+
+function collectorLabel(name: string): string {
+  return COLLECTOR_LABELS[name] ?? name.toUpperCase();
+}
+
 // Heat class for a poll-duration cell: fast=ok, sluggish=warn, slow=bad.
 function pollClass(ms?: number): string {
   if (ms == null) return "";
@@ -114,7 +129,7 @@ export default function Collectors() {
           <tbody>
             {items.map((c) => (
               <tr key={c.name} className="dt-row">
-                <td>{c.name}</td>
+                <td>{collectorLabel(c.name)}</td>
                 <td>
                   <span className={`badge ${c.enabled ? "good" : "warn"}`}>
                     {c.enabled ? "on" : "off"}

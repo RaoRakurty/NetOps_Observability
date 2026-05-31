@@ -1,0 +1,25 @@
+# Synthetic flow generator overlay — emits NetFlow v5 / IPFIX / sFlow to goflow2.
+#
+# The clos-multivendor fabric is virtual (cEOS/SR Linux have no ASIC), so its
+# sFlow yields only counter-samples — goflow2 can't turn those into flow rows.
+# This sidecar stands in for real exporters so the Flows tab has live, realistic
+# NetFlow/IPFIX/sFlow data. sFlow records carry per-device agent IPs (172.40.40.x).
+#
+# Start:  docker compose -f docker-compose.yml -f docker-compose.flowgen.yml up -d flowgen
+# Stop:   docker compose -f docker-compose.yml -f docker-compose.flowgen.yml stop flowgen
+# Logs:   docker logs -f netops-flowgen-1
+#
+# Pure stdlib Python (no deps); the script lives in scripts/lab/flowgen/flowgen.py.
+
+services:
+  flowgen:
+    image: python:3.12-slim
+    container_name: netops-flowgen-1
+    restart: unless-stopped
+    depends_on: [goflow2]
+    # share goflow2's network namespace -> send straight to its listeners on
+    # localhost, no dependency on the stack's network name.
+    network_mode: "service:goflow2"
+    volumes:
+      - ../../scripts/lab/flowgen/flowgen.py:/flowgen.py:ro
+    command: ["python3", "/flowgen.py", "--host", "127.0.0.1", "--eps", "30"]

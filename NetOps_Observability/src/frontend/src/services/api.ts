@@ -144,6 +144,18 @@ export type OpenAIChatResponse = {
 };
 export type CopilotChatResponse = AnthropicChatResponse | OpenAIChatResponse;
 
+// Runtime assistant config (admin). The API key stays server-side and is never
+// returned — GET reports key_present instead of the secret.
+export type CopilotConfig = {
+  provider: string; // "anthropic" | "openai"
+  model: string;
+  system?: string;
+  feature_enabled?: boolean;
+  key_present?: boolean;
+  providers?: string[];
+  model_suggestions?: Record<string, string[]>;
+};
+
 export const TOKEN_KEY = "netops_token";
 export const REFRESH_KEY = "netops_refresh";
 
@@ -360,6 +372,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ messages, system }),
     }),
+  // Runtime assistant config (admin): provider/model picker. Key never returned.
+  copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
+  setCopilotConfig: (cfg: { provider: string; model: string; system?: string }) =>
+    request<CopilotConfig>("/api/copilot/config", {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),
@@ -392,10 +411,15 @@ export const api = {
   // Reports — saved objects (type=report) delivered on a schedule by the
   // server-side scheduler via the notify dispatcher.
   reportRuns: () => request<Record<string, ReportRun>>("/api/reports/runs"),
-  runReport: (id: string) =>
+  // The notify channels actually configured, so "Send now" offers only real
+  // delivery destinations.
+  reportChannels: () => request<string[]>("/api/reports/channels"),
+  // Deliver a report now. channels optionally restricts this one send to named
+  // notify channels; omitted/empty => all configured channels.
+  runReport: (id: string, channels?: string[]) =>
     request<ReportRun>("/api/reports/run", {
       method: "POST",
-      body: JSON.stringify({ id }),
+      body: JSON.stringify(channels && channels.length ? { id, channels } : { id }),
     }),
 
   // ----- Identity & access (admin) -----
@@ -521,13 +545,23 @@ export type ApiKey = {
   revoked_at?: string;
 };
 
-export type ReportKind = "alerts_summary" | "device_inventory" | "health_summary";
+export type ReportKind =
+  | "alerts_summary"
+  | "device_inventory"
+  | "health_summary"
+  | "wan_utilization"
+  | "security_threats"
+  | "device_utilization"
+  | "latency_jitter_sla";
 export type ReportBody = {
   kind: ReportKind;
   interval_minutes: number;
   severity: string;
   enabled: boolean;
   description?: string;
+  // Optional delivery-channel restriction (email, slack, pagerduty, sns, twilio…).
+  // Empty/undefined => all configured channels.
+  channels?: string[];
 };
 export type ReportRun = {
   last_run?: string;

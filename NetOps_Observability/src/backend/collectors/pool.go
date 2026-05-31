@@ -49,7 +49,8 @@ func NewPool(targets TargetFunc) *Pool {
 		collectors: make(map[string]Collector),
 		enabled:    make(map[string]bool),
 	}
-	p.register(NewSNMP(targets))
+	p.register(NewSNMPv2c(targets))
+	p.register(NewSNMPv3(targets))
 	p.register(NewGNMI(targets))
 	p.register(NewNETCONF(targets))
 	p.register(NewTunnels(targets))
