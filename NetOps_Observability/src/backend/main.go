@@ -85,6 +85,11 @@ func newServer() *server {
 					community = c.Community
 				}
 			}
+			// Fallback for static inventory: a per-device `snmp_community` label
+			// (lets devices.yaml set a community without a full credential profile).
+			if community == "" {
+				community = dev.Labels["snmp_community"]
+			}
 			out = append(out, collectors.Target{
 				ID:        dev.ID,
 				Address:   dev.Address,

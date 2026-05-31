@@ -70,6 +70,7 @@ type publicSNMPCredential struct {
 	Timeout       int       `json:"timeout_ms"`
 	Retries       int       `json:"retries"`
 	HasCommunity  bool      `json:"has_community"`
+	Community     string    `json:"community,omitempty"` // v1/v2c RO community — shown so operators can verify it (v3 USM keys stay masked below)
 	SecurityName  string    `json:"security_name,omitempty"`
 	SecurityLevel string    `json:"security_level,omitempty"`
 	AuthProtocol  string    `json:"auth_protocol,omitempty"`
@@ -83,7 +84,7 @@ type publicSNMPCredential struct {
 func (c SNMPCredential) public() publicSNMPCredential {
 	return publicSNMPCredential{
 		ID: c.ID, Name: c.Name, Version: c.Version, Port: c.Port, Timeout: c.Timeout, Retries: c.Retries,
-		HasCommunity: c.Community != "", SecurityName: c.SecurityName, SecurityLevel: c.SecurityLevel,
+		HasCommunity: c.Community != "", Community: c.Community, SecurityName: c.SecurityName, SecurityLevel: c.SecurityLevel,
 		AuthProtocol: c.AuthProtocol, HasAuthKey: c.AuthKey != "", PrivProtocol: c.PrivProtocol,
 		HasPrivKey: c.PrivKey != "", Context: c.Context, CreatedAt: c.CreatedAt,
 	}

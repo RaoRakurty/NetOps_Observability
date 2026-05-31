@@ -62,9 +62,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if c.targets != nil {
 		targets = c.targets()
 	}
-	community := os.Getenv("SNMP_COMMUNITY")
-	if community == "" {
-		community = "public"
+	envCommunity := os.Getenv("SNMP_COMMUNITY")
+	if envCommunity == "" {
+		envCommunity = "public"
 	}
 
 	start := time.Now()
@@ -75,6 +75,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 
 	for _, tg := range targets {
 		addr := withPort(tg.Address, 161)
+		// Per-device community (resolved from the device's credential profile /
+		// label by the target builder); fall back to the global SNMP_COMMUNITY.
+		// Essential for a multi-vendor fleet where each device has its own RO
+		// community (cisco-public, arista-public, srl-public, …).
+		community := tg.Community
+		if community == "" {
+			community = envCommunity
+		}
 		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
 		ent, entOK := 0, false

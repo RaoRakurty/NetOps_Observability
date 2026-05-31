@@ -1,55 +1,107 @@
-# Static device inventory.
-# Devices listed here are monitored alongside anything auto-discovered
-# from Netbox or SNMP scanning. Set `override: true` to make a static
-# entry take precedence over any discovered metadata with the same id.
-
-# Each collector polls only the devices whose `preferred_protocol` matches it
-# (snmp/gnmi/netconf); a device with no preferred_protocol is polled by SNMP.
-# These lab entries have placeholder addresses, so they appear as targets but
-# won't be reachable until pointed at real devices (or a simulator). Replace
-# addresses/credentials with your own.
-devices:
-  edge-rtr-01:
-    address: 10.20.0.1
-    preferred_protocol: snmp
-    labels:
-      site: lab
-      role: edge
-  edge-rtr-02:
-    address: 10.20.0.2
-    preferred_protocol: snmp
-    labels:
-      site: lab
-      role: edge
-  core-sw-01:
-    address: 10.20.1.1
-    preferred_protocol: gnmi
-    labels:
-      site: lab
-      role: core
-  dist-sw-03:
-    address: 10.20.2.3
-    preferred_protocol: netconf
-    labels:
-      site: lab
-      role: distribution
-  fw-edge-01:
-    address: 10.20.3.1
-    preferred_protocol: netconf
-    labels:
-      site: lab
-      role: firewall
-
-# Example (uncomment and adapt):
+# Static device inventory — containerlab "clos-multivendor" fabric (172.40.40.0/24).
 #
-# devices:
-#   lab-router-01:
-#     address: 172.16.0.1
-#     preferred_protocol: snmp
-#     credential_ref: lab-snmp-v2c
-#     labels:
-#       site: lab
-#       environment: lab
-#     override: true
-#     metadata:
-#       notes: "Lab device for testing"
+# SNMP community/credentials are configured in the GUI (Administration → SNMP
+# Credentials) as profiles; each device references one via `credential_ref`
+# (the slug of the profile name, e.g. "arista-v2c"). The `snmp_community` label
+# is a fallback if no profile is assigned. Reachability requires the stack host
+# (.122) to route 172.40.40.0/24 via .120.
+devices:
+  spine1:
+    address: 172.40.40.11
+    preferred_protocol: snmp
+    vendor: nokia
+    credential_ref: nokia-v2c
+    labels:
+      site: clos-lab
+      role: spine
+      snmp_community: srl-public
+  spine2:
+    address: 172.40.40.12
+    preferred_protocol: snmp
+    vendor: nokia
+    credential_ref: nokia-v2c
+    labels:
+      site: clos-lab
+      role: spine
+      snmp_community: srl-public
+  leaf1:
+    address: 172.40.40.21
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v2c
+    labels:
+      site: clos-lab
+      role: leaf
+      snmp_community: arista-public
+  leaf2:
+    address: 172.40.40.22
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v2c
+    labels:
+      site: clos-lab
+      role: leaf
+      snmp_community: arista-public
+  leaf3:
+    address: 172.40.40.23
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v2c
+    labels:
+      site: clos-lab
+      role: leaf
+      snmp_community: arista-public
+  leaf4:
+    address: 172.40.40.24
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v2c
+    labels:
+      site: clos-lab
+      role: leaf
+      snmp_community: arista-public
+  wan-r1:
+    address: 172.40.40.31
+    preferred_protocol: snmp
+    vendor: juniper
+    credential_ref: juniper-v2c
+    labels:
+      site: clos-lab
+      role: wan
+      snmp_community: juniper-public
+  wan-r2:
+    address: 172.40.40.32
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v2c
+    labels:
+      site: clos-lab
+      role: wan
+      snmp_community: arista-public
+  lan-sw1:
+    address: 172.40.40.51
+    preferred_protocol: snmp
+    vendor: cisco
+    credential_ref: cisco-v2c
+    labels:
+      site: clos-lab
+      role: lan
+      snmp_community: cisco-public
+  lan-sw2:
+    address: 172.40.40.52
+    preferred_protocol: snmp
+    vendor: cisco
+    credential_ref: cisco-v2c
+    labels:
+      site: clos-lab
+      role: lan
+      snmp_community: cisco-public
+  dmz-fw:
+    address: 172.40.40.41
+    preferred_protocol: snmp
+    vendor: fortinet
+    credential_ref: fortinet-v2c
+    labels:
+      site: clos-lab
+      role: firewall
+      snmp_community: fortinet-public

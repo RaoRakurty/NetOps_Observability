@@ -64,13 +64,14 @@ export default function SnmpCredentials() {
         {err && <p style={{ color: "var(--bad)", fontSize: "var(--fs-meta)" }}>{err}</p>}
         <table>
           <thead>
-            <tr><th>Name</th><th>Version</th><th>Port</th><th>Auth</th><th>Privacy</th><th>Secrets</th><th></th></tr>
+            <tr><th>Name</th><th>Version</th><th>Community</th><th>Port</th><th>Auth</th><th>Privacy</th><th>Secrets</th><th></th></tr>
           </thead>
           <tbody>
             {creds.map((c) => (
               <tr key={c.id}>
                 <td style={{ fontWeight: 600 }}>{c.name}</td>
                 <td><span className="badge">{c.version}</span></td>
+                <td className="mono">{c.version === "v3" ? "—" : (c.community || (c.has_community ? "••••••" : "—"))}</td>
                 <td>{c.port}</td>
                 <td>{c.version === "v3" ? `${c.security_level}${c.auth_protocol ? " · " + c.auth_protocol : ""}` : "—"}</td>
                 <td>{c.version === "v3" ? (c.priv_protocol || "—") : "—"}</td>
@@ -85,7 +86,7 @@ export default function SnmpCredentials() {
                 </td>
               </tr>
             ))}
-            {creds.length === 0 && <tr><td colSpan={7} className="panel-empty">No SNMP profiles yet — devices fall back to the global SNMP_COMMUNITY.</td></tr>}
+            {creds.length === 0 && <tr><td colSpan={8} className="panel-empty">No SNMP profiles yet — devices fall back to the global SNMP_COMMUNITY.</td></tr>}
           </tbody>
         </table>
       </div>

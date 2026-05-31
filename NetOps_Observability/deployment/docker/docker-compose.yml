@@ -379,6 +379,8 @@ services:
       ENABLE_SNMP_DISCOVERY: ${ENABLE_SNMP_DISCOVERY:-true}
       SNMP_CIDR_RANGES: ${SNMP_CIDR_RANGES:-10.0.0.0/8}
       ENABLE_SNMP_COLLECTION: ${ENABLE_SNMP_COLLECTION:-true}
+      # Profile-driven multivendor stats poller — emits device_cpu_percent etc.
+      ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
       # Notification channels
