@@ -162,6 +162,22 @@ services:
     networks: [netops]
     restart: *restart
 
+  # gnmic — gNMI dial-in telemetry collector. Subscribes to the multivendor
+  # fabric (Arista OpenConfig, Nokia SR Linux native) and remote-writes the
+  # streamed samples to VictoriaMetrics. Device gNMI passwords are env-injected
+  # (lab defaults below; override in .env). Config: ./gnmic/gnmic.yaml.
+  gnmic:
+    image: ghcr.io/openconfig/gnmic:latest
+    command: ["subscribe", "--config", "/app/gnmic.yaml"]
+    environment:
+      SRL_GNMI_PASS: ${SRL_GNMI_PASS:-NokiaSrl1!}
+      EOS_GNMI_PASS: ${EOS_GNMI_PASS:-admin}
+    volumes:
+      - ./gnmic/gnmic.yaml:/app/gnmic.yaml:ro
+    depends_on: [victoria]
+    networks: [netops]
+    restart: *restart
+
   # goflow2 — edge collector for NetFlow v5/v9, IPFIX, sFlow. Decodes
   # binary protocols into JSON, writes to stdout. vector-aggregator
   # picks them up via docker_logs.
