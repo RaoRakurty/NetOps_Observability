@@ -214,22 +214,36 @@ function TrafficInOut() {
   if (inS.length === 0 && outS.length === 0)
     return <Empty msg="No interface throughput yet (enable SNMP metrics)." />;
   return (
-    <ReactECharts
-      style={{ height: 220 }}
-      option={{
-        ...chartBase,
-        grid: { left: 56, right: 12, top: 16, bottom: 24 },
-        tooltip: { ...chartBase.tooltip, trigger: "axis" },
-        legend: { ...chartBase.legend, top: 0, data: ["In", "Out"] },
-        xAxis: { type: "time", ...axisStyle },
-        yAxis: { type: "value", name: "bps", ...axisStyle },
-        series: [
-          { name: "In", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(0), width: 2 }, itemStyle: { color: paletteColor(0) }, areaStyle: { color: areaGradient(0) }, data: inS },
-          { name: "Out", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(2), width: 2 }, itemStyle: { color: paletteColor(2) }, areaStyle: { color: areaGradient(2) }, data: outS },
-        ],
-      }}
-    />
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ color: "var(--muted)", fontSize: "var(--fs-meta)", marginBottom: 2 }}>
+        Aggregate of all interfaces across all devices (Σ, bit/s)
+      </div>
+      <ReactECharts
+        style={{ height: 220 }}
+        option={{
+          ...chartBase,
+          grid: { left: 64, right: 12, top: 16, bottom: 24 },
+          tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtBps(v) },
+          legend: { ...chartBase.legend, top: 0, data: ["In", "Out"] },
+          xAxis: { type: "time", ...axisStyle },
+          yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBps(v) } },
+          series: [
+            { name: "In", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(0), width: 2 }, itemStyle: { color: paletteColor(0) }, areaStyle: { color: areaGradient(0) }, data: inS },
+            { name: "Out", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(2), width: 2 }, itemStyle: { color: paletteColor(2) }, areaStyle: { color: areaGradient(2) }, data: outS },
+          ],
+        }}
+      />
+    </div>
   );
+}
+
+// fmtBps renders a bit/s value with industry-standard SI scaling.
+function fmtBps(v: number): string {
+  if (!isFinite(v) || v <= 0) return "0 bps";
+  const u = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"];
+  let i = 0, n = v;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+  return `${n.toFixed(n < 10 && i > 0 ? 2 : 0)} ${u[i]}`;
 }
 
 function TopHosts() {

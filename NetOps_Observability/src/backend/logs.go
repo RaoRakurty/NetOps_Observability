@@ -115,9 +115,14 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// Compose a query string DSL body. We use query_string so callers
 	// can pass either bare text ("error") or full Lucene syntax
 	// ("severity:err AND host:router-01").
+	// All netops-* indices (applogs/syslog/flows) timestamp their docs with the
+	// field `timestamp` (Vector's default), not the ECS `@timestamp`. Sort and
+	// range-filter on that. unmapped_type keeps the sort from failing on any
+	// index whose mapping happens to lack the field rather than erroring the
+	// whole multi-index search.
 	body := map[string]any{
 		"size": req.Size,
-		"sort": []any{map[string]any{"@timestamp": map[string]string{"order": "desc"}}},
+		"sort": []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must": []any{
@@ -131,7 +136,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 				"filter": []any{
 					map[string]any{
 						"range": map[string]any{
-							"@timestamp": map[string]string{
+							"timestamp": map[string]string{
 								"gte": start.Format(time.RFC3339),
 								"lte": end.Format(time.RFC3339),
 							},

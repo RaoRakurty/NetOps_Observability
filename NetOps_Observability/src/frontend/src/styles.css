@@ -679,6 +679,28 @@ tbody tr.dt-row:hover { background: var(--hover); }
 .scope-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .scope-chip input { margin: 0; }
 
+/* Quick-pick chips (Metrics Explorer catalog & similar). */
+.chip {
+  padding: 4px 11px; font-size: var(--fs-meta); border-radius: 999px;
+  border: 1px solid var(--panel-border); background: var(--bg); color: var(--fg);
+  cursor: pointer; white-space: nowrap; transition: border-color .12s, color .12s, background .12s;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+
+/* Elegant default <select> — custom caret, consistent with inputs, smooth focus. */
+select {
+  padding: 7px 30px 7px 10px; font-size: var(--fs-sm);
+  border: 1px solid var(--panel-border); border-radius: var(--r-2);
+  background-color: var(--bg); color: var(--fg); cursor: pointer;
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238a93a6' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+  transition: border-color .12s, box-shadow .12s;
+}
+select:hover { border-color: var(--accent); }
+select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
 /* SNMP credential form — responsive 3-col grid of labelled fields. */
 .snmp-form { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); }
 .snmp-form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-meta); color: var(--muted); }

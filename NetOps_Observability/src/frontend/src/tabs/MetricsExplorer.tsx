@@ -3,40 +3,106 @@ import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../services/api";
 import { chartBase, axisStyle, paletteColor } from "../theme/charts";
 
-// Native Metrics Explorer — a Grafana-style PromQL surface that renders
-// charts in-app (ECharts) instead of iframing Prometheus. Queries the
-// Go /api/metrics/* proxy, governed by the shell's global time range.
+// Native Metrics Explorer — a Grafana/Datadog-style surface that renders charts
+// in-app (ECharts) over the Go /api/metrics/* proxy. Instead of leading with
+// Prometheus self-metrics, it presents a curated, categorized catalog of the
+// network telemetry the stack actually collects (SNMP device health, interface
+// throughput, gNMI streaming, collector health) — the way Datadog's Metric
+// Explorer and Zabbix's Latest Data front the operator with real signals.
 
 type Props = { rangeMinutes?: number };
 
-const SUGGESTIONS = [
-  "go_goroutines",
-  "rate(go_memstats_alloc_bytes_total[5m])",
-  "process_resident_memory_bytes",
-  "up",
+type CatalogItem = { label: string; q: string; base: string; unit?: string };
+type CatalogGroup = { group: string; items: CatalogItem[] };
+
+// Curated catalog. `base` is the underlying metric name used to check whether
+// the series exists in the store (so we never show a dead quick-pick); `q` is
+// the PromQL actually run. Mirrors Datadog's "pick a metric, get a graph".
+const CATALOG: CatalogGroup[] = [
+  {
+    group: "Device health (SNMP)",
+    items: [
+      { label: "CPU utilization", q: "device_cpu_percent", base: "device_cpu_percent", unit: "%" },
+      { label: "Memory used", q: "device_mem_used_kb", base: "device_mem_used_kb", unit: "KB" },
+      { label: "Memory %", q: "device_mem_percent", base: "device_mem_percent", unit: "%" },
+      { label: "Temperature", q: "device_temp_celsius", base: "device_temp_celsius", unit: "°C" },
+    ],
+  },
+  {
+    group: "Interfaces (SNMP)",
+    items: [
+      { label: "Ingress bit/s", q: "rate(device_if_in_octets[5m]) * 8", base: "device_if_in_octets", unit: "bps" },
+      { label: "Egress bit/s", q: "rate(device_if_out_octets[5m]) * 8", base: "device_if_out_octets", unit: "bps" },
+      { label: "Oper status", q: "device_if_oper_status", base: "device_if_oper_status" },
+    ],
+  },
+  {
+    group: "gNMI streaming",
+    items: [
+      { label: "gNMI ingress bit/s", q: "rate(gnmi_interfaces_interface_state_counters_in_octets[5m]) * 8", base: "gnmi_interfaces_interface_state_counters_in_octets", unit: "bps" },
+      { label: "gNMI egress bit/s", q: "rate(gnmi_interfaces_interface_state_counters_out_octets[5m]) * 8", base: "gnmi_interfaces_interface_state_counters_out_octets", unit: "bps" },
+      { label: "SR Linux CPU", q: "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant", base: "gnmi_srl_nokia_platform_platform_srl_nokia_platform_control_control_srl_nokia_platform_cpu_cpu_total_instant", unit: "%" },
+    ],
+  },
+  {
+    group: "Collector health",
+    items: [
+      { label: "Reachable targets", q: "collector_targets_reachable", base: "collector_targets_reachable" },
+      { label: "Samples / poll", q: "collector_samples", base: "collector_samples" },
+      { label: "Collector up", q: "collector_up", base: "collector_up" },
+    ],
+  },
 ];
 
+// Compact SI/unit formatter for the Y axis + tooltip.
+function fmtVal(v: number, unit?: string): string {
+  if (!isFinite(v)) return "—";
+  if (unit === "bps") {
+    const u = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"];
+    let i = 0, n = v;
+    while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+    return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+  }
+  if (unit === "KB") {
+    const u = ["KB", "MB", "GB", "TB"];
+    let i = 0, n = v;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(1)} ${u[i]}`;
+  }
+  const s = Math.abs(v) >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return unit ? `${s}${unit === "%" || unit === "°C" ? "" : " "}${unit}` : s;
+}
+
 export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
-  const [query, setQuery] = useState("go_goroutines");
+  const [query, setQuery] = useState("device_cpu_percent");
+  const [unit, setUnit] = useState<string | undefined>("%");
   const [series, setSeries] = useState<PromSeries[]>([]);
   const [names, setNames] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ran = useRef(false);
 
-  // Metric-name list for the datalist autocomplete.
   useEffect(() => {
     api.metricNames().then((r) => setNames(r?.data ?? [])).catch(() => setNames([]));
   }, []);
 
-  const run = async (q = query, minutes = rangeMinutes) => {
+  const nameSet = useMemo(() => new Set(names), [names]);
+  // Only surface catalog items whose underlying metric is actually present.
+  const groups = useMemo(
+    () => CATALOG.map((g) => ({ ...g, items: g.items.filter((it) => nameSet.size === 0 || nameSet.has(it.base)) }))
+      .filter((g) => g.items.length > 0),
+    [nameSet],
+  );
+
+  const run = async (q = query, minutes = rangeMinutes, u = unit) => {
     if (!q.trim()) return;
     setBusy(true);
     setError(null);
+    setUnit(u);
     try {
       const end = Math.floor(Date.now() / 1000);
       const start = end - minutes * 60;
-      // Aim for ~240 points across the window.
       const step = Math.max(15, Math.floor((minutes * 60) / 240));
       const r = await api.metricsQueryRange(q, start, end, step);
       if (r.status !== "success" || !r.data) throw new Error(r.error || "query failed");
@@ -49,27 +115,41 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
     }
   };
 
-  // Run on mount and whenever the global time range changes.
   useEffect(() => {
-    run(query, rangeMinutes);
+    run(query, rangeMinutes, unit);
     ran.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeMinutes]);
 
+  const pick = (it: CatalogItem) => {
+    setQuery(it.q);
+    run(it.q, rangeMinutes, it.unit);
+  };
+
   const option = useMemo(() => {
     const label = (m: Record<string, string>) => {
+      // Prefer the friendly device/source label over raw instance/job.
+      const dev = m.device || m.source || m.instance || "";
+      const iface = m.interface_name || m.index || m.interface || "";
       const name = m.__name__ ?? "value";
-      const inst = m.instance ? `{${m.instance}}` : "";
-      const job = m.job ? ` ${m.job}` : "";
-      return `${name}${job}${inst}`.trim();
+      if (dev || iface) return [dev, iface].filter(Boolean).join(" · ");
+      return name;
     };
     return {
       ...chartBase,
-      grid: { left: 56, right: 16, top: 16, bottom: 28 },
-      tooltip: { ...chartBase.tooltip, trigger: "axis" },
+      grid: { left: 64, right: 16, top: 24, bottom: 28 },
+      tooltip: {
+        ...chartBase.tooltip,
+        trigger: "axis",
+        valueFormatter: (v: number) => fmtVal(v, unit),
+      },
       legend: { ...chartBase.legend, type: "scroll", top: 0 },
       xAxis: { type: "time", ...axisStyle },
-      yAxis: { type: "value", ...axisStyle },
+      yAxis: {
+        type: "value",
+        ...axisStyle,
+        axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtVal(v, unit) },
+      },
       series: series.map((s, i) => ({
         name: label(s.metric),
         type: "line",
@@ -80,38 +160,57 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
         data: s.values.map(([t, v]) => [t * 1000, Number(v)]),
       })),
     };
-  }, [series]);
+  }, [series, unit]);
 
   return (
     <>
       <div className="card">
         <h2>Metrics Explorer</h2>
         <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-          PromQL against <code>/api/metrics/query_range</code>. Time range follows the
-          global picker. Try: {SUGGESTIONS.map((s) => <code key={s} style={{ marginRight: 8 }}>{s}</code>)}
+          Pick a metric below or write PromQL. Charts query <code>/api/metrics/query_range</code> and
+          follow the global time range.
         </p>
+
+        {/* Datadog-style categorized quick-picks of real telemetry. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          {groups.map((g) => (
+            <div key={g.group} style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, minWidth: 130 }}>
+                {g.group}
+              </span>
+              {g.items.map((it) => {
+                const active = query === it.q;
+                return (
+                  <button
+                    key={it.q}
+                    type="button"
+                    onClick={() => pick(it)}
+                    className={active ? "chip chip-active" : "chip"}
+                    title={it.q}
+                  >
+                    {it.label}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
         <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            run();
-          }}
+          onSubmit={(e) => { e.preventDefault(); run(); }}
           style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}
         >
           <input
             list="metric-names"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="PromQL, e.g. rate(go_memstats_alloc_bytes_total[5m])"
+            placeholder="PromQL, e.g. rate(device_if_in_octets[5m]) * 8"
             style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
           />
           <datalist id="metric-names">
-            {names.slice(0, 2000).map((n) => (
-              <option key={n} value={n} />
-            ))}
+            {names.slice(0, 2000).map((n) => <option key={n} value={n} />)}
           </datalist>
-          <button disabled={busy} type="submit">
-            {busy ? "Running…" : "Run"}
-          </button>
+          <button disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
         </form>
         {error && (
           <p style={{ color: "var(--bad)", marginTop: 12 }}>
@@ -121,9 +220,17 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
       </div>
 
       <div className="card">
-        <h2>{query}</h2>
+        <h2 style={{ fontFamily: "ui-monospace, monospace", fontSize: 14 }}>{query}</h2>
         {series.length === 0 ? (
-          <div className="empty">{busy ? "Loading…" : "No data for this query / range."}</div>
+          <div className="empty">
+            {busy ? "Loading…" : (
+              <>
+                No data for this query / range. Telemetry arrives every ~30–60s once collectors poll —
+                try a quick-pick above (e.g. <strong>CPU utilization</strong>) or widen the time range.
+                {names.length > 0 && <div style={{ marginTop: 6, fontSize: 12 }}>{names.length} metric names available.</div>}
+              </>
+            )}
+          </div>
         ) : (
           <ReactECharts style={{ height: 420 }} option={option} notMerge />
         )}
