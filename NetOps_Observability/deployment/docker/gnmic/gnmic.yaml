@@ -70,10 +70,12 @@ subscriptions:
     stream-mode: sample
     sample-interval: 30s
 
-  # Nokia SR Linux control-plane CPU load.
+  # Nokia SR Linux control-plane health: CPU, memory, temperature.
   srl-cpu:
     paths:
       - "/platform/control[slot=A]/cpu[index=all]/total"
+      - "/platform/control[slot=A]/memory"
+      - "/platform/control[slot=A]/temperature"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
