@@ -371,10 +371,15 @@ function Donut({ rows, unit }: { rows: { name: string; value: number }[]; unit?:
 
 // ---- flows by protocol (ClickHouse) ----------------------------------------
 
+const PROTO_NAMES: Record<string, string> = {
+  "1": "ICMP", "2": "IGMP", "6": "TCP", "17": "UDP", "47": "GRE",
+  "50": "ESP", "51": "AH", "58": "ICMPv6", "89": "OSPF", "132": "SCTP",
+};
+
 function FlowsByProto() {
   const res = usePolled(() => api.flowsByProto(3600), 30000);
-  const rows = ((res?.data as { proto: string; bytes_total: number }[]) ?? [])
-    .map((r) => ({ name: r.proto || "other", value: Number(r.bytes_total) }))
+  const rows = ((res?.data as { proto: string | number; bytes_total: number }[]) ?? [])
+    .map((r) => ({ name: PROTO_NAMES[String(r.proto)] ?? `proto ${r.proto}`, value: Number(r.bytes_total) }))
     .filter((r) => r.value > 0)
     .slice(0, 8);
   return <Donut rows={rows} unit="B" />;
