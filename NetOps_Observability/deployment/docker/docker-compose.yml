@@ -27,6 +27,17 @@ name: netops
 
 x-restart: &restart unless-stopped
 
+# Bounded container logs. goflow2/vector/telegraf stream high-volume JSON to
+# stdout; without a cap a single json log grew to 3+ GB and filled the disk,
+# tripping OpenSearch's read-only flood watermark. Cap every noisy service to
+# 150 MB (3×50 MB) of rotated logs. (For a host-wide default, also set
+# /etc/docker/daemon.json log-opts max-size/max-file.)
+x-logging: &deflog
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
 
   # =========================================================================
@@ -141,7 +152,8 @@ services:
   # forwards to vector-aggregator's syslog source.
   syslog-ng:
     image: balabit/syslog-ng:4.7.1
-    command: ["-F", "-edv"]
+    logging: *deflog
+    command: ["-F", "-e"]
     volumes:
       - ./syslog-ng/syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:ro
     ports:
@@ -155,6 +167,7 @@ services:
   # SNMP, emits InfluxDB line protocol over TCP to vector-aggregator.
   telegraf:
     image: telegraf:1.31-alpine
+    logging: *deflog
     command: ["--config", "/etc/telegraf/telegraf.conf"]
     volumes:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
@@ -183,6 +196,7 @@ services:
   # picks them up via docker_logs.
   goflow2:
     image: netsampler/goflow2:v2.2.1
+    logging: *deflog
     command:
       - "-listen"
       - "netflow://:2055,sflow://:6343,netflow://:4739"
@@ -208,6 +222,7 @@ services:
   # buffers, ships to Redpanda topics.
   vector-aggregator:
     image: timberio/vector:0.40.0-alpine
+    logging: *deflog
     command: ["--config", "/etc/vector/vector.yaml"]
     volumes:
       - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
@@ -220,6 +235,7 @@ services:
   # Router: reads Kafka topics back out and fans into the storage tier.
   vector-router:
     image: timberio/vector:0.40.0-alpine
+    logging: *deflog
     command: ["--config", "/etc/vector/vector.yaml"]
     environment:
       # ClickHouse credentials are interpolated into vector.yaml at startup.
