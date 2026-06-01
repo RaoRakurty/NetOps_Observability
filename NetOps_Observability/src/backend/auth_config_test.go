@@ -40,10 +40,11 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 		tenants:   ts,
 		refresh:   rf,
 		startedAt: time.Now().UTC(),
-		oidc:      newOIDCProvider(), // disabled (no env) -> ready()==false
 		ldap:      newLDAPConfigStore(dir + "/ldap_config.json"),
 		tacacs:    newTACACSConfigStore(dir + "/tacacs_config.json"),
 	}
+	s.oidc.Store(newOIDCProvider()) // disabled (no env) -> ready()==false
+	s.oidcCfg = newOIDCConfigStore(dir+"/oidc_config.json", s)
 	mux := http.NewServeMux()
 	s.routes(mux)
 	srv := httptest.NewServer(s.withAuth(mux))

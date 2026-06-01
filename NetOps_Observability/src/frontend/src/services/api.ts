@@ -334,6 +334,12 @@ export const api = {
     return r;
   },
 
+  // SSO/OIDC admin config (admin-gated; the client secret is write-only on the
+  // server). GET/PUT return the redacted config plus whether the provider is ready.
+  oidcConfig: () => request<{ config: OidcConfig; ready: boolean }>("/api/auth/oidc/config"),
+  saveOidcConfig: (cfg: Partial<OidcConfig> & { client_secret?: string }) =>
+    request<{ config: OidcConfig; ready: boolean }>("/api/auth/oidc/config", { method: "PUT", body: JSON.stringify(cfg) }),
+
   // Native-provider admin config (admin-gated; secrets are write-only on the server).
   ldapConfig: () => request<{ config: LdapConfig }>("/api/auth/ldap/config"),
   saveLdapConfig: (cfg: Partial<LdapConfig> & { bind_password?: string }) =>
@@ -662,6 +668,24 @@ export type SavedObject = {
 // ----- SSO / API / ITSM -----
 export type SSOProvider = { id: string; name: string; kind: "oidc" | "saml" | "ldap" | "tacacs" };
 export type SSOConfig = { enabled: boolean; providers: SSOProvider[] };
+
+// OIDC/SSO provider config (admin-gated). The client secret is write-only: the
+// server returns client_secret_set instead of the value, and a PUT that omits
+// client_secret preserves the stored one.
+export type OidcConfig = {
+  enabled: boolean;
+  issuer: string;
+  client_id: string;
+  client_secret_set: boolean;
+  scopes: string;
+  redirect_url: string;
+  post_login_url: string;
+  default_role: string;
+  default_tenant: string;
+  admin_roles: string;
+  operator_roles: string;
+  providers: string;
+};
 
 // Native (non-Keycloak) auth providers, configured at runtime via the admin UI.
 export type LdapRoleMapping = { group: string; role: string };

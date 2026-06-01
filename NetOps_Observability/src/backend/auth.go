@@ -340,12 +340,12 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		}
 		// Otherwise, if SSO is configured, accept a Keycloak-signed RS256 Bearer
 		// (service accounts / direct API clients) verified against its JWKS.
-		if s.oidc.ready() {
-			if oc, verr := s.oidc.jwks.verifyRS256(token, s.oidc.issuer, s.oidc.clientID); verr == nil {
+		if op := s.oidcProvider(); op.ready() {
+			if oc, verr := op.jwks.verifyRS256(token, op.issuer, op.clientID); verr == nil {
 				ctx := context.WithValue(r.Context(), userCtxKey, jwtClaims{
 					Sub:    firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub),
-					Role:   s.oidc.roleFor(oc),
-					Tenant: s.oidc.defaultTenant,
+					Role:   op.roleFor(oc),
+					Tenant: op.defaultTenant,
 				})
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

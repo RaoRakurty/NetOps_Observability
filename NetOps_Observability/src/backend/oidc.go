@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -92,20 +91,31 @@ func parseProviders(csv string) []ssoProviderInfo {
 // newOIDCProvider builds the SSO provider from the environment. It returns a
 // disabled provider (enabled=false) when OIDC_ENABLED!=true so the rest of the
 // app is unaffected — local accounts remain the always-available fallback.
+//
+// It is a thin wrapper over newOIDCProviderFromConfig(newOIDCConfigFromEnv()):
+// the env vars define the initial config, and the runtime overlay (oidc_config.go,
+// admin UI) rebuilds the provider from a stored oidcConfig with identical shape.
 func newOIDCProvider() *oidcProvider {
+	return newOIDCProviderFromConfig(newOIDCConfigFromEnv())
+}
+
+// newOIDCProviderFromConfig builds a live provider from an oidcConfig. The same
+// path is used for the env-derived initial provider and for every admin-driven
+// rebuild, so there is one construction path and no drift between the two.
+func newOIDCProviderFromConfig(c oidcConfig) *oidcProvider {
 	p := &oidcProvider{
-		enabled:       os.Getenv("OIDC_ENABLED") == "true",
-		clientID:      os.Getenv("OIDC_CLIENT_ID"),
-		clientSecret:  os.Getenv("OIDC_CLIENT_SECRET"),
-		scopes:        envOr("OIDC_SCOPES", "openid email profile"),
-		issuer:        strings.TrimRight(os.Getenv("OIDC_ISSUER"), "/"),
-		redirectURL:   os.Getenv("OIDC_REDIRECT_URL"),
-		postLoginURL:  envOr("OIDC_POST_LOGIN_URL", "/"),
-		defaultRole:   envOr("OIDC_DEFAULT_ROLE", RoleReadOnly),
-		defaultTenant: envOr("OIDC_DEFAULT_TENANT", TenantGlobal),
-		adminRoles:    splitSet(envOr("OIDC_ADMIN_ROLES", "super-admin,admin,netops-admin")),
-		operatorRoles: splitSet(envOr("OIDC_OPERATOR_ROLES", "operator,netops-operator")),
-		providers:     parseProviders(os.Getenv("OIDC_PROVIDERS")),
+		enabled:       c.Enabled,
+		clientID:      strings.TrimSpace(c.ClientID),
+		clientSecret:  c.ClientSecret,
+		scopes:        firstNonEmpty(strings.TrimSpace(c.Scopes), "openid email profile"),
+		issuer:        strings.TrimRight(strings.TrimSpace(c.Issuer), "/"),
+		redirectURL:   strings.TrimSpace(c.RedirectURL),
+		postLoginURL:  firstNonEmpty(strings.TrimSpace(c.PostLoginURL), "/"),
+		defaultRole:   firstNonEmpty(strings.TrimSpace(c.DefaultRole), RoleReadOnly),
+		defaultTenant: firstNonEmpty(strings.TrimSpace(c.DefaultTenant), TenantGlobal),
+		adminRoles:    splitSet(firstNonEmpty(strings.TrimSpace(c.AdminRoles), "super-admin,admin,netops-admin")),
+		operatorRoles: splitSet(firstNonEmpty(strings.TrimSpace(c.OperatorRoles), "operator,netops-operator")),
+		providers:     parseProviders(c.Providers),
 	}
 	if p.enabled && p.issuer != "" {
 		p.jwks = newJWKSCache(p.issuer)
@@ -160,7 +170,7 @@ func (p *oidcProvider) callbackURL(r *http.Request) string {
 // handleSSOConfig (public) tells the SPA whether SSO is on and which buttons to
 // render. Never leaks the client secret.
 func (s *server) handleSSOConfig(w http.ResponseWriter, _ *http.Request) {
-	p := s.oidc
+	p := s.oidcProvider()
 	if !p.ready() {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "providers": []ssoProviderInfo{}})
 		return
@@ -173,7 +183,7 @@ const ssoStateCookie = "netops_sso_state"
 // handleSSOLogin (public) starts the Authorization Code flow: set a CSRF state
 // cookie and 302 to Keycloak. ?idp=<id> selects a federated IdP via kc_idp_hint.
 func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
-	p := s.oidc
+	p := s.oidcProvider()
 	if !p.ready() {
 		writeError(w, http.StatusNotFound, errors.New("sso not configured"))
 		return
@@ -211,7 +221,7 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 // handleSSOCallback (public) completes the flow: validate state, exchange the
 // code, verify the ID token, JIT-provision the user and re-issue our session.
 func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
-	p := s.oidc
+	p := s.oidcProvider()
 	if !p.ready() {
 		writeError(w, http.StatusNotFound, errors.New("sso not configured"))
 		return
@@ -291,7 +301,7 @@ func (s *server) ssoFail(w http.ResponseWriter, r *http.Request, msg string) {
 	logInfo("auth", "sso login failed", map[string]any{"reason": msg})
 	frag := url.Values{}
 	frag.Set("sso_error", msg)
-	http.Redirect(w, r, s.oidc.postLoginURL+"#"+frag.Encode(), http.StatusFound)
+	http.Redirect(w, r, s.oidcProvider().postLoginURL+"#"+frag.Encode(), http.StatusFound)
 }
 
 // exchange trades an authorization code for tokens at Keycloak's token endpoint

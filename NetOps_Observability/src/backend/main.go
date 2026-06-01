@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -45,7 +46,11 @@ type server struct {
 	saved      *savedStore
 	reports    *reportScheduler
 	copilotCfg *copilotConfigStore
-	oidc       *oidcProvider
+	// oidc holds the live SSO provider. It is swapped atomically when an operator
+	// saves config from the admin UI (oidc_config.go), and is read on the hot
+	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
+	oidc       atomic.Pointer[oidcProvider]
+	oidcCfg    *oidcConfigStore
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
@@ -252,7 +257,6 @@ func newServer() *server {
 		refresh:    refresh,
 		snmpCreds:  snmpCreds,
 		saved:      saved,
-		oidc:       newOIDCProvider(),
 		servicenow: serviceNow,
 		jira:       jiraConn,
 		hub:        NewHub(),
@@ -262,6 +266,11 @@ func newServer() *server {
 	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"))
 	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"))
 	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
+	// SSO/OIDC: runtime-configurable overlay over the env defaults. The store
+	// builds the initial live provider into the atomic pointer and swaps it on
+	// every admin save (see oidc_config.go).
+	srv.oidcCfg = newOIDCConfigStore(envOr("OIDC_CONFIG_FILE", "/data/oidc_config.json"), srv)
+	srv.oidc.Store(newOIDCProviderFromConfig(srv.oidcCfg.effective()))
 	return srv
 }
 
@@ -325,6 +334,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/sso/config", s.handleSSOConfig)
 	mux.HandleFunc("/api/auth/sso/login", s.handleSSOLogin)
 	mux.HandleFunc("/api/auth/sso/callback", s.handleSSOCallback)
+	mux.HandleFunc("/api/auth/oidc/config", s.handleOIDCConfig)
 	mux.HandleFunc("/api/auth/methods", s.handleAuthMethods)
 	mux.HandleFunc("/api/auth/ldap/login", s.handleLDAPLogin)
 	mux.HandleFunc("/api/auth/ldap/config", s.handleLDAPConfig)
@@ -542,6 +552,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
+
+// oidcProvider returns the current live SSO provider. It is swapped atomically
+// when an operator saves OIDC config, so readers always see a consistent,
+// fully-built provider without locking.
+func (s *server) oidcProvider() *oidcProvider { return s.oidc.Load() }
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

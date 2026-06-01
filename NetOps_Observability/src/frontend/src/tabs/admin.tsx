@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, AuthTestResult, LdapRoleMapping, TokenPolicy } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -546,10 +546,6 @@ function OpenAPIReference() {
 
 // ---- Authentication (SSO / LDAP / TACACS+) ---------------------------------
 
-const KIND_LABEL: Record<string, string> = {
-  oidc: "OAuth 2.0 / OIDC", saml: "SAML 2.0", ldap: "LDAP / Active Directory", tacacs: "TACACS+",
-};
-
 // Small status pill for a provider section.
 function ProviderBadge({ enabled }: { enabled: boolean }) {
   return <span className={`badge ${enabled ? "good" : "accent-badge"}`}>{enabled ? "Enabled" : "Disabled"}</span>;
@@ -765,41 +761,100 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
 }
 
 export function AuthenticationAdmin() {
-  const [sso] = useReload(() => api.ssoConfig());
   const [roles] = useReload(() => api.listRoles());
-  const enabled = !!sso?.enabled;
-  const providers = sso?.providers ?? [];
   const roleIds = (roles?.roles ?? []).map((r) => r.id).filter((x): x is string => !!x);
   const fallbackRoles = roleIds.length ? roleIds : ["super-admin", "operator", "read-only"];
 
   return (
     <>
-      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work. SSO (OIDC/SAML) is brokered by your identity provider; native LDAP/AD and TACACS+ authenticate directly and are configured below." />
+      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work. SSO (OIDC) is brokered by your identity provider; native LDAP/AD and TACACS+ authenticate directly. All three are configured below." />
       <div className="ov-grid">
-        <div className="panel col-6 provider-card">
+        <div className="panel col-12 provider-card">
           <div className="provider-head"><h3>Local accounts</h3><span className="badge good">Active</span></div>
           <p className="mini-meta">Username + password (PBKDF2) with JWT + rotating single-use refresh tokens. Always available as a fallback even when an external IdP is down.</p>
         </div>
-        <div className="panel col-6 provider-card">
-          <div className="provider-head"><h3>Single Sign-On (OIDC / SAML)</h3><ProviderBadge enabled={enabled} /></div>
-          <p className="mini-meta">
-            {enabled
-              ? "Federated via your identity provider; the platform validates the resulting RS256 token. Providers below appear on the login screen."
-              : "Configure your OIDC/SAML identity provider to enable. Upstream IdPs such as Okta, Azure AD or Google are supported."}
-          </p>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-            {providers.map((p) => (
-              <a key={p.id || p.kind} className="dash-btn" href={api.ssoLoginUrl(p.id)} title={KIND_LABEL[p.kind] || p.kind}>{p.name} →</a>
-            ))}
-          </div>
-        </div>
       </div>
 
+      <SsoAdminForm roleIds={fallbackRoles} />
       <LdapAdminForm roleIds={fallbackRoles} />
       <TacacsAdminForm roleIds={fallbackRoles} />
 
       <TokenPolicyForm />
     </>
+  );
+}
+
+// ---- Single Sign-On (OIDC) form ----
+// Mirrors the LDAP/TACACS forms: a kv-persisted overlay over the env defaults,
+// with the client secret write-only. Saving rebuilds the live provider on the
+// server, so SSO can be turned on without editing .env or restarting.
+function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
+  const [cfg, setCfg] = useState<OidcConfig | null>(null);
+  const [ready, setReady] = useState(false);
+  const [secret, setSecret] = useState(""); // typed client secret (only sent if non-empty)
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const redirectHint = `${window.location.origin}/api/auth/sso/callback`;
+
+  useEffect(() => {
+    api.oidcConfig()
+      .then((r) => { setCfg(r.config); setReady(r.ready); })
+      .catch((e) => setMsg((e as Error).message));
+  }, []);
+  if (!cfg) return <div className="card"><h2>Single Sign-On (OIDC)</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+
+  const set = (patch: Partial<OidcConfig>) => setCfg({ ...cfg, ...patch });
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const body: Partial<OidcConfig> & { client_secret?: string } = { ...cfg };
+      if (secret) body.client_secret = secret; // only override the secret when re-typed
+      const r = await api.saveOidcConfig(body);
+      setCfg(r.config); setReady(r.ready); setSecret(""); setMsg("Saved.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head">
+        <h2>
+          Single Sign-On (OIDC) <ProviderBadge enabled={cfg.enabled} />{" "}
+          <span className={`badge ${ready ? "good" : "accent-badge"}`}>{ready ? "Ready" : "Not ready"}</span>
+        </h2>
+        <label style={{ fontSize: 13 }}>
+          <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
+        </label>
+      </div>
+      <p className="admin-sub">Federate sign-in to your OIDC identity provider (Authorization Code flow). The platform brokers the login and re-issues its own session. Upstream IdPs such as Okta, Azure AD, Google or any standards-compliant provider are supported. The client secret is write-only — leave blank to keep the stored one.</p>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+        <LabeledInput label="Issuer / Discovery URL" value={cfg.issuer} onChange={(v) => set({ issuer: v })} placeholder="https://idp.example.com/realms/netops" hint="Base issuer URL; /.well-known/openid-configuration is appended." required />
+        <LabeledInput label="Client ID" value={cfg.client_id} onChange={(v) => set({ client_id: v })} placeholder="netops" required />
+        <LabeledInput label="Client secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.client_secret_set ? "•••••• (unchanged)" : "(none / public client)"} />
+        <LabeledInput label="Scopes" value={cfg.scopes} onChange={(v) => set({ scopes: v })} placeholder="openid email profile" />
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          Default role
+          <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
+            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
+        <LabeledInput label="Admin roles" value={cfg.admin_roles} onChange={(v) => set({ admin_roles: v })} placeholder="super-admin,admin,netops-admin" hint="Comma-separated IdP roles/groups mapped to super-admin." />
+        <LabeledInput label="Operator roles" value={cfg.operator_roles} onChange={(v) => set({ operator_roles: v })} placeholder="operator,netops-operator" hint="Comma-separated IdP roles/groups mapped to operator." />
+        <LabeledInput label="Providers" value={cfg.providers} onChange={(v) => set({ providers: v })} placeholder="okta:Okta:oidc,ad:Azure AD:saml" hint="Optional sign-in buttons: id:Label:kind, comma-separated. Blank = one default button." />
+        <LabeledInput label="Post-login URL" value={cfg.post_login_url} onChange={(v) => set({ post_login_url: v })} placeholder="/" hint="Where the browser lands after a successful login." />
+        <LabeledInput label="Redirect URL override" value={cfg.redirect_url} onChange={(v) => set({ redirect_url: v })} placeholder="(derived from request)" hint="Optional; leave blank to derive from the incoming request." />
+      </div>
+      <p className="mini-meta" style={{ marginTop: 8 }}>
+        Register this Redirect URI with your identity provider:{" "}
+        <code className="mono" style={{ userSelect: "all" }}>{redirectHint}</code>
+      </p>
+      <RequiredLegend />
+      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
+        <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
+      </div>
+      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+    </div>
   );
 }
 

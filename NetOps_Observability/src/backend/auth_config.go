@@ -558,8 +558,8 @@ func (s *server) handleAuthMethods(w http.ResponseWriter, _ *http.Request) {
 		"ldap":   map[string]any{"enabled": ldap.Enabled, "name": "LDAP / Active Directory"},
 		"tacacs": map[string]any{"enabled": tac.Enabled, "name": "TACACS+"},
 	}
-	if s.oidc.ready() {
-		resp["sso"] = map[string]any{"enabled": true, "providers": s.oidc.providers}
+	if op := s.oidcProvider(); op.ready() {
+		resp["sso"] = map[string]any{"enabled": true, "providers": op.providers}
 	} else {
 		resp["sso"] = map[string]any{"enabled": false, "providers": []ssoProviderInfo{}}
 	}
