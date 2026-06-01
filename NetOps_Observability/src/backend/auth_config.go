@@ -185,7 +185,7 @@ func (c ldapConfig) public() publicLDAPConfig {
 		UserFilter:         c.UserFilter,
 		GroupBaseDN:        c.GroupBaseDN,
 		GroupFilter:        c.GroupFilter,
-		RoleMappings:       c.RoleMappings,
+		RoleMappings:       rm,
 		DefaultRole:        c.DefaultRole,
 		DefaultTenant:      c.DefaultTenant,
 		InsecureSkipVerify: c.InsecureSkipVerify,
