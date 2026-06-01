@@ -500,17 +500,27 @@ function TestResult({ r }: { r: AuthTestResult | null }) {
   );
 }
 
-function LabeledInput({ label, value, onChange, type = "text", placeholder = "", hint }: {
-  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string;
+// Red asterisk marking a mandatory field.
+function Req() {
+  return <span style={{ color: "var(--bad)" }} title="Required" aria-label="required"> *</span>;
+}
+
+function LabeledInput({ label, value, onChange, type = "text", placeholder = "", hint, required = false }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string; required?: boolean;
 }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-      {label}
+      <span>{label}{required && <Req />}</span>
       <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
       {hint && <span className="mini-meta">{hint}</span>}
     </label>
   );
+}
+
+// Legend explaining the asterisk on config forms.
+function RequiredLegend() {
+  return <p className="mini-meta" style={{ marginTop: 4 }}><Req /> required when the provider is enabled</p>;
 }
 
 // ---- LDAP / Active Directory form ----
@@ -563,7 +573,7 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
       </div>
       <p className="admin-sub">Native stdlib LDAP bind (RFC 4511). Directory groups map onto NetOps roles (first match by privilege wins). The bind password is write-only — leave blank to keep the stored one.</p>
       <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="ldap.example.com" />
+        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="ldap.example.com" required />
         <LabeledInput label="Port (0 = auto)" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 0 })} />
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
           Encryption
@@ -575,8 +585,8 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
         </label>
         <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" />
         <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} />
-        <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" />
-        <LabeledInput label="User filter" value={cfg.user_filter} onChange={(v) => set({ user_filter: v })} hint="%s = username, e.g. (uid=%s) or (sAMAccountName=%s)" />
+        <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" required />
+        <LabeledInput label="User filter" value={cfg.user_filter} onChange={(v) => set({ user_filter: v })} hint="%s = username, e.g. (uid=%s) or (sAMAccountName=%s)" required />
         <LabeledInput label="Group base DN" value={cfg.group_base_dn} onChange={(v) => set({ group_base_dn: v })} placeholder="(defaults to Base DN)" />
         <LabeledInput label="Group filter" value={cfg.group_filter} onChange={(v) => set({ group_filter: v })} hint="%s = user DN, e.g. (member=%s)" />
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
@@ -590,6 +600,8 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
           <input type="checkbox" checked={cfg.insecure_skip_verify} onChange={(e) => set({ insecure_skip_verify: e.target.checked })} /> Skip TLS verify (lab only)
         </label>
       </div>
+
+      <RequiredLegend />
 
       <h3 style={{ marginTop: 16 }}>Group → role mapping <span className="mini-meta">(highest-privilege match wins; otherwise default role)</span></h3>
       {cfg.role_mappings.map((m, i) => (
@@ -656,7 +668,7 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
       </div>
       <p className="admin-sub">Native stdlib TACACS+ PAP (RFC 8907) — authenticate operators against the same AAA server that fronts your routers/switches. The shared secret is write-only.</p>
       <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="tacacs.example.com" />
+        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="tacacs.example.com" required />
         <LabeledInput label="Port" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 49 })} />
         <LabeledInput label="Shared secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.secret_set ? "•••••• (unchanged)" : "(none)"} />
         <LabeledInput label="Timeout (s)" type="number" value={String(cfg.timeout_seconds)} onChange={(v) => set({ timeout_seconds: Number(v) || 5 })} />
@@ -668,6 +680,7 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
         </label>
         <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
       </div>
+      <RequiredLegend />
       <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
         <span style={{ flex: 1 }} />
