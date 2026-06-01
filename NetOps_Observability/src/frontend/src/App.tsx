@@ -3,7 +3,7 @@ import { api, Health } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
-import { resolveRoute } from "./nav";
+import { resolveRoute, filteredNav } from "./nav";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import SubNav from "./components/SubNav";
@@ -15,11 +15,17 @@ export default function App() {
   const { user, loading, refresh, logout } = useAuth();
   const [health, setHealth] = useState<Health | null>(null);
 
+  // The nav tree is gated to the principal: tenant-scoped users don't see the
+  // platform's own infra-stack monitoring (Stack Health + raw backends). The
+  // backend enforces the same boundary independently.
+  const platformAdmin = !!user?.platform_admin;
+  const nav = useMemo(() => filteredNav(platformAdmin), [platformAdmin]);
+
   // Shell state — the single source of truth that unifies the sections.
   const [hash, setHash] = useState<string>(() => location.hash || "#/overview");
   // Per-section time-range memory: each section restores the range it was last
   // viewed with (theme/timeprefs.ts). setRange persists under the active section.
-  const sectionId = useMemo(() => resolveRoute(hash).section.id, [hash]);
+  const sectionId = useMemo(() => resolveRoute(hash, nav).section.id, [hash, nav]);
   const sectionRef = useRef(sectionId);
   const [range, setRangeState] = useState<TimeRange>(() => rangeForSection(sectionId));
   const setRange = (r: TimeRange) => {
@@ -80,7 +86,7 @@ export default function App() {
     return <Login onLoggedIn={refresh} />;
   }
 
-  const { section, leaf } = resolveRoute(hash);
+  const { section, leaf } = resolveRoute(hash, nav);
   const ctx: SectionCtx = { rangeMinutes: range.minutes, query };
   const view = leaf ? leaf.render(ctx) : section.render ? section.render(ctx) : null;
 
@@ -89,6 +95,7 @@ export default function App() {
       <div className={`shell${collapsed ? " collapsed" : ""}`}>
         <TopBar health={health} user={user} onLogout={logout} />
         <Sidebar
+          nav={nav}
           activeSection={section.id}
           activeLeaf={leaf?.id}
           collapsed={collapsed}
@@ -106,7 +113,7 @@ export default function App() {
           <div className="page">{view}</div>
         </main>
         <CopilotDrawer />
-        <CommandPalette />
+        <CommandPalette nav={nav} />
       </div>
     </ShellContext.Provider>
   );

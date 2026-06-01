@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, GlobalResult } from "../services/api";
 import { useShell } from "../context/shell";
 import { usePrefs } from "../theme/prefs";
-import { navDestinations } from "../nav";
+import { navDestinations, NavSection } from "../nav";
 import Icon from "./Icon";
 
 // CommandPalette — a ⌘K / Ctrl-K overlay that turns the omni-search into a
@@ -38,7 +38,7 @@ const KIND_LABEL: Record<Cmd["kind"], string> = {
   logs: "Logs",
 };
 
-export default function CommandPalette() {
+export default function CommandPalette({ nav }: { nav: NavSection[] }) {
   const { navigate, setQuery, setCopilotOpen } = useShell();
   const { theme, setTheme, density, setDensity } = usePrefs();
   const [open, setOpen] = useState(false);
@@ -101,7 +101,7 @@ export default function CommandPalette() {
   // The static command set (nav destinations + actions), rebuilt only when the
   // prefs change (labels reflect the next state).
   const staticCmds = useMemo<Cmd[]>(() => {
-    const nav: Cmd[] = navDestinations().map((d) => ({
+    const navCmds: Cmd[] = navDestinations(nav).map((d) => ({
       id: `nav:${d.route}`,
       kind: "nav",
       title: d.label,
@@ -134,9 +134,9 @@ export default function CommandPalette() {
         },
       },
     ];
-    return [...nav, ...actions];
+    return [...navCmds, ...actions];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme, density]);
+  }, [theme, density, nav]);
 
   // Combine: filtered static commands + live search results.
   const cmds = useMemo<Cmd[]>(() => {

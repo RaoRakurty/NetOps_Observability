@@ -20,6 +20,7 @@ import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
+import StackHealth from "./tabs/StackHealth";
 import {
   UsersAdmin,
   RolesAdmin,
@@ -34,6 +35,7 @@ export type NavLeaf = {
   id: string;
   label: string;
   render: (c: SectionCtx) => JSX.Element;
+  platformOnly?: boolean; // visible only to the cross-tenant platform owner
 };
 
 export type NavSection = {
@@ -44,6 +46,7 @@ export type NavSection = {
   render?: (c: SectionCtx) => JSX.Element;
   action?: "copilot"; // opens the slide-over instead of routing
   footer?: boolean; // pinned to the bottom of the sidebar
+  platformOnly?: boolean; // visible only to the cross-tenant platform owner
 };
 
 // The information architecture. Labels/grouping follow the conventions shared
@@ -140,10 +143,13 @@ export const NAV: NavSection[] = [
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       { id: "api", label: "API Access", render: () => <ApiAccessAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
-      // Raw-backend escape hatches.
-      { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
-      { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
-      { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
+      // Infra-stack monitoring + raw-backend escape hatches — the platform's own
+      // plumbing. Platform-owner only (tenant admins manage their tenant, never
+      // the stack). Enforced on the backend too (/api/stack/health, nginx).
+      { id: "stack", label: "Stack Health", platformOnly: true, render: () => <StackHealth /> },
+      { id: "grafana", label: "Grafana", platformOnly: true, render: () => <GrafanaTab /> },
+      { id: "prometheus", label: "Prometheus", platformOnly: true, render: () => <PrometheusTab /> },
+      { id: "opensearch", label: "OpenSearch", platformOnly: true, render: () => <SearchDashboardsTab /> },
     ],
   },
 ];
@@ -153,11 +159,23 @@ export type Resolved = {
   leaf?: NavLeaf;
 };
 
-// Parse "#/section/leaf" into the section + active leaf, with fallbacks.
-export function resolveRoute(hash: string): Resolved {
+// filteredNav drops platform-owner-only sections/leaves for tenant-scoped users.
+// The platform owner sees the full tree. This is UX gating; the backend enforces
+// the boundary independently (e.g. /api/stack/health returns 403).
+export function filteredNav(platformAdmin: boolean): NavSection[] {
+  if (platformAdmin) return NAV;
+  return NAV.filter((s) => !s.platformOnly).map((s) =>
+    s.children ? { ...s, children: s.children.filter((l) => !l.platformOnly) } : s,
+  );
+}
+
+// Parse "#/section/leaf" into the section + active leaf, with fallbacks. The nav
+// defaults to the full tree; pass a filtered tree to keep hidden routes
+// unreachable via the hash (they fall back to the first visible entry).
+export function resolveRoute(hash: string, nav: NavSection[] = NAV): Resolved {
   const path = hash.replace(/^#\/?/, "");
   const [sectionId, leafId] = path.split("/");
-  const section = NAV.find((s) => s.id === sectionId) ?? NAV[0];
+  const section = nav.find((s) => s.id === sectionId) ?? nav[0];
   if (!section.children) return { section };
   const leaf = section.children.find((l) => l.id === leafId) ?? section.children[0];
   return { section, leaf };
@@ -178,10 +196,12 @@ export type NavDestination = {
   action?: "copilot";
 };
 
-// navDestinations flattens NAV into the list of places ⌘K can jump to.
-export function navDestinations(): NavDestination[] {
+// navDestinations flattens the nav into the list of places ⌘K can jump to.
+// Defaults to the full tree; pass a filtered tree so the palette can't jump to
+// sections the current user isn't allowed to see.
+export function navDestinations(nav: NavSection[] = NAV): NavDestination[] {
   const out: NavDestination[] = [];
-  for (const s of NAV) {
+  for (const s of nav) {
     if (s.action) {
       out.push({ label: s.label, section: s.label, route: s.id, action: s.action });
       continue;

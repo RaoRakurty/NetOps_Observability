@@ -63,6 +63,24 @@ export type Health = {
   alerts: Record<string, unknown>;
 };
 
+// ---------- Platform stack health (platform-owner only) ----------
+
+export type StackComponent = {
+  name: string;
+  category: string;
+  status: "up" | "degraded" | "down";
+  latency_ms: number;
+  detail?: string;
+};
+export type StackHealth = {
+  overall: "healthy" | "degraded" | "down";
+  up: number;
+  degraded: number;
+  down: number;
+  components: StackComponent[];
+  subsystems: Record<string, unknown>;
+};
+
 // ---------- OpenSearch ------------
 
 export type OSHit = {
@@ -274,6 +292,10 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
 export type AuthUser = {
   username: string;
   role: string;
+  tenant_id?: string;
+  // platform_admin = the cross-tenant platform owner. Gates infra-stack
+  // monitoring + platform-wide admin in the UI. Mirrors the backend rule.
+  platform_admin?: boolean;
   last_login_at?: string;
 };
 export type LoginResponse = { token: string; refresh_token?: string; expires_in?: number; user: AuthUser };
@@ -365,6 +387,7 @@ export const api = {
     }),
 
   health: () => request<Health>("/admin/health"),
+  stackHealth: () => request<StackHealth>("/api/stack/health"),
   devices: () => request<Device[]>("/api/devices"),
   upsertDevice: (d: Partial<Device>) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(d) }),

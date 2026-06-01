@@ -206,7 +206,14 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("user removed"))
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublic(user))
+	// platform_admin tells the SPA whether to surface infra-stack monitoring and
+	// platform-wide administration. It mirrors the backend's own cross-tenant
+	// rule (principalTenant) so the UI never re-derives the policy itself.
+	_, cross := principalTenant(claims)
+	writeJSON(w, http.StatusOK, struct {
+		publicUser
+		PlatformAdmin bool `json:"platform_admin"`
+	}{toPublic(user), cross})
 }
 
 type changePasswordRequest struct {

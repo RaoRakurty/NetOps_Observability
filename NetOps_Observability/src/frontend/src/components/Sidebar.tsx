@@ -1,17 +1,18 @@
 import { useState } from "react";
-import { NAV, NavLeaf, NavSection, routeFor } from "../nav";
+import { NavLeaf, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
 
 type Props = {
+  nav: NavSection[];
   activeSection: string;
   activeLeaf?: string;
   collapsed: boolean;
   onToggle: () => void;
 };
 
-export default function Sidebar({ activeSection, activeLeaf, collapsed, onToggle }: Props) {
+export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onToggle }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
 
   // Which grouped sections are expanded in the sidebar. A section defaults to
@@ -20,8 +21,8 @@ export default function Sidebar({ activeSection, activeLeaf, collapsed, onToggle
   const isOpen = (id: string) => overrides[id] ?? id === activeSection;
   const toggle = (id: string) => setOverrides((m) => ({ ...m, [id]: !isOpen(id) }));
 
-  const main = NAV.filter((s) => !s.footer);
-  const footer = NAV.filter((s) => s.footer);
+  const main = nav.filter((s) => !s.footer);
+  const footer = nav.filter((s) => s.footer);
 
   const leafItem = (s: NavSection, leaf: NavLeaf) => {
     const active = s.id === activeSection && leaf.id === activeLeaf;

@@ -384,6 +384,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/itsm/servicenow", s.handleITSMServiceNow)
 	mux.HandleFunc("/api/itsm/jira", s.handleITSMJira)
+	// Platform-stack self-monitoring (platform-owner only).
+	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	// Dashboard live data
 	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
 	mux.HandleFunc("/api/metrics/query", s.handleMetricsQuery)
