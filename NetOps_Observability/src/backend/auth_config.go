@@ -169,6 +169,10 @@ type publicLDAPConfig struct {
 }
 
 func (c ldapConfig) public() publicLDAPConfig {
+	rm := c.RoleMappings
+	if rm == nil {
+		rm = []ldapRoleMapping{} // never emit JSON null — the UI maps over this
+	}
 	return publicLDAPConfig{
 		Enabled:            c.Enabled,
 		Host:               c.Host,

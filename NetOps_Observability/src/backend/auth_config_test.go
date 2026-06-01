@@ -173,6 +173,19 @@ func TestLDAPPublicNeverLeaksPassword(t *testing.T) {
 	}
 }
 
+// Regression: a nil RoleMappings slice must serialise as [] not null, else the
+// admin UI crashes (white screen) calling .map on null.
+func TestLDAPPublicRoleMappingsNeverNil(t *testing.T) {
+	pub := ldapConfig{Enabled: true}.public() // RoleMappings left nil
+	if pub.RoleMappings == nil {
+		t.Fatal("public().RoleMappings must be non-nil ([])")
+	}
+	b, _ := json.Marshal(pub)
+	if !strings.Contains(string(b), `"role_mappings":[]`) {
+		t.Fatalf("expected role_mappings:[] in JSON, got %s", b)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TACACS config (pure unit)
 // ---------------------------------------------------------------------------

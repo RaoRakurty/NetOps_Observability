@@ -523,7 +523,11 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
   const [testPass, setTestPass] = useState("");
   const [result, setResult] = useState<AuthTestResult | null>(null);
 
-  useEffect(() => { api.ldapConfig().then((r) => setCfg(r.config)).catch((e) => setMsg((e as Error).message)); }, []);
+  useEffect(() => {
+    api.ldapConfig()
+      .then((r) => setCfg({ ...r.config, role_mappings: r.config.role_mappings ?? [] }))
+      .catch((e) => setMsg((e as Error).message));
+  }, []);
   if (!cfg) return <div className="card"><h2>LDAP / Active Directory</h2><p className="mini-meta">Loading…</p></div>;
 
   const set = (patch: Partial<LdapConfig>) => setCfg({ ...cfg, ...patch });
