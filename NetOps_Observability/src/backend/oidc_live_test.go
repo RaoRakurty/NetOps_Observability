@@ -1,0 +1,44 @@
+package main
+
+import (
+	"os"
+	"testing"
+)
+
+// TestOIDCLiveDuende validates the OIDC integration end-to-end against the
+// public Duende demo IdentityServer (https://demo.duendesoftware.com), up to the
+// token-verification layer: it builds the provider from config, confirms it is
+// ready(), fetches the real OIDC discovery document, and loads the live JWKS
+// signing keys. The full interactive code-exchange login needs a browser, so it
+// is not covered here. Skipped unless NETOPS_OIDC_LIVE=1 (keeps the offline
+// suite hermetic).
+func TestOIDCLiveDuende(t *testing.T) {
+	if os.Getenv("NETOPS_OIDC_LIVE") != "1" {
+		t.Skip("set NETOPS_OIDC_LIVE=1 to run against demo.duendesoftware.com")
+	}
+	p := newOIDCProviderFromConfig(oidcConfig{
+		Enabled:  true,
+		Issuer:   "https://demo.duendesoftware.com",
+		ClientID: "interactive.public",
+		Scopes:   "openid profile email",
+	})
+	if !p.ready() {
+		t.Fatalf("provider should be ready (enabled+issuer+clientID+jwks)")
+	}
+	disc, err := p.jwks.discovery()
+	if err != nil {
+		t.Fatalf("OIDC discovery against Duende failed: %v", err)
+	}
+	if disc.AuthEndpoint == "" || disc.TokenEndpoint == "" || disc.JWKSURI == "" {
+		t.Fatalf("incomplete discovery doc: %+v", disc)
+	}
+	t.Logf("discovery OK: auth=%s token=%s jwks=%s", disc.AuthEndpoint, disc.TokenEndpoint, disc.JWKSURI)
+
+	// Force a JWKS fetch (keyFor refreshes when the kid is unknown); ignore the
+	// lookup error — we only assert the live key set was retrieved.
+	_, _ = p.jwks.keyFor("probe-unknown-kid")
+	if len(p.jwks.keys) == 0 {
+		t.Fatal("expected ≥1 signing key fetched from the live JWKS endpoint")
+	}
+	t.Logf("JWKS OK: %d live signing key(s) loaded", len(p.jwks.keys))
+}
