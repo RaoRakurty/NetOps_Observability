@@ -11,6 +11,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -34,6 +37,16 @@ type APIKey struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
+
+	// RFC 7591-style client metadata (non-secret).
+	GrantTypes      []string   `json:"grant_types,omitempty"`
+	ClientURI       string     `json:"client_uri,omitempty"`
+	LogoURI         string     `json:"logo_uri,omitempty"`
+	Contacts        []string   `json:"contacts,omitempty"`         // emails
+	ContactPhone    string     `json:"contact_phone,omitempty"`
+	SourceCIDRs     []string   `json:"source_cidrs,omitempty"`     // allowed source IPs
+	ClientExpiresAt *time.Time `json:"client_expires_at,omitempty"`
+	SecretExpiresAt *time.Time `json:"secret_expires_at,omitempty"`
 }
 
 // publicAPIKey omits the hash; it's what the API returns when listing. The
@@ -52,6 +65,16 @@ type publicAPIKey struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
+
+	// RFC 7591-style client metadata (non-secret).
+	GrantTypes      []string   `json:"grant_types,omitempty"`
+	ClientURI       string     `json:"client_uri,omitempty"`
+	LogoURI         string     `json:"logo_uri,omitempty"`
+	Contacts        []string   `json:"contacts,omitempty"`
+	ContactPhone    string     `json:"contact_phone,omitempty"`
+	SourceCIDRs     []string   `json:"source_cidrs,omitempty"`
+	ClientExpiresAt *time.Time `json:"client_expires_at,omitempty"`
+	SecretExpiresAt *time.Time `json:"secret_expires_at,omitempty"`
 }
 
 func (k APIKey) public() publicAPIKey {
@@ -60,6 +83,9 @@ func (k APIKey) public() publicAPIKey {
 		Scopes: k.Scopes, RateLimitPerMin: k.RateLimitPerMin, UseCount: k.UseCount,
 		CreatedBy: k.CreatedBy, CreatedAt: k.CreatedAt,
 		LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt,
+		GrantTypes: k.GrantTypes, ClientURI: k.ClientURI, LogoURI: k.LogoURI,
+		Contacts: k.Contacts, ContactPhone: k.ContactPhone, SourceCIDRs: k.SourceCIDRs,
+		ClientExpiresAt: k.ClientExpiresAt, SecretExpiresAt: k.SecretExpiresAt,
 	}
 }
 
@@ -209,18 +235,93 @@ func (s *apiKeyStore) List() []publicAPIKey {
 	return out
 }
 
-// Create mints a new key and returns the one-time plaintext secret alongside
-// the stored (hashless) record. rateLimitPerMin <= 0 inherits the server default.
-func (s *apiKeyStore) Create(tenantID, label, createdBy string, scopes []string, rateLimitPerMin int) (publicAPIKey, string, error) {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return publicAPIKey{}, "", errors.New("key label required")
+// apiKeyInput carries the RFC 7591-style registration request for a new key.
+// RateLimitPerMin <= 0 inherits the server default. GrantTypes defaults to
+// ["client_credentials"] when empty (these are machine-to-machine keys).
+type apiKeyInput struct {
+	TenantID        string
+	Label           string
+	Scopes          []string
+	RateLimitPerMin int
+	GrantTypes      []string
+	Contacts        []string
+	SourceCIDRs     []string
+	ClientURI       string
+	LogoURI         string
+	ContactPhone    string
+	ClientExpiresAt *time.Time
+	SecretExpiresAt *time.Time
+}
+
+// validGrantTypes is the set permitted per RFC 6749 / RFC 7591. The "password"
+// grant is intentionally excluded (deprecated by RFC 9700 §2.4).
+var validGrantTypes = map[string]bool{
+	"authorization_code": true,
+	"client_credentials": true,
+	"refresh_token":      true,
+}
+
+// validate enforces the RFC 7591-style metadata rules. It normalizes the input
+// in place (trims label, defaults grant types) and returns the first error.
+func (in *apiKeyInput) validate() error {
+	in.Label = strings.TrimSpace(in.Label)
+	if in.Label == "" {
+		return errors.New("key label required")
 	}
-	if tenantID == "" {
-		tenantID = TenantGlobal
+	if in.TenantID == "" {
+		in.TenantID = TenantGlobal
 	}
-	if rateLimitPerMin < 0 {
-		rateLimitPerMin = 0
+	if in.RateLimitPerMin < 0 {
+		in.RateLimitPerMin = 0
+	}
+	if len(in.GrantTypes) == 0 {
+		in.GrantTypes = []string{"client_credentials"}
+	}
+	for _, g := range in.GrantTypes {
+		g = strings.TrimSpace(g)
+		if g == "password" {
+			return errors.New("password grant is deprecated (RFC 9700 §2.4)")
+		}
+		if !validGrantTypes[g] {
+			return fmt.Errorf("unsupported grant type %q", g)
+		}
+	}
+	for _, c := range in.SourceCIDRs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(c); err != nil {
+			return fmt.Errorf("invalid source CIDR %q: %w", c, err)
+		}
+	}
+	for _, e := range in.Contacts {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if !strings.Contains(e, "@") {
+			return fmt.Errorf("invalid contact email %q", e)
+		}
+	}
+	if u := strings.TrimSpace(in.ClientURI); u != "" {
+		if _, err := url.ParseRequestURI(u); err != nil {
+			return fmt.Errorf("invalid client URI %q: %w", u, err)
+		}
+	}
+	if u := strings.TrimSpace(in.LogoURI); u != "" {
+		if _, err := url.ParseRequestURI(u); err != nil {
+			return fmt.Errorf("invalid logo URI %q: %w", u, err)
+		}
+	}
+	return nil
+}
+
+// Create mints a new key from a validated input and returns the one-time
+// plaintext secret alongside the stored (hashless) record.
+func (s *apiKeyStore) Create(in apiKeyInput, createdBy string) (publicAPIKey, string, error) {
+	if err := in.validate(); err != nil {
+		return publicAPIKey{}, "", err
 	}
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
@@ -229,10 +330,13 @@ func (s *apiKeyStore) Create(tenantID, label, createdBy string, scopes []string,
 	secret := keyPrefix + hex.EncodeToString(raw)
 	id := hex.EncodeToString(raw[:6])
 	k := APIKey{
-		ID: id, TenantID: tenantID, Label: label, Hash: hashKey(secret),
-		Prefix: secret[:len(keyPrefix)+6] + "…", Scopes: scopes,
-		RateLimitPerMin: rateLimitPerMin,
+		ID: id, TenantID: in.TenantID, Label: in.Label, Hash: hashKey(secret),
+		Prefix: secret[:len(keyPrefix)+6] + "…", Scopes: in.Scopes,
+		RateLimitPerMin: in.RateLimitPerMin,
 		CreatedBy:       createdBy, CreatedAt: time.Now().UTC(),
+		GrantTypes: in.GrantTypes, ClientURI: in.ClientURI, LogoURI: in.LogoURI,
+		Contacts: in.Contacts, ContactPhone: in.ContactPhone, SourceCIDRs: in.SourceCIDRs,
+		ClientExpiresAt: in.ClientExpiresAt, SecretExpiresAt: in.SecretExpiresAt,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -242,6 +346,30 @@ func (s *apiKeyStore) Create(tenantID, label, createdBy string, scopes []string,
 		return publicAPIKey{}, "", err
 	}
 	return k.public(), secret, nil
+}
+
+// sourceAllowed reports whether ip is permitted to use this key. An empty
+// SourceCIDRs list means any source is allowed; otherwise ip must fall within
+// one of the configured CIDRs. Malformed CIDRs (already rejected at creation)
+// are skipped defensively.
+func (k APIKey) sourceAllowed(ip net.IP) bool {
+	if len(k.SourceCIDRs) == 0 {
+		return true
+	}
+	for _, c := range k.SourceCIDRs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, netw, err := net.ParseCIDR(c)
+		if err != nil {
+			continue
+		}
+		if ip != nil && netw.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *apiKeyStore) Revoke(id string) error {
@@ -266,6 +394,13 @@ func (s *apiKeyStore) Verify(secret string) (APIKey, bool) {
 	for id, k := range s.keys {
 		if k.Hash == h && k.RevokedAt == nil {
 			now := time.Now().UTC()
+			// Reject expired client identities or secrets (RFC 7591 lifecycle).
+			if k.ClientExpiresAt != nil && k.ClientExpiresAt.Before(now) {
+				return APIKey{}, false
+			}
+			if k.SecretExpiresAt != nil && k.SecretExpiresAt.Before(now) {
+				return APIKey{}, false
+			}
 			k.LastUsedAt = &now
 			k.UseCount++
 			s.keys[id] = k

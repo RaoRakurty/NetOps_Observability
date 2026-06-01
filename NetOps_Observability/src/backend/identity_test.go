@@ -136,7 +136,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAPIKeyStore: %v", err)
 	}
-	rec, secret, err := ks.Create("acme", "ci", "root", []string{"read:metrics"}, 0)
+	rec, secret, err := ks.Create(apiKeyInput{TenantID: "acme", Label: "ci", Scopes: []string{"read:metrics"}}, "root")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestAPIKeyRateLimitAndUsage(t *testing.T) {
 		t.Fatalf("newAPIKeyStore: %v", err)
 	}
 	// A key capped at 3/min: the 4th call in the same window is rejected.
-	rec, secret, err := ks.Create("acme", "tight", "root", []string{"read:metrics"}, 3)
+	rec, secret, err := ks.Create(apiKeyInput{TenantID: "acme", Label: "tight", Scopes: []string{"read:metrics"}, RateLimitPerMin: 3}, "root")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

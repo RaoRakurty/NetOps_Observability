@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, LdapConfig, TacacsConfig, AuthTestResult, LdapRoleMapping, TokenPolicy } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, AuthTestResult, LdapRoleMapping, TokenPolicy } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -252,24 +252,64 @@ export function TenantsAdmin() {
 
 const SCOPE_OPTIONS = ["read:metrics", "read:alerts", "read:devices", "read:flows", "read:*", "write:incidents"];
 
+const GRANT_TYPE_OPTIONS = ["authorization_code", "client_credentials", "refresh_token"];
+
 export function ApiAccessAdmin() {
   const [keys, err, reload, setErr] = useReload(() => api.listApiKeys());
   const [label, setLabel] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read:metrics"]);
   const [rate, setRate] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
+  // Credential metadata
+  const [grantTypes, setGrantTypes] = useState<string[]>(["client_credentials"]);
+  const [clientUri, setClientUri] = useState("");
+  const [logoUri, setLogoUri] = useState("");
+  const [sourceCidrs, setSourceCidrs] = useState("");
+  // Expiry
+  const [clientExpires, setClientExpires] = useState("");
+  const [secretExpires, setSecretExpires] = useState("");
+  // Contacts
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
 
   const toggleScope = (s: string) =>
     setScopes((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
+  const toggleGrant = (g: string) =>
+    setGrantTypes((cur) => (cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g]));
+
+  // splitList turns a comma-separated input into a trimmed, non-empty list.
+  const splitList = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
+  // toIso converts a yyyy-mm-dd date input into an RFC 3339 timestamp.
+  const toIso = (v: string) => (v.trim() ? new Date(v).toISOString() : undefined);
+
   const generate = async () => {
     if (!label.trim()) return;
     setErr(null);
     try {
-      const limit = rate.trim() ? Math.max(0, parseInt(rate, 10) || 0) : undefined;
-      const res = await api.createApiKey(label.trim(), scopes, limit);
+      const req: CreateApiKeyRequest = {
+        label: label.trim(),
+        scopes,
+        rate_limit_per_min: rate.trim() ? Math.max(0, parseInt(rate, 10) || 0) : undefined,
+        grant_types: grantTypes.length ? grantTypes : undefined,
+        client_uri: clientUri.trim() || undefined,
+        logo_uri: logoUri.trim() || undefined,
+        source_cidrs: splitList(sourceCidrs).length ? splitList(sourceCidrs) : undefined,
+        client_expires_at: toIso(clientExpires),
+        secret_expires_at: toIso(secretExpires),
+        contacts: contactEmail.trim() ? splitList(contactEmail) : undefined,
+        contact_phone: contactPhone.trim() || undefined,
+      };
+      const res = await api.createApiKey(req);
       setSecret(res.secret);
       setLabel("");
       setRate("");
+      setClientUri("");
+      setLogoUri("");
+      setSourceCidrs("");
+      setClientExpires("");
+      setSecretExpires("");
+      setContactEmail("");
+      setContactPhone("");
       reload();
     } catch (e) { setErr((e as Error).message); }
   };
@@ -291,31 +331,54 @@ export function ApiAccessAdmin() {
             <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setSecret(null)}>Dismiss</button>
           </div>
         )}
-        <div className="admin-form">
-          <input placeholder="key label (e.g. ci-pipeline)" value={label} onChange={(e) => setLabel(e.target.value)} />
-          <input
-            type="number"
-            min={0}
-            style={{ maxWidth: 170 }}
-            placeholder="rate limit / min (blank = default)"
-            value={rate}
-            onChange={(e) => setRate(e.target.value)}
-          />
-          <button className="dash-btn accent" onClick={generate}>Generate key</button>
+        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          <LabeledInput label="Label" value={label} onChange={setLabel} placeholder="e.g. ci-pipeline" required />
+          <LabeledInput label="Rate limit / min (blank = default)" type="number" value={rate} onChange={setRate} placeholder="blank = server default" />
         </div>
-        <div className="scope-row">
+        <div className="scope-row" style={{ marginTop: 12 }}>
           {SCOPE_OPTIONS.map((s) => (
             <label key={s} className={`scope-chip ${scopes.includes(s) ? "on" : ""}`}>
               <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggleScope(s)} /> {s}
             </label>
           ))}
         </div>
+
+        <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Credential</h3>
+        <div className="scope-row">
+          {GRANT_TYPE_OPTIONS.map((g) => (
+            <label key={g} className={`scope-chip ${grantTypes.includes(g) ? "on" : ""}`}>
+              <input type="checkbox" checked={grantTypes.includes(g)} onChange={() => toggleGrant(g)} /> {g}
+            </label>
+          ))}
+        </div>
+        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 12 }}>
+          <LabeledInput label="Client URL" value={clientUri} onChange={setClientUri} placeholder="https://app.example.com" hint="Public homepage of the client." />
+          <LabeledInput label="Logo URL" value={logoUri} onChange={setLogoUri} placeholder="https://app.example.com/logo.png" hint="Image shown on consent screens." />
+          <LabeledInput label="Allowed source IP / CIDR" value={sourceCidrs} onChange={setSourceCidrs} placeholder="10.0.0.0/8, 192.168.1.0/24" hint="Comma-separated; blank = any source." />
+        </div>
+
+        <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Expiry</h3>
+        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          <LabeledInput label="Client expires on" type="date" value={clientExpires} onChange={setClientExpires} hint="Optional; blank = never." />
+          <LabeledInput label="Secret expires on" type="date" value={secretExpires} onChange={setSecretExpires} hint="Optional; blank = never." />
+        </div>
+
+        <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Contacts</h3>
+        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          <LabeledInput label="Contact email" value={contactEmail} onChange={setContactEmail} placeholder="ops@example.com" hint="Comma-separated for multiple." />
+          <LabeledInput label="Contact phone" value={contactPhone} onChange={setContactPhone} placeholder="+1 555 0100" />
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12 }}>
+          <button className="dash-btn accent" onClick={generate}>Generate key</button>
+          <RequiredLegend />
+        </div>
       </div>
       <div className="card">
         <div className="admin-card-head"><h2>API keys</h2></div>
         <table>
           <thead>
-            <tr><th>Label</th><th>Key</th><th>Scopes</th><th>Rate / min</th><th>Usage</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr>
+            <tr><th>Label</th><th>Key</th><th>Scopes</th><th>Grant types</th><th>Source CIDRs</th><th>Rate / min</th><th>Usage</th><th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
             {(keys ?? []).map((k) => {
@@ -323,9 +386,13 @@ export function ApiAccessAdmin() {
               const near = cap > 0 && k.window_used >= cap * 0.8;
               return (
               <tr key={k.id}>
-                <td style={{ fontWeight: 600 }}>{k.label}</td>
+                <td style={{ fontWeight: 600 }}>
+                  {k.client_uri ? <a href={k.client_uri} target="_blank" rel="noreferrer">{k.label}</a> : k.label}
+                </td>
                 <td className="mono">{k.prefix}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.scopes || []).join(", ") || "—"}</td>
+                <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.grant_types || []).join(", ") || "—"}</td>
+                <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.source_cidrs || []).join(", ") || "any"}</td>
                 <td className="mono">
                   {cap > 0
                     ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span>
@@ -333,12 +400,15 @@ export function ApiAccessAdmin() {
                 </td>
                 <td className="mono">{(k.use_count ?? 0).toLocaleString()}</td>
                 <td>{k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}</td>
+                <td>{k.client_expires_at || k.secret_expires_at
+                  ? new Date(k.client_expires_at || k.secret_expires_at || "").toLocaleDateString()
+                  : "never"}</td>
                 <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : "never"}</td>
                 <td>{k.revoked_at ? <span className="badge warn">revoked</span> : <span className="badge good">active</span>}</td>
                 <td>{!k.revoked_at && <button className="dash-btn" onClick={() => revoke(k)}>Revoke</button>}</td>
               </tr>
             );})}
-            {(keys ?? []).length === 0 && <tr><td colSpan={9} className="panel-empty">No API keys yet.</td></tr>}
+            {(keys ?? []).length === 0 && <tr><td colSpan={12} className="panel-empty">No API keys yet.</td></tr>}
           </tbody>
         </table>
         <p className="mini-meta" style={{ marginTop: 8 }}>

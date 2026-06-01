@@ -4,11 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 )
+
+// clientIP derives the caller's source IP: the first hop in X-Forwarded-For if
+// present, else the host portion of RemoteAddr. Returns nil if unparseable.
+func clientIP(r *http.Request) net.IP {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+		if ip := net.ParseIP(first); ip != nil {
+			return ip
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return net.ParseIP(strings.TrimSpace(host))
+}
 
 // auth.go — login + middleware.
 //
@@ -289,6 +306,12 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			k, ok := s.apiKeys.Verify(token)
 			if !ok {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid or revoked API key"))
+				return
+			}
+			// Source-IP allow-list (NetOps extension). Reject calls from outside
+			// the key's permitted CIDRs without authenticating.
+			if !k.sourceAllowed(clientIP(r)) {
+				writeError(w, http.StatusForbidden, errors.New("source address not permitted for this API key"))
 				return
 			}
 			// Per-key rate limit (fixed window / minute). 429 + Retry-After when

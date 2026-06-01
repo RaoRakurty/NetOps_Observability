@@ -493,10 +493,10 @@ export const api = {
   itsmJira: () => request<JiraStatus>("/api/itsm/jira"),
 
   listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
-  createApiKey: (label: string, scopes: string[], rate_limit_per_min?: number, tenant_id?: string) =>
+  createApiKey: (req: CreateApiKeyRequest) =>
     request<{ key: ApiKey; secret: string }>("/api/apikeys", {
       method: "POST",
-      body: JSON.stringify({ label, scopes, rate_limit_per_min, tenant_id }),
+      body: JSON.stringify(req),
     }),
   revokeApiKey: (id: string) => request<void>(`/api/apikeys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
@@ -585,6 +585,32 @@ export type ApiKey = {
   created_at: string;
   last_used_at?: string;
   revoked_at?: string;
+  // Client metadata
+  grant_types?: string[];
+  client_uri?: string;
+  logo_uri?: string;
+  contacts?: string[];
+  contact_phone?: string;
+  source_cidrs?: string[];
+  client_expires_at?: string;
+  secret_expires_at?: string;
+};
+
+// CreateApiKeyRequest is the registration payload for minting a new key.
+// Only `label` is mandatory; everything else is optional metadata.
+export type CreateApiKeyRequest = {
+  label: string;
+  scopes: string[];
+  rate_limit_per_min?: number;
+  tenant_id?: string;
+  grant_types?: string[];
+  client_uri?: string;
+  logo_uri?: string;
+  contacts?: string[];
+  contact_phone?: string;
+  source_cidrs?: string[];
+  client_expires_at?: string;
+  secret_expires_at?: string;
 };
 
 export type ReportKind =

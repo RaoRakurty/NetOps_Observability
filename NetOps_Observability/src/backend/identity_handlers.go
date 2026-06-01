@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // requirePerm gates a handler on a (module, level). Returns the caller's claims
@@ -283,10 +284,18 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 // ---- api keys --------------------------------------------------------------
 
 type createAPIKeyRequest struct {
-	Label           string   `json:"label"`
-	TenantID        string   `json:"tenant_id"`
-	Scopes          []string `json:"scopes"`
-	RateLimitPerMin int      `json:"rate_limit_per_min"`
+	Label           string     `json:"label"`
+	TenantID        string     `json:"tenant_id"`
+	Scopes          []string   `json:"scopes"`
+	RateLimitPerMin int        `json:"rate_limit_per_min"`
+	GrantTypes      []string   `json:"grant_types"`
+	ClientURI       string     `json:"client_uri"`
+	LogoURI         string     `json:"logo_uri"`
+	Contacts        []string   `json:"contacts"`
+	ContactPhone    string     `json:"contact_phone"`
+	SourceCIDRs     []string   `json:"source_cidrs"`
+	ClientExpiresAt *time.Time `json:"client_expires_at"`
+	SecretExpiresAt *time.Time `json:"secret_expires_at"`
 }
 
 func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +312,20 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		rec, secret, err := s.apiKeys.Create(req.TenantID, req.Label, claims.Sub, req.Scopes, req.RateLimitPerMin)
+		rec, secret, err := s.apiKeys.Create(apiKeyInput{
+			TenantID:        req.TenantID,
+			Label:           req.Label,
+			Scopes:          req.Scopes,
+			RateLimitPerMin: req.RateLimitPerMin,
+			GrantTypes:      req.GrantTypes,
+			ClientURI:       req.ClientURI,
+			LogoURI:         req.LogoURI,
+			Contacts:        req.Contacts,
+			ContactPhone:    req.ContactPhone,
+			SourceCIDRs:     req.SourceCIDRs,
+			ClientExpiresAt: req.ClientExpiresAt,
+			SecretExpiresAt: req.SecretExpiresAt,
+		}, claims.Sub)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
