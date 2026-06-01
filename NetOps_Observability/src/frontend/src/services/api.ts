@@ -309,6 +309,43 @@ export const api = {
   ssoConfig: () => request<SSOConfig>("/api/auth/sso/config"),
   ssoLoginUrl: (idp?: string) => `/api/auth/sso/login${idp ? `?idp=${encodeURIComponent(idp)}` : ""}`,
 
+  // Auth-method discovery for the login page (which sign-in options are enabled).
+  authMethods: () => request<AuthMethods>("/api/auth/methods"),
+
+  // Direct (native) LDAP / TACACS+ logins — same session-issuing contract as login().
+  ldapLogin: async (username: string, password: string) => {
+    const r = await request<LoginResponse>("/api/auth/ldap/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    setToken(r.token);
+    setRefresh(r.refresh_token ?? null);
+    fireAuthChange(true);
+    return r;
+  },
+  tacacsLogin: async (username: string, password: string) => {
+    const r = await request<LoginResponse>("/api/auth/tacacs/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    setToken(r.token);
+    setRefresh(r.refresh_token ?? null);
+    fireAuthChange(true);
+    return r;
+  },
+
+  // Native-provider admin config (admin-gated; secrets are write-only on the server).
+  ldapConfig: () => request<{ config: LdapConfig }>("/api/auth/ldap/config"),
+  saveLdapConfig: (cfg: Partial<LdapConfig> & { bind_password?: string }) =>
+    request<{ config: LdapConfig }>("/api/auth/ldap/config", { method: "PUT", body: JSON.stringify(cfg) }),
+  testLdap: (username?: string, password?: string) =>
+    request<AuthTestResult>("/api/auth/ldap/test", { method: "POST", body: JSON.stringify({ username, password }) }),
+  tacacsConfig: () => request<{ config: TacacsConfig }>("/api/auth/tacacs/config"),
+  saveTacacsConfig: (cfg: Partial<TacacsConfig> & { secret?: string }) =>
+    request<{ config: TacacsConfig }>("/api/auth/tacacs/config", { method: "PUT", body: JSON.stringify(cfg) }),
+  testTacacs: (username?: string, password?: string) =>
+    request<AuthTestResult>("/api/auth/tacacs/test", { method: "POST", body: JSON.stringify({ username, password }) }),
+
   me: () => request<AuthUser>("/api/auth/me"),
   changePassword: (current_password: string, new_password: string) =>
     request<{ status: string }>("/api/auth/change-password", {
@@ -592,8 +629,51 @@ export type SavedObject = {
 };
 
 // ----- SSO / API / ITSM -----
-export type SSOProvider = { id: string; name: string; kind: "oidc" | "saml" | "ldap" };
+export type SSOProvider = { id: string; name: string; kind: "oidc" | "saml" | "ldap" | "tacacs" };
 export type SSOConfig = { enabled: boolean; providers: SSOProvider[] };
+
+// Native (non-Keycloak) auth providers, configured at runtime via the admin UI.
+export type LdapRoleMapping = { group: string; role: string };
+export type LdapConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  use_tls: boolean;
+  start_tls: boolean;
+  bind_dn: string;
+  bind_password_set: boolean;
+  base_dn: string;
+  user_filter: string;
+  group_base_dn: string;
+  group_filter: string;
+  role_mappings: LdapRoleMapping[];
+  default_role: string;
+  default_tenant: string;
+  insecure_skip_verify: boolean;
+};
+export type TacacsConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  secret_set: boolean;
+  timeout_seconds: number;
+  default_role: string;
+  default_tenant: string;
+};
+export type AuthTestResult = {
+  ok: boolean;
+  stage: string;
+  message: string;
+  resolved_dn?: string;
+  groups?: string[];
+  assigned_role?: string;
+};
+export type AuthMethods = {
+  local: boolean;
+  ldap: { enabled: boolean; name: string };
+  tacacs: { enabled: boolean; name: string };
+  sso: { enabled: boolean; providers: SSOProvider[] };
+};
 
 export type OpenAPIOperation = { tags?: string[]; summary?: string };
 export type OpenAPISpec = {

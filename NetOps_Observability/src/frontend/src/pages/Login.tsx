@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, SSOConfig } from "../services/api";
+import { api, AuthMethods } from "../services/api";
 import { BRAND, BRAND_TAGLINE } from "../brand";
+
+type Method = "local" | "ldap" | "tacacs";
 
 export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");
@@ -9,19 +11,30 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [error, setError] = useState<string | null>(
     () => sessionStorage.getItem("netops_sso_error"),
   );
-  const [sso, setSso] = useState<SSOConfig | null>(null);
+  const [methods, setMethods] = useState<AuthMethods | null>(null);
+  const [method, setMethod] = useState<Method>("local");
 
   useEffect(() => {
     sessionStorage.removeItem("netops_sso_error");
-    api.ssoConfig().then(setSso).catch(() => setSso(null));
+    api.authMethods().then(setMethods).catch(() => setMethods(null));
   }, []);
+
+  // Which password-based methods are available (local is always on).
+  const directMethods: { id: Method; label: string }[] = [
+    { id: "local", label: "Local account" },
+    ...(methods?.ldap.enabled ? [{ id: "ldap" as Method, label: methods.ldap.name }] : []),
+    ...(methods?.tacacs.enabled ? [{ id: "tacacs" as Method, label: methods.tacacs.name }] : []),
+  ];
+  const ssoProviders = methods?.sso.enabled ? methods.sso.providers : [];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api.login(username, password);
+      if (method === "ldap") await api.ldapLogin(username, password);
+      else if (method === "tacacs") await api.tacacsLogin(username, password);
+      else await api.login(username, password);
       onLoggedIn();
     } catch (e) {
       setError((e as Error).message.replace(/^401 Unauthorized: ?/, ""));
@@ -48,6 +61,24 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}>
           {BRAND_TAGLINE} · sign in to continue.
         </p>
+
+        {/* Method selector only appears when a directory provider is enabled. */}
+        {directMethods.length > 1 && (
+          <>
+            <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--muted)" }}>
+              Sign in with
+            </label>
+            <select
+              value={method}
+              onChange={(e) => setMethod(e.target.value as Method)}
+              style={{ width: "100%", marginTop: 4, padding: 8 }}
+            >
+              {directMethods.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </>
+        )}
 
         <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--muted)" }}>
           Username
@@ -85,7 +116,7 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
           {busy ? "Signing in…" : "Sign in"}
         </button>
 
-        {sso?.enabled && sso.providers.length > 0 && (
+        {ssoProviders.length > 0 && (
           <>
             <div
               style={{
@@ -97,7 +128,7 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
               or
               <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
             </div>
-            {sso.providers.map((p) => (
+            {ssoProviders.map((p) => (
               <button
                 key={p.id || "default"}
                 type="button"

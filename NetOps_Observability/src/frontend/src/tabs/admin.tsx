@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, LdapConfig, TacacsConfig, AuthTestResult, LdapRoleMapping } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -474,49 +474,243 @@ function OpenAPIReference() {
   );
 }
 
-// ---- Authentication (SSO / SAML / LDAP via Keycloak) -----------------------
+// ---- Authentication (SSO / LDAP / TACACS+) ---------------------------------
 
-// kindTag labels a federated provider by how Keycloak brokers it.
-const KIND_LABEL: Record<string, string> = { oidc: "OAuth 2.0 / OIDC", saml: "SAML 2.0", ldap: "LDAP / Active Directory" };
+const KIND_LABEL: Record<string, string> = {
+  oidc: "OAuth 2.0 / OIDC", saml: "SAML 2.0", ldap: "LDAP / Active Directory", tacacs: "TACACS+",
+};
+
+// Small status pill for a provider section.
+function ProviderBadge({ enabled }: { enabled: boolean }) {
+  return <span className={`badge ${enabled ? "good" : "accent-badge"}`}>{enabled ? "Enabled" : "Disabled"}</span>;
+}
+
+// Renders a test-connection result (Okta-style: the headline is the role).
+function TestResult({ r }: { r: AuthTestResult | null }) {
+  if (!r) return null;
+  const color = r.ok ? "var(--good)" : "var(--bad)";
+  return (
+    <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 6, border: `1px solid ${color}`, background: "var(--panel)", fontSize: 13 }}>
+      <span className={`badge ${r.ok ? "good" : "bad"}`}>{r.ok ? "OK" : "FAIL"}</span>{" "}
+      <span className="mini-meta">[{r.stage}]</span> {r.message}
+      {r.resolved_dn && <div className="mono mini-meta" style={{ marginTop: 4 }}>DN: {r.resolved_dn}</div>}
+      {r.groups && r.groups.length > 0 && <div className="mini-meta">groups: {r.groups.join(", ")}</div>}
+      {r.assigned_role && <div style={{ marginTop: 4 }}>→ would be assigned role <b>{r.assigned_role}</b></div>}
+    </div>
+  );
+}
+
+function LabeledInput({ label, value, onChange, type = "text", placeholder = "", hint }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string;
+}) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+      {label}
+      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+        style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
+      {hint && <span className="mini-meta">{hint}</span>}
+    </label>
+  );
+}
+
+// ---- LDAP / Active Directory form ----
+function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
+  const [cfg, setCfg] = useState<LdapConfig | null>(null);
+  const [pw, setPw] = useState(""); // typed bind password (only sent if non-empty)
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [testUser, setTestUser] = useState("");
+  const [testPass, setTestPass] = useState("");
+  const [result, setResult] = useState<AuthTestResult | null>(null);
+
+  useEffect(() => { api.ldapConfig().then((r) => setCfg(r.config)).catch((e) => setMsg((e as Error).message)); }, []);
+  if (!cfg) return <div className="card"><h2>LDAP / Active Directory</h2><p className="mini-meta">Loading…</p></div>;
+
+  const set = (patch: Partial<LdapConfig>) => setCfg({ ...cfg, ...patch });
+  const enc = cfg.use_tls ? "ldaps" : cfg.start_tls ? "starttls" : "none";
+  const setEnc = (v: string) => set({ use_tls: v === "ldaps", start_tls: v === "starttls" });
+  const setMapping = (i: number, patch: Partial<LdapRoleMapping>) => {
+    const m = cfg.role_mappings.slice(); m[i] = { ...m[i], ...patch }; set({ role_mappings: m });
+  };
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const body: Partial<LdapConfig> & { bind_password?: string } = { ...cfg };
+      if (pw) body.bind_password = pw; // only override the secret when re-typed
+      const r = await api.saveLdapConfig(body);
+      setCfg(r.config); setPw(""); setMsg("Saved.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+  const test = async () => {
+    setBusy(true); setResult(null);
+    try { setResult(await api.testLdap(testUser || undefined, testPass || undefined)); }
+    catch (e) { setResult({ ok: false, stage: "error", message: (e as Error).message }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head">
+        <h2>LDAP / Active Directory <ProviderBadge enabled={cfg.enabled} /></h2>
+        <label style={{ fontSize: 13 }}>
+          <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
+        </label>
+      </div>
+      <p className="admin-sub">Native stdlib LDAP bind (RFC 4511). Directory groups map onto NetOps roles (first match by privilege wins). The bind password is write-only — leave blank to keep the stored one.</p>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="ldap.example.com" />
+        <LabeledInput label="Port (0 = auto)" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 0 })} />
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          Encryption
+          <select value={enc} onChange={(e) => setEnc(e.target.value)}>
+            <option value="none">None (389)</option>
+            <option value="starttls">StartTLS</option>
+            <option value="ldaps">LDAPS (636)</option>
+          </select>
+        </label>
+        <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" />
+        <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} />
+        <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" />
+        <LabeledInput label="User filter" value={cfg.user_filter} onChange={(v) => set({ user_filter: v })} hint="%s = username, e.g. (uid=%s) or (sAMAccountName=%s)" />
+        <LabeledInput label="Group base DN" value={cfg.group_base_dn} onChange={(v) => set({ group_base_dn: v })} placeholder="(defaults to Base DN)" />
+        <LabeledInput label="Group filter" value={cfg.group_filter} onChange={(v) => set({ group_filter: v })} hint="%s = user DN, e.g. (member=%s)" />
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          Default role
+          <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
+            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
+        <label style={{ fontSize: 12, color: "var(--muted)", alignSelf: "end" }}>
+          <input type="checkbox" checked={cfg.insecure_skip_verify} onChange={(e) => set({ insecure_skip_verify: e.target.checked })} /> Skip TLS verify (lab only)
+        </label>
+      </div>
+
+      <h3 style={{ marginTop: 16 }}>Group → role mapping <span className="mini-meta">(highest-privilege match wins; otherwise default role)</span></h3>
+      {cfg.role_mappings.map((m, i) => (
+        <div key={i} className="admin-form" style={{ marginBottom: 6 }}>
+          <input value={m.group} placeholder="cn=netops-admins,ou=groups,dc=example,dc=com" onChange={(e) => setMapping(i, { group: e.target.value })} />
+          <select value={m.role} onChange={(e) => setMapping(i, { role: e.target.value })}>
+            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <button onClick={() => set({ role_mappings: cfg.role_mappings.filter((_, j) => j !== i) })}>Remove</button>
+        </div>
+      ))}
+      <button onClick={() => set({ role_mappings: [...cfg.role_mappings, { group: "", role: roleIds[0] || "read-only" }] })}>+ Add mapping</button>
+
+      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
+        <span style={{ flex: 1 }} />
+        <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
+        <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
+        <button disabled={busy} onClick={test}>Test connection</button>
+      </div>
+      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+      <TestResult r={result} />
+    </div>
+  );
+}
+
+// ---- TACACS+ form ----
+function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
+  const [cfg, setCfg] = useState<TacacsConfig | null>(null);
+  const [secret, setSecret] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [testUser, setTestUser] = useState("");
+  const [testPass, setTestPass] = useState("");
+  const [result, setResult] = useState<AuthTestResult | null>(null);
+
+  useEffect(() => { api.tacacsConfig().then((r) => setCfg(r.config)).catch((e) => setMsg((e as Error).message)); }, []);
+  if (!cfg) return <div className="card"><h2>TACACS+</h2><p className="mini-meta">Loading…</p></div>;
+  const set = (patch: Partial<TacacsConfig>) => setCfg({ ...cfg, ...patch });
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const body: Partial<TacacsConfig> & { secret?: string } = { ...cfg };
+      if (secret) body.secret = secret;
+      const r = await api.saveTacacsConfig(body);
+      setCfg(r.config); setSecret(""); setMsg("Saved.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+  const test = async () => {
+    setBusy(true); setResult(null);
+    try { setResult(await api.testTacacs(testUser || undefined, testPass || undefined)); }
+    catch (e) { setResult({ ok: false, stage: "error", message: (e as Error).message }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head">
+        <h2>TACACS+ <ProviderBadge enabled={cfg.enabled} /></h2>
+        <label style={{ fontSize: 13 }}>
+          <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
+        </label>
+      </div>
+      <p className="admin-sub">Native stdlib TACACS+ PAP (RFC 8907) — authenticate operators against the same AAA server that fronts your routers/switches. The shared secret is write-only.</p>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="tacacs.example.com" />
+        <LabeledInput label="Port" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 49 })} />
+        <LabeledInput label="Shared secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.secret_set ? "•••••• (unchanged)" : "(none)"} />
+        <LabeledInput label="Timeout (s)" type="number" value={String(cfg.timeout_seconds)} onChange={(v) => set({ timeout_seconds: Number(v) || 5 })} />
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          Default role
+          <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
+            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
+      </div>
+      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
+        <span style={{ flex: 1 }} />
+        <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
+        <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
+        <button disabled={busy} onClick={test}>Test connection</button>
+      </div>
+      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+      <TestResult r={result} />
+    </div>
+  );
+}
 
 export function AuthenticationAdmin() {
   const [sso] = useReload(() => api.ssoConfig());
+  const [roles] = useReload(() => api.listRoles());
   const enabled = !!sso?.enabled;
   const providers = sso?.providers ?? [];
+  const roleIds = (roles?.roles ?? []).map((r) => r.id).filter((x): x is string => !!x);
+  const fallbackRoles = roleIds.length ? roleIds : ["super-admin", "operator", "read-only"];
 
   return (
     <>
-      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work; OIDC/SAML/LDAP are brokered by Keycloak — the Go API only validates the resulting tokens." />
-      <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
-        <span className="badge good">{enabled ? "SSO enabled" : "Active"}</span>
-        <span>
-          JWT auth with rotating, single-use refresh tokens (reuse detection) is live.
-          {enabled
-            ? " Single Sign-On is configured: the providers below appear on the login screen."
-            : " Single Sign-On is available — set OIDC_ENABLED=true + the Keycloak realm details to light up the providers below."}
-        </span>
-      </div>
+      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work. Keycloak brokers OIDC/SAML; native LDAP/AD and TACACS+ authenticate directly and are configured below." />
       <div className="ov-grid">
         <div className="panel col-6 provider-card">
-          <div className="provider-head">
-            <h3>Local accounts</h3>
-            <span className="badge good">Active</span>
-          </div>
-          <p className="mini-meta">Username + password (PBKDF2) with JWT. Always available as a fallback even when an external IdP is down.</p>
+          <div className="provider-head"><h3>Local accounts</h3><span className="badge good">Active</span></div>
+          <p className="mini-meta">Username + password (PBKDF2) with JWT + rotating single-use refresh tokens. Always available as a fallback even when an external IdP is down.</p>
         </div>
-        {(enabled ? providers : [{ id: "oidc", name: "OAuth 2.0 / OIDC", kind: "oidc" }, { id: "saml", name: "SAML 2.0", kind: "saml" }, { id: "ldap", name: "LDAP / Active Directory", kind: "ldap" }]).map((p) => (
-          <div className="panel col-6 provider-card" key={p.id || p.kind}>
-            <div className="provider-head">
-              <h3>{p.name || KIND_LABEL[p.kind]}</h3>
-              <span className={`badge ${enabled ? "good" : "accent-badge"}`}>{enabled ? "Enabled" : "Available"}</span>
-            </div>
-            <p className="mini-meta">{KIND_LABEL[p.kind] || p.kind} via Keycloak. {p.kind === "saml" ? "Per-IdP metadata & attribute mapping configured in Keycloak." : p.kind === "ldap" ? "Bind + group sync maps directory groups onto roles." : "Authorization Code flow; Okta/Azure AD/Google brokered upstream."}</p>
-            {enabled && (
-              <a className="dash-btn" href={api.ssoLoginUrl(p.id)} style={{ marginTop: 10, display: "inline-block" }}>Test sign-in →</a>
-            )}
+        <div className="panel col-6 provider-card">
+          <div className="provider-head"><h3>Single Sign-On (Keycloak)</h3><ProviderBadge enabled={enabled} /></div>
+          <p className="mini-meta">
+            {enabled
+              ? "OIDC/SAML brokered by Keycloak; the Go API validates the resulting RS256 token. Providers below appear on the login screen."
+              : "Set OIDC_ENABLED=true + the Keycloak realm details to enable. OIDC/SAML/upstream IdPs (Okta/Azure AD/Google) are brokered by Keycloak."}
+          </p>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            {providers.map((p) => (
+              <a key={p.id || p.kind} className="dash-btn" href={api.ssoLoginUrl(p.id)} title={KIND_LABEL[p.kind] || p.kind}>{p.name} →</a>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
+
+      <LdapAdminForm roleIds={fallbackRoles} />
+      <TacacsAdminForm roleIds={fallbackRoles} />
+
       <div className="card">
         <h2>Token policy</h2>
         <dl className="kv-form">
