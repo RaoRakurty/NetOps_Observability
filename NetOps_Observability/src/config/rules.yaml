@@ -1,74 +1,623 @@
+# NetOps alerting rules — Prometheus rules-file subset consumed by the Go alert
+# engine (src/backend/alerts/engine.go parseRulesYAML). Each `expr` is sent
+# verbatim to VictoriaMetrics /api/v1/query, so full PromQL/MetricsQL is allowed
+# (rate, clamp_min, avg_over_time, stddev_over_time, predict_linear, changes,
+# delta, increase, count by, and/or/unless). A rule fires when the query returns
+# ≥1 series, so every expr ends in a comparison.
+#
+# NOTE on the parser: it reads block-style labels only (severity: under labels:)
+# and strips trailing # comments — so the [NEEDS METRIC] notes below are
+# documentation; those rules reference telemetry the collectors do not emit yet,
+# so they simply never fire until the metric exists (see
+# docs/research/noc-alert-rules.md §2.4). ~33 of these fire on metrics we collect
+# today; the rest are forward-compatible.
+#
+# Metric vocabulary + thresholds rationale: docs/research/noc-alert-rules.md.
+
 groups:
-  - name: network
+
+  # ----------------------------------------------------------------------------
+  # Reachability / availability
+  # ----------------------------------------------------------------------------
+  - name: noc-availability
     interval: 30s
     rules:
-      - alert: DeviceUnreachable
+      - alert: ScrapeTargetDown
         expr: up == 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Device {{ $labels.device_id }} is unreachable"
+          summary: "{{ $labels.instance }} down >5m"
 
-      - alert: HighCPU
-        expr: cpu_usage > 90
-        for: 5m
+      - alert: DeviceUnreachable
+        expr: collector_target_up == 0
+        for: 2m
         labels:
-          severity: warning
+          severity: critical
         annotations:
-          summary: "High CPU on {{ $labels.device_id }}: {{ $value }}%"
-
-      - alert: HighMemory
-        expr: memory_usage > 85
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High memory on {{ $labels.device_id }}: {{ $value }}%"
-
-  # Device-health alerts over the multivendor SNMP metrics emitted by the
-  # snmpmetrics collector (ENABLE_SNMP_METRICS=true). These reference metric
-  # NAMES — vendor-neutral — so one rule covers Cisco, Juniper, etc. Labels:
-  # device, vendor, and index (per-row tables like interfaces/sensors).
-  - name: device-health
-    interval: 30s
-    rules:
-      - alert: HighDeviceCPU
-        expr: device_cpu_percent > 90
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High CPU on {{ $labels.device }} ({{ $labels.vendor }}): {{ $value }}%"
-
-      - alert: HighDeviceTemperature
-        expr: device_temp_celsius > 75
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High temperature on {{ $labels.device }} ({{ $labels.vendor }}): {{ $value }}°C"
-
-      - alert: HighDeviceMemory
-        expr: device_mem_percent > 90
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High memory on {{ $labels.device }} ({{ $labels.vendor }}): {{ $value }}%"
+          summary: "{{ $labels.device }} unreachable from {{ $labels.collector }}"
 
       - alert: InterfaceDown
-        expr: device_if_oper_status == 2
+        expr: device_if_oper_status == 2 and device_if_admin_status == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} DOWN (admin-up)"
+
+      - alert: InterfaceLowerLayerDown
+        expr: device_if_oper_status == 7
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Interface {{ $labels.index }} down on {{ $labels.device }}"
+          summary: "{{ $labels.device }} if{{ $labels.index }} lowerLayerDown"
 
-      - alert: CollectorTargetsUnreachable
+      - alert: InterfaceFlapping
+        expr: changes(device_if_oper_status[10m]) >= 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} flapping ({{ $value }} transitions/10m)"
+
+      - alert: AdminDownButReceivingTraffic
+        expr: device_if_admin_status == 2 and rate(device_if_in_octets[5m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} admin-down yet receiving traffic"
+
+      - alert: DeviceRebooted
+        expr: device_sysuptime < 6000
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} recently rebooted (uptime {{ $value }} cs)"
+
+  # ----------------------------------------------------------------------------
+  # Errors / discards
+  # ----------------------------------------------------------------------------
+  - name: noc-errors
+    interval: 30s
+    rules:
+      - alert: InterfaceInputErrors
+        expr: rate(device_if_in_errors[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} input errors {{ $value }}/s"
+
+      - alert: InterfaceOutputErrors
+        expr: rate(device_if_out_errors[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} output errors {{ $value }}/s"
+
+      - alert: InterfaceInputErrorsHigh
+        expr: rate(device_if_in_errors[5m]) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} HIGH input errors {{ $value }}/s"
+
+      - alert: InterfaceInputDiscards
+        expr: rate(device_if_in_discards[5m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} input discards {{ $value }}/s (congestion)"
+
+      - alert: InterfaceOutputDiscards
+        expr: rate(device_if_out_discards[5m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} output discards {{ $value }}/s (egress congestion)"
+
+      - alert: InterfaceErrorRatioHigh
+        expr: rate(device_if_in_errors[5m]) / clamp_min(rate(device_if_in_ucast_pkts[5m]) + rate(device_if_in_mcast_pkts[5m]) + rate(device_if_in_bcast_pkts[5m]), 1) > 0.001
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} error ratio >0.1% of input pkts"
+
+      - alert: InterfaceErrorAnomaly
+        expr: (rate(device_if_in_errors[5m]) - avg_over_time(rate(device_if_in_errors[5m])[1h:5m])) / clamp_min(stddev_over_time(rate(device_if_in_errors[5m])[1h:5m]), 0.01) > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} error-rate z-score anomaly"
+
+      - alert: InterfaceCRCErrors   # [NEEDS METRIC] dot3StatsFCSErrors
+        expr: rate(device_if_crc_errors[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} CRC/FCS errors {{ $value }}/s (cabling/optic)"
+
+  # ----------------------------------------------------------------------------
+  # Saturation (CPU / memory / link util / storage / sessions)
+  # ----------------------------------------------------------------------------
+  - name: noc-saturation
+    interval: 30s
+    rules:
+      - alert: HighCPU
+        expr: device_cpu_percent > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} ({{ $labels.vendor }}) CPU {{ $value }}%"
+
+      - alert: CriticalCPU
+        expr: device_cpu_percent > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} CPU critically high {{ $value }}%"
+
+      - alert: HighMemory
+        expr: device_mem_percent > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} memory {{ $value }}%"
+
+      - alert: CriticalMemory
+        expr: device_mem_percent > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} memory critically high {{ $value }}%"
+
+      - alert: HighMemoryBytes
+        expr: device_mem_used_bytes / clamp_min(device_mem_used_bytes + device_mem_free_bytes, 1) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} memory >90% (Cisco byte counters)"
+
+      - alert: LinkInboundUtilHigh
+        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} inbound >80% of link"
+
+      - alert: LinkInboundUtilCritical
+        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} inbound SATURATED (>95%)"
+
+      - alert: LinkOutboundUtilHigh
+        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} outbound >80% of link"
+
+      - alert: LinkOutboundUtilCritical
+        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} outbound SATURATED (>95%)"
+
+      - alert: StorageUtilHigh
+        expr: device_storage_used / clamp_min(device_storage_size, 1) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} storage{{ $labels.index }} >85%"
+
+      - alert: StorageUtilCritical
+        expr: device_storage_used / clamp_min(device_storage_size, 1) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} storage{{ $labels.index }} >95% (full risk)"
+
+      - alert: FirewallDiskHigh
+        expr: device_disk_used_mb / clamp_min(device_disk_capacity_mb, 1) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} firewall disk >90%"
+
+      - alert: FirewallSessionsHigh
+        expr: (device_session_count - avg_over_time(device_session_count[6h])) / clamp_min(stddev_over_time(device_session_count[6h]), 1) > 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} session-count spike (z>4) — flood/leak?"
+
+  # ----------------------------------------------------------------------------
+  # Environmental (temp / power / fan / optics / sensors)
+  # ----------------------------------------------------------------------------
+  - name: noc-environmental
+    interval: 30s
+    rules:
+      - alert: TemperatureHigh
+        expr: device_temp_celsius > 55
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} sensor{{ $labels.index }} {{ $value }}C"
+
+      - alert: TemperatureCritical
+        expr: device_temp_celsius > 70
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} sensor{{ $labels.index }} {{ $value }}C (thermal)"
+
+      - alert: TemperatureStateAbnormal
+        expr: device_temp_state >= 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} temp sensor{{ $labels.index }} state {{ $value }} (CISCO-ENVMON !normal)"
+
+      - alert: FanFailed
+        expr: device_fan_state >= 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} fan{{ $labels.index }} state {{ $value }} (failed/warning)"
+
+      - alert: PowerSupplyFailed
+        expr: device_psu_state >= 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} PSU{{ $labels.index }} state {{ $value }} (failed/warning)"
+
+      - alert: GenericSensorAnomaly
+        expr: (device_sensor_value - avg_over_time(device_sensor_value[6h])) / clamp_min(stddev_over_time(device_sensor_value[6h]), 0.5) > 4
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} ENTITY sensor{{ $labels.index }} anomaly (z>4)"
+
+      - alert: OpticRxPowerLow   # [NEEDS METRIC] device_optic_rx_power_dbm
+        expr: device_optic_rx_power_dbm < -14
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic Rx {{ $value }}dBm low"
+
+      - alert: OpticRxPowerCritical   # [NEEDS METRIC]
+        expr: device_optic_rx_power_dbm < -18
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic Rx {{ $value }}dBm — LOS imminent"
+
+      - alert: OpticTxPowerLow   # [NEEDS METRIC]
+        expr: device_optic_tx_power_dbm < -8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic Tx {{ $value }}dBm low (failing laser)"
+
+      - alert: OpticTemperatureHigh   # [NEEDS METRIC]
+        expr: device_optic_temp_c > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} transceiver {{ $value }}C"
+
+      - alert: OpticBiasDrift   # [NEEDS METRIC] laser ageing
+        expr: (device_optic_bias_ma - avg_over_time(device_optic_bias_ma[6h])) / clamp_min(stddev_over_time(device_optic_bias_ma[6h]), 0.1) > 3
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} optic bias drift"
+
+  # ----------------------------------------------------------------------------
+  # Routing / control-plane   [all NEEDS METRIC — collectors don't emit yet]
+  # ----------------------------------------------------------------------------
+  - name: noc-routing
+    interval: 30s
+    rules:
+      - alert: BGPSessionDown   # [NEEDS METRIC] BGP4-MIB bgpPeerState (6=established)
+        expr: device_bgp_peer_state != 6
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} BGP peer {{ $labels.index }} not established"
+
+      - alert: BGPPeerFlapping   # [NEEDS METRIC]
+        expr: increase(device_bgp_fsm_transitions[15m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} BGP peer {{ $labels.index }} flapping"
+
+      - alert: BGPPrefixDrop   # [NEEDS METRIC]
+        expr: delta(device_bgp_accepted_prefixes[10m]) < -1000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} BGP peer {{ $labels.index }} dropped >1000 prefixes"
+
+      - alert: BGPAllPeersDown   # [NEEDS METRIC]
+        expr: count by (device) (device_bgp_peer_state == 6) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} has zero established BGP peers (isolation)"
+
+      - alert: OSPFAdjacencyDown   # [NEEDS METRIC] OSPF-MIB ospfNbrState (8=full)
+        expr: device_ospf_nbr_state != 8
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.index }} not full"
+
+      - alert: OSPFAdjacencyFlapping   # [NEEDS METRIC]
+        expr: changes(device_ospf_nbr_state[15m]) >= 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.index }} flapping"
+
+      - alert: RouteTableShrink   # [NEEDS METRIC]
+        expr: delta(device_route_count[10m]) < -500
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} RIB shrank >500 routes/10m"
+
+      - alert: FIBNearCapacity   # [NEEDS METRIC] TCAM exhaustion
+        expr: device_fib_count / clamp_min(device_fib_max, 1) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} FIB/TCAM >90% (blackhole risk)"
+
+  # ----------------------------------------------------------------------------
+  # Capacity / trend (z-score & linear prediction over real metrics)
+  # ----------------------------------------------------------------------------
+  - name: noc-capacity
+    interval: 30s
+    rules:
+      - alert: TrafficZScoreAnomalyIn
+        expr: (rate(device_if_in_octets[5m]) - avg_over_time(rate(device_if_in_octets[5m])[1h:5m])) / clamp_min(stddev_over_time(rate(device_if_in_octets[5m])[1h:5m]), 1) > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} inbound traffic anomaly (z>3)"
+
+      - alert: TrafficDropAnomaly
+        expr: (rate(device_if_in_octets[5m]) - avg_over_time(rate(device_if_in_octets[5m])[1h:5m])) / clamp_min(stddev_over_time(rate(device_if_in_octets[5m])[1h:5m]), 1) < -3 and device_if_oper_status == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} traffic collapsed while up (z<-3)"
+
+      - alert: SustainedLinkGrowth
+        expr: avg_over_time(rate(device_if_in_octets[5m])[1h:5m]) * 8 / (device_if_speed * 1e6) > 0.70
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} sustained >70% — plan upgrade"
+
+      - alert: MemoryLeakTrend
+        expr: delta(device_mem_percent[6h]) > 20
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} memory +{{ $value }}pp/6h — possible leak"
+
+      - alert: StorageWillFill24h
+        expr: predict_linear(device_storage_used[6h], 86400) > device_storage_size
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} storage{{ $labels.index }} projected full <24h"
+
+      - alert: CPUBaselineRising
+        expr: delta(avg_over_time(device_cpu_percent[1h])[12h:1h]) > 15
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} baseline CPU rising +{{ $value }}pp/12h"
+
+  # ----------------------------------------------------------------------------
+  # Latency / jitter / SLA   [NEEDS METRIC + VM mirror — see research §2.4]
+  # ----------------------------------------------------------------------------
+  - name: noc-sla
+    interval: 30s
+    rules:
+      - alert: TunnelDown   # [NEEDS METRIC] tunnel_status to VictoriaMetrics
+        expr: tunnel_status == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} DOWN"
+
+      - alert: TunnelLatencyHigh   # [NEEDS METRIC]
+        expr: tunnel_latency_ms > 150
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} latency {{ $value }}ms > SLA"
+
+      - alert: TunnelLatencyCritical   # [NEEDS METRIC]
+        expr: tunnel_latency_ms > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} latency {{ $value }}ms — SLA breach"
+
+      - alert: TunnelJitterHigh   # [NEEDS METRIC]
+        expr: tunnel_jitter_ms > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} jitter {{ $value }}ms (voice/video risk)"
+
+      - alert: TunnelLossHigh   # [NEEDS METRIC]
+        expr: tunnel_loss_pct > 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} loss {{ $value }}% — SLA breach"
+
+      - alert: TunnelLatencyAnomaly   # [NEEDS METRIC]
+        expr: (tunnel_latency_ms - avg_over_time(tunnel_latency_ms[2h])) / clamp_min(stddev_over_time(tunnel_latency_ms[2h]), 1) > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Tunnel {{ $labels.tunnel }} latency anomaly (z>3)"
+
+  # ----------------------------------------------------------------------------
+  # Security / syslog   [NEEDS METRIC — syslog counterization not wired]
+  # ----------------------------------------------------------------------------
+  - name: noc-security
+    interval: 30s
+    rules:
+      - alert: AuthFailureBurst   # [NEEDS METRIC] device_auth_failures_total
+        expr: rate(device_auth_failures_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} {{ $value }} auth failures/s (brute force?)"
+
+      - alert: AuthFailureCritical   # [NEEDS METRIC]
+        expr: rate(device_auth_failures_total[5m]) > 20
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} sustained login failures — credential attack"
+
+      - alert: ConfigChanged   # [NEEDS METRIC] device_config_change_total
+        expr: increase(device_config_change_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.device }} running-config changed"
+
+      - alert: PortAuthFailure   # [NEEDS METRIC] device_dot1x_failures_total
+        expr: rate(device_dot1x_failures_total[5m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} if{{ $labels.index }} 802.1X failures"
+
+  # ----------------------------------------------------------------------------
+  # Stack self-health
+  # ----------------------------------------------------------------------------
+  - name: noc-self-health
+    interval: 30s
+    rules:
+      - alert: CollectorDown
+        expr: collector_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Collector {{ $labels.collector }} is down"
+
+      - alert: CollectorAllTargetsUnreachable
         expr: collector_targets_reachable == 0 and collector_targets > 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Collector {{ $labels.collector }} cannot reach any of its targets"
+          summary: "Collector {{ $labels.collector }} cannot reach any target"
+
+      - alert: CollectorPartialReachability
+        expr: collector_targets_reachable / clamp_min(collector_targets, 1) < 0.8 and collector_targets > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector {{ $labels.collector }} reaching <80% of targets"
+
+      - alert: CollectorPollSlow
+        expr: collector_poll_duration_ms > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector {{ $labels.collector }} poll {{ $value }}ms (slow)"
+
+      - alert: NoSamplesIngested
+        expr: collector_samples == 0 and collector_targets > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector {{ $labels.collector }} produced 0 samples"
+
+      - alert: StorageBackendDown   # [NEEDS METRIC] up{job=...} for stack services
+        expr: up{job=~"opensearch|clickhouse|victoria|postgres|redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stack backend {{ $labels.job }} down"
