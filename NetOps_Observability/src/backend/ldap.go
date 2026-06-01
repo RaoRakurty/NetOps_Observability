@@ -150,9 +150,7 @@ func groupMatches(group, mapping string) bool {
 // the input unchanged (lower-cased, trimmed) when it carries no "cn=".
 func leadingCN(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	if strings.HasPrefix(s, "cn=") {
-		s = s[len("cn="):]
-	}
+	s = strings.TrimPrefix(s, "cn=")
 	if i := strings.IndexByte(s, ','); i >= 0 {
 		s = s[:i]
 	}

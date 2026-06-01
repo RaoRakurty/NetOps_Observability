@@ -300,7 +300,7 @@ type tacacsConfig struct {
 	Enabled        bool   `json:"enabled"`
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
-	Secret         string `json:"secret,omitempty"` // write-only
+	Secret         string `json:"secret,omitempty"` // write-only: persisted to the kv store (UI-configurable); never returned by public()
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	DefaultRole    string `json:"default_role"`
 	DefaultTenant  string `json:"default_tenant"`
@@ -422,6 +422,9 @@ func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
 	if in.Secret == "" && s.cfg != nil {
 		in.Secret = s.cfg.Secret
 	}
+	// #nosec G117 -- the TACACS shared secret is intentionally persisted to the kv
+	// store so the provider is UI-configurable; it is redacted from every API
+	// response by publicTACACSConfig and never logged.
 	b, err := json.MarshalIndent(in, "", "  ")
 	if err != nil {
 		return tacacsConfig{}, err
