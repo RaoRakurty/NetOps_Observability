@@ -46,8 +46,9 @@ type server struct {
 	reports    *reportScheduler
 	copilotCfg *copilotConfigStore
 	oidc       *oidcProvider
-	ldap       *ldapConfigStore
-	tacacs     *tacacsConfigStore
+	ldap        *ldapConfigStore
+	tacacs      *tacacsConfigStore
+	tokenPolicy *tokenPolicyStore
 	servicenow *notify.ServiceNow
 	jira       *notify.Jira
 	hub        *Hub
@@ -260,6 +261,7 @@ func newServer() *server {
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
 	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"))
 	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"))
+	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
 	return srv
 }
 
@@ -330,6 +332,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/tacacs/login", s.handleTACACSLogin)
 	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
+	mux.HandleFunc("/api/auth/token-policy", s.handleTokenPolicy)
 	// Identity & access (admin-gated): users, roles, tenants, API keys.
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/", s.handleUserByID)

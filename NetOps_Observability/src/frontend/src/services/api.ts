@@ -346,6 +346,11 @@ export const api = {
   testTacacs: (username?: string, password?: string) =>
     request<AuthTestResult>("/api/auth/tacacs/test", { method: "POST", body: JSON.stringify({ username, password }) }),
 
+  // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
+  tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),
+  saveTokenPolicy: (p: { access_ttl_seconds: number; refresh_ttl_seconds: number }) =>
+    request<TokenPolicy>("/api/auth/token-policy", { method: "PUT", body: JSON.stringify(p) }),
+
   me: () => request<AuthUser>("/api/auth/me"),
   changePassword: (current_password: string, new_password: string) =>
     request<{ status: string }>("/api/auth/change-password", {
@@ -667,6 +672,14 @@ export type AuthTestResult = {
   resolved_dn?: string;
   groups?: string[];
   assigned_role?: string;
+};
+export type TokenPolicy = {
+  access_ttl_seconds: number;
+  refresh_ttl_seconds: number;
+  bounds: {
+    access_min_seconds: number; access_max_seconds: number; access_recommended_seconds: number;
+    refresh_min_seconds: number; refresh_max_seconds: number; refresh_recommended_seconds: number;
+  };
 };
 export type AuthMethods = {
   local: boolean;

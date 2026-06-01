@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -54,5 +55,55 @@ func TestRefreshTokenTTLBounds(t *testing.T) {
 	t.Setenv("REFRESH_TOKEN_TTL", "")
 	if got := refreshTokenTTL(); got != 7*24*time.Hour {
 		t.Errorf("default refresh TTL should be 7d, got %v", got)
+	}
+}
+
+func TestTokenPolicyStoreClampPersistAndApply(t *testing.T) {
+	// Snapshot + restore the process env this store mutates.
+	origA, okA := os.LookupEnv("ACCESS_TOKEN_TTL")
+	origR, okR := os.LookupEnv("REFRESH_TOKEN_TTL")
+	t.Cleanup(func() {
+		restore := func(k, v string, had bool) {
+			if had {
+				_ = os.Setenv(k, v)
+			} else {
+				_ = os.Unsetenv(k)
+			}
+		}
+		restore("ACCESS_TOKEN_TTL", origA, okA)
+		restore("REFRESH_TOKEN_TTL", origR, okR)
+	})
+
+	dir := t.TempDir()
+	rf, err := newRefreshStore(dir+"/r.json", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := newTokenPolicyStore(dir+"/tp.json", rf)
+
+	if _, err := st.set(tokenPolicyConfig{AccessTTLSeconds: 0, RefreshTTLSeconds: 0}); err == nil {
+		t.Fatal("expected error for non-positive TTLs")
+	}
+
+	out, err := st.set(tokenPolicyConfig{AccessTTLSeconds: 1, RefreshTTLSeconds: 999 * 86400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.AccessTTLSeconds != int(accessTTLMin.Seconds()) {
+		t.Fatalf("access not clamped to min: got %d want %d", out.AccessTTLSeconds, int(accessTTLMin.Seconds()))
+	}
+	if out.RefreshTTLSeconds != int(refreshTTLMax.Seconds()) {
+		t.Fatalf("refresh not clamped to max: got %d want %d", out.RefreshTTLSeconds, int(refreshTTLMax.Seconds()))
+	}
+	if rf.ttl != refreshTTLMax {
+		t.Fatalf("refresh store ttl not updated live: %v", rf.ttl)
+	}
+
+	if _, err := st.set(tokenPolicyConfig{AccessTTLSeconds: 1800, RefreshTTLSeconds: 14 * 86400}); err != nil {
+		t.Fatal(err)
+	}
+	st2 := newTokenPolicyStore(dir+"/tp.json", rf)
+	if e := st2.effective(); e.AccessTTLSeconds != 1800 || e.RefreshTTLSeconds != 14*86400 {
+		t.Fatalf("reload lost policy: %+v", e)
 	}
 }

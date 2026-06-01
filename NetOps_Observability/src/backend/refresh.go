@@ -117,6 +117,18 @@ func (s *refreshStore) issueLocked(username, family string) (string, error) {
 	return secret, nil
 }
 
+// SetTTL updates the refresh-token lifetime at runtime (token policy admin). It
+// affects tokens issued after the change; existing tokens keep their expiry. A
+// non-positive ttl is ignored.
+func (s *refreshStore) SetTTL(ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.ttl = ttl
+	s.mu.Unlock()
+}
+
 // Issue creates a brand-new refresh token (and family) for a username.
 func (s *refreshStore) Issue(username string) (string, error) {
 	s.mu.Lock()

@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, LdapConfig, TacacsConfig, AuthTestResult, LdapRoleMapping } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, LdapConfig, TacacsConfig, AuthTestResult, LdapRoleMapping, TokenPolicy } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -728,15 +728,61 @@ export function AuthenticationAdmin() {
       <LdapAdminForm roleIds={fallbackRoles} />
       <TacacsAdminForm roleIds={fallbackRoles} />
 
-      <div className="card">
-        <h2>Token policy</h2>
-        <dl className="kv-form">
-          <dt>Access token TTL</dt><dd>1 hour <span className="mini-meta">(ACCESS_TOKEN_TTL; signed with JWT_SECRET)</span></dd>
-          <dt>Refresh token TTL</dt><dd>rotating, 7 days <span className="mini-meta">(single-use; reuse revokes the lineage)</span></dd>
-          <dt>Federated tokens</dt><dd className="mono">RS256, verified against the identity provider's JWKS</dd>
-        </dl>
-      </div>
+      <TokenPolicyForm />
     </>
+  );
+}
+
+// Editable token-lifetime policy. Access TTL is entered in minutes, refresh in
+// days; both are clamped server-side to the RFC 9700 / NIST 800-63B bounds.
+function TokenPolicyForm() {
+  const [tp, setTp] = useState<TokenPolicy | null>(null);
+  const [accessMin, setAccessMin] = useState("");   // minutes
+  const [refreshDays, setRefreshDays] = useState(""); // days
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = (p: TokenPolicy) => {
+    setTp(p);
+    setAccessMin(String(Math.round(p.access_ttl_seconds / 60)));
+    setRefreshDays(String(Math.round(p.refresh_ttl_seconds / 86400)));
+  };
+  useEffect(() => { api.tokenPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
+  if (!tp) return <div className="card"><h2>Token policy</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+
+  const b = tp.bounds;
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const p = await api.saveTokenPolicy({
+        access_ttl_seconds: Math.max(1, Math.round(Number(accessMin) * 60)),
+        refresh_ttl_seconds: Math.max(1, Math.round(Number(refreshDays) * 86400)),
+      });
+      load(p); setMsg("Saved. Access TTL applies to new logins immediately; refresh TTL applies to newly issued tokens.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <h2>Token policy</h2>
+      <p className="admin-sub">Session token lifetimes. Values are clamped to safe bounds (RFC 9700 / NIST 800-63B); out-of-range entries are adjusted on save.</p>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <LabeledInput label="Access token TTL (minutes)" type="number" value={accessMin} onChange={setAccessMin}
+          hint={`allowed ${Math.round(b.access_min_seconds / 60)}–${Math.round(b.access_max_seconds / 60)} min · recommended ≤ ${Math.round(b.access_recommended_seconds / 60)} min`} required />
+        <LabeledInput label="Refresh token TTL (days)" type="number" value={refreshDays} onChange={setRefreshDays}
+          hint={`allowed ${Math.round(b.refresh_min_seconds / 86400) || 1}–${Math.round(b.refresh_max_seconds / 86400)} days · recommended ≤ ${Math.round(b.refresh_recommended_seconds / 86400)} days`} required />
+      </div>
+      <dl className="kv-form" style={{ marginTop: 12 }}>
+        <dt>Refresh rotation</dt><dd>single-use with reuse detection (reuse revokes the lineage)</dd>
+        <dt>Local tokens</dt><dd className="mono">HS256, signed with the server secret</dd>
+        <dt>Federated tokens</dt><dd className="mono">RS256, verified against the identity provider's JWKS</dd>
+      </dl>
+      <RequiredLegend />
+      <div style={{ marginTop: 12 }}>
+        <button className="dash-btn" disabled={busy} onClick={save}>Save policy</button>
+      </div>
+      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+    </div>
   );
 }
 
