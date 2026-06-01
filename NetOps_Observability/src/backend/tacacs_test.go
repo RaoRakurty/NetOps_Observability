@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 )
 
 // TACACS+ test suite.
@@ -164,10 +165,9 @@ func mockTacacsServer(t *testing.T, secret, validUser, validPass string) (addr s
 }
 
 func TestTACACSAuthenticatePAPSuccess(t *testing.T) {
-	t.Skip("pending TACACS.Authenticate handshake implementation (scaffold)")
 	addr, stop := mockTacacsServer(t, "topsecret", "noc-admin", "Cisco123")
 	defer stop()
-	c := &TACACS{addr: addr, secret: "topsecret", enabled: true, timeout: 0}
+	c := &TACACS{addr: addr, secret: "topsecret", enabled: true, timeout: 3 * time.Second}
 	ok, err := c.Authenticate("noc-admin", "Cisco123")
 	if err != nil || !ok {
 		t.Fatalf("expected PASS, got ok=%v err=%v", ok, err)
@@ -175,15 +175,55 @@ func TestTACACSAuthenticatePAPSuccess(t *testing.T) {
 }
 
 func TestTACACSAuthenticatePAPFailure(t *testing.T) {
-	t.Skip("pending TACACS.Authenticate handshake implementation (scaffold)")
 	addr, stop := mockTacacsServer(t, "topsecret", "noc-admin", "Cisco123")
 	defer stop()
-	c := &TACACS{addr: addr, secret: "topsecret", enabled: true, timeout: 0}
+	c := &TACACS{addr: addr, secret: "topsecret", enabled: true, timeout: 3 * time.Second}
 	ok, err := c.Authenticate("noc-admin", "wrong-password")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ok {
 		t.Fatal("wrong password must FAIL")
+	}
+}
+
+// Empty credentials are rejected before any network I/O.
+func TestTACACSAuthenticateRejectsEmptyCreds(t *testing.T) {
+	c := &TACACS{addr: "127.0.0.1:1", secret: "x", enabled: true, timeout: time.Second}
+	if ok, err := c.Authenticate("", "p"); ok || err == nil {
+		t.Errorf("empty username: got ok=%v err=%v", ok, err)
+	}
+	if ok, err := c.Authenticate("u", ""); ok || err == nil {
+		t.Errorf("empty password: got ok=%v err=%v", ok, err)
+	}
+}
+
+// The AUTHEN START PAP body must survive obfuscate -> de-obfuscate and parse
+// back into the original username/password fields (the keystream is keyed by
+// secret/session/version/seq, so the server can recover it).
+func TestTACACSStartBodyObfuscateRoundTrip(t *testing.T) {
+	const secret = "topsecret"
+	const user, pass = "noc-admin", "Cisco123"
+	var sid uint32 = 0x12345678
+	body := authenStartPAP(user, pass)
+	orig := append([]byte(nil), body...)
+
+	tacacsObfuscate(secret, sid, tacACSPAPVersion, 1, body)
+	if bytes.Equal(body, orig) {
+		t.Fatal("obfuscation did not change the START body")
+	}
+	tacacsObfuscate(secret, sid, tacACSPAPVersion, 1, body)
+	if !bytes.Equal(body, orig) {
+		t.Fatal("round-trip failed: de-obfuscated body != original")
+	}
+
+	// Parse the recovered PAP fields the way a server would.
+	ul, pl := int(body[4]), int(body[7])
+	off := 8
+	gotUser := string(body[off : off+ul])
+	off += ul + int(body[5]) + int(body[6])
+	gotPass := string(body[off : off+pl])
+	if gotUser != user || gotPass != pass {
+		t.Errorf("recovered (%q,%q), want (%q,%q)", gotUser, gotPass, user, pass)
 	}
 }

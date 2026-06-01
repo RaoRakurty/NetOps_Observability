@@ -46,6 +46,8 @@ type server struct {
 	reports    *reportScheduler
 	copilotCfg *copilotConfigStore
 	oidc       *oidcProvider
+	ldap       *ldapConfigStore
+	tacacs     *tacacsConfigStore
 	servicenow *notify.ServiceNow
 	jira       *notify.Jira
 	hub        *Hub
@@ -256,6 +258,8 @@ func newServer() *server {
 	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
+	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"))
+	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"))
 	return srv
 }
 
@@ -319,6 +323,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/sso/config", s.handleSSOConfig)
 	mux.HandleFunc("/api/auth/sso/login", s.handleSSOLogin)
 	mux.HandleFunc("/api/auth/sso/callback", s.handleSSOCallback)
+	mux.HandleFunc("/api/auth/methods", s.handleAuthMethods)
+	mux.HandleFunc("/api/auth/ldap/login", s.handleLDAPLogin)
+	mux.HandleFunc("/api/auth/ldap/config", s.handleLDAPConfig)
+	mux.HandleFunc("/api/auth/ldap/test", s.handleLDAPTest)
+	mux.HandleFunc("/api/auth/tacacs/login", s.handleTACACSLogin)
+	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
+	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
 	// Identity & access (admin-gated): users, roles, tenants, API keys.
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/", s.handleUserByID)

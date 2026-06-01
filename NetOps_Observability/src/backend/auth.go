@@ -238,6 +238,9 @@ var publicPaths = []string{
 	"/api/auth/sso/config",
 	"/api/auth/sso/login",
 	"/api/auth/sso/callback",
+	"/api/auth/methods",
+	"/api/auth/ldap/login",
+	"/api/auth/tacacs/login",
 	"/metrics",
 }
 

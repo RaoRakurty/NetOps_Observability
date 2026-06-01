@@ -95,3 +95,228 @@ Tests present: `src/backend/{jwt,users,password}_test.go`,
   silently dropped *all* app logs. `vector/vector.yaml` now `del(.label)` in the
   applogs/flows transforms. If applog indexing breaks again, suspect dotted-key
   fields first.
+
+---
+
+# AI CODE GENERATION GUARDRAILS (GO / NETOPS PLATFORM)
+
+This file defines mandatory rules for all AI-generated code in this repository.
+Any violation = INVALID OUTPUT.
+
+---
+
+## 1. CORE PRINCIPLES
+
+- System must be modular, plug-and-play, and enterprise-grade
+- Zero Trust architecture is mandatory everywhere
+- No implicit trust between services or modules
+- Every dependency must be explicit and injectable
+- No hidden coupling between packages
+- Simplicity > cleverness
+- Production safety > speed of implementation
+
+---
+
+## 2. ARCHITECTURE RULES (STRICT)
+
+### REQUIRED PROJECT STRUCTURE
+
+```
+/cmd        → entrypoints only (NO BUSINESS LOGIC)
+/internal   → core logic (private domain code)
+/pkg        → reusable external-safe libraries
+/api        → schemas (OpenAPI / protobuf / contracts)
+/plugins    → isolated plugin implementations
+/config     → configuration only
+```
+
+---
+
+### FORBIDDEN
+
+- Business logic inside /cmd
+- Circular dependencies
+- Direct cross-domain package calls
+- Shared global state
+- “utils” dumping ground packages
+- Hidden singletons
+
+---
+
+## 3. ZERO TRUST RULES
+
+- Every service must assume all inputs are malicious
+- All service-to-service communication must be authenticated
+- Use mTLS or signed requests (JWT/HMAC)
+- No internal trust shortcuts allowed
+
+### RULES
+
+- Validate ALL inputs at every boundary
+- Never trust upstream services
+- Never trust plugin outputs
+- Never trust cached data without validation
+
+---
+
+## 4. PLUGIN SYSTEM RULES (PLUG-AND-PLAY)
+
+Plugins MUST be isolated.
+
+Allowed models:
+
+### Preferred: RPC-based plugins (gRPC/HTTP)
+- Plugins run as separate processes
+- Communication only via protobuf/OpenAPI
+- No shared memory
+
+OR
+
+### Optional: WASM sandbox plugins
+- Must be sandboxed
+- Must enforce CPU/memory limits
+- Must restrict filesystem/network access
+
+---
+
+### PLUGIN RULES
+
+- Plugins cannot import core system code
+- Plugins must be versioned
+- Plugins must validate schema on input/output
+- Plugins must be replaceable without system change
+
+---
+
+## 5. CODE QUALITY RULES (GO)
+
+- All functions must have explicit types
+- No ignored errors (`_ = err` is forbidden unless justified)
+- No global variables
+- No reflection unless explicitly approved
+- No cgo usage unless explicitly approved
+- Prefer composition over inheritance
+- Use interfaces for all external dependencies
+
+---
+
+## 6. DEPENDENCY RULES
+
+- Only approved dependencies allowed
+- No automatic addition of libraries
+- All dependencies must be reviewed
+- Keep dependency graph minimal
+- Prefer standard library
+
+---
+
+## 7. AI CODE GENERATION RULES
+
+When generating code:
+
+### REQUIRED OUTPUT STRUCTURE
+
+1. Interfaces first
+2. Core implementation
+3. Tests
+4. Example usage
+
+---
+
+### MODIFICATION RULES
+
+- One bounded context per change
+- Do NOT modify unrelated modules
+- Do NOT refactor multiple domains in one change
+- Keep changes isolated and minimal
+
+---
+
+### FORBIDDEN AI BEHAVIOR
+
+- Do not invent APIs that do not exist
+- Do not assume hidden framework behavior
+- Do not skip error handling
+- Do not bypass architecture rules for convenience
+
+---
+
+## 8. SECURITY RULES
+
+- No secrets in code
+- No hardcoded credentials
+- No unsafe deserialization
+- No unsafe shell execution
+- Validate all external inputs
+- Sanitize all logs (no PII leakage)
+
+Mandatory tools:
+- govulncheck
+- gosec
+- staticcheck
+- golangci-lint
+
+---
+
+## 9. RELIABILITY RULES (NETOPS PLATFORM)
+
+- All IO must have timeout
+- All network calls must retry with backoff + jitter
+- All queues must be bounded
+- All services must support backpressure
+- All operations must be idempotent where possible
+
+---
+
+## 10. OBSERVABILITY RULES
+
+- Structured logging only
+- Every service must emit metrics
+- Tracing must be supported (OpenTelemetry preferred)
+- No silent failures allowed
+- All errors must be observable
+
+---
+
+## 11. TESTING RULES
+
+- Every module MUST have unit tests
+- Integration tests required for service boundaries
+- Mock telemetry streams required for validation
+- No feature is complete without tests
+
+---
+
+## 12. CI/CD GUARDRAILS
+
+Pipeline must enforce:
+
+- go vet ./...
+- go test ./...
+- go test -race
+- golangci-lint
+- staticcheck
+- govulncheck
+- gosec scan
+
+ANY failure = BLOCK MERGE
+
+---
+
+## 13. ARCHITECTURE VALIDATION RULES
+
+System must enforce:
+
+- no cross-domain imports
+- plugin isolation
+- schema compatibility
+- API contract stability
+- event format consistency
+
+---
+
+## 14. FINAL RULE
+
+If a requirement conflicts with these rules:
+
+👉 ALWAYS choose safety, modularity, and zero-trust design over speed or convenience.
