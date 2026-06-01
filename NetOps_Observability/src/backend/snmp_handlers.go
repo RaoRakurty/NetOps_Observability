@@ -28,18 +28,41 @@ func (s *server) handleSNMPOptions(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleSNMPCreds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, s.snmpCreds.List())
+		// Tenant isolation: a scoped principal sees only its own credentials;
+		// global/untagged creds are platform-owned (visible cross-tenant only).
+		tenant, cross := principalTenant(claims)
+		out := make([]publicSNMPCredential, 0)
+		for _, c := range s.snmpCreds.List() {
+			if sameTenant(c.TenantID, tenant, cross) {
+				out = append(out, c)
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
 			return
 		}
 		var c SNMPCredential
 		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		// A scoped principal may only write within its own tenant: block
+		// overwriting a credential it can't see, and force ownership to itself.
+		tenant, cross := principalTenant(claims)
+		if c.ID != "" {
+			if existing, found := s.snmpCreds.Get(c.ID); found && !sameTenant(existing.TenantID, tenant, cross) {
+				writeError(w, http.StatusNotFound, errors.New("no such credential"))
+				return
+			}
+		}
+		if !cross {
+			c.TenantID = tenant
 		}
 		saved, err := s.snmpCreds.Upsert(c)
 		if err != nil {
@@ -61,7 +84,16 @@ func (s *server) handleSNMPCredByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPut:
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
+			return
+		}
+		// Strict isolation: 404 (not 403) when the credential is out of the
+		// caller's tenant, so other tenants' ids aren't probeable.
+		tenant, cross := principalTenant(claims)
+		existing, found := s.snmpCreds.Get(id)
+		if !found || !sameTenant(existing.TenantID, tenant, cross) {
+			writeError(w, http.StatusNotFound, errors.New("no such credential"))
 			return
 		}
 		var c SNMPCredential
@@ -70,6 +102,9 @@ func (s *server) handleSNMPCredByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.ID = id
+		if !cross {
+			c.TenantID = tenant // a scoped principal can't re-home the credential
+		}
 		saved, err := s.snmpCreds.Upsert(c)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -77,7 +112,14 @@ func (s *server) handleSNMPCredByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, saved)
 	case http.MethodDelete:
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		existing, found := s.snmpCreds.Get(id)
+		if !found || !sameTenant(existing.TenantID, tenant, cross) {
+			writeError(w, http.StatusNotFound, errors.New("no such credential"))
 			return
 		}
 		if err := s.snmpCreds.Delete(id); err != nil {

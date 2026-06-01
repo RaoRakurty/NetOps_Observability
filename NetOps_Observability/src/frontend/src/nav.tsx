@@ -100,7 +100,8 @@ export const NAV: NavSection[] = [
     icon: "infrastructure",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
-      { id: "collectors", label: "Collectors", render: () => <Collectors /> },
+      // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
+      { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
       { id: "snmp", label: "SNMP Credentials", render: () => <SnmpCredentials /> },
     ],
   },

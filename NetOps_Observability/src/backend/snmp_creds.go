@@ -39,9 +39,10 @@ func inList(v string, list []string) bool {
 }
 
 type SNMPCredential struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Version string `json:"version"` // v1 | v2c | v3
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	TenantID string `json:"tenant_id,omitempty"` // owning tenant ("" = global/platform-owned)
+	Version  string `json:"version"`             // v1 | v2c | v3
 	Port    int    `json:"port"`    // default 161
 	Timeout int    `json:"timeout_ms"`
 	Retries int    `json:"retries"`
@@ -65,6 +66,7 @@ type SNMPCredential struct {
 type publicSNMPCredential struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
+	TenantID      string    `json:"tenant_id,omitempty"`
 	Version       string    `json:"version"`
 	Port          int       `json:"port"`
 	Timeout       int       `json:"timeout_ms"`
@@ -83,7 +85,7 @@ type publicSNMPCredential struct {
 
 func (c SNMPCredential) public() publicSNMPCredential {
 	return publicSNMPCredential{
-		ID: c.ID, Name: c.Name, Version: c.Version, Port: c.Port, Timeout: c.Timeout, Retries: c.Retries,
+		ID: c.ID, Name: c.Name, TenantID: c.TenantID, Version: c.Version, Port: c.Port, Timeout: c.Timeout, Retries: c.Retries,
 		HasCommunity: c.Community != "", Community: c.Community, SecurityName: c.SecurityName, SecurityLevel: c.SecurityLevel,
 		AuthProtocol: c.AuthProtocol, HasAuthKey: c.AuthKey != "", PrivProtocol: c.PrivProtocol,
 		HasPrivKey: c.PrivKey != "", Context: c.Context, CreatedAt: c.CreatedAt,
@@ -196,6 +198,18 @@ func (s *snmpCredStore) List() []publicSNMPCredential {
 	return out
 }
 
+// Get returns the redacted credential for an id (for tenant-ownership checks at
+// the API boundary), without exposing secrets.
+func (s *snmpCredStore) Get(id string) (publicSNMPCredential, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.creds[id]
+	if !ok {
+		return publicSNMPCredential{}, false
+	}
+	return c.public(), true
+}
+
 // Resolve returns the full (secret-bearing) credential for a device's
 // credential_ref. Matches by id or by name (case-insensitive). Used by the
 // poller, not the API.
@@ -236,6 +250,9 @@ func (s *snmpCredStore) Upsert(c SNMPCredential) (publicSNMPCredential, error) {
 		}
 		if c.CreatedAt.IsZero() {
 			c.CreatedAt = existing.CreatedAt
+		}
+		if c.TenantID == "" {
+			c.TenantID = existing.TenantID // don't silently re-home a credential
 		}
 	}
 	if c.CreatedAt.IsZero() {

@@ -474,7 +474,13 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) handleCollectors(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleCollectors(w http.ResponseWriter, r *http.Request) {
+	// Collector status is a fleet-wide aggregate (shared poller engines, no
+	// per-tenant breakdown), so it's platform-owner only — a tenant-scoped user
+	// would otherwise learn the global fleet size. See requireCrossTenant.
+	if _, ok := s.requireCrossTenant(w, r); !ok {
+		return
+	}
 	writeJSON(w, http.StatusOK, s.collectors.Status())
 }
 
