@@ -21,40 +21,66 @@ type MetricTile struct {
 	Trend string `json:"trend,omitempty"`
 }
 
-func (s *server) handleMetricTiles(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.currentMetricTiles())
+func (s *server) handleMetricTiles(w http.ResponseWriter, r *http.Request) {
+	claims, _ := userFrom(r.Context())
+	writeJSON(w, http.StatusOK, s.currentMetricTiles(claims))
 }
 
-// currentMetricTiles snapshots the system state into the dashboard tile shape.
-// The headline KPIs are operations-first: fleet size, what's DOWN right now,
-// active security/critical threats, and site coverage. Add tiles by appending —
-// the frontend renders whatever the array contains.
-func (s *server) currentMetricTiles() []MetricTile {
-	devs := s.discovery.Devices()
+// currentMetricTiles snapshots the system state into the dashboard tile shape,
+// SCOPED to the caller's tenant. The headline KPIs are operations-first: fleet
+// size, what's DOWN right now, active security/critical threats, and site
+// coverage. Add tiles by appending — the frontend renders whatever the array
+// contains.
+//
+// Tenant isolation: a scoped principal's tiles reflect only its own devices and
+// alerts — the dashboard must not leak the global fleet's counts (the platform
+// owner, cross-tenant, still sees everything).
+func (s *server) currentMetricTiles(claims jwtClaims) []MetricTile {
+	devs := visibleDevices(s.discovery.Devices(), claims)
 	devices := len(devs)
+	ids, cross := s.visibleDeviceIDs(claims)
 
-	// Devices down: unreachable targets summed across protocol collectors
-	// (targets a poller knows about minus the ones it can currently reach).
+	// Devices down. Platform owner: unreachable targets summed across protocol
+	// collectors (collector stats are fleet-wide, not tenant-attributable). A
+	// scoped tenant instead proxies reachability with LastSeen staleness over its
+	// OWN devices, so the count never reflects another tenant's fleet.
 	down := 0
-	for _, c := range s.collectors.Status() {
-		if c.Kind != "" && c.Kind != "protocol" {
-			continue
+	if cross {
+		if s.collectors != nil {
+			for _, c := range s.collectors.Status() {
+				if c.Kind != "" && c.Kind != "protocol" {
+					continue
+				}
+				if d := c.Targets - c.Reachable; d > 0 {
+					down += d
+				}
+			}
 		}
-		if d := c.Targets - c.Reachable; d > 0 {
-			down += d
+	} else {
+		now := time.Now()
+		for _, d := range devs {
+			if !d.LastSeen.IsZero() && now.Sub(d.LastSeen) > 5*time.Minute {
+				down++
+			}
 		}
 	}
 
-	// Critical threats: active alerts at critical severity (the security/
-	// page-worthy signal, distinct from the full alert count).
+	// Critical threats: active critical alerts the principal is allowed to see
+	// (same visibility rule as GET /api/alerts; device-less alerts stay visible).
 	threats := 0
-	for _, a := range s.alerts.Active() {
-		if strings.EqualFold(strings.TrimSpace(a.Severity), "critical") {
+	if s.alerts != nil {
+		for _, a := range s.alerts.Active() {
+			if !strings.EqualFold(strings.TrimSpace(a.Severity), "critical") {
+				continue
+			}
+			if !cross && !(a.DeviceID == "" || ids[a.DeviceID]) {
+				continue
+			}
 			threats++
 		}
 	}
 
-	// Sites: distinct site/location labels across the fleet.
+	// Sites: distinct site/location labels across the VISIBLE fleet.
 	siteSet := map[string]struct{}{}
 	for _, d := range devs {
 		site := d.Labels["site"]
@@ -112,14 +138,18 @@ func (s *server) startBroadcaster(stop <-chan struct{}) {
 			return
 
 		case <-metricsTicker.C:
-			// Push the full tile list so the client doesn't have to
-			// reconcile partial updates. The receiver upserts by title.
-			for _, t := range s.currentMetricTiles() {
-				s.hub.Broadcast(map[string]any{
-					"type": "metric_update",
-					"data": t,
-				})
-			}
+			// Push the full tile list so the client doesn't have to reconcile
+			// partial updates. The receiver upserts by title. Tiles are computed
+			// PER CLIENT from its own tenant scope so the dashboard never leaks
+			// the global fleet's counts to a tenant-scoped user.
+			s.hub.BroadcastFiltered(func(claims jwtClaims) []map[string]any {
+				tiles := s.currentMetricTiles(claims)
+				msgs := make([]map[string]any, 0, len(tiles))
+				for _, t := range tiles {
+					msgs = append(msgs, map[string]any{"type": "metric_update", "data": t})
+				}
+				return msgs
+			})
 
 		case <-telemetryTicker.C:
 			// Placeholder telemetry value — replace with a real
@@ -156,9 +186,15 @@ func (s *server) watchAlertsForBroadcast(ctx context.Context) {
 					continue
 				}
 				seen[a.ID] = true
-				s.hub.Broadcast(map[string]any{
-					"type": "alert",
-					"data": a,
+				alert := a // capture for the per-client closure
+				// Fan out only to clients whose tenant may see this alert (same
+				// rule as GET /api/alerts) so one tenant's alerts never surface
+				// on another's dashboard.
+				s.hub.BroadcastFiltered(func(claims jwtClaims) []map[string]any {
+					if !s.alertVisibleTo(alert, claims) {
+						return nil
+					}
+					return []map[string]any{{"type": "alert", "data": alert}}
 				})
 			}
 		}

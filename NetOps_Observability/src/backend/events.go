@@ -37,10 +37,11 @@ const wsMagic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 // ----------------------------------------------------------------------------
 
 type wsClient struct {
-	conn net.Conn
-	send chan []byte
-	done chan struct{}
-	once sync.Once
+	conn   net.Conn
+	send   chan []byte
+	done   chan struct{}
+	once   sync.Once
+	claims jwtClaims // the principal that opened the socket; gates tenant-sensitive frames
 }
 
 func (c *wsClient) close() {
@@ -94,6 +95,29 @@ func (h *Hub) Broadcast(msg map[string]any) {
 	}
 }
 
+// BroadcastFiltered fans out a PER-CLIENT set of frames: build(claims) returns
+// the messages to send that specific client (nil/empty to skip it). Use this for
+// tenant-sensitive payloads (dashboard tiles, alerts) so one tenant never
+// receives another's data over the shared socket. Slow clients are dropped, as
+// in Broadcast.
+func (h *Hub) BroadcastFiltered(build func(claims jwtClaims) []map[string]any) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients {
+		for _, msg := range build(c.claims) {
+			data, err := json.Marshal(msg)
+			if err != nil {
+				continue
+			}
+			select {
+			case c.send <- data:
+			default:
+				// drop: client is too slow
+			}
+		}
+	}
+}
+
 func (h *Hub) Count() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -143,10 +167,12 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims, _ := userFrom(r.Context())
 	client := &wsClient{
-		conn: conn,
-		send: make(chan []byte, 64),
-		done: make(chan struct{}),
+		conn:   conn,
+		send:   make(chan []byte, 64),
+		done:   make(chan struct{}),
+		claims: claims,
 	}
 	s.hub.register(client)
 	defer s.hub.unregister(client)

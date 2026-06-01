@@ -112,6 +112,18 @@ func visibleDevices(all []models.Device, c jwtClaims) []models.Device {
 	return out
 }
 
+// alertVisibleTo reports whether a principal may see an alert: the platform
+// owner sees all; a scoped principal sees alerts on its own devices, plus
+// device-less (stack-level) alerts. Mirrors the GET /api/alerts filter so the
+// WebSocket alert feed enforces the same boundary.
+func (s *server) alertVisibleTo(a models.Alert, c jwtClaims) bool {
+	ids, cross := s.visibleDeviceIDs(c)
+	if cross {
+		return true
+	}
+	return a.DeviceID == "" || ids[a.DeviceID]
+}
+
 // visibleDeviceIDs returns the set of device ids the principal may view, plus a
 // cross-tenant flag (when true the set is empty and means "all"). Used to scope
 // resources that reference a device (alerts, flows, …).
