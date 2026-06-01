@@ -32,6 +32,22 @@ func (s *server) requireAdmin(w http.ResponseWriter, r *http.Request) (jwtClaims
 	return s.requirePerm(w, r, "administration", LevelAdmin)
 }
 
+// requirePlatformAdmin gates an action to the cross-tenant PLATFORM OWNER
+// (a super-admin in the global tenant). Used for platform-wide resources a
+// tenant admin must never mutate: role definitions, the tenant registry,
+// platform SSO config, etc.
+func (s *server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (jwtClaims, bool) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return claims, false
+	}
+	if _, cross := principalTenant(claims); !cross {
+		writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
+		return claims, false
+	}
+	return claims, true
+}
+
 // handlePermissions returns the caller's effective module→level grid so the
 // SPA can gate navigation. Available to any authenticated user.
 func (s *server) handlePermissions(w http.ResponseWriter, r *http.Request) {
@@ -67,14 +83,19 @@ type createUserRequest struct {
 }
 
 func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
 		return
 	}
+	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
 		users := s.users.List()
 		out := make([]publicUser, 0, len(users))
 		for _, u := range users {
+			if !sameTenant(u.TenantID, tenant, cross) {
+				continue // strict isolation: a tenant admin sees only its own users
+			}
 			out = append(out, toPublic(u))
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -83,6 +104,11 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		// A tenant admin may only create users inside its own tenant; only the
+		// platform owner may target an arbitrary tenant.
+		if !cross {
+			req.TenantID = tenant
 		}
 		role := req.Role
 		if role == "" {
@@ -118,12 +144,23 @@ type updateUserRequest struct {
 }
 
 func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	if id == "" || strings.Contains(id, "/") {
 		writeError(w, http.StatusBadRequest, errors.New("invalid username"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	// Strict isolation: a tenant admin may only act on users inside its own
+	// tenant. Resolve the target first and 404 (not 403) when it is out of scope,
+	// so a tenant admin can neither see nor delete the platform admin / other
+	// tenants' users — and existence isn't leaked.
+	target, found := s.users.Get(id)
+	if !found || !sameTenant(target.TenantID, tenant, cross) {
+		writeError(w, http.StatusNotFound, errors.New("user not found"))
 		return
 	}
 	switch r.Method {
@@ -139,9 +176,14 @@ func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// A tenant admin cannot move a user out of its own tenant.
+		tid := req.TenantID
+		if !cross {
+			tid = target.TenantID
+		}
 		u, err := s.users.Update(id, User{
 			Role: req.Role, Email: req.Email, DisplayName: req.DisplayName,
-			TenantID: req.TenantID, Status: req.Status,
+			TenantID: tid, Status: req.Status,
 		})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -174,8 +216,13 @@ func (s *server) handleRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		// Role definitions are platform-wide; a tenant admin may read them (to
+		// assign to its own users) but not change them.
 		writeJSON(w, http.StatusOK, map[string]any{"modules": Modules, "roles": s.roles.List()})
 	case http.MethodPost:
+		if _, ok := s.requirePlatformAdmin(w, r); !ok {
+			return
+		}
 		var role Role
 		if err := json.NewDecoder(r.Body).Decode(&role); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -194,7 +241,7 @@ func (s *server) handleRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleRoleByID(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/roles/")
@@ -236,13 +283,31 @@ type createTenantRequest struct {
 }
 
 func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
 		return
 	}
+	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.tenants.List())
+		all := s.tenants.List()
+		if cross {
+			writeJSON(w, http.StatusOK, all)
+			return
+		}
+		// A tenant admin sees only its own tenant in the registry.
+		out := make([]Tenant, 0, 1)
+		for _, t := range all {
+			if strings.EqualFold(t.ID, tenant) {
+				out = append(out, t)
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
+		if !cross {
+			writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
+			return
+		}
 		var req createTenantRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -261,7 +326,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
@@ -303,14 +368,26 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.apiKeys.List())
+		all := s.apiKeys.List()
+		out := make([]publicAPIKey, 0, len(all))
+		for _, k := range all {
+			if sameTenant(k.TenantID, tenant, cross) {
+				out = append(out, k)
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var req createAPIKeyRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		// A tenant admin can only mint keys bound to its own tenant.
+		if !cross {
+			req.TenantID = tenant
 		}
 		rec, secret, err := s.apiKeys.Create(apiKeyInput{
 			TenantID:        req.TenantID,
@@ -340,7 +417,8 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/apikeys/")
@@ -351,6 +429,20 @@ func (s *server) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		w.Header().Set("Allow", "DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Strict isolation: a tenant admin may only revoke keys bound to its own
+	// tenant. 404 when out of scope so other tenants' key ids aren't probeable.
+	tenant, cross := principalTenant(claims)
+	visible := false
+	for _, k := range s.apiKeys.List() {
+		if k.ID == id {
+			visible = sameTenant(k.TenantID, tenant, cross)
+			break
+		}
+	}
+	if !visible {
+		writeError(w, http.StatusNotFound, errors.New("key not found"))
 		return
 	}
 	if err := s.apiKeys.Revoke(id); err != nil {

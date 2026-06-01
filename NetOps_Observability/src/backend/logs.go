@@ -120,6 +120,45 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// range-filter on that. unmapped_type keeps the sort from failing on any
 	// index whose mapping happens to lack the field rather than erroring the
 	// whole multi-index search.
+	filters := []any{
+		map[string]any{
+			"range": map[string]any{
+				"timestamp": map[string]string{
+					"gte": start.Format(time.RFC3339),
+					"lte": end.Format(time.RFC3339),
+				},
+			},
+		},
+	}
+
+	// Tenant isolation: a scoped principal may only see logs emitted by devices
+	// in its own tenant — matched on the log's host/hostname (device name) or
+	// source_ip (device address). A tenant with no devices sees no logs; the
+	// cross-tenant platform owner is unrestricted. (Logs aren't yet tagged with a
+	// tenant_id at ingestion, so we scope by the caller's visible device set.)
+	if claims, ok := userFrom(r.Context()); ok {
+		if names, cross := s.visibleDeviceKeys(claims); !cross {
+			addrs, _ := s.visibleDeviceAddrs(claims)
+			var should []any
+			if len(names) > 0 {
+				should = append(should,
+					map[string]any{"terms": map[string]any{"host": names}},
+					map[string]any{"terms": map[string]any{"hostname": names}},
+				)
+			}
+			if len(addrs) > 0 {
+				should = append(should, map[string]any{"terms": map[string]any{"source_ip": addrs}})
+			}
+			if len(should) == 0 {
+				// No visible devices → no logs are in this tenant's namespace.
+				should = append(should, map[string]any{"match_none": map[string]any{}})
+			}
+			filters = append(filters, map[string]any{
+				"bool": map[string]any{"should": should, "minimum_should_match": 1},
+			})
+		}
+	}
+
 	body := map[string]any{
 		"size": req.Size,
 		"sort": []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
@@ -133,16 +172,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 						},
 					},
 				},
-				"filter": []any{
-					map[string]any{
-						"range": map[string]any{
-							"timestamp": map[string]string{
-								"gte": start.Format(time.RFC3339),
-								"lte": end.Format(time.RFC3339),
-							},
-						},
-					},
-				},
+				"filter": filters,
 			},
 		},
 	}

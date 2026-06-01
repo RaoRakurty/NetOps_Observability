@@ -13,19 +13,21 @@ import (
 // resource carries a TenantID, and read/write handlers filter against the
 // caller's tenant resolved from their token claims.
 //
-// A principal is "cross-tenant" (sees everything) when it is a super-admin or
-// is unbound / bound to the global tenant — that covers the seeded admin and
-// platform operators. Everyone else is strictly scoped. Resources with an empty
-// TenantID are treated as global/shared and are visible to all tenants but
-// owned by none (so a scoped tenant can never mutate them away from others).
-// See docs/IDENTITY_ACCESS.md (multi-tenancy).
+// Cross-tenant ("sees everything") is reserved for the PLATFORM OWNER only — a
+// super-admin in the global/platform tenant. Every other principal, INCLUDING a
+// tenant's own super-admin, is strictly confined to its tenant: a tenant is a
+// namespace, not a window onto the platform. Resources owned by the global tenant
+// (or with an empty TenantID) belong to the platform and are visible only to the
+// platform owner — a new tenant therefore starts as an empty namespace and can
+// never see another tenant's (or the platform's) data. See docs/IDENTITY_ACCESS.md.
 
 // principalTenant resolves the caller's tenant id and whether they may read
-// across all tenants.
+// across all tenants. crossTenant is true ONLY for a super-admin whose own tenant
+// is the global/platform tenant (the SaaS operator).
 func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
 	t := strings.ToLower(strings.TrimSpace(c.Tenant))
-	if isSuperAdminRole(c.Role) || t == "" || t == TenantGlobal {
-		return t, true
+	if isSuperAdminRole(c.Role) && (t == "" || t == TenantGlobal) {
+		return TenantGlobal, true
 	}
 	return t, false
 }
@@ -34,13 +36,24 @@ func deviceTenant(d models.Device) string {
 	return strings.ToLower(strings.TrimSpace(d.TenantID))
 }
 
-// canSeeDevice reports whether a scoped principal may view a device.
+// sameTenant reports whether a resource owned by resourceTenant is visible to a
+// principal scoped to `tenant` (cross-tenant principals see everything). Strict:
+// only an exact tenant match — global/unassigned resources are platform-owned.
+func sameTenant(resourceTenant, tenant string, cross bool) bool {
+	if cross {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(resourceTenant)) == tenant
+}
+
+// canSeeDevice reports whether a scoped principal may view a device. Strict
+// isolation: a scoped principal sees ONLY its own tenant's devices; global/
+// unassigned devices belong to the platform and are visible only cross-tenant.
 func canSeeDevice(d models.Device, tenant string, cross bool) bool {
 	if cross {
 		return true
 	}
-	dt := deviceTenant(d)
-	return dt == "" || dt == TenantGlobal || dt == tenant
+	return deviceTenant(d) == tenant
 }
 
 // ---- saved objects ---------------------------------------------------------
@@ -49,14 +62,14 @@ func savedTenant(o SavedObject) string {
 	return strings.ToLower(strings.TrimSpace(o.TenantID))
 }
 
-// canSeeSaved reports whether a scoped principal may view a saved object. Like
-// devices, an empty/global tenant id is shared and visible to all.
+// canSeeSaved reports whether a scoped principal may view a saved object.
+// Strict isolation: only the principal's own tenant (global/unassigned objects
+// are platform-owned, visible only cross-tenant).
 func canSeeSaved(o SavedObject, tenant string, cross bool) bool {
 	if cross {
 		return true
 	}
-	st := savedTenant(o)
-	return st == "" || st == TenantGlobal || st == tenant
+	return savedTenant(o) == tenant
 }
 
 // canMutateSaved reports whether a scoped principal may modify/delete a saved

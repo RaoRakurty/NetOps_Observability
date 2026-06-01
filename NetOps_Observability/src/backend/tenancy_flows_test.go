@@ -12,7 +12,7 @@ func serverWithDevices() *server {
 	d := NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "core-1", Name: "core-1", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "edge-2", Name: "edge-2", Address: "10.2.0.1", TenantID: "globex"})
-	d.Upsert(models.Device{ID: "shared", Name: "shared", Address: "10.9.0.1"}) // global/shared
+	d.Upsert(models.Device{ID: "shared", Name: "shared", Address: "10.9.0.1"}) // global/untagged (platform-owned)
 	return &server{discovery: d}
 }
 
@@ -32,8 +32,8 @@ func TestVisibleDeviceAddrsTenantIsolation(t *testing.T) {
 	if set["10.2.0.1"] {
 		t.Error("TENANT LEAK: acme must NOT see globex device address in flow scoping")
 	}
-	if !set["10.9.0.1"] {
-		t.Error("shared device address should be visible to a scoped tenant")
+	if set["10.9.0.1"] {
+		t.Error("strict isolation: global/untagged device address must NOT be visible to a scoped tenant")
 	}
 }
 
@@ -55,7 +55,7 @@ func TestVisibleDeviceKeysTenantIsolation(t *testing.T) {
 	for _, k := range keys {
 		set[k] = true
 	}
-	// globex sees its own id+name and the shared device, never acme's.
+	// globex sees only its own id+name, never the global/untagged device nor acme's.
 	if !set["edge-2"] {
 		t.Error("globex should see its own device keys")
 	}

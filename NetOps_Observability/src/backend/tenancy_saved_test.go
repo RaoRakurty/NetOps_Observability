@@ -6,7 +6,7 @@ func savedSet() []SavedObject {
 	return []SavedObject{
 		{ID: "a", TenantID: "acme"},
 		{ID: "b", TenantID: "globex"},
-		{ID: "s"}, // shared / global (no tenant)
+		{ID: "s"}, // unassigned (no tenant) — platform-owned
 		{ID: "g", TenantID: TenantGlobal},
 	}
 }
@@ -19,10 +19,19 @@ func savedIDs(os []SavedObject) map[string]bool {
 	return m
 }
 
-func TestVisibleSavedSuperAdminSeesAll(t *testing.T) {
-	got := visibleSaved(savedSet(), jwtClaims{Role: RoleSuperAdmin, Tenant: "acme"})
+// The platform owner (super-admin in the global tenant) sees every saved object.
+func TestVisibleSavedPlatformOwnerSeesAll(t *testing.T) {
+	got := visibleSaved(savedSet(), jwtClaims{Role: RoleSuperAdmin, Tenant: TenantGlobal})
 	if len(got) != 4 {
-		t.Fatalf("super-admin should see all 4 saved objects, got %d", len(got))
+		t.Fatalf("platform owner should see all 4 saved objects, got %d", len(got))
+	}
+}
+
+// A tenant-bound super-admin is scoped to its own tenant's objects only.
+func TestVisibleSavedTenantSuperAdminScoped(t *testing.T) {
+	got := savedIDs(visibleSaved(savedSet(), jwtClaims{Role: RoleSuperAdmin, Tenant: "acme"}))
+	if !got["a"] || got["b"] || got["s"] || got["g"] {
+		t.Fatalf("tenant super-admin must see ONLY its own saved object (a), got %v", got)
 	}
 }
 
@@ -34,25 +43,27 @@ func TestVisibleSavedTenantIsolation(t *testing.T) {
 	if got["b"] {
 		t.Error("TENANT LEAK: acme must NOT see globex saved object b")
 	}
-	if !got["s"] || !got["g"] {
-		t.Error("shared/global saved objects should be visible to a scoped tenant")
+	// Strict isolation: global/unassigned saved objects are platform-owned and
+	// must NOT leak into a scoped tenant's view.
+	if got["s"] || got["g"] {
+		t.Error("TENANT LEAK: global/unassigned saved objects must NOT be visible to a scoped tenant")
 	}
 }
 
-// canMutateSaved must be stricter than canSeeSaved: a scoped tenant can VIEW a
-// shared/global object but must not be able to mutate or delete it (it belongs
-// to no single tenant), mirroring the device contract.
-func TestCanMutateSavedSharedIsReadOnlyForScoped(t *testing.T) {
-	shared := SavedObject{ID: "s"} // no tenant
-	if !canSeeSaved(shared, "acme", false) {
-		t.Error("scoped tenant should be able to VIEW a shared object")
+// Strict view + mutate contract for a scoped tenant.
+func TestCanSeeAndMutateSavedStrict(t *testing.T) {
+	shared := SavedObject{ID: "s"} // no tenant → platform-owned
+	if canSeeSaved(shared, "acme", false) {
+		t.Error("LEAK: a scoped tenant must NOT see a global/unassigned object")
+	}
+	if !canSeeSaved(SavedObject{TenantID: "acme"}, "acme", false) {
+		t.Error("scoped tenant should see its own object")
 	}
 	if canMutateSaved(shared, "acme", false) {
-		t.Error("LEAK: scoped tenant must NOT mutate a shared/global object")
+		t.Error("LEAK: scoped tenant must NOT mutate a global/unassigned object")
 	}
-	owned := SavedObject{ID: "a", TenantID: "acme"}
-	if !canMutateSaved(owned, "acme", false) {
-		t.Error("scoped tenant should be able to mutate its own object")
+	if !canMutateSaved(SavedObject{ID: "a", TenantID: "acme"}, "acme", false) {
+		t.Error("scoped tenant should mutate its own object")
 	}
 	if canMutateSaved(SavedObject{TenantID: "globex"}, "acme", false) {
 		t.Error("TENANT LEAK: acme must NOT mutate a globex object")
@@ -60,8 +71,8 @@ func TestCanMutateSavedSharedIsReadOnlyForScoped(t *testing.T) {
 }
 
 func TestCanMutateSavedCrossTenant(t *testing.T) {
-	// A cross-tenant principal may mutate anything, including shared objects.
+	// The platform owner may mutate anything.
 	if !canMutateSaved(SavedObject{TenantID: "globex"}, "", true) {
-		t.Error("cross-tenant principal should mutate any object")
+		t.Error("platform owner should mutate any object")
 	}
 }

@@ -130,7 +130,7 @@ func TestFlowTenantClauseCrossTenant(t *testing.T) {
 }
 
 // flowTenantClause: scoped principal gets a src/dst IN(...) restriction limited
-// to its own + shared device addresses, never another tenant's.
+// to its own device addresses, never another tenant's nor global/untagged ones.
 func TestFlowTenantClauseScoped(t *testing.T) {
 	s := flowsTestServer(t)
 	r := req(http.MethodGet, "/api/flows", "", acme())
@@ -144,8 +144,8 @@ func TestFlowTenantClauseScoped(t *testing.T) {
 	if !strings.Contains(clause, "'10.1.0.1'") {
 		t.Errorf("clause should include acme's own address: %q", clause)
 	}
-	if !strings.Contains(clause, "'10.9.0.1'") {
-		t.Errorf("clause should include shared address: %q", clause)
+	if strings.Contains(clause, "'10.9.0.1'") {
+		t.Errorf("strict isolation: shared/global address must NOT appear in a scoped clause: %q", clause)
 	}
 	if strings.Contains(clause, "'10.2.0.1'") {
 		t.Errorf("TENANT LEAK: acme clause must not include globex address: %q", clause)

@@ -21,7 +21,7 @@ func tenantServer(t *testing.T) *server {
 	d := NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
-	d.Upsert(models.Device{ID: "shared-dns", Name: "shared-dns", Address: "10.9.0.1"}) // global/shared
+	d.Upsert(models.Device{ID: "shared-dns", Name: "shared-dns", Address: "10.9.0.1"}) // global/untagged (platform-owned)
 	sv, err := newSavedStore(t.TempDir() + "/saved.json")
 	if err != nil {
 		t.Fatalf("savedStore: %v", err)
@@ -43,7 +43,7 @@ func superA() jwtClaims { return jwtClaims{Sub: "root", Role: RoleSuperAdmin} }
 func TestHTTPDevicesTenantScoped(t *testing.T) {
 	s := tenantServer(t)
 
-	// acme sees its own + shared, never globex.
+	// acme sees only its own — never globex, never the global/untagged device.
 	w := httptest.NewRecorder()
 	s.handleDevices(w, req("GET", "/api/devices", "", acme()))
 	var devs []models.Device
@@ -52,8 +52,11 @@ func TestHTTPDevicesTenantScoped(t *testing.T) {
 	for _, d := range devs {
 		ids[d.ID] = true
 	}
-	if !ids["acme-core"] || !ids["shared-dns"] {
-		t.Error("acme should see its own + shared devices")
+	if !ids["acme-core"] {
+		t.Error("acme should see its own device")
+	}
+	if ids["shared-dns"] {
+		t.Error("strict isolation: acme must NOT see the global/untagged device")
 	}
 	if ids["globex-core"] {
 		t.Fatal("TENANT LEAK: acme saw globex-core via GET /api/devices")
