@@ -392,16 +392,19 @@ export const api = {
     }),
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
 
-  // Flows (ClickHouse)
-  topTalkers: (sinceSeconds = 3600, limit = 20) =>
+  // Flows (ClickHouse). `type` filters by source family (netflow|ipfix|sflow);
+  // empty = all sources.
+  topTalkers: (sinceSeconds = 3600, limit = 20, type = "") =>
     request<ClickHouseResponse>(
-      `/api/flows/top?since=${sinceSeconds}s&limit=${limit}`,
+      `/api/flows/top?since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}`,
     ),
-  flowsByProto: (sinceSeconds = 3600) =>
-    request<ClickHouseResponse>(`/api/flows/by-proto?since=${sinceSeconds}s`),
-  flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60) =>
+  flowsByProto: (sinceSeconds = 3600, type = "") =>
+    request<ClickHouseResponse>(`/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}`),
+  flowsByType: (sinceSeconds = 3600) =>
+    request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
+  flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "") =>
     request<ClickHouseResponse>(
-      `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s`,
+      `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}`,
     ),
   tunnels: (limit = 200, status?: string) => {
     const p = new URLSearchParams({ limit: String(limit) });

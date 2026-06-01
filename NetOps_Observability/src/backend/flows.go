@@ -33,7 +33,7 @@ SELECT src_addr AS src,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + `
  GROUP BY src, dst
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
@@ -54,7 +54,7 @@ SELECT proto,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + `
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
@@ -99,7 +99,7 @@ SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` S
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + `
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + `
  GROUP BY bucket
  ORDER BY bucket
  FORMAT JSON`
@@ -136,6 +136,23 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
 	proxyClickHouse(w, sql)
+}
+
+// flowTypeClause restricts flow rows to a single source family when ?type= is
+// one of netflow|ipfix|sflow. The returned fragment uses only server-side
+// literals (never the raw query value), so it is injection-safe; any other
+// value yields no clause (= all sources).
+func flowTypeClause(r *http.Request) string {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type"))) {
+	case "netflow":
+		return " AND flow_type = 'netflow'"
+	case "ipfix":
+		return " AND flow_type = 'ipfix'"
+	case "sflow":
+		return " AND flow_type = 'sflow'"
+	default:
+		return ""
+	}
 }
 
 // flowTenantClause builds the SQL fragment that restricts flow rows to a scoped

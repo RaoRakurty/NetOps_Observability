@@ -20,6 +20,22 @@ type ProtoRow = {
 
 type TsRow = { bucket: string; bytes_total: number; packets_total: number };
 
+type ByTypeRow = {
+  flow_type: string;
+  bytes_total: number;
+  packets_total: number;
+  flows: number;
+  exporters: number;
+};
+
+// Source families the collector ingests (goflow2 → flow_type column).
+const FLOW_TYPES: { value: string; label: string }[] = [
+  { value: "", label: "All sources" },
+  { value: "netflow", label: "NetFlow" },
+  { value: "ipfix", label: "IPFIX" },
+  { value: "sflow", label: "sFlow" },
+];
+
 const PROTO_NAMES: Record<number, string> = {
   1: "ICMP",
   6: "TCP",
@@ -34,8 +50,10 @@ const PROTO_NAMES: Record<number, string> = {
 // the component manages its own range selector.
 export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) {
   const [since, setSince] = useState(sinceSeconds ?? 3600);
+  const [ftype, setFtype] = useState(""); // "" | netflow | ipfix | sflow
   const [top, setTop] = useState<TopTalkerRow[]>([]);
   const [byProto, setByProto] = useState<ProtoRow[]>([]);
+  const [byType, setByType] = useState<ByTypeRow[]>([]);
   const [ts, setTs] = useState<TsRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,15 +65,17 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
     let alive = true;
     const load = async () => {
       try {
-        const [a, b, c] = await Promise.all([
-          api.topTalkers(since, 25),
-          api.flowsByProto(since),
-          api.flowsTimeseries(since, Math.max(60, Math.floor(since / 60))),
+        const [a, b, c, d] = await Promise.all([
+          api.topTalkers(since, 25, ftype),
+          api.flowsByProto(since, ftype),
+          api.flowsTimeseries(since, Math.max(60, Math.floor(since / 60)), ftype),
+          api.flowsByType(since),
         ]);
         if (!alive) return;
         setTop((a?.data as TopTalkerRow[]) ?? []);
         setByProto((b?.data as ProtoRow[]) ?? []);
         setTs((c?.data as TsRow[]) ?? []);
+        setByType((d?.data as ByTypeRow[]) ?? []);
         setError(null);
       } catch (e) {
         if (alive) setError((e as Error).message);
@@ -67,29 +87,51 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
       alive = false;
       clearInterval(id);
     };
-  }, [since]);
+  }, [since, ftype]);
 
   return (
     <>
       <div className="card">
-        <h2>NetFlow / IPFIX / sFlow analytics</h2>
-        <p style={{ color: "var(--muted)", fontSize: 12 }}>
-          Queries run via <code>/api/flows/*</code>. Counts are
-          scaled by each device's sampling rate.
+        <div className="admin-card-head">
+          <h2>{(FLOW_TYPES.find((t) => t.value === ftype)?.label ?? "All sources")} · flow analytics</h2>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select value={ftype} onChange={(e) => setFtype(e.target.value)} title="Flow source" style={{ width: 150 }}>
+              {FLOW_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+            {sinceSeconds === undefined && (
+              <select value={since} onChange={(e) => setSince(Number(e.target.value))} style={{ width: 170 }}>
+                <option value={900}>Last 15 minutes</option>
+                <option value={3600}>Last 1 hour</option>
+                <option value={21600}>Last 6 hours</option>
+                <option value={86400}>Last 24 hours</option>
+              </select>
+            )}
+          </div>
+        </div>
+        <p className="mini-meta">
+          Counts scaled by each device's sampling rate. Pick a source to view only NetFlow, IPFIX or sFlow — or click a chip below.
         </p>
-        {sinceSeconds === undefined && (
-          <select
-            value={since}
-            onChange={(e) => setSince(Number(e.target.value))}
-            style={{ width: 200 }}
-          >
-            <option value={900}>Last 15 minutes</option>
-            <option value={3600}>Last 1 hour</option>
-            <option value={21600}>Last 6 hours</option>
-            <option value={86400}>Last 24 hours</option>
-          </select>
-        )}
-        {error && <p style={{ color: "var(--bad)" }}>{error}</p>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {byType.length === 0 ? (
+            <span className="mini-meta">No flow data in this window.</span>
+          ) : (
+            byType.map((t) => (
+              <button
+                key={t.flow_type}
+                type="button"
+                onClick={() => setFtype(ftype === t.flow_type ? "" : t.flow_type)}
+                className={`badge ${ftype === t.flow_type ? "good" : "accent-badge"}`}
+                style={{ cursor: "pointer", border: "none" }}
+                title={`${t.exporters} exporter(s) sending ${t.flow_type}`}
+              >
+                {String(t.flow_type).toUpperCase()}: {Number(t.flows).toLocaleString()} flows · {t.exporters} exporters
+              </button>
+            ))
+          )}
+        </div>
+        {error && <p style={{ color: "var(--bad)", marginTop: 8 }}>{error}</p>}
       </div>
 
       <div className="card">
