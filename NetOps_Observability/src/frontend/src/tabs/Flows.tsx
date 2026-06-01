@@ -74,7 +74,7 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
       <div className="card">
         <h2>NetFlow / IPFIX / sFlow analytics</h2>
         <p style={{ color: "var(--muted)", fontSize: 12 }}>
-          Queries run against ClickHouse via <code>/api/flows/*</code>. Counts are
+          Queries run via <code>/api/flows/*</code>. Counts are
           scaled by each device's sampling rate.
         </p>
         {sinceSeconds === undefined && (

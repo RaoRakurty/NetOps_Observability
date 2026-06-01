@@ -81,7 +81,7 @@ export function UsersAdmin() {
 
   return (
     <>
-      <AdminHead title="Users" sub={`People with access to ${BRAND}. Local accounts today; federated users (SSO/LDAP) arrive once Keycloak is wired.`} />
+      <AdminHead title="Users" sub={`People with access to ${BRAND}. Local accounts today; federated users (SSO/LDAP) arrive once an identity provider is configured.`} />
       <div className="card">
         <div className="admin-card-head">
           <h2>Directory</h2>
@@ -691,18 +691,18 @@ export function AuthenticationAdmin() {
 
   return (
     <>
-      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work. Keycloak brokers OIDC/SAML; native LDAP/AD and TACACS+ authenticate directly and are configured below." />
+      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work. SSO (OIDC/SAML) is brokered by your identity provider; native LDAP/AD and TACACS+ authenticate directly and are configured below." />
       <div className="ov-grid">
         <div className="panel col-6 provider-card">
           <div className="provider-head"><h3>Local accounts</h3><span className="badge good">Active</span></div>
           <p className="mini-meta">Username + password (PBKDF2) with JWT + rotating single-use refresh tokens. Always available as a fallback even when an external IdP is down.</p>
         </div>
         <div className="panel col-6 provider-card">
-          <div className="provider-head"><h3>Single Sign-On (Keycloak)</h3><ProviderBadge enabled={enabled} /></div>
+          <div className="provider-head"><h3>Single Sign-On (OIDC / SAML)</h3><ProviderBadge enabled={enabled} /></div>
           <p className="mini-meta">
             {enabled
-              ? "OIDC/SAML brokered by Keycloak; the Go API validates the resulting RS256 token. Providers below appear on the login screen."
-              : "Set OIDC_ENABLED=true + the Keycloak realm details to enable. OIDC/SAML/upstream IdPs (Okta/Azure AD/Google) are brokered by Keycloak."}
+              ? "Federated via your identity provider; the platform validates the resulting RS256 token. Providers below appear on the login screen."
+              : "Configure your OIDC/SAML identity provider to enable. Upstream IdPs such as Okta, Azure AD or Google are supported."}
           </p>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             {providers.map((p) => (
@@ -720,7 +720,7 @@ export function AuthenticationAdmin() {
         <dl className="kv-form">
           <dt>Access token TTL</dt><dd>1 hour <span className="mini-meta">(ACCESS_TOKEN_TTL; signed with JWT_SECRET)</span></dd>
           <dt>Refresh token TTL</dt><dd>rotating, 7 days <span className="mini-meta">(single-use; reuse revokes the lineage)</span></dd>
-          <dt>Federated tokens</dt><dd className="mono">RS256, verified against Keycloak JWKS</dd>
+          <dt>Federated tokens</dt><dd className="mono">RS256, verified against the identity provider's JWKS</dd>
         </dl>
       </div>
     </>
