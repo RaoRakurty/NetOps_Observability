@@ -287,6 +287,22 @@ services:
     networks: [netops]
     restart: *restart
 
+  # One-shot: installs the ISM retention policy (deletes netops-* log/flow indices
+  # after OPENSEARCH_LOG_RETENTION_DAYS) once OpenSearch is healthy, then exits.
+  # The #1 disk-fill protection for a multi-day run.
+  opensearch-init:
+    image: curlimages/curl:8.10.1
+    restart: "no"
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      OPENSEARCH_LOG_RETENTION_DAYS: ${OPENSEARCH_LOG_RETENTION_DAYS:-14}
+    entrypoint: ["sh", "/apply-ism.sh"]
+    volumes:
+      - ./opensearch/apply-ism.sh:/apply-ism.sh:ro
+    depends_on:
+      opensearch: { condition: service_healthy }
+    networks: [netops]
+
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:2.16.0
     # Heavy and redundant with the in-app OpenSearch tab + Grafana, so off by
