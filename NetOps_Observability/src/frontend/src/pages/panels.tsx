@@ -171,6 +171,7 @@ function MetricGauge({
 const SEV_ORDER: SeverityKey[] = ["critical", "error", "warning", "notice", "info"];
 
 function AlertsSeverity() {
+  const { navigate } = useShell();
   const alerts = usePolled(() => api.alerts(), 10000) ?? [];
   const counts = alerts.reduce<Record<string, number>>((acc, a) => {
     const k = severityKey(a.severity);
@@ -183,7 +184,10 @@ function AlertsSeverity() {
         <div
           key={k}
           className="sev-count"
-          style={{ borderLeftColor: SEVERITY_COLOR[k] }}
+          style={{ borderLeftColor: SEVERITY_COLOR[k], cursor: "pointer" }}
+          role="button"
+          title={`View ${k} alerts`}
+          onClick={() => navigate("alerts/active")}
         >
           <div className="n" style={{ color: SEVERITY_COLOR[k] }}>
             {counts[k] ?? 0}
@@ -196,12 +200,20 @@ function AlertsSeverity() {
 }
 
 function ActiveAlerts() {
+  const { navigate } = useShell();
   const alerts = (usePolled(() => api.alerts(), 10000) ?? []).slice(0, 10);
   if (alerts.length === 0) return <Empty msg="All clear — no active alerts." />;
   return (
     <div className="alerts-scroll">
       {alerts.map((a: Alert, i) => (
-        <div className="mini-row" key={a.id ?? i}>
+        <div
+          className="mini-row"
+          key={a.id ?? i}
+          style={{ cursor: "pointer" }}
+          role="button"
+          title="Open in Alerts"
+          onClick={() => navigate("alerts/active")}
+        >
           <span className={`badge ${severityClass(a.severity)}`}>{a.severity || "info"}</span>
           <div className="mini-body">
             <div className="mini-title">{a.summary || "(no summary)"}</div>
@@ -268,6 +280,7 @@ function fmtBps(v: number): string {
 }
 
 function TopHosts() {
+  const { navigate } = useShell();
   const res = usePolled(() => api.topTalkers(3600, 8), 30000);
   const rows = ((res?.data as { src: string; dst: string; bytes_total: number }[]) ?? []).slice(0, 8);
   if (rows.length === 0) return <Empty msg="No flow data yet." />;
@@ -275,7 +288,7 @@ function TopHosts() {
     <table className="mini-table">
       <tbody>
         {rows.map((r, i) => (
-          <tr key={i}>
+          <tr key={i} style={{ cursor: "pointer" }} title="View in Flows" onClick={() => navigate("explore/flows")}>
             <td className="mono">{r.src}</td>
             <td className="mono">{r.dst}</td>
             <td style={{ textAlign: "right" }}>{Number(r.bytes_total).toLocaleString()} B</td>
@@ -294,13 +307,14 @@ function useProtocolCollectors(): CollectorStatus[] {
 }
 
 function SiteAvailability() {
+  const { navigate } = useShell();
   const cols = useProtocolCollectors();
   const targets = cols.reduce((n, c) => n + (c.targets ?? 0), 0);
   const reachable = cols.reduce((n, c) => n + (c.reachable ?? 0), 0);
   const pct = targets > 0 ? Math.round((reachable / targets) * 100) : null;
   const cls = pct === null ? "s-muted" : pct >= 99 ? "s-good" : pct >= 90 ? "s-warn" : "s-bad";
   return (
-    <div className={`stat ${cls}`} style={{ border: 0, padding: 0 }}>
+    <div className={`stat ${cls}`} style={{ border: 0, padding: 0, cursor: "pointer" }} role="button" title="View devices" onClick={() => navigate("infrastructure/devices")}>
       <span className="stat-value">{pct === null ? "—" : `${pct}%`}</span>
       <span className="stat-sub">{reachable}/{targets} targets reachable</span>
     </div>
@@ -308,6 +322,7 @@ function SiteAvailability() {
 }
 
 function StackPerformance() {
+  const { navigate } = useShell();
   const cols = useProtocolCollectors();
   const enabled = cols.filter((c) => c.enabled);
   const healthy = enabled.filter((c) => c.healthy).length;
@@ -316,7 +331,7 @@ function StackPerformance() {
       ? Math.round(cols.reduce((n, c) => n + (c.last_poll_ms ?? 0), 0) / cols.length)
       : null;
   return (
-    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} role="button" title="View metrics" onClick={() => navigate("explore/metrics")}>
       <div className={`stat ${enabled.length && healthy === enabled.length ? "s-good" : "s-bad"}`}>
         <span className="stat-label">Collectors healthy</span>
         <span className="stat-value">{healthy}/{enabled.length}</span>
@@ -378,11 +393,12 @@ function TopologyPanel() {
 
 // ---- donut: a shared colorful ring used by several panels ------------------
 
-function Donut({ rows, unit }: { rows: { name: string; value: number }[]; unit?: string }) {
+function Donut({ rows, unit, onClick }: { rows: { name: string; value: number }[]; unit?: string; onClick?: () => void }) {
   if (rows.length === 0) return <Empty msg="No data yet." />;
   return (
     <ReactECharts
-      style={{ height: 190 }}
+      style={{ height: 190, cursor: onClick ? "pointer" : undefined }}
+      onEvents={onClick ? { click: onClick } : undefined}
       option={{
         ...chartBase,
         tooltip: { ...chartBase.tooltip, trigger: "item", formatter: `{b}: {c}${unit ? " " + unit : ""} ({d}%)` },
@@ -406,27 +422,30 @@ const PROTO_NAMES: Record<string, string> = {
 };
 
 function FlowsByProto() {
+  const { navigate } = useShell();
   const res = usePolled(() => api.flowsByProto(3600), 30000);
   const rows = ((res?.data as { proto: string | number; bytes_total: number }[]) ?? [])
     .map((r) => ({ name: PROTO_NAMES[String(r.proto)] ?? `proto ${r.proto}`, value: Number(r.bytes_total) }))
     .filter((r) => r.value > 0)
     .slice(0, 8);
-  return <Donut rows={rows} unit="B" />;
+  return <Donut rows={rows} unit="B" onClick={() => navigate("explore/flows")} />;
 }
 
 // ---- device inventory by vendor --------------------------------------------
 
 function DevicesByVendor() {
+  const { navigate } = useShell();
   const devices = usePolled(() => api.devices(), 30000) ?? [];
   const by: Record<string, number> = {};
   for (const d of devices as Device[]) by[d.vendor || "unknown"] = (by[d.vendor || "unknown"] ?? 0) + 1;
   const rows = Object.entries(by).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  return <Donut rows={rows} unit="devices" />;
+  return <Donut rows={rows} unit="devices" onClick={() => navigate("infrastructure/devices")} />;
 }
 
 // ---- tunnels health (IPsec / SD-WAN) ---------------------------------------
 
 function TunnelsHealth() {
+  const { navigate } = useShell();
   const res = usePolled(() => api.tunnels(500), 20000);
   const rows = (res?.data as Tunnel[]) ?? [];
   if (rows.length === 0) return <Empty msg="No tunnel telemetry yet." />;
@@ -436,7 +455,7 @@ function TunnelsHealth() {
   const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : null;
   const worst = lats.length ? Math.round(Math.max(...lats)) : null;
   return (
-    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} role="button" title="View tunnels" onClick={() => navigate("topology/tunnels")}>
       <div className="stat s-good"><span className="stat-label">Tunnels up</span><span className="stat-value">{up}</span></div>
       <div className={`stat ${down ? "s-bad" : "s-good"}`}><span className="stat-label">Tunnels down</span><span className="stat-value">{down}</span></div>
       <div className="stat s-accent"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
@@ -448,13 +467,14 @@ function TunnelsHealth() {
 // ---- recent incidents (correlation findings) -------------------------------
 
 function RecentIncidents() {
+  const { navigate } = useShell();
   const res = usePolled(() => api.findings(12), 20000);
   const rows = ((res?.data as Finding[]) ?? []).slice(0, 8);
   if (rows.length === 0) return <Empty msg="No correlated incidents." />;
   return (
     <div className="alerts-scroll">
       {rows.map((f, i) => (
-        <div className="mini-row" key={f.id ?? i}>
+        <div className="mini-row" key={f.id ?? i} style={{ cursor: "pointer" }} title="Open in Incidents" onClick={() => navigate("alerts/incidents")}>
           <span className={`badge ${severityClass(f.severity)}`}>{f.severity || "info"}</span>
           <div className="mini-body">
             <div className="mini-title">{f.summary || f.kind || "(incident)"}</div>
