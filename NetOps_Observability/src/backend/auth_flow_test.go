@@ -33,7 +33,15 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	rf, err := newRefreshStore(dir+"/refresh.json", time.Hour)
 	must(err)
-	s := &server{users: us, roles: rs, tenants: ts, apiKeys: ks, refresh: rf, startedAt: time.Now().UTC()}
+	sv, err := newSavedStore(dir + "/saved.json")
+	must(err)
+	sc, err := newSNMPCredStore(dir + "/snmp.json")
+	must(err)
+	s := &server{
+		users: us, roles: rs, tenants: ts, apiKeys: ks, refresh: rf,
+		saved: sv, snmpCreds: sc, discovery: NewDiscoveryAggregator(),
+		startedAt: time.Now().UTC(),
+	}
 	must(us.SeedAdmin("admin", "password123"))
 	mux := http.NewServeMux()
 	s.routes(mux)
