@@ -144,7 +144,11 @@ export const NAV: NavSection[] = [
       // Identity & access (planned scaffolding — see tabs/admin.tsx + docs/).
       { id: "users", label: "Users", render: () => <UsersAdmin /> },
       { id: "roles", label: "Roles", render: () => <RolesAdmin /> },
-      { id: "tenants", label: "Tenants", render: () => <TenantsAdmin /> },
+      // Platform-owner only: the tenant registry is the platform's namespace map,
+      // not a tenant's to see or manage (a tenant admin governs WITHIN its tenant).
+      // Backend already enforces this (handleTenants: POST needs cross; GET shows
+      // only the caller's own tenant) — this just stops surfacing the section.
+      { id: "tenants", label: "Tenants", platformOnly: true, render: () => <TenantsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       { id: "api", label: "API Access", render: () => <ApiAccessAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
