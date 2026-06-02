@@ -41,7 +41,8 @@ func (s *server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (j
 	if !ok {
 		return claims, false
 	}
-	if _, cross := principalTenant(claims); !cross {
+	// Platform-wide mutation (role defs, tenant registry): central policy decides.
+	if !s.can(claims, ActionUpdate, Resource{Type: ResTenant}) {
 		writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
 		return claims, false
 	}

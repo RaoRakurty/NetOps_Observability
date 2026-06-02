@@ -27,7 +27,8 @@ func (s *server) requireCrossTenant(w http.ResponseWriter, r *http.Request) (jwt
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
 		return claims, false
 	}
-	if _, cross := principalTenant(claims); !cross {
+	// Infra-stack is platform plumbing — central policy decides (authz.go).
+	if !s.can(claims, ActionView, Resource{Type: ResInfraStack}) {
 		writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
 		return claims, false
 	}

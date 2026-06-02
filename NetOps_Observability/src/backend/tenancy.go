@@ -39,21 +39,24 @@ func deviceTenant(d models.Device) string {
 // sameTenant reports whether a resource owned by resourceTenant is visible to a
 // principal scoped to `tenant` (cross-tenant principals see everything). Strict:
 // only an exact tenant match — global/unassigned resources are platform-owned.
+// Thin adapter over the central policy (authz.go).
 func sameTenant(resourceTenant, tenant string, cross bool) bool {
 	if cross {
 		return true
 	}
-	return strings.ToLower(strings.TrimSpace(resourceTenant)) == tenant
+	return sameTenantStrict(resourceTenant, tenant)
 }
 
 // canSeeDevice reports whether a scoped principal may view a device. Strict
 // isolation: a scoped principal sees ONLY its own tenant's devices; global/
 // unassigned devices belong to the platform and are visible only cross-tenant.
+// Decision flows through the central Authorize() policy.
 func canSeeDevice(d models.Device, tenant string, cross bool) bool {
-	if cross {
-		return true
-	}
-	return deviceTenant(d) == tenant
+	return Authorize(
+		Principal{Tenant: tenant, cross: cross},
+		ActionView,
+		Resource{Type: ResDevice, Tenant: deviceTenant(d)},
+	).Allow
 }
 
 // ---- saved objects ---------------------------------------------------------
@@ -64,22 +67,24 @@ func savedTenant(o SavedObject) string {
 
 // canSeeSaved reports whether a scoped principal may view a saved object.
 // Strict isolation: only the principal's own tenant (global/unassigned objects
-// are platform-owned, visible only cross-tenant).
+// are platform-owned, visible only cross-tenant). Routed through Authorize().
 func canSeeSaved(o SavedObject, tenant string, cross bool) bool {
-	if cross {
-		return true
-	}
-	return savedTenant(o) == tenant
+	return Authorize(
+		Principal{Tenant: tenant, cross: cross},
+		ActionView,
+		Resource{Type: ResSaved, Tenant: savedTenant(o)},
+	).Allow
 }
 
 // canMutateSaved reports whether a scoped principal may modify/delete a saved
 // object. Scoped principals own only their own tenant's objects — never the
 // shared/global ones (which belong to no single tenant), mirroring devices.
 func canMutateSaved(o SavedObject, tenant string, cross bool) bool {
-	if cross {
-		return true
-	}
-	return savedTenant(o) == tenant
+	return Authorize(
+		Principal{Tenant: tenant, cross: cross},
+		ActionUpdate,
+		Resource{Type: ResSaved, Tenant: savedTenant(o)},
+	).Allow
 }
 
 // visibleSaved filters a saved-object list to those the principal may view.
