@@ -21,6 +21,7 @@ import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
 import StackHealth from "./tabs/StackHealth";
+import AuditLog from "./tabs/AuditLog";
 import {
   UsersAdmin,
   RolesAdmin,
@@ -144,6 +145,7 @@ export const NAV: NavSection[] = [
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       { id: "api", label: "API Access", render: () => <ApiAccessAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
+      { id: "audit", label: "Audit Log", render: () => <AuditLog /> },
       // Infra-stack monitoring + raw-backend escape hatches — the platform's own
       // plumbing. Platform-owner only (tenant admins manage their tenant, never
       // the stack). Enforced on the backend too (/api/stack/health, nginx).

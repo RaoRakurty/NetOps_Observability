@@ -37,15 +37,17 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	sc, err := newSNMPCredStore(dir + "/snmp.json")
 	must(err)
+	au, err := newAuditStore(dir + "/audit.json")
+	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, apiKeys: ks, refresh: rf,
 		saved: sv, snmpCreds: sc, discovery: NewDiscoveryAggregator(),
-		startedAt: time.Now().UTC(),
+		audit: au, startedAt: time.Now().UTC(),
 	}
 	must(us.SeedAdmin("admin", "password123"))
 	mux := http.NewServeMux()
 	s.routes(mux)
-	srv := httptest.NewServer(s.withAuth(mux))
+	srv := httptest.NewServer(s.withAuth(s.withAudit(mux)))
 	t.Cleanup(srv.Close)
 	return srv
 }

@@ -81,6 +81,21 @@ export type StackHealth = {
   subsystems: Record<string, unknown>;
 };
 
+// ---------- Audit trail (tenant-scoped) ----------
+
+export type AuditEvent = {
+  id: string;
+  time: string;
+  actor: string;
+  tenant?: string;
+  cross?: boolean;
+  method: string;
+  path: string;
+  status: number;
+  decision: "allow" | "deny" | "error";
+  remote?: string;
+};
+
 // ---------- OpenSearch ------------
 
 export type OSHit = {
@@ -388,6 +403,7 @@ export const api = {
 
   health: () => request<Health>("/admin/health"),
   stackHealth: () => request<StackHealth>("/api/stack/health"),
+  audit: (limit = 200) => request<AuditEvent[]>(`/api/audit?limit=${limit}`),
   devices: () => request<Device[]>("/api/devices"),
   upsertDevice: (d: Partial<Device>) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(d) }),

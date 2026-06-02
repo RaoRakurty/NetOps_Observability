@@ -44,6 +44,7 @@ type server struct {
 	refresh    *refreshStore
 	snmpCreds  *snmpCredStore
 	saved      *savedStore
+	audit      *auditStore
 	reports    *reportScheduler
 	copilotCfg *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
@@ -244,6 +245,11 @@ func newServer() *server {
 		log.Fatalf("saved store: %v", err)
 	}
 
+	audit, err := newAuditStore(envOr("AUDIT_FILE", "/data/audit.json"))
+	if err != nil {
+		log.Fatalf("audit store: %v", err)
+	}
+
 	srv := &server{
 		startedAt:  time.Now().UTC(),
 		discovery:  d,
@@ -257,6 +263,7 @@ func newServer() *server {
 		refresh:    refresh,
 		snmpCreds:  snmpCreds,
 		saved:      saved,
+		audit:      audit,
 		servicenow: serviceNow,
 		jira:       jiraConn,
 		hub:        NewHub(),
@@ -294,7 +301,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(withLogging(srv.withAuth(mux))),
+		Handler:           withCORS(withLogging(srv.withAuth(srv.withAudit(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -386,6 +393,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/itsm/jira", s.handleITSMJira)
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
+	mux.HandleFunc("/api/audit", s.handleAudit)
 	// Dashboard live data
 	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
 	mux.HandleFunc("/api/metrics/query", s.handleMetricsQuery)
