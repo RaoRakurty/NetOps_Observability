@@ -1,0 +1,25 @@
+NetOps_Observability
+=====================
+
+This product includes software developed by third parties.
+
+--------------------------------------------------------------------------------
+SNMP vendor profiles (src/backend/snmp_profiles_catalog.json)
+--------------------------------------------------------------------------------
+
+The bundled SNMP device-profile catalog (vendor OID/metric definitions) is
+derived from Datadog's open-source SNMP device profiles:
+
+    https://github.com/DataDog/integrations-core
+
+Copyright (c) Datadog, Inc.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+these files except in compliance with the License. You may obtain a copy of the
+License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+The profile definitions have been adapted (converted to this project's JSON
+schema, with OIDs reconciled against the referenced source MIBs/RFCs). The
+hand-authored built-in profiles in src/backend/snmp_profiles_seed.go are original
+to this project.
