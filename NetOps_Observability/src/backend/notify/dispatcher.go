@@ -35,6 +35,37 @@ func (d *Dispatcher) Register(c Channel) {
 	d.channels = append(d.channels, c)
 }
 
+// Replace swaps the channel sharing the same Name() (or appends it if absent),
+// so a channel can be reconfigured at runtime from the admin UI without a
+// restart. Pair with Remove to disable a channel.
+func (d *Dispatcher) Replace(c Channel) {
+	if c == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, ex := range d.channels {
+		if ex.Name() == c.Name() {
+			d.channels[i] = c
+			return
+		}
+	}
+	d.channels = append(d.channels, c)
+}
+
+// Remove deletes the channel with the given name (no-op if absent).
+func (d *Dispatcher) Remove(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := d.channels[:0]
+	for _, c := range d.channels {
+		if c.Name() != name {
+			out = append(out, c)
+		}
+	}
+	d.channels = out
+}
+
 // Dispatch sends the alert to all registered channels concurrently.
 // Channel errors are logged but never returned — alert delivery should
 // never block the evaluation loop.
@@ -90,11 +121,18 @@ func (d *Dispatcher) DispatchTo(a models.Alert, names []string) int {
 			continue
 		}
 		sent++
+		// An explicit DispatchTo (e.g. a scheduled report) is an intentional
+		// send, so bypass any severity gate wrapping the channel — a low-severity
+		// report must still reach an email channel gated to "critical" for alerts.
+		target := c
+		if g, ok := c.(interface{ Unguarded() Channel }); ok {
+			target = g.Unguarded()
+		}
 		go func(c Channel) {
 			if err := c.Send(a); err != nil {
 				log.Printf("notify %s: %v", c.Name(), err)
 			}
-		}(c)
+		}(target)
 	}
 	return sent
 }

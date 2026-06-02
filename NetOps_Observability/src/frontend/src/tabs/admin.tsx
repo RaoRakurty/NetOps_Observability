@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, SmtpConfig, TwilioConfig, NtfyConfig } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -1019,6 +1019,166 @@ export function IntegrationsAdmin() {
             </div>
           );
         })}
+      </div>
+    </>
+  );
+}
+
+// ---- Notifications (SMTP / Twilio / ntfy) ----------------------------------
+
+const SEVERITIES = ["info", "notice", "warning", "error", "critical"];
+
+function SeveritySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+      <span>Send on severity ≥</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
+        {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    </label>
+  );
+}
+
+export function NotificationsAdmin() {
+  const [smtp, setSmtp] = useState<SmtpConfig | null>(null);
+  const [twilio, setTwilio] = useState<TwilioConfig | null>(null);
+  const [ntfy, setNtfy] = useState<NtfyConfig | null>(null);
+  const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "" });
+  const [msg, setMsg] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api.smtpConfig().then(setSmtp).catch(() => {});
+    api.twilioConfig().then(setTwilio).catch(() => {});
+    api.ntfyConfig().then(setNtfy).catch(() => {});
+  }, []);
+
+  const flash = (k: string, m: string) => setMsg((p) => ({ ...p, [k]: m }));
+
+  const saveSmtp = async () => {
+    if (!smtp) return;
+    try {
+      const body: Partial<SmtpConfig> = { ...smtp };
+      if (secret.smtp) body.pass = secret.smtp;
+      setSmtp(await api.saveSmtpConfig(body)); setSecret((s) => ({ ...s, smtp: "" })); flash("smtp", "Saved.");
+    } catch (e) { flash("smtp", (e as Error).message); }
+  };
+  const saveTwilio = async () => {
+    if (!twilio) return;
+    try {
+      const body: Partial<TwilioConfig> = { ...twilio };
+      if (secret.twilio) body.auth_token = secret.twilio;
+      setTwilio(await api.saveTwilioConfig(body)); setSecret((s) => ({ ...s, twilio: "" })); flash("twilio", "Saved.");
+    } catch (e) { flash("twilio", (e as Error).message); }
+  };
+  const saveNtfy = async () => {
+    if (!ntfy) return;
+    try {
+      const body: Partial<NtfyConfig> = { ...ntfy };
+      if (secret.ntfy) body.token = secret.ntfy;
+      setNtfy(await api.saveNtfyConfig(body)); setSecret((s) => ({ ...s, ntfy: "" })); flash("ntfy", "Saved.");
+    } catch (e) { flash("ntfy", (e as Error).message); }
+  };
+  const test = async (k: string, fn: () => Promise<{ status: string }>) => {
+    try { await fn(); flash(k, "Test sent — check your inbox/phone."); }
+    catch (e) { flash(k, "Test failed: " + (e as Error).message); }
+  };
+
+  return (
+    <>
+      <AdminHead title="Notifications" sub="Email, SMS and push channels. Critical alerts route here; secrets are write-only." />
+
+      {/* SMTP */}
+      <div className="card">
+        <div className="admin-card-head">
+          <h2>Email (SMTP)</h2>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={!!smtp?.enabled} onChange={(e) => smtp && setSmtp({ ...smtp, enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+        {smtp && (
+          <>
+            <div className="form-grid">
+              <LabeledInput label="Host" value={smtp.host} onChange={(v) => setSmtp({ ...smtp, host: v })} required placeholder="smtp.example.com" />
+              <LabeledInput label="Port" type="number" value={String(smtp.port)} onChange={(v) => setSmtp({ ...smtp, port: Number(v) || 0 })} required placeholder="587" />
+              <LabeledInput label="From" value={smtp.from} onChange={(v) => setSmtp({ ...smtp, from: v })} required placeholder="noc@example.com" />
+              <LabeledInput label="Recipients (comma-separated)" value={smtp.to} onChange={(v) => setSmtp({ ...smtp, to: v })} required />
+              <LabeledInput label="Username" value={smtp.user} onChange={(v) => setSmtp({ ...smtp, user: v })} />
+              <LabeledInput label={`Password${smtp.pass_set ? " (stored)" : ""}`} type="password" value={secret.smtp} onChange={(v) => setSecret((s) => ({ ...s, smtp: v }))} placeholder={smtp.pass_set ? "•••••• (unchanged)" : ""} />
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                <span>Security</span>
+                <select value={smtp.security} onChange={(e) => setSmtp({ ...smtp, security: e.target.value })}
+                  style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
+                  <option value="starttls">STARTTLS (587, secure)</option>
+                  <option value="tls">TLS on connect (465, secure)</option>
+                  <option value="none">None (plain relay, insecure)</option>
+                </select>
+              </label>
+              <SeveritySelect value={smtp.min_severity} onChange={(v) => setSmtp({ ...smtp, min_severity: v })} />
+            </div>
+            <RequiredLegend />
+            <div className="admin-actions">
+              <button onClick={saveSmtp}>Save</button>
+              <button className="ghost" onClick={() => test("smtp", api.testSmtp)}>Send test</button>
+              {msg.smtp && <span className="mini-meta">{msg.smtp}</span>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Twilio */}
+      <div className="card">
+        <div className="admin-card-head">
+          <h2>SMS (Twilio)</h2>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={!!twilio?.enabled} onChange={(e) => twilio && setTwilio({ ...twilio, enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+        <p className="mini-meta">Phone SMS for critical alerts. Twilio is metered — use ntfy below for free testing.</p>
+        {twilio && (
+          <>
+            <div className="form-grid">
+              <LabeledInput label="Account SID" value={twilio.account_sid} onChange={(v) => setTwilio({ ...twilio, account_sid: v })} required />
+              <LabeledInput label={`Auth token${twilio.token_set ? " (stored)" : ""}`} type="password" value={secret.twilio} onChange={(v) => setSecret((s) => ({ ...s, twilio: v }))} placeholder={twilio.token_set ? "•••••• (unchanged)" : ""} />
+              <LabeledInput label="From number" value={twilio.from} onChange={(v) => setTwilio({ ...twilio, from: v })} required placeholder="+15555550123" />
+              <LabeledInput label="To numbers (comma-separated)" value={twilio.to} onChange={(v) => setTwilio({ ...twilio, to: v })} required />
+              <SeveritySelect value={twilio.min_severity} onChange={(v) => setTwilio({ ...twilio, min_severity: v })} />
+            </div>
+            <RequiredLegend />
+            <div className="admin-actions">
+              <button onClick={saveTwilio}>Save</button>
+              <button className="ghost" onClick={() => test("twilio", api.testTwilio)}>Send test</button>
+              {msg.twilio && <span className="mini-meta">{msg.twilio}</span>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ntfy */}
+      <div className="card">
+        <div className="admin-card-head">
+          <h2>Push (ntfy.sh)</h2>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={!!ntfy?.enabled} onChange={(e) => ntfy && setNtfy({ ...ntfy, enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+        <p className="mini-meta">Free push to phone/desktop — subscribe to the topic in the ntfy app. Great for testing critical-alert pushes without Twilio.</p>
+        {ntfy && (
+          <>
+            <div className="form-grid">
+              <LabeledInput label="Server" value={ntfy.server} onChange={(v) => setNtfy({ ...ntfy, server: v })} placeholder="https://ntfy.sh" />
+              <LabeledInput label="Topic" value={ntfy.topic} onChange={(v) => setNtfy({ ...ntfy, topic: v })} required placeholder="netops-xxxxxx" />
+              <LabeledInput label={`Token (optional)${ntfy.token_set ? " (stored)" : ""}`} type="password" value={secret.ntfy} onChange={(v) => setSecret((s) => ({ ...s, ntfy: v }))} placeholder={ntfy.token_set ? "•••••• (unchanged)" : "for protected topics"} />
+              <SeveritySelect value={ntfy.min_severity} onChange={(v) => setNtfy({ ...ntfy, min_severity: v })} />
+            </div>
+            <RequiredLegend />
+            <div className="admin-actions">
+              <button onClick={saveNtfy}>Save</button>
+              <button className="ghost" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
+              {msg.ntfy && <span className="mini-meta">{msg.ntfy}</span>}
+            </div>
+          </>
+        )}
       </div>
     </>
   );

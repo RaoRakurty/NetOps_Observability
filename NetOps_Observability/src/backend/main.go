@@ -46,6 +46,7 @@ type server struct {
 	snmpProfiles *snmpProfileStore
 	saved      *savedStore
 	audit      *auditStore
+	notifyCfg  *notifyConfigStore
 	reports    *reportScheduler
 	copilotCfg *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
@@ -277,6 +278,9 @@ func newServer() *server {
 	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
+	// UI-configurable email/SMS/push channels (registers live channels into the
+	// dispatcher built above). Must come after notifier is set on srv.
+	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
 	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"))
 	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"))
 	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
@@ -393,6 +397,12 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/reports/runs", s.handleReportRuns)
 	mux.HandleFunc("/api/reports/run", s.handleReportRunNow)
 	mux.HandleFunc("/api/reports/channels", s.handleReportChannels)
+	mux.HandleFunc("/api/notify/smtp", s.handleSMTPConfig)
+	mux.HandleFunc("/api/notify/smtp/test", s.handleSMTPTest)
+	mux.HandleFunc("/api/notify/twilio", s.handleTwilioConfig)
+	mux.HandleFunc("/api/notify/twilio/test", s.handleTwilioTest)
+	mux.HandleFunc("/api/notify/ntfy", s.handleNtfyConfig)
+	mux.HandleFunc("/api/notify/ntfy/test", s.handleNtfyTest)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)

@@ -232,12 +232,15 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 	if sev == "" {
 		sev = "info"
 	}
+	// Per-tenant reports: a report owned by a tenant reflects only that tenant's
+	// devices/alerts; a global/unassigned report is platform-wide.
+	tenant := o.TenantID
 	var summary, body string
 	switch spec.Kind {
 	case "device_inventory":
-		summary, body = rs.renderDevices()
+		summary, body = rs.renderDevices(tenant)
 	case "health_summary":
-		summary, body = rs.renderHealth(now)
+		summary, body = rs.renderHealth(now, tenant)
 	case "wan_utilization":
 		summary, body = rs.renderWANUtilization()
 	case "security_threats":
@@ -247,7 +250,7 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 	case "latency_jitter_sla":
 		summary, body = rs.renderLatencyJitterSLA()
 	default: // alerts_summary
-		summary, body = rs.renderAlerts()
+		summary, body = rs.renderAlerts(tenant)
 	}
 	header := "Report: " + o.Name
 	if spec.Description != "" {
@@ -264,8 +267,46 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 	}
 }
 
-func (rs *reportScheduler) renderAlerts() (string, string) {
+// tenantDevices returns the devices a report for the given tenant should cover:
+// a global/unassigned report sees the whole fleet, a tenant report only its own.
+func (rs *reportScheduler) tenantDevices(tenant string) []models.Device {
+	all := rs.discovery.Devices()
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if t == "" || t == TenantGlobal {
+		return all
+	}
+	out := make([]models.Device, 0, len(all))
+	for _, d := range all {
+		if canSeeDevice(d, t, false) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// tenantAlerts returns the active alerts visible to the report's tenant (alerts
+// on its devices, plus device-less stack alerts).
+func (rs *reportScheduler) tenantAlerts(tenant string) []models.Alert {
 	active := rs.alerts.Active()
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if t == "" || t == TenantGlobal {
+		return active
+	}
+	ids := map[string]bool{}
+	for _, d := range rs.tenantDevices(t) {
+		ids[d.ID] = true
+	}
+	out := make([]models.Alert, 0, len(active))
+	for _, a := range active {
+		if a.DeviceID == "" || ids[a.DeviceID] {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (rs *reportScheduler) renderAlerts(tenant string) (string, string) {
+	active := rs.tenantAlerts(tenant)
 	bySev := map[string]int{}
 	for _, a := range active {
 		bySev[strings.ToLower(a.Severity)]++
@@ -294,8 +335,8 @@ func (rs *reportScheduler) renderAlerts() (string, string) {
 	return summary, b.String()
 }
 
-func (rs *reportScheduler) renderDevices() (string, string) {
-	devs := rs.discovery.Devices()
+func (rs *reportScheduler) renderDevices(tenant string) (string, string) {
+	devs := rs.tenantDevices(tenant)
 	summary := fmt.Sprintf("%d device(s) discovered", len(devs))
 	var b strings.Builder
 	for i, d := range devs {
@@ -313,10 +354,10 @@ func (rs *reportScheduler) renderDevices() (string, string) {
 	return summary, b.String()
 }
 
-func (rs *reportScheduler) renderHealth(now time.Time) (string, string) {
+func (rs *reportScheduler) renderHealth(now time.Time, tenant string) (string, string) {
 	uptime := now.Sub(rs.startedAt).Round(time.Second)
-	devs := len(rs.discovery.Devices())
-	active := len(rs.alerts.Active())
+	devs := len(rs.tenantDevices(tenant))
+	active := len(rs.tenantAlerts(tenant))
 	summary := fmt.Sprintf("uptime %s · %d devices · %d active alerts", uptime, devs, active)
 	b := fmt.Sprintf("API uptime: %s\nDevices discovered: %d\nActive alerts: %d\n", uptime, devs, active)
 	return summary, b

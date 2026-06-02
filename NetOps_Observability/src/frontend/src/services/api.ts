@@ -102,6 +102,38 @@ export type SnmpProfile = {
   metrics: SnmpMetric[];
 };
 
+// ---------- Notification channels ----------
+
+export type SmtpConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  from: string;
+  user: string;
+  pass?: string; // write-only on PUT
+  pass_set?: boolean; // read-only on GET
+  to: string;
+  security: string; // starttls | tls | none
+  min_severity: string;
+};
+export type TwilioConfig = {
+  enabled: boolean;
+  account_sid: string;
+  auth_token?: string;
+  token_set?: boolean;
+  from: string;
+  to: string;
+  min_severity: string;
+};
+export type NtfyConfig = {
+  enabled: boolean;
+  server: string;
+  topic: string;
+  token?: string;
+  token_set?: boolean;
+  min_severity: string;
+};
+
 // ---------- Audit trail (tenant-scoped) ----------
 
 export type AuditEvent = {
@@ -425,6 +457,18 @@ export const api = {
   health: () => request<Health>("/admin/health"),
   stackHealth: () => request<StackHealth>("/api/stack/health"),
   audit: (limit = 200) => request<AuditEvent[]>(`/api/audit?limit=${limit}`),
+
+  // Notification channels (UI-configurable; secrets write-only). _set booleans
+  // tell the form whether a secret is stored without revealing it.
+  smtpConfig: () => request<SmtpConfig>("/api/notify/smtp"),
+  saveSmtpConfig: (c: Partial<SmtpConfig>) => request<SmtpConfig>("/api/notify/smtp", { method: "PUT", body: JSON.stringify(c) }),
+  testSmtp: () => request<{ status: string }>("/api/notify/smtp/test", { method: "POST" }),
+  twilioConfig: () => request<TwilioConfig>("/api/notify/twilio"),
+  saveTwilioConfig: (c: Partial<TwilioConfig>) => request<TwilioConfig>("/api/notify/twilio", { method: "PUT", body: JSON.stringify(c) }),
+  testTwilio: () => request<{ status: string }>("/api/notify/twilio/test", { method: "POST" }),
+  ntfyConfig: () => request<NtfyConfig>("/api/notify/ntfy"),
+  saveNtfyConfig: (c: Partial<NtfyConfig>) => request<NtfyConfig>("/api/notify/ntfy", { method: "PUT", body: JSON.stringify(c) }),
+  testNtfy: () => request<{ status: string }>("/api/notify/ntfy/test", { method: "POST" }),
   snmpProfiles: () => request<SnmpProfile[]>("/api/snmp/profiles"),
   addSnmpProfileMetrics: (id: string, metrics: SnmpMetric[]) =>
     request<SnmpProfile>(`/api/snmp/profiles/${encodeURIComponent(id)}/metrics`, {
