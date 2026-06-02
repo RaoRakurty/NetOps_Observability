@@ -1,11 +1,15 @@
 package notify
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 
 	"netops/backend/models"
@@ -86,6 +90,87 @@ func (e *Email) SendDocument(subject, contentType, body string) error {
 	}
 	msg := buildRFC5322(e.from, e.to, subject, body, contentType)
 	return e.sendRaw([]byte(msg))
+}
+
+// Attachment is a file attached to a report email (e.g. an Excel or PDF export).
+type Attachment struct {
+	Filename    string
+	ContentType string
+	Bytes       []byte
+}
+
+// SendReport delivers an HTML-bodied email with optional file attachments
+// (multipart/mixed), to the configured recipients via the shared transport. With
+// no attachments it degrades to a plain HTML send. The reporting pipeline uses it
+// so an Excel/PDF export rides along with the rendered report.
+func (e *Email) SendReport(subject, htmlBody string, attachments []Attachment) error {
+	if e.host == "" || e.from == "" {
+		return errors.New("smtp host or sender not configured")
+	}
+	if len(e.to) == 0 {
+		return errors.New("no recipients configured")
+	}
+	if len(attachments) == 0 {
+		return e.SendDocument(subject, "text/html; charset=UTF-8", htmlBody)
+	}
+	msg, err := buildMixed(e.from, e.to, subject, htmlBody, attachments)
+	if err != nil {
+		return err
+	}
+	return e.sendRaw(msg)
+}
+
+// buildMixed assembles an RFC 5322 multipart/mixed message: an HTML body part
+// plus base64-encoded attachment parts.
+func buildMixed(from string, to []string, subject, htmlBody string, atts []Attachment) ([]byte, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	htmlHdr := textproto.MIMEHeader{}
+	htmlHdr.Set("Content-Type", "text/html; charset=UTF-8")
+	htmlHdr.Set("Content-Transfer-Encoding", "8bit")
+	pw, err := mw.CreatePart(htmlHdr)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := pw.Write([]byte(htmlBody)); err != nil {
+		return nil, err
+	}
+
+	for _, a := range atts {
+		ct := a.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		ah := textproto.MIMEHeader{}
+		ah.Set("Content-Type", ct)
+		ah.Set("Content-Transfer-Encoding", "base64")
+		ah.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", a.Filename))
+		aw, err := mw.CreatePart(ah)
+		if err != nil {
+			return nil, err
+		}
+		enc := base64.StdEncoding.EncodeToString(a.Bytes)
+		for i := 0; i < len(enc); i += 76 {
+			end := i + 76
+			if end > len(enc) {
+				end = len(enc)
+			}
+			if _, err := aw.Write([]byte(enc[i:end] + "\r\n")); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := mw.Close(); err != nil {
+		return nil, err
+	}
+
+	headers := "From: " + from + "\r\n" +
+		"To: " + strings.Join(to, ", ") + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=\"" + mw.Boundary() + "\"\r\n\r\n"
+	return append([]byte(headers), body.Bytes()...), nil
 }
 
 // sendRaw applies auth and the STARTTLS / TLS-on-connect transport choice shared

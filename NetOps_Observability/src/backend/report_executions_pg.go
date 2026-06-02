@@ -46,10 +46,13 @@ func (s *pgExecStore) MarkRunning(ctx context.Context, id string, at time.Time) 
 		 WHERE id=$1`, id, at)
 }
 
-func (s *pgExecStore) Complete(ctx context.Context, id string, at time.Time, ref reports.ArtifactRef, deliveries []reports.DeliveryStatus) error {
-	refJSON, err := json.Marshal(ref)
-	if err != nil {
-		return err
+func (s *pgExecStore) Complete(ctx context.Context, id string, at time.Time, refs []reports.ArtifactRef, deliveries []reports.DeliveryStatus) error {
+	var refJSON []byte
+	if len(refs) > 0 {
+		var err error
+		if refJSON, err = json.Marshal(refs); err != nil {
+			return err
+		}
 	}
 	delJSON, err := marshalDeliveries(deliveries)
 	if err != nil {
@@ -199,10 +202,7 @@ func scanExec(row pgx.Row) (reports.ExecutionRecord, bool, error) {
 		r.CompletedAt = *completed
 	}
 	if len(refJSON) > 0 {
-		var ref reports.ArtifactRef
-		if err := json.Unmarshal(refJSON, &ref); err == nil && ref.Format != "" {
-			r.Artifact = &ref
-		}
+		_ = json.Unmarshal(refJSON, &r.Artifacts)
 	}
 	if len(delJSON) > 0 {
 		_ = json.Unmarshal(delJSON, &r.Deliveries)

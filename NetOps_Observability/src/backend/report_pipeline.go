@@ -2,15 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"netops/backend/models"
 	"netops/backend/reports"
 )
 
@@ -26,7 +28,7 @@ type reportPipeline struct {
 	queue     reports.JobQueue
 	execs     reports.ExecutionStore
 	artifacts reports.ArtifactStore
-	renderer  reports.Renderer
+	renderers map[string]reports.Renderer // format -> renderer (html always; xlsx; pdf if sidecar)
 	delivery  *reportDelivery
 
 	workers     int
@@ -46,13 +48,19 @@ type reportPipeline struct {
 	metRetries   atomic.Int64
 }
 
-func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, r reports.Renderer) *reportPipeline {
+func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, html reports.Renderer) *reportPipeline {
+	// Build the renderer set: HTML always; Excel in-process; PDF only when a
+	// sidecar URL is configured (nil renderer => format unavailable, skipped).
+	renderers := map[string]reports.Renderer{"html": html, "xlsx": reports.NewXLSXRenderer()}
+	if pdf := reports.NewPDFRenderer(html, os.Getenv("REPORT_PDF_SIDECAR_URL")); pdf != nil {
+		renderers["pdf"] = pdf
+	}
 	return &reportPipeline{
 		srv:       s,
 		queue:     q,
 		execs:     es,
 		artifacts: art,
-		renderer:  r,
+		renderers: renderers,
 		delivery:  newReportDelivery(s),
 
 		workers:     envInt("REPORT_WORKERS", 4),
@@ -239,34 +247,38 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 		return
 	}
 
-	// Render (data gathering uses the report's own tenant scope internally).
+	// Build the dataset once, then render every requested format in parallel.
 	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseRendering, time.Now().UTC(), "")
-	alert := p.srv.reports.render(o, spec, job.FireTime)
-	art, err := p.renderer.Render(jctx, viewModelFromAlert(o, spec, alert, job.FireTime))
+	vm := p.srv.reports.buildViewModel(o, spec, job.FireTime)
+	alert := alertFromViewModel(vm, job.FireTime)
+	refs, arts, err := p.renderAll(jctx, job.ExecutionID, vm, normalizeFormats(spec.Formats))
 	if err != nil {
 		p.fail(ctx, jctx, job, tenant, "render: "+err.Error(), nil, p.dead(job), fields)
 		return
 	}
-	ref, err := p.artifacts.Save(jctx, job.ExecutionID, art)
-	if err != nil {
-		p.fail(ctx, jctx, job, tenant, "store artifact: "+err.Error(), nil, p.dead(job), fields)
-		return
-	}
 
-	// Deliver.
+	// Deliver: HTML artifact is the email body; xlsx/pdf ride as attachments.
 	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseDelivering, time.Now().UTC(), "")
 	cross := tenant == "" || tenant == normTenant(TenantGlobal)
+	htmlArt := arts["html"]
+	var attachments []reports.Artifact
+	for _, f := range []string{"xlsx", "pdf"} {
+		if a, ok := arts[f]; ok {
+			attachments = append(attachments, a)
+		}
+	}
 	statuses := p.delivery.Deliver(jctx, deliverReq{
 		Tenant: tenant, Cross: cross,
 		ContactPoints: spec.ContactPoints, Channels: spec.Channels,
-		Subject: art.Summary, ContentType: art.ContentType, Body: art.Bytes,
-		Alert: alert,
+		Subject: htmlArt.Summary, ContentType: htmlArt.ContentType, Body: htmlArt.Bytes,
+		Attachments: attachments,
+		Alert:       alert,
 	})
 
 	done := time.Now().UTC()
 	// Use the parent ctx for the terminal writes so a job that finished right at
 	// the timeout still records its completion.
-	if err := p.execs.Complete(ctx, job.ExecutionID, done, ref, statuses); err != nil {
+	if err := p.execs.Complete(ctx, job.ExecutionID, done, refs, statuses); err != nil {
 		logError("reports.worker", "record completion", merge(fields, errf(err)))
 	}
 	_ = p.execs.RecordEvent(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
@@ -315,8 +327,8 @@ func (p *reportPipeline) runsFromExecutions(ctx context.Context, tenant string, 
 		if !e.CompletedAt.IsZero() {
 			run.LastRun = e.CompletedAt
 		}
-		if e.Artifact != nil {
-			run.Detail = e.Artifact.Summary
+		if a := e.PrimaryArtifact(); a != nil {
+			run.Detail = a.Summary
 		} else if e.Error != "" {
 			run.Detail = e.Error
 		}
@@ -380,24 +392,83 @@ func (p *reportPipeline) fail(ctx, _ context.Context, job reports.Job, tenant, c
 
 // ---- helpers ---------------------------------------------------------------
 
-// viewModelFromAlert adapts the existing per-kind render output (a models.Alert)
-// into the renderer's ViewModel. Phase-1 carries the gathered text body as a
-// single section; structured per-kind sections are a later refinement.
-func viewModelFromAlert(o SavedObject, spec reportSpec, a models.Alert, fire time.Time) reports.ViewModel {
-	vm := reports.ViewModel{
-		ReportID:    o.ID,
-		ReportName:  o.Name,
-		Kind:        spec.Kind,
-		TenantID:    o.TenantID,
-		GeneratedAt: fire,
-		Severity:    a.Severity,
-		Description: spec.Description,
-		Summary:     a.Summary,
+// errFormatUnavailable marks a requested format with no configured renderer
+// (e.g. pdf without a sidecar) — skipped silently, never fatal.
+var errFormatUnavailable = errors.New("format renderer unavailable")
+
+// renderAll renders the dataset to every requested format in parallel, storing
+// each artifact under a per-format key (execID_format). HTML is the primary (the
+// email body) — its failure sinks the job; a non-HTML format failing is logged
+// and skipped so a PDF-sidecar outage can't block the whole report. Returns the
+// stored refs and the rendered artifacts (by format) for delivery.
+func (p *reportPipeline) renderAll(ctx context.Context, execID string, vm reports.ViewModel, formats []string) ([]reports.ArtifactRef, map[string]reports.Artifact, error) {
+	type out struct {
+		format string
+		art    reports.Artifact
+		ref    reports.ArtifactRef
+		err    error
 	}
-	if a.Description != "" {
-		vm.Sections = []reports.Section{{Title: "Details", Note: a.Description}}
+	results := make([]out, len(formats))
+	var wg sync.WaitGroup
+	for i, f := range formats {
+		r, ok := p.renderers[f]
+		if !ok || r == nil {
+			results[i] = out{format: f, err: errFormatUnavailable}
+			continue
+		}
+		wg.Add(1)
+		go func(i int, f string, r reports.Renderer) {
+			defer wg.Done()
+			art, err := r.Render(ctx, vm)
+			if err != nil {
+				results[i] = out{format: f, err: err}
+				return
+			}
+			ref, err := p.artifacts.Save(ctx, execID+"_"+f, art)
+			results[i] = out{format: f, art: art, ref: ref, err: err}
+		}(i, f, r)
 	}
-	return vm
+	wg.Wait()
+
+	arts := map[string]reports.Artifact{}
+	var refs []reports.ArtifactRef
+	htmlOK := false
+	for _, o := range results {
+		if o.err != nil {
+			if o.format == "html" {
+				return nil, nil, o.err
+			}
+			if !errors.Is(o.err, errFormatUnavailable) {
+				logWarn("reports.worker", "format render skipped", map[string]any{"format": o.format, "error": o.err.Error(), "execution_id": execID})
+			}
+			continue
+		}
+		arts[o.format] = o.art
+		refs = append(refs, o.ref)
+		if o.format == "html" {
+			htmlOK = true
+		}
+	}
+	if !htmlOK {
+		return nil, nil, errors.New("primary HTML render produced no artifact")
+	}
+	return refs, arts, nil
+}
+
+// normalizeFormats dedupes the requested formats and guarantees html is present
+// (it's the email body), html first.
+func normalizeFormats(in []string) []string {
+	out := []string{"html"}
+	seen := map[string]bool{"html": true}
+	for _, f := range in {
+		f = strings.ToLower(strings.TrimSpace(f))
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	return out
 }
 
 func intervalFires(anchor, now time.Time, interval time.Duration, max int) []time.Time {

@@ -128,9 +128,33 @@ type ExecutionRecord struct {
 	StartedAt   time.Time        `json:"started_at,omitempty"`
 	CompletedAt time.Time        `json:"completed_at,omitempty"`
 	Status      ExecStatus       `json:"status"`
-	Artifact    *ArtifactRef     `json:"artifact_ref,omitempty"`
+	Artifacts   []ArtifactRef    `json:"artifacts,omitempty"` // one per rendered format
 	Deliveries  []DeliveryStatus `json:"delivery_status,omitempty"`
 	Error       string           `json:"error,omitempty"`
+}
+
+// PrimaryArtifact returns the HTML artifact (the email body / default view), or
+// the first artifact if no HTML one exists, or nil.
+func (e ExecutionRecord) PrimaryArtifact() *ArtifactRef {
+	for i := range e.Artifacts {
+		if e.Artifacts[i].Format == "html" {
+			return &e.Artifacts[i]
+		}
+	}
+	if len(e.Artifacts) > 0 {
+		return &e.Artifacts[0]
+	}
+	return nil
+}
+
+// ArtifactByFormat returns the artifact for a given format, or nil.
+func (e ExecutionRecord) ArtifactByFormat(format string) *ArtifactRef {
+	for i := range e.Artifacts {
+		if e.Artifacts[i].Format == format {
+			return &e.Artifacts[i]
+		}
+	}
+	return nil
 }
 
 // ExecEvent is a single phase transition with its timestamp.
@@ -154,7 +178,7 @@ type ExecutionStore interface {
 	Append(ctx context.Context, e ExecutionRecord) error
 	// Status transitions update the row by id (the worker owns the lifecycle).
 	MarkRunning(ctx context.Context, id string, at time.Time) error
-	Complete(ctx context.Context, id string, at time.Time, ref ArtifactRef, deliveries []DeliveryStatus) error
+	Complete(ctx context.Context, id string, at time.Time, refs []ArtifactRef, deliveries []DeliveryStatus) error
 	FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []DeliveryStatus) error
 	Cancel(ctx context.Context, id string, at time.Time, reason string) error
 	// RecordEvent appends a phase transition (tenant sets the events row scope).
@@ -165,11 +189,14 @@ type ExecutionStore interface {
 
 // ---- rendering & artifacts -------------------------------------------------
 
-// Section is a formatting-free block of gathered data (the template does layout).
+// Section is a formatting-free block of gathered data (the renderers do layout).
+// Header is the optional column-header row (bolded in HTML/Excel); Rows are the
+// data rows; Note is free text shown when a section isn't tabular.
 type Section struct {
-	Title string     `json:"title"`
-	Rows  [][]string `json:"rows,omitempty"`
-	Note  string     `json:"note,omitempty"`
+	Title  string     `json:"title"`
+	Header []string   `json:"header,omitempty"`
+	Rows   [][]string `json:"rows,omitempty"`
+	Note   string     `json:"note,omitempty"`
 }
 
 // ViewModel is the gathered, transport-neutral data for one report fire.

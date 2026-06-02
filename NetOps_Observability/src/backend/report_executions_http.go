@@ -83,13 +83,18 @@ func (s *server) handleReportExecutionByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// /api/reports/executions/{id}/artifact streams the stored rendered document.
+	// /api/reports/executions/{id}/artifact[?format=html|xlsx|pdf] streams a stored
+	// rendered document (defaults to the HTML/primary artifact).
 	if sub == "artifact" {
-		if rec.Artifact == nil {
-			writeError(w, http.StatusNotFound, errors.New("no artifact for this execution"))
+		ref := rec.PrimaryArtifact()
+		if f := r.URL.Query().Get("format"); f != "" {
+			ref = rec.ArtifactByFormat(f)
+		}
+		if ref == nil {
+			writeError(w, http.StatusNotFound, errors.New("no artifact for this execution/format"))
 			return
 		}
-		art, err := s.reportPipeline.artifacts.Load(r.Context(), *rec.Artifact)
+		art, err := s.reportPipeline.artifacts.Load(r.Context(), *ref)
 		if err != nil {
 			writeError(w, http.StatusNotFound, errors.New("artifact unavailable"))
 			return
@@ -99,6 +104,9 @@ func (s *server) handleReportExecutionByID(w http.ResponseWriter, r *http.Reques
 			ct = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", ct)
+		if ref.Format != "html" {
+			w.Header().Set("Content-Disposition", "attachment; filename=\"report."+ref.Format+"\"")
+		}
 		_, _ = w.Write(art.Bytes)
 		return
 	}

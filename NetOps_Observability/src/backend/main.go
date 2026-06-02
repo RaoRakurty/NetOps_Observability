@@ -422,6 +422,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/reports/channels", s.handleReportChannels)
 	mux.HandleFunc("/api/reports/executions", s.handleReportExecutions)
 	mux.HandleFunc("/api/reports/executions/", s.handleReportExecutionByID)
+	mux.HandleFunc("/api/reports/preview", s.handleReportPreview)
 	mux.HandleFunc("/api/notify/smtp", s.handleSMTPConfig)
 	mux.HandleFunc("/api/notify/smtp/test", s.handleSMTPTest)
 	mux.HandleFunc("/api/notify/twilio", s.handleTwilioConfig)

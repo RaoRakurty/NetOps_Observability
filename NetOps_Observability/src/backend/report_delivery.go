@@ -31,10 +31,11 @@ type reportDelivery struct {
 	now          func() time.Time
 }
 
-// docSender is the slice of *notify.Email the adapter needs (an HTML-capable
-// one-off send), kept as an interface so tests can fake it.
+// docSender is the slice of *notify.Email the adapter needs (HTML-capable one-off
+// sends, with and without attachments), kept as an interface so tests can fake it.
 type docSender interface {
 	SendDocument(subject, contentType, body string) error
+	SendReport(subject, htmlBody string, attachments []notify.Attachment) error
 }
 
 func newReportDelivery(s *server) *reportDelivery {
@@ -58,9 +59,10 @@ type deliverReq struct {
 	Cross         bool
 	ContactPoints []string
 	Channels      []string
-	Subject       string // artifact summary -> email subject
-	ContentType   string // artifact content type (text/html...)
-	Body          []byte // rendered artifact bytes (the HTML email body)
+	Subject       string             // artifact summary -> email subject
+	ContentType   string             // artifact content type (text/html...)
+	Body          []byte             // rendered HTML artifact (the email body)
+	Attachments   []reports.Artifact // non-HTML artifacts (xlsx/pdf) attached to the email
 	Alert         models.Alert
 }
 
@@ -86,7 +88,12 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 			// One SMTP transaction addresses the whole group (matching existing
 			// behavior); the shared outcome is recorded per recipient. Per-recipient
 			// isolation (and skip-on-retry) is the execution_deliveries phase.
-			err := sender.SendDocument(req.Subject, req.ContentType, string(req.Body))
+			var err error
+			if atts := toAttachments(req.Attachments); len(atts) > 0 {
+				err = sender.SendReport(req.Subject, string(req.Body), atts)
+			} else {
+				err = sender.SendDocument(req.Subject, req.ContentType, string(req.Body))
+			}
 			for _, r := range recipients {
 				ds := reports.DeliveryStatus{Channel: "email", Recipient: r, Attempt: 1, At: at, OK: err == nil}
 				if err != nil {
@@ -108,5 +115,26 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 		}
 	}
 
+	return out
+}
+
+// toAttachments turns rendered non-HTML artifacts into email attachments with a
+// sensible filename per format.
+func toAttachments(arts []reports.Artifact) []notify.Attachment {
+	if len(arts) == 0 {
+		return nil
+	}
+	out := make([]notify.Attachment, 0, len(arts))
+	for _, a := range arts {
+		ext := a.Format
+		if ext == "" {
+			ext = "bin"
+		}
+		out = append(out, notify.Attachment{
+			Filename:    "report." + ext,
+			ContentType: a.ContentType,
+			Bytes:       a.Bytes,
+		})
+	}
 	return out
 }

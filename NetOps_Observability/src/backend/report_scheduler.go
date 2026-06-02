@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -151,6 +152,9 @@ type reportSpec struct {
 	// (PG backend). When set and valid it supersedes IntervalMinutes; when absent
 	// the pipeline falls back to IntervalMinutes (rolling cadence) for back-compat.
 	Schedule *reports.Recurrence `json:"schedule,omitempty"`
+	// Formats lists the output formats to render (html, xlsx, pdf). Empty => html.
+	// HTML is always produced (the email body); extras are stored + attached.
+	Formats []string `json:"formats,omitempty"`
 }
 
 const (
@@ -368,6 +372,232 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 		Labels:      map[string]string{"report_id": o.ID, "kind": firstNonEmpty(spec.Kind, "alerts_summary")},
 		FiredAt:     now,
 	}
+}
+
+// buildViewModel is the "Build Dataset" stage: it gathers a report's data once
+// into a render-neutral, structured reports.ViewModel that every renderer (HTML,
+// Excel, PDF) consumes. Tabular kinds populate Section.Header+Rows (real tables,
+// so Excel exports cells, not a text blob); narrative kinds fall back to a Note.
+func (rs *reportScheduler) buildViewModel(o SavedObject, spec reportSpec, now time.Time) reports.ViewModel {
+	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
+	if sev == "" {
+		sev = "info"
+	}
+	tenant := o.TenantID
+	var summary string
+	var sections []reports.Section
+	switch spec.Kind {
+	case "device_inventory":
+		summary, sections = rs.datasetDevices(tenant)
+	case "health_summary":
+		summary, sections = rs.datasetHealth(now, tenant)
+	case "wan_utilization":
+		summary, sections = rs.datasetWAN()
+	case "security_threats":
+		summary, sections = rs.datasetSecurity()
+	case "device_utilization":
+		summary, sections = rs.datasetDeviceUtil()
+	case "latency_jitter_sla":
+		summary, sections = rs.datasetLatency()
+	default:
+		summary, sections = rs.datasetAlerts(tenant)
+	}
+	return reports.ViewModel{
+		ReportID:    o.ID,
+		ReportName:  o.Name,
+		Kind:        firstNonEmpty(spec.Kind, "alerts_summary"),
+		TenantID:    tenant,
+		GeneratedAt: now,
+		Severity:    sev,
+		Description: spec.Description,
+		Summary:     summary,
+		Sections:    sections,
+	}
+}
+
+// alertFromViewModel renders the structured ViewModel down to the models.Alert
+// shape the notify channels (slack/pagerduty/...) consume, so named-channel
+// delivery keeps working from the same dataset.
+func alertFromViewModel(vm reports.ViewModel, now time.Time) models.Alert {
+	var b strings.Builder
+	if vm.Description != "" {
+		b.WriteString(vm.Description + "\n\n")
+	}
+	for _, s := range vm.Sections {
+		b.WriteString(s.Title + "\n")
+		if s.Note != "" {
+			b.WriteString(s.Note + "\n")
+		}
+		for _, row := range s.Rows {
+			b.WriteString("  " + strings.Join(row, "  ") + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return models.Alert{
+		ID:          "report-" + vm.ReportID,
+		Rule:        "report",
+		Severity:    firstNonEmpty(vm.Severity, "info"),
+		Summary:     "Report: " + vm.ReportName + " — " + vm.Summary,
+		Description: strings.TrimSpace(b.String()),
+		Labels:      map[string]string{"report_id": vm.ReportID, "kind": vm.Kind},
+		FiredAt:     now,
+	}
+}
+
+func (rs *reportScheduler) datasetAlerts(tenant string) (string, []reports.Section) {
+	active := rs.tenantAlerts(tenant)
+	bySev := map[string]int{}
+	for _, a := range active {
+		bySev[strings.ToLower(a.Severity)]++
+	}
+	summary := fmt.Sprintf("%d active alert(s)", len(active))
+	if len(active) == 0 {
+		return summary, []reports.Section{{Title: "Active alerts", Note: "No active alerts."}}
+	}
+	var sevRows [][]string
+	for _, s := range []string{"critical", "error", "warning", "notice", "info"} {
+		if n := bySev[s]; n > 0 {
+			sevRows = append(sevRows, []string{s, strconv.Itoa(n)})
+		}
+	}
+	sort.Slice(active, func(i, j int) bool { return active[i].FiredAt.After(active[j].FiredAt) })
+	var recent [][]string
+	for i, a := range active {
+		if i >= 25 {
+			break
+		}
+		recent = append(recent, []string{a.Severity, a.Summary})
+	}
+	return summary, []reports.Section{
+		{Title: "By severity", Header: []string{"Severity", "Count"}, Rows: sevRows},
+		{Title: "Most recent", Header: []string{"Severity", "Alert"}, Rows: recent},
+	}
+}
+
+func (rs *reportScheduler) datasetDevices(tenant string) (string, []reports.Section) {
+	devs := rs.tenantDevices(tenant)
+	summary := fmt.Sprintf("%d device(s) discovered", len(devs))
+	if len(devs) == 0 {
+		return summary, []reports.Section{{Title: "Devices", Note: "No devices discovered."}}
+	}
+	var rows [][]string
+	for _, d := range devs {
+		m := toMap(d)
+		name := firstNonEmpty(str(m["name"]), str(m["id"]))
+		rows = append(rows, []string{name, str(m["address"]), str(m["vendor"])})
+	}
+	return summary, []reports.Section{{Title: "Devices", Header: []string{"Name", "Address", "Vendor"}, Rows: rows}}
+}
+
+func (rs *reportScheduler) datasetHealth(now time.Time, tenant string) (string, []reports.Section) {
+	uptime := now.Sub(rs.startedAt).Round(time.Second)
+	devs := len(rs.tenantDevices(tenant))
+	active := len(rs.tenantAlerts(tenant))
+	rows := [][]string{
+		{"API uptime", uptime.String()},
+		{"Devices discovered", strconv.Itoa(devs)},
+		{"Active alerts", strconv.Itoa(active)},
+	}
+	return fmt.Sprintf("uptime %s · %d devices · %d active alerts", uptime, devs, active),
+		[]reports.Section{{Title: "Stack health", Header: []string{"Metric", "Value"}, Rows: rows}}
+}
+
+func (rs *reportScheduler) datasetWAN() (string, []reports.Section) {
+	rows := chQuery(`
+SELECT local_device, remote_device, type, status,
+       round(loss_pct,2), round(qoe,2)
+  FROM netops.tunnels
+ ORDER BY ts DESC
+ LIMIT 1 BY id
+ FORMAT TSV`)
+	if len(rows) == 0 {
+		return "no WAN/overlay links reporting", []reports.Section{{Title: "WAN / overlay links", Note: "No tunnel/overlay telemetry yet."}}
+	}
+	up := 0
+	var data [][]string
+	for _, r := range rows {
+		c := strings.Split(r, "\t")
+		if len(c) < 6 {
+			continue
+		}
+		if c[3] == "up" {
+			up++
+		}
+		data = append(data, []string{c[0] + "↔" + c[1], c[2], c[3], c[4] + "%", c[5]})
+	}
+	return fmt.Sprintf("%d WAN/overlay link(s), %d up", len(rows), up),
+		[]reports.Section{{Title: "WAN / overlay links", Header: []string{"Link", "Type", "Status", "Loss", "QoE"}, Rows: data}}
+}
+
+func (rs *reportScheduler) datasetSecurity() (string, []reports.Section) {
+	sev := chQuery(`
+SELECT severity, count()
+  FROM netops.findings
+ WHERE ts >= now() - INTERVAL 24 HOUR
+ GROUP BY severity
+ ORDER BY count() DESC
+ FORMAT TSV`)
+	recent := chQuery(`
+SELECT severity, device, summary
+  FROM netops.findings
+ WHERE ts >= now() - INTERVAL 24 HOUR
+ ORDER BY ts DESC
+ LIMIT 10
+ FORMAT TSV`)
+	var secs []reports.Section
+	total := 0
+	if len(sev) == 0 {
+		secs = append(secs, reports.Section{Title: "Findings (24h)", Note: "No findings in the last 24h."})
+	} else {
+		var sevRows [][]string
+		for _, r := range sev {
+			c := strings.Split(r, "\t")
+			if len(c) == 2 {
+				sevRows = append(sevRows, []string{c[0], c[1]})
+				total += atoiSafe(c[1])
+			}
+		}
+		secs = append(secs, reports.Section{Title: "By severity (24h)", Header: []string{"Severity", "Count"}, Rows: sevRows})
+	}
+	if len(recent) > 0 {
+		var rows [][]string
+		for _, r := range recent {
+			c := strings.Split(r, "\t")
+			if len(c) >= 3 {
+				rows = append(rows, []string{c[0], c[1], c[2]})
+			}
+		}
+		secs = append(secs, reports.Section{Title: "Recent findings", Header: []string{"Severity", "Device", "Summary"}, Rows: rows})
+	}
+	crit := 0
+	for _, a := range rs.alerts.Active() {
+		if strings.EqualFold(a.Severity, "critical") {
+			crit++
+		}
+	}
+	secs = append(secs, reports.Section{Title: "Critical active alerts", Note: strconv.Itoa(crit)})
+	return fmt.Sprintf("%d finding(s)/24h · %d critical alert(s)", total, crit), secs
+}
+
+func (rs *reportScheduler) datasetDeviceUtil() (string, []reports.Section) {
+	cpu := vmTopk(`topk(10, device_cpu_percent)`, "%")
+	mem := vmTopk(`topk(10, device_mem_percent)`, "%")
+	if len(cpu) == 0 && len(mem) == 0 {
+		return "no device utilisation metrics", []reports.Section{{Title: "Device utilisation", Note: "No CPU/memory metrics reporting yet."}}
+	}
+	var secs []reports.Section
+	if len(cpu) > 0 {
+		secs = append(secs, reports.Section{Title: "Top CPU", Note: strings.Join(cpu, "\n")})
+	}
+	if len(mem) > 0 {
+		secs = append(secs, reports.Section{Title: "Top memory", Note: strings.Join(mem, "\n")})
+	}
+	return fmt.Sprintf("%d device(s) by CPU, %d by memory", len(cpu), len(mem)), secs
+}
+
+func (rs *reportScheduler) datasetLatency() (string, []reports.Section) {
+	summary, body := rs.renderLatencyJitterSLA()
+	return summary, []reports.Section{{Title: "Latency, jitter & SLA", Note: body}}
 }
 
 // tenantDevices returns the devices a report for the given tenant should cover:

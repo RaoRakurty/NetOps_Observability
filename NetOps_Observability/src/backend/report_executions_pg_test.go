@@ -42,8 +42,11 @@ func TestPgExecStore(t *testing.T) {
 		{Channel: "email", Recipient: "a@x.com", OK: true, Attempt: 1, At: base.Add(5 * time.Second)},
 		{Channel: "email", Recipient: "b@x.com", OK: false, Attempt: 1, Error: "smtp 550", At: base.Add(5 * time.Second)},
 	}
-	ref := reports.ArtifactRef{Format: "html", ContentType: "text/html", SizeBytes: 1234, SHA256: "abc", Summary: "Stack health", Key: "e1"}
-	if err := s.Complete(ctx, "e1", base.Add(6*time.Second), ref, deliveries); err != nil {
+	refs := []reports.ArtifactRef{
+		{Format: "html", ContentType: "text/html", SizeBytes: 1234, SHA256: "abc", Summary: "Stack health", Key: "e1_html"},
+		{Format: "xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", SizeBytes: 999, SHA256: "def", Summary: "Stack health", Key: "e1_xlsx"},
+	}
+	if err := s.Complete(ctx, "e1", base.Add(6*time.Second), refs, deliveries); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 
@@ -54,8 +57,14 @@ func TestPgExecStore(t *testing.T) {
 	if got.Status != reports.StatusCompleted {
 		t.Errorf("status = %q, want completed", got.Status)
 	}
-	if got.Artifact == nil || got.Artifact.SizeBytes != 1234 || got.Artifact.Format != "html" {
-		t.Errorf("artifact ref not round-tripped: %+v", got.Artifact)
+	if len(got.Artifacts) != 2 {
+		t.Fatalf("artifacts not round-tripped: %+v", got.Artifacts)
+	}
+	if a := got.PrimaryArtifact(); a == nil || a.SizeBytes != 1234 || a.Format != "html" {
+		t.Errorf("primary artifact wrong: %+v", a)
+	}
+	if got.ArtifactByFormat("xlsx") == nil {
+		t.Errorf("xlsx artifact missing")
 	}
 	if len(got.Deliveries) != 2 || got.Deliveries[0].Recipient != "a@x.com" || got.Deliveries[1].OK {
 		t.Errorf("deliveries not round-tripped: %+v", got.Deliveries)

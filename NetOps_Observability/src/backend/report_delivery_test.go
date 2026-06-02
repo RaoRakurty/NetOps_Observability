@@ -11,16 +11,25 @@ import (
 )
 
 type fakeDoc struct {
-	err    error
-	called bool
-	body   string
-	ctype  string
+	err         error
+	called      bool
+	body        string
+	ctype       string
+	attachments []notify.Attachment
 }
 
 func (f *fakeDoc) SendDocument(subject, contentType, body string) error {
 	f.called = true
 	f.body = body
 	f.ctype = contentType
+	return f.err
+}
+
+func (f *fakeDoc) SendReport(subject, htmlBody string, attachments []notify.Attachment) error {
+	f.called = true
+	f.body = htmlBody
+	f.ctype = "text/html; charset=UTF-8"
+	f.attachments = attachments
 	return f.err
 }
 

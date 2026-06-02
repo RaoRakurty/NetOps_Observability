@@ -591,10 +591,51 @@ export const api = {
   // Deliver a report now. channels optionally restricts this one send to named
   // notify channels; omitted/empty => all configured channels.
   runReport: (id: string, channels?: string[]) =>
-    request<ReportRun>("/api/reports/run", {
+    request<ReportRun & { execution_id?: string }>("/api/reports/run", {
       method: "POST",
       body: JSON.stringify(channels && channels.length ? { id, channels } : { id }),
     }),
+  // Edit an existing report (or any saved object).
+  updateSaved: (id: string, name: string, body: unknown) =>
+    request<SavedObject>(`/api/saved/${id}`, { method: "PUT", body: JSON.stringify({ name, body }) }),
+  // Async pipeline (Postgres backend): per-report execution history + detail.
+  reportExecutions: (scheduleId?: string, opts?: { limit?: number; before?: string }) => {
+    const p = new URLSearchParams();
+    if (scheduleId) p.set("schedule_id", scheduleId);
+    if (opts?.limit) p.set("limit", String(opts.limit));
+    if (opts?.before) p.set("before", opts.before);
+    const qs = p.toString();
+    return request<ReportExecution[]>(`/api/reports/executions${qs ? `?${qs}` : ""}`);
+  },
+  reportExecution: (id: string) => request<ReportExecutionDetail>(`/api/reports/executions/${encodeURIComponent(id)}`),
+  // Live preview — renders a report's HTML on demand without scheduling/delivering.
+  reportPreview: async (name: string, body: ReportBody, format: ReportFormat = "html"): Promise<string> => {
+    const token = getToken();
+    const res = await fetch(`/api/reports/preview?format=${encodeURIComponent(format)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ name, body }),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
+    return res.text();
+  },
+  // Fetch a stored artifact (auth-protected) and trigger a browser download.
+  downloadArtifact: async (execId: string, format: ReportFormat): Promise<void> => {
+    const token = getToken();
+    const res = await fetch(`/api/reports/executions/${encodeURIComponent(execId)}/artifact?format=${encodeURIComponent(format)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `report.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 
   // ----- Identity & access (admin) -----
   permissions: () => request<{ role: string; permissions: Record<string, number> }>("/api/auth/permissions"),
@@ -768,7 +809,53 @@ export type ReportBody = {
   // How contact-point delivery carries the report: "body" emails the rendered
   // report; "link" emails a secure link (rolling out). Default "body".
   delivery_mode?: "body" | "link";
+  // Calendar+timezone schedule (async backend). Supersedes interval_minutes when set.
+  schedule?: Recurrence;
+  // Output formats to render: html (always), xlsx, pdf. Empty => html only.
+  formats?: ReportFormat[];
 };
+
+export type ReportFormat = "html" | "xlsx" | "pdf";
+export type Weekday = "" | "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+export type Recurrence = {
+  tz: string; // IANA, e.g. "America/Chicago"; "" => UTC
+  hour: number; // 0..23
+  minute: number; // 0..59
+  weekday?: Weekday; // set => weekly
+  dom?: number; // 1..31 => monthly (takes precedence over weekday)
+};
+
+export type ArtifactRef = {
+  format: ReportFormat;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  summary: string;
+  key: string;
+};
+export type DeliveryStatus = {
+  channel: string;
+  recipient: string;
+  ok: boolean;
+  attempt: number;
+  error?: string;
+  at: string;
+};
+export type ExecEvent = { phase: string; at: string; note?: string };
+export type ReportExecution = {
+  id: string;
+  tenant_id?: string;
+  schedule_id: string;
+  job_id?: string;
+  fire_time: string;
+  started_at?: string;
+  completed_at?: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  artifacts?: ArtifactRef[];
+  delivery_status?: DeliveryStatus[];
+  error?: string;
+};
+export type ReportExecutionDetail = ReportExecution & { events?: ExecEvent[] };
 
 export type ContactPointType = "email" | "slack" | "webhook";
 export type ContactPoint = {
