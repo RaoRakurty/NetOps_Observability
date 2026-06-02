@@ -19,6 +19,7 @@ import (
 	"netops/backend/alerts"
 	"netops/backend/models"
 	"netops/backend/notify"
+	"netops/backend/reports"
 )
 
 // handleReportRuns: GET /api/reports/runs — run-state map keyed by report id,
@@ -28,6 +29,17 @@ func (s *server) handleReportRuns(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Under the async backend, derive last/next/status from the execution history
+	// (scoped to the caller's tenant); the file backend uses the in-memory map.
+	if s.reportPipeline != nil {
+		claims, ok := s.requirePerm(w, r, "reports", LevelRead)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		writeJSON(w, http.StatusOK, s.reportPipeline.runsFromExecutions(r.Context(), tenant, cross))
 		return
 	}
 	writeJSON(w, http.StatusOK, s.reports.Runs())
@@ -41,6 +53,9 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.requirePerm(w, r, "reports", LevelWrite); !ok {
+		return
+	}
 	var req struct {
 		ID       string   `json:"id"`
 		Channels []string `json:"channels,omitempty"`
@@ -49,7 +64,33 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("id required"))
 		return
 	}
-	run, err := s.reports.RunNow(strings.TrimSpace(req.ID), req.Channels)
+	id := strings.TrimSpace(req.ID)
+
+	// Async path (Postgres): enqueue a job and return immediately — no blocking
+	// render/SMTP in the request. The worker pool delivers and records the
+	// execution; the client polls /api/reports/executions/{id} for progress.
+	if s.reportPipeline != nil {
+		o, ok := s.saved.Get(id)
+		if !ok || o.Type != "report" {
+			writeError(w, http.StatusNotFound, errors.New("report not found"))
+			return
+		}
+		execID, err := s.reportPipeline.EnqueueNow(r.Context(), o)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"execution_id": execID,
+			"status":       "queued",
+			// "run" keeps the legacy shape so the existing UI still updates.
+			"run": reportRun{Status: "queued", Detail: "queued for async delivery"},
+		})
+		return
+	}
+
+	// Synchronous fallback (file backend).
+	run, err := s.reports.RunNow(id, req.Channels)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -106,6 +147,10 @@ type reportSpec struct {
 	// "body" (default) emails the rendered report; "link" emails a secure link
 	// (Phase 3). Unknown/empty => body.
 	DeliveryMode string `json:"delivery_mode,omitempty"`
+	// Schedule is the calendar+timezone recurrence used by the async pipeline
+	// (PG backend). When set and valid it supersedes IntervalMinutes; when absent
+	// the pipeline falls back to IntervalMinutes (rolling cadence) for back-compat.
+	Schedule *reports.Recurrence `json:"schedule,omitempty"`
 }
 
 const (

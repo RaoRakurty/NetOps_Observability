@@ -65,19 +65,42 @@ func (e *Email) Send(a models.Alert) error {
 
 	subject := fmt.Sprintf("[%s] %s", strings.ToUpper(a.Severity), a.Rule)
 	body := buildEmailBody(a)
+	msg := buildRFC5322(e.from, e.to, subject, body, "text/plain; charset=UTF-8")
+	return e.sendRaw([]byte(msg))
+}
 
-	msg := buildRFC5322(e.from, e.to, subject, body)
+// SendDocument delivers a one-off message with an explicit subject and a body of
+// the given MIME content type (e.g. "text/html; charset=UTF-8") to the configured
+// recipients, reusing the same SMTP transport as Send. The reporting pipeline
+// uses it to deliver a rendered HTML artifact as the email body; the alert Send
+// path is unchanged.
+func (e *Email) SendDocument(subject, contentType, body string) error {
+	if e.host == "" || e.from == "" {
+		return errors.New("smtp host or sender not configured")
+	}
+	if len(e.to) == 0 {
+		return errors.New("no recipients configured")
+	}
+	if contentType == "" {
+		contentType = "text/plain; charset=UTF-8"
+	}
+	msg := buildRFC5322(e.from, e.to, subject, body, contentType)
+	return e.sendRaw([]byte(msg))
+}
 
+// sendRaw applies auth and the STARTTLS / TLS-on-connect transport choice shared
+// by Send and SendDocument.
+func (e *Email) sendRaw(msg []byte) error {
 	host, _, _ := net.SplitHostPort(e.host)
 	var auth smtp.Auth
 	if e.user != "" {
 		auth = smtp.PlainAuth("", e.user, e.password, host)
 	}
 	if e.tlsOnConnect {
-		return e.sendTLSOnConnect(host, auth, []byte(msg))
+		return e.sendTLSOnConnect(host, auth, msg)
 	}
 	// STARTTLS path (port 587/25).
-	return smtp.SendMail(e.host, auth, e.from, e.to, []byte(msg))
+	return smtp.SendMail(e.host, auth, e.from, e.to, msg)
 }
 
 // sendTLSOnConnect dials an implicit-TLS connection (port 465) before HELO,
@@ -144,13 +167,13 @@ func buildEmailBody(a models.Alert) string {
 	return b.String()
 }
 
-func buildRFC5322(from string, to []string, subject, body string) string {
+func buildRFC5322(from string, to []string, subject, body, contentType string) string {
 	headers := []string{
 		"From: " + from,
 		"To: " + strings.Join(to, ", "),
 		"Subject: " + subject,
 		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Type: " + contentType,
 	}
 	return strings.Join(headers, "\r\n") + "\r\n\r\n" + body
 }

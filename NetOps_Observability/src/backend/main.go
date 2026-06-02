@@ -24,6 +24,7 @@ import (
 	"netops/backend/collectors"
 	"netops/backend/models"
 	"netops/backend/notify"
+	"netops/backend/reports"
 )
 
 const version = "0.1.0-scaffold"
@@ -32,24 +33,25 @@ const version = "0.1.0-scaffold"
 // (discovery aggregator, collector pool, alert engine, notifier, user
 // store for auth, and the live-events WebSocket hub).
 type server struct {
-	startedAt     time.Time
-	discovery     *DiscoveryAggregator
-	collectors    *collectors.Pool
-	alerts        *alerts.Engine
-	notifier      *notify.Dispatcher
-	users         usersRepo
-	roles         *roleStore
-	tenants       *tenantStore
-	apiKeys       *apiKeyStore
-	refresh       *refreshStore
-	snmpCreds     *snmpCredStore
-	snmpProfiles  *snmpProfileStore
-	saved         *savedStore
-	audit         auditRepo
-	notifyCfg     *notifyConfigStore
-	contactPoints *contactPointStore
-	reports       *reportScheduler
-	copilotCfg    *copilotConfigStore
+	startedAt      time.Time
+	discovery      *DiscoveryAggregator
+	collectors     *collectors.Pool
+	alerts         *alerts.Engine
+	notifier       *notify.Dispatcher
+	users          usersRepo
+	roles          *roleStore
+	tenants        *tenantStore
+	apiKeys        *apiKeyStore
+	refresh        *refreshStore
+	snmpCreds      *snmpCredStore
+	snmpProfiles   *snmpProfileStore
+	saved          *savedStore
+	audit          auditRepo
+	notifyCfg      *notifyConfigStore
+	contactPoints  *contactPointStore
+	reports        *reportScheduler
+	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
+	copilotCfg     *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -309,7 +311,20 @@ func main() {
 	srv.collectors.Start(ctx)
 	srv.alerts.Start(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
-		srv.reports.Start(ctx)
+		// On the Postgres backend, run the durable async pipeline (queue + workers
+		// + immutable execution history). On the file backend, keep the in-process
+		// scheduler so the offline/dev build still delivers scheduled reports.
+		if ps, ok := backend.(*pgStore); ok {
+			renderer, err := reports.NewHTMLRenderer()
+			if err != nil {
+				log.Fatalf("report renderer: %v", err)
+			}
+			srv.reportPipeline = newReportPipeline(srv,
+				newPgJobQueue(ps.db, 5), newPgExecStore(ps.db), newKVArtifactStore(), renderer)
+			srv.reportPipeline.Start(ctx)
+		} else {
+			srv.reports.Start(ctx)
+		}
 	}
 	go srv.startBroadcaster(ctx.Done())
 	go srv.watchAlertsForBroadcast(ctx)
@@ -405,6 +420,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/reports/runs", s.handleReportRuns)
 	mux.HandleFunc("/api/reports/run", s.handleReportRunNow)
 	mux.HandleFunc("/api/reports/channels", s.handleReportChannels)
+	mux.HandleFunc("/api/reports/executions", s.handleReportExecutions)
+	mux.HandleFunc("/api/reports/executions/", s.handleReportExecutionByID)
 	mux.HandleFunc("/api/notify/smtp", s.handleSMTPConfig)
 	mux.HandleFunc("/api/notify/smtp/test", s.handleSMTPTest)
 	mux.HandleFunc("/api/notify/twilio", s.handleTwilioConfig)
@@ -584,6 +601,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_alerts_active Currently active alerts.\n")
 	fmt.Fprintf(w, "# TYPE netops_alerts_active gauge\n")
 	fmt.Fprintf(w, "netops_alerts_active %d\n", len(s.alerts.Active()))
+	if s.reportPipeline != nil {
+		s.reportPipeline.writeMetrics(w)
+	}
 }
 
 // ---- helpers ----------------------------------------------------------------

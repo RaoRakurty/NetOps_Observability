@@ -132,8 +132,11 @@ func buildEmailChannel(c smtpConfig) notify.Channel {
 // emailSenderTo builds a one-off, ungated email send to an explicit recipient
 // list using the configured SMTP transport — the path report contact-point
 // delivery uses (resolved recipients, not the global To, and no severity gate).
-// Returns false if SMTP isn't usably configured or there are no recipients.
-func (s *notifyConfigStore) emailSenderTo(recipients []string) (notify.Channel, bool) {
+// Returns false if SMTP isn't usably configured or there are no recipients. The
+// concrete *notify.Email also exposes SendDocument, so the reporting pipeline can
+// deliver a rendered HTML artifact as the body; it still satisfies notify.Channel
+// for the plain-text alert path.
+func (s *notifyConfigStore) emailSenderTo(recipients []string) (*notify.Email, bool) {
 	s.mu.RLock()
 	c := s.cfg.SMTP
 	s.mu.RUnlock()

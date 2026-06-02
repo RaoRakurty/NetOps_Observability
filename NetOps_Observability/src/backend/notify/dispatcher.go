@@ -136,3 +136,41 @@ func (d *Dispatcher) DispatchTo(a models.Alert, names []string) int {
 	}
 	return sent
 }
+
+// SendResult is the per-channel outcome of a DispatchToResults call.
+type SendResult struct {
+	Channel string
+	Err     error
+}
+
+// DispatchToResults sends the alert to the named channels SYNCHRONOUSLY and
+// returns a per-channel result, so a caller that needs delivery receipts (the
+// report pipeline, recording per-channel DeliveryStatus) knows which channels
+// succeeded. An empty/nil selection targets all channels. The intentional-send
+// severity-gate bypass matches DispatchTo. Unlike Dispatch/DispatchTo, this
+// blocks until every send returns — callers run it off the request path.
+func (d *Dispatcher) DispatchToResults(a models.Alert, names []string) []SendResult {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	all := len(names) == 0
+
+	d.mu.RLock()
+	channels := make([]Channel, len(d.channels))
+	copy(channels, d.channels)
+	d.mu.RUnlock()
+
+	var results []SendResult
+	for _, c := range channels {
+		if !all && !want[strings.ToLower(c.Name())] {
+			continue
+		}
+		target := c
+		if g, ok := c.(interface{ Unguarded() Channel }); ok {
+			target = g.Unguarded()
+		}
+		results = append(results, SendResult{Channel: c.Name(), Err: target.Send(a)})
+	}
+	return results
+}
