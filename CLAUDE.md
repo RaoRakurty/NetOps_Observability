@@ -67,7 +67,11 @@ Tests present: `src/backend/{jwt,users,password}_test.go`,
 `src/backend/alerts/parse_test.go`, `src/correlation/test_anomaly.py`.
 
 ### Conventions & gotchas
-- **Backend stays dependency-free** — do not add third-party Go modules.
+- **Backend defaults to the standard library; third-party Go modules are
+  allowed ONLY from the allowlist below** (see §6). The rule's *purpose* is a
+  clean offline build + minimal attack surface — not dogma. A dependency is
+  permitted when it serves a foundational capability the stdlib can't, is
+  offline-buildable, pinned, and reviewed. Everything else stays stdlib.
 - `data/` and `deployment/docker/.env` are gitignored (generated at install).
   ⚠️ **`.env` is currently tracked in git despite being in `.gitignore`** — it
   was committed before being ignored, so it carries secrets in history. Flag
@@ -202,11 +206,27 @@ OR
 
 ## 6. DEPENDENCY RULES
 
-- Only approved dependencies allowed
-- No automatic addition of libraries
-- All dependencies must be reviewed
-- Keep dependency graph minimal
-- Prefer standard library
+Zero-trust on dependencies stands: **default to the standard library.** A
+third-party module is allowed only when it clears ALL of these gates:
+
+1. **Need** — it provides a foundational capability the stdlib genuinely cannot
+   (e.g. a database driver), not mere convenience.
+2. **Offline-buildable** — vendored or module-cached so `go build` works in a
+   clean, network-less environment (the original reason for the stdlib rule).
+3. **Pinned & reviewed** — exact version in `go.mod`, justified in the PR.
+4. **Minimal surface** — prefer build-time codegen (e.g. sqlc) or a single
+   driver over frameworks/ORMs that pull large transitive trees.
+
+### Allowlist (the ONLY third-party modules permitted)
+
+| Module | Purpose | Notes |
+|--------|---------|-------|
+| `github.com/jackc/pgx` (or `lib/pq`) | PostgreSQL driver | Required for the relational app-state store (M0). Build-tagged/opt-in; default file build stays dependency-free. |
+| `sqlc` (build-time, not a runtime import) | type-safe SQL → Go codegen | Generated code is checked in; runtime keeps only the driver. |
+
+Anything not in this table is **forbidden without first amending this table.**
+No automatic addition of libraries. Keep the dependency graph minimal. When in
+doubt, stdlib.
 
 ---
 
