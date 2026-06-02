@@ -37,7 +37,7 @@ type server struct {
 	collectors   *collectors.Pool
 	alerts       *alerts.Engine
 	notifier     *notify.Dispatcher
-	users        *userStore
+	users        usersRepo
 	roles        *roleStore
 	tenants      *tenantStore
 	apiKeys      *apiKeyStore
@@ -197,7 +197,7 @@ func newServer() *server {
 
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
 
-	users, err := newUserStore(envOr("USERS_FILE", "/data/users.json"))
+	users, err := newUsersStore(envOr("USERS_FILE", "/data/users.json"))
 	if err != nil {
 		log.Fatalf("user store: %v", err)
 	}
@@ -347,6 +347,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
 	mux.HandleFunc("/api/auth/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
+	mux.HandleFunc("/api/auth/osd-gate", s.handleOSDGate) // nginx auth_request target for /search
 	mux.HandleFunc("/api/auth/permissions", s.handlePermissions)
 	// SSO (OIDC/SAML/LDAP via Keycloak) — config + Authorization Code flow.
 	mux.HandleFunc("/api/auth/sso/config", s.handleSSOConfig)

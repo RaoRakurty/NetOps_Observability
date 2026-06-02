@@ -466,8 +466,12 @@ def ensure_data_dirs(root: Path) -> None:
 
 def compose_up(compose_dir: Path) -> None:
     info("building and starting services (this can take a few minutes the first time)…")
+    # --profile osd brings up OpenSearch Dashboards alongside the base stack so the
+    # platform-admin /search route is served rather than 502-ing (nginx still
+    # graceful-degrades if it's later stopped). The "sso" profile (Keycloak) stays
+    # opt-in. Profiles are additive: non-profiled services always start.
     subprocess.run(
-        ["docker", "compose", "up", "-d", "--build"],
+        ["docker", "compose", "--profile", "osd", "up", "-d", "--build"],
         cwd=str(compose_dir),
         check=True,
     )

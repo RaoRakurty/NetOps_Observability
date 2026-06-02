@@ -132,6 +132,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.users.TouchLogin(user.Username)
+	setOSDCookie(w, tok, ttl) // /search gate cookie (enforced for platform owner only)
 	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role})
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
@@ -172,6 +173,10 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Refresh the /search gate cookie too, so it tracks the rotating session and
+	// covers principals that authenticated via SSO/LDAP/TACACS (they reach a fresh
+	// access token through this path).
+	setOSDCookie(w, tok, ttl)
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, RefreshToken: newRefresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
 	})
@@ -192,6 +197,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if req.RefreshToken != "" {
 		s.refresh.Revoke(req.RefreshToken)
 	}
+	clearOSDCookie(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -265,6 +271,7 @@ var publicPaths = []string{
 	"/api/auth/methods",
 	"/api/auth/ldap/login",
 	"/api/auth/tacacs/login",
+	"/api/auth/osd-gate", // cookie-authenticated nginx auth_request target; does its own authz
 	"/metrics",
 }
 
@@ -369,6 +376,78 @@ func userFrom(ctx context.Context) (jwtClaims, bool) {
 	}
 	c, ok := v.(jwtClaims)
 	return c, ok
+}
+
+// ---- OpenSearch Dashboards (/search) platform-owner gate (#35) -------------
+//
+// nginx proxies /search/ to OpenSearch Dashboards OUTSIDE this auth middleware
+// (it's a browser-loaded iframe, not an XHR, so it can't carry the Bearer
+// header). To keep that surface platform-owner-only — Dashboards runs with its
+// security plugin off, so it has NO tenant isolation and would expose every
+// tenant's logs — nginx auth_request's each /search request against
+// handleOSDGate. The principal is carried in a short-lived httpOnly cookie
+// scoped to Path=/search (set at login/refresh, cleared at logout), so it is
+// only ever sent on /search requests and never reaches /api.
+const osdCookieName = "netops_osd"
+
+// secureCookies marks session cookies Secure (HTTPS-only). Off by default
+// because the stack currently serves plain HTTP on :8000; flip SECURE_COOKIES=
+// true once TLS (#18) terminates at nginx. A Secure cookie over plain HTTP is
+// silently dropped by the browser, which would break the gate — hence opt-in.
+func secureCookies() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("SECURE_COOKIES")), "true")
+}
+
+// setOSDCookie issues/refreshes the /search gate cookie carrying the caller's
+// access token. Path=/search confines it to the Dashboards route; SameSite=Lax
+// is sufficient (the iframe is same-origin). Lifetime tracks the access token.
+func setOSDCookie(w http.ResponseWriter, token string, ttl time.Duration) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     osdCookieName,
+		Value:    token,
+		Path:     "/search",
+		HttpOnly: true,
+		Secure:   secureCookies(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(ttl.Seconds()),
+	})
+}
+
+// clearOSDCookie expires the gate cookie on logout (same attributes, MaxAge<0).
+func clearOSDCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     osdCookieName,
+		Value:    "",
+		Path:     "/search",
+		HttpOnly: true,
+		Secure:   secureCookies(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
+// handleOSDGate is the nginx auth_request target for /search. It authenticates
+// from the gate cookie (not a Bearer token) and authorizes ONLY the platform
+// owner — a super-admin in the global tenant (principalTenant cross==true).
+// 200 = allow, 401 = no/invalid session, 403 = authenticated but not platform
+// owner. It is in publicPaths so the bearer-token middleware doesn't reject the
+// cookie-only subrequest; the authorization lives here.
+func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(osdCookieName)
+	if err != nil || c.Value == "" {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	claims, err := verifyJWT(c.Value, jwtSecret())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
+		return
+	}
+	if _, cross := principalTenant(claims); !cross {
+		writeError(w, http.StatusForbidden, errors.New("platform administrator access required"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func jwtSecret() string {
