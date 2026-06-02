@@ -4,7 +4,7 @@
 # distroless / scratch. Stage 2 ships only the binary, the CA bundle,
 # and a non-root user.
 
-FROM golang:1.22-alpine AS build
+FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY src/backend/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api .

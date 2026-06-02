@@ -71,14 +71,17 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 
 | # | Task | Status | Why |
 |---|------|--------|-----|
-| 19 | **M0 — normalize app-state → Postgres rows + RLS** (pgx+sqlc, migrations, tx + `SET app.current_tenant`, FORCE RLS, importer, backups) | 🟡 **in progress** (see below) | Unblocks RLS / per-tenant encryption / tamper-evident audit. SaaS prerequisite (a query bug = multi-customer breach). |
+| 19 | **M0 — normalize app-state → Postgres rows + RLS** (pgx, migrations, tx + `SET app.current_tenant`, FORCE RLS, importer) | ✅ **storage layer done** (see below) — follow-ups #31/#32/#33 | Unblocks RLS / per-tenant encryption / tamper-evident audit. SaaS prerequisite (a query bug = multi-customer breach). |
 | 20 | **Multi-tenant telemetry isolation** — tenant-tag at Vector ingest + ClickHouse row policies + OpenSearch per-tenant indices/DLS + VM tenants | ⏳ open | Real customer data separation for flows/logs/metrics. Pairs with real-traffic #4/#5. Independent of #19. |
 
 **SaaS ingestion decision to make early (one-way door):** customer-run collector/agent vs. exposed receivers — shapes tenant identity + data model. Design doc TODO.
 
-### 🟡 #19 M0 — current state of the working tree (uncommitted)
-**Laid down:** pgx allowlisted + vendored (`go.mod`/`go.sum`/`vendor/`, offline build intact) · Dockerfile `golang:1.22→1.24-alpine` · `migrations/0001_app_state.sql` (normalized `tenants`/`users`/`api_keys`/`saved_objects`/`snmp_credentials`/`audit_events` with `FORCE ROW LEVEL SECURITY` + fail-closed `app.current_tenant` GUC; global `roles`/`snmp_profiles` unscoped) · `db.go` (`pgxpool` + in-house forward-only migrator + `withTenant()`). `build`/`vet`/`test` all green.
-**Not done yet:** `db.go` is a standalone foundation — **nothing calls `newPgDB`/`withTenant`**; the 16 stores still run the old blob-kv path (`kvstore.go`→`pgkv.go`). Two Postgres backends now coexist. Remaining: row-level store seam replacing blob `kvLoad`/`kvSave`, blob→rows one-time importer, backups, migrator + RLS-isolation tests (skip-without-DB).
+### ✅ #19 M0 — storage layer landed; what it is and is NOT
+**Shipped:** pgx allowlisted + vendored (offline build intact) · `migrations/0001_app_state.sql` (normalized `tenants`/`users`/`api_keys`/`saved_objects`/`snmp_credentials`/`audit_events` with `FORCE ROW LEVEL SECURITY` + fail-closed `app.current_tenant` GUC; global `roles`/`snmp_profiles`; `app_kv` blob fallback for singleton configs) · `db.go` (`pgxpool` + forward-only migrator + `withTenant()`) · `pgstore.go` (`kvBackend` that **explodes** each collection blob into RLS rows on Save / **reassembles** on Load, with a one-time legacy `netops_kv` importer) · `pgstore_test.go` (pure explode/assemble + **live RLS-isolation + importer tests** gated on `DATABASE_URL_TEST`, verified against Postgres 16). Old `pgkv.go` blob backend removed. `build`/`vet`/`test` green; vendored offline build verified.
+
+**Deliberately a bridge, not the destination** (see design review). It gets normalized rows + RLS + tenant isolation with **zero store/API churn**. It does NOT yet give: per-request tenant-scoped reads (RLS is a **backstop** today — the app still loads all tenants into memory as platform-owner `'*'`), partial updates (flush = delete-all+insert-all), pagination, or multi-instance cache coherence. Those are the follow-ups below.
+
+**⚠️ Operational:** `DATABASE_URL` MUST be a non-superuser, non-BYPASSRLS role — superusers bypass RLS even with FORCE, silently disabling isolation (documented in `db.go`).
 
 ---
 
@@ -90,6 +93,9 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | # | Task | Pri | Status |
 |---|------|-----|--------|
 | 15 | **Phase 5 — PostgreSQL RLS** (app-state) | High | 🟡 design staged (`docs/design/postgres-rls.md`); **now unblocking via #19** — decision was A(normalize). Lands as #19 wires rows + `withTenant`. |
+| 31 | **Cross-backend conformance suite** — shared kvBackend contract run vs file/mem/pgStore so the two backends can't drift silently | High | ✅ done (`kvconformance_test.go`) |
+| 32 | **Audit → append/query repository** — `audit_events` is append-only + unbounded but currently load-all + rewrite-whole (predates M0, carried over). Give it a real append + time-range-query + pagination repository; retire it from the load-all model | High | ⏳ next (design-review finding) |
+| 33 | **Typed per-domain repositories + per-request tenant-scoped reads** — graduate growing/multi-tenant stores off load-all-cache to tenant-scoped queries (small hot cache + invalidation). Makes RLS *enforce per request* (not just backstop), enables partial updates + pagination + multi-instance coherence, and shrinks the generic `pgStore` router (never grow it). Bounded config stores (roles/profiles) stay cached by design | High | ⏳ open (design-review finding) |
 | 16 | **Later**: Tenant→Project→Env ownership; per-tenant encryption; ClickHouse `PARTITION BY tenant_id`; workload identities; policy-defined roles (Auditor/API-Client) | Low | ⏳ open |
 
 ### B. Security & crypto infrastructure
@@ -119,11 +125,12 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 ---
 
 ## Recommended sequencing
-1. **#19 M0** (in progress) — wire `db.go` into the store seam, importer, RLS tests. Lands #15 as the backstop.
-2. **#20 telemetry isolation** — independent of #19; Vector `tenant_id` tagging → ClickHouse row policy + OpenSearch DLS.
-3. **#17 swtpm** + **#18 TLS** + **#30 cert auto-rotation** as a paired crypto-infra effort.
-4. Lab tier (#4/#5/#9) when device config can be coordinated (user runs scripts).
-5. Polish (#28/#29) as standalone cleanups.
+1. **#19 M0** ✅ storage layer + #31 conformance landed — RLS is the backstop (#15) under the app-layer chokepoint.
+2. **#32 audit repository** — first store off the load-all model (the one that's actively wrong at scale).
+3. **#33 typed repositories + per-request scoping** — the SaaS-correctness step (per-request RLS enforcement, partial updates, pagination, multi-instance coherence). Convert `users` first as the template; `pgStore` router shrinks per store, never grows.
+4. **#20 telemetry isolation** — independent; Vector `tenant_id` tagging → ClickHouse row policy + OpenSearch DLS.
+5. **#17 swtpm** + **#18 TLS** + **#30 cert auto-rotation** as a paired crypto-infra effort.
+6. Lab tier (#4/#5/#9) when device config can be coordinated; polish (#28/#29) standalone.
 
 ## Subagent usage
 - **#17** design doc draft, **#15** RLS test authoring → spin up on demand when that lane starts.

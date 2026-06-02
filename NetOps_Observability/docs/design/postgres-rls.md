@@ -1,7 +1,25 @@
 # Phase 5 — Database-enforced isolation (PostgreSQL RLS + telemetry)
 
-Status: **design + migration ready; implementation staged (needs a decision).**
-Owner track: enterprise tenant-isolation roadmap (`docs/TRACKER.md`, task #15).
+Status: **M0 storage layer IMPLEMENTED (decision A — normalize).** App-state now
+persists as normalized, RLS-protected rows under `STORE_BACKEND=postgres`
+(`db.go` + `pgstore.go` + `migrations/0001_app_state.sql`); verified by live
+isolation + importer tests (`pgstore_test.go`, gated on `DATABASE_URL_TEST`).
+Remaining: per-request tenant scoping (RLS is the backstop today, see below) and
+the telemetry track. Owner: `docs/TRACKER.md` tasks #19/#15.
+
+⚠️ **Operational requirement — handled three ways (defense in depth):**
+`DATABASE_URL` must use a NON-superuser, non-BYPASSRLS role — superusers bypass
+RLS even with FORCE, silently disabling isolation.
+1. **Fail-closed runtime guard** (`db.go` `assertRLSCapable`): startup aborts if
+   the connected role is a superuser or has BYPASSRLS, turning a silent breach
+   into a loud error. Override for single-tenant: `STORE_PG_ALLOW_RLS_BYPASS=true`
+   (downgrades to a warning).
+2. **Correct-by-construction**: the installer must provision a dedicated
+   least-privilege role (`CREATE ROLE … LOGIN NOSUPERUSER`, owns the app-state
+   tables) and write *that* into `DATABASE_URL` — never the `postgres` superuser.
+   *(Installer wiring is a follow-up; the Postgres app-state path is opt-in.)*
+3. **Test-proven**: `pgstore_test.go` provisions a non-superuser role to prove
+   isolation, and asserts the guard rejects a superuser connection.
 
 This is defense-in-depth *under* the application layer. The app already enforces
 strict isolation at one chokepoint (`authz.go` `Authorize()`), proven by the

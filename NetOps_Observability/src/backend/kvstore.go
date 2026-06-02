@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // kvstore.go — a process-wide persistence seam for the file-backed identity and
@@ -19,9 +21,10 @@ import (
 // later with no API-surface change".
 //
 // The default backend is `fileKV` (the original atomic-file behavior). The
-// Postgres backend (pgkv.go) uses ONLY database/sql from the standard library,
-// so the default build stays dependency-free per CLAUDE.md; a Postgres driver is
-// third-party and is pulled in only when an operator opts into that backend.
+// Postgres backend (pgstore.go) normalizes each store's collection into per-row,
+// Row-Level-Security-protected tables via the allowlisted, vendored pgx driver
+// (CLAUDE.md §6); it is compiled in but used only when an operator opts in with
+// STORE_BACKEND=postgres, so the default file build is unaffected.
 
 // kvBackend abstracts where a store persists its JSON blob. The `key` is the
 // store's configured path (e.g. "/data/users.json"): the file backend treats it
@@ -47,7 +50,9 @@ func initStoreBackend() error {
 		backend = fileKV{}
 		return nil
 	case "postgres", "postgresql", "pg":
-		pg, err := newPostgresKV(os.Getenv("DATABASE_URL"))
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		pg, err := newPgStore(ctx, os.Getenv("DATABASE_URL"))
 		if err != nil {
 			return err
 		}
