@@ -279,8 +279,9 @@ func (s *server) handleRoleByID(w http.ResponseWriter, r *http.Request) {
 // ---- tenants ---------------------------------------------------------------
 
 type createTenantRequest struct {
-	Name string `json:"name"`
-	Note string `json:"note"`
+	Name          string `json:"name"`
+	Note          string `json:"note"`
+	IsolationMode string `json:"isolation_mode"`
 }
 
 func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +315,7 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		t, err := s.tenants.Create(req.Name, req.Note)
+		t, err := s.tenants.Create(req.Name, req.Note, req.IsolationMode)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return

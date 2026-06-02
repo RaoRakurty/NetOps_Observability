@@ -18,11 +18,12 @@ import (
 const TenantGlobal = "global"
 
 type Tenant struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	Note      string    `json:"note,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Slug          string        `json:"slug"`
+	Note          string        `json:"note,omitempty"`
+	IsolationMode IsolationMode `json:"isolation_mode,omitempty"` // shared (default) | dedicated_schema|db|cluster
+	CreatedAt     time.Time     `json:"created_at"`
 }
 
 type tenantStore struct {
@@ -42,7 +43,8 @@ func newTenantStore(path string) (*tenantStore, error) {
 	if _, ok := s.tenants[TenantGlobal]; !ok {
 		s.tenants[TenantGlobal] = Tenant{
 			ID: TenantGlobal, Name: "Global", Slug: TenantGlobal,
-			Note: "Root tenant — owns shared infrastructure & defaults.", CreatedAt: time.Now().UTC(),
+			Note: "Root tenant — owns shared infrastructure & defaults.",
+			IsolationMode: IsolationShared, CreatedAt: time.Now().UTC(),
 		}
 		if err := s.flushLocked(); err != nil {
 			return nil, err
@@ -102,7 +104,7 @@ func (s *tenantStore) Get(id string) (Tenant, bool) {
 	return t, ok
 }
 
-func (s *tenantStore) Create(name, note string) (Tenant, error) {
+func (s *tenantStore) Create(name, note, isolationMode string) (Tenant, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Tenant{}, errors.New("tenant name required")
@@ -111,12 +113,16 @@ func (s *tenantStore) Create(name, note string) (Tenant, error) {
 	if id == "" {
 		return Tenant{}, errors.New("tenant name must contain letters or digits")
 	}
+	mode, err := normalizeIsolationMode(isolationMode)
+	if err != nil {
+		return Tenant{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tenants[id]; ok {
 		return Tenant{}, errors.New("tenant already exists")
 	}
-	t := Tenant{ID: id, Name: name, Slug: id, Note: note, CreatedAt: time.Now().UTC()}
+	t := Tenant{ID: id, Name: name, Slug: id, Note: note, IsolationMode: mode, CreatedAt: time.Now().UTC()}
 	s.tenants[id] = t
 	if err := s.flushLocked(); err != nil {
 		delete(s.tenants, id)
