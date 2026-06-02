@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,30 @@ import (
 	"strings"
 	"sync"
 )
+
+// catalogFS embeds the large vendor catalog (200+ profiles, generated/curated
+// from the open-source Datadog SNMP profiles, Apache-2.0, with attribution).
+// Kept as data (not Go literals) so the library can grow without code churn; the
+// file may be just "[]" until the catalog is populated.
+//
+//go:embed snmp_profiles_catalog.json
+var catalogFS embed.FS
+
+// embeddedCatalogProfiles returns the catalog profiles, or nil if empty/invalid.
+func embeddedCatalogProfiles() []SNMPProfile {
+	b, err := catalogFS.ReadFile("snmp_profiles_catalog.json")
+	if err != nil {
+		return nil
+	}
+	var list []SNMPProfile
+	if json.Unmarshal(b, &list) != nil {
+		return nil
+	}
+	for i := range list {
+		list[i].Builtin = true
+	}
+	return list
+}
 
 // snmp_profiles.go — the SNMP profile manager (backlog #6).
 //
@@ -28,15 +53,18 @@ import (
 type SNMPMetric struct {
 	Name        string `json:"name"`
 	OID         string `json:"oid"`
-	Type        string `json:"type"` // counter | gauge | string | enum
+	Type        string `json:"type"` // counter | gauge | string | enum | table
 	Unit        string `json:"unit,omitempty"`
+	MIB         string `json:"mib,omitempty"`
+	Category    string `json:"category,omitempty"` // System | CPU | Memory | Capacity | Utilization | …
 	Description string `json:"description,omitempty"`
 }
 
 // SNMPProfile is a vendor/category metric set.
 type SNMPProfile struct {
-	ID                string       `json:"id"`       // stable key, e.g. "cisco-ios"
-	Vendor            string       `json:"vendor"`   // display name
+	ID                string       `json:"id"`          // stable key, e.g. "cisco-ios"
+	Vendor            string       `json:"vendor"`      // display name
+	Description       string       `json:"description,omitempty"`
 	Category          string       `json:"category"` // universal | router_switch | firewall | wireless | voip | printer | ups | server
 	SysObjectIDPrefix string       `json:"sysobjectid_prefix,omitempty"`
 	Builtin           bool         `json:"builtin"`
@@ -65,9 +93,11 @@ func newSNMPProfileStore(path string) (*snmpProfileStore, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	// Overlay built-ins: ensure each built-in profile exists and that its base
-	// metrics are present (idempotent — operator-added metrics are preserved).
-	for _, bp := range builtinSNMPProfiles() {
+	// Overlay built-ins (Go-defined) + the embedded vendor catalog: ensure each
+	// exists and that its base metrics are present (idempotent — operator-added
+	// metrics are preserved). Go built-ins win on metadata when ids collide.
+	builtins := append(embeddedCatalogProfiles(), builtinSNMPProfiles()...)
+	for _, bp := range builtins {
 		existing, ok := s.profiles[bp.ID]
 		if !ok {
 			s.profiles[bp.ID] = bp

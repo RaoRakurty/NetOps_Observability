@@ -88,11 +88,14 @@ export type SnmpMetric = {
   oid: string;
   type: string;
   unit?: string;
+  mib?: string;
+  category?: string;
   description?: string;
 };
 export type SnmpProfile = {
   id: string;
   vendor: string;
+  description?: string;
   category: string;
   sysobjectid_prefix?: string;
   builtin: boolean;
