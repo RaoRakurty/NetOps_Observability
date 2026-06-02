@@ -25,9 +25,11 @@ func (s *server) handleSaved(w http.ResponseWriter, r *http.Request) {
 	claims, _ := userFrom(r.Context())
 	switch r.Method {
 	case http.MethodGet:
-		// Tenant isolation: a scoped principal only sees its tenant's (and
-		// shared/global) saved objects.
-		writeJSON(w, http.StatusOK, visibleSaved(s.saved.List(r.URL.Query().Get("type")), claims))
+		// Tenant isolation: List is RLS/scope-filtered per request (pg backend) or
+		// in-memory filtered (file backend); visibleSaved stays as a defense-in-
+		// depth app-layer pass.
+		tenant, cross := principalTenant(claims)
+		writeJSON(w, http.StatusOK, visibleSaved(s.saved.List(r.URL.Query().Get("type"), tenant, cross), claims))
 	case http.MethodPost:
 		var req savedRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

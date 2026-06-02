@@ -45,7 +45,7 @@ type server struct {
 	refresh        *refreshStore
 	snmpCreds      *snmpCredStore
 	snmpProfiles   *snmpProfileStore
-	saved          *savedStore
+	saved          savedRepo
 	audit          auditRepo
 	notifyCfg      *notifyConfigStore
 	contactPoints  *contactPointStore

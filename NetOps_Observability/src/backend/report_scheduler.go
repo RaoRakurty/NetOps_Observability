@@ -172,7 +172,7 @@ type reportRun struct {
 
 type reportScheduler struct {
 	srv       *server // for lazily-constructed deps (notifyCfg, contactPoints)
-	saved     *savedStore
+	saved     savedRepo
 	notifier  *notify.Dispatcher
 	discovery *DiscoveryAggregator
 	alerts    *alerts.Engine
@@ -221,7 +221,7 @@ func (rs *reportScheduler) Start(ctx context.Context) {
 // tick fires every report whose NextRun has arrived.
 func (rs *reportScheduler) tick() {
 	now := time.Now().UTC()
-	for _, o := range rs.saved.List("report") {
+	for _, o := range rs.saved.List("report", "", true) {
 		spec, err := parseReportSpec(o.Body)
 		if err != nil || !spec.Enabled || spec.IntervalMinutes <= 0 {
 			continue
@@ -951,7 +951,7 @@ func (rs *reportScheduler) Runs() map[string]reportRun {
 // gc drops run-state for reports that no longer exist.
 func (rs *reportScheduler) gc() {
 	live := map[string]bool{}
-	for _, o := range rs.saved.List("report") {
+	for _, o := range rs.saved.List("report", "", true) {
 		live[o.ID] = true
 	}
 	rs.mu.Lock()

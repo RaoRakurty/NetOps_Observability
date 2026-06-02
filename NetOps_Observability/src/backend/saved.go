@@ -37,13 +37,32 @@ var validSavedTypes = map[string]bool{
 	"report":       true,
 }
 
+// savedRepo is the saved-object store seam (mirroring usersRepo/auditRepo, #33).
+// List is tenant-scoped: a scoped principal passes its tenant (RLS on the pg
+// backend / an in-memory filter on the file backend); infrastructure callers
+// (the report scheduler) pass ("", true) for the platform view. Get/Create/
+// Update/Delete operate by id; the HTTP layer enforces per-object authz
+// (canSeeSaved/canMutateSaved) before mutating, so they need no scope arg.
+type savedRepo interface {
+	List(typ, tenant string, cross bool) []SavedObject
+	Get(id string) (SavedObject, bool)
+	Create(typ, name, owner, tenant string, body json.RawMessage) (SavedObject, error)
+	Update(id, name string, body json.RawMessage) (SavedObject, error)
+	Delete(id string) error
+}
+
 type savedStore struct {
 	mu    sync.RWMutex
 	path  string
 	items map[string]SavedObject
 }
 
-func newSavedStore(path string) (*savedStore, error) {
+// newSavedStore selects the saved-object backend: under STORE_BACKEND=postgres a
+// per-row, RLS-scoped repository (saved_pg.go); otherwise the file store.
+func newSavedStore(path string) (savedRepo, error) {
+	if ps, ok := backend.(*pgStore); ok {
+		return newPgSavedStore(ps.db), nil
+	}
 	if path == "" {
 		path = "/data/saved.json"
 	}
@@ -82,14 +101,21 @@ func (s *savedStore) flushLocked() error {
 }
 
 // List returns objects, newest first, optionally filtered by type.
-func (s *savedStore) List(typ string) []SavedObject {
+// List returns saved objects of the given type visible to the tenant scope
+// (the file backend filters in memory; the pg backend uses RLS). typ=="" lists
+// all types; cross=true (platform) sees every tenant's objects.
+func (s *savedStore) List(typ, tenant string, cross bool) []SavedObject {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]SavedObject, 0, len(s.items))
 	for _, o := range s.items {
-		if typ == "" || o.Type == typ {
-			out = append(out, o)
+		if typ != "" && o.Type != typ {
+			continue
 		}
+		if !sameTenant(o.TenantID, tenant, cross) {
+			continue
+		}
+		out = append(out, o)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out

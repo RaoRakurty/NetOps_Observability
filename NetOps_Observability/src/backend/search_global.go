@@ -12,7 +12,7 @@ import (
 // global search rather than only running a log query.
 
 type globalResult struct {
-	Kind  string `json:"kind"`  // device | alert | saved | logs
+	Kind  string `json:"kind"` // device | alert | saved | logs
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Sub   string `json:"sub"`
@@ -65,7 +65,8 @@ func (s *server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Saved objects (name or body match) — tenant-scoped.
-		for _, o := range visibleSaved(s.saved.List(""), claims) {
+		sTenant, sCross := principalTenant(claims)
+		for _, o := range visibleSaved(s.saved.List("", sTenant, sCross), claims) {
 			if strings.Contains(strings.ToLower(o.Name), q) ||
 				strings.Contains(strings.ToLower(string(o.Body)), q) {
 				add(globalResult{

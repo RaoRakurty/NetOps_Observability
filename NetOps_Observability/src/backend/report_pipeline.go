@@ -111,7 +111,7 @@ func (p *reportPipeline) runScheduler(ctx context.Context) {
 // one recorded, bounded by the catch-up limits. Enqueue is idempotent on
 // (schedule, fire), so this is safe across restarts and replicas.
 func (p *reportPipeline) enqueueDue(ctx context.Context, now time.Time) {
-	for _, o := range p.srv.saved.List("report") {
+	for _, o := range p.srv.saved.List("report", "", true) {
 		spec, err := parseReportSpec(o.Body)
 		if err != nil || !spec.Enabled {
 			continue
