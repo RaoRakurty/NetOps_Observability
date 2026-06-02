@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Device } from "../services/api";
 import { takeDrill } from "../theme/drill";
+import DeviceDetail from "./DeviceDetail";
 
 // A device is considered "down" when discovery hasn't refreshed it within the
 // staleness window (no recent SNMP/telemetry response). This mirrors the
@@ -59,6 +60,7 @@ export default function Devices() {
   const [draft, setDraft] = useState({ id: "", name: "", address: "", vendor: "" });
   // "down" when arriving from the Overview "Devices Down" tile (one-shot drill).
   const [statusFilter, setStatusFilter] = useState<"all" | "down">("all");
+  const [detail, setDetail] = useState<Device | null>(null);
 
   useEffect(() => {
     if (takeDrill().devices === "down") setStatusFilter("down");
@@ -200,7 +202,15 @@ export default function Devices() {
                 <tbody>
                   {list.map((d) => (
                     <tr key={d.id}>
-                      <td>{d.id}</td>
+                      <td>
+                        <a
+                          style={{ cursor: "pointer", color: "var(--accent)", fontWeight: 600 }}
+                          title="View device details"
+                          onClick={() => setDetail(d)}
+                        >
+                          {d.id}
+                        </a>
+                      </td>
                       <td>{d.name || "—"}</td>
                       <td>{d.address}</td>
                       <td>{d.model || "—"}</td>
@@ -238,6 +248,8 @@ export default function Devices() {
           ))
         )}
       </div>
+
+      {detail && <DeviceDetail device={detail} onClose={() => setDetail(null)} />}
     </>
   );
 }
