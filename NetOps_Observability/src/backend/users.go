@@ -11,12 +11,57 @@ import (
 	"time"
 )
 
-// User store, persisted to /data/users.json.
+// User store.
 //
-// File-backed because the scaffold avoids dragging in a Postgres
-// driver dependency. The store implements the same Create/Get/Update
-// operations a real backend would, so swapping to Postgres later is a
-// single-file change with no API surface impact.
+// Two backends implement the usersRepo seam (mirroring auditRepo, #32):
+//   - userStore (file/default, below): the whole collection lives in memory and
+//     is flushed as one JSON blob. Fine for single-node dev/lab.
+//   - pgUsersStore (STORE_BACKEND=postgres, users_pg.go): one row per user in an
+//     RLS-protected table; reads are query-driven, the tenant-scoped List is
+//     enforced per request by Row-Level Security (not just an app-layer filter),
+//     and mutations are partial UPDATEs instead of rewrite-the-whole-collection.
+//
+// The domain invariants that must hold identically across both backends —
+// patch application, federated-account refresh, the last-super-admin guard, and
+// password validation — are factored into the pure helpers near the bottom of
+// this file and shared by both implementations so they cannot drift.
+
+// usersRepo is the user-store seam. Reads split by tenant scope:
+//   - List(tenant, cross) is PER-REQUEST tenant-scoped: a scoped admin sees only
+//     its own tenant's users (RLS-enforced on the pg backend; the same
+//     sameTenant filter on the file backend). The platform owner ('*') sees all.
+//   - Get is tenant-BLIND by design: username is a global identity key, and login
+//     resolves a user's tenant FROM the record before any tenant scope exists, so
+//     the lookup must span all tenants. Authorization on the resolved user stays
+//     at the handler/Authorize() chokepoint.
+// Mutations likewise run at platform scope on the pg backend (global username PK,
+// platform-wide super-admin invariant); the handler gates who may mutate whom.
+type usersRepo interface {
+	Get(username string) (User, bool)
+	List(tenant string, cross bool) []User
+	Create(username, password, role string) (User, error)
+	CreateFull(u User, password string) (User, error)
+	Update(username string, patch User) (User, error)
+	Delete(username string) error
+	UpsertFederated(username, email, displayName, role, source, tenant string) (User, error)
+	ChangePassword(username, newPassword string) error
+	ResetPassword(username, newPassword string) error
+	TouchLogin(username string)
+	Count() int
+	SeedAdmin(username, password string) error
+}
+
+// newUsersStore selects the user-store backend, mirroring newAuditStore: under
+// STORE_BACKEND=postgres it returns the per-row pgUsersStore; otherwise the
+// file-backed userStore. The choice keys off the already-initialized process
+// backend, so initStoreBackend must have run first (it does — main.go wires it
+// before constructing stores).
+func newUsersStore(path string) (usersRepo, error) {
+	if ps, ok := backend.(*pgStore); ok {
+		return newPgUsersStore(ps.db), nil
+	}
+	return newUserStore(path)
+}
 
 type User struct {
 	Username     string    `json:"username"`
@@ -108,8 +153,8 @@ func (s *userStore) Create(username, password, role string) (User, error) {
 	if username == "" {
 		return User{}, errors.New("username required")
 	}
-	if len(password) < 8 {
-		return User{}, errors.New("password must be at least 8 characters")
+	if err := validatePassword(password); err != nil {
+		return User{}, err
 	}
 	hash, err := hashPassword(password)
 	if err != nil {
@@ -137,13 +182,18 @@ func (s *userStore) Create(username, password, role string) (User, error) {
 	return u, nil
 }
 
-// List returns all users sorted by username (passwords never included by the
-// handler, which maps through toPublic).
-func (s *userStore) List() []User {
+// List returns the users visible to the caller, sorted by username (passwords
+// never included by the handler, which maps through toPublic). The platform
+// owner ('*') sees all; a scoped admin sees only its own tenant's users —
+// strict isolation, mirroring the RLS the pg backend enforces in-database.
+func (s *userStore) List(tenant string, cross bool) []User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]User, 0, len(s.users))
 	for _, u := range s.users {
+		if !sameTenant(u.TenantID, tenant, cross) {
+			continue
+		}
 		out = append(out, u)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
@@ -159,8 +209,8 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 		return User{}, errors.New("username required")
 	}
 	if password != "" {
-		if len(password) < 8 {
-			return User{}, errors.New("password must be at least 8 characters")
+		if err := validatePassword(password); err != nil {
+			return User{}, err
 		}
 		hash, err := hashPassword(password)
 		if err != nil {
@@ -168,12 +218,7 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 		}
 		u.PasswordHash = hash
 	}
-	if u.Status == "" {
-		u.Status = "active"
-	}
-	if u.AuthSource == "" {
-		u.AuthSource = "local"
-	}
+	u = applyCreateDefaults(u)
 	u.CreatedAt = time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,16 +256,7 @@ func (s *userStore) UpsertFederated(username, email, displayName, role, source, 
 	if u, ok := s.users[key]; ok {
 		if u.AuthSource != "local" {
 			// Federated account — keep it in sync with the IdP.
-			if email != "" {
-				u.Email = email
-			}
-			if displayName != "" {
-				u.DisplayName = displayName
-			}
-			if role != "" {
-				u.Role = role
-			}
-			u.AuthSource = source
+			u = mergeFederated(u, email, displayName, role, source)
 			s.users[key] = u
 			if err := s.flushLocked(); err != nil {
 				return User{}, err
@@ -252,28 +288,12 @@ func (s *userStore) Update(username string, patch User) (User, error) {
 	key := strings.ToLower(username)
 	u, ok := s.users[key]
 	if !ok {
-		return User{}, errors.New("no such user")
+		return User{}, errNoSuchUser
 	}
-	demoting := patch.Role != "" && patch.Role != u.Role && isSuperAdminRole(u.Role)
-	disabling := patch.Status == "disabled" && isSuperAdminRole(u.Role)
-	if (demoting || disabling) && s.countSuperAdminsLocked() <= 1 {
-		return User{}, errors.New("cannot demote or disable the last super-admin")
+	if updateTouchesLastSuperAdmin(u, patch) && s.countSuperAdminsLocked() <= 1 {
+		return User{}, errLastSuperAdmin
 	}
-	if patch.Role != "" {
-		u.Role = patch.Role
-	}
-	if patch.Email != "" {
-		u.Email = patch.Email
-	}
-	if patch.DisplayName != "" {
-		u.DisplayName = patch.DisplayName
-	}
-	if patch.TenantID != "" {
-		u.TenantID = patch.TenantID
-	}
-	if patch.Status != "" {
-		u.Status = patch.Status
-	}
+	u = applyUserPatch(u, patch)
 	s.users[key] = u
 	if err := s.flushLocked(); err != nil {
 		return User{}, err
@@ -288,10 +308,10 @@ func (s *userStore) Delete(username string) error {
 	key := strings.ToLower(username)
 	u, ok := s.users[key]
 	if !ok {
-		return errors.New("no such user")
+		return errNoSuchUser
 	}
 	if isSuperAdminRole(u.Role) && s.countSuperAdminsLocked() <= 1 {
-		return errors.New("cannot delete the last super-admin")
+		return errLastSuperAdminDelete
 	}
 	delete(s.users, key)
 	return s.flushLocked()
@@ -314,8 +334,8 @@ func (s *userStore) ResetPassword(username, newPassword string) error {
 }
 
 func (s *userStore) ChangePassword(username, newPassword string) error {
-	if len(newPassword) < 8 {
-		return errors.New("password must be at least 8 characters")
+	if err := validatePassword(newPassword); err != nil {
+		return err
 	}
 	hash, err := hashPassword(newPassword)
 	if err != nil {
@@ -325,7 +345,7 @@ func (s *userStore) ChangePassword(username, newPassword string) error {
 	defer s.mu.Unlock()
 	u, ok := s.users[strings.ToLower(username)]
 	if !ok {
-		return errors.New("no such user")
+		return errNoSuchUser
 	}
 	u.PasswordHash = hash
 	s.users[strings.ToLower(username)] = u
@@ -361,4 +381,89 @@ func (s *userStore) SeedAdmin(username, password string) error {
 	}
 	_, err := s.Create(username, password, "admin")
 	return err
+}
+
+// ---- shared domain logic (backend-agnostic) --------------------------------
+//
+// These pure helpers and sentinel errors encode the user-store invariants that
+// MUST behave identically whether the backing store is the in-memory file map
+// or normalized Postgres rows. Both userStore and pgUsersStore call them so the
+// rules can't drift apart.
+
+var (
+	errShortPassword        = errors.New("password must be at least 8 characters")
+	errLastSuperAdmin       = errors.New("cannot demote or disable the last super-admin")
+	errLastSuperAdminDelete = errors.New("cannot delete the last super-admin")
+	errNoSuchUser           = errors.New("no such user")
+)
+
+// validatePassword enforces the minimum password length (a non-empty password
+// must be at least 8 characters). Empty is handled by the callers (CreateFull
+// permits a passwordless/invited account; Create/ChangePassword require one).
+func validatePassword(password string) error {
+	if len(password) < 8 {
+		return errShortPassword
+	}
+	return nil
+}
+
+// applyCreateDefaults fills the create-time defaults for a rich-profile user:
+// an active, local account unless the caller said otherwise. Pure.
+func applyCreateDefaults(u User) User {
+	if u.Status == "" {
+		u.Status = "active"
+	}
+	if u.AuthSource == "" {
+		u.AuthSource = "local"
+	}
+	return u
+}
+
+// applyUserPatch applies a mutable-field patch (role, email, display name,
+// tenant, status) onto a user; empty patch fields leave the current value. Pure
+// — the last-super-admin guard is the caller's responsibility (it needs a count).
+func applyUserPatch(u, patch User) User {
+	if patch.Role != "" {
+		u.Role = patch.Role
+	}
+	if patch.Email != "" {
+		u.Email = patch.Email
+	}
+	if patch.DisplayName != "" {
+		u.DisplayName = patch.DisplayName
+	}
+	if patch.TenantID != "" {
+		u.TenantID = patch.TenantID
+	}
+	if patch.Status != "" {
+		u.Status = patch.Status
+	}
+	return u
+}
+
+// updateTouchesLastSuperAdmin reports whether a patch would demote (change the
+// role of) or disable a super-admin — the two operations that must be refused
+// when only one super-admin remains, so an operator can never lock everyone out.
+func updateTouchesLastSuperAdmin(u, patch User) bool {
+	demoting := patch.Role != "" && patch.Role != u.Role && isSuperAdminRole(u.Role)
+	disabling := patch.Status == "disabled" && isSuperAdminRole(u.Role)
+	return demoting || disabling
+}
+
+// mergeFederated refreshes a federated (non-local) account from its IdP: any
+// non-empty incoming attribute overwrites, and the auth source is updated so a
+// user that moved IdPs (oidc→ldap) is re-tagged. Pure. A pre-existing LOCAL
+// account is never passed here — local management wins (see UpsertFederated).
+func mergeFederated(u User, email, displayName, role, source string) User {
+	if email != "" {
+		u.Email = email
+	}
+	if displayName != "" {
+		u.DisplayName = displayName
+	}
+	if role != "" {
+		u.Role = role
+	}
+	u.AuthSource = source
+	return u
 }

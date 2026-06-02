@@ -91,12 +91,11 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
-		users := s.users.List()
+		// Strict isolation is enforced in the repo: List returns only the caller's
+		// tenant (RLS-scoped on the pg backend; the same sameTenant filter on file).
+		users := s.users.List(tenant, cross)
 		out := make([]publicUser, 0, len(users))
 		for _, u := range users {
-			if !sameTenant(u.TenantID, tenant, cross) {
-				continue // strict isolation: a tenant admin sees only its own users
-			}
 			out = append(out, toPublic(u))
 		}
 		writeJSON(w, http.StatusOK, out)

@@ -93,7 +93,7 @@ func TestUserCRUD(t *testing.T) {
 	if u.Status != "active" || u.AuthSource != "local" {
 		t.Errorf("defaults not applied: %+v", u)
 	}
-	if got := us.List(); len(got) != 1 {
+	if got := us.List("", true); len(got) != 1 {
 		t.Fatalf("List len = %d, want 1", len(got))
 	}
 	if _, err := us.Update("dana", User{DisplayName: "Dana Ops", Status: "disabled"}); err != nil {

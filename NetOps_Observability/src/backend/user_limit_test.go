@@ -27,7 +27,7 @@ func TestUserLimitEnforced(t *testing.T) {
 	if _, err := us.CreateFull(User{Username: "dave", Role: RoleReadOnly}, "password123"); err == nil {
 		t.Error("CreateFull past the cap must fail")
 	}
-	if got := len(us.List()); got != 2 {
+	if got := len(us.List("", true)); got != 2 {
 		t.Errorf("store should hold exactly the cap (2), got %d", got)
 	}
 
