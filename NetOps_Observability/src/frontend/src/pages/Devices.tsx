@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Device } from "../services/api";
+import { takeDrill } from "../theme/drill";
+
+// A device is considered "down" when discovery hasn't refreshed it within the
+// staleness window (no recent SNMP/telemetry response). This mirrors the
+// Overview "Devices Down" tile so the drilldown lands on the same set.
+const DOWN_AFTER_MS = 5 * 60 * 1000;
+function isDown(d: Device): boolean {
+  const seen = new Date(d.last_seen).getTime();
+  return !!seen && Date.now() - seen > DOWN_AFTER_MS;
+}
 
 // Stable accent per vendor so each group header reads as one product family.
 // Known vendors get a fixed hue; unknowns hash to a consistent color.
@@ -47,6 +57,12 @@ export default function Devices() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState({ id: "", name: "", address: "", vendor: "" });
+  // "down" when arriving from the Overview "Devices Down" tile (one-shot drill).
+  const [statusFilter, setStatusFilter] = useState<"all" | "down">("all");
+
+  useEffect(() => {
+    if (takeDrill().devices === "down") setStatusFilter("down");
+  }, []);
 
   const load = async () => {
     try {
@@ -84,9 +100,11 @@ export default function Devices() {
   };
 
   // Group the inventory by vendor: alphabetical, with "Unknown" pinned last.
+  const downCount = useMemo(() => devices.filter(isDown).length, [devices]);
   const groups = useMemo(() => {
     const by = new Map<string, Device[]>();
     for (const d of devices) {
+      if (statusFilter === "down" && !isDown(d)) continue;
       const v = (d.vendor || "").trim() || "Unknown";
       (by.get(v) ?? by.set(v, []).get(v)!).push(d);
     }
@@ -95,7 +113,7 @@ export default function Devices() {
       if (b === "Unknown") return -1;
       return a.localeCompare(b);
     });
-  }, [devices]);
+  }, [devices, statusFilter]);
 
   return (
     <>
@@ -129,10 +147,31 @@ export default function Devices() {
       </div>
 
       <div className="card">
-        <h2>
-          Inventory ({devices.length}) · {groups.length} vendor
-          {groups.length === 1 ? "" : "s"}
-        </h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <h2 style={{ margin: 0 }}>
+            Inventory ({devices.length}) · {groups.length} vendor
+            {groups.length === 1 ? "" : "s"}
+          </h2>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              className={statusFilter === "all" ? "btn accent" : "btn"}
+              onClick={() => setStatusFilter("all")}
+            >
+              All ({devices.length})
+            </button>
+            <button
+              className={statusFilter === "down" ? "btn accent" : "btn"}
+              onClick={() => setStatusFilter("down")}
+            >
+              Down ({downCount})
+            </button>
+          </div>
+        </div>
+        {statusFilter === "down" && (
+          <p style={{ color: "var(--muted)", fontSize: 13 }}>
+            Showing devices with no telemetry in the last 5 minutes.
+          </p>
+        )}
         {error && <p style={{ color: "var(--bad)" }}>{error}</p>}
         {devices.length === 0 ? (
           <div className="empty">No devices yet — discovery hasn't returned anything.</div>
@@ -153,6 +192,7 @@ export default function Devices() {
                     <th>Model</th>
                     <th>OS</th>
                     <th>Source</th>
+                    <th>Status</th>
                     <th>Last seen</th>
                     <th></th>
                   </tr>
@@ -172,6 +212,19 @@ export default function Devices() {
                         >
                           {sourceLabel(d.source)}
                         </span>
+                      </td>
+                      <td>
+                        {isDown(d) ? (
+                          <span
+                            className="badge"
+                            style={{ background: "var(--bad)", color: "#fff" }}
+                            title={`No telemetry since ${new Date(d.last_seen).toLocaleString()}`}
+                          >
+                            Down
+                          </span>
+                        ) : (
+                          <span className="badge good" title="Responding">Up</span>
+                        )}
                       </td>
                       <td>{new Date(d.last_seen).toLocaleString()}</td>
                       <td>

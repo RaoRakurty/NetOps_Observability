@@ -11,7 +11,21 @@ import { api, Alert, MetricTile, PromRangeResponse, CollectorStatus, Device, Fin
 import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import { usePrefs } from "../theme/prefs";
+import { useShell } from "../context/shell";
+import { setDrill } from "../theme/drill";
 import Topology from "../tabs/Topology";
+
+// Map a KPI tile title to its drilldown destination (and optional one-shot
+// filter the destination page consumes). Keeps the Overview's headline numbers
+// clickable: a count is only useful if you can jump to what it counts.
+function kpiDestination(title: string): { route: string; drill?: Record<string, string> } | null {
+  const t = title.toLowerCase();
+  if (t.includes("down")) return { route: "infrastructure/devices", drill: { devices: "down" } };
+  if (t.includes("threat") || t.includes("critical")) return { route: "alerts/active" };
+  if (t.includes("site")) return { route: "topology/map" };
+  if (t.includes("device")) return { route: "infrastructure/devices" };
+  return null;
+}
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -316,6 +330,7 @@ function StackPerformance() {
 }
 
 function KpiTiles() {
+  const { navigate } = useShell();
   const tiles = usePolled(() => api.metricTiles(), 15000) ?? [];
   if (tiles.length === 0) return <Empty msg="Waiting for metrics…" />;
   return (
@@ -327,8 +342,22 @@ function KpiTiles() {
           m.trend === "critical" ? "s-bad"
           : m.trend === "all up" || m.trend === "clear" ? "s-good"
           : "s-accent";
+        const dest = kpiDestination(m.title);
+        const go = dest
+          ? () => {
+              if (dest.drill) setDrill(dest.drill);
+              navigate(dest.route);
+            }
+          : undefined;
         return (
-          <div className={`stat ${cls}`} key={m.title}>
+          <div
+            className={`stat ${cls}${go ? " stat-link" : ""}`}
+            key={m.title}
+            onClick={go}
+            role={go ? "button" : undefined}
+            title={go ? "View details" : undefined}
+            style={go ? { cursor: "pointer" } : undefined}
+          >
             <span className="stat-label">{m.title}</span>
             <span className="stat-value">{m.value}</span>
             {m.trend && <span className="stat-sub">{m.trend}</span>}
@@ -450,25 +479,26 @@ export type PanelDef = {
   defaultSpan: number; // 3 | 4 | 6 | 8 | 12
   category: PanelCategory;
   render: () => JSX.Element;
+  drill?: string; // hash route the panel header links to (Overview → detail)
 };
 
 export const PANELS: Record<string, PanelDef> = {
   kpis: { type: "kpis", title: "KPIs", defaultSpan: 12, category: "Health & KPIs", render: () => <KpiTiles /> },
-  "site-availability": { type: "site-availability", title: "Site availability", defaultSpan: 3, category: "Health & KPIs", render: () => <SiteAvailability /> },
-  "stack-performance": { type: "stack-performance", title: "Stack performance", defaultSpan: 6, category: "Health & KPIs", render: () => <StackPerformance /> },
-  "gauge-cpu": { type: "gauge-cpu", title: "CPU", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_cpu_percent)" /> },
-  "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_mem_percent)" /> },
-  "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(device_storage_used) / sum(device_storage_size)" /> },
-  "gauge-network": { type: "gauge-network", title: "Bandwidth utilization", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(rate(device_if_in_octets[5m]) * 8) / sum(device_if_speed * 1000000)" /> },
-  "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity /> },
-  "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts /> },
-  incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents /> },
-  traffic: { type: "traffic", title: "Traffic in / out", defaultSpan: 8, category: "Traffic", render: () => <TrafficInOut /> },
-  "top-hosts": { type: "top-hosts", title: "Top hosts", defaultSpan: 4, category: "Traffic", render: () => <TopHosts /> },
-  "flows-proto": { type: "flows-proto", title: "Traffic by protocol", defaultSpan: 4, category: "Traffic", render: () => <FlowsByProto /> },
-  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth /> },
-  "devices-vendor": { type: "devices-vendor", title: "Devices by vendor", defaultSpan: 4, category: "Inventory", render: () => <DevicesByVendor /> },
-  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel /> },
+  "site-availability": { type: "site-availability", title: "Site availability", defaultSpan: 3, category: "Health & KPIs", render: () => <SiteAvailability />, drill: "infrastructure/devices" },
+  "stack-performance": { type: "stack-performance", title: "Stack performance", defaultSpan: 6, category: "Health & KPIs", render: () => <StackPerformance />, drill: "explore/metrics" },
+  "gauge-cpu": { type: "gauge-cpu", title: "CPU", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_cpu_percent)" />, drill: "explore/metrics" },
+  "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_mem_percent)" />, drill: "explore/metrics" },
+  "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(device_storage_used) / sum(device_storage_size)" />, drill: "explore/metrics" },
+  "gauge-network": { type: "gauge-network", title: "Bandwidth utilization", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(rate(device_if_in_octets[5m]) * 8) / sum(device_if_speed * 1000000)" />, drill: "explore/metrics" },
+  "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity />, drill: "alerts/active" },
+  "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts />, drill: "alerts/active" },
+  incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents />, drill: "alerts/incidents" },
+  traffic: { type: "traffic", title: "Traffic in / out", defaultSpan: 8, category: "Traffic", render: () => <TrafficInOut />, drill: "explore/flows" },
+  "top-hosts": { type: "top-hosts", title: "Top hosts", defaultSpan: 4, category: "Traffic", render: () => <TopHosts />, drill: "explore/flows" },
+  "flows-proto": { type: "flows-proto", title: "Traffic by protocol", defaultSpan: 4, category: "Traffic", render: () => <FlowsByProto />, drill: "explore/flows" },
+  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth />, drill: "topology/tunnels" },
+  "devices-vendor": { type: "devices-vendor", title: "Devices by vendor", defaultSpan: 4, category: "Inventory", render: () => <DevicesByVendor />, drill: "infrastructure/devices" },
+  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel />, drill: "topology/map" },
 };
 
 // Category groups for the "Add panel" picker, in display order.

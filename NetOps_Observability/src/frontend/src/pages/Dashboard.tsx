@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PANELS, PANEL_CATEGORIES, PanelDef } from "./panels";
+import { useShell } from "../context/shell";
 
 // Operations Overview — a modular, Datadog/Zabbix-style board. The layout is a
 // list of panels the user composes themselves: add from the panel library,
@@ -57,6 +58,7 @@ function uid(): string {
 }
 
 export default function Dashboard() {
+  const { navigate } = useShell();
   const [items, setItems] = useState<Item[]>(loadLayout);
   const [picking, setPicking] = useState(false);
 
@@ -135,7 +137,15 @@ export default function Dashboard() {
           return (
             <div className={`panel col-${item.span}`} key={item.key}>
               <div className="panel-tools">
-                <h3>{def.title}</h3>
+                <h3
+                  className={def.drill ? "panel-title-link" : undefined}
+                  onClick={def.drill ? () => navigate(def.drill!) : undefined}
+                  style={def.drill ? { cursor: "pointer" } : undefined}
+                  title={def.drill ? "Open detail view" : undefined}
+                >
+                  {def.title}
+                  {def.drill && <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 12 }}>↗</span>}
+                </h3>
                 <div className="panel-tools-btns">
                   <button onClick={() => resize(item.key)} title="Resize">⤢</button>
                   <button onClick={() => remove(item.key)} title="Remove">✕</button>
