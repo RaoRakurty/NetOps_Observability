@@ -94,7 +94,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 |---|------|-----|--------|
 | 15 | **Phase 5 — PostgreSQL RLS** (app-state) | High | 🟡 design staged (`docs/design/postgres-rls.md`); **now unblocking via #19** — decision was A(normalize). Lands as #19 wires rows + `withTenant`. |
 | 31 | **Cross-backend conformance suite** — shared kvBackend contract run vs file/mem/pgStore so the two backends can't drift silently | High | ✅ done (`kvconformance_test.go`) |
-| 32 | **Audit → append/query repository** — `audit_events` is append-only + unbounded but currently load-all + rewrite-whole (predates M0, carried over). Give it a real append + time-range-query + pagination repository; retire it from the load-all model | High | ⏳ next (design-review finding) |
+| 32 | **Audit → append/query repository** — `audit_events` now has a real per-row append + time-range + keyset-pagination repository on the pg backend (`audit_pg.go`), **first store using per-request RLS-scoped reads**; file backend keeps the bounded ring. Tenant-id normalized (lower+trim) to match the GUC. | High | ✅ done |
 | 33 | **Typed per-domain repositories + per-request tenant-scoped reads** — graduate growing/multi-tenant stores off load-all-cache to tenant-scoped queries (small hot cache + invalidation). Makes RLS *enforce per request* (not just backstop), enables partial updates + pagination + multi-instance coherence, and shrinks the generic `pgStore` router (never grow it). Bounded config stores (roles/profiles) stay cached by design | High | ⏳ open (design-review finding) |
 | 16 | **Later**: Tenant→Project→Env ownership; per-tenant encryption; ClickHouse `PARTITION BY tenant_id`; workload identities; policy-defined roles (Auditor/API-Client) | Low | ⏳ open |
 

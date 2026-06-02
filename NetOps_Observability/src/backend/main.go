@@ -32,34 +32,34 @@ const version = "0.1.0-scaffold"
 // (discovery aggregator, collector pool, alert engine, notifier, user
 // store for auth, and the live-events WebSocket hub).
 type server struct {
-	startedAt  time.Time
-	discovery  *DiscoveryAggregator
-	collectors *collectors.Pool
-	alerts     *alerts.Engine
-	notifier   *notify.Dispatcher
-	users      *userStore
-	roles      *roleStore
-	tenants    *tenantStore
-	apiKeys    *apiKeyStore
-	refresh    *refreshStore
+	startedAt    time.Time
+	discovery    *DiscoveryAggregator
+	collectors   *collectors.Pool
+	alerts       *alerts.Engine
+	notifier     *notify.Dispatcher
+	users        *userStore
+	roles        *roleStore
+	tenants      *tenantStore
+	apiKeys      *apiKeyStore
+	refresh      *refreshStore
 	snmpCreds    *snmpCredStore
 	snmpProfiles *snmpProfileStore
-	saved      *savedStore
-	audit      *auditStore
-	notifyCfg  *notifyConfigStore
-	reports    *reportScheduler
-	copilotCfg *copilotConfigStore
+	saved        *savedStore
+	audit        auditRepo
+	notifyCfg    *notifyConfigStore
+	reports      *reportScheduler
+	copilotCfg   *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
-	oidc       atomic.Pointer[oidcProvider]
-	oidcCfg    *oidcConfigStore
+	oidc        atomic.Pointer[oidcProvider]
+	oidcCfg     *oidcConfigStore
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	servicenow *notify.ServiceNow
-	jira       *notify.Jira
-	hub        *Hub
+	servicenow  *notify.ServiceNow
+	jira        *notify.Jira
+	hub         *Hub
 }
 
 func newServer() *server {
@@ -258,23 +258,23 @@ func newServer() *server {
 	}
 
 	srv := &server{
-		startedAt:  time.Now().UTC(),
-		discovery:  d,
-		collectors: pool,
-		alerts:     engine,
-		notifier:   notifier,
-		users:      users,
-		roles:      roles,
-		tenants:    tenants,
-		apiKeys:    apiKeys,
-		refresh:    refresh,
+		startedAt:    time.Now().UTC(),
+		discovery:    d,
+		collectors:   pool,
+		alerts:       engine,
+		notifier:     notifier,
+		users:        users,
+		roles:        roles,
+		tenants:      tenants,
+		apiKeys:      apiKeys,
+		refresh:      refresh,
 		snmpCreds:    snmpCreds,
 		snmpProfiles: snmpProfiles,
 		saved:        saved,
 		audit:        audit,
-		servicenow: serviceNow,
-		jira:       jiraConn,
-		hub:        NewHub(),
+		servicenow:   serviceNow,
+		jira:         jiraConn,
+		hub:          NewHub(),
 	}
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))

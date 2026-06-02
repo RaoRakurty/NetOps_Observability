@@ -221,7 +221,11 @@ func explode(spec rowSpec, blob []byte) ([]rowValue, error) {
 		}
 		rv := rowValue{id: id, data: e}
 		if spec.tenantField != "" && !spec.selfTenant {
-			rv.tenant, _ = strField(fields, spec.tenantField) // absent/empty → "" (global)
+			t, _ := strField(fields, spec.tenantField) // absent/empty → "" (global)
+			// Normalize to match withTenant's GUC (lower+trim) so the tenant_id
+			// column compares equal to the RLS session tenant; the verbatim object
+			// (original casing) is preserved in the data column.
+			rv.tenant = strings.ToLower(strings.TrimSpace(t))
 		}
 		if spec.typeField != "" {
 			rv.typ, _ = strField(fields, spec.typeField)
