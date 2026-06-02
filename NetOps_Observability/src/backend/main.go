@@ -137,6 +137,9 @@ func newServer() *server {
 	if os.Getenv("FEATURE_SLACK_NOTIFICATIONS") == "true" {
 		notifier.Register(notify.NewSlack(os.Getenv("SLACK_WEBHOOK_URL")))
 	}
+	if os.Getenv("FEATURE_TEAMS_NOTIFICATIONS") == "true" {
+		notifier.Register(notify.NewTeams(os.Getenv("TEAMS_WEBHOOK_URL")))
+	}
 	if os.Getenv("FEATURE_PAGERDUTY_NOTIFICATIONS") == "true" {
 		notifier.Register(notify.NewPagerDuty(os.Getenv("PAGERDUTY_KEY")))
 	}
@@ -320,7 +323,8 @@ func main() {
 				log.Fatalf("report renderer: %v", err)
 			}
 			srv.reportPipeline = newReportPipeline(srv,
-				newPgJobQueue(ps.db, 5), newPgExecStore(ps.db), newKVArtifactStore(), renderer)
+				newPgJobQueue(ps.db, 5), newPgExecStore(ps.db), newKVArtifactStore(), renderer,
+				newPgDeliveryStore(ps.db))
 			srv.reportPipeline.Start(ctx)
 		} else {
 			srv.reports.Start(ctx)
@@ -423,6 +427,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/reports/executions", s.handleReportExecutions)
 	mux.HandleFunc("/api/reports/executions/", s.handleReportExecutionByID)
 	mux.HandleFunc("/api/reports/preview", s.handleReportPreview)
+	mux.HandleFunc("/api/reports/view/", s.handleReportView) // token-authenticated (public)
 	mux.HandleFunc("/api/notify/smtp", s.handleSMTPConfig)
 	mux.HandleFunc("/api/notify/smtp/test", s.handleSMTPTest)
 	mux.HandleFunc("/api/notify/twilio", s.handleTwilioConfig)

@@ -34,6 +34,23 @@ const FORMATS: { value: ReportFormat; label: string }[] = [
   { value: "pdf", label: "PDF" },
 ];
 
+// Guided-wizard goals map executive-friendly outcomes to report kinds.
+const GOALS: { icon: string; label: string; kind: ReportKind; blurb: string }[] = [
+  { icon: "📈", label: "Executive Overview", kind: "health_summary", blurb: "Uptime, devices, and active issues at a glance." },
+  { icon: "🩺", label: "Network Health", kind: "alerts_summary", blurb: "Active alerts by severity + the latest events." },
+  { icon: "🎯", label: "SLA Summary", kind: "latency_jitter_sla", blurb: "Per-link latency, jitter, loss and availability." },
+  { icon: "📊", label: "Capacity Trends", kind: "device_utilization", blurb: "Busiest devices by CPU and memory." },
+  { icon: "🛡️", label: "Security Summary", kind: "security_threats", blurb: "Findings by severity (24h) + critical alerts." },
+  { icon: "🌐", label: "WAN / Circuits", kind: "wan_utilization", blurb: "Per-WAN/overlay link load, status and QoE." },
+];
+
+const AUDIENCES: { label: string; severity: string; note: string }[] = [
+  { label: "Executives", severity: "info", note: "For leadership — concise, outcome-focused." },
+  { label: "NOC Team", severity: "warning", note: "For the NOC — operational detail and live issues." },
+  { label: "Operations", severity: "notice", note: "For ops — inventory and utilization detail." },
+  { label: "Customer", severity: "info", note: "For an external customer — SLA and health summary." },
+];
+
 const TZS = [
   "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
   "Europe/London", "Europe/Berlin", "Asia/Kolkata", "Asia/Singapore", "Australia/Sydney",
@@ -199,6 +216,7 @@ export default function Reports() {
   const [preview, setPreview] = useState<{ html: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [history, setHistory] = useState<SavedObject | null>(null);
+  const [wizard, setWizard] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -301,11 +319,24 @@ export default function Reports() {
 
   const kindLabel = (k?: string) => KINDS.find((x) => x.value === k)?.label ?? k ?? "—";
 
+  if (wizard) {
+    return (
+      <ReportWizard
+        contactPoints={contactPoints}
+        onCancel={() => setWizard(false)}
+        onDone={async () => { setWizard(false); await load(); }}
+      />
+    );
+  }
+
   return (
     <>
       <div className="card">
-        <h2>{editingId ? "Edit report" : "New report"}</h2>
-        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0 }}>{editingId ? "Edit report" : "New report"}</h2>
+          {!editingId && <button type="button" className="dash-btn accent" onClick={() => setWizard(true)}>✨ Guided setup</button>}
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8 }}>
           Choose what to report, when to send it, who receives it, and which formats to produce.
           The server renders HTML, Excel and PDF in parallel and emails them to your contact points.
         </p>
@@ -478,6 +509,158 @@ const backdrop: React.CSSProperties = {
   position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
   display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
 };
+
+// ReportWizard — a guided 5-step flow (goal → audience → schedule → recipients
+// → preview) for non-technical users, producing a standard report.
+function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: ContactPoint[]; onCancel: () => void; onDone: () => Promise<void> }) {
+  const [step, setStep] = useState(0);
+  const [name, setName] = useState("");
+  const [draft, setDraft] = useState<ReportBody>(EMPTY);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const STEPS = ["Goal", "Audience", "Schedule", "Recipients", "Preview"];
+
+  const pickGoal = (g: (typeof GOALS)[number]) => { setDraft((d) => ({ ...d, kind: g.kind })); if (!name) setName(g.label); setStep(1); };
+  const pickAudience = (a: (typeof AUDIENCES)[number]) => { setDraft((d) => ({ ...d, severity: a.severity, description: a.note })); setStep(2); };
+  const toggleFormat = (f: ReportFormat) => setDraft((d) => {
+    if (f === "html") return d;
+    const cur = d.formats ?? ["html"];
+    return { ...d, formats: cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f] };
+  });
+  const toggleCp = (id: string) => setDraft((d) => {
+    const cur = d.contact_points ?? [];
+    return { ...d, contact_points: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+  });
+
+  useEffect(() => {
+    if (step !== 4) return;
+    let live = true;
+    setPreviewing(true);
+    api.reportPreview(name || "Preview", draft, "html")
+      .then((h) => { if (live) setPreviewHtml(h); })
+      .catch((e) => { if (live) window.alert(`Preview failed: ${(e as Error).message}`); })
+      .finally(() => { if (live) setPreviewing(false); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  const create = async () => {
+    if (!name.trim()) { window.alert("Give the report a name."); return; }
+    setBusy(true);
+    try { await api.createSaved("report", name.trim(), draft); await onDone(); }
+    catch (e) { window.alert(`Create failed: ${(e as Error).message}`); }
+    finally { setBusy(false); }
+  };
+
+  const cardBtn = (active: boolean): React.CSSProperties => ({ textAlign: "left", padding: 14, borderColor: active ? "var(--accent)" : undefined });
+
+  return (
+    <div className="card" style={{ maxWidth: 760 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0 }}>Guided report setup</h2>
+        <button className="dash-btn" onClick={onCancel}>Close</button>
+      </div>
+      <div style={{ display: "flex", gap: 14, margin: "14px 0 18px", flexWrap: "wrap" }}>
+        {STEPS.map((s, i) => (
+          <div key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: i === step ? "var(--accent)" : "var(--muted)", fontWeight: i === step ? 700 : 400 }}>
+            <span style={{ width: 20, height: 20, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: i < step ? "var(--good)" : i === step ? "var(--accent)" : "var(--panel-border)", color: "#fff", fontSize: 11 }}>{i < step ? "✓" : i + 1}</span>
+            {s}
+          </div>
+        ))}
+      </div>
+
+      {step === 0 && (
+        <div>
+          <p className="mini-meta">What's the goal of this report?</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 10 }}>
+            {GOALS.map((g) => (
+              <button key={g.label} className="dash-btn" style={cardBtn(draft.kind === g.kind)} onClick={() => pickGoal(g)}>
+                <div style={{ fontSize: 22 }}>{g.icon}</div>
+                <div style={{ fontWeight: 700, marginTop: 4 }}>{g.label}</div>
+                <div className="mini-meta">{g.blurb}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === 1 && (
+        <div>
+          <p className="mini-meta">Who is this report for?</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 10 }}>
+            {AUDIENCES.map((a) => (
+              <button key={a.label} className="dash-btn" style={cardBtn(draft.description === a.note)} onClick={() => pickAudience(a)}>
+                <div style={{ fontWeight: 700 }}>{a.label}</div>
+                <div className="mini-meta">{a.note}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div>
+          <p className="mini-meta">How often should it go out?</p>
+          <ScheduleControl body={draft} onChange={setDraft} />
+        </div>
+      )}
+
+      {step === 3 && (
+        <div style={{ display: "grid", gap: 14 }}>
+          <div>
+            <p className="mini-meta">Who receives it? (contact points)</p>
+            {contactPoints.length === 0 ? (
+              <span className="mini-meta">No contact points yet — add email groups in Administration → Notifications.</span>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {contactPoints.map((cp) => {
+                  const on = (draft.contact_points ?? []).includes(cp.id);
+                  return <button key={cp.id} className={`chip${on ? " chip-active" : ""}`} onClick={() => toggleCp(cp.id)}>{on ? "✓ " : ""}{cp.name} · {cp.type}</button>;
+                })}
+              </div>
+            )}
+          </div>
+          <div>
+            <p className="mini-meta">Formats</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {FORMATS.map((f) => {
+                const on = (draft.formats ?? ["html"]).includes(f.value);
+                return <button key={f.value} className={`chip${on ? " chip-active" : ""}`} disabled={f.value === "html"} onClick={() => toggleFormat(f.value)}>{on ? "✓ " : ""}{f.label}</button>;
+              })}
+            </div>
+          </div>
+          <label style={{ fontSize: 13, display: "grid", gap: 4 }}>
+            Delivery
+            <select value={draft.delivery_mode ?? "body"} onChange={(e) => setDraft({ ...draft, delivery_mode: e.target.value as "body" | "link" })}>
+              <option value="body">Email the report</option>
+              <option value="link">Secure link</option>
+            </select>
+          </label>
+        </div>
+      )}
+
+      {step === 4 && (
+        <div style={{ display: "grid", gap: 10 }}>
+          <input placeholder="Report name" value={name} onChange={(e) => setName(e.target.value)} />
+          <div className="mini-meta">{nlSchedule(draft)} · {(draft.formats ?? ["html"]).join(", ")} · {(draft.contact_points ?? []).length} recipient group(s)</div>
+          <div style={{ height: 360, border: "1px solid var(--panel-border)", borderRadius: 8, background: "#fff", overflow: "hidden" }}>
+            {previewing ? <div className="empty">Rendering preview…</div> : previewHtml ? <iframe title="preview" sandbox="" srcDoc={previewHtml} style={{ width: "100%", height: "100%", border: 0 }} /> : <div className="empty">No preview</div>}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 18 }}>
+        <button className="dash-btn" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</button>
+        {step < 4 ? (
+          <button className="dash-btn accent" onClick={() => setStep((s) => Math.min(4, s + 1))}>Next</button>
+        ) : (
+          <button className="dash-btn accent" disabled={busy} onClick={create}>{busy ? "Creating…" : "Create report"}</button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function PreviewModal({ html, onClose }: { html: string; onClose: () => void }) {
   return (

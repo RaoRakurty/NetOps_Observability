@@ -123,6 +123,40 @@ func TestDeliverNamedChannelsRecordPerChannel(t *testing.T) {
 	}
 }
 
+func TestDeliverSkipsAlreadyDelivered(t *testing.T) {
+	var sentTo []string
+	d := &reportDelivery{
+		resolveEmail: func(ids []string, tenant string, cross bool) []string {
+			return []string{"a@x.com", "b@x.com", "c@x.com"}
+		},
+		emailSender: func(r []string) (docSender, bool) { sentTo = append(sentTo, r[0]); return &fakeDoc{}, true },
+		dispatch:    func(a models.Alert, names []string) []notify.SendResult { return nil },
+		now:         fixedNow,
+	}
+	got := d.Deliver(context.Background(), deliverReq{
+		ContactPoints:  []string{"cp"},
+		Attempt:        2,
+		SkipRecipients: map[string]bool{"b@x.com": true},
+	})
+	// b@x.com was already delivered -> not re-sent, but still reported ok.
+	if len(sentTo) != 2 {
+		t.Fatalf("expected 2 sends (a,c), got %v", sentTo)
+	}
+	for _, s := range sentTo {
+		if s == "b@x.com" {
+			t.Fatalf("b@x.com should have been skipped, not re-sent")
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 statuses, got %d", len(got))
+	}
+	for _, ds := range got {
+		if !ds.OK || ds.Attempt != 2 {
+			t.Errorf("status should be ok/attempt2: %+v", ds)
+		}
+	}
+}
+
 func TestDeliverEmptyChannelsNoFanout(t *testing.T) {
 	dispatched := false
 	d := &reportDelivery{

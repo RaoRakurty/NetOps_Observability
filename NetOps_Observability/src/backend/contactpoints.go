@@ -209,6 +209,27 @@ func (s *contactPointStore) resolveEmailRecipients(ids []string, tenant string, 
 	return out
 }
 
+// resolveWebhookPoints returns the enabled slack/webhook-type contact points in
+// scope with a usable target — the non-email delivery destinations for a report.
+func (s *contactPointStore) resolveWebhookPoints(ids []string, tenant string, cross bool) []ContactPoint {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []ContactPoint
+	for _, id := range ids {
+		c, ok := s.items[id]
+		if !ok || !c.Enabled || c.Target == "" {
+			continue
+		}
+		if c.Type != contactSlack && c.Type != contactWebhook {
+			continue
+		}
+		if sameTenant(c.TenantID, tenant, cross) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // ---- handlers (admin-gated, tenant-scoped) ---------------------------------
 
 func (s *server) handleContactPoints(w http.ResponseWriter, r *http.Request) {

@@ -547,6 +547,21 @@ services:
       # Break-glass admin password recovery on boot (unset after use). See main.go.
       ADMIN_RESET_PASSWORD: ${ADMIN_RESET_PASSWORD:-}
       USERS_FILE: /data/users.json
+      # Reporting pipeline (active on the postgres backend). PDF output is rendered
+      # by the optional gotenberg sidecar — start it with:
+      #   docker compose --profile pdf up -d gotenberg
+      # When the sidecar is down, pdf-format reports gracefully skip the PDF.
+      REPORT_WORKERS: ${REPORT_WORKERS:-4}
+      REPORT_PDF_SIDECAR_URL: ${REPORT_PDF_SIDECAR_URL:-http://gotenberg:3000/forms/chromium/convert/html}
+      REPORT_MAX_CATCHUP_RUNS: ${REPORT_MAX_CATCHUP_RUNS:-50}
+      REPORT_MAX_CATCHUP_AGE: ${REPORT_MAX_CATCHUP_AGE:-168h}
+      # Secure-link delivery: public base URL for emailed report links + signing
+      # secret (falls back to JWT_SECRET when unset).
+      REPORT_PUBLIC_BASE_URL: ${REPORT_PUBLIC_BASE_URL:-}
+      REPORT_LINK_SECRET: ${REPORT_LINK_SECRET:-}
+      # Microsoft Teams notifications (incoming webhook)
+      FEATURE_TEAMS_NOTIFICATIONS: ${FEATURE_TEAMS_NOTIFICATIONS:-false}
+      TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
     volumes:
       - ../../src/config:/config:ro
       - ../../data/api:/data
@@ -555,6 +570,20 @@ services:
       redis:       { condition: service_healthy }
       opensearch:  { condition: service_started }
       clickhouse:  { condition: service_started }
+    networks: [netops]
+    restart: *restart
+
+  # Headless-Chromium PDF renderer for reports (optional). The Go API stays
+  # stdlib-only; PDF generation lives here and is reached over HTTP. Opt-in:
+  #   docker compose --profile pdf up -d gotenberg
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    profiles: ["pdf"]
+    command:
+      - gotenberg
+      - --chromium-disable-javascript=true
+      - --api-timeout=30s
+    mem_limit: ${GOTENBERG_MEM_LIMIT:-768m}
     networks: [netops]
     restart: *restart
 

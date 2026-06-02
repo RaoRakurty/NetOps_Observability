@@ -288,6 +288,12 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				return
 			}
 		}
+		// Secure report links carry a signed, expiring token in the path and do
+		// their own authorization in handleReportView — no Bearer needed.
+		if strings.HasPrefix(r.URL.Path, "/api/reports/view/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Anything outside /api/ and /admin/ (i.e. /metrics is the only
 		// odd duck, already handled above) is fronted by the SPA / iframes
 		// and doesn't go through this Go server.

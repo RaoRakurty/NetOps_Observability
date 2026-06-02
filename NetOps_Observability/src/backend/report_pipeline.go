@@ -24,12 +24,13 @@ import (
 // execution. The legacy in-process reportScheduler still runs on the file
 // backend (see main.go); this type runs when STORE_BACKEND=postgres.
 type reportPipeline struct {
-	srv       *server
-	queue     reports.JobQueue
-	execs     reports.ExecutionStore
-	artifacts reports.ArtifactStore
-	renderers map[string]reports.Renderer // format -> renderer (html always; xlsx; pdf if sidecar)
-	delivery  *reportDelivery
+	srv        *server
+	queue      reports.JobQueue
+	execs      reports.ExecutionStore
+	artifacts  reports.ArtifactStore
+	renderers  map[string]reports.Renderer // format -> renderer (html always; xlsx; pdf if sidecar)
+	delivery   *reportDelivery
+	deliveries deliveryRecorder // per-recipient ledger (skip-on-retry)
 
 	workers     int
 	maxAttempts int
@@ -48,7 +49,7 @@ type reportPipeline struct {
 	metRetries   atomic.Int64
 }
 
-func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, html reports.Renderer) *reportPipeline {
+func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, html reports.Renderer, deliveries deliveryRecorder) *reportPipeline {
 	// Build the renderer set: HTML always; Excel in-process; PDF only when a
 	// sidecar URL is configured (nil renderer => format unavailable, skipped).
 	renderers := map[string]reports.Renderer{"html": html, "xlsx": reports.NewXLSXRenderer()}
@@ -56,12 +57,13 @@ func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore,
 		renderers["pdf"] = pdf
 	}
 	return &reportPipeline{
-		srv:       s,
-		queue:     q,
-		execs:     es,
-		artifacts: art,
-		renderers: renderers,
-		delivery:  newReportDelivery(s),
+		srv:        s,
+		queue:      q,
+		execs:      es,
+		artifacts:  art,
+		renderers:  renderers,
+		delivery:   newReportDelivery(s),
+		deliveries: deliveries,
 
 		workers:     envInt("REPORT_WORKERS", 4),
 		maxAttempts: 5,
@@ -267,13 +269,28 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 			attachments = append(attachments, a)
 		}
 	}
+	// On a retry, skip recipients already delivered on a prior attempt.
+	var skip map[string]bool
+	if p.deliveries != nil {
+		skip, _ = p.deliveries.Delivered(jctx, job.ExecutionID)
+	}
 	statuses := p.delivery.Deliver(jctx, deliverReq{
 		Tenant: tenant, Cross: cross,
 		ContactPoints: spec.ContactPoints, Channels: spec.Channels,
 		Subject: htmlArt.Summary, ContentType: htmlArt.ContentType, Body: htmlArt.Bytes,
-		Attachments: attachments,
-		Alert:       alert,
+		Attachments:    attachments,
+		Alert:          alert,
+		Mode:           spec.DeliveryMode,
+		ReportName:     o.Name,
+		ExecutionID:    job.ExecutionID,
+		Attempt:        job.Attempts,
+		SkipRecipients: skip,
 	})
+	if p.deliveries != nil {
+		if err := p.deliveries.Record(ctx, tenant, job.ExecutionID, statuses); err != nil {
+			logError("reports.worker", "record deliveries", merge(fields, errf(err)))
+		}
+	}
 
 	done := time.Now().UTC()
 	// Use the parent ctx for the terminal writes so a job that finished right at
