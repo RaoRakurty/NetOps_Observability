@@ -129,6 +129,24 @@ func buildEmailChannel(c smtpConfig) notify.Channel {
 	return notify.NewSeverityGate(e, c.MinSeverity)
 }
 
+// emailSenderTo builds a one-off, ungated email send to an explicit recipient
+// list using the configured SMTP transport — the path report contact-point
+// delivery uses (resolved recipients, not the global To, and no severity gate).
+// Returns false if SMTP isn't usably configured or there are no recipients.
+func (s *notifyConfigStore) emailSenderTo(recipients []string) (notify.Channel, bool) {
+	s.mu.RLock()
+	c := s.cfg.SMTP
+	s.mu.RUnlock()
+	if !c.Enabled || c.Host == "" || len(recipients) == 0 {
+		return nil, false
+	}
+	e := notify.NewEmail(hostPort(c.Host, c.Port), c.From).
+		WithAuth(c.User, c.Pass).
+		WithRecipients(strings.Join(recipients, ",")).
+		WithTLSOnConnect(strings.EqualFold(c.Security, "tls"))
+	return e, true
+}
+
 func buildTwilioChannel(c twilioConfig) notify.Channel {
 	t := notify.NewTwilio(c.AccountSID, c.AuthToken, c.From, c.To)
 	return notify.NewSeverityGate(t, c.MinSeverity)

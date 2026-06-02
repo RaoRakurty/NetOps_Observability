@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, SmtpConfig, TwilioConfig, NtfyConfig } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, SmtpConfig, TwilioConfig, NtfyConfig, ContactPoint, ContactPointType } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -1046,12 +1046,46 @@ export function NotificationsAdmin() {
   const [ntfy, setNtfy] = useState<NtfyConfig | null>(null);
   const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "" });
   const [msg, setMsg] = useState<Record<string, string>>({});
+  // Contact points (reusable delivery audiences referenced by reports).
+  const [cps, setCps] = useState<ContactPoint[]>([]);
+  const emptyCP: Partial<ContactPoint> = { name: "", type: "email", email: [], target: "", enabled: true };
+  const [cpDraft, setCpDraft] = useState<Partial<ContactPoint>>(emptyCP);
+  const [cpEmails, setCpEmails] = useState(""); // comma-separated editor for email type
+
+  const loadCps = () => api.contactPoints().then(setCps).catch(() => {});
 
   useEffect(() => {
     api.smtpConfig().then(setSmtp).catch(() => {});
     api.twilioConfig().then(setTwilio).catch(() => {});
     api.ntfyConfig().then(setNtfy).catch(() => {});
+    loadCps();
   }, []);
+
+  const editCp = (cp: ContactPoint) => {
+    setCpDraft({ ...cp });
+    setCpEmails((cp.email ?? []).join(", "));
+  };
+  const resetCp = () => { setCpDraft(emptyCP); setCpEmails(""); };
+  const saveCp = async () => {
+    try {
+      const body: Partial<ContactPoint> = { ...cpDraft };
+      if (cpDraft.type === "email") {
+        body.email = cpEmails.split(",").map((s) => s.trim()).filter(Boolean);
+        body.target = "";
+      } else {
+        body.email = [];
+      }
+      await api.saveContactPoint(body);
+      resetCp();
+      await loadCps();
+      flash("cp", "Saved.");
+    } catch (e) { flash("cp", (e as Error).message); }
+  };
+  const deleteCp = async (cp: ContactPoint) => {
+    if (!window.confirm(`Delete contact point "${cp.name}"?`)) return;
+    try { await api.deleteContactPoint(cp.id); await loadCps(); }
+    catch (e) { flash("cp", (e as Error).message); }
+  };
 
   const flash = (k: string, m: string) => setMsg((p) => ({ ...p, [k]: m }));
 
@@ -1179,6 +1213,66 @@ export function NotificationsAdmin() {
             </div>
           </>
         )}
+      </div>
+
+      {/* Contact points — reusable, tenant-scoped delivery audiences referenced
+          by Reports. Email-type points resolve to addresses the scheduler emails
+          directly; slack/webhook types are stored for future routing. */}
+      <div className="card">
+        <div className="admin-card-head">
+          <h2>Contact points</h2>
+        </div>
+        <p className="mini-meta">
+          Reusable delivery audiences (email groups, Slack, webhooks) that Reports
+          deliver to. Scoped to the current tenant.
+        </p>
+
+        {cps.length > 0 && (
+          <table style={{ width: "100%", marginBottom: 12 }}>
+            <thead>
+              <tr><th>Name</th><th>Type</th><th>Recipients</th><th>Enabled</th><th></th></tr>
+            </thead>
+            <tbody>
+              {cps.map((cp) => (
+                <tr key={cp.id}>
+                  <td>{cp.name}</td>
+                  <td>{cp.type}</td>
+                  <td className="mini-meta">{cp.type === "email" ? (cp.email ?? []).join(", ") : cp.target}</td>
+                  <td>{cp.enabled ? "Yes" : "No"}</td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button className="ghost" onClick={() => editCp(cp)}>Edit</button>
+                    <button className="ghost" onClick={() => deleteCp(cp)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="form-grid">
+          <LabeledInput label="Name" value={cpDraft.name ?? ""} onChange={(v) => setCpDraft({ ...cpDraft, name: v })} required placeholder="NOC on-call" />
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+            <span>Type</span>
+            <select value={cpDraft.type ?? "email"} onChange={(e) => setCpDraft({ ...cpDraft, type: e.target.value as ContactPointType })}
+              style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
+              {(["email", "slack", "webhook"] as ContactPointType[]).map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          {cpDraft.type === "email" ? (
+            <LabeledInput label="Email recipients (comma-separated)" value={cpEmails} onChange={setCpEmails} required placeholder="a@example.com, b@example.com" />
+          ) : (
+            <LabeledInput label="Target (webhook URL / Slack channel)" value={cpDraft.target ?? ""} onChange={(v) => setCpDraft({ ...cpDraft, target: v })} required />
+          )}
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={cpDraft.enabled ?? true} onChange={(e) => setCpDraft({ ...cpDraft, enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+        <RequiredLegend />
+        <div className="admin-actions">
+          <button onClick={saveCp}>{cpDraft.id ? "Update" : "Add"}</button>
+          {cpDraft.id && <button className="ghost" onClick={resetCp}>Cancel</button>}
+          {msg.cp && <span className="mini-meta">{msg.cp}</span>}
+        </div>
       </div>
     </>
   );

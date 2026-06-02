@@ -469,6 +469,15 @@ export const api = {
   ntfyConfig: () => request<NtfyConfig>("/api/notify/ntfy"),
   saveNtfyConfig: (c: Partial<NtfyConfig>) => request<NtfyConfig>("/api/notify/ntfy", { method: "PUT", body: JSON.stringify(c) }),
   testNtfy: () => request<{ status: string }>("/api/notify/ntfy/test", { method: "POST" }),
+
+  // Contact points — reusable, tenant-scoped delivery audiences (email group /
+  // slack / webhook) referenced by reports. Managed in the Notifications section.
+  contactPoints: () => request<ContactPoint[]>("/api/notify/contact-points"),
+  saveContactPoint: (c: Partial<ContactPoint>) =>
+    c.id
+      ? request<ContactPoint>(`/api/notify/contact-points/${encodeURIComponent(c.id)}`, { method: "PUT", body: JSON.stringify(c) })
+      : request<ContactPoint>("/api/notify/contact-points", { method: "POST", body: JSON.stringify(c) }),
+  deleteContactPoint: (id: string) => request<void>(`/api/notify/contact-points/${encodeURIComponent(id)}`, { method: "DELETE" }),
   snmpProfiles: () => request<SnmpProfile[]>("/api/snmp/profiles"),
   addSnmpProfileMetrics: (id: string, metrics: SnmpMetric[]) =>
     request<SnmpProfile>(`/api/snmp/profiles/${encodeURIComponent(id)}/metrics`, {
@@ -753,6 +762,23 @@ export type ReportBody = {
   // Optional delivery-channel restriction (email, slack, pagerduty, sns, twilio…).
   // Empty/undefined => all configured channels.
   channels?: string[];
+  // Reusable contact points (by id) this report is delivered to. Email-type
+  // points are resolved to addresses and emailed directly.
+  contact_points?: string[];
+  // How contact-point delivery carries the report: "body" emails the rendered
+  // report; "link" emails a secure link (rolling out). Default "body".
+  delivery_mode?: "body" | "link";
+};
+
+export type ContactPointType = "email" | "slack" | "webhook";
+export type ContactPoint = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  type: ContactPointType;
+  email?: string[];
+  target?: string;
+  enabled: boolean;
 };
 export type ReportRun = {
   last_run?: string;

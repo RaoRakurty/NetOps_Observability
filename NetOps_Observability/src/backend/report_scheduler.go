@@ -97,7 +97,21 @@ type reportSpec struct {
 	// slack, pagerduty, sns, twilio…). Empty => all configured channels. Used by
 	// scheduled runs and as the default for "Send now".
 	Channels []string `json:"channels,omitempty"`
+	// ContactPoints lists reusable contact-point ids (contactpoints.go) this
+	// report is delivered to — the modern recipient model. Email-type points are
+	// resolved to addresses and emailed directly (in the report's tenant scope);
+	// independent of Channels (which still drives slack/pagerduty/etc.).
+	ContactPoints []string `json:"contact_points,omitempty"`
+	// DeliveryMode selects how contact-point delivery carries the report:
+	// "body" (default) emails the rendered report; "link" emails a secure link
+	// (Phase 3). Unknown/empty => body.
+	DeliveryMode string `json:"delivery_mode,omitempty"`
 }
+
+const (
+	deliverBody = "body"
+	deliverLink = "link"
+)
 
 // reportRun records the scheduler's per-report state.
 type reportRun struct {
@@ -108,6 +122,7 @@ type reportRun struct {
 }
 
 type reportScheduler struct {
+	srv       *server // for lazily-constructed deps (notifyCfg, contactPoints)
 	saved     *savedStore
 	notifier  *notify.Dispatcher
 	discovery *DiscoveryAggregator
@@ -124,6 +139,7 @@ func newReportScheduler(s *server, path string) *reportScheduler {
 		path = "/data/report_runs.json"
 	}
 	rs := &reportScheduler{
+		srv:       s,
 		saved:     s.saved,
 		notifier:  s.notifier,
 		discovery: s.discovery,
@@ -206,7 +222,14 @@ func (rs *reportScheduler) RunNow(id string, channels []string) (reportRun, erro
 func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time) {
 	msg := rs.render(o, spec, now)
 	sent := rs.notifier.DispatchTo(msg, spec.Channels)
-	log.Printf("report %q (%s) delivered to %d channel(s)", o.Name, o.ID, sent)
+
+	// Contact-point delivery (the modern recipient model). Resolve the report's
+	// email-type contact points in the report's own tenant scope, then email the
+	// report to those addresses directly via the configured SMTP transport —
+	// independent of the named-channel routing above.
+	cpRecipients, cpNote := rs.deliverToContactPoints(msg, o, spec)
+	log.Printf("report %q (%s) delivered to %d channel(s), %d contact-point recipient(s)",
+		o.Name, o.ID, sent, cpRecipients)
 
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -216,13 +239,48 @@ func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time
 		run.NextRun = now.Add(time.Duration(spec.IntervalMinutes) * time.Minute)
 	}
 	run.Status = "ok"
+	detail := fmt.Sprintf("%s — sent to %d channel(s)", msg.Summary, sent)
 	if len(spec.Channels) > 0 {
-		run.Detail = fmt.Sprintf("%s — sent to %d channel(s): %s", msg.Summary, sent, strings.Join(spec.Channels, ", "))
-	} else {
-		run.Detail = fmt.Sprintf("%s — sent to %d channel(s)", msg.Summary, sent)
+		detail += ": " + strings.Join(spec.Channels, ", ")
 	}
+	if cpNote != "" {
+		detail += "; " + cpNote
+	}
+	run.Detail = detail
 	rs.runs[o.ID] = run
 	rs.flushLocked()
+}
+
+// deliverToContactPoints resolves the report's email contact points (tenant-
+// scoped) and emails the report to them. Returns the recipient count and a short
+// status note for the run detail. No-op (0, "") when the report has no contact
+// points. "link" delivery is Phase 3 — until then it is recorded as pending and
+// the report body is NOT emailed (so tenant data isn't leaked while the secure
+// link is unbuilt).
+func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o SavedObject, spec reportSpec) (int, string) {
+	if len(spec.ContactPoints) == 0 || rs.srv == nil || rs.srv.contactPoints == nil || rs.srv.notifyCfg == nil {
+		return 0, ""
+	}
+	t := normTenant(o.TenantID)
+	cross := t == "" || t == TenantGlobal
+	recipients := rs.srv.contactPoints.resolveEmailRecipients(spec.ContactPoints, t, cross)
+	if len(recipients) == 0 {
+		return 0, "contact points resolved to no email recipients"
+	}
+	if strings.EqualFold(spec.DeliveryMode, deliverLink) {
+		// Phase 3 builds the signed report-view link; until then do not email the
+		// report body in link mode.
+		return 0, fmt.Sprintf("secure-link delivery to %d recipient(s) pending (phase 3)", len(recipients))
+	}
+	sender, ok := rs.srv.notifyCfg.emailSenderTo(recipients)
+	if !ok {
+		return 0, "SMTP not configured — contact-point email skipped"
+	}
+	if err := sender.Send(msg); err != nil {
+		log.Printf("report %q contact-point email: %v", o.Name, err)
+		return 0, fmt.Sprintf("contact-point email failed: %v", err)
+	}
+	return len(recipients), fmt.Sprintf("emailed to %d contact-point recipient(s)", len(recipients))
 }
 
 // render builds the models.Alert carrying the report content. Reusing the

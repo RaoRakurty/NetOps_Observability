@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, SavedObject, ReportBody, ReportRun, ReportKind } from "../services/api";
+import { api, SavedObject, ReportBody, ReportRun, ReportKind, ContactPoint } from "../services/api";
 
 // Reports — saved objects (type=report) the server-side scheduler renders on
 // a cadence and delivers via the notify dispatcher (Slack/email/PagerDuty…).
@@ -49,20 +49,25 @@ export default function Reports() {
   const [loading, setLoading] = useState(true);
   // Configured notify channels + the "Send now" channel-picker state.
   const [channels, setChannels] = useState<string[]>([]);
+  // Reusable contact points (defined in the Notifications section) a report can
+  // be delivered to.
+  const [contactPoints, setContactPoints] = useState<ContactPoint[]>([]);
   const [picker, setPicker] = useState<{ report: SavedObject; selected: string[] } | null>(null);
   const [sending, setSending] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [list, runState, chans] = await Promise.all([
+      const [list, runState, chans, cps] = await Promise.all([
         api.listSaved("report"),
         api.reportRuns(),
         api.reportChannels().catch(() => [] as string[]),
+        api.contactPoints().catch(() => [] as ContactPoint[]),
       ]);
       setItems(list);
       setRuns(runState ?? {});
       setChannels(chans ?? []);
+      setContactPoints(cps ?? []);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -193,6 +198,80 @@ export default function Reports() {
             value={draft.description ?? ""}
             onChange={(e) => setDraft({ ...draft, description: e.target.value })}
           />
+
+          {/* Recipients — reusable contact points defined in Notifications. */}
+          <div style={{ display: "grid", gap: 4 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Recipients (contact points)</span>
+            {contactPoints.length === 0 ? (
+              <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                No contact points yet — create email groups in Administration → Notifications.
+              </span>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: 8,
+                }}
+              >
+                {contactPoints.map((cp) => {
+                  const selected = (draft.contact_points ?? []).includes(cp.id);
+                  return (
+                    <label
+                      key={cp.id}
+                      title={cp.type === "email" ? (cp.email ?? []).join(", ") : cp.target}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        fontSize: 12,
+                        padding: "2px 8px",
+                        borderRadius: 12,
+                        cursor: "pointer",
+                        background: selected ? "var(--accent, #5b5bd6)" : "var(--chip-bg, #f0f0f4)",
+                        color: selected ? "#fff" : "var(--fg)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() =>
+                          setDraft((d) => {
+                            const cur = d.contact_points ?? [];
+                            return {
+                              ...d,
+                              contact_points: cur.includes(cp.id)
+                                ? cur.filter((x) => x !== cp.id)
+                                : [...cur, cp.id],
+                            };
+                          })
+                        }
+                        style={{ width: "auto" }}
+                      />
+                      {cp.name} <span style={{ opacity: 0.7 }}>· {cp.type}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Delivery mode — how contact-point recipients receive the report. */}
+          <label style={{ fontSize: 13, display: "grid", gap: 4 }}>
+            Delivery
+            <select
+              value={draft.delivery_mode ?? "body"}
+              onChange={(e) => setDraft({ ...draft, delivery_mode: e.target.value as "body" | "link" })}
+              title="How contact-point recipients receive the report"
+            >
+              <option value="body">Email the report</option>
+              <option value="link">Secure link (rolling out)</option>
+            </select>
+          </label>
+
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
             <input
               type="checkbox"
