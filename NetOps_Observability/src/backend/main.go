@@ -42,7 +42,8 @@ type server struct {
 	tenants    *tenantStore
 	apiKeys    *apiKeyStore
 	refresh    *refreshStore
-	snmpCreds  *snmpCredStore
+	snmpCreds    *snmpCredStore
+	snmpProfiles *snmpProfileStore
 	saved      *savedStore
 	audit      *auditStore
 	reports    *reportScheduler
@@ -250,6 +251,11 @@ func newServer() *server {
 		log.Fatalf("audit store: %v", err)
 	}
 
+	snmpProfiles, err := newSNMPProfileStore(envOr("SNMP_PROFILES_FILE", "/data/snmp_profiles.json"))
+	if err != nil {
+		log.Fatalf("snmp profile store: %v", err)
+	}
+
 	srv := &server{
 		startedAt:  time.Now().UTC(),
 		discovery:  d,
@@ -261,9 +267,10 @@ func newServer() *server {
 		tenants:    tenants,
 		apiKeys:    apiKeys,
 		refresh:    refresh,
-		snmpCreds:  snmpCreds,
-		saved:      saved,
-		audit:      audit,
+		snmpCreds:    snmpCreds,
+		snmpProfiles: snmpProfiles,
+		saved:        saved,
+		audit:        audit,
 		servicenow: serviceNow,
 		jira:       jiraConn,
 		hub:        NewHub(),
@@ -363,6 +370,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/snmp/options", s.handleSNMPOptions)
 	mux.HandleFunc("/api/snmp/credentials", s.handleSNMPCreds)
 	mux.HandleFunc("/api/snmp/credentials/", s.handleSNMPCredByID)
+	mux.HandleFunc("/api/snmp/profiles", s.handleSNMPProfiles)
+	mux.HandleFunc("/api/snmp/profiles/", s.handleSNMPProfileByID)
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)

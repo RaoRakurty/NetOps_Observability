@@ -8,6 +8,7 @@ import SavedDashboards from "./pages/SavedDashboards";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
 import SnmpCredentials from "./tabs/SnmpCredentials";
+import SnmpProfiles from "./tabs/SnmpProfiles";
 import Alerts from "./tabs/Alerts";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
@@ -104,6 +105,7 @@ export const NAV: NavSection[] = [
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
       { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
       { id: "snmp", label: "SNMP Credentials", render: () => <SnmpCredentials /> },
+      { id: "profiles", label: "SNMP Profiles", render: () => <SnmpProfiles /> },
     ],
   },
   {

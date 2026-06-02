@@ -39,9 +39,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	au, err := newAuditStore(dir + "/audit.json")
 	must(err)
+	sp, err := newSNMPProfileStore(dir + "/snmp_profiles.json")
+	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, apiKeys: ks, refresh: rf,
-		saved: sv, snmpCreds: sc, discovery: NewDiscoveryAggregator(),
+		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
 		audit: au, startedAt: time.Now().UTC(),
 	}
 	must(us.SeedAdmin("admin", "password123"))

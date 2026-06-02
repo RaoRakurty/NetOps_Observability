@@ -81,6 +81,24 @@ export type StackHealth = {
   subsystems: Record<string, unknown>;
 };
 
+// ---------- SNMP profiles (vendor OID/metric library) ----------
+
+export type SnmpMetric = {
+  name: string;
+  oid: string;
+  type: string;
+  unit?: string;
+  description?: string;
+};
+export type SnmpProfile = {
+  id: string;
+  vendor: string;
+  category: string;
+  sysobjectid_prefix?: string;
+  builtin: boolean;
+  metrics: SnmpMetric[];
+};
+
 // ---------- Audit trail (tenant-scoped) ----------
 
 export type AuditEvent = {
@@ -404,6 +422,16 @@ export const api = {
   health: () => request<Health>("/admin/health"),
   stackHealth: () => request<StackHealth>("/api/stack/health"),
   audit: (limit = 200) => request<AuditEvent[]>(`/api/audit?limit=${limit}`),
+  snmpProfiles: () => request<SnmpProfile[]>("/api/snmp/profiles"),
+  addSnmpProfileMetrics: (id: string, metrics: SnmpMetric[]) =>
+    request<SnmpProfile>(`/api/snmp/profiles/${encodeURIComponent(id)}/metrics`, {
+      method: "POST",
+      body: JSON.stringify(metrics),
+    }),
+  upsertSnmpProfile: (p: Partial<SnmpProfile>) =>
+    request<SnmpProfile>("/api/snmp/profiles", { method: "POST", body: JSON.stringify(p) }),
+  deleteSnmpProfile: (id: string) =>
+    request<void>(`/api/snmp/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
   devices: () => request<Device[]>("/api/devices"),
   upsertDevice: (d: Partial<Device>) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(d) }),
