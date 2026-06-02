@@ -522,11 +522,14 @@ services:
       OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-read-only}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1h}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
-      # Identity/saved-object store backend: file (default) or postgres (needs a
-      # driver compiled in — see pgkv.go). DATABASE_URL/DRIVER apply when postgres.
+      # App-state store backend: file (default; JSON on the data volume) or
+      # postgres (normalized rows + Row-Level Security via pgstore.go). When
+      # postgres, DATABASE_URL must be a NON-superuser role — superusers bypass
+      # RLS, so startup refuses one (override: STORE_PG_ALLOW_RLS_BYPASS=true for
+      # a deliberate single-tenant deploy). See docs/DEPLOY_POSTGRES_APPSTATE.md.
       STORE_BACKEND: ${STORE_BACKEND:-file}
       DATABASE_URL: ${DATABASE_URL:-}
-      DATABASE_DRIVER: ${DATABASE_DRIVER:-postgres}
+      STORE_PG_ALLOW_RLS_BYPASS: ${STORE_PG_ALLOW_RLS_BYPASS:-}
       # Default per-API-key rate limit (requests/minute; 0 = unlimited)
       APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
       # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)

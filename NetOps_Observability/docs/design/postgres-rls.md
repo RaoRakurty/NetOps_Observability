@@ -14,10 +14,12 @@ RLS even with FORCE, silently disabling isolation.
    the connected role is a superuser or has BYPASSRLS, turning a silent breach
    into a loud error. Override for single-tenant: `STORE_PG_ALLOW_RLS_BYPASS=true`
    (downgrades to a warning).
-2. **Correct-by-construction**: the installer must provision a dedicated
-   least-privilege role (`CREATE ROLE … LOGIN NOSUPERUSER`, owns the app-state
-   tables) and write *that* into `DATABASE_URL` — never the `postgres` superuser.
-   *(Installer wiring is a follow-up; the Postgres app-state path is opt-in.)*
+2. **Correct-by-construction**: a least-privilege role is provisioned via
+   `deployment/docker/postgres/netops-app-role.sql` (`CREATE ROLE … LOGIN
+   NOSUPERUSER NOBYPASSRLS`, owns the app-state tables) and written into
+   `DATABASE_URL` — never the `postgres` superuser. Opt-in compose wiring +
+   step-by-step enablement in `docs/DEPLOY_POSTGRES_APPSTATE.md`. *(Auto-gen in
+   `install.py` is a further follow-up; the manual path is documented.)*
 3. **Test-proven**: `pgstore_test.go` provisions a non-superuser role to prove
    isolation, and asserts the guard rejects a superuser connection.
 
