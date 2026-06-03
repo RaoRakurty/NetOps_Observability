@@ -47,7 +47,7 @@ func TestServiceNow_VerifyAndNormalize(t *testing.T) {
 		t.Fatalf("normalize: err=%v n=%d", err, len(evs))
 	}
 	e := evs[0]
-	if e.ExternalID != "abc" || e.ExternalSeq != 5 || e.ExternalState != "resolved" || e.Type != EventResolved || e.ProviderEvtID != "d1" || e.Assignee != "jdoe" {
+	if e.ExternalID != "INC0010" || e.ExternalSeq != 5 || e.ExternalState != "resolved" || e.Type != EventResolved || e.ProviderEvtID != "d1" || e.Assignee != "jdoe" {
 		t.Fatalf("unexpected SN event: %+v", e)
 	}
 }
@@ -64,7 +64,7 @@ func TestJira_VerifyAndNormalize(t *testing.T) {
 	}
 	evs, _ := p.Normalize("acme", body)
 	e := evs[0]
-	if e.ExternalID != "10001" || e.ExternalSeq != 99999 || e.ExternalState != "In Progress" || e.Assignee != "Jane" || e.Type != EventAcknowledged {
+	if e.ExternalID != "NOC-1" || e.ExternalSeq != 99999 || e.ExternalState != "In Progress" || e.Assignee != "Jane" || e.Type != EventAcknowledged {
 		t.Fatalf("unexpected Jira event: %+v", e)
 	}
 	// Comment webhook → distinct type.

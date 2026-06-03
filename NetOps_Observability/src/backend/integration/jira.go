@@ -79,9 +79,11 @@ func (jiraProvider) Normalize(tenant string, body []byte) ([]IntegrationEvent, e
 	}
 
 	ev := IntegrationEvent{
-		Provider:      "jira",
-		Tenant:        tenant,
-		ExternalID:    firstNonEmpty(p.Issue.ID, p.Issue.Key),
+		Provider: "jira",
+		Tenant:   tenant,
+		// Correlates to the incident's external_ticket_id, stored as the Jira KEY
+		// (NOC-1) on outbound. Prefer key; fall back to numeric id.
+		ExternalID: firstNonEmpty(p.Issue.Key, p.Issue.ID),
 		ExternalSeq:   seq,
 		OccurredAt:    occurred,
 		ExternalState: p.Issue.Fields.Status.Name,

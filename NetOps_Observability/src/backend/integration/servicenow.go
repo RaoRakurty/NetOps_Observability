@@ -54,7 +54,10 @@ func (serviceNowProvider) Normalize(tenant string, body []byte) ([]IntegrationEv
 		Provider:      "servicenow",
 		Tenant:        tenant,
 		ProviderEvtID: firstNonEmpty(p.EventID, p.SysID+":"+strconv.FormatInt(p.SysModCount, 10)),
-		ExternalID:    firstNonEmpty(p.SysID, p.Number),
+		// ExternalID correlates to the incident's external_ticket_id, which we
+		// store as the SN NUMBER (INC00…) on outbound. Prefer number; fall back to
+		// sys_id if a webhook omits it.
+		ExternalID: firstNonEmpty(p.Number, p.SysID),
 		AlertID:       p.AlertID,
 		ExternalSeq:   p.SysModCount,
 		OccurredAt:    parseLooseTime(p.UpdatedOn),

@@ -97,6 +97,28 @@ func (s *pgIncidentStore) Ingest(ctx context.Context, in IncidentInput) (Inciden
 	return inc, inserted, err
 }
 
+// FindByExternalTicket resolves an incident from its external_ticket_id (the
+// forward link set on outbound projection). Used by inbound reconciliation to
+// correlate a webhook back to the originating incident. Tenant-scoped (RLS).
+func (s *pgIncidentStore) FindByExternalTicket(ctx context.Context, tenant, system, externalID string) (Incident, bool, error) {
+	var inc Incident
+	var found bool
+	err := s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, selectIncidentCols+`
+			FROM incidents WHERE external_system=$1 AND external_ticket_id=$2
+			ORDER BY created_at DESC LIMIT 1`, system, externalID)
+		r, ok, err := scanIncident(row)
+		if err != nil {
+			return err
+		}
+		if ok {
+			inc, found = r, true
+		}
+		return nil
+	})
+	return inc, found, err
+}
+
 func (s *pgIncidentStore) Get(ctx context.Context, tenant string, cross bool, id string) (Incident, []IncidentEvent, bool, error) {
 	var inc Incident
 	var events []IncidentEvent

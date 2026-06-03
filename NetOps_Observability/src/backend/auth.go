@@ -301,6 +301,13 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// ITSM inbound webhooks are called by external systems (no JWT). The
+		// handler authenticates via the per-tenant path token + the provider's
+		// signature (HMAC/replay) before touching any state — fail-closed.
+		if strings.HasPrefix(r.URL.Path, "/api/integrations/webhook/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Anything outside /api/ and /admin/ (i.e. /metrics is the only
 		// odd duck, already handled above) is fronted by the SPA / iframes
 		// and doesn't go through this Go server.

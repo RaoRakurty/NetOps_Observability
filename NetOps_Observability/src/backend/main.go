@@ -22,6 +22,7 @@ import (
 
 	"netops/backend/alerts"
 	"netops/backend/collectors"
+	"netops/backend/integration"
 	"netops/backend/models"
 	"netops/backend/notify"
 	"netops/backend/reports"
@@ -53,6 +54,8 @@ type server struct {
 	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents      incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics     *incidentMetrics
+	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
+	providers      *integration.Registry // inbound provider translators (registry)
 	exportPolicy   *exportPolicyStore // runtime-tunable log-export limits
 	exportLimiter  *tenantRateLimiter // per-tenant export rate limit
 	copilotCfg     *copilotConfigStore
@@ -293,6 +296,12 @@ func newServer() *server {
 	// Incident system (Postgres only) + its alert-ingestion hook.
 	srv.incidents = newIncidentStore()
 	srv.incMetrics = &incidentMetrics{}
+	// Integration platform (#43): persistence is Postgres-only; the provider
+	// registry (inbound translators) is always available.
+	if ps, ok := backend.(*pgStore); ok {
+		srv.integrations = newIntegrationStore(ps.db)
+	}
+	srv.providers = integration.DefaultRegistry()
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
 	srv.exportLimiter = newTenantRateLimiter()
 	engine.OnFire = srv.ingestAlertIncident
@@ -466,6 +475,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/itsm/servicenow", s.handleITSMServiceNow)
 	mux.HandleFunc("/api/itsm/jira", s.handleITSMJira)
+	// Integration platform (#43): admin config + UNAUTHENTICATED inbound webhook
+	// (the more specific /webhook/ prefix wins over /api/integrations/ in the mux).
+	mux.HandleFunc("/api/integrations", s.handleIntegrations)
+	mux.HandleFunc("/api/integrations/", s.handleIntegrations)
+	mux.HandleFunc("/api/integrations/webhook/", s.handleIntegrationWebhook)
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	mux.HandleFunc("/api/audit", s.handleAudit)

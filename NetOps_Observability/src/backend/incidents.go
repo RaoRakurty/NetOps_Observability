@@ -150,6 +150,9 @@ type incidentsRepo interface {
 	Assign(ctx context.Context, tenant string, cross bool, id, owner, actor string) (Incident, error)
 	// MarkSync records the ITSM projection result (worker, platform scope).
 	MarkSync(ctx context.Context, id, system, externalID, externalURL, syncStatus string, at time.Time) error
+	// FindByExternalTicket resolves an incident from its ITSM ticket id (the
+	// external_ticket_id forward link) for INBOUND reconciliation. Tenant-scoped.
+	FindByExternalTicket(ctx context.Context, tenant, system, externalID string) (Incident, bool, error)
 }
 
 // newIncidentStore selects the backend: Postgres only (RLS). Returns nil on the
