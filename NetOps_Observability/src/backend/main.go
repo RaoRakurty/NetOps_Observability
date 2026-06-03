@@ -321,6 +321,9 @@ func main() {
 	srv.discovery.Start(ctx)
 	srv.collectors.Start(ctx)
 	srv.alerts.Start(ctx)
+	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
+	// telemetry (#20 Phase 1). No-op unless TENANT_ENRICHMENT_DIR is set.
+	srv.startTenantEnrichment(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process

@@ -231,6 +231,9 @@ services:
     volumes:
       - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # #20: device→tenant enrichment CSV exported by the api (read-only). Loaded
+      # by the device_tenant enrichment table to stamp tenant_id onto telemetry.
+      - ../../data/api/enrichment:/etc/vector/enrichment:ro
     depends_on:
       redpanda: { condition: service_healthy }
     networks: [netops]
@@ -420,6 +423,10 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       POSTGRES_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-netops}"
       LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
+      # #20: device→tenant map (exported by api) to stamp tenant_id on findings.
+      TENANT_ENRICHMENT_FILE: /data/enrichment/device_tenant.csv
+    volumes:
+      - ../../data/api/enrichment:/data/enrichment:ro
     depends_on:
       redpanda:   { condition: service_healthy }
       opensearch: { condition: service_started }
@@ -457,6 +464,9 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
       CORRELATION_URL: "http://correlation:8000"
+      # #20: export the device→tenant map (under the api's /data volume) so the
+      # Vector aggregator + correlation can stamp tenant_id onto telemetry.
+      TENANT_ENRICHMENT_DIR: /data/enrichment
       STATIC_DEVICES_PATH: /config/devices.yaml
       RULES_FILE: /config/rules.yaml
       NETBOX_URL: ${NETBOX_URL:-}

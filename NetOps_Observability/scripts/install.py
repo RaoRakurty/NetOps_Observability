@@ -459,6 +459,22 @@ def ensure_data_dirs(root: Path) -> None:
                 info(
                     f"  Fix: sudo chown -R {uid_gid[0]}:{uid_gid[1]} {d}"
                 )
+
+    # #20: device→tenant enrichment dir. The api (nonroot 65532) exports the CSV
+    # here; the Vector aggregator + correlation mount it read-only. Seed a
+    # header-only CSV so the aggregator's enrichment-table load never fails on a
+    # cold start (before the api has written its first map). Owned by the api uid.
+    enrich = root / "data" / "api" / "enrichment"
+    enrich.mkdir(parents=True, exist_ok=True)
+    seed = enrich / "device_tenant.csv"
+    if not seed.exists():
+        seed.write_text("identity,tenant_id\n")
+    try:
+        os.chown(enrich, 65532, 65532)
+        os.chown(seed, 65532, 65532)
+    except (PermissionError, OSError):
+        pass  # not root; api will adopt it on first write where it can
+
     ok("data/ directories ready")
 
 

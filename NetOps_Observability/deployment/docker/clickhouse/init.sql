@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS netops.flows
     dst_as          UInt32,
     sampling_rate   UInt32,
     vlan_id         UInt16,
-    flow_type       LowCardinality(String) DEFAULT 'unknown'  -- netflow | ipfix | sflow
+    flow_type       LowCardinality(String) DEFAULT 'unknown',  -- netflow | ipfix | sflow
+    tenant_id       LowCardinality(String) DEFAULT ''  -- #20: stamped at Vector ingest (device→tenant); '' = global
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
@@ -85,7 +86,8 @@ CREATE TABLE IF NOT EXISTS netops.tunnels
     jitter_ms      Float32,
     loss_pct       Float32,
     qoe            Float32,                  -- quality-of-experience score 0..10
-    uptime_s       UInt64
+    uptime_s       UInt64,
+    tenant_id      LowCardinality(String) DEFAULT ''  -- #20: owning tenant; '' = global
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
@@ -109,7 +111,8 @@ CREATE TABLE IF NOT EXISTS netops.findings
     component   String,
     summary     String,
     description String,
-    labels      Map(String, String)
+    labels      Map(String, String),
+    tenant_id   LowCardinality(String) DEFAULT ''  -- #20: stamped by the correlation service (device→tenant); '' = global
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)

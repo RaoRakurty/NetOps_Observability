@@ -18,6 +18,28 @@ api:
   address: 0.0.0.0:8686
 
 # ----------------------------------------------------------------------------
+# ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
+#
+# The Go API exports a CSV (identity,tenant_id) — one row per device name and per
+# management address — to a shared volume; we load it here and stamp .tenant_id
+# onto every event by matching its source-device identity (syslog hostname, flows
+# sampler_address). The file is loaded at config load; it always exists (the
+# stack seeds a header-only CSV), and an empty/missing match yields tenant_id=""
+# (global/platform). See docs/design/multitenant-telemetry-isolation.md.
+# ----------------------------------------------------------------------------
+
+enrichment_tables:
+  device_tenant:
+    type: file
+    file:
+      path: /etc/vector/enrichment/device_tenant.csv
+      encoding:
+        type: csv
+    schema:
+      identity: string
+      tenant_id: string
+
+# ----------------------------------------------------------------------------
 # SOURCES
 # ----------------------------------------------------------------------------
 
@@ -78,6 +100,9 @@ transforms:
       del(.label)
       .level     = string(.level)     ?? "info"
       .component = string(.component) ?? "container"
+      # App logs are emitted by stack-internal services, not tenant devices →
+      # global/platform tenant.
+      .tenant_id = ""
 
   flows_normalized:
     type: remap
@@ -91,6 +116,16 @@ transforms:
       # Same dotted-key collision as applogs — drop the Docker label map.
       del(.label)
       .signal = "netflow"
+      # Tenant attribution: match the flow exporter (sampler_address) to its
+      # device's tenant. No match → "" (global). #20.
+      .tenant_id = ""
+      sampler = to_string(.sampler_address) ?? ""
+      if sampler != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
 
   syslog_normalized:
     type: remap
@@ -100,6 +135,17 @@ transforms:
       .hostname = string(.hostname) ?? "unknown"
       .severity = string(.severity) ?? "info"
       .appname  = string(.appname)  ?? "unknown"
+
+      # Tenant attribution: match the device hostname to its tenant. The hostname
+      # survives NAT in the RFC5424 message, so it's the reliable device key. No
+      # match → "" (global/platform). #20.
+      .tenant_id = ""
+      if .hostname != "unknown" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": .hostname }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
 
       # Vendor classification from the log signature (heuristic). The
       # authoritative vendor still comes from SNMP sysObjectID at discovery;

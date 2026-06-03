@@ -18,7 +18,8 @@
             "service":        { "type": "keyword" },
             "container_name": { "type": "keyword" },
             "message":        { "type": "text" },
-            "msg":            { "type": "text" }
+            "msg":            { "type": "text" },
+            "tenant_id":      { "type": "keyword" }
           }
         }
       }
@@ -39,7 +40,8 @@
             "appname":   { "type": "keyword" },
             "severity":  { "type": "keyword" },
             "facility":  { "type": "keyword" },
-            "message":   { "type": "text" }
+            "message":   { "type": "text" },
+            "tenant_id": { "type": "keyword" }
           }
         }
       }
@@ -63,7 +65,8 @@
             "dst_port":        { "type": "integer" },
             "proto":           { "type": "integer" },
             "bytes":           { "type": "long" },
-            "packets":         { "type": "long" }
+            "packets":         { "type": "long" },
+            "tenant_id":       { "type": "keyword" }
           }
         }
       }

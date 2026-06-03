@@ -21,6 +21,7 @@ serve /findings) stays stable.
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
 import os
@@ -47,6 +48,40 @@ CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
 TOPICS = ["netops.syslog", "netops.flows", "netops.metrics"]
+
+# Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
+# tenant_id onto each finding so it carries the same tenant discriminator as the
+# flows/logs the Vector aggregator tags. The file is re-read when its mtime
+# changes; an absent file or unmatched device yields "" (global/platform).
+TENANT_ENRICHMENT_FILE = os.environ.get("TENANT_ENRICHMENT_FILE", "/data/enrichment/device_tenant.csv")
+_tenant_map: Dict[str, str] = {}
+_tenant_mtime: float = -1.0
+
+
+def tenant_for(device: str) -> str:
+    """Resolve a device name/id to its tenant id ("" = global). Cheap: re-reads
+    the CSV only when its mtime changes."""
+    global _tenant_map, _tenant_mtime
+    if not device:
+        return ""
+    try:
+        mt = os.path.getmtime(TENANT_ENRICHMENT_FILE)
+    except OSError:
+        return _tenant_map.get(device, "")
+    if mt != _tenant_mtime:
+        _tenant_mtime = mt
+        fresh: Dict[str, str] = {}
+        try:
+            with open(TENANT_ENRICHMENT_FILE, newline="") as f:
+                reader = csv.reader(f)
+                next(reader, None)  # header: identity,tenant_id
+                for row in reader:
+                    if len(row) >= 2 and row[0]:
+                        fresh[row[0]] = row[1]
+            _tenant_map = fresh
+        except OSError:
+            pass
+    return _tenant_map.get(device, "")
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -249,16 +284,18 @@ async def handle_flow(_ev: dict) -> None:
 
 
 async def emit(**kwargs) -> None:
+    device = kwargs.get("device", "")
     row = {
         "id":          str(uuid.uuid4()),
         "kind":        kwargs["kind"],
         "severity":    kwargs["severity"],
         "score":       kwargs["score"],
-        "device":      kwargs.get("device", ""),
+        "device":      device,
         "component":   kwargs.get("component", ""),
         "summary":     kwargs.get("summary", ""),
         "description": kwargs.get("description", ""),
         "labels":      kwargs.get("labels", {}),
+        "tenant_id":   tenant_for(device),  # #20: same tenant discriminator as flows/logs
     }
     assert ch is not None
     await ch.insert("netops.findings", [row])
