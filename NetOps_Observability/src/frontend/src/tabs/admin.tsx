@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -994,8 +994,6 @@ export function ExportPolicyForm() {
 const ITSM = [
   { id: "servicenow", name: "ServiceNow", desc: "Critical alerts cut an incident via the Table API (deduped by fingerprint) and auto-resolve when the alert clears; critical incidents auto-promote too. Configure it in the form above — no restart.", tag: "Available" },
   { id: "jira", name: "Jira", desc: "Alerts at/above the threshold open a deduped Jira issue (REST v2) and transition to Done when the alert clears. Configure it in the form above — no restart.", tag: "Available" },
-  { id: "pagerduty", name: "PagerDuty", desc: "On-call routing & escalation (notifier already exists in the backend).", tag: "Available" },
-  { id: "slack", name: "Slack", desc: "Channel notifications & alert actions (notifier already exists).", tag: "Available" },
 ];
 
 // ITSMConfigForm — admin-editable ServiceNow + Jira connector config (replaces the
@@ -1182,7 +1180,9 @@ export function NotificationsAdmin() {
   const [smtp, setSmtp] = useState<SmtpConfig | null>(null);
   const [twilio, setTwilio] = useState<TwilioConfig | null>(null);
   const [ntfy, setNtfy] = useState<NtfyConfig | null>(null);
-  const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "" });
+  const [slack, setSlack] = useState<SlackConfig | null>(null);
+  const [pager, setPager] = useState<PagerDutyConfig | null>(null);
+  const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "", slack: "", pager: "" });
   const [msg, setMsg] = useState<Record<string, string>>({});
   // Contact points (reusable delivery audiences referenced by reports).
   const [cps, setCps] = useState<ContactPoint[]>([]);
@@ -1196,6 +1196,8 @@ export function NotificationsAdmin() {
     api.smtpConfig().then(setSmtp).catch(() => {});
     api.twilioConfig().then(setTwilio).catch(() => {});
     api.ntfyConfig().then(setNtfy).catch(() => {});
+    api.slackConfig().then(setSlack).catch(() => {});
+    api.pagerDutyConfig().then(setPager).catch(() => {});
     loadCps();
   }, []);
 
@@ -1250,6 +1252,22 @@ export function NotificationsAdmin() {
       if (secret.ntfy) body.token = secret.ntfy;
       setNtfy(await api.saveNtfyConfig(body)); setSecret((s) => ({ ...s, ntfy: "" })); flash("ntfy", "Saved.");
     } catch (e) { flash("ntfy", (e as Error).message); }
+  };
+  const saveSlack = async () => {
+    if (!slack) return;
+    try {
+      const body: Partial<SlackConfig> = { ...slack };
+      if (secret.slack) body.webhook_url = secret.slack;
+      setSlack(await api.saveSlackConfig(body)); setSecret((s) => ({ ...s, slack: "" })); flash("slack", "Saved.");
+    } catch (e) { flash("slack", (e as Error).message); }
+  };
+  const savePager = async () => {
+    if (!pager) return;
+    try {
+      const body: Partial<PagerDutyConfig> = { ...pager };
+      if (secret.pager) body.routing_key = secret.pager;
+      setPager(await api.savePagerDutyConfig(body)); setSecret((s) => ({ ...s, pager: "" })); flash("pager", "Saved.");
+    } catch (e) { flash("pager", (e as Error).message); }
   };
   const test = async (k: string, fn: () => Promise<{ status: string }>) => {
     try { await fn(); flash(k, "Test sent — check your inbox/phone."); }
@@ -1348,6 +1366,56 @@ export function NotificationsAdmin() {
               <button onClick={saveNtfy}>Save</button>
               <button className="ghost" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
               {msg.ntfy && <span className="mini-meta">{msg.ntfy}</span>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Slack */}
+      <div className="card">
+        <div className="admin-card-head">
+          <h2>Slack</h2>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={!!slack?.enabled} onChange={(e) => slack && setSlack({ ...slack, enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+        <p className="mini-meta">Posts alerts to a Slack Incoming Webhook. Create one at api.slack.com → Incoming Webhooks; the URL embeds a secret, so it is write-only.</p>
+        {slack && (
+          <>
+            <div className="form-grid">
+              <LabeledInput label={`Webhook URL${slack.webhook_set ? " (stored)" : ""}`} type="password" value={secret.slack} onChange={(v) => setSecret((s) => ({ ...s, slack: v }))} placeholder={slack.webhook_set ? "•••••• (unchanged)" : "https://hooks.slack.com/services/…"} required={!slack.webhook_set} />
+              <SeveritySelect value={slack.min_severity} onChange={(v) => setSlack({ ...slack, min_severity: v })} />
+            </div>
+            <RequiredLegend />
+            <div className="admin-actions">
+              <button onClick={saveSlack}>Save</button>
+              <button className="ghost" onClick={() => test("slack", api.testSlack)}>Send test</button>
+              {msg.slack && <span className="mini-meta">{msg.slack}</span>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* PagerDuty */}
+      <div className="card">
+        <div className="admin-card-head">
+          <h2>PagerDuty</h2>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={!!pager?.enabled} onChange={(e) => pager && setPager({ ...pager, enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+        <p className="mini-meta">On-call escalation via the Events API v2. Add an Events API v2 integration to a PagerDuty service and paste its integration (routing) key.</p>
+        {pager && (
+          <>
+            <div className="form-grid">
+              <LabeledInput label={`Routing key${pager.routing_set ? " (stored)" : ""}`} type="password" value={secret.pager} onChange={(v) => setSecret((s) => ({ ...s, pager: v }))} placeholder={pager.routing_set ? "•••••• (unchanged)" : "32-char integration key"} required={!pager.routing_set} />
+              <SeveritySelect value={pager.min_severity} onChange={(v) => setPager({ ...pager, min_severity: v })} />
+            </div>
+            <RequiredLegend />
+            <div className="admin-actions">
+              <button onClick={savePager}>Save</button>
+              <button className="ghost" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
+              {msg.pager && <span className="mini-meta">{msg.pager}</span>}
             </div>
           </>
         )}

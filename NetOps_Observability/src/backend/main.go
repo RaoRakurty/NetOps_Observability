@@ -147,14 +147,13 @@ func newServer() *server {
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
 
 	notifier := notify.NewDispatcher()
-	if os.Getenv("FEATURE_SLACK_NOTIFICATIONS") == "true" {
-		notifier.Register(notify.NewSlack(os.Getenv("SLACK_WEBHOOK_URL")))
-	}
+	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
+	// after srv exists), which seeds from FEATURE_SLACK_NOTIFICATIONS/SLACK_WEBHOOK_URL
+	// and FEATURE_PAGERDUTY_NOTIFICATIONS/PAGERDUTY_KEY on first run and is then
+	// editable live from the admin UI — mirroring the ITSM connectors. See
+	// notify_config.go. They are intentionally NOT registered from env here.
 	if os.Getenv("FEATURE_TEAMS_NOTIFICATIONS") == "true" {
 		notifier.Register(notify.NewTeams(os.Getenv("TEAMS_WEBHOOK_URL")))
-	}
-	if os.Getenv("FEATURE_PAGERDUTY_NOTIFICATIONS") == "true" {
-		notifier.Register(notify.NewPagerDuty(os.Getenv("PAGERDUTY_KEY")))
 	}
 	if os.Getenv("FEATURE_EMAIL_NOTIFICATIONS") == "true" {
 		notifier.Register(
@@ -436,6 +435,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notify/twilio/test", s.handleTwilioTest)
 	mux.HandleFunc("/api/notify/ntfy", s.handleNtfyConfig)
 	mux.HandleFunc("/api/notify/ntfy/test", s.handleNtfyTest)
+	mux.HandleFunc("/api/notify/slack", s.handleSlackConfig)
+	mux.HandleFunc("/api/notify/slack/test", s.handleSlackTest)
+	mux.HandleFunc("/api/notify/pagerduty", s.handlePagerDutyConfig)
+	mux.HandleFunc("/api/notify/pagerduty/test", s.handlePagerDutyTest)
 	mux.HandleFunc("/api/notify/contact-points", s.handleContactPoints)
 	mux.HandleFunc("/api/notify/contact-points/", s.handleContactPointByID)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
@@ -585,8 +588,8 @@ func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {
 	// Scaffold: credentials live in env / external vault. Never echo secrets back.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"netbox":     os.Getenv("NETBOX_TOKEN") != "",
-		"slack":      os.Getenv("SLACK_WEBHOOK_URL") != "",
-		"pagerduty":  os.Getenv("PAGERDUTY_KEY") != "",
+		"slack":      s.notifyCfg.publicSlack().WebhookSet,
+		"pagerduty":  s.notifyCfg.publicPagerDuty().RoutingSet,
 		"smtp":       os.Getenv("SMTP_HOST") != "",
 		"twilio":     os.Getenv("TWILIO_ACCOUNT_SID") != "",
 		"aws_sns":    os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_REGION") != "",

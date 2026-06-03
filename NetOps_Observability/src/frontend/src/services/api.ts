@@ -134,6 +134,20 @@ export type NtfyConfig = {
   min_severity: string;
 };
 
+export type SlackConfig = {
+  enabled: boolean;
+  webhook_url?: string; // write-only on PUT
+  webhook_set?: boolean; // read-only on GET
+  min_severity: string;
+};
+
+export type PagerDutyConfig = {
+  enabled: boolean;
+  routing_key?: string; // write-only on PUT
+  routing_set?: boolean; // read-only on GET
+  min_severity: string;
+};
+
 // ---------- Audit trail (tenant-scoped) ----------
 
 export type AuditEvent = {
@@ -544,6 +558,12 @@ export const api = {
   ntfyConfig: () => request<NtfyConfig>("/api/notify/ntfy"),
   saveNtfyConfig: (c: Partial<NtfyConfig>) => request<NtfyConfig>("/api/notify/ntfy", { method: "PUT", body: JSON.stringify(c) }),
   testNtfy: () => request<{ status: string }>("/api/notify/ntfy/test", { method: "POST" }),
+  slackConfig: () => request<SlackConfig>("/api/notify/slack"),
+  saveSlackConfig: (c: Partial<SlackConfig>) => request<SlackConfig>("/api/notify/slack", { method: "PUT", body: JSON.stringify(c) }),
+  testSlack: () => request<{ status: string }>("/api/notify/slack/test", { method: "POST" }),
+  pagerDutyConfig: () => request<PagerDutyConfig>("/api/notify/pagerduty"),
+  savePagerDutyConfig: (c: Partial<PagerDutyConfig>) => request<PagerDutyConfig>("/api/notify/pagerduty", { method: "PUT", body: JSON.stringify(c) }),
+  testPagerDuty: () => request<{ status: string }>("/api/notify/pagerduty/test", { method: "POST" }),
 
   // Contact points — reusable, tenant-scoped delivery audiences (email group /
   // slack / webhook) referenced by reports. Managed in the Notifications section.
