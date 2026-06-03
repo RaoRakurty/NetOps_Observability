@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, SmtpConfig, TwilioConfig, NtfyConfig, ContactPoint, ContactPointType } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, ContactPoint, ContactPointType } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -333,7 +333,7 @@ export function ApiAccessAdmin() {
         )}
         <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
           <LabeledInput label="Label" value={label} onChange={setLabel} placeholder="e.g. ci-pipeline" required />
-          <LabeledInput label="Rate limit / min (blank = default)" type="number" value={rate} onChange={setRate} placeholder="blank = server default" />
+          <LabeledInput label="Rate limit / min" type="number" value={rate} onChange={setRate} placeholder="blank = default (600)" hint="default 600 · 0 = unlimited · blank = inherit default" />
         </div>
         <div className="scope-row" style={{ marginTop: 12 }}>
           {SCOPE_OPTIONS.map((s) => (
@@ -412,12 +412,14 @@ export function ApiAccessAdmin() {
           </tbody>
         </table>
         <p className="mini-meta" style={{ marginTop: 8 }}>
-          Each key is rate-limited per minute (fixed window) — leave the field blank to inherit the
-          server default (<code>APIKEY_RATE_LIMIT_PER_MIN</code>), or set 0 for unlimited. Over-cap
+          Each key is rate-limited per minute (fixed window). Allowed values: any whole number ≥ 1
+          (requests/min), <code>0</code> for unlimited, or blank to inherit the server default of
+          <strong> 600/min</strong> (<code>APIKEY_RATE_LIMIT_PER_MIN</code>). Over-cap
           calls get <code>429 Too Many Requests</code> with a <code>Retry-After</code>. The Rate
           column shows live current-minute usage; Usage is lifetime authenticated calls.
         </p>
       </div>
+      <TokenPolicyForm />
       <GraphQLExplorer />
       <OpenAPIReference />
       <div className="ov-grid">
@@ -778,8 +780,6 @@ export function AuthenticationAdmin() {
       <SsoAdminForm roleIds={fallbackRoles} />
       <LdapAdminForm roleIds={fallbackRoles} />
       <TacacsAdminForm roleIds={fallbackRoles} />
-
-      <TokenPolicyForm />
     </>
   );
 }
@@ -905,6 +905,70 @@ function TokenPolicyForm() {
       <RequiredLegend />
       <div style={{ marginTop: 12 }}>
         <button className="dash-btn" disabled={busy} onClick={save}>Save policy</button>
+      </div>
+      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
+    </div>
+  );
+}
+
+// ExportPolicyForm — runtime-tunable log-export limits (anti-exfiltration
+// guardrails). Applies live; only the platform owner can save (a tenant must not
+// be able to raise its own caps). Rendered in Settings.
+export function ExportPolicyForm() {
+  const [p, setP] = useState<ExportPolicy | null>(null);
+  const [f, setF] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = (pol: ExportPolicy) => {
+    setP(pol);
+    setF({
+      rate: String(pol.rate_per_min),
+      rows: String(pol.max_rows),
+      sizeMB: String(Math.round(pol.max_bytes / (1024 * 1024))),
+      runtimeMin: String(Math.round(pol.max_runtime_seconds / 60)),
+      rangeHours: String(pol.max_range_hours),
+      linkMin: String(Math.round(pol.link_ttl_seconds / 60)),
+      syncRows: String(pol.sync_max_rows),
+    });
+  };
+  useEffect(() => { api.exportPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
+  if (!p) return <div className="card"><h2>Log export limits</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+
+  const set = (k: string) => (v: string) => setF((s) => ({ ...s, [k]: v }));
+  const num = (v: string, min = 1) => Math.max(min, Math.round(Number(v) || 0));
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const out = await api.saveExportPolicy({
+        rate_per_min: num(f.rate),
+        max_rows: num(f.rows),
+        max_bytes: num(f.sizeMB) * 1024 * 1024,
+        max_runtime_seconds: num(f.runtimeMin) * 60,
+        max_range_hours: num(f.rangeHours),
+        link_ttl_seconds: num(f.linkMin) * 60,
+        sync_max_rows: num(f.syncRows),
+      });
+      load(out); setMsg("Saved. New limits apply to all exports immediately.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <h2>Log export limits</h2>
+      <p className="admin-sub">Guardrails for log exports (anti-exfiltration / abuse). Applied live — no restart. Only the platform owner can change them. Download links are clamped to 5–15 minutes.</p>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <LabeledInput label="Rate limit (exports / min / tenant)" type="number" value={f.rate} onChange={set("rate")} required />
+        <LabeledInput label="Max rows per export" type="number" value={f.rows} onChange={set("rows")} required />
+        <LabeledInput label="Max size (MB)" type="number" value={f.sizeMB} onChange={set("sizeMB")} required />
+        <LabeledInput label="Max runtime (minutes)" type="number" value={f.runtimeMin} onChange={set("runtimeMin")} required />
+        <LabeledInput label="Max time window (hours)" type="number" value={f.rangeHours} onChange={set("rangeHours")} required />
+        <LabeledInput label="Download link TTL (minutes)" type="number" value={f.linkMin} onChange={set("linkMin")} hint="clamped 5–15 min" required />
+        <LabeledInput label="Sync → async threshold (rows)" type="number" value={f.syncRows} onChange={set("syncRows")} required />
+      </div>
+      <RequiredLegend />
+      <div style={{ marginTop: 12 }}>
+        <button className="dash-btn" disabled={busy} onClick={save}>Save limits</button>
       </div>
       {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
     </div>

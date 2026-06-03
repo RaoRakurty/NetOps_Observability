@@ -30,7 +30,8 @@ func (s *server) handleReportExecutions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	q := reports.ExecQuery{ScheduleID: r.URL.Query().Get("schedule_id")}
+	// Scope to report executions only — log exports share the table (kind='export').
+	q := reports.ExecQuery{Kind: "report", ScheduleID: r.URL.Query().Get("schedule_id")}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil {
 			q.Limit = n

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
+import { ExportPolicyForm } from "./admin";
 
 export default function Settings() {
   const [creds, setCreds] = useState<Record<string, boolean>>({});
@@ -121,6 +122,8 @@ export default function Settings() {
         </button>
         {msg && <p style={{ marginTop: 12, color: "var(--muted)" }}>{msg}</p>}
       </div>
+
+      <ExportPolicyForm />
     </>
   );
 }

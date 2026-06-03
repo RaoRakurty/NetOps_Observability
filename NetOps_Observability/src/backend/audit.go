@@ -75,6 +75,9 @@ type AuditEvent struct {
 	Status   int       `json:"status"`
 	Decision string    `json:"decision"` // allow | deny | error
 	Remote   string    `json:"remote,omitempty"`
+	// Detail carries action-specific context for sensitive operations (e.g. an
+	// export's query/size/execution_id) beyond the generic request envelope.
+	Detail map[string]any `json:"detail,omitempty"`
 }
 
 type auditStore struct {
@@ -195,11 +198,13 @@ func (s *server) withAudit(next http.Handler) http.Handler {
 }
 
 func auditClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	if trustProxy() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

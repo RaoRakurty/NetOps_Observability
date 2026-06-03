@@ -202,6 +202,22 @@ func (j *Jira) resolve(fp string) error {
 // createIssue POSTs to the REST v2 API and returns (key, id). The v2 endpoint
 // accepts a plain-text description (v3 requires the verbose ADF document body);
 // Jira Cloud serves both.
+// CreateForIncident projects a platform Incident to a new Jira issue and returns
+// (issue key, url). Used by the incident sync worker (outward projection only).
+func (j *Jira) CreateForIncident(title, description, severity string) (string, string, error) {
+	key, _, err := j.createIssue(models.Alert{
+		Rule: title, Severity: severity, Summary: title, Description: description,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	url := ""
+	if j.baseURL != "" && key != "" {
+		url = strings.TrimRight(j.baseURL, "/") + "/browse/" + key
+	}
+	return key, url, nil
+}
+
 func (j *Jira) createIssue(a models.Alert) (string, string, error) {
 	fields := map[string]any{
 		"project":     map[string]string{"key": j.projectKey},

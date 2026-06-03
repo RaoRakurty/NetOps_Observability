@@ -44,9 +44,14 @@ type reportPipeline struct {
 	maxCatchupAge  time.Duration
 
 	// observability counters (atomic; exported via /metrics).
-	metCompleted atomic.Int64
-	metFailed    atomic.Int64
-	metRetries   atomic.Int64
+	metCompleted     atomic.Int64
+	metFailed        atomic.Int64
+	metRetries       atomic.Int64
+	metExportDone    atomic.Int64
+	metExportFailed  atomic.Int64
+	metExportRows    atomic.Int64
+	metExportBytes   atomic.Int64
+	metExportSeconds atomic.Int64
 }
 
 func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, html reports.Renderer, deliveries deliveryRecorder) *reportPipeline {
@@ -220,11 +225,19 @@ func (p *reportPipeline) runWorker(ctx context.Context, idx int) {
 	}
 }
 
+// process is the worker's per-job entry point on the shared substrate: it sets up
+// the per-type timeout + lease heartbeat, marks the execution running, then
+// dispatches to the handler selected by job.JobType. New job types (export today,
+// archive later) plug in here — one pool, explicit types, no second queue.
 func (p *reportPipeline) process(ctx context.Context, workerID string, job reports.Job) {
-	jctx, cancel := context.WithTimeout(ctx, p.jobTimeout)
+	timeout := p.jobTimeout
+	if job.JobType == jobTypeExport {
+		timeout = envDuration("MAX_EXPORT_RUNTIME", 5*time.Minute) // live policy; exports run minutes
+	}
+	jctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Heartbeat renews the lease while the job runs so a slow render/deliver can't
+	// Heartbeat renews the lease while the job runs so a slow render/export can't
 	// have its lease lapse and be double-claimed by another worker.
 	stopHB := make(chan struct{})
 	go p.heartbeat(jctx, workerID, job.ID, stopHB)
@@ -237,6 +250,20 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 	_ = p.execs.MarkRunning(jctx, job.ExecutionID, now)
 	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseRunning, now, workerID)
 
+	switch job.JobType {
+	case jobTypeExport:
+		p.processExport(ctx, jctx, workerID, job, tenant, fields)
+	case jobTypeIncidentSync:
+		p.processIncidentSync(ctx, jctx, workerID, job, tenant, fields)
+	default:
+		p.processReport(ctx, jctx, workerID, job, tenant, fields)
+	}
+}
+
+// processReport renders + delivers a scheduled/now report (the original worker
+// body). ctx is the parent (durable terminal writes); jctx carries the job
+// timeout. The execution is already marked running by process().
+func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID string, job reports.Job, tenant string, fields map[string]any) {
 	o, ok := p.srv.saved.Get(job.ScheduleID)
 	if !ok {
 		// The report was deleted after enqueue — finalize honestly, don't retry.
@@ -331,7 +358,7 @@ func (p *reportPipeline) dead(job reports.Job) bool { return job.Attempts >= p.m
 // per schedule is its latest run; the next fire comes from the recurrence.
 func (p *reportPipeline) runsFromExecutions(ctx context.Context, tenant string, cross bool) map[string]reportRun {
 	out := map[string]reportRun{}
-	list, err := p.execs.List(ctx, tenant, cross, reports.ExecQuery{Limit: 200})
+	list, err := p.execs.List(ctx, tenant, cross, reports.ExecQuery{Kind: "report", Limit: 200})
 	if err != nil {
 		return out
 	}
@@ -382,6 +409,22 @@ func (p *reportPipeline) writeMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP netops_report_job_retries_total Report job retry attempts scheduled.\n")
 	fmt.Fprintf(w, "# TYPE netops_report_job_retries_total counter\n")
 	fmt.Fprintf(w, "netops_report_job_retries_total %d\n", p.metRetries.Load())
+	// Log-export executions (shared substrate, job_type=export).
+	fmt.Fprintf(w, "# HELP netops_log_export_executions_total Log export executions completed.\n")
+	fmt.Fprintf(w, "# TYPE netops_log_export_executions_total counter\n")
+	fmt.Fprintf(w, "netops_log_export_executions_total %d\n", p.metExportDone.Load())
+	fmt.Fprintf(w, "# HELP netops_log_export_failures_total Log export executions that failed.\n")
+	fmt.Fprintf(w, "# TYPE netops_log_export_failures_total counter\n")
+	fmt.Fprintf(w, "netops_log_export_failures_total %d\n", p.metExportFailed.Load())
+	fmt.Fprintf(w, "# HELP netops_log_export_rows_total Rows written across log exports.\n")
+	fmt.Fprintf(w, "# TYPE netops_log_export_rows_total counter\n")
+	fmt.Fprintf(w, "netops_log_export_rows_total %d\n", p.metExportRows.Load())
+	fmt.Fprintf(w, "# HELP netops_log_export_bytes_total Bytes written across log exports.\n")
+	fmt.Fprintf(w, "# TYPE netops_log_export_bytes_total counter\n")
+	fmt.Fprintf(w, "netops_log_export_bytes_total %d\n", p.metExportBytes.Load())
+	fmt.Fprintf(w, "# HELP netops_log_export_seconds_total Cumulative log export run time (seconds).\n")
+	fmt.Fprintf(w, "# TYPE netops_log_export_seconds_total counter\n")
+	fmt.Fprintf(w, "netops_log_export_seconds_total %d\n", p.metExportSeconds.Load())
 }
 
 // fail records a failure: an immutable failed execution when terminal, and a

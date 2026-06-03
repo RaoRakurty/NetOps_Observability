@@ -31,11 +31,15 @@ func (s *pgExecStore) Append(ctx context.Context, e reports.ExecutionRecord) err
 	if e.Status == "" {
 		e.Status = reports.StatusQueued
 	}
+	kind := e.Kind
+	if kind == "" {
+		kind = "report"
+	}
 	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO report_executions (id, tenant_id, schedule_id, job_id, fire_time, status)
-			VALUES ($1,$2,$3,$4,$5,$6)`,
-			e.ID, normTenant(e.TenantID), e.ScheduleID, nullText(e.JobID), e.FireTime, string(e.Status))
+			INSERT INTO report_executions (id, kind, tenant_id, schedule_id, job_id, fire_time, status)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			e.ID, kind, normTenant(e.TenantID), e.ScheduleID, nullText(e.JobID), e.FireTime, string(e.Status))
 		return err
 	})
 }
@@ -139,6 +143,10 @@ func (s *pgExecStore) List(ctx context.Context, tenant string, cross bool, q rep
 	sql := selectExecCols + ` FROM report_executions`
 	var args []any
 	var conds []string
+	if q.Kind != "" {
+		args = append(args, q.Kind)
+		conds = append(conds, fmt.Sprintf("kind = $%d", len(args)))
+	}
 	if q.ScheduleID != "" {
 		args = append(args, q.ScheduleID)
 		conds = append(conds, fmt.Sprintf("schedule_id = $%d", len(args)))
@@ -177,7 +185,7 @@ func (s *pgExecStore) List(ctx context.Context, tenant string, cross bool, q rep
 
 // ---- helpers ----
 
-const selectExecCols = `SELECT id, tenant_id, schedule_id, COALESCE(job_id,''), fire_time,
+const selectExecCols = `SELECT id, COALESCE(kind,'report'), tenant_id, schedule_id, COALESCE(job_id,''), fire_time,
 	started_at, completed_at, status, artifact_ref, delivery_status, COALESCE(error,'')`
 
 // scanExec reads one report_executions row. The bool is false only when a
@@ -187,7 +195,7 @@ func scanExec(row pgx.Row) (reports.ExecutionRecord, bool, error) {
 	var status string
 	var started, completed *time.Time
 	var refJSON, delJSON []byte
-	if err := row.Scan(&r.ID, &r.TenantID, &r.ScheduleID, &r.JobID, &r.FireTime,
+	if err := row.Scan(&r.ID, &r.Kind, &r.TenantID, &r.ScheduleID, &r.JobID, &r.FireTime,
 		&started, &completed, &status, &refJSON, &delJSON, &r.Error); err != nil {
 		if err == pgx.ErrNoRows {
 			return reports.ExecutionRecord{}, false, nil

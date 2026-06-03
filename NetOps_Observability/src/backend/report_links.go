@@ -72,6 +72,66 @@ func verifyReportLink(token string) (string, error) {
 	return execID, nil
 }
 
+// ---- export links --------------------------------------------------------
+//
+// A raw LOG EXPORT is bulk sensitive data (unlike a curated report), and links
+// "may be forwarded externally" — so export links expire in MINUTES (not the
+// report 7-day window) and are bound to BOTH the execution id AND the tenant id,
+// so a leaked token can't be replayed against another tenant's artifact.
+
+// exportLinkTTL is clamped to [5min, 15min] per the hardening policy.
+func exportLinkTTL() time.Duration {
+	d := envDuration("EXPORT_LINK_TTL", 10*time.Minute)
+	if d < 5*time.Minute {
+		d = 5 * time.Minute
+	}
+	if d > 15*time.Minute {
+		d = 15 * time.Minute
+	}
+	return d
+}
+
+func exportLinkSig(execID, tenant, exp string) string {
+	mac := hmac.New(sha256.New, []byte(reportLinkSecret()))
+	mac.Write([]byte("export." + execID + "." + tenant + "." + exp))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// signExportLink mints "b64(execID).b64(tenant).b64(expiryUnix).b64(hmac)".
+func signExportLink(execID, tenant string) string {
+	exp := strconv.FormatInt(time.Now().Add(exportLinkTTL()).Unix(), 10)
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(execID)) + "." + enc([]byte(tenant)) + "." + enc([]byte(exp)) + "." + exportLinkSig(execID, tenant, exp)
+}
+
+// verifyExportLink returns (execID, tenant) iff the token is well-formed, the
+// signature matches, and it has not expired.
+func verifyExportLink(token string) (string, string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 4 {
+		return "", "", errors.New("malformed token")
+	}
+	dec := base64.RawURLEncoding.DecodeString
+	idB, e1 := dec(parts[0])
+	tB, e2 := dec(parts[1])
+	expB, e3 := dec(parts[2])
+	if e1 != nil || e2 != nil || e3 != nil {
+		return "", "", errors.New("malformed token")
+	}
+	execID, tenant, exp := string(idB), string(tB), string(expB)
+	if !hmac.Equal([]byte(exportLinkSig(execID, tenant, exp)), []byte(parts[3])) {
+		return "", "", errors.New("bad signature")
+	}
+	expUnix, err := strconv.ParseInt(exp, 10, 64)
+	if err != nil {
+		return "", "", err
+	}
+	if time.Now().Unix() > expUnix {
+		return "", "", errors.New("link expired")
+	}
+	return execID, tenant, nil
+}
+
 // reportViewLink builds the absolute URL recipients click. REPORT_PUBLIC_BASE_URL
 // should be the externally-reachable origin; when unset the link is path-only
 // (works behind the same nginx, but set it for email clients).

@@ -172,6 +172,68 @@ export type LogSearchOpts = {
   signal?: "applogs" | "syslog" | "flows" | "";
 };
 
+export type ExportFmt = "csv" | "json" | "ndjson" | "xlsx";
+
+export type LogExportOpts = {
+  format: ExportFmt;
+  query?: string;
+  from?: string;
+  to?: string;
+  signal?: "applogs" | "syslog" | "flows" | "";
+  mode?: "sync" | "async" | "auto";
+};
+
+export type ExportStatus = {
+  id: string;
+  status: string;
+  format?: string;
+  size_bytes?: number;
+  download_url?: string;
+  error?: string;
+};
+
+export type Incident = {
+  id: string;
+  tenant_id: string;
+  title: string;
+  description?: string;
+  severity: string;
+  status: string;
+  source_type: string;
+  source_id?: string;
+  owner?: string;
+  occurrences: number;
+  created_at: string;
+  updated_at: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolved_at?: string;
+  external_ticket_id?: string;
+  external_url?: string;
+  external_system?: string;
+  sync_status: string;
+  last_synced_at?: string;
+};
+
+export type IncidentEvent = {
+  id: string;
+  incident_id: string;
+  event_type: string;
+  payload?: Record<string, unknown>;
+  actor: string;
+  created_at: string;
+};
+
+export type ExportPolicy = {
+  rate_per_min: number;
+  max_rows: number;
+  max_bytes: number;
+  max_runtime_seconds: number;
+  max_range_hours: number;
+  link_ttl_seconds: number;
+  sync_max_rows: number;
+};
+
 // ---------- ClickHouse rows (passthrough) ----------
 
 export type ClickHouseResponse<T = Record<string, any>> = {
@@ -367,6 +429,19 @@ export type AuthUser = {
   last_login_at?: string;
 };
 export type LoginResponse = { token: string; refresh_token?: string; expires_in?: number; user: AuthUser };
+
+// downloadResponse turns a fetch Response body into a browser file download.
+async function downloadResponse(res: Response, filename: string): Promise<void> {
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export const api = {
   // ---- auth ----
@@ -636,6 +711,69 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+
+  // ----- Logs export -----
+  // Mode A: render the rows already loaded in the browser (selected/page) to one
+  // file. Excel reuses the server OOXML renderer; csv/json/ndjson share the
+  // server encoders so every format matches Mode B byte-for-byte.
+  exportLogRows: async (format: ExportFmt, columns: string[], rows: string[][], filename = "logs-export"): Promise<void> => {
+    const token = getToken();
+    const res = await fetch("/api/logs/export/rows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ format, columns, rows, filename }),
+    });
+    if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
+    await downloadResponse(res, `${filename}.${format}`);
+  },
+
+  // Mode B: export the ENTIRE result set. Small sets stream straight back (file
+  // download, returns {}); large sets enqueue an async job and return
+  // { executionId } to poll via exportStatus → exported download_url.
+  exportLogQuery: async (opts: LogExportOpts): Promise<{ executionId?: string; matched?: number }> => {
+    const token = getToken();
+    const params = new URLSearchParams();
+    params.set("format", opts.format);
+    if (opts.query) params.set("query", opts.query);
+    if (opts.from) params.set("from", opts.from);
+    if (opts.to) params.set("to", opts.to);
+    if (opts.signal) params.set("signal", opts.signal);
+    if (opts.mode) params.set("mode", opts.mode);
+    const res = await fetch(`/api/logs/export?${params.toString()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 202) {
+      const body = await res.json();
+      return { executionId: body.execution_id, matched: body.matched };
+    }
+    if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
+    await downloadResponse(res, `logs-export.${opts.format}`);
+    return {};
+  },
+
+  exportStatus: (id: string) => request<ExportStatus>(`/api/exports/${encodeURIComponent(id)}`),
+
+  // ----- Incidents -----
+  listIncidents: (opts: { status?: string; severity?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.status) p.set("status", opts.status);
+    if (opts.severity) p.set("severity", opts.severity);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    const qs = p.toString();
+    return request<Incident[]>(`/api/incidents${qs ? `?${qs}` : ""}`);
+  },
+  getIncident: (id: string) =>
+    request<{ incident: Incident; events: IncidentEvent[] }>(`/api/incidents/${encodeURIComponent(id)}`),
+  incidentAction: (id: string, action: "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | "assign" | "promote", body: { note?: string; owner?: string } = {}) =>
+    request<Incident>(`/api/incidents/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // ----- Export limits (runtime policy; platform-owner only to change) -----
+  exportPolicy: () => request<ExportPolicy>("/api/exports/policy"),
+  saveExportPolicy: (p: ExportPolicy) =>
+    request<ExportPolicy>("/api/exports/policy", { method: "PUT", body: JSON.stringify(p) }),
 
   // ----- Identity & access (admin) -----
   permissions: () => request<{ role: string; permissions: Record<string, number> }>("/api/auth/permissions"),

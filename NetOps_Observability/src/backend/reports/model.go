@@ -46,17 +46,21 @@ const (
 	PhaseRunning    Phase = "running"
 	PhaseRendering  Phase = "rendering"
 	PhaseDelivering Phase = "delivering"
+	PhaseExporting  Phase = "exporting" // log-export: streaming OpenSearch → artifact
 	PhaseCompleted  Phase = "completed"
 	PhaseFailed     Phase = "failed"
 )
 
 // ---- queue -----------------------------------------------------------------
 
-// Job is one claimable unit of work: render + deliver report ScheduleID for the
-// logical instant FireTime. Payload is a frozen snapshot (spec + delivery
-// targets) so a job is self-contained even if the report is later edited.
+// Job is one claimable unit of work on the shared substrate. JobType selects the
+// worker handler ("report" renders+delivers ScheduleID for the instant FireTime;
+// "export" streams a log query to an artifact; future: "archive"). Payload is a
+// frozen, self-contained snapshot of the job's parameters so it survives the
+// source being edited/deleted after enqueue. The empty JobType means "report".
 type Job struct {
 	ID          string
+	JobType     string
 	TenantID    string
 	ScheduleID  string
 	ExecutionID string
@@ -121,6 +125,7 @@ type ArtifactRef struct {
 // denormalized summary; ExecEvent rows carry the phase detail).
 type ExecutionRecord struct {
 	ID          string           `json:"id"`
+	Kind        string           `json:"kind,omitempty"` // "report" | "export" | "archive"
 	TenantID    string           `json:"tenant_id"`
 	ScheduleID  string           `json:"schedule_id"`
 	JobID       string           `json:"job_id,omitempty"`
@@ -165,7 +170,10 @@ type ExecEvent struct {
 }
 
 // ExecQuery parameterizes a history listing (newest-first, keyset via Before).
+// Kind, when set, scopes the listing to one execution type ("report"/"export") so
+// the reports drawer and the exports drawer don't bleed into each other.
 type ExecQuery struct {
+	Kind       string
 	ScheduleID string
 	Before     time.Time
 	Limit      int

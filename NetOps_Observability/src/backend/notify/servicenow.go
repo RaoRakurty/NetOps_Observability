@@ -206,6 +206,23 @@ func (s *ServiceNow) resolve(fp string) error {
 }
 
 // createIncident POSTs to the Table API and returns (number, sys_id).
+// CreateForIncident projects a platform Incident to a new ServiceNow incident and
+// returns (ticket number, url). Used by the incident sync worker; the platform
+// Incident stays the source of truth (this is an outward projection only).
+func (s *ServiceNow) CreateForIncident(title, description, severity, deviceID string) (string, string, error) {
+	num, sysID, err := s.createIncident(models.Alert{
+		Rule: title, Severity: severity, Summary: title, Description: description, DeviceID: deviceID,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	url := ""
+	if s.instanceURL != "" && sysID != "" {
+		url = strings.TrimRight(s.instanceURL, "/") + "/nav_to.do?uri=incident.do?sys_id=" + sysID
+	}
+	return num, url, nil
+}
+
 func (s *ServiceNow) createIncident(a models.Alert) (string, string, error) {
 	impact, urgency := severityToImpactUrgency(a.Severity)
 	payload := map[string]string{

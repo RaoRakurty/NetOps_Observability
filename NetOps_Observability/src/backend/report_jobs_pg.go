@@ -49,14 +49,18 @@ func (q *pgJobQueue) Enqueue(ctx context.Context, j reports.Job, runAfter time.T
 	if runAfter.IsZero() {
 		runAfter = time.Now().UTC()
 	}
+	jobType := j.JobType
+	if jobType == "" {
+		jobType = "report"
+	}
 	created := false
 	err := q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO report_jobs
-				(id, tenant_id, schedule_id, execution_id, fire_time, status, attempts, max_attempts, run_after, payload)
-			VALUES ($1,$2,$3,$4,$5,'queued',0,$6,$7,$8)
+				(id, job_type, tenant_id, schedule_id, execution_id, fire_time, status, attempts, max_attempts, run_after, payload)
+			VALUES ($1,$2,$3,$4,$5,$6,'queued',0,$7,$8,$9)
 			ON CONFLICT (schedule_id, fire_time) DO NOTHING`,
-			j.ID, normTenant(j.TenantID), j.ScheduleID, j.ExecutionID, j.FireTime,
+			j.ID, jobType, normTenant(j.TenantID), j.ScheduleID, j.ExecutionID, j.FireTime,
 			q.maxAttempts, runAfter, payloadOrEmpty(j.Payload))
 		if err != nil {
 			return err
@@ -89,7 +93,7 @@ UPDATE report_jobs j
        attempts = j.attempts + 1, updated_at = now()
   FROM claimable c
  WHERE j.id = c.id
-RETURNING j.id, j.tenant_id, j.schedule_id, j.execution_id, j.fire_time, j.attempts, j.payload`
+RETURNING j.id, j.job_type, j.tenant_id, j.schedule_id, j.execution_id, j.fire_time, j.attempts, j.payload`
 
 func (q *pgJobQueue) Claim(ctx context.Context, workerID string, n int, lease time.Duration) ([]reports.Job, error) {
 	if n <= 0 {
@@ -105,7 +109,7 @@ func (q *pgJobQueue) Claim(ctx context.Context, workerID string, n int, lease ti
 		for rows.Next() {
 			var j reports.Job
 			var payload []byte
-			if err := rows.Scan(&j.ID, &j.TenantID, &j.ScheduleID, &j.ExecutionID, &j.FireTime, &j.Attempts, &payload); err != nil {
+			if err := rows.Scan(&j.ID, &j.JobType, &j.TenantID, &j.ScheduleID, &j.ExecutionID, &j.FireTime, &j.Attempts, &payload); err != nil {
 				return err
 			}
 			j.Payload = json.RawMessage(payload)

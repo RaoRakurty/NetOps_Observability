@@ -51,6 +51,10 @@ type server struct {
 	contactPoints  *contactPointStore
 	reports        *reportScheduler
 	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
+	incidents      incidentsRepo   // incident system of record (nil on file backend)
+	incMetrics     *incidentMetrics
+	exportPolicy   *exportPolicyStore // runtime-tunable log-export limits
+	exportLimiter  *tenantRateLimiter // per-tenant export rate limit
 	copilotCfg     *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
@@ -288,6 +292,12 @@ func newServer() *server {
 		jira:          jiraConn,
 		hub:           NewHub(),
 	}
+	// Incident system (Postgres only) + its alert-ingestion hook.
+	srv.incidents = newIncidentStore()
+	srv.incMetrics = &incidentMetrics{}
+	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
+	srv.exportLimiter = newTenantRateLimiter()
+	engine.OnFire = srv.ingestAlertIncident
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
 	// UI-configurable email/SMS/push channels (registers live channels into the
@@ -412,12 +422,19 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
+	mux.HandleFunc("/api/logs/export", s.handleLogsExport)          // Mode B: whole result set (sync/async)
+	mux.HandleFunc("/api/logs/export/rows", s.handleLogsExportRows) // Mode A: selected/loaded rows
+	mux.HandleFunc("/api/exports/view/", s.handleExportView)        // token-authenticated (public)
+	mux.HandleFunc("/api/exports/policy", s.handleExportPolicy)     // runtime export limits (admin/platform-owner)
+	mux.HandleFunc("/api/exports/", s.handleExportStatus)           // async export status poll
 	mux.HandleFunc("/api/flows/top", s.handleFlowsTopTalkers)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
+	mux.HandleFunc("/api/incidents", s.handleIncidents)       // GET list (tenant-scoped)
+	mux.HandleFunc("/api/incidents/", s.handleIncidentByID)   // GET {id}; POST {id}/ack|resolve|note|assign|…
 	mux.HandleFunc("/api/saved", s.handleSaved)
 	mux.HandleFunc("/api/saved/", s.handleSavedByID)
 	mux.HandleFunc("/api/search/global", s.handleGlobalSearch)
@@ -609,6 +626,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "netops_alerts_active %d\n", len(s.alerts.Active()))
 	if s.reportPipeline != nil {
 		s.reportPipeline.writeMetrics(w)
+	}
+	if s.incMetrics != nil {
+		s.incMetrics.write(w)
 	}
 }
 

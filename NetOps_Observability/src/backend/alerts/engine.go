@@ -36,8 +36,12 @@ type Engine struct {
 	active    map[string]models.Alert
 	rulesFile string
 	notifier  *notify.Dispatcher
-	healthy   bool
-	lastTick  time.Time
+	// OnFire, when set, is invoked once per NEWLY-firing alert (not on every tick).
+	// The server uses it to ingest an incident; it must be non-blocking/best-effort
+	// so the alert loop is never stalled by a downstream consumer.
+	OnFire   func(models.Alert)
+	healthy  bool
+	lastTick time.Time
 }
 
 func NewEngine(rulesFile string, n *notify.Dispatcher) *Engine {
@@ -146,11 +150,15 @@ func (e *Engine) evaluateAll() {
 	e.mu.Lock()
 	e.active = next
 	e.mu.Unlock()
-	if e.notifier != nil {
-		for id, a := range next {
-			if _, existed := prev[id]; !existed {
-				e.notifier.Dispatch(a)
-			}
+	for id, a := range next {
+		if _, existed := prev[id]; existed {
+			continue
+		}
+		if e.notifier != nil {
+			e.notifier.Dispatch(a)
+		}
+		if e.OnFire != nil {
+			e.OnFire(a)
 		}
 	}
 }

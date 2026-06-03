@@ -12,6 +12,7 @@ import SnmpProfiles from "./tabs/SnmpProfiles";
 import Alerts from "./tabs/Alerts";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
+import Incidents from "./tabs/Incidents";
 import Logs from "./tabs/Logs";
 import SavedSearches from "./tabs/SavedSearches";
 import Flows from "./tabs/Flows";
@@ -92,7 +93,8 @@ export const NAV: NavSection[] = [
     children: [
       { id: "active", label: "Active", render: () => <Alerts /> },
       { id: "rules", label: "Rules", render: () => <Rules /> },
-      { id: "incidents", label: "Incidents", render: () => <Findings /> },
+      { id: "incidents", label: "Incidents", render: () => <Incidents /> },
+      { id: "anomalies", label: "Anomalies", render: () => <Findings /> },
     ],
   },
   // Infrastructure — the device fleet + collection health (Datadog
