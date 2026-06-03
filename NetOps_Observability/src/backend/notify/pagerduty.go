@@ -11,7 +11,9 @@ import (
 	"netops/backend/models"
 )
 
-const pagerDutyEventsV2URL = "https://events.pagerduty.com/v2/enqueue"
+// pagerDutyEventsV2URL is the Events API v2 endpoint. A var (not const) so tests
+// can point it at a local fake server; never reassigned in production.
+var pagerDutyEventsV2URL = "https://events.pagerduty.com/v2/enqueue"
 
 // PagerDuty fires events via the Events API v2.
 type PagerDuty struct {
