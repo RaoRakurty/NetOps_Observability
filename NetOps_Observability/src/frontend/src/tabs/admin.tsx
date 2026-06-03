@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, ContactPoint, ContactPointType } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -586,6 +586,20 @@ function LabeledInput({ label, value, onChange, type = "text", placeholder = "",
   );
 }
 
+function LabeledSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: string[];
+}) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+      <span>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </label>
+  );
+}
+
 // Legend explaining the asterisk on config forms.
 function RequiredLegend() {
   return <p className="mini-meta" style={{ marginTop: 4 }}><Req /> required when the provider is enabled</p>;
@@ -978,11 +992,76 @@ export function ExportPolicyForm() {
 // ---- ITSM Integrations — planned -------------------------------------------
 
 const ITSM = [
-  { id: "servicenow", name: "ServiceNow", desc: "Critical alerts cut an incident via the Table API (deduped by fingerprint) and auto-resolve when the alert clears. Enable with FEATURE_SERVICENOW_NOTIFICATIONS. Bi-directional sync & CMDB lookup are next.", tag: "Available" },
-  { id: "jira", name: "Jira", desc: "Alerts at/above the threshold open a deduped Jira issue (REST v2) and transition to Done when the alert clears. Enable with FEATURE_JIRA_NOTIFICATIONS + JIRA_PROJECT_KEY.", tag: "Available" },
+  { id: "servicenow", name: "ServiceNow", desc: "Critical alerts cut an incident via the Table API (deduped by fingerprint) and auto-resolve when the alert clears; critical incidents auto-promote too. Configure it in the form above — no restart.", tag: "Available" },
+  { id: "jira", name: "Jira", desc: "Alerts at/above the threshold open a deduped Jira issue (REST v2) and transition to Done when the alert clears. Configure it in the form above — no restart.", tag: "Available" },
   { id: "pagerduty", name: "PagerDuty", desc: "On-call routing & escalation (notifier already exists in the backend).", tag: "Available" },
   { id: "slack", name: "Slack", desc: "Channel notifications & alert actions (notifier already exists).", tag: "Available" },
 ];
+
+// ITSMConfigForm — admin-editable ServiceNow + Jira connector config (replaces the
+// old "Configured via env" greyed cards). Saves to PUT /api/notify/itsm, which
+// rebuilds + hot-swaps the live connectors (no restart). Secrets are write-only:
+// leave the password/token blank to keep the stored one. Platform-owner only —
+// the API 403s otherwise, surfaced as a save error.
+function ITSMConfigForm() {
+  const [cfg, setCfg] = useState<ItsmConfig | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.itsmConfig().then(setCfg).catch((e) => setMsg((e as Error).message)); }, []);
+  if (!cfg) return <div className="card"><h2>ServiceNow & Jira configuration</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+
+  const sn = cfg.servicenow, jr = cfg.jira;
+  const setSN = (p: Partial<ItsmServiceNowConfig>) => setCfg({ ...cfg, servicenow: { ...cfg.servicenow, ...p } });
+  const setJR = (p: Partial<ItsmJiraConfig>) => setCfg({ ...cfg, jira: { ...cfg.jira, ...p } });
+  const SEV = ["info", "low", "medium", "high", "critical"];
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const out = await api.saveItsmConfig({
+        servicenow: { enabled: sn.enabled, instance_url: sn.instance_url, user: sn.user, password: sn.password || "", min_severity: sn.min_severity, assignment_group: sn.assignment_group },
+        jira: { enabled: jr.enabled, base_url: jr.base_url, email: jr.email, api_token: jr.api_token || "", project_key: jr.project_key, issue_type: jr.issue_type, min_severity: jr.min_severity, resolve_transition: jr.resolve_transition },
+      });
+      setCfg(out); setMsg("Saved — connectors updated live (no restart).");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head"><h2>ServiceNow & Jira configuration</h2><RequiredLegend /></div>
+      <p className="admin-sub">Configure your system-of-record connectors here — no environment variables or restart needed. Applies to both alert auto-ticketing and incident promotion. Secrets are write-only: leave blank to keep the stored value. Only the platform owner can change these.</p>
+
+      <h3 style={{ marginTop: 14 }}>ServiceNow {sn.configured && <span className="badge good">connected</span>}</h3>
+      <label className="scope-chip" style={{ marginBottom: 8 }}>
+        <input type="checkbox" checked={sn.enabled} onChange={(e) => setSN({ enabled: e.target.checked })} /> Enable ServiceNow ticketing
+      </label>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSN({ instance_url: v })} placeholder="https://dev12345.service-now.com" required={sn.enabled} />
+        <LabeledInput label="User" value={sn.user} onChange={(v) => setSN({ user: v })} />
+        <LabeledInput label="Password" type="password" value={sn.password ?? ""} onChange={(v) => setSN({ password: v })} placeholder={sn.has_password ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
+        <LabeledSelect label="Min severity to ticket" value={sn.min_severity} onChange={(v) => setSN({ min_severity: v })} options={SEV} />
+        <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSN({ assignment_group: v })} />
+      </div>
+
+      <h3 style={{ marginTop: 18 }}>Jira {jr.configured && <span className="badge good">connected</span>}</h3>
+      <label className="scope-chip" style={{ marginBottom: 8 }}>
+        <input type="checkbox" checked={jr.enabled} onChange={(e) => setJR({ enabled: e.target.checked })} /> Enable Jira ticketing
+      </label>
+      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJR({ base_url: v })} placeholder="https://your-org.atlassian.net" required={jr.enabled} />
+        <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJR({ project_key: v })} placeholder="NOC" required={jr.enabled} />
+        <LabeledInput label="Email" value={jr.email} onChange={(v) => setJR({ email: v })} placeholder="svc@your-org.com" />
+        <LabeledInput label="API token" type="password" value={jr.api_token ?? ""} onChange={(v) => setJR({ api_token: v })} placeholder={jr.has_token ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
+        <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJR({ issue_type: v })} placeholder="Incident" />
+        <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJR({ resolve_transition: v })} placeholder="Done" />
+        <LabeledSelect label="Min severity to ticket" value={jr.min_severity} onChange={(v) => setJR({ min_severity: v })} options={SEV} />
+      </div>
+
+      <button className="dash-btn primary" style={{ marginTop: 14 }} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save ITSM configuration"}</button>
+      {msg && <p className="mini-meta" style={{ marginTop: 8 }}>{msg}</p>}
+    </div>
+  );
+}
 
 export function IntegrationsAdmin() {
   const [sn] = useReload(() => api.itsmServiceNow());
@@ -993,13 +1072,7 @@ export function IntegrationsAdmin() {
   return (
     <>
       <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
-      <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
-        <span className="badge good">Active</span>
-        <span>
-          ServiceNow and Jira auto-ticketing are both live: an alert at/above the
-          threshold opens a deduped ticket and auto-resolves it when the alert clears.
-        </span>
-      </div>
+      <ITSMConfigForm />
 
       {sn?.enabled && (
         <div className="card">
@@ -1077,8 +1150,9 @@ export function IntegrationsAdmin() {
                 <span className={`badge ${good ? "good" : "accent-badge"}`}>{tag}</span>
               </div>
               <p className="mini-meta">{i.desc}</p>
-              <button className="dash-btn" disabled style={{ marginTop: 10 }}>
-                {i.id === "servicenow" || i.id === "jira" ? "Configured via env" : "Configure"}
+              <button className="dash-btn" disabled={i.id !== "servicenow" && i.id !== "jira"} style={{ marginTop: 10 }}
+                onClick={() => { if (i.id === "servicenow" || i.id === "jira") window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                {i.id === "servicenow" || i.id === "jira" ? "Configure above ↑" : "Configure"}
               </button>
             </div>
           );

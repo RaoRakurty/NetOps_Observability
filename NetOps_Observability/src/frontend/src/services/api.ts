@@ -802,6 +802,9 @@ export const api = {
   openapi: () => request<OpenAPISpec>("/api/openapi.json"),
   itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),
   itsmJira: () => request<JiraStatus>("/api/itsm/jira"),
+  itsmConfig: () => request<ItsmConfig>("/api/notify/itsm"),
+  saveItsmConfig: (c: ItsmConfigInput) =>
+    request<ItsmConfig>("/api/notify/itsm", { method: "PUT", body: JSON.stringify(c) }),
 
   listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
   createApiKey: (req: CreateApiKeyRequest) =>
@@ -1150,6 +1153,37 @@ export type JiraStatus = {
   auto_close?: boolean;
   open?: JiraTicket[];
   open_count?: number;
+};
+
+// ITSM connector config (admin-editable). GET returns has_password/has_token +
+// configured flags (secrets are write-only and never returned); PUT sends the
+// secret only when (re)setting it — leave blank to keep the stored one.
+export type ItsmServiceNowConfig = {
+  enabled: boolean;
+  instance_url: string;
+  user: string;
+  has_password?: boolean;
+  password?: string;
+  min_severity: string;
+  assignment_group: string;
+  configured?: boolean;
+};
+export type ItsmJiraConfig = {
+  enabled: boolean;
+  base_url: string;
+  email: string;
+  has_token?: boolean;
+  api_token?: string;
+  project_key: string;
+  issue_type: string;
+  min_severity: string;
+  resolve_transition: string;
+  configured?: boolean;
+};
+export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig };
+export type ItsmConfigInput = {
+  servicenow: Omit<ItsmServiceNowConfig, "has_password" | "configured">;
+  jira: Omit<ItsmJiraConfig, "has_token" | "configured">;
 };
 
 export type PromNamesResponse = { status: string; data: string[] };

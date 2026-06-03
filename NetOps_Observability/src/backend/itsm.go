@@ -20,7 +20,8 @@ func (s *server) handleITSMServiceNow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.servicenow == nil || !s.servicenow.Configured() {
+	sn := s.serviceNow()
+	if sn == nil || !sn.Configured() {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled":    false,
 			"configured": false,
@@ -28,11 +29,11 @@ func (s *server) handleITSMServiceNow(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tickets := s.servicenow.Tickets()
+	tickets := sn.Tickets()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":    true,
 		"configured": true,
-		"threshold":  s.servicenow.ThresholdName(),
+		"threshold":  sn.ThresholdName(),
 		"open":       tickets,
 		"open_count": len(tickets),
 		"auto_close": true,
@@ -48,7 +49,8 @@ func (s *server) handleITSMJira(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.jira == nil || !s.jira.Configured() {
+	j := s.jiraConn()
+	if j == nil || !j.Configured() {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled":    false,
 			"configured": false,
@@ -56,12 +58,12 @@ func (s *server) handleITSMJira(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tickets := s.jira.Tickets()
+	tickets := j.Tickets()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":    true,
 		"configured": true,
-		"project":    s.jira.ProjectKey(),
-		"threshold":  s.jira.ThresholdName(),
+		"project":    j.ProjectKey(),
+		"threshold":  j.ThresholdName(),
 		"open":       tickets,
 		"open_count": len(tickets),
 		"auto_close": true,

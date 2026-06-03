@@ -64,10 +64,19 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	servicenow  *notify.ServiceNow
-	jira        *notify.Jira
-	hub         *Hub
+	// servicenow / jira hold the live ITSM connectors. Swapped atomically when an
+	// operator saves config from the admin UI (itsm_config.go); read lock-free by
+	// the incident-projection worker (incidents_sync.go) and the ITSM status
+	// endpoints (itsm.go) via serviceNow()/jiraConn(). nil = not configured.
+	servicenow atomic.Pointer[notify.ServiceNow]
+	jira       atomic.Pointer[notify.Jira]
+	itsmCfg    *itsmConfigStore
+	hub        *Hub
 }
+
+// serviceNow / jiraConn return the live ITSM connectors (nil when unconfigured).
+func (s *server) serviceNow() *notify.ServiceNow { return s.servicenow.Load() }
+func (s *server) jiraConn() *notify.Jira         { return s.jira.Load() }
 
 func newServer() *server {
 	// Select where the identity/saved stores persist (file by default; Postgres
@@ -172,38 +181,12 @@ func newServer() *server {
 			os.Getenv("SNS_TOPIC_ARN"),
 		))
 	}
-	// ITSM: alerts at/above the configured threshold auto-open a ServiceNow
-	// incident and auto-resolve it when the alert clears (bi-directional
-	// autoticketing). State persists across restarts. See notify/servicenow.go.
-	var serviceNow *notify.ServiceNow
-	if os.Getenv("FEATURE_SERVICENOW_NOTIFICATIONS") == "true" {
-		serviceNow = notify.NewServiceNow(
-			os.Getenv("SERVICENOW_INSTANCE_URL"),
-			os.Getenv("SERVICENOW_USER"),
-			os.Getenv("SERVICENOW_PASSWORD"),
-		).
-			WithThreshold(os.Getenv("SERVICENOW_MIN_SEVERITY")).
-			WithStateFile(envOr("SERVICENOW_STATE_FILE", "/data/servicenow_tickets.json")).
-			WithAssignmentGroup(os.Getenv("SERVICENOW_ASSIGNMENT_GROUP"))
-		notifier.Register(serviceNow)
-	}
-	// ITSM: Jira auto-ticketing — same bi-directional shape as ServiceNow
-	// (open on threshold, transition to done when the alert clears). Either or
-	// both connectors can run at once. See notify/jira.go.
-	var jiraConn *notify.Jira
-	if os.Getenv("FEATURE_JIRA_NOTIFICATIONS") == "true" {
-		jiraConn = notify.NewJira(
-			os.Getenv("JIRA_BASE_URL"),
-			os.Getenv("JIRA_EMAIL"),
-			os.Getenv("JIRA_API_TOKEN"),
-			os.Getenv("JIRA_PROJECT_KEY"),
-		).
-			WithIssueType(os.Getenv("JIRA_ISSUE_TYPE")).
-			WithThreshold(os.Getenv("JIRA_MIN_SEVERITY")).
-			WithResolveTransition(os.Getenv("JIRA_RESOLVE_TRANSITION")).
-			WithStateFile(envOr("JIRA_STATE_FILE", "/data/jira_tickets.json"))
-		notifier.Register(jiraConn)
-	}
+	// ITSM connectors (ServiceNow + Jira) are built from the itsmConfigStore, which
+	// seeds from the legacy FEATURE_*_NOTIFICATIONS + SERVICENOW_*/JIRA_* env on
+	// first run and is then editable live from the admin UI. The store is created
+	// after srv exists (it swaps connectors into srv + the notifier). See
+	// itsm_config.go. Both connectors can run at once; either feeds alert
+	// auto-ticketing (the notifier) and the incident-projection worker.
 
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
 
@@ -288,10 +271,11 @@ func newServer() *server {
 		saved:         saved,
 		audit:         audit,
 		contactPoints: contactPoints,
-		servicenow:    serviceNow,
-		jira:          jiraConn,
 		hub:           NewHub(),
 	}
+	// ITSM config store — seeds from env on first run, then admin-UI editable;
+	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
+	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
 	// Incident system (Postgres only) + its alert-ingestion hook.
 	srv.incidents = newIncidentStore()
 	srv.incMetrics = &incidentMetrics{}
@@ -390,6 +374,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/sso/login", s.handleSSOLogin)
 	mux.HandleFunc("/api/auth/sso/callback", s.handleSSOCallback)
 	mux.HandleFunc("/api/auth/oidc/config", s.handleOIDCConfig)
+	mux.HandleFunc("/api/notify/itsm", s.handleITSMConfig) // ServiceNow/Jira config (platform-owner)
 	mux.HandleFunc("/api/auth/methods", s.handleAuthMethods)
 	mux.HandleFunc("/api/auth/ldap/login", s.handleLDAPLogin)
 	mux.HandleFunc("/api/auth/ldap/config", s.handleLDAPConfig)
@@ -655,6 +640,8 @@ func envOr(key, fallback string) string {
 	}
 	return fallback
 }
+
+func envBool(key string) bool { return os.Getenv(key) == "true" }
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

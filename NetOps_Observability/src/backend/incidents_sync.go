@@ -109,11 +109,11 @@ func (p *reportPipeline) finishIncidentSync(ctx context.Context, job reports.Job
 // projectIncident creates a ticket in the configured ITSM — ServiceNow preferred,
 // then Jira. Returns (system, ticketID, url).
 func (p *reportPipeline) projectIncident(inc Incident) (string, string, string, error) {
-	if sn := p.srv.servicenow; sn != nil && sn.Configured() {
+	if sn := p.srv.serviceNow(); sn != nil && sn.Configured() {
 		id, url, err := sn.CreateForIncident(inc.Title, inc.Description, inc.Severity, "")
 		return "servicenow", id, url, err
 	}
-	if j := p.srv.jira; j != nil && j.Configured() {
+	if j := p.srv.jiraConn(); j != nil && j.Configured() {
 		id, url, err := j.CreateForIncident(inc.Title, inc.Description, inc.Severity)
 		return "jira", id, url, err
 	}
@@ -123,5 +123,7 @@ func (p *reportPipeline) projectIncident(inc Incident) (string, string, string, 
 // itsmConfigured reports whether any external ticketing target is available — so
 // the auto-policy doesn't enqueue syncs that will only dead-letter.
 func (s *server) itsmConfigured() bool {
-	return (s.servicenow != nil && s.servicenow.Configured()) || (s.jira != nil && s.jira.Configured())
+	sn := s.serviceNow()
+	j := s.jiraConn()
+	return (sn != nil && sn.Configured()) || (j != nil && j.Configured())
 }
