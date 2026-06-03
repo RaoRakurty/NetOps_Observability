@@ -40,6 +40,47 @@ configurable — turning the feature into a control plane.
 
 ---
 
+## 1a. The closed loop (canonical lifecycle)
+
+```
+        ┌────────────────────────┐
+        │         NMS            │  incident raised (alert/finding fold-in)
+        └─────────┬──────────────┘
+                  │ OUTBOUND SYNC   enqueue(integration_outbound) → worker → Provider.Apply
+                  ▼
+        ┌────────────────────────┐
+        │  ITSM systems          │  ticket created/updated; external_id stored
+        │  SNOW / Jira / PD      │  (Slack = notify + action source)
+        └─────────┬──────────────┘
+                  │ INBOUND SYNC    webhook (signed) ─or─ reconcile poll
+                  ▼
+        ┌────────────────────────┐
+        │   State Reconciler     │  VerifyWebhook → Normalize → dedup(external_evt_id)
+        │                        │  → MappingEngine(state_map) → correlate(provider,external_id)
+        └─────────┬──────────────┘
+                  │ SOURCE UPDATE   incident.Transition(...) — last-writer-wins by OccurredAt
+                  ▼
+        ┌────────────────────────┐
+        │   NMS (source of truth)│  state converged; audit + metrics emitted
+        └────────────────────────┘
+```
+
+Each box → concrete component (and the phase that builds it):
+
+| Loop box | Component | Reuses | Phase |
+|---|---|---|---|
+| NMS → OUTBOUND | Outbound Event Router (`enqueueIntegrationEvent`) | incident SoR + PG queue | ✅ P0 / P1 reshape |
+| ITSM systems | `Provider.Apply` (SN/Jira/PD/Slack) | existing connectors | ✅ P0 / P1 interface |
+| INBOUND SYNC | Inbound webhook endpoint + drift poller | `tenantRateLimiter`, scheduler | P2 / P4 |
+| **State Reconciler** | `Provider.VerifyWebhook`+`Normalize` → MappingEngine → Correlation | reverse `integration_mappings` index | **P2-P3** |
+| NMS source update | `incident.Transition()` lifecycle | ack/investigate/resolve/close/reopen (exists) | P2 |
+
+The reconciler is the only genuinely new control point; everything it calls
+(queue, incident lifecycle, audit) already exists. Its hard requirements —
+idempotency (`external_evt_id` dedup), drift/conflict resolution (last-writer-wins
+by `OccurredAt`, NMS authoritative for severity / external for ticket fields), and
+fail-closed verification — are specified in §4, §6, §9.
+
 ## 2. Architecture — the Integration Orchestrator
 
 Reuse the existing worker pool (`reportPipeline`) as the orchestrator runtime;
