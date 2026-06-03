@@ -28,7 +28,11 @@ const CATALOG: CatalogGroup[] = [
     items: [
       { label: "CPU utilization", q: "avg by (device) (device_cpu_percent)", base: "device_cpu_percent", unit: "%" },
       { label: "Memory %", q: "avg by (device) (device_mem_percent)", base: "device_mem_percent", unit: "%" },
-      { label: "Memory used", q: "sum by (device) (device_mem_used_kb)", base: "device_mem_used_kb", unit: "KB" },
+      // Memory-used is emitted under two units by different vendor profiles:
+      // KB (Nokia SR OS sgiMemoryUsed) and bytes (Cisco ciscoMemoryPoolUsed).
+      // They can't be summed together, so each gets its own (self-hiding) pick.
+      { label: "Memory used (KB)", q: "sum by (device) (device_mem_used_kb)", base: "device_mem_used_kb", unit: "KB" },
+      { label: "Memory used (bytes)", q: "sum by (device) (device_mem_used_bytes)", base: "device_mem_used_bytes", unit: "bytes" },
       { label: "Temperature", q: "max by (device) (device_temp_celsius)", base: "device_temp_celsius", unit: "°C" },
     ],
   },
@@ -68,8 +72,9 @@ function fmtVal(v: number, unit?: string): string {
     while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
     return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
   }
-  if (unit === "KB") {
-    const u = ["KB", "MB", "GB", "TB"];
+  if (unit === "KB" || unit === "bytes") {
+    // KB-scaled metrics start one rung up the ladder; raw bytes start at B.
+    const u = unit === "KB" ? ["KB", "MB", "GB", "TB"] : ["B", "KB", "MB", "GB", "TB"];
     let i = 0, n = v;
     while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
     return `${n.toFixed(1)} ${u[i]}`;
@@ -85,6 +90,7 @@ function unitFor(name: string): string | undefined {
   if (n.includes("percent") || n.endsWith("_pct")) return "%";
   if (n.includes("celsius") || n.includes("temp")) return "°C";
   if (n.includes("_kb") || n.includes("kbyte")) return "KB";
+  if (n.endsWith("_bytes") || n.endsWith("_octets")) return "bytes";
   return undefined;
 }
 

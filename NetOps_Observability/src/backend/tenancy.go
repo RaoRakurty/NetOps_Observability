@@ -165,6 +165,37 @@ func (s *server) visibleDeviceAddrs(c jwtClaims) (addrs []string, cross bool) {
 	return addrs, false
 }
 
+// visibleDeviceMetricLabels returns the distinct device ids and device names a
+// scoped principal may view, plus a cross-tenant flag (when true both slices are
+// nil and mean "all"). Used to scope time-series metrics, where the device is
+// identified by different labels depending on the producer: the Go collectors tag
+// samples with `device`=<device id> (poller.go / snmpmetrics.go), the Telegraf
+// SNMP edge poller tags `hostname`=<sysName>, and the gnmic sidecar tags
+// `source`=<target name> — the latter two corresponding to the device name.
+// Returning the two key classes separately lets the metrics scoper constrain each
+// label with the right value set.
+func (s *server) visibleDeviceMetricLabels(c jwtClaims) (ids, names []string, cross bool) {
+	tenant, cross := principalTenant(c)
+	if cross {
+		return nil, nil, true
+	}
+	seenID, seenName := map[string]bool{}, map[string]bool{}
+	for _, d := range s.discovery.Devices() {
+		if !canSeeDevice(d, tenant, cross) {
+			continue
+		}
+		if d.ID != "" && !seenID[d.ID] {
+			seenID[d.ID] = true
+			ids = append(ids, d.ID)
+		}
+		if d.Name != "" && !seenName[d.Name] {
+			seenName[d.Name] = true
+			names = append(names, d.Name)
+		}
+	}
+	return ids, names, false
+}
+
 // visibleDeviceKeys returns the distinct identifiers (id and name) of the devices
 // a scoped principal may view, plus a cross-tenant flag (when true the slice is
 // nil and means "all"). Used to scope ClickHouse findings, whose `device` column
