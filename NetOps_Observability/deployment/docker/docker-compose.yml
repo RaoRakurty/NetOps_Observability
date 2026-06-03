@@ -530,6 +530,9 @@ services:
       STORE_BACKEND: ${STORE_BACKEND:-file}
       DATABASE_URL: ${DATABASE_URL:-}
       STORE_PG_ALLOW_RLS_BYPASS: ${STORE_PG_ALLOW_RLS_BYPASS:-}
+      # One-time file→Postgres import on cutover (idempotent: fills empty tables
+      # only). Point at the mounted /data dir; safe to leave set after migrating.
+      IMPORT_FILE_STATE_DIR: ${IMPORT_FILE_STATE_DIR:-}
       # Default per-API-key rate limit (requests/minute; 0 = unlimited)
       APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
       # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)

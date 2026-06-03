@@ -2,6 +2,9 @@
 deployment/docker/.env
 data/
 
+# Pre-cutover app-state snapshots (contain live secrets — never commit)
+backups/
+
 # Build artifacts
 src/frontend/dist/
 src/frontend/node_modules/

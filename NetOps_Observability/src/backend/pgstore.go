@@ -92,7 +92,72 @@ func newPgStore(ctx context.Context, dsn string) (*pgStore, error) {
 		// can be retried on next boot once the cause is fixed).
 		logWarn("db", "legacy blob import skipped", map[string]any{"error": err.Error()})
 	}
+	// One-time file→Postgres cutover: import the file-backend /data/*.json
+	// collections when IMPORT_FILE_STATE_DIR points at them (idempotent — fills
+	// empty targets only, never clobbers live data).
+	if dir := os.Getenv("IMPORT_FILE_STATE_DIR"); dir != "" {
+		if err := ps.importFileState(ctx, dir); err != nil {
+			logWarn("db", "file-state import skipped", map[string]any{"error": err.Error()})
+		}
+	}
 	return ps, nil
+}
+
+// importFileState migrates the file-backend app-state (the /data/*.json
+// collections) into the normalized tables / app_kv. It only fills EMPTY targets,
+// so re-running it is a no-op once data has moved. Transient state (refresh
+// tokens, the audit ring, ITSM ticket dedup) is intentionally NOT imported — it
+// rebuilds. The durable config (users/tenants/roles/SNMP creds/SSO/contact
+// points/policies) carries over so a cutover preserves logins and secrets.
+func (p *pgStore) importFileState(ctx context.Context, dir string) error {
+	keys := []string{
+		"/data/tenants.json", "/data/roles.json", "/data/users.json",
+		"/data/snmp_credentials.json", "/data/snmp_profiles.json",
+		"/data/apikeys.json", "/data/saved.json", "/data/contact_points.json",
+		"/data/notify_config.json", "/data/oidc_config.json", "/data/ldap_config.json",
+		"/data/tacacs_config.json", "/data/token_policy.json", "/data/copilot_config.json",
+		"/data/export_policy.json",
+	}
+	imported := 0
+	for _, key := range keys {
+		data, err := os.ReadFile(filepath.Join(dir, filepath.Base(key)))
+		if err != nil || len(data) == 0 {
+			continue // missing/empty file → nothing to import
+		}
+		empty, err := p.targetEmpty(ctx, key)
+		if err != nil {
+			return err
+		}
+		if !empty {
+			continue // already populated — never clobber live state
+		}
+		if err := p.Save(key, data); err != nil {
+			return fmt.Errorf("import %s: %w", key, err)
+		}
+		imported++
+		logInfo("db", "imported file-backend collection", map[string]any{"key": key})
+	}
+	if imported > 0 {
+		logInfo("db", "imported file-backend app-state into Postgres", map[string]any{"collections": imported})
+	}
+	return nil
+}
+
+// targetEmpty reports whether the Postgres target for a backend key has no data
+// (so an import won't overwrite live state).
+func (p *pgStore) targetEmpty(ctx context.Context, key string) (bool, error) {
+	if spec, ok := specFor(key); ok {
+		var n int
+		if err := p.db.pool.QueryRow(ctx, "SELECT count(*) FROM "+spec.table).Scan(&n); err != nil {
+			return false, err
+		}
+		return n == 0, nil
+	}
+	var present bool
+	if err := p.db.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM app_kv WHERE key=$1)`, key).Scan(&present); err != nil {
+		return false, err
+	}
+	return !present, nil
 }
 
 // Load reassembles a normalized collection into the JSON array the store expects,
