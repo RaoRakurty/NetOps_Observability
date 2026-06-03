@@ -478,6 +478,9 @@ services:
       ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # ITSM inbound (bidirectional) sync: webhooks are verified+recorded always,
+      # but only drive incident state when this is true (#43 P2b). Default off.
+      FEATURE_ITSM_INBOUND: ${FEATURE_ITSM_INBOUND:-false}
       # Notification channels
       FEATURE_SLACK_NOTIFICATIONS: ${FEATURE_SLACK_NOTIFICATIONS:-false}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
