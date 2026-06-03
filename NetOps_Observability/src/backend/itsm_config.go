@@ -4,33 +4,41 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 
 	"netops/backend/notify"
 )
 
-// itsm_config.go — runtime-configurable, kv-persisted config for the ITSM
-// connectors (ServiceNow + Jira), tunable live from the admin UI with NO restart.
+// itsm_config.go — PER-TENANT, runtime-configurable, kv-persisted config for the
+// ITSM connectors (ServiceNow + Jira), tunable live from the admin UI with NO
+// restart.
 //
-// Before this, the connectors were built ONCE in newServer() straight from env
+// Multi-tenancy: every tenant configures its OWN ServiceNow/Jira (Acme → Acme's
+// ServiceNow, Globex → Globex's Jira); the platform owner configures the global
+// connector under the "" key (used for platform/infra incidents). The store keys
+// config + live connectors by tenant; incident projection resolves the connector
+// from the incident's TenantID, so a tenant's incidents can only ever reach its
+// own ticketing system.
+//
+// Routing: ITSM is reached EXCLUSIVELY through the incident-projection path
+// (incidents_sync.go), which carries inc.TenantID. The connectors are NOT
+// registered in the broadcast alert Dispatcher — that dispatcher fans every alert
+// to every channel regardless of tenant, so a per-tenant connector there would
+// leak tenant A's alerts into tenant B's ticketing. The incident system already
+// folds in all alerts/findings, so nothing is lost: an alert tickets via its
+// (tenant-scoped) incident.
+//
+// On first run the GLOBAL ("") connector seeds from the legacy env vars
 // (FEATURE_SERVICENOW_NOTIFICATIONS + SERVICENOW_*, FEATURE_JIRA_NOTIFICATIONS +
-// JIRA_*), so the integrations showed greyed in the UI — an operator had to edit
-// compose/.env and restart. This store seeds from those same env vars on first
-// run (back-compat), then becomes the source of truth.
+// JIRA_*) for back-compat; thereafter the kv store is the source of truth.
 //
-// On a successful set() the store rebuilds each live connector and:
-//   - atomically swaps it into s.servicenow / s.jira (read lock-free by the
-//     incident-projection worker and the ITSM status endpoints), and
-//   - Replace()s / Remove()s it in the alert Dispatcher (the auto-ticketing path),
-// so both ITSM consumers pick up the change immediately.
-//
-// SECURITY: only the PLATFORM OWNER may read/change ITSM config — the connectors
-// are a single platform-wide integration, and the credentials are global.
+// SECURITY: an admin may read/write ONLY its own tenant's ITSM config. The
+// platform owner manages the global connector and (via ?tenant=) any tenant's.
+// Secrets (Password / APIToken) are write-only: persisted but never returned.
 
 // serviceNowConfig / jiraConfig are the persisted, kv-backed connector settings.
-// Secrets (Password / APIToken) are write-only: persisted to the kv store but
-// never returned by the public() view.
 type serviceNowConfig struct {
 	Enabled         bool   `json:"enabled"`
 	InstanceURL     string `json:"instance_url"`
@@ -51,46 +59,87 @@ type jiraConfig struct {
 	ResolveTransition string `json:"resolve_transition"`
 }
 
+// itsmConfig is ONE tenant's ITSM connector settings.
 type itsmConfig struct {
 	ServiceNow serviceNowConfig `json:"servicenow"`
 	Jira       jiraConfig       `json:"jira"`
 }
 
-type itsmConfigStore struct {
-	mu   sync.Mutex
-	path string
-	srv  *server
-	cfg  itsmConfig // current config, INCLUDING secrets (never logged/returned)
+// itsmLive holds a tenant's built connectors (nil when disabled/unconfigured).
+type itsmLive struct {
+	sn   *notify.ServiceNow
+	jira *notify.Jira
 }
 
-// newITSMConfigStore loads persisted config (or seeds from env on first run),
-// then applies it so the live connectors reflect the stored config at boot.
-func newITSMConfigStore(srv *server, path string) *itsmConfigStore {
-	s := &itsmConfigStore{path: path, srv: srv}
-	if !s.load() {
-		s.cfg = itsmConfigFromEnv()
+// itsmConfigFile is the persisted, versioned envelope for the per-tenant map.
+// Version >= 2 distinguishes it from the legacy single-object format, which is
+// migrated under the global "" key on load.
+type itsmConfigFile struct {
+	Version int                   `json:"version"`
+	Tenants map[string]itsmConfig `json:"tenants"`
+}
+
+type itsmConfigStore struct {
+	mu   sync.RWMutex
+	path string
+	srv  *server
+	cfgs map[string]itsmConfig // tenant key ("" = global) -> config, INCLUDING secrets
+	live map[string]*itsmLive  // tenant key -> built connectors
+}
+
+// itsmKey normalizes a tenant id to the store/connector key. The global/platform
+// tenant ("" or "global") collapses to "" so an incident tagged TenantID="" and
+// the platform owner's config resolve to the same connector.
+func itsmKey(tenant string) string {
+	t := normTenant(tenant)
+	if t == TenantGlobal {
+		return ""
 	}
-	s.apply(s.cfg)
+	return t
+}
+
+// newITSMConfigStore loads the persisted per-tenant config (or seeds the global
+// connector from env on first run), then builds the live connectors per tenant.
+func newITSMConfigStore(srv *server, path string) *itsmConfigStore {
+	s := &itsmConfigStore{path: path, srv: srv, cfgs: map[string]itsmConfig{}, live: map[string]*itsmLive{}}
+	if !s.load() {
+		// First run: the pre-per-tenant single connector was platform-wide → seed
+		// it under the global "" key.
+		s.cfgs[""] = itsmConfigFromEnv()
+	}
+	for tenant, cfg := range s.cfgs {
+		s.apply(tenant, cfg)
+	}
 	return s
 }
 
-// load reads the persisted config; returns false when absent/empty so the caller
-// seeds from env instead.
+// load reads the persisted config. Returns false when absent/empty so the caller
+// seeds from env. Migrates the legacy single-object format under the "" key.
 func (s *itsmConfigStore) load() bool {
 	b, err := kvLoad(s.path)
 	if err != nil || len(b) == 0 {
 		return false
 	}
+	// New per-tenant format (versioned envelope).
+	var f itsmConfigFile
+	if json.Unmarshal(b, &f) == nil && f.Version >= 2 && f.Tenants != nil {
+		s.cfgs = map[string]itsmConfig{}
+		for k, v := range f.Tenants {
+			s.cfgs[itsmKey(k)] = v
+		}
+		return true
+	}
+	// Legacy single global connector → migrate under "".
 	var c itsmConfig
 	if json.Unmarshal(b, &c) != nil {
 		return false
 	}
-	s.cfg = c
+	s.cfgs = map[string]itsmConfig{"": c}
 	return true
 }
 
-// itsmConfigFromEnv seeds the store from the legacy env vars so an existing
-// env-configured deployment keeps working unchanged after upgrade.
+// itsmConfigFromEnv seeds the GLOBAL connector from the legacy env vars so an
+// existing env-configured deployment keeps working unchanged after upgrade.
 func itsmConfigFromEnv() itsmConfig {
 	return itsmConfig{
 		ServiceNow: serviceNowConfig{
@@ -114,77 +163,120 @@ func itsmConfigFromEnv() itsmConfig {
 	}
 }
 
-// set validates, merges (preserving blanked secrets), persists, then rebuilds and
-// atomically swaps the live connectors.
-func (s *itsmConfigStore) set(in itsmConfig) error {
+// set validates a tenant's config, merges (preserving blanked secrets), persists
+// the whole map, then rebuilds and swaps that tenant's live connectors.
+func (s *itsmConfigStore) set(tenant string, in itsmConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tenant = itsmKey(tenant)
 
 	in.ServiceNow = normalizeServiceNow(in.ServiceNow)
 	in.Jira = normalizeJira(in.Jira)
 
 	// Write-only secrets: a blank secret on update KEEPS the stored one (so the UI
-	// never has to re-enter it), so the form can mask it.
+	// can mask it and never re-send it).
+	prev := s.cfgs[tenant]
 	if in.ServiceNow.Password == "" {
-		in.ServiceNow.Password = s.cfg.ServiceNow.Password
+		in.ServiceNow.Password = prev.ServiceNow.Password
 	}
 	if in.Jira.APIToken == "" {
-		in.Jira.APIToken = s.cfg.Jira.APIToken
+		in.Jira.APIToken = prev.Jira.APIToken
 	}
 
 	if err := validateITSM(in); err != nil {
 		return err
 	}
 
-	b, err := json.Marshal(in) // #nosec G117 -- ITSM creds are intentionally persisted to the kv store
-	if err != nil {
+	s.cfgs[tenant] = in
+	if err := s.persist(); err != nil {
 		return err
 	}
-	if err := kvSave(s.path, b); err != nil {
-		return err
-	}
-	s.cfg = in
-	s.apply(in)
+	s.apply(tenant, in)
 	return nil
 }
 
-// apply (re)builds each connector from cfg and swaps it into the live server +
-// the alert dispatcher. Must hold s.mu (or be called from the constructor).
-func (s *itsmConfigStore) apply(cfg itsmConfig) {
-	if cfg.ServiceNow.Enabled && cfg.ServiceNow.InstanceURL != "" {
-		sn := notify.NewServiceNow(cfg.ServiceNow.InstanceURL, cfg.ServiceNow.User, cfg.ServiceNow.Password).
-			WithThreshold(cfg.ServiceNow.MinSeverity).
-			WithStateFile(envOr("SERVICENOW_STATE_FILE", "/data/servicenow_tickets.json")).
-			WithAssignmentGroup(cfg.ServiceNow.AssignmentGroup)
-		s.srv.servicenow.Store(sn)
-		s.srv.notifier.Replace(sn)
-	} else {
-		s.srv.servicenow.Store(nil)
-		s.srv.notifier.Remove("servicenow")
+// persist writes the whole per-tenant map as the versioned envelope. Caller holds s.mu.
+func (s *itsmConfigStore) persist() error {
+	b, err := json.Marshal(itsmConfigFile{Version: 2, Tenants: s.cfgs}) // #nosec G117 -- ITSM creds are intentionally persisted to the kv store
+	if err != nil {
+		return err
 	}
+	return kvSave(s.path, b)
+}
 
+var itsmTenantSlug = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+// itsmStateFile returns the per-tenant ticket dedup-state path. The global
+// connector keeps the legacy paths (so existing dedup state survives upgrade);
+// each tenant gets its own file so dedup keys can never collide across tenants.
+func itsmStateFile(system, tenant string) string {
+	if tenant == "" {
+		switch system {
+		case "servicenow":
+			return envOr("SERVICENOW_STATE_FILE", "/data/servicenow_tickets.json")
+		case "jira":
+			return envOr("JIRA_STATE_FILE", "/data/jira_tickets.json")
+		}
+	}
+	slug := itsmTenantSlug.ReplaceAllString(tenant, "-")
+	return "/data/" + system + "_tickets_" + slug + ".json"
+}
+
+// apply (re)builds a tenant's connectors from cfg and swaps them into the live
+// map. Connectors are reached only via incident projection (NOT the dispatcher).
+// Caller holds s.mu (or it's the constructor).
+func (s *itsmConfigStore) apply(tenant string, cfg itsmConfig) {
+	tenant = itsmKey(tenant)
+	live := &itsmLive{}
+	if cfg.ServiceNow.Enabled && cfg.ServiceNow.InstanceURL != "" {
+		live.sn = notify.NewServiceNow(cfg.ServiceNow.InstanceURL, cfg.ServiceNow.User, cfg.ServiceNow.Password).
+			WithThreshold(cfg.ServiceNow.MinSeverity).
+			WithStateFile(itsmStateFile("servicenow", tenant)).
+			WithAssignmentGroup(cfg.ServiceNow.AssignmentGroup)
+	}
 	if cfg.Jira.Enabled && cfg.Jira.BaseURL != "" && cfg.Jira.ProjectKey != "" {
-		j := notify.NewJira(cfg.Jira.BaseURL, cfg.Jira.Email, cfg.Jira.APIToken, cfg.Jira.ProjectKey).
+		live.jira = notify.NewJira(cfg.Jira.BaseURL, cfg.Jira.Email, cfg.Jira.APIToken, cfg.Jira.ProjectKey).
 			WithIssueType(cfg.Jira.IssueType).
 			WithThreshold(cfg.Jira.MinSeverity).
 			WithResolveTransition(cfg.Jira.ResolveTransition).
-			WithStateFile(envOr("JIRA_STATE_FILE", "/data/jira_tickets.json"))
-		s.srv.jira.Store(j)
-		s.srv.notifier.Replace(j)
-	} else {
-		s.srv.jira.Store(nil)
-		s.srv.notifier.Remove("jira")
+			WithStateFile(itsmStateFile("jira", tenant))
 	}
+	s.live[tenant] = live
 }
 
-// public returns the redacted config for the admin UI — secrets are replaced with
-// a has_* flag, and a configured flag reflects whether the live connector is up.
-func (s *itsmConfigStore) public() map[string]any {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sn := s.cfg.ServiceNow
-	jr := s.cfg.Jira
+// serviceNowFor / jiraFor resolve a tenant's live connector (nil if none).
+func (s *itsmConfigStore) serviceNowFor(tenant string) *notify.ServiceNow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if l := s.live[itsmKey(tenant)]; l != nil {
+		return l.sn
+	}
+	return nil
+}
+
+func (s *itsmConfigStore) jiraFor(tenant string) *notify.Jira {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if l := s.live[itsmKey(tenant)]; l != nil {
+		return l.jira
+	}
+	return nil
+}
+
+// public returns one tenant's redacted config for the admin UI — secrets become
+// has_* flags; configured reflects whether that tenant's live connector is up.
+func (s *itsmConfigStore) public(tenant string) map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tenant = itsmKey(tenant)
+	cfg := s.cfgs[tenant]
+	live := s.live[tenant]
+	snLive := live != nil && live.sn != nil
+	jrLive := live != nil && live.jira != nil
+	sn := cfg.ServiceNow
+	jr := cfg.Jira
 	return map[string]any{
+		"tenant": tenant,
 		"servicenow": map[string]any{
 			"enabled":          sn.Enabled,
 			"instance_url":     sn.InstanceURL,
@@ -192,7 +284,7 @@ func (s *itsmConfigStore) public() map[string]any {
 			"has_password":     sn.Password != "",
 			"min_severity":     sn.MinSeverity,
 			"assignment_group": sn.AssignmentGroup,
-			"configured":       s.srv.serviceNow() != nil,
+			"configured":       snLive,
 		},
 		"jira": map[string]any{
 			"enabled":            jr.Enabled,
@@ -203,7 +295,7 @@ func (s *itsmConfigStore) public() map[string]any {
 			"issue_type":         jr.IssueType,
 			"min_severity":       jr.MinSeverity,
 			"resolve_transition": jr.ResolveTransition,
-			"configured":         s.srv.jiraConn() != nil,
+			"configured":         jrLive,
 		},
 	}
 }
@@ -257,15 +349,20 @@ func validateITSM(c itsmConfig) error {
 	return nil
 }
 
-// handleITSMConfig serves GET/PUT /api/notify/itsm — platform-owner only.
+// handleITSMConfig serves GET/PUT /api/notify/itsm, scoped to the caller's tenant.
+// A tenant admin manages only its own connector; the platform owner manages the
+// global connector and (via ?tenant=) any specific tenant's.
 func (s *server) handleITSMConfig(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.requireAdmin(w, r)
 	if !ok {
 		return
 	}
-	if _, cross := principalTenant(claims); !cross {
-		writeError(w, http.StatusForbidden, errors.New("only the platform owner may configure ITSM integrations"))
-		return
+	tenant, cross := principalTenant(claims)
+	key := itsmKey(tenant)
+	if cross {
+		if q := strings.TrimSpace(r.URL.Query().Get("tenant")); q != "" {
+			key = itsmKey(q)
+		}
 	}
 	if s.itsmCfg == nil {
 		writeError(w, http.StatusServiceUnavailable, errors.New("ITSM config store unavailable"))
@@ -273,19 +370,19 @@ func (s *server) handleITSMConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.itsmCfg.public())
+		writeJSON(w, http.StatusOK, s.itsmCfg.public(key))
 	case http.MethodPut:
 		var in itsmConfig
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := s.itsmCfg.set(in); err != nil {
+		if err := s.itsmCfg.set(key, in); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		logInfo("itsm", "ITSM config updated", map[string]any{"actor": claims.Sub})
-		writeJSON(w, http.StatusOK, s.itsmCfg.public())
+		logInfo("itsm", "ITSM config updated", map[string]any{"actor": claims.Sub, "tenant": key})
+		writeJSON(w, http.StatusOK, s.itsmCfg.public(key))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

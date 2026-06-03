@@ -10,17 +10,12 @@ import (
 func newTestITSMStore(t *testing.T) (*itsmConfigStore, *server) {
 	t.Helper()
 	srv := &server{notifier: notify.NewDispatcher()}
-	st := &itsmConfigStore{path: filepath.Join(t.TempDir(), "itsm.json"), srv: srv}
-	return st, srv
-}
-
-func hasChannel(d *notify.Dispatcher, name string) bool {
-	for _, n := range d.Names() {
-		if n == name {
-			return true
-		}
+	st := &itsmConfigStore{
+		path: filepath.Join(t.TempDir(), "itsm.json"), srv: srv,
+		cfgs: map[string]itsmConfig{}, live: map[string]*itsmLive{},
 	}
-	return false
+	srv.itsmCfg = st
+	return st, srv
 }
 
 func TestValidateITSM(t *testing.T) {
@@ -61,19 +56,16 @@ func TestNormalizeJiraServiceNow(t *testing.T) {
 func TestITSMApplyAndPublic(t *testing.T) {
 	st, srv := newTestITSMStore(t)
 
-	// Enable ServiceNow → live connector + notifier channel present.
-	if err := st.set(itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc", Password: "secret"}}); err != nil {
+	// Enable ServiceNow for the global tenant → live connector resolvable.
+	if err := st.set("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc", Password: "secret"}}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if srv.serviceNow() == nil {
 		t.Fatal("servicenow connector not live after enable")
 	}
-	if !hasChannel(srv.notifier, "servicenow") {
-		t.Error("servicenow not registered with the dispatcher")
-	}
 
 	// public() must redact the password but advertise that one is stored.
-	pub := st.public()["servicenow"].(map[string]any)
+	pub := st.public("")["servicenow"].(map[string]any)
 	if _, leaked := pub["password"]; leaked {
 		t.Error("public() leaked the password")
 	}
@@ -82,21 +74,75 @@ func TestITSMApplyAndPublic(t *testing.T) {
 	}
 
 	// Blank password on update KEEPS the stored secret (write-only field).
-	if err := st.set(itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc2", Password: ""}}); err != nil {
+	if err := st.set("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc2", Password: ""}}); err != nil {
 		t.Fatalf("set2: %v", err)
 	}
-	if st.cfg.ServiceNow.Password != "secret" {
-		t.Errorf("blanked password not preserved, got %q", st.cfg.ServiceNow.Password)
+	if st.cfgs[""].ServiceNow.Password != "secret" {
+		t.Errorf("blanked password not preserved, got %q", st.cfgs[""].ServiceNow.Password)
 	}
 
-	// Disable → connector removed from server + dispatcher.
-	if err := st.set(itsmConfig{ServiceNow: serviceNowConfig{Enabled: false}}); err != nil {
+	// Disable → connector no longer resolvable.
+	if err := st.set("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: false}}); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	if srv.serviceNow() != nil {
 		t.Error("servicenow still live after disable")
 	}
-	if hasChannel(srv.notifier, "servicenow") {
-		t.Error("servicenow still registered after disable")
+}
+
+// TestITSMPerTenantIsolation proves a tenant's connector resolves ONLY for that
+// tenant — never another tenant, and never the global connector (and vice versa).
+func TestITSMPerTenantIsolation(t *testing.T) {
+	st, srv := newTestITSMStore(t)
+
+	// Acme configures its own ServiceNow; Globex configures its own Jira.
+	if err := st.set("acme", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://acme.service-now.com", User: "a", Password: "pa"}}); err != nil {
+		t.Fatalf("set acme: %v", err)
+	}
+	if err := st.set("globex", itsmConfig{Jira: jiraConfig{Enabled: true, BaseURL: "https://globex.atlassian.net", Email: "g@x", APIToken: "tg", ProjectKey: "OPS"}}); err != nil {
+		t.Fatalf("set globex: %v", err)
+	}
+
+	if srv.serviceNowFor("acme") == nil {
+		t.Error("acme ServiceNow not resolvable")
+	}
+	if srv.serviceNowFor("globex") != nil {
+		t.Error("globex must NOT see a ServiceNow connector")
+	}
+	if srv.serviceNowFor("") != nil {
+		t.Error("global must NOT see acme's connector")
+	}
+	if srv.jiraFor("globex") == nil {
+		t.Error("globex Jira not resolvable")
+	}
+	if srv.jiraFor("acme") != nil {
+		t.Error("acme must NOT see globex's Jira")
+	}
+
+	// public() is per-tenant: acme sees its own config, globex sees none for SN.
+	if st.public("acme")["servicenow"].(map[string]any)["configured"] != true {
+		t.Error("acme public servicenow should be configured")
+	}
+	if st.public("globex")["servicenow"].(map[string]any)["configured"] != false {
+		t.Error("globex public servicenow should be unconfigured")
+	}
+}
+
+// TestITSMLegacyMigration proves a pre-per-tenant single-object config file is
+// migrated under the global "" key on load.
+func TestITSMLegacyMigration(t *testing.T) {
+	_, srv := newTestITSMStore(t)
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	// Legacy format: a bare itsmConfig object (no version envelope).
+	legacy := `{"servicenow":{"enabled":true,"instance_url":"https://legacy.service-now.com","user":"u","password":"p","min_severity":"critical"},"jira":{"enabled":false}}`
+	if err := kvSave(path, []byte(legacy)); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+	st := newITSMConfigStore(srv, path)
+	if st.serviceNowFor("") == nil {
+		t.Fatal("legacy global ServiceNow not migrated/live")
+	}
+	if st.cfgs[""].ServiceNow.InstanceURL != "https://legacy.service-now.com" {
+		t.Errorf("legacy instance url lost: %q", st.cfgs[""].ServiceNow.InstanceURL)
 	}
 }

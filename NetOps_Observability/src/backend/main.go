@@ -64,19 +64,34 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	// servicenow / jira hold the live ITSM connectors. Swapped atomically when an
-	// operator saves config from the admin UI (itsm_config.go); read lock-free by
-	// the incident-projection worker (incidents_sync.go) and the ITSM status
-	// endpoints (itsm.go) via serviceNow()/jiraConn(). nil = not configured.
-	servicenow atomic.Pointer[notify.ServiceNow]
-	jira       atomic.Pointer[notify.Jira]
-	itsmCfg    *itsmConfigStore
-	hub        *Hub
+	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
+	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
+	// connector via serviceNowFor()/jiraFor(); the incident-projection worker keys
+	// on the incident's TenantID so a tenant's incidents only reach its own
+	// ticketing. nil = not configured for that tenant.
+	itsmCfg *itsmConfigStore
+	hub     *Hub
 }
 
-// serviceNow / jiraConn return the live ITSM connectors (nil when unconfigured).
-func (s *server) serviceNow() *notify.ServiceNow { return s.servicenow.Load() }
-func (s *server) jiraConn() *notify.Jira         { return s.jira.Load() }
+// serviceNowFor / jiraFor resolve a tenant's live ITSM connector (nil when
+// unconfigured, or before the config store is built). serviceNow()/jiraConn()
+// are the global ("" tenant) shorthands used by the platform status endpoints.
+func (s *server) serviceNowFor(tenant string) *notify.ServiceNow {
+	if s.itsmCfg == nil {
+		return nil
+	}
+	return s.itsmCfg.serviceNowFor(tenant)
+}
+
+func (s *server) jiraFor(tenant string) *notify.Jira {
+	if s.itsmCfg == nil {
+		return nil
+	}
+	return s.itsmCfg.jiraFor(tenant)
+}
+
+func (s *server) serviceNow() *notify.ServiceNow { return s.serviceNowFor("") }
+func (s *server) jiraConn() *notify.Jira         { return s.jiraFor("") }
 
 func newServer() *server {
 	// Select where the identity/saved stores persist (file by default; Postgres

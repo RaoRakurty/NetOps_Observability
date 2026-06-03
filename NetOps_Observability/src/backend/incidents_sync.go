@@ -106,24 +106,27 @@ func (p *reportPipeline) finishIncidentSync(ctx context.Context, job reports.Job
 	}
 }
 
-// projectIncident creates a ticket in the configured ITSM — ServiceNow preferred,
-// then Jira. Returns (system, ticketID, url).
+// projectIncident creates a ticket in the incident's OWN tenant ITSM — ServiceNow
+// preferred, then Jira. A tenant's incidents can only ever reach that tenant's
+// connector (resolved by inc.TenantID); global/"" incidents reach the platform
+// connector. Returns (system, ticketID, url).
 func (p *reportPipeline) projectIncident(inc Incident) (string, string, string, error) {
-	if sn := p.srv.serviceNow(); sn != nil && sn.Configured() {
+	if sn := p.srv.serviceNowFor(inc.TenantID); sn != nil && sn.Configured() {
 		id, url, err := sn.CreateForIncident(inc.Title, inc.Description, inc.Severity, "")
 		return "servicenow", id, url, err
 	}
-	if j := p.srv.jiraConn(); j != nil && j.Configured() {
+	if j := p.srv.jiraFor(inc.TenantID); j != nil && j.Configured() {
 		id, url, err := j.CreateForIncident(inc.Title, inc.Description, inc.Severity)
 		return "jira", id, url, err
 	}
-	return "", "", "", errors.New("no ITSM integration configured")
+	return "", "", "", errors.New("no ITSM integration configured for this tenant")
 }
 
-// itsmConfigured reports whether any external ticketing target is available — so
-// the auto-policy doesn't enqueue syncs that will only dead-letter.
-func (s *server) itsmConfigured() bool {
-	sn := s.serviceNow()
-	j := s.jiraConn()
+// itsmConfiguredFor reports whether the given tenant has an external ticketing
+// target available — so the auto-policy doesn't enqueue syncs that only
+// dead-letter for a tenant with no connector.
+func (s *server) itsmConfiguredFor(tenant string) bool {
+	sn := s.serviceNowFor(tenant)
+	j := s.jiraFor(tenant)
 	return (sn != nil && sn.Configured()) || (j != nil && j.Configured())
 }

@@ -54,7 +54,7 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 		// Auto-policy: critical incidents promote to an ITSM ticket (dedup by the
 		// incident itself; the sync worker is idempotent). Skipped if no ITSM is
 		// configured so we don't enqueue jobs that only dead-letter.
-		if autoTicketEligible(inc.Severity) && s.reportPipeline != nil && s.itsmConfigured() {
+		if autoTicketEligible(inc.Severity) && s.reportPipeline != nil && s.itsmConfiguredFor(inc.TenantID) {
 			if _, err := s.reportPipeline.EnqueueIncidentSync(ctx, inc.TenantID, inc.ID); err != nil {
 				logError("incidents", "auto-enqueue sync", map[string]any{"incident_id": inc.ID, "error": err.Error()})
 			}

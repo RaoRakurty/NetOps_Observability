@@ -1027,7 +1027,7 @@ function ITSMConfigForm() {
   return (
     <div className="card">
       <div className="admin-card-head"><h2>ServiceNow & Jira configuration</h2><RequiredLegend /></div>
-      <p className="admin-sub">Configure your system-of-record connectors here — no environment variables or restart needed. Applies to both alert auto-ticketing and incident promotion. Secrets are write-only: leave blank to keep the stored value. Only the platform owner can change these.</p>
+      <p className="admin-sub">Configure your system-of-record connectors here — no environment variables or restart needed. These apply to <strong>your tenant</strong>: your incidents promote to your own ServiceNow/Jira. Secrets are write-only: leave blank to keep the stored value.</p>
 
       <h3 style={{ marginTop: 14 }}>ServiceNow {sn.configured && <span className="badge good">connected</span>}</h3>
       <label className="scope-chip" style={{ marginBottom: 8 }}>
@@ -1061,15 +1061,167 @@ function ITSMConfigForm() {
   );
 }
 
+// ITSMWizard — a guided flow (system → connect → routing → review) for wiring a
+// tenant's ServiceNow/Jira, mirroring the Reports guided setup. Builds an
+// ItsmConfigInput and saves it (connectors hot-swap live, no restart).
+function ITSMWizard({ onCancel, onDone }: { onCancel: () => void; onDone: () => Promise<void> }) {
+  const [step, setStep] = useState(0);
+  const [pick, setPick] = useState<"servicenow" | "jira" | "both">("servicenow");
+  const [sn, setSn] = useState({ instance_url: "", user: "", password: "", min_severity: "critical", assignment_group: "" });
+  const [jr, setJr] = useState({ base_url: "", project_key: "", email: "", api_token: "", issue_type: "", resolve_transition: "", min_severity: "critical" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const STEPS = ["System", "Connect", "Routing", "Review"];
+  const SEV = ["info", "low", "medium", "high", "critical"];
+  const wantSN = pick === "servicenow" || pick === "both";
+  const wantJR = pick === "jira" || pick === "both";
+
+  const SYSTEMS: { id: typeof pick; icon: string; label: string; blurb: string }[] = [
+    { id: "servicenow", icon: "🧰", label: "ServiceNow", blurb: "Cut incidents via the Table API; auto-resolve when the alert clears." },
+    { id: "jira", icon: "📋", label: "Jira", blurb: "Open deduped issues via REST v2; transition to Done on clear." },
+    { id: "both", icon: "🔗", label: "Both", blurb: "Wire ServiceNow and Jira together." },
+  ];
+
+  const valid = () => {
+    if (wantSN && !/^https?:\/\//.test(sn.instance_url)) return "ServiceNow instance URL must start with http(s)://";
+    if (wantJR && !/^https?:\/\//.test(jr.base_url)) return "Jira base URL must start with http(s)://";
+    if (wantJR && !jr.project_key.trim()) return "Jira project key is required";
+    return null;
+  };
+
+  const save = async () => {
+    const v = valid();
+    if (v) { setMsg(v); setStep(1); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await api.saveItsmConfig({
+        servicenow: { enabled: wantSN, instance_url: sn.instance_url, user: sn.user, password: sn.password, min_severity: sn.min_severity, assignment_group: sn.assignment_group },
+        jira: { enabled: wantJR, base_url: jr.base_url, email: jr.email, api_token: jr.api_token, project_key: jr.project_key, issue_type: jr.issue_type, min_severity: jr.min_severity, resolve_transition: jr.resolve_transition },
+      });
+      await onDone();
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+  const cardBtn = (active: boolean): React.CSSProperties => ({ textAlign: "left", padding: 14, borderColor: active ? "var(--accent)" : undefined });
+
+  return (
+    <div className="card" style={{ maxWidth: 760 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0 }}>Guided ITSM setup</h2>
+        <button className="dash-btn" onClick={onCancel}>Close</button>
+      </div>
+      <p className="mini-meta">Wires your tenant's ticketing — your incidents promote to your own system of record.</p>
+      <div style={{ display: "flex", gap: 14, margin: "14px 0 18px", flexWrap: "wrap" }}>
+        {STEPS.map((s, i) => (
+          <div key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: i === step ? "var(--accent)" : "var(--muted)", fontWeight: i === step ? 700 : 400 }}>
+            <span style={{ width: 20, height: 20, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: i < step ? "var(--good)" : i === step ? "var(--accent)" : "var(--panel-border)", color: "#fff", fontSize: 11 }}>{i < step ? "✓" : i + 1}</span>
+            {s}
+          </div>
+        ))}
+      </div>
+
+      {step === 0 && (
+        <div>
+          <p className="mini-meta">Which system of record do you use?</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 10 }}>
+            {SYSTEMS.map((g) => (
+              <button key={g.id} className="dash-btn" style={cardBtn(pick === g.id)} onClick={() => { setPick(g.id); setStep(1); }}>
+                <div style={{ fontSize: 22 }}>{g.icon}</div>
+                <div style={{ fontWeight: 700, marginTop: 4 }}>{g.label}</div>
+                <div className="mini-meta">{g.blurb}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === 1 && (
+        <div style={{ display: "grid", gap: 16 }}>
+          {wantSN && (
+            <div>
+              <h3 style={{ margin: "0 0 8px" }}>ServiceNow</h3>
+              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSn({ ...sn, instance_url: v })} placeholder="https://dev12345.service-now.com" required />
+                <LabeledInput label="User" value={sn.user} onChange={(v) => setSn({ ...sn, user: v })} />
+                <LabeledInput label="Password" type="password" value={sn.password} onChange={(v) => setSn({ ...sn, password: v })} hint="write-only" />
+              </div>
+            </div>
+          )}
+          {wantJR && (
+            <div>
+              <h3 style={{ margin: "0 0 8px" }}>Jira</h3>
+              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJr({ ...jr, base_url: v })} placeholder="https://your-org.atlassian.net" required />
+                <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJr({ ...jr, project_key: v })} placeholder="NOC" required />
+                <LabeledInput label="Email" value={jr.email} onChange={(v) => setJr({ ...jr, email: v })} placeholder="svc@your-org.com" />
+                <LabeledInput label="API token" type="password" value={jr.api_token} onChange={(v) => setJr({ ...jr, api_token: v })} hint="write-only" />
+              </div>
+            </div>
+          )}
+          <RequiredLegend />
+        </div>
+      )}
+
+      {step === 2 && (
+        <div style={{ display: "grid", gap: 16 }}>
+          {wantSN && (
+            <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+              <LabeledSelect label="ServiceNow — min severity to ticket" value={sn.min_severity} onChange={(v) => setSn({ ...sn, min_severity: v })} options={SEV} />
+              <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSn({ ...sn, assignment_group: v })} />
+            </div>
+          )}
+          {wantJR && (
+            <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+              <LabeledSelect label="Jira — min severity to ticket" value={jr.min_severity} onChange={(v) => setJr({ ...jr, min_severity: v })} options={SEV} />
+              <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJr({ ...jr, issue_type: v })} placeholder="Incident" />
+              <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJr({ ...jr, resolve_transition: v })} placeholder="Done" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {step === 3 && (
+        <div style={{ display: "grid", gap: 8 }}>
+          <p className="mini-meta">Review — connectors hot-swap live on save (no restart).</p>
+          {wantSN && <div className="mini-meta">🧰 <strong>ServiceNow</strong> → {sn.instance_url || "—"} · tickets at <strong>{sn.min_severity}</strong> and worse{sn.assignment_group ? ` · group ${sn.assignment_group}` : ""}</div>}
+          {wantJR && <div className="mini-meta">📋 <strong>Jira</strong> → {jr.base_url || "—"} · project <strong>{jr.project_key || "—"}</strong> · issues at <strong>{jr.min_severity}</strong> and worse</div>}
+          {msg && <p className="mini-meta" style={{ color: "var(--bad)" }}>{msg}</p>}
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 18 }}>
+        <button className="dash-btn" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</button>
+        {step < 3 ? (
+          <button className="dash-btn accent" onClick={() => setStep((s) => Math.min(3, s + 1))}>Next</button>
+        ) : (
+          <button className="dash-btn accent" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save & connect"}</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function IntegrationsAdmin() {
-  const [sn] = useReload(() => api.itsmServiceNow());
-  const [jira] = useReload(() => api.itsmJira());
+  const [sn, , reloadSN] = useReload(() => api.itsmServiceNow());
+  const [jira, , reloadJira] = useReload(() => api.itsmJira());
+  const [wizard, setWizard] = useState(false);
   const snLive = !!sn?.configured;
   const jiraLive = !!jira?.configured;
+
+  if (wizard) {
+    return (
+      <>
+        <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
+        <ITSMWizard onCancel={() => setWizard(false)} onDone={async () => { setWizard(false); await reloadSN(); await reloadJira(); }} />
+      </>
+    );
+  }
 
   return (
     <>
       <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <button className="dash-btn accent" onClick={() => setWizard(true)}>✨ Guided setup</button>
+      </div>
       <ITSMConfigForm />
 
       {sn?.enabled && (
