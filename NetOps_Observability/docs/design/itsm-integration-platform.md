@@ -55,31 +55,39 @@ configurable — turning the feature into a control plane.
                   │ INBOUND SYNC    webhook (signed) ─or─ reconcile poll
                   ▼
         ┌────────────────────────┐
-        │   State Reconciler     │  VerifyWebhook → Normalize → dedup(external_evt_id)
-        │                        │  → MappingEngine(state_map) → correlate(provider,external_id)
+        │  Normalization +       │  VerifyWebhook → Normalize → 3-level dedup
+        │  Ordering / Causality  │  → per-incident sequencing (watermark) → drop/reorder stale
         └─────────┬──────────────┘
-                  │ SOURCE UPDATE   incident.Transition(...) — last-writer-wins by OccurredAt
+                  │ ORDERED EVENT   causally-correct, deduped, in-order per external_incident
+                  ▼
+        ┌────────────────────────┐
+        │   State Reconciler     │  MappingEngine(state_map) → priority conflict resolution
+        │                        │  → correlate(provider, external_id) → decide internal action
+        └─────────┬──────────────┘
+                  │ SOURCE UPDATE   incident.Transition(...) — priority rules, not bare LWW
                   ▼
         ┌────────────────────────┐
         │   NMS (source of truth)│  state converged; audit + metrics emitted
         └────────────────────────┘
 ```
 
+**Two control planes, not one.** The reconciler decides *what the state should
+be*; it must be fed *causally-correct, deduped, in-order* events — otherwise
+webhooks + retries + polling (an at-least-once, multi-source world) produce
+resolved-before-acknowledged, duplicate reopen/close flapping, and wrong SLA
+math. So an **Event Normalization + Ordering / Causality Layer** sits *before*
+the reconciler. See §4a (ordering), §4c (conflict resolution), §4d (idempotency).
+
 Each box → concrete component (and the phase that builds it):
 
 | Loop box | Component | Reuses | Phase |
 |---|---|---|---|
 | NMS → OUTBOUND | Outbound Event Router (`enqueueIntegrationEvent`) | incident SoR + PG queue | ✅ P0 / P1 reshape |
-| ITSM systems | `Provider.Apply` (SN/Jira/PD/Slack) | existing connectors | ✅ P0 / P1 interface |
-| INBOUND SYNC | Inbound webhook endpoint + drift poller | `tenantRateLimiter`, scheduler | P2 / P4 |
-| **State Reconciler** | `Provider.VerifyWebhook`+`Normalize` → MappingEngine → Correlation | reverse `integration_mappings` index | **P2-P3** |
-| NMS source update | `incident.Transition()` lifecycle | ack/investigate/resolve/close/reopen (exists) | P2 |
-
-The reconciler is the only genuinely new control point; everything it calls
-(queue, incident lifecycle, audit) already exists. Its hard requirements —
-idempotency (`external_evt_id` dedup), drift/conflict resolution (last-writer-wins
-by `OccurredAt`, NMS authoritative for severity / external for ticket fields), and
-fail-closed verification — are specified in §4, §6, §9.
+| ITSM systems | Provider Adapter (`Provider.Apply`) | existing connectors | ✅ P0 / P1 interface |
+| INBOUND SYNC | Inbound Ingestion (webhook endpoint + drift poller) | `tenantRateLimiter`, scheduler | P2 / P4 |
+| **Normalization + Ordering** | `Provider.Normalize` + **Causality/Ordering engine** (3-level dedup, per-incident watermark) | `integration_events` ledger | **P2 (new core)** |
+| **State Reconciler** | MappingEngine + priority conflict resolver + Correlation | reverse `integration_mappings` index | **P2-P3** |
+| NMS source update | Incident Lifecycle Engine (`incident.Transition()`) | ack/investigate/resolve/close/reopen (exists) | P2 |
 
 ## 2. Architecture — the Integration Orchestrator
 
@@ -101,13 +109,25 @@ horizontally scalable via the lease queue (no new process).
  mapping row + audit + metrics              incident.Transition(...) + audit + metrics
 ```
 
-Orchestrator sub-components mapped to code:
-- **Outbound Event Router** = `enqueueIntegrationEvent` (generalize `EnqueueIncidentSync`).
-- **Inbound Event Processor** = new `integrations_webhook.go` handler + `integration_inbound` job worker.
-- **Retry Engine** = the PG queue (exists).
-- **Mapping Engine** = `integration_mapping.go` (field + state translation, pure/testable).
-- **Tenant Policy Resolver** = `integrationConfigStore` (per-tenant, per-provider; extends `itsm_config`).
-- **Correlation Engine** = reverse index lookup → existing incident dedup/lifecycle.
+The orchestrator is a **6-layer pipeline** (the layering is the contract; each
+layer is independently testable and replaceable):
+
+| # | Layer | Responsibility | Code | Status |
+|---|---|---|---|---|
+| 1 | **Outbound Router** | alert/incident → enqueue → provider | `enqueueIntegrationEvent` (generalizes `EnqueueIncidentSync`) | ✅ exists |
+| 2 | **Provider Adapter** | per-provider in/out translation (no core deps) | `integration.Provider` registry | P1 |
+| 3 | **Inbound Ingestion** | receive webhooks / poll; verify signature; persist raw; enqueue | `integrations_webhook.go` + `integration_inbound` worker | P2 |
+| 4 | **Normalization + Ordering / Causality** | normalize → 3-level dedup → per-incident sequencing (watermark) → drop/reorder stale | `integration.Normalize` + `ordering.go` | **P2 (new)** |
+| 5 | **State Reconciler** | map external→internal; priority conflict resolution; correlate to incident | `mapping.go` + `reconcile.go` | **P2-P3** |
+| 6 | **Incident Lifecycle Engine** | apply the decided transition | `incident.Transition()` | ✅ exists |
+
+Cross-cutting: **Retry Engine** = the PG queue (exists); **Tenant Policy
+Resolver** = `integrationConfigStore` (per-tenant/provider, extends `itsm_config`);
+**Audit/Metrics** = `audit_events` + `/metrics` (exist).
+
+Layers 1, 2, 6 already ship or are thin wrappers. **Layers 3-5 are the new work**,
+and **Layer 4 (ordering/causality) is the subtle, non-optional one** — without it
+the reconciler (Layer 5) makes correct decisions on *incorrectly-ordered* input.
 
 ---
 
@@ -148,26 +168,58 @@ one `Register`. The orchestrator core is provider-agnostic (satisfies CLAUDE.md
 
 ---
 
-## 4. Canonical event + state machine
+## 4. Canonical event, ordering & reconciliation
 
 ```go
 type IntegrationEvent struct {
-    Provider     string
-    Tenant       string
-    ExternalID   string            // ticket/incident id in the external system
-    ExternalEvtID string           // provider event id / etag — idempotency key
-    Type         EventType         // incident.created|updated|acknowledged|resolved|assigned|comment_added
-    ExternalState string           // raw external state ("In Progress", "6", "resolved", …)
-    Actor        string
-    Comment      string
-    Assignee     string
-    OccurredAt   time.Time
-    Raw          json.RawMessage
+    Provider      string
+    Tenant        string
+    // --- 3-level idempotency keys (§4d) ---
+    ProviderEvtID string  // (1) raw dedup — provider's event/delivery id
+    ExternalID    string  // (2) logical dedup — ticket/incident id in the external system
+    AlertID       string  // (3) business dedup — the internal alert/incident this maps to
+    // --- ordering / causality (§4a) ---
+    ExternalSeq   int64   // provider monotonic version (SN sys_mod_count, Jira changelog id, …); 0 if absent
+    OccurredAt    time.Time
+    // --- payload ---
+    Type          EventType // incident.created|updated|acknowledged|resolved|assigned|comment_added
+    ExternalState string    // raw external state ("In Progress", "6", "resolved", …)
+    Actor         string
+    Comment       string
+    Assignee      string
+    Raw           json.RawMessage
 }
 ```
 
-**State reconciliation** — per-tenant configurable map external→internal, with a
-shipped default:
+### 4a. Event Normalization + Ordering / Causality Layer (Layer 4)
+
+Webhooks (at-least-once, retried) + polling (catch-up) + multiple providers means
+events arrive **out of order and duplicated**. Applying them naïvely yields
+resolved-before-acknowledged, reopen/close flapping, and corrupted SLA timers.
+This layer guarantees the reconciler sees a **causally-correct, deduped,
+monotonic stream per `(tenant, provider, external_id)`**:
+
+1. **Dedup** (§4a, 3 levels) — drop raw/logical/business duplicates.
+2. **Sequence** — order by a robust key, NOT wall-clock alone:
+   `orderKey = (ExternalSeq, OccurredAt, providerPrecedence)`. Provider-supplied
+   monotonic version (`ExternalSeq`) is primary because it's immune to clock
+   drift; `OccurredAt` breaks ties; deterministic provider precedence breaks the
+   rest.
+3. **Watermark** — `integration_mappings.applied_seq` is the high-water mark per
+   incident. An event whose `orderKey` is **≤** the watermark is **stale**:
+   dropped (terminal already applied) or merged (non-conflicting field), never
+   replayed as a transition. This is what stops flapping.
+4. **Reorder window** (optional, P4) — a short hold buffer to reorder
+   near-simultaneous events before applying; default off (watermark handles the
+   common case), enabled per tenant if a provider is bursty.
+
+The ordering engine is **pure** (events in → ordered/decided events out, given
+the current watermark) and therefore exhaustively unit-testable with adversarial
+orderings (resolve-then-ack, duplicate close, late reopen).
+
+### 4b. State reconciliation (the map)
+
+Per-tenant configurable map external→internal, with a shipped default:
 
 | External (normalized) | Internal incident state |
 |---|---|
@@ -177,10 +229,45 @@ shipped default:
 | resolved / closed / done | Resolved → (auto) Closed |
 | escalated | Open + severity bump |
 
-Conflict policy (drift): **last-writer-wins by `OccurredAt`**, but NMS-originated
-transitions within a short window are authoritative for fields NMS owns
-(severity), external authoritative for ticket fields (assignee, ticket comments).
-Configurable per tenant; default documented above.
+### 4c. Conflict resolution (priority order, NOT bare last-writer-wins)
+
+`OccurredAt` alone is unsafe: clocks drift across systems and retries violate
+ordering. After the ordering layer (§4a) has sequenced events, conflicts are
+resolved by a **deterministic priority ladder**, evaluated top-down:
+
+1. **Terminal states win for NMS** — once NMS marks an incident `Resolved`/`Closed`
+   (the alert genuinely cleared), a later external non-terminal update does **not**
+   reopen it. NMS owns "is the underlying condition still true?".
+2. **Assignment / ownership → ITSM wins** — assignee, assignment group, owner are
+   authoritative from the ticketing system (that's where humans triage).
+3. **Intermediate states → event-time ordering** — ack/investigate/in-progress
+   resolve by `orderKey` (§4a): `ExternalSeq` first (drift-immune), then
+   `OccurredAt`.
+4. **Tie → deterministic provider precedence** — a fixed, configured ordering
+   (e.g. ServiceNow > Jira > PagerDuty > Slack) so the outcome is reproducible.
+
+Field ownership summary: NMS owns severity + terminal lifecycle (it sees the
+telemetry); ITSM owns assignment + ticket comments. All four rules are
+per-tenant overridable; the ladder above is the shipped default. Pure + table-
+driven → unit-tested with adversarial event pairs.
+
+### 4d. Idempotency — three levels
+
+A single logical change can arrive many times (webhook retry, poll overlap,
+fan-out). Dedup at three scopes, each backed by a unique key:
+
+1. **Raw dedup** — `ProviderEvtID` (the provider's delivery/event id). Unique
+   `(tenant, provider, provider_evt_id)` on `integration_events` → a redelivered
+   webhook is a no-op insert.
+2. **Logical dedup** — `ExternalID` + `ExternalSeq`. Two different deliveries
+   describing the *same ticket version* collapse via the §4a watermark
+   (`applied_seq`) — never applied twice.
+3. **Business dedup** — `(tenant, AlertID)`. The incident system already dedups
+   alerts→one incident (`DedupKey`); inbound events resolve to that same incident,
+   so N external tickets for one root cause don't spawn N internal state machines.
+
+Without all three, reconciliation is noisy at scale (level 1 stops storms,
+level 2 stops flapping, level 3 stops fan-out duplication).
 
 ---
 
@@ -199,21 +286,25 @@ integration_configs(
   field_mappings jsonb, state_map jsonb,    -- mapping engine inputs
   status text, updated_at timestamptz)
 
--- External↔internal correlation (the reverse index inbound needs).
+-- External↔internal correlation (reverse index) + the ordering WATERMARK (§4a).
 integration_mappings(
   tenant_id text, provider text, external_id text,  -- PK (tenant_id, provider, external_id)
-  internal_incident_id text, state text,
+  internal_incident_id text, state text,            -- level-2/3 correlation (§4d)
+  applied_seq bigint, applied_at timestamptz,       -- high-water mark: last orderKey applied
   external_etag text, last_synced_at timestamptz,
   UNIQUE(tenant_id, provider, external_id))
 
--- Durable event log (outbound + inbound) for idempotency, audit, observability.
+-- Durable event log (outbound + inbound): 3-level idempotency + ordering + audit.
 integration_events(
   id text PK, tenant_id text, provider text,
   direction text,                           -- 'outbound' | 'inbound'
-  type text, external_evt_id text,          -- dedup key (tenant, provider, external_evt_id)
+  type text,
+  provider_evt_id text,                     -- level-1 raw dedup (§4d)
+  external_id text, external_seq bigint,    -- level-2 logical dedup + ordering key (§4a)
+  alert_id text,                            -- level-3 business dedup (§4d)
   status text, retry_count int, error text,
-  payload jsonb, created_at, updated_at,
-  UNIQUE(tenant_id, provider, external_evt_id))   -- at-least-once → exactly-once effect
+  payload jsonb, occurred_at timestamptz, created_at, updated_at,
+  UNIQUE(tenant_id, provider, provider_evt_id))   -- redelivery → no-op insert (exactly-once effect)
 ```
 
 Reuse, don't re-create:
@@ -306,11 +397,16 @@ Slack is notification + **action source**, not a ticket store:
 ## 11. Phased plan
 
 - **P0 — done**: outbound per-tenant + async spine + idempotency + DLQ (#40/#38/#37).
-- **P1 — provider + config normalization**: `Provider` interface + registry
-  (wrap existing connectors); `integration_configs` table (migrate `itsm_config`);
-  reverse `integration_mappings` index; `Sealer` seam. *No behavior change.*
-- **P2 — inbound (SN + Jira)**: webhook endpoint + signature verify + normalize +
-  state_map + correlate → incident lifecycle; `integration_events` ledger; audit.
+- **P1 — provider + ordering/reconciliation core (pure)**: `Provider` interface +
+  registry (Type/Capabilities/VerifyWebhook/Normalize); SN/Jira/PD/Slack inbound
+  translators (real HMAC verify + payload normalize); **`ordering.go`** (3-level
+  dedup + per-incident watermark + orderKey) and **`mapping.go`/`reconcile.go`**
+  (state_map + priority ladder §4c) — all pure + exhaustively unit-tested with
+  adversarial orderings. *No live wiring / no behavior change.*
+- **P2 — inbound wiring (SN + Jira)**: webhook endpoint + signature verify →
+  ordering layer → reconciler → incident lifecycle; `integration_configs` table
+  (migrate `itsm_config`); reverse `integration_mappings` index + `applied_seq`
+  watermark; `integration_events` ledger (3-level dedup); `Sealer` seam; audit.
 - **P3 — PagerDuty + Slack interactivity**: ack/resolve/escalate actions → state,
   fan-out to ticketing.
 - **P4 — reconciliation poller + observability**: drift correction; metrics +
