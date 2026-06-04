@@ -92,6 +92,11 @@ func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 	}
 	if b, err := kvLoad(path); err == nil {
 		_ = json.Unmarshal(b, &s.cfg)
+		if dec, derr := mapNotify(s.cfg, openFn(s.vault())); derr != nil {
+			logError("notify.config", "decrypt secrets", errf(derr))
+		} else {
+			s.cfg = dec
+		}
 	} else {
 		// First run (no stored config): seed Slack/PagerDuty from the legacy
 		// env wiring so an existing env-driven deployment keeps working, then
@@ -117,8 +122,23 @@ func (s *notifyConfigStore) seedFromEnv() {
 	}
 }
 
+// vault returns the secret-custody Vault (nil → dormant/passthrough; e.g. tests
+// without a wired server).
+func (s *notifyConfigStore) vault() *Vault {
+	if s.srv == nil {
+		return nil
+	}
+	return s.srv.vault
+}
+
 func (s *notifyConfigStore) save() {
-	b, err := json.MarshalIndent(s.cfg, "", "  ")
+	// Encrypt secrets at rest (platform DEK); the in-memory s.cfg stays plaintext.
+	c, err := mapNotify(s.cfg, sealFn(s.vault()))
+	if err != nil {
+		logError("notify.config", "encrypt secrets", errf(err))
+		return
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
 	if err == nil {
 		_ = kvSave(s.path, b)
 	}

@@ -34,13 +34,14 @@ import (
 // ---------------------------------------------------------------------------
 
 type ldapConfigStore struct {
-	mu   sync.RWMutex
-	cfg  *ldapConfig // nil until an operator saves; falls back to env defaults
-	path string
+	mu    sync.RWMutex
+	cfg   *ldapConfig // nil until an operator saves; falls back to env defaults
+	path  string
+	vault *Vault // secret-custody envelope for bind_password at rest (nil = dormant/passthrough)
 }
 
-func newLDAPConfigStore(path string) *ldapConfigStore {
-	s := &ldapConfigStore{path: path}
+func newLDAPConfigStore(path string, v *Vault) *ldapConfigStore {
+	s := &ldapConfigStore{path: path, vault: v}
 	s.load()
 	return s
 }
@@ -53,6 +54,11 @@ func (s *ldapConfigStore) load() {
 	var c ldapConfig
 	if json.Unmarshal(b, &c) != nil {
 		return
+	}
+	if dec, derr := mapLDAP(c, openFn(s.vault)); derr != nil {
+		logError("ldap.config", "decrypt secret", errf(derr))
+	} else {
+		c = dec
 	}
 	s.mu.Lock()
 	s.cfg = &c
@@ -85,7 +91,11 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 	if in.BindPassword == "" && s.cfg != nil {
 		in.BindPassword = s.cfg.BindPassword
 	}
-	b, err := json.MarshalIndent(in, "", "  ")
+	sealed, err := mapLDAP(in, sealFn(s.vault)) // encrypt at rest; in-memory stays plaintext
+	if err != nil {
+		return ldapConfig{}, err
+	}
+	b, err := json.MarshalIndent(sealed, "", "  ")
 	if err != nil {
 		return ldapConfig{}, err
 	}
@@ -381,13 +391,14 @@ func (c tacacsConfig) client() *TACACS {
 }
 
 type tacacsConfigStore struct {
-	mu   sync.RWMutex
-	cfg  *tacacsConfig
-	path string
+	mu    sync.RWMutex
+	cfg   *tacacsConfig
+	path  string
+	vault *Vault // secret-custody envelope for the shared secret at rest (nil = dormant)
 }
 
-func newTACACSConfigStore(path string) *tacacsConfigStore {
-	s := &tacacsConfigStore{path: path}
+func newTACACSConfigStore(path string, v *Vault) *tacacsConfigStore {
+	s := &tacacsConfigStore{path: path, vault: v}
 	s.load()
 	return s
 }
@@ -400,6 +411,11 @@ func (s *tacacsConfigStore) load() {
 	var c tacacsConfig
 	if json.Unmarshal(b, &c) != nil {
 		return
+	}
+	if dec, derr := mapTACACS(c, openFn(s.vault)); derr != nil {
+		logError("tacacs.config", "decrypt secret", errf(derr))
+	} else {
+		c = dec
 	}
 	s.mu.Lock()
 	s.cfg = &c
@@ -428,8 +444,13 @@ func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
 	}
 	// #nosec G117 -- the TACACS shared secret is intentionally persisted to the kv
 	// store so the provider is UI-configurable; it is redacted from every API
-	// response by publicTACACSConfig and never logged.
-	b, err := json.MarshalIndent(in, "", "  ")
+	// response by publicTACACSConfig and never logged. Encrypted at rest under the
+	// platform DEK; the in-memory copy below stays plaintext for the client.
+	sealed, err := mapTACACS(in, sealFn(s.vault))
+	if err != nil {
+		return tacacsConfig{}, err
+	}
+	b, err := json.MarshalIndent(sealed, "", "  ")
 	if err != nil {
 		return tacacsConfig{}, err
 	}

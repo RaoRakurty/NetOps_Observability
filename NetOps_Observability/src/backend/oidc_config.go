@@ -164,9 +164,22 @@ func (s *oidcConfigStore) load() {
 	if json.Unmarshal(b, &c) != nil {
 		return
 	}
+	if dec, derr := mapOIDC(c, openFn(s.vault())); derr != nil {
+		logError("oidc.config", "decrypt secret", errf(derr))
+	} else {
+		c = dec
+	}
 	s.mu.Lock()
 	s.cfg = &c
 	s.mu.Unlock()
+}
+
+// vault returns the secret-custody Vault (nil → dormant/passthrough).
+func (s *oidcConfigStore) vault() *Vault {
+	if s.srv == nil {
+		return nil
+	}
+	return s.srv.vault
 }
 
 // effective returns the stored overlay when present, else the env-derived
@@ -197,8 +210,14 @@ func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
 	}
 	// #nosec G117 -- the OIDC client secret is intentionally persisted to the kv
 	// store so the provider is UI-configurable; it is redacted from every API
-	// response by publicOIDCConfig and never logged.
-	b, err := json.MarshalIndent(in, "", "  ")
+	// response by publicOIDCConfig and never logged. At rest it is encrypted under
+	// the platform DEK (the in-memory copy below stays plaintext for the provider).
+	sealed, err := mapOIDC(in, sealFn(s.vault()))
+	if err != nil {
+		s.mu.Unlock()
+		return oidcConfig{}, err
+	}
+	b, err := json.MarshalIndent(sealed, "", "  ")
 	if err != nil {
 		s.mu.Unlock()
 		return oidcConfig{}, err

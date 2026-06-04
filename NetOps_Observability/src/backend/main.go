@@ -322,8 +322,8 @@ func newServer() *server {
 	// UI-configurable email/SMS/push channels (registers live channels into the
 	// dispatcher built above). Must come after notifier is set on srv.
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
-	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"))
-	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"))
+	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"), vault)
+	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"), vault)
 	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
 	// SSO/OIDC: runtime-configurable overlay over the env defaults. The store
 	// builds the initial live provider into the atomic pointer and swaps it on

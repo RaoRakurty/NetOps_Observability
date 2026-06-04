@@ -40,8 +40,8 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 		tenants:   ts,
 		refresh:   rf,
 		startedAt: time.Now().UTC(),
-		ldap:      newLDAPConfigStore(dir + "/ldap_config.json"),
-		tacacs:    newTACACSConfigStore(dir + "/tacacs_config.json"),
+		ldap:      newLDAPConfigStore(dir + "/ldap_config.json", nil),
+		tacacs:    newTACACSConfigStore(dir + "/tacacs_config.json", nil),
 	}
 	s.oidc.Store(newOIDCProvider()) // disabled (no env) -> ready()==false
 	s.oidcCfg = newOIDCConfigStore(dir+"/oidc_config.json", s)
@@ -63,7 +63,7 @@ func adminToken(t *testing.T, srv *httptest.Server) string {
 
 func TestLDAPConfigStoreSetEffectiveAndReload(t *testing.T) {
 	path := t.TempDir() + "/ldap.json"
-	st := newLDAPConfigStore(path)
+	st := newLDAPConfigStore(path, nil)
 	// Nothing saved yet -> falls back to env defaults (disabled).
 	if st.effective().Enabled {
 		t.Fatal("expected disabled effective config before any save")
@@ -80,14 +80,14 @@ func TestLDAPConfigStoreSetEffectiveAndReload(t *testing.T) {
 		t.Fatalf("unexpected stored config: %+v", out)
 	}
 	// A fresh store over the same path must load the persisted config.
-	st2 := newLDAPConfigStore(path)
+	st2 := newLDAPConfigStore(path, nil)
 	if got := st2.effective(); !got.Enabled || got.BindPassword != "s3cret" {
 		t.Fatalf("reload lost data: %+v", got)
 	}
 }
 
 func TestLDAPConfigSecretPreservedOnUpdate(t *testing.T) {
-	st := newLDAPConfigStore(t.TempDir() + "/ldap.json")
+	st := newLDAPConfigStore(t.TempDir() + "/ldap.json", nil)
 	if _, err := st.set(ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "orig"}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestTACACSConfigClientBuild(t *testing.T) {
 }
 
 func TestTACACSConfigSecretPreservedAndValidate(t *testing.T) {
-	st := newTACACSConfigStore(t.TempDir() + "/tac.json")
+	st := newTACACSConfigStore(t.TempDir() + "/tac.json", nil)
 	if _, err := st.set(tacacsConfig{Enabled: true, Host: "h", Secret: "orig"}); err != nil {
 		t.Fatal(err)
 	}
