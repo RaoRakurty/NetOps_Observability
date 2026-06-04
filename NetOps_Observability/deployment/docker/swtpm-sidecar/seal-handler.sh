@@ -21,6 +21,10 @@ case "$cmd" in
 UNSEAL)
     (
         flock 9
+        # swtpm has only 3 transient object slots; tpm2-tools leaves the primary
+        # loaded after each invocation, so without this they exhaust and every op
+        # fails with "out of memory for object contexts". Flush before loading.
+        tpm2_flushcontext -t >/dev/null 2>&1 || true
         if [ ! -f "$TPMDIR/seal.priv" ]; then
             echo "ERR no-kek"   # first run — no KEK sealed yet; the Vault generates one
             exit 0
@@ -40,6 +44,7 @@ UNSEAL)
 SEAL)
     (
         flock 9
+        tpm2_flushcontext -t >/dev/null 2>&1 || true
         if ! printf '%s' "$arg" | base64 -d > "$TPMDIR/kek.bin" 2>/dev/null; then
             echo "ERR b64"
             exit 0

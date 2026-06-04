@@ -1,1 +1,5 @@
 Netops/
+
+# secret-custody Vault wrapped-DEK store written at runtime / by the gated swtpm test
+secrets_wrapped_keys.json
+**/secrets_wrapped_keys.json

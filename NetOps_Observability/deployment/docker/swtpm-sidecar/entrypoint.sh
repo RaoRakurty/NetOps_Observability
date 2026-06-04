@@ -35,6 +35,11 @@ done
 if [ ! -f "$TPMDIR/primary.ctx" ]; then
     tpm2_createprimary -C o -g sha256 -G rsa -c "$TPMDIR/primary.ctx" >/dev/null
 fi
+# swtpm exposes only 3 transient object slots; flush any left loaded by the
+# warm-up so the first SEAL/UNSEAL starts from a clean slate (the per-op handler
+# also flushes — see seal-handler.sh). Without this, slots leak and ops fail with
+# "out of memory for object contexts". Validated live against swtpm 0.7.1.
+tpm2_flushcontext -t >/dev/null 2>&1 || true
 
 rm -f "$SEAL_SOCKET"
 echo "secrets-seal: ready, serving $SEAL_SOCKET" >&2
