@@ -77,7 +77,7 @@ func (p *reportPipeline) processIntegrationInbound(ctx, jctx context.Context, _ 
 		return
 	}
 	// applyInboundEvent records its own ledger verdict + advances the watermark.
-	p.srv.applyInboundEvent(jctx, cfg, ev, pl.EventID)
+	p.srv.intgInbound(p.srv.applyInboundEvent(jctx, cfg, ev, pl.EventID))
 	p.finishInbound(ctx, job, tenant, fields)
 	logInfo("integration.inbound", "applied", merge(fields, map[string]any{
 		"provider": ev.Provider, "external_id": ev.ExternalID, "event_id": pl.EventID}))

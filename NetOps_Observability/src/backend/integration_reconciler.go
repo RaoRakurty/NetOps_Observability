@@ -104,6 +104,7 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
 				logError("integration.reconcile", "enqueue drift", errf(eerr))
 				continue
 			}
+			s.intgDrift(false)
 			logInfo("integration.reconcile", "inbound drift → re-drove", map[string]any{
 				"tenant": cfg.Tenant, "provider": cfg.Provider, "external_id": m.ExternalID,
 				"external_version": version, "applied_seq": m.Applied.Seq, "state": ev.ExternalState,
@@ -131,6 +132,7 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
 			Tenant: cfg.Tenant, Provider: cfg.Provider, ExternalID: m.ExternalID,
 			IncidentID: m.IncidentID, State: inc.Status, Applied: m.Applied,
 		})
+		s.intgDrift(true)
 		logInfo("integration.reconcile", "outbound drift → pushed resolve to ITSM", map[string]any{
 			"tenant": cfg.Tenant, "provider": cfg.Provider, "external_id": m.ExternalID, "nms_status": inc.Status,
 		})

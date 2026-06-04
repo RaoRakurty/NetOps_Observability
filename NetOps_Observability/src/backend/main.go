@@ -56,6 +56,7 @@ type server struct {
 	incMetrics     *incidentMetrics
 	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
 	providers      *integration.Registry // inbound provider translators (registry)
+	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
 	exportPolicy   *exportPolicyStore // runtime-tunable log-export limits
 	exportLimiter  *tenantRateLimiter // per-tenant export rate limit
 	copilotCfg     *copilotConfigStore
@@ -302,6 +303,7 @@ func newServer() *server {
 		srv.integrations = newIntegrationStore(ps.db)
 	}
 	srv.providers = integration.DefaultRegistry()
+	srv.intMetrics = &integrationMetrics{}
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
 	srv.exportLimiter = newTenantRateLimiter()
 	engine.OnFire = srv.ingestAlertIncident
@@ -654,6 +656,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.incMetrics != nil {
 		s.incMetrics.write(w)
+	}
+	if s.intMetrics != nil {
+		s.intMetrics.write(w)
 	}
 }
 

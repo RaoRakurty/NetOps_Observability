@@ -217,6 +217,7 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := prov.VerifyWebhook(r, body, cfg.WebhookSecret); err != nil {
+		s.intgWebhookRejected()
 		writeError(w, http.StatusUnauthorized, errors.New("signature verification failed"))
 		return
 	}
@@ -237,6 +238,7 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 		if !inserted {
 			continue // level-1 raw duplicate (redelivery) — already handled
 		}
+		s.intgWebhookReceived()
 		// Mutation is gated: only a bidirectional config with the flag on drives
 		// state. The apply is ENQUEUED (async, crash-safe via the worker lease),
 		// so the webhook returns immediately and never blocks the caller.
