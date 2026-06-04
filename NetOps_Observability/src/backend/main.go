@@ -57,6 +57,7 @@ type server struct {
 	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
 	providers      *integration.Registry // inbound provider translators (registry)
 	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
+	vault          *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	exportPolicy   *exportPolicyStore // runtime-tunable log-export limits
 	exportLimiter  *tenantRateLimiter // per-tenant export rate limit
 	copilotCfg     *copilotConfigStore
@@ -102,6 +103,14 @@ func newServer() *server {
 	// when STORE_BACKEND=postgres). Must run before any store is constructed.
 	if err := initStoreBackend(); err != nil {
 		log.Fatalf("store backend: %v", err)
+	}
+
+	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
+	// SEAL_PROVIDER is set; fail closed if a configured provider can't unseal the
+	// root KEK — never silently fall back to storing secrets in the clear.
+	vault, err := newVault(context.Background())
+	if err != nil {
+		log.Fatalf("secret custody: %v", err)
 	}
 
 	d := NewDiscoveryAggregator()
@@ -304,6 +313,7 @@ func newServer() *server {
 	}
 	srv.providers = integration.DefaultRegistry()
 	srv.intMetrics = &integrationMetrics{}
+	srv.vault = vault
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
 	srv.exportLimiter = newTenantRateLimiter()
 	engine.OnFire = srv.ingestAlertIncident
