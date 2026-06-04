@@ -1,0 +1,47 @@
+name: fuzz-nightly
+
+# Live fuzzing of the stdlib parsers (SPIFFE ID + federation bundles). Kept OUT
+# of the per-PR gate (backend-ci): live `-fuzz` worker coordination flakes on
+# busy 2-core PR runners ("context deadline exceeded"), and a 30s smoke finds
+# little. Here it runs alone (no contention) for minutes, on a schedule, so a
+# real crasher fails the run (and is uploaded), without blocking development.
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # daily ~07:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/src/backend
+
+jobs:
+  fuzz:
+    name: live fuzz parsers
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: ./tlsconfig/
+            target: FuzzParseSpiffeID
+          - pkg: .
+            target: FuzzParseFederationBundles
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.11'
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: fuzz ${{ matrix.target }}
+        run: go test ${{ matrix.pkg }} -run '^$' -fuzz "^${{ matrix.target }}$" -fuzztime 5m
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: NetOps_Observability/src/backend/**/testdata/fuzz/**
+          if-no-files-found: ignore
