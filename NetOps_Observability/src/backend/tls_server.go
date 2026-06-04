@@ -100,12 +100,16 @@ func buildTLSServer() (*tlsServer, error) {
 			},
 		}
 		if len(fedEntries) > 0 {
-			fed, err := tlsconfig.LoadFederationTrust(fedEntries)
+			// Auto-register the local domain so enabling federation doesn't reject
+			// the platform's own same-domain peers (the local root is already in the
+			// pool above; this maps it in the registry too).
+			regEntries := ensureLocalDomain(fedEntries, caFile)
+			fed, err := tlsconfig.LoadFederationTrust(regEntries)
 			if err != nil {
 				return nil, err
 			}
 			opts.Peer.Federation = fed
-			logInfo("tls", "SPIFFE federation enabled", map[string]any{"trust_domains": federationDomains(fedEntries)})
+			logInfo("tls", "SPIFFE federation enabled", map[string]any{"trust_domains": federationDomains(regEntries)})
 		}
 	}
 	cfg, err := tlsconfig.ServerConfig(opts)
@@ -194,6 +198,23 @@ func parseFederationBundles(s string) ([]tlsconfig.FederationEntry, error) {
 		entries = append(entries, tlsconfig.FederationEntry{Domain: domain, Path: path})
 	}
 	return entries, nil
+}
+
+// ensureLocalDomain prepends the local trust domain → local CA mapping so that
+// turning federation ON never breaks same-domain (local) mTLS. Without it, the
+// local CA root is in the chain-building pool but NOT the FederationTrust registry,
+// so every local peer (nginx→api, the API's own SVID) would chain to an
+// "unmapped root" and be rejected. Skipped if the operator already listed the
+// local domain explicitly (so their path wins, and we don't trip the
+// duplicate-domain guard). The local domain matches tls_ca.go's TLS_TRUST_DOMAIN.
+func ensureLocalDomain(entries []tlsconfig.FederationEntry, caFile string) []tlsconfig.FederationEntry {
+	local := strings.ToLower(strings.TrimSpace(envOr("TLS_TRUST_DOMAIN", "netops")))
+	for _, e := range entries {
+		if strings.ToLower(strings.TrimSpace(e.Domain)) == local {
+			return entries
+		}
+	}
+	return append([]tlsconfig.FederationEntry{{Domain: local, Path: caFile}}, entries...)
 }
 
 func federationPaths(entries []tlsconfig.FederationEntry) []string {

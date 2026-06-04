@@ -49,7 +49,9 @@ func initBackendTransport() error {
 	}
 	opts := tlsconfig.ClientOptions{RootCAs: bundle}
 	if len(fedEntries) > 0 {
-		fed, err := tlsconfig.LoadFederationTrust(fedEntries)
+		// Register the local domain too, so local backend servers (same-domain
+		// SVIDs) still bind once federation is on. See ensureLocalDomain.
+		fed, err := tlsconfig.LoadFederationTrust(ensureLocalDomain(fedEntries, caFile))
 		if err != nil {
 			return err
 		}

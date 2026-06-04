@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"netops/backend/tlsconfig"
+)
 
 // TestBuildTLSServerDormant: with no TLS env, the API stays plaintext (nginx is
 // the ingress terminator) — buildTLSServer returns (nil, nil), no error.
@@ -21,6 +25,58 @@ func TestBuildTLSServerFailClosed(t *testing.T) {
 	if _, err := buildTLSServer(); err == nil {
 		t.Fatal("cert without key must error (fail closed), not fall back to plaintext")
 	}
+}
+
+// TestParseFederationBundles: well-formed pairs parse; a missing '=' or empty
+// side is fail-closed; empty input disables federation.
+func TestParseFederationBundles(t *testing.T) {
+	got, err := parseFederationBundles("west=/a.pem, east=/b.pem ")
+	if err != nil || len(got) != 2 || got[0] != (tlsconfig.FederationEntry{Domain: "west", Path: "/a.pem"}) {
+		t.Fatalf("good parse failed: %#v err=%v", got, err)
+	}
+	if g, err := parseFederationBundles(""); g != nil || err != nil {
+		t.Fatalf("empty should disable federation: %#v err=%v", g, err)
+	}
+	for _, bad := range []string{"noequals", "=/p.pem", "dom="} {
+		if _, err := parseFederationBundles(bad); err == nil {
+			t.Errorf("parseFederationBundles(%q) must fail closed", bad)
+		}
+	}
+}
+
+// TestEnsureLocalDomain: enabling federation must always register the local
+// trust domain (so same-domain mTLS keeps working), unless the operator already
+// mapped it (then their entry wins, no duplicate).
+func TestEnsureLocalDomain(t *testing.T) {
+	t.Setenv("TLS_TRUST_DOMAIN", "netops")
+	out := ensureLocalDomain([]tlsconfig.FederationEntry{{Domain: "west", Path: "/w.pem"}}, "/local-ca.pem")
+	if len(out) != 2 || out[0] != (tlsconfig.FederationEntry{Domain: "netops", Path: "/local-ca.pem"}) {
+		t.Fatalf("local domain must be prepended: %#v", out)
+	}
+	// Operator already listed the local domain → no duplicate, their path wins.
+	in := []tlsconfig.FederationEntry{{Domain: "netops", Path: "/custom.pem"}, {Domain: "west", Path: "/w.pem"}}
+	if out := ensureLocalDomain(in, "/local-ca.pem"); len(out) != 2 || out[0].Path != "/custom.pem" {
+		t.Fatalf("explicit local domain must not be duplicated: %#v", out)
+	}
+}
+
+// FuzzParseFederationBundles: the env parser must never panic on arbitrary input,
+// and any successful parse must yield entries with non-empty domain and path.
+func FuzzParseFederationBundles(f *testing.F) {
+	for _, s := range []string{"", "a=/b.pem", "a=/b.pem,c=/d.pem", "noequals", "=/p", "d=", ",,,"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		out, err := parseFederationBundles(s)
+		if err != nil {
+			return
+		}
+		for _, e := range out {
+			if e.Domain == "" || e.Path == "" {
+				t.Fatalf("parseFederationBundles(%q) produced empty field: %#v", s, e)
+			}
+		}
+	})
 }
 
 func TestSplitCSV(t *testing.T) {

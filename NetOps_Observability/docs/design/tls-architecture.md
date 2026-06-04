@@ -152,8 +152,13 @@ cannot impersonate a local `netops` identity. Applies to the mTLS ingress
 audit-logged via `OnReject`, and counted in `netops_tls_identity_rejected_total`.
 Roots are keyed on whole-cert DER (unforgeable); each region exports its CA bundle
 and operators wire peers' roots in. Unset → no federation (single-domain default
-unchanged). **Out of scope here:** running a live SPIRE deployment and HSM-backed
-keys (the `PeerPolicy` URI seam + #17 SealingProvider are ready for both).
+unchanged). The **local** trust domain (`TLS_TRUST_DOMAIN`, default `netops`) is
+auto-registered to the local CA when federation is enabled, so turning it on never
+rejects the platform's own same-domain peers — you only list *foreign* domains.
+**Out of scope here:** running a live SPIRE deployment and HSM-backed keys (the
+`PeerPolicy` URI seam + #17 SealingProvider are ready for both). Foreign-root
+rotation currently needs a restart (matches the boot-time trust-bundle load);
+`FederationTrust.Reload()` is wired for a future SIGHUP/watch.
 
 ## 8. Migration strategy
 

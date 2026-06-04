@@ -1,6 +1,7 @@
 package tlsconfig
 
 import (
+	"crypto/tls"
 	"path/filepath"
 	"testing"
 )
@@ -29,6 +30,10 @@ func TestParseSpiffeID_Valid(t *testing.T) {
 	}
 	if id.path != "/ns/default/sa/api" {
 		t.Errorf("path = %q", id.path)
+	}
+	// Scheme is case-insensitive per RFC 3986.
+	if _, err := parseSpiffeID("SPIFFE://netops/x"); err != nil {
+		t.Errorf("uppercase scheme must parse: %v", err)
 	}
 }
 
@@ -271,6 +276,129 @@ func TestFederationDormantIsNoop(t *testing.T) {
 	if ce, se := handshake(sc, cc); ce != nil || se != nil {
 		t.Fatalf("dormant federation must not change behavior: client=%v server=%v", ce, se)
 	}
+}
+
+// TestFederationTrustDomainCaseInsensitive: a peer SVID whose URI host differs
+// only in case from the registered domain still binds (trust domains are
+// DNS-name-like / case-insensitive). Regression against a strict ==.
+func TestFederationTrustDomainCaseInsensitive(t *testing.T) {
+	caA := newTestCA(t)
+	caB := newTestCA(t)
+	clientCAs, _ := LoadTrustBundle(caA.bundlePath(), caB.bundlePath())
+	ft := fedTrust(t, map[string]*testCA{"neta": caA, "netb": caB})
+
+	sc := serverCfg(t, caA, ServerOptions{
+		RequireClientCert: true, ClientCAs: clientCAs,
+		Peer: PeerPolicy{Federation: ft},
+	}, "server", leafOpts{dns: []string{"localhost"}})
+
+	cp, kp := caB.issue(t, "peer", leafOpts{client: true, uris: []string{"spiffe://NETB/ns/default/sa/api"}}) // upper-case
+	crl, _ := NewCertReloader(cp, kp)
+	rootCAs, _ := LoadTrustBundle(caA.bundlePath())
+	cc, _ := ClientConfig(ClientOptions{RootCAs: rootCAs, ServerName: "localhost", Reloader: crl})
+
+	if ce, se := handshake(sc, cc); ce != nil || se != nil {
+		t.Fatalf("case-different domain must still bind: client=%v server=%v", ce, se)
+	}
+}
+
+// TestFederationAmbiguousMultiDomainRejected: a leaf carrying SPIFFE IDs from two
+// different trust domains is ambiguous and must be rejected (it could otherwise
+// straddle the binding check).
+func TestFederationAmbiguousMultiDomainRejected(t *testing.T) {
+	caA := newTestCA(t)
+	caB := newTestCA(t)
+	clientCAs, _ := LoadTrustBundle(caA.bundlePath(), caB.bundlePath())
+	ft := fedTrust(t, map[string]*testCA{"neta": caA, "netb": caB})
+
+	sc := serverCfg(t, caA, ServerOptions{
+		RequireClientCert: true, ClientCAs: clientCAs,
+		Peer: PeerPolicy{Federation: ft},
+	}, "server", leafOpts{dns: []string{"localhost"}})
+
+	cp, kp := caB.issue(t, "peer", leafOpts{client: true,
+		uris: []string{"spiffe://netb/ns/default/sa/api", "spiffe://neta/ns/default/sa/api"}})
+	crl, _ := NewCertReloader(cp, kp)
+	rootCAs, _ := LoadTrustBundle(caA.bundlePath())
+	cc, _ := ClientConfig(ClientOptions{RootCAs: rootCAs, ServerName: "localhost", Reloader: crl})
+
+	if _, se := handshake(sc, cc); se == nil {
+		t.Fatal("a leaf with SPIFFE IDs from two domains must be rejected")
+	}
+}
+
+// TestFederationMultipleSameDomainURIsAccepted: multiple SPIFFE IDs in the SAME
+// domain are not ambiguous and bind normally.
+func TestFederationMultipleSameDomainURIsAccepted(t *testing.T) {
+	caA := newTestCA(t)
+	caB := newTestCA(t)
+	clientCAs, _ := LoadTrustBundle(caA.bundlePath(), caB.bundlePath())
+	ft := fedTrust(t, map[string]*testCA{"neta": caA, "netb": caB})
+
+	sc := serverCfg(t, caA, ServerOptions{
+		RequireClientCert: true, ClientCAs: clientCAs,
+		Peer: PeerPolicy{Federation: ft},
+	}, "server", leafOpts{dns: []string{"localhost"}})
+
+	cp, kp := caB.issue(t, "peer", leafOpts{client: true,
+		uris: []string{"spiffe://netb/ns/default/sa/api", "spiffe://netb/ns/default/sa/api-alt"}})
+	crl, _ := NewCertReloader(cp, kp)
+	rootCAs, _ := LoadTrustBundle(caA.bundlePath())
+	cc, _ := ClientConfig(ClientOptions{RootCAs: rootCAs, ServerName: "localhost", Reloader: crl})
+
+	if ce, se := handshake(sc, cc); ce != nil || se != nil {
+		t.Fatalf("same-domain multi-URI must bind: client=%v server=%v", ce, se)
+	}
+}
+
+// TestFederationLayersWithAllowlist: federation binding and the identity allowlist
+// are independent AND-ed gates — passing the binding does not bypass the allowlist.
+func TestFederationLayersWithAllowlist(t *testing.T) {
+	caA := newTestCA(t)
+	caB := newTestCA(t)
+	clientCAs, _ := LoadTrustBundle(caA.bundlePath(), caB.bundlePath())
+	ft := fedTrust(t, map[string]*testCA{"neta": caA, "netb": caB})
+	allowed := "spiffe://netb/ns/default/sa/api"
+
+	mkServer := func() *tls.Config {
+		return serverCfg(t, caA, ServerOptions{
+			RequireClientCert: true, ClientCAs: clientCAs,
+			Peer: PeerPolicy{AllowedURIs: []string{allowed}, Federation: ft},
+		}, "server", leafOpts{dns: []string{"localhost"}})
+	}
+	mkClient := func(uri string) *tls.Config {
+		cp, kp := caB.issue(t, "peer", leafOpts{client: true, uris: []string{uri}})
+		crl, _ := NewCertReloader(cp, kp)
+		rootCAs, _ := LoadTrustBundle(caA.bundlePath())
+		cc, _ := ClientConfig(ClientOptions{RootCAs: rootCAs, ServerName: "localhost", Reloader: crl})
+		return cc
+	}
+
+	// Binding passes (netb), but identity not on the allowlist → rejected.
+	if _, se := handshake(mkServer(), mkClient("spiffe://netb/ns/default/sa/other")); se == nil {
+		t.Fatal("binding-OK but allowlist-miss must still be rejected")
+	}
+	// Binding passes AND identity allowed → accepted.
+	if ce, se := handshake(mkServer(), mkClient(allowed)); ce != nil || se != nil {
+		t.Fatalf("binding-OK and allowlisted must be accepted: client=%v server=%v", ce, se)
+	}
+}
+
+// FuzzParseSpiffeID: the parser must never panic on arbitrary input, and any
+// success must yield a non-empty trust domain.
+func FuzzParseSpiffeID(f *testing.F) {
+	for _, s := range []string{
+		"spiffe://netops/ns/default/sa/api", "spiffe://", "spiffe:///x",
+		"://", "spiffe://a@b/x", "spiffe://b:9/x", "%zz", "",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		id, err := parseSpiffeID(raw)
+		if err == nil && id.trustDomain == "" {
+			t.Fatalf("parseSpiffeID(%q) returned ok with empty trust domain", raw)
+		}
+	})
 }
 
 // TestClientBuildersInstallVerifyForEmptyAllowlistFederation guards the install
