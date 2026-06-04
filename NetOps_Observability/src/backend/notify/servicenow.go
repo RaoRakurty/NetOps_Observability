@@ -99,6 +99,44 @@ func (s *ServiceNow) PollState(number string) (state string, version int64, foun
 	return out.Result[0].State, v, true, nil
 }
 
+// ResolveExternal resolves a ServiceNow incident by its NUMBER (the drift
+// reconciler's outbound re-push when NMS is terminal but the ticket is still
+// open). Resolves the sys_id first, then PATCHes to Resolved. Idempotent — a
+// PATCH to an already-resolved incident is a no-op.
+func (s *ServiceNow) ResolveExternal(number string) error {
+	if s.instanceURL == "" || number == "" {
+		return errors.New("servicenow not configured")
+	}
+	u := strings.TrimRight(s.instanceURL, "/") +
+		"/api/now/table/incident?sysparm_limit=1&sysparm_fields=sys_id&sysparm_query=number=" + url.QueryEscape(number)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(s.user, s.password)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("servicenow lookup returned %d", resp.StatusCode)
+	}
+	var out struct {
+		Result []struct {
+			SysID string `json:"sys_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return err
+	}
+	if len(out.Result) == 0 || out.Result[0].SysID == "" {
+		return errors.New("servicenow: ticket not found")
+	}
+	return s.resolveIncident(out.Result[0].SysID)
+}
+
 func NewServiceNow(instanceURL, user, password string) *ServiceNow {
 	return &ServiceNow{
 		instanceURL:   strings.TrimRight(instanceURL, "/"),

@@ -51,6 +51,16 @@ type Jira struct {
 	open map[string]*JiraTicket // fingerprint -> ticket
 }
 
+// ResolveExternal transitions a Jira issue to Done/Resolved by its KEY (the drift
+// reconciler's outbound re-push). Idempotent — already-resolved issues no-op via
+// the transition lookup.
+func (j *Jira) ResolveExternal(key string) error {
+	if j.baseURL == "" || key == "" {
+		return errors.New("jira not configured")
+	}
+	return j.resolveIssue(key)
+}
+
 // PollState fetches an issue's current status name + a version (the `updated`
 // timestamp in epoch millis, since Jira has no monotonic change counter) by its
 // key, for the drift reconciler. found=false when the issue is gone. Read-only.
