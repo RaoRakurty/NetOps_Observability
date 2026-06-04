@@ -114,7 +114,7 @@ or identity violation rejects the connection and is audit-logged.
 | Phase | Scope | Status |
 |---|---|---|
 | **1** | Centralized `tlsconfig` package (secure server/client builders, trust, reload, mTLS identity) + opt-in API HTTPS/mTLS + HSTS + expiry metric + tests | ✅ **done** |
-| **2** | TLS private keys sealed via the #17 Vault; internal CA tooling (issue/rotate short-lived SVIDs); nginx↔API mTLS | planned |
+| **2** | Internal CA (`internalca`) issuing short-lived SPIFFE SVIDs; CA key **sealed via the #17 Vault**; boot self-bootstrap of API+nginx SVIDs + trust bundle (`tls_ca.go`); nginx↔API mTLS runbook | ✅ **done** (CA+seal+bootstrap unit-tested end to end; swtpm seal/unseal **live-validated**; nginx hop = runbook `docs/runbooks/tls-mtls.md`) |
 | **3** | API→backends client TLS (OpenSearch/ClickHouse/VictoriaMetrics/correlation) via `tlsconfig.ClientConfig`; Postgres `sslmode=verify-full` | planned |
 | **4** | Handshake/error metrics expansion; structured audit on trust/identity failures; readiness probes that assert cert validity | planned |
 | **5** | SPIFFE/SPIRE adoption (URI SAN seam already in `PeerPolicy`); HSM/TPM via the #17 SealingProvider; multi-region trust | future |
