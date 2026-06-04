@@ -14,10 +14,9 @@ on:
     paths:
       - 'NetOps_Observability/src/correlation/**'
       - '.github/workflows/correlation-ci.yml'
+  # No paths filter on pull_request (see backend-ci.yml): required checks must
+  # report on every PR. push stays path-filtered for fast branch feedback.
   pull_request:
-    paths:
-      - 'NetOps_Observability/src/correlation/**'
-      - '.github/workflows/correlation-ci.yml'
 
 permissions:
   contents: read

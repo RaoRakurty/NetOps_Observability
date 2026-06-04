@@ -16,11 +16,10 @@ on:
       - 'NetOps_Observability/src/backend/**'
       - 'NetOps_Observability/deployment/docker/Dockerfile.backend'
       - '.github/workflows/backend-ci.yml'
+  # No paths filter on pull_request: required status checks must report on EVERY
+  # PR to main, else a path-skipped workflow leaves the check stuck "Expected".
+  # (push stays path-filtered above for fast feedback on feature branches.)
   pull_request:
-    paths:
-      - 'NetOps_Observability/src/backend/**'
-      - 'NetOps_Observability/deployment/docker/Dockerfile.backend'
-      - '.github/workflows/backend-ci.yml'
 
 permissions:
   contents: read

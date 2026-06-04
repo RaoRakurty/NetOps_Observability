@@ -16,10 +16,9 @@ on:
     paths:
       - 'NetOps_Observability/src/frontend/**'
       - '.github/workflows/frontend-ci.yml'
+  # No paths filter on pull_request (see backend-ci.yml): required checks must
+  # report on every PR. push stays path-filtered for fast branch feedback.
   pull_request:
-    paths:
-      - 'NetOps_Observability/src/frontend/**'
-      - '.github/workflows/frontend-ci.yml'
 
 permissions:
   contents: read
