@@ -136,6 +136,7 @@ func (s *server) can(c jwtClaims, a Action, r Resource) bool {
 // cross-tenant resource so existence isn't leaked, 403 for a platform-only
 // resource the caller could legitimately know exists. Returns (principal, true)
 // only when allowed.
+//nolint:unused // tenant-aware HTTP gate (404-vs-403 existence hiding); handlers still use requirePerm — migration target
 func (s *server) authorize(w http.ResponseWriter, r *http.Request, a Action, res Resource) (Principal, bool) {
 	claims, ok := userFrom(r.Context())
 	if !ok {

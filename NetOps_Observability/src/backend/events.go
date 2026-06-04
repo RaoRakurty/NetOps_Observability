@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -283,6 +282,3 @@ func writeTextFrame(conn net.Conn, payload []byte) error {
 	return nil
 }
 
-// errNotWebSocket lets callers distinguish "wrong handshake" from
-// "broken connection" if they need to.
-var errNotWebSocket = errors.New("not a websocket request")

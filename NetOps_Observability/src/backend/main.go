@@ -97,7 +97,6 @@ func (s *server) jiraFor(tenant string) *notify.Jira {
 }
 
 func (s *server) serviceNow() *notify.ServiceNow { return s.serviceNowFor("") }
-func (s *server) jiraConn() *notify.Jira         { return s.jiraFor("") }
 
 func newServer() *server {
 	// Select where the identity/saved stores persist (file by default; Postgres

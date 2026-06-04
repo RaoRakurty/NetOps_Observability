@@ -42,19 +42,6 @@ func levelName(l int) string {
 	}
 }
 
-func levelValue(name string) int {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "admin":
-		return LevelAdmin
-	case "write":
-		return LevelWrite
-	case "read":
-		return LevelRead
-	default:
-		return LevelNone
-	}
-}
-
 // Role is a named permission grid. Built-in roles are seeded and protected.
 type Role struct {
 	ID          string         `json:"id"`

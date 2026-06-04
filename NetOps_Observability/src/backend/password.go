@@ -108,6 +108,7 @@ type jwtClaims struct {
 
 // hasScope reports whether the principal carries an API-key scope. Human
 // sessions carry none, so they fall through to RBAC role checks instead.
+//nolint:unused // API-token scope check (#23); sessions use RBAC roles, so unwired until API tokens land
 func (c jwtClaims) hasScope(want string) bool {
 	for _, s := range c.Scopes {
 		if s == want || s == "admin:*" {
