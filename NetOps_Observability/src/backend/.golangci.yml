@@ -1,0 +1,36 @@
+# golangci-lint config (v1.64). Aggregates the correctness + security linters from
+# CLAUDE.md §12 under one runner. The CI gate (.github/workflows/backend-ci.yml)
+# runs this BLOCKING on the crypto/trust packages (tlsconfig, internalca) and
+# NON-blocking repo-wide until the pre-existing backlog is burned down.
+#
+# vendor/, testdata/ are auto-skipped by golangci-lint's defaults.
+
+run:
+  timeout: 5m
+
+linters:
+  # Keep the defaults (errcheck, gosimple, govet, ineffassign, staticcheck,
+  # unused) and add security + reliability linters.
+  enable:
+    - gosec       # security analyzer (honors // #nosec annotations)
+    - bodyclose   # HTTP response bodies must be closed (leak guard)
+    - noctx       # HTTP requests must carry a context (timeout/cancel)
+    - errorlint   # correct error wrapping / comparison
+    - misspell
+    - unconvert   # redundant type conversions
+
+issues:
+  # Don't cap findings — show everything (the gate must see all of it).
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Test files deliberately ignore some return values (e.g. driving a handshake
+    # only for its OnReject side effect), make short-lived requests without a
+    # context or body-close, and embed test certs/keys — these linters are noise
+    # in tests, not findings.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - bodyclose
+        - noctx

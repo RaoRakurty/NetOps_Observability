@@ -1,0 +1,71 @@
+name: correlation-ci
+
+# CI gate for the Python correlation service (FastAPI, Python 3.10). Mirrors the
+# backend gate's tiered approach:
+#   - `test` is BLOCKING: the existing unit suite must pass.
+#   - `lint` is NON-blocking triage (ruff/bandit/mypy/pip-audit): these were NOT
+#     pre-validated locally (the dev sandbox had no pip), so they surface findings
+#     without gating merges. Once a real run confirms them clean (or the code is
+#     fixed), drop `continue-on-error` to make them blocking — the Python analog of
+#     the backend's govulncheck/gosec gates.
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/src/correlation/**'
+      - '.github/workflows/correlation-ci.yml'
+  pull_request:
+    paths:
+      - 'NetOps_Observability/src/correlation/**'
+      - '.github/workflows/correlation-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: correlation-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/src/correlation
+
+jobs:
+  test:
+    name: pytest (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+          cache-dependency-path: NetOps_Observability/src/correlation/requirements.txt
+      - name: install deps + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: pytest
+        run: python -m pytest test_anomaly.py -v
+
+  lint:
+    name: ruff · bandit · mypy · pip-audit (non-blocking triage)
+    runs-on: ubuntu-latest
+    # Not yet merge-blocking — surfaces findings until validated against a real
+    # run. Flip off continue-on-error to enforce.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: install linters
+        run: pip install ruff bandit mypy pip-audit
+      - name: ruff (style + bugs)
+        run: ruff check .
+      - name: bandit (security; service code, not tests)
+        run: bandit -r main.py -ll
+      - name: mypy (type check)
+        run: mypy main.py
+      - name: pip-audit (dependency CVEs)
+        run: pip-audit -r requirements.txt

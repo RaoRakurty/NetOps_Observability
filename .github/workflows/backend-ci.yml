@@ -34,6 +34,7 @@ env:
   # Pinned for reproducibility; gosec floats on latest for newest security rules.
   STATICCHECK_VERSION: '2025.1.1'
   GOVULNCHECK_VERSION: 'v1.3.0'
+  GOLANGCI_VERSION: 'v1.64.8'
 
 defaults:
   run:
@@ -96,6 +97,12 @@ jobs:
         run: staticcheck ./tlsconfig/... ./internalca/...
       - name: gosec (tlsconfig, internalca)
         run: gosec -quiet ./tlsconfig/... ./internalca/...
+      - name: golangci-lint (tlsconfig, internalca)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+          working-directory: NetOps_Observability/src/backend
+          args: ./tlsconfig/... ./internalca/...
 
   full-lint:
     name: staticcheck + gosec (repo-wide, non-blocking triage)
@@ -117,3 +124,9 @@ jobs:
         run: staticcheck ./...
       - name: gosec (repo-wide, excluding vendored deps)
         run: gosec -quiet -exclude-dir=vendor ./...
+      - name: golangci-lint (repo-wide)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+          working-directory: NetOps_Observability/src/backend
+          args: ./...
