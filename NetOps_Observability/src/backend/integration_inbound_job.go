@@ -21,15 +21,18 @@ import (
 const jobTypeIntegrationInbound = "integration_inbound"
 
 type integrationInboundPayload struct {
-	EventID string `json:"event_id"` // integration_events ledger row id
+	EventID       string `json:"event_id"`       // integration_events ledger row id
+	CorrelationID string `json:"correlation_id"` // §9 end-to-end trace id (carried into worker logs)
 }
 
-// EnqueueIntegrationInbound queues the apply of a recorded inbound event.
-func (p *reportPipeline) EnqueueIntegrationInbound(ctx context.Context, tenant, eventID string) (string, error) {
+// EnqueueIntegrationInbound queues the apply of a recorded inbound event. The
+// correlationID is persisted in the job payload so it survives a crash/re-claim
+// and threads into the worker's apply logs.
+func (p *reportPipeline) EnqueueIntegrationInbound(ctx context.Context, tenant, eventID, correlationID string) (string, error) {
 	now := time.Now().UTC()
 	tenant = normTenant(tenant)
 	execID := randHex(8)
-	payload, _ := json.Marshal(integrationInboundPayload{EventID: eventID})
+	payload, _ := json.Marshal(integrationInboundPayload{EventID: eventID, CorrelationID: correlationID})
 	job := reports.Job{
 		JobType: jobTypeIntegrationInbound, TenantID: tenant,
 		ScheduleID: "itsm-inbound:" + eventID, ExecutionID: execID, FireTime: now, Payload: payload,
@@ -77,10 +80,11 @@ func (p *reportPipeline) processIntegrationInbound(ctx, jctx context.Context, _ 
 		return
 	}
 	// applyInboundEvent records its own ledger verdict + advances the watermark.
-	p.srv.intgInbound(p.srv.applyInboundEvent(jctx, cfg, ev, pl.EventID))
+	p.srv.intgInbound(p.srv.applyInboundEvent(jctx, cfg, ev, pl.EventID, pl.CorrelationID))
 	p.finishInbound(ctx, job, tenant, fields)
 	logInfo("integration.inbound", "applied", merge(fields, map[string]any{
-		"provider": ev.Provider, "external_id": ev.ExternalID, "event_id": pl.EventID}))
+		"provider": ev.Provider, "external_id": ev.ExternalID, "event_id": pl.EventID,
+		"correlation_id": pl.CorrelationID}))
 }
 
 func (p *reportPipeline) finishInbound(ctx context.Context, job reports.Job, tenant string, fields map[string]any) {

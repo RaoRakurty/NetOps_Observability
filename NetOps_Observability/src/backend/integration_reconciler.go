@@ -96,11 +96,11 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
 				Type:          integration.EventUpdated,
 				ExternalState: integration.CanonicalState(cfg.Provider, state),
 			}
-			id, inserted, rerr := s.integrations.RecordInbound(ctx, ev)
+			id, correlationID, inserted, rerr := s.integrations.RecordInbound(ctx, ev)
 			if rerr != nil || !inserted {
 				continue // dedup: this exact poll result was already handled
 			}
-			if _, eerr := s.reportPipeline.EnqueueIntegrationInbound(ctx, cfg.Tenant, id); eerr != nil {
+			if _, eerr := s.reportPipeline.EnqueueIntegrationInbound(ctx, cfg.Tenant, id, correlationID); eerr != nil {
 				logError("integration.reconcile", "enqueue drift", errf(eerr))
 				continue
 			}
@@ -108,6 +108,7 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
 			logInfo("integration.reconcile", "inbound drift → re-drove", map[string]any{
 				"tenant": cfg.Tenant, "provider": cfg.Provider, "external_id": m.ExternalID,
 				"external_version": version, "applied_seq": m.Applied.Seq, "state": ev.ExternalState,
+				"correlation_id": correlationID,
 			})
 			continue
 		}

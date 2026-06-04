@@ -230,7 +230,7 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 	queued := 0
 	for _, ev := range events {
-		id, inserted, err := s.integrations.RecordInbound(ctx, ev)
+		id, correlationID, inserted, err := s.integrations.RecordInbound(ctx, ev)
 		if err != nil {
 			logError("integration", "record inbound", map[string]any{"provider": providerType, "error": err.Error()})
 			continue
@@ -239,11 +239,14 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 			continue // level-1 raw duplicate (redelivery) — already handled
 		}
 		s.intgWebhookReceived()
+		logInfo("integration", "inbound recorded", map[string]any{
+			"provider": providerType, "external_id": ev.ExternalID, "event_id": id,
+			"correlation_id": correlationID, "alert_id": ev.AlertID})
 		// Mutation is gated: only a bidirectional config with the flag on drives
 		// state. The apply is ENQUEUED (async, crash-safe via the worker lease),
 		// so the webhook returns immediately and never blocks the caller.
 		if itsmInboundEnabled() && cfg.Bidirectional() && s.reportPipeline != nil {
-			if _, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, id); err != nil {
+			if _, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, id, correlationID); err != nil {
 				logError("integration", "enqueue inbound", map[string]any{"provider": providerType, "error": err.Error()})
 				continue
 			}
@@ -257,7 +260,7 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 
 // applyInboundEvent orders/reconciles one recorded event and applies the verdict
 // to the incident lifecycle. Returns true when it mutated an incident.
-func (s *server) applyInboundEvent(ctx context.Context, cfg integrationConfig, ev integration.IntegrationEvent, ledgerID string) bool {
+func (s *server) applyInboundEvent(ctx context.Context, cfg integrationConfig, ev integration.IntegrationEvent, ledgerID, correlationID string) bool {
 	if s.incidents == nil {
 		_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "no-incident-store")
 		return false
@@ -315,6 +318,7 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integrationConfig, e
 	logInfo("integration", "inbound applied", map[string]any{
 		"provider": ev.Provider, "external_id": ev.ExternalID, "incident_id": inc.ID,
 		"target": string(decision.Target), "reason": decision.Reason,
+		"correlation_id": correlationID, "alert_id": ev.AlertID,
 	})
 	return mutated
 }

@@ -62,11 +62,14 @@ func TestIntegrationRepo(t *testing.T) {
 		ExternalID: "INC42", ExternalSeq: 9, Type: integration.EventResolved,
 		OccurredAt: at,
 	}
-	id1, ins1, err := st.RecordInbound(ctx, ev)
+	id1, cid1, ins1, err := st.RecordInbound(ctx, ev)
 	if err != nil || !ins1 {
 		t.Fatalf("first record should insert: err=%v inserted=%v", err, ins1)
 	}
-	_, ins2, err := st.RecordInbound(ctx, ev) // same provider_evt_id
+	if cid1 == "" {
+		t.Fatal("RecordInbound must mint a correlation_id (§9 end-to-end trace)")
+	}
+	_, _, ins2, err := st.RecordInbound(ctx, ev) // same provider_evt_id
 	if err != nil || ins2 {
 		t.Fatalf("redelivery must be a no-op: err=%v inserted=%v", err, ins2)
 	}
@@ -77,7 +80,7 @@ func TestIntegrationRepo(t *testing.T) {
 	// An event with no provider_evt_id is NOT raw-deduped (always inserts).
 	ev2 := ev
 	ev2.ProviderEvtID = ""
-	if _, ins, err := st.RecordInbound(ctx, ev2); err != nil || !ins {
+	if _, _, ins, err := st.RecordInbound(ctx, ev2); err != nil || !ins {
 		t.Fatalf("empty-evtid event should always insert: err=%v inserted=%v", err, ins)
 	}
 }

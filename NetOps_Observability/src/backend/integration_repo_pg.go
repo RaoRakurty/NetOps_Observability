@@ -123,8 +123,13 @@ func (s *integrationStore) TouchMapping(ctx context.Context, tenant, provider, e
 // RecordInbound persists a normalized inbound event (level-1 raw dedup via the
 // partial unique on provider_evt_id). Returns inserted=false when the event was a
 // redelivery (ON CONFLICT DO NOTHING) — the caller then skips re-applying it.
-func (s *integrationStore) RecordInbound(ctx context.Context, ev integration.IntegrationEvent) (id string, inserted bool, err error) {
+//
+// correlationID is the single id threaded end-to-end (§9): minted here per
+// recorded event and carried through enqueue → worker apply → incident
+// transition (and any resulting outbound re-push), so one grep spans the chain.
+func (s *integrationStore) RecordInbound(ctx context.Context, ev integration.IntegrationEvent) (id, correlationID string, inserted bool, err error) {
 	id = randHex(8)
+	correlationID = "ic-" + randHex(8)
 	payload, _ := json.Marshal(ev)
 	var occurred any
 	if !ev.OccurredAt.IsZero() {
@@ -134,11 +139,11 @@ func (s *integrationStore) RecordInbound(ctx context.Context, ev integration.Int
 		var returned string
 		qerr := tx.QueryRow(ctx, `
 INSERT INTO integration_events
-   (id, tenant_id, provider, direction, type, provider_evt_id, external_id, external_seq, alert_id, status, payload, occurred_at)
- VALUES ($1,$2,$3,'inbound',$4,$5,$6,$7,$8,'received',$9,$10)
+   (id, tenant_id, provider, direction, type, provider_evt_id, external_id, external_seq, alert_id, status, payload, occurred_at, correlation_id)
+ VALUES ($1,$2,$3,'inbound',$4,$5,$6,$7,$8,'received',$9,$10,$11)
  ON CONFLICT (tenant_id, provider, provider_evt_id) WHERE provider_evt_id <> '' DO NOTHING
  RETURNING id`,
-			id, ev.Tenant, ev.Provider, string(ev.Type), ev.ProviderEvtID, ev.ExternalID, ev.ExternalSeq, ev.AlertID, payload, occurred)
+			id, ev.Tenant, ev.Provider, string(ev.Type), ev.ProviderEvtID, ev.ExternalID, ev.ExternalSeq, ev.AlertID, payload, occurred, correlationID)
 		if scanErr := qerr.Scan(&returned); scanErr != nil {
 			if scanErr == pgx.ErrNoRows {
 				inserted = false // redelivery — collapsed by the unique index
@@ -149,7 +154,7 @@ INSERT INTO integration_events
 		inserted = true
 		return nil
 	})
-	return id, inserted, err
+	return id, correlationID, inserted, err
 }
 
 // GetInboundEvent reconstructs a recorded inbound event from its ledger row (the
