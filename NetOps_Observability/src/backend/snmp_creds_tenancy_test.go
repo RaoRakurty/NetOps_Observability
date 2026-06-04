@@ -17,7 +17,7 @@ func snmpTenantServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs, err := newSNMPCredStore(dir + "/snmp.json")
+	cs, err := newSNMPCredStore(dir + "/snmp.json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

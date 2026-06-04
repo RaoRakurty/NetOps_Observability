@@ -35,7 +35,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	sv, err := newSavedStore(dir + "/saved.json")
 	must(err)
-	sc, err := newSNMPCredStore(dir + "/snmp.json")
+	sc, err := newSNMPCredStore(dir + "/snmp.json", nil)
 	must(err)
 	au, err := newAuditStore(dir + "/audit.json")
 	must(err)

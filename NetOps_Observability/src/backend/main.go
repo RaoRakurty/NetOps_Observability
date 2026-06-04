@@ -256,7 +256,7 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("refresh store: %v", err)
 	}
-	snmpCreds, err := newSNMPCredStore(envOr("SNMP_CREDS_FILE", "/data/snmp_credentials.json"))
+	snmpCreds, err := newSNMPCredStore(envOr("SNMP_CREDS_FILE", "/data/snmp_credentials.json"), vault)
 	if err != nil {
 		log.Fatalf("snmp cred store: %v", err)
 	}
@@ -309,7 +309,7 @@ func newServer() *server {
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
 	if ps, ok := backend.(*pgStore); ok {
-		srv.integrations = newIntegrationStore(ps.db)
+		srv.integrations = newIntegrationStore(ps.db, vault)
 	}
 	srv.providers = integration.DefaultRegistry()
 	srv.intMetrics = &integrationMetrics{}

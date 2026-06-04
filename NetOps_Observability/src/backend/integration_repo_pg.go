@@ -17,9 +17,14 @@ import (
 // incidents_pg.go (withTenant binds app.current_tenant; system writes run at
 // platform scope '*' and stamp tenant_id, which RLS WITH CHECK permits).
 
-type integrationStore struct{ db *pgDB }
+type integrationStore struct {
+	db    *pgDB
+	vault *Vault // secret-custody envelope for webhook_secret at rest (nil/dormant = plaintext)
+}
 
-func newIntegrationStore(db *pgDB) *integrationStore { return &integrationStore{db: db} }
+func newIntegrationStore(db *pgDB, v *Vault) *integrationStore {
+	return &integrationStore{db: db, vault: v}
+}
 
 // integrationMapping is one external incident's correlation + watermark row.
 type integrationMapping struct {

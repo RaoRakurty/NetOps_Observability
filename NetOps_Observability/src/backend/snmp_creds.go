@@ -145,19 +145,27 @@ func validateSNMPCredential(c *SNMPCredential) error {
 type snmpCredStore struct {
 	mu    sync.RWMutex
 	path  string
+	vault *Vault // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
 	creds map[string]SNMPCredential // id -> credential
 }
 
-func newSNMPCredStore(path string) (*snmpCredStore, error) {
+func newSNMPCredStore(path string, v *Vault) (*snmpCredStore, error) {
 	if path == "" {
 		path = "/data/snmp_credentials.json"
 	}
-	s := &snmpCredStore{path: path, creds: make(map[string]SNMPCredential)}
+	s := &snmpCredStore{path: path, vault: v, creds: make(map[string]SNMPCredential)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return s, nil
 }
+
+// snmp secret AAD field-ids (tenant DEK binds them per-tenant; these bind per-field).
+const (
+	snmpFieldCommunity = "snmp.community"
+	snmpFieldAuthKey   = "snmp.auth_key"
+	snmpFieldPrivKey   = "snmp.priv_key"
+)
 
 func (s *snmpCredStore) load() error {
 	b, err := kvLoad(s.path)
@@ -169,7 +177,11 @@ func (s *snmpCredStore) load() error {
 		return err
 	}
 	for _, c := range list {
-		s.creds[c.ID] = c
+		dec, err := s.decryptSecrets(c)
+		if err != nil {
+			return err
+		}
+		s.creds[dec.ID] = dec
 	}
 	return nil
 }
@@ -177,7 +189,11 @@ func (s *snmpCredStore) load() error {
 func (s *snmpCredStore) flushLocked() error {
 	list := make([]SNMPCredential, 0, len(s.creds))
 	for _, c := range s.creds {
-		list = append(list, c)
+		enc, err := s.encryptSecrets(c) // encrypt a copy — the in-memory map stays plaintext for Resolve
+		if err != nil {
+			return err
+		}
+		list = append(list, enc)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	b, err := json.MarshalIndent(list, "", "  ")
@@ -185,6 +201,37 @@ func (s *snmpCredStore) flushLocked() error {
 		return err
 	}
 	return kvSave(s.path, b)
+}
+
+// encryptSecrets returns a copy of c with its reversible secret fields encrypted
+// at rest under the owning tenant's DEK. Dormant Vault → unchanged (plaintext).
+func (s *snmpCredStore) encryptSecrets(c SNMPCredential) (SNMPCredential, error) {
+	var err error
+	if c.Community, err = s.vault.Encrypt(c.TenantID, snmpFieldCommunity, c.Community); err != nil {
+		return c, err
+	}
+	if c.AuthKey, err = s.vault.Encrypt(c.TenantID, snmpFieldAuthKey, c.AuthKey); err != nil {
+		return c, err
+	}
+	if c.PrivKey, err = s.vault.Encrypt(c.TenantID, snmpFieldPrivKey, c.PrivKey); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+// decryptSecrets reverses encryptSecrets (legacy plaintext passes through).
+func (s *snmpCredStore) decryptSecrets(c SNMPCredential) (SNMPCredential, error) {
+	var err error
+	if c.Community, err = s.vault.Decrypt(c.TenantID, snmpFieldCommunity, c.Community); err != nil {
+		return c, err
+	}
+	if c.AuthKey, err = s.vault.Decrypt(c.TenantID, snmpFieldAuthKey, c.AuthKey); err != nil {
+		return c, err
+	}
+	if c.PrivKey, err = s.vault.Decrypt(c.TenantID, snmpFieldPrivKey, c.PrivKey); err != nil {
+		return c, err
+	}
+	return c, nil
 }
 
 func (s *snmpCredStore) List() []publicSNMPCredential {

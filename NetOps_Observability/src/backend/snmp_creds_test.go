@@ -6,7 +6,7 @@ import (
 )
 
 func TestSNMPCredV2cAndRedaction(t *testing.T) {
-	cs, err := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"))
+	cs, err := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"), nil)
 	if err != nil {
 		t.Fatalf("newSNMPCredStore: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestSNMPCredV2cAndRedaction(t *testing.T) {
 }
 
 func TestSNMPCredV3Validation(t *testing.T) {
-	cs, _ := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"))
+	cs, _ := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"), nil)
 	// authPriv requires auth + priv protocols and keys.
 	if _, err := cs.Upsert(SNMPCredential{Name: "v3bad", Version: "v3", SecurityName: "noc", SecurityLevel: "authPriv"}); err == nil {
 		t.Error("expected validation error for authPriv without keys")
@@ -59,7 +59,7 @@ func TestSNMPCredV3Validation(t *testing.T) {
 }
 
 func TestSNMPCredUpdatePreservesSecrets(t *testing.T) {
-	cs, _ := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"))
+	cs, _ := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"), nil)
 	cs.Upsert(SNMPCredential{Name: "grp", Version: "v2c", Community: "orig"})
 	// Update without re-sending the community keeps the stored one.
 	if _, err := cs.Upsert(SNMPCredential{ID: "grp", Name: "grp", Version: "v2c", Retries: 3}); err != nil {

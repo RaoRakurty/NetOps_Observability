@@ -22,7 +22,9 @@ func TestIntegrationRepo(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	st := newIntegrationStore(ps.db)
+	// Dormant Vault (no SEAL_PROVIDER) → webhook_secret stays plaintext, exercising
+	// the passthrough path; the Vault's crypto is covered by secrets_test.go.
+	st := newIntegrationStore(ps.db, &Vault{deks: map[string][]byte{}, wrapped: map[string]string{}})
 
 	// --- mapping upsert + watermark roundtrip ---
 	at := time.Now().UTC().Truncate(time.Second)

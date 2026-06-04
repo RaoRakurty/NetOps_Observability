@@ -45,7 +45,15 @@ func (c integrationConfig) mappingEngine() *integration.MappingEngine {
 
 const integrationConfigCols = `tenant_id, provider, enabled, sync_mode, webhook_enabled, webhook_token, webhook_secret, state_map`
 
-func scanConfig(row pgx.Row) (integrationConfig, error) {
+// webhookSecretField is the Vault AAD field-id binding a webhook_secret ciphertext
+// to its provider (and, via the tenant DEK, to its tenant).
+func webhookSecretField(provider string) string { return "integration.webhook_secret." + provider }
+
+// scanConfig reads one config row and decrypts the webhook_secret at rest (the
+// secret is GCM-bound to tenant|provider; a dormant Vault / legacy plaintext
+// passes through). Decrypt uses the row's own tenant, so platform-scope scans
+// (e.g. ListBidirectionalConfigs) decrypt each row under its owner's DEK.
+func (s *integrationStore) scanConfig(row pgx.Row) (integrationConfig, error) {
 	var c integrationConfig
 	var stateMap []byte
 	err := row.Scan(&c.Tenant, &c.Provider, &c.Enabled, &c.SyncMode, &c.WebhookEnabled, &c.WebhookToken, &c.WebhookSecret, &stateMap)
@@ -54,6 +62,13 @@ func scanConfig(row pgx.Row) (integrationConfig, error) {
 	}
 	if len(stateMap) > 0 {
 		_ = json.Unmarshal(stateMap, &c.StateMap)
+	}
+	if c.WebhookSecret != "" {
+		sec, derr := s.vault.Decrypt(c.Tenant, webhookSecretField(c.Provider), c.WebhookSecret)
+		if derr != nil {
+			return c, derr
+		}
+		c.WebhookSecret = sec
 	}
 	return c, nil
 }
@@ -64,7 +79,7 @@ func (s *integrationStore) GetConfig(ctx context.Context, tenant string, cross b
 	var found bool
 	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT `+integrationConfigCols+` FROM integration_configs WHERE provider=$1`, provider)
-		got, err := scanConfig(row)
+		got, err := s.scanConfig(row)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				return nil
@@ -87,7 +102,7 @@ func (s *integrationStore) ListConfigs(ctx context.Context, tenant string, cross
 		}
 		defer rows.Close()
 		for rows.Next() {
-			c, err := scanConfig(rows)
+			c, err := s.scanConfig(rows)
 			if err != nil {
 				return err
 			}
@@ -113,7 +128,7 @@ func (s *integrationStore) ListBidirectionalConfigs(ctx context.Context) ([]inte
 		}
 		defer rows.Close()
 		for rows.Next() {
-			c, err := scanConfig(rows)
+			c, err := s.scanConfig(rows)
 			if err != nil {
 				return err
 			}
@@ -135,7 +150,7 @@ func (s *integrationStore) ConfigByToken(ctx context.Context, token string) (int
 	}
 	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT `+integrationConfigCols+` FROM integration_configs WHERE webhook_token=$1`, token)
-		got, err := scanConfig(row)
+		got, err := s.scanConfig(row)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				return nil
@@ -158,6 +173,11 @@ func (s *integrationStore) UpsertConfig(ctx context.Context, c integrationConfig
 	if len(c.StateMap) == 0 {
 		sm = []byte("{}")
 	}
+	// Encrypt the signing secret at rest (tenant DEK, GCM-bound to tenant|provider).
+	storedSecret, err := s.vault.Encrypt(c.Tenant, webhookSecretField(c.Provider), c.WebhookSecret)
+	if err != nil {
+		return err
+	}
 	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO integration_configs
@@ -167,7 +187,7 @@ INSERT INTO integration_configs
    enabled=EXCLUDED.enabled, sync_mode=EXCLUDED.sync_mode,
    webhook_enabled=EXCLUDED.webhook_enabled, webhook_token=EXCLUDED.webhook_token,
    webhook_secret=EXCLUDED.webhook_secret, state_map=EXCLUDED.state_map, updated_at=now()`,
-			c.Tenant, c.Provider, c.Enabled, c.SyncMode, c.WebhookEnabled, c.WebhookToken, c.WebhookSecret, sm)
+			c.Tenant, c.Provider, c.Enabled, c.SyncMode, c.WebhookEnabled, c.WebhookToken, storedSecret, sm)
 		return err
 	})
 }
