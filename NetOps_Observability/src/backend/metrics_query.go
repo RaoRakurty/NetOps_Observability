@@ -158,7 +158,7 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := backendHTTPClient(25 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)

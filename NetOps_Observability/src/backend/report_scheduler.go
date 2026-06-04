@@ -874,7 +874,7 @@ func chQuery(sql string) []string {
 	}
 	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), os.Getenv("CLICKHOUSE_PASSWORD"))
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	resp, err := backendHTTPClient(8 * time.Second).Do(req)
 	if err != nil {
 		return nil
 	}
@@ -897,7 +897,7 @@ func chQuery(sql string) []string {
 func vmTopk(query, unit string) []string {
 	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
 	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(query)
-	resp, err := (&http.Client{Timeout: 6 * time.Second}).Get(endpoint)
+	resp, err := backendHTTPClient(6 * time.Second).Get(endpoint)
 	if err != nil {
 		return nil
 	}

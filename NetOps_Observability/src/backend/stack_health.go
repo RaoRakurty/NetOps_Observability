@@ -83,7 +83,7 @@ func probeOne(ctx context.Context, p stackProbe) stackComponentHealth {
 			out.Detail = err.Error()
 			return out
 		}
-		client := &http.Client{Timeout: 4 * time.Second}
+		client := backendHTTPClient(4 * time.Second)
 		resp, err := client.Do(req)
 		out.LatencyMS = time.Since(start).Milliseconds()
 		if err != nil {

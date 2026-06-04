@@ -584,6 +584,21 @@ services:
       TLS_CLIENT_ALLOWED_DNS: ${TLS_CLIENT_ALLOWED_DNS:-}
       TLS_CLIENT_ALLOWED_URIS: ${TLS_CLIENT_ALLOWED_URIS:-}
       TLS_RELOAD_INTERVAL: ${TLS_RELOAD_INTERVAL:-30s}
+      # Internal CA self-bootstrap (#18 phase 2) + outbound backend TLS (phase 3).
+      TLS_INTERNAL_CA: ${TLS_INTERNAL_CA:-}
+      TLS_TRUST_DOMAIN: ${TLS_TRUST_DOMAIN:-netops}
+      TLS_SVID_TTL: ${TLS_SVID_TTL:-24h}
+      TLS_NGINX_CERT_DIR: ${TLS_NGINX_CERT_DIR:-}
+      # Outbound TLS to internal backends (OpenSearch/ClickHouse/VictoriaMetrics/
+      # correlation): verify their https certs against THIS explicit CA (not the
+      # system pool); optional client SVID for backend mTLS. Defaults to the mesh
+      # CA bundle. Dormant when unset (plaintext http, unchanged).
+      TLS_BACKEND_CA_FILE: ${TLS_BACKEND_CA_FILE:-}
+      TLS_BACKEND_CERT_FILE: ${TLS_BACKEND_CERT_FILE:-}
+      TLS_BACKEND_KEY_FILE: ${TLS_BACKEND_KEY_FILE:-}
+      # When STORE_BACKEND=postgres over TLS, set DATABASE_URL with
+      # sslmode=verify-full&sslrootcert=/path/ca.pem (pgx honors it). See the
+      # tls-mtls runbook §Postgres.
       # App secrets and bootstrap admin
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}

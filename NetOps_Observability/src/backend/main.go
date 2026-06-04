@@ -114,6 +114,12 @@ func newServer() *server {
 		log.Fatalf("secret custody: %v", err)
 	}
 
+	// Hardened TLS for outbound calls to internal backends (#18 phase 3). Fail
+	// closed: a configured-but-unloadable trust bundle aborts boot.
+	if err := initBackendTransport(); err != nil {
+		log.Fatalf("backend TLS: %v", err)
+	}
+
 	d := NewDiscoveryAggregator()
 	d.Register(NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
 	if os.Getenv("ENABLE_SNMP_DISCOVERY") == "true" {

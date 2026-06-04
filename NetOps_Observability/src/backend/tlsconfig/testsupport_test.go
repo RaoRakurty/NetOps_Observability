@@ -4,10 +4,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -53,9 +55,22 @@ func (ca *testCA) bundlePath() string { return filepath.Join(ca.dir, "ca.pem") }
 
 type leafOpts struct {
 	dns      []string
+	ips      []net.IP
 	uris     []string
 	notAfter time.Time // zero → now+1h
 	client   bool      // clientAuth EKU instead of serverAuth
+}
+
+// issuePair mints a leaf and returns it as an in-memory tls.Certificate (for an
+// httptest TLS server) plus the CA's pool.
+func (ca *testCA) issuePair(t *testing.T, name string, o leafOpts) tls.Certificate {
+	t.Helper()
+	certPath, keyPath := ca.issue(t, name, o)
+	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("load pair: %v", err)
+	}
+	return pair
 }
 
 // issue mints a leaf signed by the CA and writes cert+key PEM files, returning
@@ -83,6 +98,7 @@ func (ca *testCA) issue(t *testing.T, name string, o leafOpts) (certPath, keyPat
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
 		DNSNames:     o.dns,
+		IPAddresses:  o.ips,
 	}
 	for _, u := range o.uris {
 		parsed, perr := url.Parse(u)

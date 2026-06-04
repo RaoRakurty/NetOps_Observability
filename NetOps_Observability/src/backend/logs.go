@@ -245,7 +245,7 @@ func openSearch(method, path string, body any) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := backendHTTPClient(30 * time.Second)
 	return client.Do(req)
 }
 

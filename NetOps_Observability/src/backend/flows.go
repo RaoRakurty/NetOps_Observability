@@ -275,7 +275,7 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	req.SetBasicAuth(user, pass)
 	req.Header.Set("Content-Type", "text/plain")
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := backendHTTPClient(20 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)

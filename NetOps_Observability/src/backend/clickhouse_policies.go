@@ -74,7 +74,7 @@ func chExec(base, sql string) bool {
 	}
 	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := backendHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return false
 	}
