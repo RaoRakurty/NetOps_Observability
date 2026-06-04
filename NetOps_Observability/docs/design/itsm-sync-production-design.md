@@ -249,17 +249,27 @@ resolved-in-SNOW with no webhook → reconcile detected drift → incident conve
 
 ---
 
-## 9. Observability  **[PARTIAL → PLAN]**
+## 9. Observability  **[DONE]**
 
 - **Correlation chain**: `alert_id ↔ incident_id ↔ (provider, external_id) ↔ ledger
-  event id` — every hop logs the chain. **[PARTIAL]** (logged; add a single
-  `correlation_id` column threaded end-to-end **[PLAN]**).
+  event id`. **[DONE]** A single `correlation_id` (`ic-…`) is minted in
+  `RecordInbound`, persisted on `integration_events` (migration 0008, indexed +
+  backfill-safe), carried through the async job payload (survives crash/re-claim)
+  into the worker apply + incident-transition log, and logged at every hop
+  (webhook record → enqueue → apply → verdict). Reconciler-synthesized drift
+  events carry it too. One grep of an id spans the whole sync.
 - **Audit**: `audit_events` (RLS) on every inbound/outbound action. **[DONE]**
 - **Per-incident timeline**: `incident_events` (lifecycle) ⨝ `integration_events`
-  (sync) → unified timeline view. Data exists **[DONE]**; the merged UI view **[PLAN]**.
-- **Metrics** `/metrics`: `integration_events_total{provider,direction,status}`,
-  `..._delivery_seconds`, `integration_queue_depth`, `..._webhook_rejected_total`,
-  `drift_repaired_total`. **[PLAN]**
+  (sync) → unified timeline. **[DONE]** `GET /api/incidents/{id}/timeline` merges
+  both (via the mapping reverse-index + Slack `alert_id` path), RLS-scoped, with a
+  deterministic tie-break (`mergeTimeline`, unit-tested); `Incidents.tsx` renders
+  sync rows accent-bordered with direction/verdict/correlation_id. Degrades to
+  lifecycle-only on the file backend.
+- **Metrics** `/metrics`: stdlib atomic counters (no label cardinality — the
+  per-tenant/provider/direction breakdown stays queryable in the ledger):
+  `netops_integration_webhook_received_total`, `..._webhook_rejected_total`,
+  `..._inbound_applied_total`, `..._inbound_dropped_total`,
+  `..._drift_inbound_total`, `..._drift_outbound_total`. **[DONE]**
 
 ---
 
@@ -270,7 +280,7 @@ resolved-in-SNOW with no webhook → reconcile detected drift → incident conve
 | 1 | Duplicate webhook (retry) | Level-1 dedup: unique `provider_evt_id` → no-op insert | **[DONE]** proven |
 | 2 | Out-of-order (resolve before ack) | Watermark drops stale → no flap | **[DONE]** proven live |
 | 3 | Webhook dropped / never delivered | Drift reconciler polls, synthesizes the missed event through the inbound pipeline | **[DONE]** `10c2a06`, verified live |
-| 4 | NMS resolves, ITSM push fails | Outbound job retries (backoff) → DLQ. Reconciler catches ITSM→NMS drift; NMS→ITSM re-push (case b) is the next slice | **[PARTIAL]** |
+| 4 | NMS resolves, ITSM push fails | Outbound job retries (backoff) → DLQ. Reconciler catches ITSM→NMS drift; NMS→ITSM re-push (case b) re-pushes a Resolve on NMS-terminal drift (`47b6fe6`) | **[DONE]** |
 | 5 | Concurrent NMS + ITSM update | Conflict ladder: terminal→NMS, assignment→ITSM | **[DONE]** |
 | 6 | Clock skew across systems | Ordering keys on `external_seq` (monotonic), not wall-clock | **[DONE]** |
 | 7 | Provider API down | Outbound queue backs off; inbound unaffected (NMS is SoR, never blocks) | **[DONE]** |
@@ -289,7 +299,9 @@ resolved-in-SNOW with no webhook → reconcile detected drift → incident conve
 2. ~~**Drift reconciler**~~ — **[DONE]** `10c2a06` (inbound direction). Remaining:
    outbound re-push (NMS-terminal → push Resolve to ITSM, §7 case b).
 4. **Outbound on every lifecycle change** (not just create/clear) for full NMS→ITSM.
-5. **Observability**: `correlation_id` column, merged timeline UI, integration metrics.
+5. ~~**Observability**~~ — **[DONE]**: `correlation_id` column threaded end-to-end
+   (migration 0008), merged `/timeline` (lifecycle ⨝ sync) + UI, and `/metrics`
+   integration counters. See §9.
 6. **Secrets at rest** via #17.
 
 These are the gap between the working, live-proven P2b and Datadog-grade maturity —
