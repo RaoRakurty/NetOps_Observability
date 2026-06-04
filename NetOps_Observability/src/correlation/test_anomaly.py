@@ -32,8 +32,13 @@ class TestSeries(unittest.TestCase):
         self.assertIsNone(score("dev", "metric", 50.5))
 
     def test_above_threshold_returns_z(self):
-        for _ in range(21):
-            score("dev2", "m", 100.0)
+        # A z-score is only defined when the baseline has variance — a perfectly
+        # flat series has stddev 0 and is deliberately not scored (see the
+        # `sigma == 0` guard, which test_below_threshold_returns_none relies on).
+        # Real telemetry is noisy, so feed a normal noisy baseline, then a spike.
+        baseline = [100.0, 101.0, 99.0, 100.0, 102.0, 98.0, 100.0]
+        for i in range(25):
+            score("dev2", "m", baseline[i % len(baseline)])
         # A massive spike — should fire.
         z = score("dev2", "m", 9999.0)
         self.assertIsNotNone(z)
