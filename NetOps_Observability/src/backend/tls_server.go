@@ -74,7 +74,16 @@ func buildTLSServer() (*tlsServer, error) {
 	metrics := &tlsMetrics{}
 	opts := tlsconfig.ServerOptions{Reloader: reloader}
 	if caFile := strings.TrimSpace(os.Getenv("TLS_CLIENT_CA_FILE")); caFile != "" {
-		bundle, err := tlsconfig.LoadTrustBundle(caFile)
+		// SPIFFE federation (#18 phase 5): each federated root must be in BOTH the
+		// combined ClientCAs pool (so the stdlib can build a chain to it) AND the
+		// FederationTrust registry (so the domain binding can be checked). Build
+		// both from the same entry list to keep the invariant anchorable ⊇ registered.
+		fedEntries, err := parseFederationBundles(os.Getenv("TLS_FEDERATED_BUNDLES"))
+		if err != nil {
+			return nil, err
+		}
+		bundlePaths := append([]string{caFile}, federationPaths(fedEntries)...)
+		bundle, err := tlsconfig.LoadTrustBundle(bundlePaths...)
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +98,14 @@ func buildTLSServer() (*tlsServer, error) {
 				metrics.identityRejects.Add(1)
 				logError("tls", "mTLS identity rejected", map[string]any{"peer_identity": identity, "reason": rerr.Error()})
 			},
+		}
+		if len(fedEntries) > 0 {
+			fed, err := tlsconfig.LoadFederationTrust(fedEntries)
+			if err != nil {
+				return nil, err
+			}
+			opts.Peer.Federation = fed
+			logInfo("tls", "SPIFFE federation enabled", map[string]any{"trust_domains": federationDomains(fedEntries)})
 		}
 	}
 	cfg, err := tlsconfig.ServerConfig(opts)
@@ -155,6 +172,44 @@ func (t *tlsServer) certValid(margin time.Duration) (bool, string) {
 		return false, "certificate expired or within renewal margin"
 	}
 	return true, "ok"
+}
+
+// parseFederationBundles parses "domA=/a.pem,domB=/b.pem" (TLS_FEDERATED_BUNDLES)
+// into entries. Fail-closed: a missing '=' or an empty side is a fatal config
+// error. Empty input → nil (federation disabled).
+func parseFederationBundles(s string) ([]tlsconfig.FederationEntry, error) {
+	if s = strings.TrimSpace(s); s == "" {
+		return nil, nil
+	}
+	var entries []tlsconfig.FederationEntry
+	for _, pair := range strings.Split(s, ",") {
+		if pair = strings.TrimSpace(pair); pair == "" {
+			continue
+		}
+		domain, path, ok := strings.Cut(pair, "=")
+		domain, path = strings.TrimSpace(domain), strings.TrimSpace(path)
+		if !ok || domain == "" || path == "" {
+			return nil, fmt.Errorf("tls: invalid TLS_FEDERATED_BUNDLES entry %q (want domain=/path/root.pem)", pair)
+		}
+		entries = append(entries, tlsconfig.FederationEntry{Domain: domain, Path: path})
+	}
+	return entries, nil
+}
+
+func federationPaths(entries []tlsconfig.FederationEntry) []string {
+	paths := make([]string, 0, len(entries))
+	for _, e := range entries {
+		paths = append(paths, e.Path)
+	}
+	return paths
+}
+
+func federationDomains(entries []tlsconfig.FederationEntry) []string {
+	domains := make([]string, 0, len(entries))
+	for _, e := range entries {
+		domains = append(domains, e.Domain)
+	}
+	return domains
 }
 
 func splitCSV(s string) []string {

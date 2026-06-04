@@ -33,7 +33,10 @@ func HTTPClientConfig(o ClientOptions) (*tls.Config, error) {
 	if o.Reloader != nil {
 		c.GetClientCertificate = o.Reloader.GetClientCertificate
 	}
-	if !o.Peer.empty() {
+	// Install verify when an allowlist OR a federation registry is set (see
+	// ClientConfig) so the domain binding is enforced on the outbound-backend path
+	// too, even with empty allowlists.
+	if !o.Peer.empty() || o.Peer.Federation != nil {
 		peer := o.Peer
 		c.VerifyConnection = peer.verify
 	}

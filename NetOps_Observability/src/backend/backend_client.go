@@ -35,11 +35,31 @@ func initBackendTransport() error {
 	if caFile == "" {
 		return nil // dormant — default client (unchanged behavior)
 	}
-	bundle, err := tlsconfig.LoadTrustBundle(caFile)
+	// SPIFFE federation (#18 phase 5): fold federated roots into BOTH the combined
+	// pool (chain building) and the registry (domain binding) — invariant
+	// anchorable ⊇ registered — so an outbound backend in another trust domain
+	// can't impersonate a local identity.
+	fedEntries, err := parseFederationBundles(os.Getenv("TLS_FEDERATED_BUNDLES"))
+	if err != nil {
+		return err
+	}
+	bundle, err := tlsconfig.LoadTrustBundle(append([]string{caFile}, federationPaths(fedEntries)...)...)
 	if err != nil {
 		return err
 	}
 	opts := tlsconfig.ClientOptions{RootCAs: bundle}
+	if len(fedEntries) > 0 {
+		fed, err := tlsconfig.LoadFederationTrust(fedEntries)
+		if err != nil {
+			return err
+		}
+		opts.Peer = tlsconfig.PeerPolicy{
+			Federation: fed,
+			OnReject: func(identity string, rerr error) {
+				logError("tls", "backend SPIFFE federation rejected", map[string]any{"peer_identity": identity, "reason": rerr.Error()})
+			},
+		}
+	}
 	// Optional mTLS: present the API's client SVID to backends that require it.
 	if cf, kf := os.Getenv("TLS_BACKEND_CERT_FILE"), os.Getenv("TLS_BACKEND_KEY_FILE"); cf != "" && kf != "" {
 		rl, err := tlsconfig.NewCertReloader(cf, kf)

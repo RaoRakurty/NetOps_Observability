@@ -20,6 +20,12 @@ import (
 //
 // Dormant unless TLS_INTERNAL_CA=true. When the Vault is also dormant the CA key
 // is stored plaintext (passthrough) — turning on SEAL_PROVIDER=swtpm seals it.
+//
+// Multi-region / SPIFFE federation (#18 phase 5) is verifier-side only and lives
+// in tlsconfig (FederationTrust) + the TLS_FEDERATED_BUNDLES wiring — issuance
+// here is unchanged. To federate, each region exports its CA bundle (the file
+// written via TLS_CLIENT_CA_FILE) and the operator wires the OTHER region's
+// exported root into TLS_FEDERATED_BUNDLES (domain=/path/root.pem) on the peers.
 
 const (
 	caKeyField = "tls.ca.key"              // Vault AAD field-id (platform DEK)

@@ -26,6 +26,11 @@ type PeerPolicy struct {
 	// an audit log + metric without this package depending on either. identity is
 	// the peer's SANs (or "<none>"); err is the rejection reason.
 	OnReject func(identity string, err error)
+	// Federation, when non-nil and configured, enforces the SPIFFE trust-domain
+	// binding (a peer's SPIFFE domain must match the root that anchored its chain)
+	// BEFORE the identity allowlist. Nil/unconfigured → dormant: single-domain
+	// behavior is unchanged. See federation.go.
+	Federation *FederationTrust
 }
 
 // empty reports whether the policy names no identities (no constraint configured).
@@ -42,6 +47,18 @@ func (p PeerPolicy) reject(identity string, err error) error {
 // allowlist. It assumes the stdlib has ALREADY verified the chain (we never set
 // InsecureSkipVerify), so VerifiedChains is non-empty for a trusted peer.
 func (p PeerPolicy) verify(cs tls.ConnectionState) error {
+	// Federation binding runs first and independently of the allowlist: even with
+	// no allowlist, a federated deployment must reject domain impersonation (a peer
+	// claiming a SPIFFE domain other than the one whose root anchored its chain).
+	if p.Federation.configured() {
+		if _, err := p.Federation.bindChainToDomain(cs); err != nil {
+			ident := "<none>"
+			if len(cs.VerifiedChains) > 0 && len(cs.VerifiedChains[0]) > 0 {
+				ident = peerIdentity(cs.VerifiedChains[0][0])
+			}
+			return p.reject(ident, err)
+		}
+	}
 	if p.empty() {
 		return nil // no identity allowlist configured → chain verification suffices
 	}

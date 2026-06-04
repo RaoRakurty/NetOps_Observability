@@ -75,7 +75,10 @@ func ClientConfig(o ClientOptions) (*tls.Config, error) {
 	if o.Reloader != nil {
 		c.GetClientCertificate = o.Reloader.GetClientCertificate
 	}
-	if !o.Peer.empty() {
+	// Install verify when an allowlist OR a federation registry is set — a
+	// federated policy may have empty allowlists yet still enforce the domain
+	// binding.
+	if !o.Peer.empty() || o.Peer.Federation != nil {
 		peer := o.Peer
 		c.VerifyConnection = peer.verify
 	}

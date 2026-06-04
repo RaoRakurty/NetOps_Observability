@@ -1,8 +1,9 @@
 # Transport Security (TLS / mTLS) Architecture — #18
 
-> Status: **phase 1 building** (2026-06-04). Centralized `tlsconfig` package +
-> opt-in API HTTPS/mTLS landed; phases 2–5 (internal CA, service rollout, backend
-> client TLS, rotation automation, metrics expansion) planned below.
+> Status: **phases 1–4 done; phase 5 (1/3 — SPIFFE federation) done** (2026-06-04).
+> Centralized `tlsconfig` package, opt-in API HTTPS/mTLS, internal CA + Vault-sealed
+> custody, backend client TLS, metrics/audit/readiness/re-issue, and multi-region
+> SPIFFE federation have landed. Remaining phase-5 (live SPIRE, HSM/TPM) is future.
 > Pairs with: `secret-custody.md` (#17 — TLS keys become a Vault tenant in phase
 > 2), `postgres-rls.md` (#15), SAML cert auto-rotation (#30).
 
@@ -117,7 +118,8 @@ or identity violation rejects the connection and is audit-logged.
 | **2** | Internal CA (`internalca`) issuing short-lived SPIFFE SVIDs; CA key **sealed via the #17 Vault**; boot self-bootstrap of API+nginx SVIDs + trust bundle (`tls_ca.go`); nginx↔API mTLS runbook | ✅ **done** (CA+seal+bootstrap unit-tested end to end; swtpm seal/unseal **live-validated**; nginx hop = runbook `docs/runbooks/tls-mtls.md`) |
 | **3** | API→backends client TLS — `tlsconfig.HTTPTransport` + `backend_client.go` (one shared hardened transport, explicit mesh-CA roots, optional backend mTLS, fail-closed) wired into all 7 internal-backend call sites; external clients (copilot/jwks/netbox) stay public-CA; Postgres `sslmode=verify-full` guidance | ✅ **done** (round-trip + fail-closed tested) |
 | **4** | Handshake-error + identity-reject metrics; `PeerPolicy.OnReject` trust-failure audit; `/admin/readyz` asserts cert validity (5m margin); periodic SVID re-issue loop (~TTL/2, hot-reloaded) | ✅ **done** (OnReject + margin + re-issue tested) |
-| **5** | SPIFFE/SPIRE adoption (URI SAN seam already in `PeerPolicy`); HSM/TPM via the #17 SealingProvider; multi-region trust | future |
+| **5** | **Multi-region SPIFFE federation** — `tlsconfig.FederationTrust` binds a peer's SPIFFE **trust domain** to the CA root that anchored its verified chain (closes a federation-impersonation gap: a peer chaining to domain B's root can no longer present a domain-A SVID); structured `parseSpiffeID`; `TLS_FEDERATED_BUNDLES` wiring on the mTLS server **and** the outbound-backend transport; dormant by default | ✅ **done (1/3)** (binding-impersonation proof + table/regression tested) |
+| **5 (remaining)** | Live SPIRE Workload-API SVID source; HSM/TPM via the #17 SealingProvider (PKCS#11 needs cgo/3rd-party — out of the stdlib scope; swtpm covers the TPM path) | future |
 
 ## 7. Operational guidance (phase 1)
 
@@ -133,6 +135,25 @@ TLS_RELOAD_INTERVAL=30s
 ```
 Dormant by default (unset → plaintext on the internal port; nginx terminates
 ingress TLS). Watch `netops_tls_cert_expiry_seconds`.
+
+### Multi-region SPIFFE federation (phase 5)
+
+When the mesh spans more than one trust domain (regions, or a federated partner),
+list each foreign domain's CA root:
+```
+TLS_FEDERATED_BUNDLES=netops-west=/certs/west-ca.pem,partner=/certs/partner-ca.pem
+```
+Each listed root is added to **both** the chain-building pool **and** the
+`FederationTrust` registry (the invariant *anchorable ⊇ registered*), and the
+verifier then enforces that a peer's SPIFFE-ID trust domain equals the trust
+domain whose root anchored its chain — so a peer authenticated under `netops-west`
+cannot impersonate a local `netops` identity. Applies to the mTLS ingress
+(`TLS_CLIENT_CA_FILE`) and the outbound-backend transport. A mismatch is rejected,
+audit-logged via `OnReject`, and counted in `netops_tls_identity_rejected_total`.
+Roots are keyed on whole-cert DER (unforgeable); each region exports its CA bundle
+and operators wire peers' roots in. Unset → no federation (single-domain default
+unchanged). **Out of scope here:** running a live SPIRE deployment and HSM-backed
+keys (the `PeerPolicy` URI seam + #17 SealingProvider are ready for both).
 
 ## 8. Migration strategy
 
