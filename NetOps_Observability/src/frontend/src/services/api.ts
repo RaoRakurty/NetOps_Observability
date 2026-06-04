@@ -826,6 +826,14 @@ export const api = {
   saveItsmConfig: (c: ItsmConfigInput) =>
     request<ItsmConfig>("/api/notify/itsm", { method: "PUT", body: JSON.stringify(c) }),
 
+  // Integration Platform — bidirectional-sync config (one entry per provider).
+  // The webhook signing secret is write-only: omit/blank it on PUT to keep stored.
+  integrations: () => request<IntegrationsResponse>("/api/integrations"),
+  saveIntegration: (
+    provider: string,
+    body: Partial<{ enabled: boolean; sync_mode: string; webhook_enabled: boolean; webhook_secret: string; state_map: Record<string, string> }>,
+  ) => request<IntegrationConfig>("/api/integrations/" + provider, { method: "PUT", body: JSON.stringify(body) }),
+
   listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
   createApiKey: (req: CreateApiKeyRequest) =>
     request<{ key: ApiKey; secret: string }>("/api/apikeys", {
@@ -1200,6 +1208,25 @@ export type ItsmJiraConfig = {
   resolve_transition: string;
   configured?: boolean;
 };
+// ITSM Integration Platform — bidirectional-sync config. One entry per provider
+// (servicenow | jira | pagerduty | slack). The webhook signing secret is
+// write-only: GET reports webhook_secret_set instead of the value, and a PUT
+// that omits webhook_secret preserves the stored one. webhook_url is only
+// present once a token exists; prepend window.location.origin to get the full
+// URL to paste into the provider.
+export type IntegrationConfig = {
+  provider: string; // servicenow | jira | pagerduty | slack
+  enabled: boolean;
+  sync_mode: "outbound" | "bidirectional";
+  webhook_enabled: boolean;
+  webhook_secret_set: boolean;
+  webhook_url?: string; // path only, present when a token exists
+  state_map: Record<string, string> | null; // {<external>: <internal>}
+};
+// inbound_enabled mirrors the server's FEATURE_ITSM_INBOUND flag — inbound
+// state changes are recorded regardless but only drive incident state when true.
+export type IntegrationsResponse = { integrations: IntegrationConfig[]; inbound_enabled: boolean };
+
 export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig };
 export type ItsmConfigInput = {
   servicenow: Omit<ItsmServiceNowConfig, "has_password" | "configured">;

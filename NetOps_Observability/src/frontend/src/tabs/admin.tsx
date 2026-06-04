@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig } from "../services/api";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig, IntegrationConfig } from "../services/api";
 import { BRAND } from "../brand";
 
 // ---- shared chrome ---------------------------------------------------------
@@ -1224,6 +1224,8 @@ export function IntegrationsAdmin() {
       </div>
       <ITSMConfigForm />
 
+      <BidirectionalSyncAdmin />
+
       {sn?.enabled && (
         <div className="card">
           <div className="admin-card-head">
@@ -1309,6 +1311,135 @@ export function IntegrationsAdmin() {
         })}
       </div>
     </>
+  );
+}
+
+// ---- Bidirectional sync (Integration Platform) -----------------------------
+
+// Per-provider hint on where to paste the inbound webhook URL.
+const SYNC_PROVIDERS: { id: string; name: string; webhookHint: string }[] = [
+  { id: "servicenow", name: "ServiceNow", webhookHint: "Paste into a ServiceNow Business Rule (REST call on incident update)." },
+  { id: "jira", name: "Jira", webhookHint: "Paste into a Jira webhook (Settings → System → Webhooks)." },
+  { id: "pagerduty", name: "PagerDuty", webhookHint: "Paste into a PagerDuty v3 webhook subscription." },
+  { id: "slack", name: "Slack", webhookHint: "Paste into your Slack app's Interactivity & Shortcuts request URL." },
+];
+
+// One provider's bidirectional-sync card: enable, sync mode, inbound webhook
+// toggle + write-only signing secret, and (once a token exists) the full inbound
+// webhook URL to register with the provider. The signing secret is write-only —
+// blank keeps the stored one.
+function SyncProviderCard({ cfg, name, webhookHint, onSaved }: {
+  cfg: IntegrationConfig; name: string; webhookHint: string;
+  onSaved: (next: IntegrationConfig) => void;
+}) {
+  const [enabled, setEnabled] = useState(cfg.enabled);
+  const [syncMode, setSyncMode] = useState(cfg.sync_mode);
+  const [webhookEnabled, setWebhookEnabled] = useState(cfg.webhook_enabled);
+  const [secret, setSecret] = useState(""); // typed signing secret (only sent if non-empty)
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Full URL to register with the provider (the API returns a path only).
+  const fullUrl = cfg.webhook_url ? window.location.origin + cfg.webhook_url : "";
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(fullUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { setMsg("Copy failed — select the URL and copy manually."); }
+  };
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const body: Partial<{ enabled: boolean; sync_mode: string; webhook_enabled: boolean; webhook_secret: string }> = {
+        enabled, sync_mode: syncMode, webhook_enabled: webhookEnabled,
+      };
+      if (secret) body.webhook_secret = secret; // write-only — omit when blank to keep stored
+      const next = await api.saveIntegration(cfg.provider, body);
+      onSaved(next); setSecret(""); setMsg("Saved.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head">
+        <h2>{name} <ProviderBadge enabled={enabled} /></h2>
+        <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
+        </label>
+      </div>
+      <div className="form-grid">
+        <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} />
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          <span>Inbound webhook</span>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
+            <input type="checkbox" checked={webhookEnabled} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
+          </label>
+        </label>
+        <LabeledInput label={`Webhook signing secret${cfg.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={cfg.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} hint="write-only — blank keeps stored" />
+      </div>
+
+      {fullUrl && (
+        <div style={{ marginTop: 12 }}>
+          <span className="mini-meta">Inbound webhook URL</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+            <input readOnly value={fullUrl} onFocus={(e) => e.currentTarget.select()} className="mono"
+              style={{ flex: 1, padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
+            <button className="dash-btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+          </div>
+          <p className="mini-meta" style={{ marginTop: 4 }}>{webhookHint}</p>
+        </div>
+      )}
+
+      <div className="admin-actions">
+        <button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+        {msg && <span className="mini-meta">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+// BidirectionalSyncAdmin — the Integration Platform's two-way sync config. Lists
+// one card per provider (ServiceNow / Jira / PagerDuty / Slack) for enabling
+// outbound-only vs. bidirectional sync and registering inbound webhooks. The
+// banner reflects whether the server is actually driving incident state from
+// inbound webhooks (FEATURE_ITSM_INBOUND), which an operator enables.
+export function BidirectionalSyncAdmin() {
+  const [integrations, setIntegrations] = useState<IntegrationConfig[] | null>(null);
+  const [inboundEnabled, setInboundEnabled] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.integrations()
+      .then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  // Replace a single provider's config in place after a save.
+  const onSaved = (next: IntegrationConfig) =>
+    setIntegrations((cur) => (cur ?? []).map((i) => (i.provider === next.provider ? next : i)));
+
+  // Resolve the config for a provider (fall back to a sane default if absent).
+  const cfgFor = (id: string): IntegrationConfig =>
+    integrations?.find((i) => i.provider === id) ??
+    { provider: id, enabled: false, sync_mode: "outbound", webhook_enabled: false, webhook_secret_set: false, state_map: null };
+
+  return (
+    <div className="card">
+      <div className="admin-card-head"><h2>Bidirectional sync</h2></div>
+      <p className="admin-sub">Sync incident state two ways with your ticketing systems. Outbound promotes your incidents to tickets; bidirectional also applies inbound state changes (close, reassign) back onto the incident when a registered webhook fires.</p>
+
+      {inboundEnabled
+        ? <p style={{ margin: "0 0 12px", padding: "8px 12px", borderRadius: 6, fontSize: 13, border: "1px solid var(--good)", background: "var(--sev-ok-bg)", color: "var(--good)" }}>Inbound sync is active — registered webhooks drive incident state.</p>
+        : <p style={{ margin: "0 0 12px", padding: "8px 12px", borderRadius: 6, fontSize: 13, border: "1px solid var(--panel-border)", background: "var(--bg)", color: "var(--muted)" }}>Inbound webhooks are being recorded but not yet driving incident state — pending platform enablement.</p>}
+
+      {err && <p className="mini-meta">{err}</p>}
+      {!integrations && !err && <p className="mini-meta">Loading…</p>}
+
+      {integrations && SYNC_PROVIDERS.map((p) => (
+        <SyncProviderCard key={p.id} cfg={cfgFor(p.id)} name={p.name} webhookHint={p.webhookHint} onSaved={onSaved} />
+      ))}
+    </div>
   );
 }
 
