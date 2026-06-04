@@ -41,7 +41,7 @@ defaults:
 
 jobs:
   test:
-    name: build · vet · test · race · fuzz
+    name: build · vet · test · race
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
