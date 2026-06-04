@@ -1,0 +1,63 @@
+name: frontend-ci
+
+# CI gate for the React/TypeScript dashboard. The project's `build` script is
+# `tsc -b && vite build`, so a build IS the type-check + bundle gate — a type
+# error or broken import fails it. Mirrors the other services' tiered approach:
+#   - `build` is BLOCKING (validated green locally).
+#   - `audit` is NON-blocking triage (npm dependency CVEs) — the frontend analog
+#     of backend govulncheck / correlation pip-audit. Flip off continue-on-error
+#     once the advisories are resolved.
+#
+# No eslint/test config exists in the project yet; this gate intentionally tracks
+# the tooling that's actually present (tsc + vite) rather than inventing config.
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/src/frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    paths:
+      - 'NetOps_Observability/src/frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/src/frontend
+
+jobs:
+  build:
+    name: tsc -b && vite build (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: build (type-check + bundle)
+        run: npm run build
+
+  audit:
+    name: npm audit (non-blocking triage)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
