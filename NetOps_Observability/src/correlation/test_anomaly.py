@@ -10,7 +10,7 @@ import unittest
 
 # Import without triggering the FastAPI / Kafka side effects in main.py.
 # We treat the module as a library here.
-from main import Series, score, SERIES, WINDOW_SIZE
+from main import Series, score, SERIES
 
 
 class TestSeries(unittest.TestCase):

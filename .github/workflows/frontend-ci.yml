@@ -48,9 +48,9 @@ jobs:
         run: npm run build
 
   audit:
-    name: npm audit (non-blocking triage)
+    name: npm audit (blocking)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # BLOCKING: verified green on a real run (2026-06-04).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

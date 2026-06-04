@@ -228,7 +228,9 @@ async def handle_metric(ev: dict) -> None:
     value = None
     for k, v in ev.items():
         if isinstance(v, (int, float)) and k not in {"timestamp", "time"}:
-            value = float(v); name = name or k; break
+            value = float(v)
+            name = name or k
+            break
     if value is None:
         return
     z = score(device, name, value)
@@ -320,8 +322,10 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         task.cancel()
-        try: await task
-        except asyncio.CancelledError: pass
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
         await ch.close()
 
 
@@ -350,8 +354,12 @@ async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
     assert ch is not None
     where = ""
     if severity:
-        sev = severity.replace("'", "")
-        where = f"WHERE severity = '{sev}'"
+        # Severities are simple enum words (warning/critical/info/...). Restrict
+        # to letters so the value cannot carry SQL metacharacters — quote-
+        # stripping alone is unsafe because ch.query sends raw SQL and ClickHouse
+        # honors backslash escapes. An out-of-shape value is ignored (no filter).
+        if severity.isalpha():
+            where = f"WHERE severity = '{severity.lower()}'"
     sql = f"""
       SELECT toString(ts) AS ts, id, kind, severity, score, device,
              component, summary, description
@@ -360,7 +368,7 @@ async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
        ORDER BY ts DESC
        LIMIT {int(limit)}
        FORMAT JSON
-    """
+    """  # nosec B608 -- `where` is alpha-validated, `limit` is int()-cast; no injection vector
     return await ch.query(sql)
 
 

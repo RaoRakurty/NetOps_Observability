@@ -48,11 +48,12 @@ jobs:
         run: python -m pytest test_anomaly.py -v
 
   lint:
-    name: ruff · bandit · mypy · pip-audit (non-blocking triage)
+    name: ruff · bandit · mypy (blocking)
     runs-on: ubuntu-latest
-    # Not yet merge-blocking — surfaces findings until validated against a real
-    # run. Flip off continue-on-error to enforce.
-    continue-on-error: true
+    # BLOCKING for the deterministic checks (ruff/bandit/mypy, verified clean
+    # 2026-06-04). pip-audit is a soft step (see below): it scans dependency CVEs
+    # that appear over time (the Python analog of govulncheck) and couldn't be
+    # validated in the dev sandbox, so a new advisory shouldn't hard-block dev.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,5 +67,6 @@ jobs:
         run: bandit -r main.py -ll
       - name: mypy (type check)
         run: mypy main.py
-      - name: pip-audit (dependency CVEs)
+      - name: pip-audit (dependency CVEs — soft)
+        continue-on-error: true
         run: pip-audit -r requirements.txt
