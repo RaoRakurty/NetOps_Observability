@@ -47,6 +47,77 @@ func TestSlackSendUnconfigured(t *testing.T) {
 	}
 }
 
+// TestSlackIncidentActionContract pins the OUTBOUND button contract to the
+// INBOUND translator: action_ids must be ack_incident/resolve_incident/
+// escalate_incident and every button's value must be the incident id, or the
+// bidirectional loop silently breaks (a click wouldn't correlate).
+func TestSlackIncidentActionContract(t *testing.T) {
+	blocks := BuildIncidentBlocks(IncidentNotice{
+		IncidentID: "inc-123", Title: "BGP down", Severity: "critical", Status: "open",
+	})
+	// Re-marshal/parse so we assert on the actual wire shape Slack receives.
+	raw, _ := json.Marshal(blocks)
+	var msg struct {
+		Text   string `json:"text"`
+		Blocks []struct {
+			Type     string `json:"type"`
+			Elements []struct {
+				Type     string `json:"type"`
+				ActionID string `json:"action_id"`
+				Value    string `json:"value"`
+			} `json:"elements"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(msg.Text, "BGP down") {
+		t.Errorf("fallback text missing title: %q", msg.Text)
+	}
+	want := map[string]bool{"ack_incident": false, "resolve_incident": false, "escalate_incident": false}
+	for _, b := range msg.Blocks {
+		if b.Type != "actions" {
+			continue
+		}
+		for _, e := range b.Elements {
+			if e.Type != "button" {
+				continue
+			}
+			if _, ok := want[e.ActionID]; !ok {
+				t.Errorf("unexpected action_id %q (inbound translator won't map it)", e.ActionID)
+			}
+			want[e.ActionID] = true
+			if e.Value != "inc-123" {
+				t.Errorf("button %q value = %q, want incident id", e.ActionID, e.Value)
+			}
+		}
+	}
+	for id, seen := range want {
+		if !seen {
+			t.Errorf("missing action button %q", id)
+		}
+	}
+}
+
+// TestSlackSendIncident proves SendIncident POSTs the Block Kit payload.
+func TestSlackSendIncident(t *testing.T) {
+	var calls int32
+	var gotBlocks bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		b, _ := io.ReadAll(r.Body)
+		gotBlocks = strings.Contains(string(b), "resolve_incident") && strings.Contains(string(b), "inc-9")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	if err := NewSlack(srv.URL).SendIncident(IncidentNotice{IncidentID: "inc-9", Title: "X", Severity: "high", Status: "open"}); err != nil {
+		t.Fatalf("SendIncident: %v", err)
+	}
+	if calls != 1 || !gotBlocks {
+		t.Fatalf("calls=%d gotBlocks=%v", calls, gotBlocks)
+	}
+}
+
 // TestSlackSeverityGate proves the gate that wraps Slack in the config layer
 // drops sub-threshold alerts and forwards those at/above it.
 func TestSlackSeverityGate(t *testing.T) {

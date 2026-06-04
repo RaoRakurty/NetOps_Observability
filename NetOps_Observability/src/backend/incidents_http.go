@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/notify"
 )
 
 // incidents_http.go — the Incident ingestion hook (alert → incident) and the
@@ -50,6 +51,7 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 	fields := map[string]any{"incident_id": inc.ID, "tenant_id": inc.TenantID, "severity": inc.Severity, "source_type": "alert"}
 	if created {
 		s.incidentCreated(inc)
+		s.notifyIncidentSlackActions(inc)
 		logInfo("incidents", "incident created", fields)
 		// Auto-policy: critical incidents promote to an ITSM ticket (dedup by the
 		// incident itself; the sync worker is idempotent). Skipped if no ITSM is
@@ -63,6 +65,29 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 		s.incidentDeduped()
 		logInfo("incidents", "incident deduplicated", fields)
 	}
+}
+
+// notifyIncidentSlackActions posts an interactive Slack message (Acknowledge /
+// Resolve / Escalate buttons that carry the incident id) for a newly created
+// incident, when Slack is configured and the incident meets the channel's
+// severity threshold. This is the OUTBOUND half of the bidirectional Slack loop
+// (#43a): a button click round-trips through the integration webhook to drive the
+// incident's lifecycle. Best-effort + async — it must never block or fail ingest.
+func (s *server) notifyIncidentSlackActions(inc Incident) {
+	if s.notifyCfg == nil {
+		return
+	}
+	url, minSev, ok := s.notifyCfg.slackIncidentTarget()
+	if !ok || !notify.SeverityAtLeast(inc.Severity, minSev) {
+		return
+	}
+	go func() {
+		if err := notify.NewSlack(url).SendIncident(notify.IncidentNotice{
+			IncidentID: inc.ID, Title: inc.Title, Severity: inc.Severity, Status: inc.Status,
+		}); err != nil {
+			logError("incidents", "slack incident actions", map[string]any{"incident_id": inc.ID, "error": err.Error()})
+		}
+	}()
 }
 
 // ---- REST API --------------------------------------------------------------

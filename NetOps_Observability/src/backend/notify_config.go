@@ -464,6 +464,19 @@ func (s *notifyConfigStore) publicSlack() publicSlack {
 	return publicSlack{c.Enabled, c.WebhookURL != "", c.MinSeverity}
 }
 
+// slackIncidentTarget returns the webhook + min-severity for posting interactive
+// incident messages, and whether Slack is enabled + configured. Used by the
+// incident outbound action-button push (#43a).
+func (s *notifyConfigStore) slackIncidentTarget() (url, minSeverity string, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c := s.cfg.Slack
+	if !c.Enabled || c.WebhookURL == "" {
+		return "", "", false
+	}
+	return c.WebhookURL, c.MinSeverity, true
+}
+
 func (s *server) handleSlackConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return

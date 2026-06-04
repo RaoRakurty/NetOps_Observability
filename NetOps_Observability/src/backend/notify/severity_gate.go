@@ -29,3 +29,8 @@ func (g *SeverityGate) Send(a models.Alert) error {
 	}
 	return g.inner.Send(a)
 }
+
+// SeverityAtLeast reports whether sev meets or exceeds min (e.g. "warning"). An
+// empty/unknown min admits everything. Exposes the same ranking the gate uses so
+// non-Channel paths (e.g. incident action posts) can apply the same threshold.
+func SeverityAtLeast(sev, min string) bool { return severityRank(sev) >= severityRank(min) }
