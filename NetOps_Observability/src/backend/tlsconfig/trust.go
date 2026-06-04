@@ -40,6 +40,8 @@ func (b *TrustBundle) Reload() error {
 	pool := x509.NewCertPool()
 	added := 0
 	for _, p := range b.paths {
+		// #nosec G304 -- p is an operator-configured CA bundle path (env/flag), not
+		// user-controlled input; reading it is the function's whole purpose.
 		pem, err := os.ReadFile(p)
 		if err != nil {
 			return fmt.Errorf("tlsconfig: read CA bundle %q: %w", p, err)

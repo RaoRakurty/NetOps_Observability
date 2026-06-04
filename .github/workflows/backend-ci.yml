@@ -1,0 +1,119 @@
+name: backend-ci
+
+# Security + correctness gate for the Go API (CLAUDE.md §12). Blocking jobs must
+# stay green to merge. The crypto/trust code (tlsconfig, internalca) is held to a
+# stricter bar than the rest of the tree: staticcheck + gosec are MERGE-BLOCKING
+# for those packages, and run repo-wide as non-blocking triage until the existing
+# backlog is burned down (then flip `full-lint` to blocking).
+#
+# Go is pinned to a patched toolchain (go1.25.11): govulncheck flagged a batch of
+# stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same
+# bump is applied to deployment/docker/Dockerfile.backend so prod ships patched.
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/src/backend/**'
+      - 'NetOps_Observability/deployment/docker/Dockerfile.backend'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    paths:
+      - 'NetOps_Observability/src/backend/**'
+      - 'NetOps_Observability/deployment/docker/Dockerfile.backend'
+      - '.github/workflows/backend-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25.11'
+  # Pinned for reproducibility; gosec floats on latest for newest security rules.
+  STATICCHECK_VERSION: '2025.1.1'
+  GOVULNCHECK_VERSION: 'v1.3.0'
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/src/backend
+
+jobs:
+  test:
+    name: build · vet · test · race · fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: go test -race
+        # The data-race detector needs cgo (gcc is present on ubuntu-latest).
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+      - name: fuzz smoke (parsers must never panic)
+        run: |
+          go test ./tlsconfig/ -run '^$' -fuzz '^FuzzParseSpiffeID$' -fuzztime 30s
+          go test . -run '^$' -fuzz '^FuzzParseFederationBundles$' -fuzztime 30s
+
+  vuln:
+    name: govulncheck (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+      - name: govulncheck
+        run: govulncheck ./...
+
+  security-lint:
+    name: staticcheck + gosec (crypto/trust packages, blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: install linters
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - name: staticcheck (tlsconfig, internalca)
+        run: staticcheck ./tlsconfig/... ./internalca/...
+      - name: gosec (tlsconfig, internalca)
+        run: gosec -quiet ./tlsconfig/... ./internalca/...
+
+  full-lint:
+    name: staticcheck + gosec (repo-wide, non-blocking triage)
+    runs-on: ubuntu-latest
+    # Does not gate merges yet — surfaces the pre-existing backlog. Flip to
+    # blocking once the tree is clean (drop this allowance).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: install linters
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - name: staticcheck (repo-wide)
+        run: staticcheck ./...
+      - name: gosec (repo-wide, excluding vendored deps)
+        run: gosec -quiet -exclude-dir=vendor ./...

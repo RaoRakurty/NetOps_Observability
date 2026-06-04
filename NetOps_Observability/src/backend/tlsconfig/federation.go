@@ -112,6 +112,8 @@ func (f *FederationTrust) Reload() error {
 			return fmt.Errorf("tlsconfig: trust domain %q listed more than once", domain)
 		}
 		seenDomains[domain] = true
+		// #nosec G304 -- e.Path is an operator-configured federation bundle path,
+		// not user-controlled input.
 		pemBytes, err := os.ReadFile(e.Path)
 		if err != nil {
 			return fmt.Errorf("tlsconfig: read federation bundle %q: %w", e.Path, err)
