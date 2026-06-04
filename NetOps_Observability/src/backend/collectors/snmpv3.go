@@ -1,14 +1,21 @@
 package collectors
 
+// SNMPv3's User-based Security Model (USM) fixes its crypto on the wire: RFC 3414
+// defines DES-CBC privacy and HMAC-MD5-96 / HMAC-SHA-96 authentication; RFC 3826
+// adds AES-128 in CFB-128 mode. These primitives are weak by modern standards but
+// are MANDATED by the protocol — substituting AEAD/SHA-2 would make us unable to
+// speak to any real SNMP agent. The gosec "weak crypto" warnings below (G50x/G40x)
+// and the staticcheck CFB deprecation are therefore suppressed with an RFC citation
+// at each site, not "fixed". The privacy round-trip is locked by snmpv3_priv_test.go.
 import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/des"
+	"crypto/des"   // #nosec G502 -- RFC 3414 DES-CBC privacy; protocol-mandated, not a free cipher choice
 	"crypto/hmac"
-	"crypto/md5"
+	"crypto/md5"   // #nosec G501 -- RFC 3414 HMAC-MD5-96 authentication; protocol-mandated
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1"  // #nosec G505 -- RFC 3414 HMAC-SHA-96 authentication; protocol-mandated
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
@@ -237,18 +244,22 @@ func (s *v3Session) encrypt(creds snmpCreds, scoped []byte, salt8 []byte) ([]byt
 			return nil, nil, err
 		}
 		iv := make([]byte, 16)
+		// IV = engineBoots(4) || engineTime(4) || salt(8) per RFC 3826 §3.1 — a
+		// constructed, unique IV, NOT a zero/hardcoded nonce (so G407 is a false
+		// positive here).
 		binary.BigEndian.PutUint32(iv[0:4], uint32(s.boots))
 		binary.BigEndian.PutUint32(iv[4:8], uint32(s.etime))
 		copy(iv[8:16], salt8)
 		out := make([]byte, len(scoped))
-		cipher.NewCFBEncrypter(block, iv).XORKeyStream(out, scoped)
+		// #nosec G407 -- IV constructed above per RFC 3826, not zeroed
+		cipher.NewCFBEncrypter(block, iv).XORKeyStream(out, scoped) //nolint:staticcheck // SA1019: SNMPv3 USM mandates AES-CFB (RFC 3826); no AEAD interops
 		return out, salt8, nil
 	case strings.HasPrefix(proto, "DES"):
 		key := s.privKeyL
 		if len(key) < 16 {
 			return nil, nil, fmt.Errorf("snmpv3: priv key too short for DES")
 		}
-		block, err := des.NewCipher(key[:8])
+		block, err := des.NewCipher(key[:8]) // #nosec G405 -- RFC 3414 DES-CBC privacy; protocol-mandated
 		if err != nil {
 			return nil, nil, err
 		}
@@ -265,6 +276,7 @@ func (s *v3Session) encrypt(creds snmpCreds, scoped []byte, salt8 []byte) ([]byt
 		pad := (8 - len(scoped)%8) % 8
 		pt := append(append([]byte(nil), scoped...), make([]byte, pad)...)
 		out := make([]byte, len(pt))
+		// #nosec G407 -- IV = preIV XOR salt (constructed above per RFC 3414), not zeroed
 		cipher.NewCBCEncrypter(block, iv).CryptBlocks(out, pt)
 		return out, salt, nil
 	default:
@@ -285,10 +297,11 @@ func (s *v3Session) decrypt(creds snmpCreds, cipherText, privParams []byte) ([]b
 		binary.BigEndian.PutUint32(iv[4:8], uint32(s.etime))
 		copy(iv[8:16], privParams)
 		out := make([]byte, len(cipherText))
-		cipher.NewCFBDecrypter(block, iv).XORKeyStream(out, cipherText)
+		// #nosec G407 -- IV reconstructed from engineBoots/time + privParams per RFC 3826
+		cipher.NewCFBDecrypter(block, iv).XORKeyStream(out, cipherText) //nolint:staticcheck // SA1019: SNMPv3 USM mandates AES-CFB (RFC 3826)
 		return out, nil
 	case strings.HasPrefix(proto, "DES"):
-		block, err := des.NewCipher(s.privKeyL[:8])
+		block, err := des.NewCipher(s.privKeyL[:8]) // #nosec G405 -- RFC 3414 DES-CBC privacy; protocol-mandated
 		if err != nil {
 			return nil, err
 		}
