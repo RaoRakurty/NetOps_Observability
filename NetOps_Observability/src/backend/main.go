@@ -58,8 +58,9 @@ type server struct {
 	providers      *integration.Registry // inbound provider translators (registry)
 	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
 	vault          *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	exportPolicy   *exportPolicyStore // runtime-tunable log-export limits
-	exportLimiter  *tenantRateLimiter // per-tenant export rate limit
+	tlsSrv         *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	exportPolicy   *exportPolicyStore    // runtime-tunable log-export limits
+	exportLimiter  *tenantRateLimiter    // per-tenant export rate limit
 	copilotCfg     *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
@@ -372,16 +373,42 @@ func main() {
 	mux := http.NewServeMux()
 	srv.routes(mux)
 
+	handler := withCORS(withLogging(srv.withAuth(srv.withAudit(mux))))
+
+	// Opt-in TLS/mTLS (#18). Fail closed: a configured-but-broken cert/CA aborts
+	// boot. Dormant (plaintext, nginx terminates ingress) when unset.
+	tlsSrv, err := buildTLSServer()
+	if err != nil {
+		log.Fatalf("tls: %v", err)
+	}
+	srv.tlsSrv = tlsSrv
+
 	httpSrv := &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(withLogging(srv.withAuth(srv.withAudit(mux)))),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if tlsSrv != nil {
+		httpSrv.TLSConfig = tlsSrv.config
+		httpSrv.Handler = hsts(handler) // HSTS only when actually serving TLS
+		go tlsSrv.reloader.WatchInterval(ctx, tlsSrv.interval, func(e error) {
+			logError("tls", "cert reload", errf(e))
+		})
 	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
+		if tlsSrv != nil {
+			log.Printf("netops-api %s listening on %s (TLS, mTLS=%v)", version, addr, tlsSrv.mtls)
+			// Certs are supplied by the reloader's GetCertificate, so the file args
+			// are intentionally empty.
+			if err := httpSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("https server: %v", err)
+			}
+			return
+		}
 		log.Printf("netops-api %s listening on %s", version, addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http server: %v", err)
@@ -460,8 +487,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
-	mux.HandleFunc("/api/incidents", s.handleIncidents)       // GET list (tenant-scoped)
-	mux.HandleFunc("/api/incidents/", s.handleIncidentByID)   // GET {id}; POST {id}/ack|resolve|note|assign|…
+	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
+	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
 	mux.HandleFunc("/api/saved", s.handleSaved)
 	mux.HandleFunc("/api/saved/", s.handleSavedByID)
 	mux.HandleFunc("/api/search/global", s.handleGlobalSearch)
@@ -669,6 +696,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.intMetrics != nil {
 		s.intMetrics.write(w)
+	}
+	if s.tlsSrv != nil {
+		s.tlsSrv.writeTLSMetrics(w)
 	}
 }
 

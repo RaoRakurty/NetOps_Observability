@@ -574,6 +574,16 @@ services:
       SEAL_PROVIDER: ${SEAL_PROVIDER:-}
       SEAL_SOCKET: ${SEAL_SOCKET:-/run/secrets-seal/seal.sock}
       SECRETS_RESEAL: ${SECRETS_RESEAL:-}
+      # Transport security (#18). DORMANT by default — unset means the API serves
+      # plaintext on its internal port and nginx terminates ingress TLS. Set both
+      # cert+key to serve HTTPS directly; add a client-CA bundle for mTLS (require
+      # + verify peer certs, least-privilege identity allowlist). Fail-closed.
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-}
+      TLS_CLIENT_CA_FILE: ${TLS_CLIENT_CA_FILE:-}
+      TLS_CLIENT_ALLOWED_DNS: ${TLS_CLIENT_ALLOWED_DNS:-}
+      TLS_CLIENT_ALLOWED_URIS: ${TLS_CLIENT_ALLOWED_URIS:-}
+      TLS_RELOAD_INTERVAL: ${TLS_RELOAD_INTERVAL:-30s}
       # App secrets and bootstrap admin
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
