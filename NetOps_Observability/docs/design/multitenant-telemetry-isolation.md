@@ -1,11 +1,23 @@
 # #20 — Multi-tenant telemetry isolation
 
-Status: **Phase 1 (ingest tenant-tagging) IMPLEMENTED.** Storage tiers now carry
-a `tenant_id` discriminator, stamped at the Vector aggregator from an
-API-exported device→tenant map (and on findings by the correlation service).
-Read-path enforcement still rides the existing read-time device-matching
-chokepoint (correct today); switching reads onto `tenant_id` + database-enforced
-policies is Phase 2+. Owner: `docs/TRACKER.md` #20.
+Status: **Phase 1 (ingest tagging) + Phase 2 (DB-enforced ClickHouse reads)
+IMPLEMENTED + deployed.** Storage carries a `tenant_id` discriminator (Phase 1);
+ClickHouse row policies on flows/findings/tunnels now enforce it at the DB —
+the API injects a `tenant_scope` custom setting on every telemetry read
+(`proxyClickHouse`/`chTenantScope`), so another tenant's TAGGED rows are refused
+even if a query filter is forgotten. Untagged rows stay app-layer device-gated
+during the tagging transition.
+
+⚠️ **Phase 2 gotcha (learned the hard way):** a materialized view that reads a
+policy table re-evaluates the row policy on every INSERT, in the inserting
+connection's context where `getSetting('tenant_scope')` is unset → the INSERT
+ERRORS and ingestion stops. We dropped the unused `flows_hourly` MV. Any future
+rollup over a policy table must be policy-exempt or tenant-aware. Row policies
+gate SELECT only; the API self-heals the policies on start (`ensureCHRowPolicies`).
+
+**Phase 3 (open):** at-rest separation (CH `PARTITION BY tenant_id`, per-tenant
+OpenSearch indices/DLS — the latter needs the OS security plugin, off in the
+scaffold). Owner: `docs/TRACKER.md` #20.
 
 Companion to #15 (`postgres-rls.md`): that doc isolates **app-state** (Postgres
 RLS); this one isolates **telemetry** (flows/logs/metrics/findings across
