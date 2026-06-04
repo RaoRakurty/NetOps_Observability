@@ -375,6 +375,13 @@ func main() {
 
 	handler := withCORS(withLogging(srv.withAuth(srv.withAudit(mux))))
 
+	// Internal CA bootstrap (#18 phase 2). When TLS_INTERNAL_CA=true, self-issue
+	// the API server + nginx client SVIDs and the CA bundle (CA key sealed by the
+	// Vault) BEFORE the TLS server reads its cert paths. No-op otherwise.
+	if _, err := bootstrapInternalCA(srv.vault); err != nil {
+		log.Fatalf("internal CA: %v", err)
+	}
+
 	// Opt-in TLS/mTLS (#18). Fail closed: a configured-but-broken cert/CA aborts
 	// boot. Dormant (plaintext, nginx terminates ingress) when unset.
 	tlsSrv, err := buildTLSServer()
