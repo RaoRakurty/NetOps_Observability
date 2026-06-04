@@ -1,0 +1,83 @@
+package tlsconfig
+
+import (
+	"crypto/tls"
+	"errors"
+)
+
+// ServerOptions configures a TLS server (the API ingress, or any internal
+// service accepting mTLS). Reloader is required; the rest enable mTLS.
+type ServerOptions struct {
+	// Reloader supplies the server's own key pair (hot-reloadable). Required.
+	Reloader *CertReloader
+	// RequireClientCert turns on mTLS: clients MUST present a cert that verifies
+	// against ClientCAs. Off → ordinary one-way TLS (still strong).
+	RequireClientCert bool
+	// ClientCAs is the explicit trust root for client certs (required when
+	// RequireClientCert is set). Never the system pool.
+	ClientCAs *TrustBundle
+	// Peer optionally constrains which client identities are accepted (least
+	// privilege on top of chain verification).
+	Peer PeerPolicy
+}
+
+// ServerConfig builds a hardened *tls.Config for a server. Fail-closed: mTLS
+// without a client-CA bundle is a configuration error, not a silent fallback to
+// no client auth.
+func ServerConfig(o ServerOptions) (*tls.Config, error) {
+	if o.Reloader == nil {
+		return nil, errors.New("tlsconfig: ServerConfig requires a CertReloader")
+	}
+	c := baseConfig()
+	c.GetCertificate = o.Reloader.GetCertificate
+	if o.RequireClientCert {
+		if o.ClientCAs == nil {
+			return nil, errors.New("tlsconfig: mTLS requires a ClientCAs trust bundle")
+		}
+		c.ClientAuth = tls.RequireAndVerifyClientCert
+		c.ClientCAs = o.ClientCAs.Pool()
+		peer := o.Peer
+		c.VerifyConnection = peer.verify // least-privilege identity allowlist
+	}
+	return c, nil
+}
+
+// ClientOptions configures a TLS client (the API dialing OpenSearch/ClickHouse/
+// VictoriaMetrics/correlation, or any service-to-service call).
+type ClientOptions struct {
+	// RootCAs is the explicit trust root for the server's cert. Required — we do
+	// NOT fall back to the system pool for internal services.
+	RootCAs *TrustBundle
+	// ServerName is verified against the server cert's SANs (SNI + hostname
+	// check). Required — an empty ServerName would disable hostname verification.
+	ServerName string
+	// Reloader optionally supplies a client cert for mTLS (the client proving its
+	// identity to the server).
+	Reloader *CertReloader
+	// Peer optionally constrains the accepted SERVER identity (URI/DNS SAN
+	// allowlist), e.g. pinning that we only talk to the real clickhouse SVID.
+	Peer PeerPolicy
+}
+
+// ClientConfig builds a hardened *tls.Config for a client. It NEVER sets
+// InsecureSkipVerify and requires both an explicit root bundle and a ServerName,
+// so hostname verification can't be accidentally disabled.
+func ClientConfig(o ClientOptions) (*tls.Config, error) {
+	if o.RootCAs == nil {
+		return nil, errors.New("tlsconfig: ClientConfig requires an explicit RootCAs bundle")
+	}
+	if o.ServerName == "" {
+		return nil, errors.New("tlsconfig: ClientConfig requires a ServerName (hostname verification)")
+	}
+	c := baseConfig()
+	c.RootCAs = o.RootCAs.Pool()
+	c.ServerName = o.ServerName
+	if o.Reloader != nil {
+		c.GetClientCertificate = o.Reloader.GetClientCertificate
+	}
+	if !o.Peer.empty() {
+		peer := o.Peer
+		c.VerifyConnection = peer.verify
+	}
+	return c, nil
+}
