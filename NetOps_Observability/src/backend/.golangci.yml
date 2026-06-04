@@ -19,6 +19,11 @@ linters:
     - misspell
     - unconvert   # redundant type conversions
 
+linters-settings:
+  misspell:
+    ignore-words:
+      - routeros  # MikroTik RouterOS — a product name, not a misspelling of "routers"
+
 issues:
   # Don't cap findings — show everything (the gate must see all of it).
   max-issues-per-linter: 0

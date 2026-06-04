@@ -192,7 +192,7 @@ func (p *poller) pollOnce(ctx context.Context) {
 		fmt.Sprintf(`collector_targets_reachable{collector=%q} %d %d`, p.name, reachable, now),
 		fmt.Sprintf(`collector_poll_duration_ms{collector=%q} %d %d`, p.name, dur.Milliseconds(), now),
 	)
-	emitMetrics(strings.Join(lines, "\n"))
+	emitMetrics(ctx, strings.Join(lines, "\n"))
 
 	p.mu.Lock()
 	p.status.LastTick = start.UTC()
@@ -278,7 +278,7 @@ func snmpProbe(ctx context.Context, addr string, t Target) error {
 
 // emitMetrics POSTs Prometheus-exposition samples to VictoriaMetrics so the
 // collectors' telemetry shows up in the Metrics Explorer. Best-effort.
-func emitMetrics(body string) {
+func emitMetrics(ctx context.Context, body string) {
 	base := os.Getenv("VICTORIA_URL")
 	if base == "" {
 		base = os.Getenv("METRICS_URL")
@@ -287,7 +287,8 @@ func emitMetrics(body string) {
 		return
 	}
 	url := strings.TrimRight(base, "/") + "/api/v1/import/prometheus"
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	// #nosec G704 -- url is the operator-configured VICTORIA_URL/METRICS_URL metrics backend, not user input
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		return
 	}

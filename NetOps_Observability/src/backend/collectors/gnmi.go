@@ -103,6 +103,7 @@ func (g *gnmiCollector) vmScalar(ctx context.Context, query string) (int, error)
 		base = "http://victoria:8428"
 	}
 	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(query)
+	// #nosec G704 -- endpoint is the operator-configured VICTORIA_URL/METRICS_URL backend, not user input
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return 0, err

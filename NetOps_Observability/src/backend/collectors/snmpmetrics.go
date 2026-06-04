@@ -111,11 +111,11 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		cancel()
 		samples += len(lines)
 		if len(lines) > 0 {
-			emitMetrics(strings.Join(lines, "\n"))
+			emitMetrics(ctx, strings.Join(lines, "\n"))
 		}
 	}
 
-	emitMetrics(strings.Join([]string{
+	emitMetrics(ctx, strings.Join([]string{
 		fmt.Sprintf(`collector_up{collector="snmpmetrics"} 1 %d`, now),
 		fmt.Sprintf(`collector_targets{collector="snmpmetrics"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="snmpmetrics"} %d %d`, reachable, now),
@@ -152,7 +152,7 @@ func vendorLabel(enterprise int, ok bool) string {
 func valueInt(v berVal) int64 {
 	switch v.tag {
 	case 0x41, 0x42, 0x43, 0x46: // Counter32, Gauge32, TimeTicks, Counter64
-		return int64(decodeUint(v.raw))
+		return int64(decodeUint(v.raw))  // #nosec G115 -- SNMP counter; int64 range covers Counter32/64 telemetry
 	default:
 		return decodeInt(v.raw)
 	}

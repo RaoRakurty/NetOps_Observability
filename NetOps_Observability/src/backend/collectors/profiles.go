@@ -78,6 +78,7 @@ func loadProfiles() []SNMPProfile {
 	if path == "" {
 		path = "/config/snmp_profiles.json"
 	}
+	// #nosec G304 G703 -- path is the operator-configured SNMP_PROFILES_FILE, not user input
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return profs

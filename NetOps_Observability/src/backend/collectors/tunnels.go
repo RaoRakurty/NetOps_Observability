@@ -391,7 +391,7 @@ type tunnelRow struct {
 // insertTunnels writes rows to ClickHouse via the HTTP interface using
 // JSONEachRow (ts uses the column DEFAULT now64(3)). Best-effort, like the
 // VictoriaMetrics emit in poller.go.
-func insertTunnels(rows []tunnelRow) {
+func insertTunnels(ctx context.Context, rows []tunnelRow) {
 	base := chEnv("CLICKHOUSE_URL", "http://clickhouse:8123")
 	if base == "" || len(rows) == 0 {
 		return
@@ -406,7 +406,8 @@ func insertTunnels(rows []tunnelRow) {
 		b.Write(j)
 		b.WriteByte('\n')
 	}
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(base, "/")+"/", strings.NewReader(b.String()))
+	// #nosec G704 -- base is the operator-configured CLICKHOUSE_URL backend, not user input
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/", strings.NewReader(b.String()))
 	if err != nil {
 		return
 	}
@@ -526,10 +527,10 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 		}
 	}
 
-	insertTunnels(rows)
+	insertTunnels(ctx, rows)
 
 	now := start.UnixMilli()
-	emitMetrics(strings.Join([]string{
+	emitMetrics(ctx, strings.Join([]string{
 		fmt.Sprintf(`collector_up{collector="tunnels"} 1 %d`, now),
 		fmt.Sprintf(`collector_targets{collector="tunnels"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="tunnels"} %d %d`, reachable, now),
