@@ -1,6 +1,7 @@
 package alerts
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,7 +51,13 @@ func Evaluate(r Rule) ([]Sample, error) {
 	u.RawQuery = q.Encode()
 
 	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Get(u.String())
+	// Build the request explicitly so it carries a context (request builder is
+	// ready for a caller-supplied ctx; Evaluate's signature can take one later).
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

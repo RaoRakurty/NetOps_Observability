@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,7 +40,7 @@ func TestServiceNow_VerifyAndNormalize(t *testing.T) {
 	if err := p.VerifyWebhook(req(map[string]string{headerWebhookSecret: "s3cret"}), body, "s3cret"); err != nil {
 		t.Fatalf("valid secret should pass: %v", err)
 	}
-	if err := p.VerifyWebhook(req(map[string]string{headerWebhookSecret: "wrong"}), body, "s3cret"); err != ErrSignatureInvalid {
+	if err := p.VerifyWebhook(req(map[string]string{headerWebhookSecret: "wrong"}), body, "s3cret"); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatalf("wrong secret must fail, got %v", err)
 	}
 	evs, err := p.Normalize("acme", body)
@@ -59,7 +60,7 @@ func TestJira_VerifyAndNormalize(t *testing.T) {
 	if err := p.VerifyWebhook(req(map[string]string{"X-Hub-Signature": sig}), body, "whk"); err != nil {
 		t.Fatalf("valid jira sig should pass: %v", err)
 	}
-	if err := p.VerifyWebhook(req(map[string]string{"X-Hub-Signature": sig + "00"}), body, "whk"); err != ErrSignatureInvalid {
+	if err := p.VerifyWebhook(req(map[string]string{"X-Hub-Signature": sig + "00"}), body, "whk"); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatal("tampered jira sig must fail")
 	}
 	evs, _ := p.Normalize("acme", body)
@@ -83,7 +84,7 @@ func TestPagerDuty_VerifyAndNormalize(t *testing.T) {
 	if err := p.VerifyWebhook(req(map[string]string{"X-PagerDuty-Signature": "v1=deadbeef, " + good}), body, "pdk"); err != nil {
 		t.Fatalf("valid PD sig should pass: %v", err)
 	}
-	if err := p.VerifyWebhook(req(map[string]string{"X-PagerDuty-Signature": "v1=deadbeef"}), body, "pdk"); err != ErrSignatureInvalid {
+	if err := p.VerifyWebhook(req(map[string]string{"X-PagerDuty-Signature": "v1=deadbeef"}), body, "pdk"); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatal("no matching PD sig must fail")
 	}
 	evs, _ := p.Normalize("acme", body)
@@ -120,11 +121,11 @@ func TestSlack_VerifyReplayAndNormalize(t *testing.T) {
 	oldTs := now.Add(-10 * time.Minute).Unix()
 	oldBase := append([]byte("v0:"+strconv.FormatInt(oldTs, 10)+":"), body...)
 	oldSig := "v0=" + hmacSHA256Hex([]byte(secret), oldBase)
-	if err := p.VerifyWebhook(mkReq(oldTs, oldSig), body, secret); err != ErrSignatureInvalid {
+	if err := p.VerifyWebhook(mkReq(oldTs, oldSig), body, secret); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatal("stale (replayed) slack request must be rejected")
 	}
 	// Tampered signature.
-	if err := p.VerifyWebhook(mkReq(validTs, validSig+"00"), body, secret); err != ErrSignatureInvalid {
+	if err := p.VerifyWebhook(mkReq(validTs, validSig+"00"), body, secret); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatal("tampered slack sig must fail")
 	}
 

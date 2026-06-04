@@ -6,7 +6,7 @@ import (
 )
 
 func stateEv(typ EventType, ext string, seq int64) IntegrationEvent {
-	return IntegrationEvent{Type: typ, ExternalState: ext, ExternalSeq: seq, OccurredAt: time.Unix(int64(seq), 0)}
+	return IntegrationEvent{Type: typ, ExternalState: ext, ExternalSeq: seq, OccurredAt: time.Unix(seq, 0)}
 }
 
 func TestReconcile_AppliesMappedState(t *testing.T) {

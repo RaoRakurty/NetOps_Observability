@@ -21,7 +21,7 @@ func (serviceNowProvider) Capabilities() Capabilities {
 	return Capabilities{Ticketing: true, Webhooks: true, Polling: true, Interactive: false}
 }
 
-const headerWebhookSecret = "X-NetOps-Webhook-Secret"
+const headerWebhookSecret = "X-NetOps-Webhook-Secret" // #nosec G101 -- HTTP header NAME, not a credential value
 
 func (serviceNowProvider) VerifyWebhook(r *http.Request, _ []byte, secret string) error {
 	if secret == "" || !constEq(r.Header.Get(headerWebhookSecret), secret) {
