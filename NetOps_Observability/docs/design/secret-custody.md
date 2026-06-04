@@ -1,8 +1,10 @@
 # Secret Custody — TPM-rooted envelope encryption (task #17)
 
-> Status: **design** (2026-06-02). Decisions locked: abstracted sealing provider,
-> tpm2-tools **sidecar** (no Go TPM dependency → governance-clean), phase-1 scope =
-> the foundation + the reversible secrets already stored in plaintext.
+> Status: **phase 1 building** (updated 2026-06-04). Phase **1a (swtpm sidecar +
+> SealingProvider)** and **1b (Vault envelope)** are DONE; **1c (wire stores)** is
+> partial — SNMP creds + integration webhook_secret encrypted, remaining config
+> stores pending. Decisions locked: abstracted sealing provider, tpm2-tools
+> **sidecar** (no Go TPM dependency → governance-clean).
 > Pairs with: `postgres-rls.md` (#15/#19/#33), TLS (#18), cert auto-rotation (#30).
 
 ---
@@ -187,11 +189,11 @@ type Vault interface {
 
 | Phase | Deliverable | Notes |
 |------|-------------|-------|
-| **1a** | swtpm sidecar (tpm2-tools) + `SealingProvider` + Unix-socket client | container + compose wiring; no Go dep |
-| **1b** | `Vault` envelope layer (`secrets.go`) + `wrapped_keys` storage + `0002` migration | stdlib AES-256-GCM; per-tenant + platform DEK; AAD binding |
-| **1c** | Wire config stores + SNMP creds through the Vault + re-seal migration | the secrets that exist today |
+| **1a** | ✅ **DONE** swtpm sidecar (tpm2-tools) + `SealingProvider` + Unix-socket client | `deployment/docker/swtpm-sidecar/` + compose `secrets-seal` (profile `seal`); `secrets_swtpm.go` client. No Go dep. Profile-gated; not live-verified in this env (no TPM) — gated test `SEAL_SWTPM_TEST`. |
+| **1b** | ✅ **DONE** `Vault` envelope layer (`secrets.go`) + `wrapped_keys` storage | stdlib AES-256-GCM; per-tenant + platform DEK; AAD = tenant\|fieldID. Wrapped DEKs ride the kv backend (no migration needed). Dormant default. Unit-tested. |
+| **1c** | 🟡 **PARTIAL** Wire stores through the Vault | ✅ SNMP creds (tenant DEK) + integration `webhook_secret` (tenant DEK). ⏳ remaining config stores: `notify_config.go` (SMTP/Twilio/ntfy/Slack-webhook), `oidc_config.go`, `auth_config.go` (LDAP/TACACS), `copilot_config.go` — platform DEK, same pattern. Re-seal pass (`SECRETS_RESEAL`) env reserved; encrypt-on-next-write is the active path. |
 | **2** | TLS private keys through the same Vault | lands with #18; seam already exists |
-| **3** | `JWT_SECRET` + bootstrap secrets off `.env` into the sealed store | changes bootstrap; do last |
+| **3** | `JWT_SECRET` + bootstrap secrets off `.env` into the sealed store | changes bootstrap; do last. (Note: compose's `ENCRYPTION_KEY` is currently an unused placeholder — a candidate env-KEK seam.) |
 | **later** | `tpm2Provider` (real HW, PCR seal + attest), `kmsProvider`, `hsmProvider` | drop-in; no caller change |
 
 ## 8. Test plan
