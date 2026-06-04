@@ -69,6 +69,8 @@ const (
 	RoleSuperAdmin = "super-admin"
 	RoleOperator   = "operator"
 	RoleReadOnly   = "read-only"
+	RoleAuditor    = "auditor"    // compliance: read everything incl. the audit trail, change nothing
+	RoleAPIClient  = "api-client" // least-privilege machine identity for programmatic access
 )
 
 // isSuperAdminRole maps both the new role id and the legacy "admin" value onto
@@ -105,6 +107,15 @@ func builtinRoles() []Role {
 	operator["administration"] = LevelNone
 	readonly := all(LevelRead)
 	readonly["administration"] = LevelNone
+	// Auditor: like read-only, but ALSO reads the administration area (the audit
+	// trail + config) — the one non-super role that can. Still zero write anywhere.
+	auditor := all(LevelRead)
+	// API client: least-privilege machine identity. Reads operational data only;
+	// no reports, no administration. Narrow further per token via API-token scopes
+	// (#23). Distinct from read-only (which can read reports) by intent + tighter grid.
+	apiClient := all(LevelRead)
+	apiClient["reports"] = LevelNone
+	apiClient["administration"] = LevelNone
 	return []Role{
 		{ID: RoleSuperAdmin, Name: "Super Admin", Builtin: true,
 			Description: "Full control across all tenants, including identity.", Permissions: all(LevelAdmin)},
@@ -112,6 +123,10 @@ func builtinRoles() []Role {
 			Description: "Acknowledge/silence alerts, run discovery, manage devices.", Permissions: operator},
 		{ID: RoleReadOnly, Name: "Read-only", Builtin: true,
 			Description: "View everything, change nothing.", Permissions: readonly},
+		{ID: RoleAuditor, Name: "Auditor", Builtin: true,
+			Description: "Read-only across all areas including the audit trail; cannot change anything.", Permissions: auditor},
+		{ID: RoleAPIClient, Name: "API Client", Builtin: true,
+			Description: "Least-privilege machine identity for programmatic API access (telemetry, alerts, topology); narrow further with API-token scopes.", Permissions: apiClient},
 	}
 }
 
