@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ type caManager struct {
 	vault       *Vault
 	ca          *internalca.CA
 	trustDomain string
+	ttl         time.Duration // SVID lifetime (set at bootstrap; the re-issue loop reuses it)
 }
 
 // loadOrCreateCA loads the internal CA from the kv store (cert plaintext, key
@@ -114,26 +116,60 @@ func bootstrapInternalCA(vault *Vault) (*caManager, error) {
 	if err != nil {
 		return nil, err
 	}
-	ttl := durationOr("TLS_SVID_TTL", 24*time.Hour)
+	m.ttl = durationOr("TLS_SVID_TTL", 24*time.Hour)
+	if err := m.provisionFromEnv(); err != nil {
+		return nil, err
+	}
+	logInfo("tls", "internal CA bootstrapped", map[string]any{
+		"trust_domain": td, "svid_ttl": m.ttl.String(), "ca_not_after": m.ca.NotAfter().Format(time.RFC3339)})
+	return m, nil
+}
+
+// provisionFromEnv (re)issues the API + nginx SVIDs and rewrites the CA bundle at
+// the env-configured paths. Idempotent to re-run — that's exactly what the
+// re-issue loop does to rotate before expiry.
+func (m *caManager) provisionFromEnv() error {
 	if p := os.Getenv("TLS_CLIENT_CA_FILE"); p != "" {
 		if err := m.writeBundle(p); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if cf, kf := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE"); cf != "" && kf != "" {
-		if err := m.issueService(cf, kf, "api", ttl, []string{"api", "localhost"}, false, true); err != nil {
-			return nil, err
+		if err := m.issueService(cf, kf, "api", m.ttl, []string{"api", "localhost"}, false, true); err != nil {
+			return err
 		}
 	}
 	if dir := os.Getenv("TLS_NGINX_CERT_DIR"); dir != "" {
 		if err := m.issueService(filepath.Join(dir, "nginx.crt"), filepath.Join(dir, "nginx.key"),
-			"nginx", ttl, []string{"nginx"}, true, false); err != nil {
-			return nil, err
+			"nginx", m.ttl, []string{"nginx"}, true, false); err != nil {
+			return err
 		}
 	}
-	logInfo("tls", "internal CA bootstrapped", map[string]any{
-		"trust_domain": td, "svid_ttl": ttl.String(), "ca_not_after": m.ca.NotAfter().Format(time.RFC3339)})
-	return m, nil
+	return nil
+}
+
+// startReissueLoop re-issues the SVIDs at ~half the TTL (a generous renewal
+// margin) until ctx is done. The API's CertReloader hot-swaps its new cert with
+// no restart; nginx needs a reload to pick up its file (see the runbook).
+func (m *caManager) startReissueLoop(ctx context.Context) {
+	every := m.ttl / 2
+	if every < time.Minute {
+		every = time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := m.provisionFromEnv(); err != nil {
+				logError("tls", "SVID re-issue", errf(err))
+				continue
+			}
+			logInfo("tls", "SVIDs re-issued", map[string]any{"svid_ttl": m.ttl.String()})
+		}
+	}
 }
 
 // writeFileAtomic writes via a temp file + rename so a reader (or the cert

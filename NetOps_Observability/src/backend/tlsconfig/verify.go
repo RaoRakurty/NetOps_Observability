@@ -2,6 +2,7 @@ package tlsconfig
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"strings"
 )
@@ -20,10 +21,22 @@ import (
 type PeerPolicy struct {
 	AllowedDNS  []string
 	AllowedURIs []string
+	// OnReject, if set, is called whenever verify rejects a peer (trusted chain
+	// but disallowed identity, or no verified cert). The hook lets the caller emit
+	// an audit log + metric without this package depending on either. identity is
+	// the peer's SANs (or "<none>"); err is the rejection reason.
+	OnReject func(identity string, err error)
 }
 
 // empty reports whether the policy names no identities (no constraint configured).
 func (p PeerPolicy) empty() bool { return len(p.AllowedDNS) == 0 && len(p.AllowedURIs) == 0 }
+
+func (p PeerPolicy) reject(identity string, err error) error {
+	if p.OnReject != nil {
+		p.OnReject(identity, err)
+	}
+	return err
+}
 
 // verify checks the verified peer chains from a completed handshake against the
 // allowlist. It assumes the stdlib has ALREADY verified the chain (we never set
@@ -33,7 +46,7 @@ func (p PeerPolicy) verify(cs tls.ConnectionState) error {
 		return nil // no identity allowlist configured → chain verification suffices
 	}
 	if len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
-		return fmt.Errorf("tlsconfig: no verified peer certificate")
+		return p.reject("<none>", fmt.Errorf("tlsconfig: no verified peer certificate"))
 	}
 	leaf := cs.VerifiedChains[0][0]
 	for _, want := range p.AllowedDNS {
@@ -50,5 +63,19 @@ func (p PeerPolicy) verify(cs tls.ConnectionState) error {
 			}
 		}
 	}
-	return fmt.Errorf("tlsconfig: peer identity %v / %v not in allowlist", leaf.DNSNames, leaf.URIs)
+	return p.reject(peerIdentity(leaf), fmt.Errorf("tlsconfig: peer identity %v / %v not in allowlist", leaf.DNSNames, leaf.URIs))
+}
+
+func peerIdentity(leaf *x509.Certificate) string {
+	var ids []string
+	ids = append(ids, leaf.DNSNames...)
+	for _, u := range leaf.URIs {
+		if u != nil {
+			ids = append(ids, u.String())
+		}
+	}
+	if len(ids) == 0 {
+		return "<none>"
+	}
+	return strings.Join(ids, ",")
 }

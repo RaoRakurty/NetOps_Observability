@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/tlsconfig"
@@ -31,6 +33,27 @@ type tlsServer struct {
 	reloader *tlsconfig.CertReloader
 	mtls     bool
 	interval time.Duration
+	metrics  *tlsMetrics
+}
+
+// tlsMetrics are the handshake/trust observability counters (#18 phase 4).
+type tlsMetrics struct {
+	handshakeErrors atomic.Int64 // TLS handshake failures at the listener
+	identityRejects atomic.Int64 // mTLS peers with a trusted chain but disallowed identity
+}
+
+// handshakeErrLog is wired to http.Server.ErrorLog when serving TLS. net/http
+// logs "http: TLS handshake error from <addr>: <reason>" there; we count those
+// (a downgrade attempt / cert problem / scanner) and emit a structured log,
+// rather than letting them vanish into the default logger.
+type handshakeErrLog struct{ m *tlsMetrics }
+
+func (h handshakeErrLog) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) {
+		h.m.handshakeErrors.Add(1)
+		logError("tls", "handshake error", map[string]any{"detail": strings.TrimSpace(string(p))})
+	}
+	return len(p), nil
 }
 
 // buildTLSServer returns a configured tlsServer, or (nil, nil) when TLS is not
@@ -48,6 +71,7 @@ func buildTLSServer() (*tlsServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	metrics := &tlsMetrics{}
 	opts := tlsconfig.ServerOptions{Reloader: reloader}
 	if caFile := strings.TrimSpace(os.Getenv("TLS_CLIENT_CA_FILE")); caFile != "" {
 		bundle, err := tlsconfig.LoadTrustBundle(caFile)
@@ -59,6 +83,12 @@ func buildTLSServer() (*tlsServer, error) {
 		opts.Peer = tlsconfig.PeerPolicy{
 			AllowedDNS:  splitCSV(os.Getenv("TLS_CLIENT_ALLOWED_DNS")),
 			AllowedURIs: splitCSV(os.Getenv("TLS_CLIENT_ALLOWED_URIS")),
+			// Audit + count every trusted-but-unauthorized peer (a confused-deputy
+			// or lateral-movement signal) — fail-closed already rejected it.
+			OnReject: func(identity string, rerr error) {
+				metrics.identityRejects.Add(1)
+				logError("tls", "mTLS identity rejected", map[string]any{"peer_identity": identity, "reason": rerr.Error()})
+			},
 		}
 	}
 	cfg, err := tlsconfig.ServerConfig(opts)
@@ -70,6 +100,7 @@ func buildTLSServer() (*tlsServer, error) {
 		reloader: reloader,
 		mtls:     opts.RequireClientCert,
 		interval: durationOr("TLS_RELOAD_INTERVAL", 30*time.Second),
+		metrics:  metrics,
 	}, nil
 }
 
@@ -96,6 +127,34 @@ func (t *tlsServer) writeTLSMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP netops_tls_cert_expiry_seconds Seconds until the API server TLS certificate expires.\n")
 	fmt.Fprintf(w, "# TYPE netops_tls_cert_expiry_seconds gauge\n")
 	fmt.Fprintf(w, "netops_tls_cert_expiry_seconds %.0f\n", secs)
+	if t.metrics != nil {
+		fmt.Fprintf(w, "# HELP netops_tls_handshake_errors_total TLS handshake failures at the API listener.\n")
+		fmt.Fprintf(w, "# TYPE netops_tls_handshake_errors_total counter\n")
+		fmt.Fprintf(w, "netops_tls_handshake_errors_total %d\n", t.metrics.handshakeErrors.Load())
+		fmt.Fprintf(w, "# HELP netops_tls_identity_rejected_total mTLS peers with a trusted chain but a disallowed identity.\n")
+		fmt.Fprintf(w, "# TYPE netops_tls_identity_rejected_total counter\n")
+		fmt.Fprintf(w, "netops_tls_identity_rejected_total %d\n", t.metrics.identityRejects.Load())
+	}
+}
+
+// certValid reports whether the served leaf exists and is within its validity
+// window with at least `margin` left — the readiness signal (#18 phase 4).
+func (t *tlsServer) certValid(margin time.Duration) (bool, string) {
+	if t == nil || t.reloader == nil {
+		return true, "tls disabled"
+	}
+	leaf := t.reloader.Leaf()
+	if leaf == nil {
+		return false, "no certificate loaded"
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) {
+		return false, "certificate not yet valid"
+	}
+	if now.Add(margin).After(leaf.NotAfter) {
+		return false, "certificate expired or within renewal margin"
+	}
+	return true, "ok"
 }
 
 func splitCSV(s string) []string {

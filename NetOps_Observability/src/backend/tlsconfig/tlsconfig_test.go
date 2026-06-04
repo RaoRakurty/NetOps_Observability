@@ -148,6 +148,33 @@ func TestMutualTLSWrongIdentityRejected(t *testing.T) {
 	}
 }
 
+func TestPeerPolicyOnRejectFires(t *testing.T) {
+	ca := newTestCA(t)
+	clientCAs, _ := LoadTrustBundle(ca.bundlePath())
+	var gotID string
+	var gotErr error
+	sc := serverCfg(t, ca, ServerOptions{
+		RequireClientCert: true, ClientCAs: clientCAs,
+		Peer: PeerPolicy{
+			AllowedURIs: []string{"spiffe://netops/ns/default/sa/api"},
+			OnReject:    func(id string, err error) { gotID, gotErr = id, err },
+		},
+	}, "server", leafOpts{dns: []string{"localhost"}})
+
+	cp, kp := ca.issue(t, "intruder", leafOpts{client: true, uris: []string{"spiffe://netops/ns/default/sa/intruder"}})
+	crl, _ := NewCertReloader(cp, kp)
+	rootCAs, _ := LoadTrustBundle(ca.bundlePath())
+	cc, _ := ClientConfig(ClientOptions{RootCAs: rootCAs, ServerName: "localhost", Reloader: crl})
+
+	handshake(sc, cc)
+	if gotErr == nil {
+		t.Fatal("OnReject must fire on a disallowed identity")
+	}
+	if gotID != "spiffe://netops/ns/default/sa/intruder" {
+		t.Fatalf("OnReject identity = %q, want the intruder SVID", gotID)
+	}
+}
+
 func TestMutualTLSAllowedIdentityAccepted(t *testing.T) {
 	ca := newTestCA(t)
 	clientCAs, _ := LoadTrustBundle(ca.bundlePath())

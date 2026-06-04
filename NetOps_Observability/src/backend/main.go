@@ -384,7 +384,8 @@ func main() {
 	// Internal CA bootstrap (#18 phase 2). When TLS_INTERNAL_CA=true, self-issue
 	// the API server + nginx client SVIDs and the CA bundle (CA key sealed by the
 	// Vault) BEFORE the TLS server reads its cert paths. No-op otherwise.
-	if _, err := bootstrapInternalCA(srv.vault); err != nil {
+	caMgr, err := bootstrapInternalCA(srv.vault)
+	if err != nil {
 		log.Fatalf("internal CA: %v", err)
 	}
 
@@ -404,9 +405,16 @@ func main() {
 	if tlsSrv != nil {
 		httpSrv.TLSConfig = tlsSrv.config
 		httpSrv.Handler = hsts(handler) // HSTS only when actually serving TLS
+		// Count + structure-log handshake failures instead of the default logger.
+		httpSrv.ErrorLog = log.New(handshakeErrLog{tlsSrv.metrics}, "", 0)
 		go tlsSrv.reloader.WatchInterval(ctx, tlsSrv.interval, func(e error) {
 			logError("tls", "cert reload", errf(e))
 		})
+		// Periodic SVID re-issue (#18 phase 4): re-mint + rewrite the API/nginx
+		// certs at ~half the TTL; the reloader hot-swaps them — rotation, no restart.
+		if caMgr != nil {
+			go caMgr.startReissueLoop(ctx)
+		}
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -443,6 +451,7 @@ func main() {
 // `/api/*` from the user-facing dashboard at port 8000.
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/health", s.handleHealth)
+	mux.HandleFunc("/admin/readyz", s.handleReadyz)
 	mux.HandleFunc("/admin/version", s.handleVersion)
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/me", s.handleMe)
@@ -563,6 +572,22 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": version})
+}
+
+// handleReadyz is the readiness probe (#18 phase 4). When serving TLS it returns
+// 503 if the served certificate is missing/expired/within its renewal margin, so
+// a load balancer pulls this instance BEFORE it would serve a dead cert (rather
+// than after clients see handshake failures). 200 otherwise.
+func (s *server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
+	if s.tlsSrv != nil {
+		// Renewal margin: a cert this close to expiry should already have been
+		// re-issued; if not, fail readiness loudly.
+		if ok, reason := s.tlsSrv.certValid(5 * time.Minute); !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "tls": reason})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
 }
 
 func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
