@@ -216,8 +216,6 @@ func severityRank(sev string) int {
 	}
 }
 
-func isCritical(sev string) bool { return severityRank(sev) >= severityRank("critical") }
-
 func (s *ServiceNow) meets(sev string) bool { return severityRank(sev) >= s.threshold }
 
 func fingerprint(a models.Alert) string {

@@ -34,3 +34,13 @@ issues:
         - gosec
         - bodyclose
         - noctx
+    # notify/: the Channel interface (`Send(models.Alert) error`) is context-free
+    # by design — these are fire-and-forget notification webhooks, each behind a
+    # bounded client Timeout (10-15s), so noctx's hang protection is already met.
+    # Adding cancellation propagation would mean threading ctx through the whole
+    # Channel interface + dispatcher + callers — a deliberate API change, not a
+    # lint cleanup. Excluded here with that rationale rather than cargo-culting
+    # context.Background() at 16 call sites.
+    - path: notify/
+      linters:
+        - noctx

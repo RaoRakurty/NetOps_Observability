@@ -191,7 +191,7 @@ func (e *Email) sendRaw(msg []byte) error {
 // sendTLSOnConnect dials an implicit-TLS connection (port 465) before HELO,
 // which smtp.SendMail can't do on its own.
 func (e *Email) sendTLSOnConnect(host string, auth smtp.Auth, msg []byte) error {
-	conn, err := tls.Dial("tcp", e.host, &tls.Config{ServerName: host})
+	conn, err := tls.Dial("tcp", e.host, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
 	if err != nil {
 		return err
 	}
