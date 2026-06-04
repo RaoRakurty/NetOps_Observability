@@ -12,8 +12,11 @@ import (
 // in-memory pipe, returning the client-side and server-side errors.
 func handshake(serverCfg, clientCfg *tls.Config) (clientErr, serverErr error) {
 	c1, c2 := net.Pipe()
-	_ = c1.SetDeadline(time.Now().Add(time.Second)) // safety net; a healthy handshake is sub-ms
-	_ = c2.SetDeadline(time.Now().Add(time.Second))
+	// Generous hang-safety net: a healthy handshake is sub-ms, but under `-race`
+	// on a contended CI runner (instrumentation + parallel packages) scheduling
+	// latency can spike, so don't set a tight deadline that flakes.
+	_ = c1.SetDeadline(time.Now().Add(15 * time.Second))
+	_ = c2.SetDeadline(time.Now().Add(15 * time.Second))
 	srv := tls.Server(c1, serverCfg)
 	cli := tls.Client(c2, clientCfg)
 	var wg sync.WaitGroup

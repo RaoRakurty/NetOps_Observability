@@ -20,8 +20,10 @@ import (
 // state plus both sides' errors (so tests can assert the negotiated version).
 func handshakeState(serverCfg, clientCfg *tls.Config) (tls.ConnectionState, error, error) {
 	c1, c2 := net.Pipe()
-	_ = c1.SetDeadline(time.Now().Add(time.Second))
-	_ = c2.SetDeadline(time.Now().Add(time.Second))
+	// Generous hang-safety net (see handshake in tlsconfig_test.go) — avoids a
+	// tight deadline flaking under `-race` on contended CI runners.
+	_ = c1.SetDeadline(time.Now().Add(15 * time.Second))
+	_ = c2.SetDeadline(time.Now().Add(15 * time.Second))
 	srv := tls.Server(c1, serverCfg)
 	cli := tls.Client(c2, clientCfg)
 	var wg sync.WaitGroup
