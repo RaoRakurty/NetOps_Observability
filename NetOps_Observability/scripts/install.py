@@ -437,6 +437,8 @@ def ensure_data_dirs(root: Path) -> None:
         "opensearch": (1000, 1000),
         "clickhouse": (101, 101),
         "api":        None,             # Go API runs as nonroot but writes JSON only
+        "secrets-seal": None,           # #17 sealing-sidecar socket dir (root-owned; opt-in 'seal' profile)
+        "swtpm":      None,             # #17 software-TPM state (sealed KEK objects); root-owned
     }
     for name, uid_gid in owners.items():
         d = root / "data" / name

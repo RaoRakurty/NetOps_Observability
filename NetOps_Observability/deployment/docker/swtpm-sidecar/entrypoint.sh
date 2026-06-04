@@ -38,4 +38,7 @@ fi
 
 rm -f "$SEAL_SOCKET"
 echo "secrets-seal: ready, serving $SEAL_SOCKET" >&2
-exec socat "UNIX-LISTEN:${SEAL_SOCKET},fork,mode=0660" EXEC:/usr/local/bin/seal-handler.sh
+# mode=0666: the api connects as a different (non-root) uid. The socket only ever
+# carries the root KEK (never tenant secrets) and lives on a host-private bind
+# mount; this is lab-grade. A real TPM/HSM deployment would gate by uid/group.
+exec socat "UNIX-LISTEN:${SEAL_SOCKET},fork,mode=0666" EXEC:/usr/local/bin/seal-handler.sh
