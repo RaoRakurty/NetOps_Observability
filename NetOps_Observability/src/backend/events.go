@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha1"
+	"crypto/sha1"  // #nosec G505 -- RFC 6455 §4.2.2: WebSocket accept-key is SHA-1; protocol-mandated
 	"encoding/base64"
 	"encoding/json"
 	"net"
@@ -149,7 +149,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send 101 Switching Protocols.
-	h := sha1.New()
+	h := sha1.New()  // #nosec G401 -- RFC 6455 WebSocket Sec-WebSocket-Accept hash; protocol-mandated
 	_, _ = h.Write([]byte(key + wsMagic))
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 

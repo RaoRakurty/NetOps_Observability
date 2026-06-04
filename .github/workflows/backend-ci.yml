@@ -107,11 +107,11 @@ jobs:
           args: ./tlsconfig/... ./internalca/...
 
   full-lint:
-    name: staticcheck + gosec (repo-wide, non-blocking triage)
+    name: golangci-lint (repo-wide, blocking)
     runs-on: ubuntu-latest
-    # Does not gate merges yet — surfaces the pre-existing backlog. Flip to
-    # blocking once the tree is clean (drop this allowance).
-    continue-on-error: true
+    # Now BLOCKING: the repo-wide backlog was burned down to zero (2026-06-04), so
+    # this enforces "no new lint findings" across the tree (protocol-mandated or
+    # false-positive cases carry inline // #nosec / //nolint with a cited reason).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

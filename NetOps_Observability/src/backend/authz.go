@@ -39,8 +39,8 @@ const (
 	ResUser       ResourceType = "user"
 	ResTenant     ResourceType = "tenant"
 	ResRole       ResourceType = "role"
-	ResAPIKey     ResourceType = "api_key"
-	ResSNMPCred   ResourceType = "snmp_credential"
+	ResAPIKey     ResourceType = "api_key"  // #nosec G101 -- ResourceType enum value, not a credential
+	ResSNMPCred   ResourceType = "snmp_credential"  // #nosec G101 -- ResourceType enum value, not a credential
 	ResAlert      ResourceType = "alert"
 	ResInfraStack ResourceType = "infra_stack" // platform plumbing: stack health, collectors, raw tools
 )

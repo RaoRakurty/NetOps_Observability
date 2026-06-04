@@ -75,7 +75,7 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	for i := 1; i <= blocks; i++ {
 		prf.Reset()
 		prf.Write(salt)
-		binary.BigEndian.PutUint32(buf[:], uint32(i))
+		binary.BigEndian.PutUint32(buf[:], uint32(i))  // #nosec G115 -- PBKDF2 32-bit block index (RFC 8018); i is a small bounded counter
 		prf.Write(buf[:])
 		u := prf.Sum(nil)
 		f := make([]byte, hashLen)

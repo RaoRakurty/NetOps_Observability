@@ -557,7 +557,7 @@ func (c *ldapConn) readMessage(wantID int32) (int32, protocolOp, error) {
 	if err != nil || idTag != tagInteger {
 		return 0, protocolOp{}, errors.New("malformed messageID")
 	}
-	id := int32(beInt(idBytes))
+	id := int32(beInt(idBytes))  // #nosec G115 -- LDAP messageID is INTEGER 0..2^31-1 (RFC 4511); int32 is the protocol type
 	opTag, opContent, err := r.next()
 	if err != nil {
 		return 0, protocolOp{}, errors.New("missing protocolOp")
