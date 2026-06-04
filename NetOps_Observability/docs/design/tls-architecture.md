@@ -115,8 +115,8 @@ or identity violation rejects the connection and is audit-logged.
 |---|---|---|
 | **1** | Centralized `tlsconfig` package (secure server/client builders, trust, reload, mTLS identity) + opt-in API HTTPS/mTLS + HSTS + expiry metric + tests | ✅ **done** |
 | **2** | Internal CA (`internalca`) issuing short-lived SPIFFE SVIDs; CA key **sealed via the #17 Vault**; boot self-bootstrap of API+nginx SVIDs + trust bundle (`tls_ca.go`); nginx↔API mTLS runbook | ✅ **done** (CA+seal+bootstrap unit-tested end to end; swtpm seal/unseal **live-validated**; nginx hop = runbook `docs/runbooks/tls-mtls.md`) |
-| **3** | API→backends client TLS (OpenSearch/ClickHouse/VictoriaMetrics/correlation) via `tlsconfig.ClientConfig`; Postgres `sslmode=verify-full` | planned |
-| **4** | Handshake/error metrics expansion; structured audit on trust/identity failures; readiness probes that assert cert validity | planned |
+| **3** | API→backends client TLS — `tlsconfig.HTTPTransport` + `backend_client.go` (one shared hardened transport, explicit mesh-CA roots, optional backend mTLS, fail-closed) wired into all 7 internal-backend call sites; external clients (copilot/jwks/netbox) stay public-CA; Postgres `sslmode=verify-full` guidance | ✅ **done** (round-trip + fail-closed tested) |
+| **4** | Handshake/error metrics expansion; structured audit on trust/identity failures; readiness probes that assert cert validity; periodic SVID re-issue | planned |
 | **5** | SPIFFE/SPIRE adoption (URI SAN seam already in `PeerPolicy`); HSM/TPM via the #17 SealingProvider; multi-region trust | future |
 
 ## 7. Operational guidance (phase 1)

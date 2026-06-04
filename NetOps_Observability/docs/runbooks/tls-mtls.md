@@ -63,6 +63,27 @@ curl -s http://localhost:8000/api/health                  # → 200
 curl -s http://localhost:8000/metrics | grep netops_tls_cert_expiry_seconds
 ```
 
+## Outbound backend TLS (phase 3)
+
+The API's calls to OpenSearch / ClickHouse / VictoriaMetrics / correlation verify
+against the mesh CA (not the system pool) once you set — on the `api` service:
+```bash
+TLS_BACKEND_CA_FILE=/data/tls/ca.pem        # the mesh CA (defaults to TLS_CLIENT_CA_FILE)
+TLS_BACKEND_CERT_FILE=/data/tls/api.crt     # optional: present a client SVID for backend mTLS
+TLS_BACKEND_KEY_FILE=/data/tls/api.key
+```
+Then point the backend URLs at `https://` (e.g. `CLICKHOUSE_URL=https://clickhouse:8123`).
+Each datastore must serve TLS first (deployment config, not Go). Fail-closed: an
+unloadable bundle aborts boot; plain `http://` URLs are unaffected.
+
+### Postgres
+pgx honors the DSN. For app-state over TLS set:
+```
+DATABASE_URL=postgres://app@postgres:5432/netops?sslmode=verify-full&sslrootcert=/data/tls/ca.pem
+```
+`verify-full` checks BOTH the chain and the hostname — do not use `require` (no
+verification). The non-superuser/non-BYPASSRLS rule (RLS, #15) still applies.
+
 ## Rotation
 
 - **Leaf SVIDs**: short TTL (`TLS_SVID_TTL`); re-issued on each API boot and
