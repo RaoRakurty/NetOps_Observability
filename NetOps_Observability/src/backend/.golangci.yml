@@ -49,3 +49,13 @@ issues:
     - path: notify/
       linters:
         - noctx
+    # Outbound data/auth helpers (copilot LLM calls, JWKS fetch, OIDC token
+    # exchange, OpenSearch/ClickHouse/VictoriaMetrics query helpers) make HTTP
+    # calls behind explicit client Timeouts. Propagating a context through them —
+    # chQuery alone has 14 call sites — is a deliberate context-aware data-layer
+    # refactor, not a lint cleanup. Excluded with that rationale; the HTTP proxy
+    # handlers that DO have a request in scope (flows, metrics_query) thread
+    # r.Context() instead.
+    - path: '(copilot|jwks|logs|oidc|report_scheduler)\.go'
+      linters:
+        - noctx

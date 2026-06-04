@@ -267,7 +267,7 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	user := envOr("CLICKHOUSE_USER", "netops")
 	pass := envOr("CLICKHOUSE_PASSWORD", "")
 
-	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

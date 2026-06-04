@@ -153,7 +153,7 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 	}
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u.String(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
