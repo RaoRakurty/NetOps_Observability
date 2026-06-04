@@ -43,24 +43,13 @@ TTL toDateTime(ts) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192;
 
 -- ---------------------------------------------------------------------------
--- Materialized rollups — top talkers per hour. Read off this for the
--- "Top Talkers (last 24h)" dashboard widget; ClickHouse keeps it warm.
+-- (Removed: the flows_hourly materialized view.) #20 Phase 2 puts a tenant
+-- row policy on netops.flows; an MV that reads flows re-evaluates that policy on
+-- every INSERT (in the inserting connection's context, where getSetting(
+-- 'tenant_scope') is unset → the insert ERRORS, breaking ingestion). The view
+-- was unused by the app (top-talkers query netops.flows directly). If an hourly
+-- rollup is wanted later, build it tenant-aware or off a policy-exempt pipeline.
 -- ---------------------------------------------------------------------------
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS netops.flows_hourly
-ENGINE = SummingMergeTree
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, src_addr, dst_addr)
-AS
-SELECT
-    toStartOfHour(ts)      AS hour,
-    src_addr,
-    dst_addr,
-    sum(bytes  * sampling_rate) AS bytes_total,
-    sum(packets * sampling_rate) AS packets_total,
-    count()               AS flow_count
-FROM netops.flows
-GROUP BY hour, src_addr, dst_addr;
 
 -- ---------------------------------------------------------------------------
 -- Overlay tunnels (IPsec / SD-WAN / GRE) between devices.
@@ -118,3 +107,29 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, severity, score)
 TTL toDateTime(ts) + INTERVAL 30 DAY;
+
+-- ---------------------------------------------------------------------------
+-- #20 Phase 2 — DATABASE-ENFORCED per-tenant isolation (defense in depth under
+-- the app-layer device matcher). The Go API injects the `tenant_scope` custom
+-- setting on EVERY telemetry read (proxyClickHouse): '__all__' for the platform
+-- owner, the tenant id for a scoped principal. A scoped reader sees ONLY its own
+-- tagged rows plus untagged (tenant_id='') rows; the app layer further narrows
+-- the untagged set by device. Another tenant's TAGGED rows are refused by the DB
+-- even if a query's WHERE clause is ever forgotten.
+--
+-- Requires custom_settings_prefixes=tenant_ (config.d/custom-settings.xml). These
+-- policies filter SELECT only (ClickHouse row policies don't gate INSERT), so
+-- ingestion is unaffected — provided no materialized view reads a policy table
+-- (see the removed flows_hourly note above). The Go API also ensures these exist
+-- at startup (ensureCHRowPolicies) so existing deployments self-heal.
+-- ---------------------------------------------------------------------------
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_flows ON netops.flows
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_findings ON netops.findings
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_tunnels ON netops.tunnels
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;

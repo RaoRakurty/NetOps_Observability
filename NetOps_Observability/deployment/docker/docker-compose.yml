@@ -395,6 +395,9 @@ services:
     volumes:
       - ../../data/clickhouse:/var/lib/clickhouse
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # #20 Phase 2: declare the `tenant_` custom-setting prefix so row policies
+      # can enforce per-tenant isolation via getSetting('tenant_scope').
+      - ./clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     healthcheck:

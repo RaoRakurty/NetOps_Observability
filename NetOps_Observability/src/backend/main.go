@@ -333,6 +333,8 @@ func main() {
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
 	// telemetry (#20 Phase 1). No-op unless TENANT_ENRICHMENT_DIR is set.
 	srv.startTenantEnrichment(ctx)
+	// Self-heal the ClickHouse tenant row policies (#20 Phase 2) in the background.
+	ensureCHRowPolicies()
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process

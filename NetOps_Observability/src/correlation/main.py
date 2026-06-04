@@ -165,8 +165,12 @@ class CH:
             log.error("clickhouse insert failed: %s %s", r.status_code, r.text)
 
     async def query(self, sql: str) -> list[dict]:
+        # #20 Phase 2: trusted internal reader — pass tenant_scope=__all__ so the
+        # findings row policy doesn't reject the query (ClickHouse errors on an
+        # unset custom setting once a policy references getSetting('tenant_scope')).
         r = await self.client.post(
-            self.base, params={"default_format": "JSON"}, content=sql, auth=self.auth,
+            self.base, params={"default_format": "JSON", "tenant_scope": "__all__"},
+            content=sql, auth=self.auth,
         )
         if r.status_code >= 300:
             raise HTTPException(status_code=502, detail=r.text)

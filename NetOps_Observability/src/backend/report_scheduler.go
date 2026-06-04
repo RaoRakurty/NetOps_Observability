@@ -862,6 +862,12 @@ func chQuery(sql string) []string {
 	if err != nil {
 		return nil
 	}
+	// #20 Phase 2: reports are a trusted internal reader — pass tenant_scope=__all__
+	// so the flows/findings row policies don't reject the query (getSetting errors
+	// on an unset custom setting). Report-level tenant scoping is handled upstream.
+	q := u.Query()
+	q.Set("tenant_scope", "__all__")
+	u.RawQuery = q.Encode()
 	req, err := http.NewRequest(http.MethodPost, u.String(), strings.NewReader(sql))
 	if err != nil {
 		return nil

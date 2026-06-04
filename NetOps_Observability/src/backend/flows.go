@@ -38,7 +38,7 @@ SELECT src_addr AS src,
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, sql)
+	proxyClickHouse(w, r, sql)
 }
 
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +58,7 @@ SELECT proto,
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
-	proxyClickHouse(w, sql)
+	proxyClickHouse(w, r, sql)
 }
 
 // handleFlowsByType breaks traffic down by flow-protocol family
@@ -83,7 +83,7 @@ SELECT flow_type,
  GROUP BY flow_type
  ORDER BY flows DESC
  FORMAT JSON`
-	proxyClickHouse(w, sql)
+	proxyClickHouse(w, r, sql)
 }
 
 func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +103,7 @@ SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` S
  GROUP BY bucket
  ORDER BY bucket
  FORMAT JSON`
-	proxyClickHouse(w, sql)
+	proxyClickHouse(w, r, sql)
 }
 
 func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +135,7 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
  ORDER BY ts DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, sql)
+	proxyClickHouse(w, r, sql)
 }
 
 // flowTypeClause restricts flow rows to a single source family when ?type= is
@@ -227,17 +227,43 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
  LIMIT 1 BY id
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
-	proxyClickHouse(w, sql)
+	proxyClickHouse(w, r, sql)
 }
 
-// proxyClickHouse runs sql against ClickHouse over its HTTP interface.
-func proxyClickHouse(w http.ResponseWriter, sql string) {
+// chTenantScope derives the ClickHouse `tenant_scope` custom setting for the
+// caller (#20 Phase 2). The DB row policies on flows/findings/tunnels enforce on
+// it: '__all__' unlocks everything (platform owner); a tenant id restricts to that
+// tenant's tagged rows plus untagged (the app-layer device matcher narrows the
+// untagged set). A request without claims (shouldn't reach an authed handler)
+// fails closed to a non-matching sentinel.
+func chTenantScope(r *http.Request) string {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		return "__none__"
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		return "__all__"
+	}
+	if tenant == "" {
+		return "__none__"
+	}
+	return tenant
+}
+
+// proxyClickHouse runs sql against ClickHouse over its HTTP interface, injecting
+// the caller's tenant_scope so the DB row policies enforce per-tenant isolation
+// even if a handler's SQL filter is ever forgotten (defense in depth).
+func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
 	u, err := url.Parse(base)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	q := u.Query()
+	q.Set("tenant_scope", chTenantScope(r))
+	u.RawQuery = q.Encode()
 	user := envOr("CLICKHOUSE_USER", "netops")
 	pass := envOr("CLICKHOUSE_PASSWORD", "")
 

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!--
+  #20 Phase 2 — SERVER config: declare the `tenant_` custom-setting prefix so
+  `tenant_scope` is an accepted per-query setting. Row policies on
+  netops.flows/findings/tunnels filter via getSetting('tenant_scope'); the Go API
+  injects it on every telemetry query (proxyClickHouse). The profile DEFAULT for
+  tenant_scope lives in users.d/tenant-scope.xml (users config), not here.
+  See docs/design/multitenant-telemetry-isolation.md §Phase 2.
+-->
+<clickhouse>
+    <custom_settings_prefixes>tenant_</custom_settings_prefixes>
+</clickhouse>
