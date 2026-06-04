@@ -183,7 +183,7 @@ Deterministic ladder, top-down (clock-skew/retry safe because ordering already r
 
 ---
 
-## 7. State Reconciler / Drift Loop  **[PLAN]** — the core new algorithm
+## 7. State Reconciler / Drift Loop  **[DONE inbound `10c2a06`]** — the core algorithm
 
 Webhooks are unreliable (dropped, duplicated, out-of-order). The reconciler is the
 **safety net** that converges NMS↔ITSM regardless. It re-drives everything through
@@ -222,6 +222,16 @@ backoff), **observable** (drift counters + per-repair ledger rows). A divergence
 that can't auto-repair (e.g. unmapped external state) → DLQ + alert, never a silent
 wrong state.
 
+**Built (`10c2a06`):** `integration_reconciler.go` — periodic loop
+(`FEATURE_ITSM_RECONCILE`, default off, `ITSM_RECONCILE_INTERVAL=5m`) + on-demand
+`POST /api/integrations/reconcile` (NOC "sync now"). Polls open mappings
+(`Provider.PollState` on SN/Jira), and on `version > applied_seq` synthesizes a
+canonical event re-driven through the inbound pipeline. The outbound projection now
+seeds `integration_mappings` so tickets are pollable. Live-verified: a ticket
+resolved-in-SNOW with no webhook → reconcile detected drift → incident converged.
+**Remaining (case b):** NMS-terminal-but-external-open → push an outbound Resolve
+(today the reconciler drives ITSM→NMS only; NMS→ITSM re-push is the next slice).
+
 ---
 
 ## 8. Multi-Tenant Isolation  **[DONE]**
@@ -259,8 +269,8 @@ wrong state.
 |---|---|---|---|
 | 1 | Duplicate webhook (retry) | Level-1 dedup: unique `provider_evt_id` → no-op insert | **[DONE]** proven |
 | 2 | Out-of-order (resolve before ack) | Watermark drops stale → no flap | **[DONE]** proven live |
-| 3 | Webhook dropped / never delivered | Drift reconciler polls, synthesizes the missed event through the inbound pipeline | **[PLAN]** |
-| 4 | NMS resolves, ITSM push fails | Outbound job retries (backoff) → DLQ; reconciler re-pushes Resolve | **[PARTIAL]** (queue done; reconciler [PLAN]) |
+| 3 | Webhook dropped / never delivered | Drift reconciler polls, synthesizes the missed event through the inbound pipeline | **[DONE]** `10c2a06`, verified live |
+| 4 | NMS resolves, ITSM push fails | Outbound job retries (backoff) → DLQ. Reconciler catches ITSM→NMS drift; NMS→ITSM re-push (case b) is the next slice | **[PARTIAL]** |
 | 5 | Concurrent NMS + ITSM update | Conflict ladder: terminal→NMS, assignment→ITSM | **[DONE]** |
 | 6 | Clock skew across systems | Ordering keys on `external_seq` (monotonic), not wall-clock | **[DONE]** |
 | 7 | Provider API down | Outbound queue backs off; inbound unaffected (NMS is SoR, never blocks) | **[DONE]** |
@@ -276,8 +286,8 @@ wrong state.
    job, crash-safe via lease re-claim + idempotent re-run; webhook returns 200 fast.
    (Subsumes the "atomic apply" concern — the queue's re-claim + watermark
    idempotency make a single-tx unnecessary.)
-2. **Drift reconciler** (§7) + `Provider.Poll` implementations — the next big one
-   (the safety net for dropped/duplicated/out-of-order webhooks).
+2. ~~**Drift reconciler**~~ — **[DONE]** `10c2a06` (inbound direction). Remaining:
+   outbound re-push (NMS-terminal → push Resolve to ITSM, §7 case b).
 4. **Outbound on every lifecycle change** (not just create/clear) for full NMS→ITSM.
 5. **Observability**: `correlation_id` column, merged timeline UI, integration metrics.
 6. **Secrets at rest** via #17.
