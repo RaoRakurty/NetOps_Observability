@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,46 @@ type Jira struct {
 
 	mu   sync.Mutex
 	open map[string]*JiraTicket // fingerprint -> ticket
+}
+
+// PollState fetches an issue's current status name + a version (the `updated`
+// timestamp in epoch millis, since Jira has no monotonic change counter) by its
+// key, for the drift reconciler. found=false when the issue is gone. Read-only.
+func (j *Jira) PollState(key string) (state string, version int64, found bool, err error) {
+	if j.baseURL == "" || key == "" {
+		return "", 0, false, nil
+	}
+	u := strings.TrimRight(j.baseURL, "/") + "/rest/api/2/issue/" + url.PathEscape(key) + "?fields=status,updated"
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return "", 0, false, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(j.email, j.apiToken)
+	resp, err := j.client.Do(req)
+	if err != nil {
+		return "", 0, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", 0, false, nil
+	}
+	if resp.StatusCode >= 300 {
+		return "", 0, false, fmt.Errorf("jira poll returned %d", resp.StatusCode)
+	}
+	var out struct {
+		Fields struct {
+			Status  struct{ Name string } `json:"status"`
+			Updated string                `json:"updated"`
+		} `json:"fields"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", 0, false, err
+	}
+	if t, e := time.Parse("2006-01-02T15:04:05.999-0700", out.Fields.Updated); e == nil {
+		version = t.UnixMilli()
+	}
+	return out.Fields.Status.Name, version, true, nil
 }
 
 // JiraTicket links a NetOps alert fingerprint to its Jira issue.

@@ -484,6 +484,11 @@ services:
       # ITSM inbound (bidirectional) sync: webhooks are verified+recorded always,
       # but only drive incident state when this is true (#43 P2b). Default off.
       FEATURE_ITSM_INBOUND: ${FEATURE_ITSM_INBOUND:-false}
+      # ITSM drift reconciler: periodically polls each open ticket and re-drives
+      # any divergence through the inbound pipeline (safety net for missed/dup/
+      # out-of-order webhooks). Makes outbound API calls; default off.
+      FEATURE_ITSM_RECONCILE: ${FEATURE_ITSM_RECONCILE:-false}
+      ITSM_RECONCILE_INTERVAL: ${ITSM_RECONCILE_INTERVAL:-5m}
       # Notification channels
       FEATURE_SLACK_NOTIFICATIONS: ${FEATURE_SLACK_NOTIFICATIONS:-false}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}

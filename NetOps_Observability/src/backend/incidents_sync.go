@@ -91,6 +91,15 @@ func (p *reportPipeline) processIncidentSync(ctx, jctx context.Context, _ string
 	if err := p.srv.incidents.MarkSync(ctx, inc.ID, system, ticketID, url, "synced", now); err != nil {
 		logError("incidents.sync", "mark synced", merge(fields, errf(err)))
 	}
+	// Record the external↔internal mapping so the drift reconciler can poll this
+	// ticket and so a future inbound webhook correlates by it. applied_seq starts
+	// at 0 — the first poll/webhook that observes a newer version drives state.
+	if p.srv.integrations != nil && ticketID != "" {
+		_ = p.srv.integrations.UpsertMapping(ctx, integrationMapping{
+			Tenant: inc.TenantID, Provider: system, ExternalID: ticketID,
+			IncidentID: inc.ID, State: inc.Status,
+		})
+	}
 	p.srv.incidentSync(true)
 	p.finishIncidentSync(ctx, job, tenant, fields)
 	logInfo("incidents.sync", "incident projected to ITSM",

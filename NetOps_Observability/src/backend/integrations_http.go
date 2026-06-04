@@ -140,6 +140,40 @@ func firstNonEmptyStr(a, b string) string {
 	return b
 }
 
+// handleIntegrationReconcile runs an on-demand drift sweep for the caller's tenant
+// (a "sync now" for NOC operators — reconcile without waiting for the periodic
+// loop). Admin + tenant-scoped.
+func (s *server) handleIntegrationReconcile(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.integrations == nil || s.reportPipeline == nil {
+		writeError(w, http.StatusConflict, errors.New("integration platform requires the Postgres backend"))
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	key := itsmKey(tenant)
+	cfgs, err := s.integrations.ListConfigs(r.Context(), key, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	n := 0
+	for _, cfg := range cfgs {
+		if cfg.Bidirectional() {
+			s.reconcileProvider(r.Context(), cfg)
+			n++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reconciled_providers": n})
+}
+
 // ---- inbound webhook -------------------------------------------------------
 
 func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request) {

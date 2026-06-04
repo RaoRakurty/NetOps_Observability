@@ -335,6 +335,8 @@ func main() {
 	srv.startTenantEnrichment(ctx)
 	// Self-heal the ClickHouse tenant row policies (#20 Phase 2) in the background.
 	ensureCHRowPolicies()
+	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
+	srv.startDriftReconciler(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process
@@ -480,6 +482,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Integration platform (#43): admin config + UNAUTHENTICATED inbound webhook
 	// (the more specific /webhook/ prefix wins over /api/integrations/ in the mux).
 	mux.HandleFunc("/api/integrations", s.handleIntegrations)
+	mux.HandleFunc("/api/integrations/reconcile", s.handleIntegrationReconcile) // exact path wins over the prefix below
 	mux.HandleFunc("/api/integrations/", s.handleIntegrations)
 	mux.HandleFunc("/api/integrations/webhook/", s.handleIntegrationWebhook)
 	// Platform-stack self-monitoring (platform-owner only).

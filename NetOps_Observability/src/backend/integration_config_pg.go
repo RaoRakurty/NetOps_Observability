@@ -98,6 +98,32 @@ func (s *integrationStore) ListConfigs(ctx context.Context, tenant string, cross
 	return out, err
 }
 
+// ListBidirectionalConfigs returns all enabled, webhook-enabled, bidirectional
+// configs across ALL tenants (platform scope) — the set the drift reconciler
+// iterates. Webhook secret is included (the reconciler may need provider auth via
+// the connector, but not the webhook secret; harmless).
+func (s *integrationStore) ListBidirectionalConfigs(ctx context.Context) ([]integrationConfig, error) {
+	var out []integrationConfig
+	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+integrationConfigCols+`
+			FROM integration_configs
+			WHERE enabled AND webhook_enabled AND sync_mode='bidirectional'`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			c, err := scanConfig(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, c)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // ConfigByToken resolves (tenant, provider, secret, …) from an opaque webhook
 // token. Runs at PLATFORM scope — the webhook is unauthenticated and we don't yet
 // know the tenant. Empty token never matches.

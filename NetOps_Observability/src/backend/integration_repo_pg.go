@@ -79,6 +79,47 @@ INSERT INTO integration_mappings
 	})
 }
 
+// ListOpenMappings returns a tenant's non-terminal mappings for a provider — the
+// drift-reconciler candidates — stalest first, bounded by limit.
+func (s *integrationStore) ListOpenMappings(ctx context.Context, tenant, provider string, limit int) ([]integrationMapping, error) {
+	var out []integrationMapping
+	err := s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at
+  FROM integration_mappings
+ WHERE provider=$1 AND state NOT IN ('resolved','closed')
+ ORDER BY last_synced_at ASC NULLS FIRST
+ LIMIT $2`, provider, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m integrationMapping
+			var appliedAt *time.Time
+			if err := rows.Scan(&m.Tenant, &m.Provider, &m.ExternalID, &m.IncidentID, &m.State, &m.Applied.Seq, &appliedAt); err != nil {
+				return err
+			}
+			if appliedAt != nil {
+				m.Applied.At = *appliedAt
+			}
+			out = append(out, m)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// TouchMapping bumps last_synced_at so a polled mapping rotates to the back of the
+// reconciler's stalest-first queue (whether or not drift was found).
+func (s *integrationStore) TouchMapping(ctx context.Context, tenant, provider, externalID string) error {
+	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE integration_mappings SET last_synced_at=now()
+			WHERE tenant_id=$1 AND provider=$2 AND external_id=$3`, tenant, provider, externalID)
+		return err
+	})
+}
+
 // RecordInbound persists a normalized inbound event (level-1 raw dedup via the
 // partial unique on provider_evt_id). Returns inserted=false when the event was a
 // redelivery (ON CONFLICT DO NOTHING) — the caller then skips re-applying it.

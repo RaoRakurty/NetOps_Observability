@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +56,47 @@ type ServiceNowTicket struct {
 	Summary     string    `json:"summary,omitempty"`
 	OpenedAt    time.Time `json:"opened_at"`
 	State       string    `json:"state"` // pending | open
+}
+
+// PollState fetches an incident's current state + version (sys_mod_count) by its
+// number, for the drift reconciler. Returns found=false when the incident no
+// longer exists. Read-only; uses the same Basic auth as the create path.
+func (s *ServiceNow) PollState(number string) (state string, version int64, found bool, err error) {
+	if s.instanceURL == "" || number == "" {
+		return "", 0, false, nil
+	}
+	u := strings.TrimRight(s.instanceURL, "/") +
+		"/api/now/table/incident?sysparm_limit=1&sysparm_fields=number,state,sys_mod_count&sysparm_query=number=" +
+		url.QueryEscape(number)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return "", 0, false, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(s.user, s.password)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", 0, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", 0, false, fmt.Errorf("servicenow poll returned %d", resp.StatusCode)
+	}
+	// ServiceNow's Table API returns every field as a string.
+	var out struct {
+		Result []struct {
+			State       string `json:"state"`
+			SysModCount string `json:"sys_mod_count"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", 0, false, err
+	}
+	if len(out.Result) == 0 {
+		return "", 0, false, nil
+	}
+	v, _ := strconv.ParseInt(out.Result[0].SysModCount, 10, 64)
+	return out.Result[0].State, v, true, nil
 }
 
 func NewServiceNow(instanceURL, user, password string) *ServiceNow {

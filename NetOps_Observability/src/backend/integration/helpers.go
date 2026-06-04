@@ -36,6 +36,19 @@ func parseLooseTime(s string) time.Time {
 	return time.Time{}
 }
 
+// CanonicalState normalizes a provider's raw external state token into the
+// canonical token the MappingEngine maps (e.g. ServiceNow numeric → word). Used
+// by the drift reconciler when it synthesizes an event from a poll, so a polled
+// state flows through the exact same mapping as a webhook.
+func CanonicalState(provider, raw string) string {
+	switch provider {
+	case "servicenow":
+		return snStateWord(raw)
+	default:
+		return raw
+	}
+}
+
 // stateToEventType classifies a canonical state token into an inbound event type.
 // Used to tag the event; the reconciler still drives the transition off the
 // mapped ExternalState. Resolved/ack are called out so they route correctly even
