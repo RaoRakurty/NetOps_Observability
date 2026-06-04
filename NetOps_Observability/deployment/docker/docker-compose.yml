@@ -563,6 +563,17 @@ services:
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-claude-sonnet-4-5}
+      # Secret-custody Vault (#17): envelope-encrypt reversible secrets at rest
+      # under per-tenant keys. DORMANT unless SEAL_PROVIDER is set (default: empty
+      # = plaintext passthrough, unchanged behavior). Activate by bringing up the
+      # sealing sidecar and pointing the api at its socket:
+      #   docker compose --profile seal up -d secrets-seal
+      #   SEAL_PROVIDER=swtpm docker compose up -d api
+      # SECRETS_RESEAL=true runs a one-time boot pass that encrypts any still-
+      # plaintext secret (idempotent). See docs/design/secret-custody.md.
+      SEAL_PROVIDER: ${SEAL_PROVIDER:-}
+      SEAL_SOCKET: ${SEAL_SOCKET:-/run/secrets-seal/seal.sock}
+      SECRETS_RESEAL: ${SECRETS_RESEAL:-}
       # App secrets and bootstrap admin
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
@@ -589,6 +600,9 @@ services:
     volumes:
       - ../../src/config:/config:ro
       - ../../data/api:/data
+      # Shared dir for the sealing sidecar's Unix socket (empty/unused when the
+      # 'seal' profile isn't up — the Vault stays dormant, see SEAL_PROVIDER).
+      - ../../data/secrets-seal:/run/secrets-seal
     depends_on:
       postgres:    { condition: service_healthy }
       redis:       { condition: service_healthy }
@@ -608,6 +622,28 @@ services:
       - --chromium-disable-javascript=true
       - --api-timeout=30s
     mem_limit: ${GOTENBERG_MEM_LIMIT:-768m}
+    networks: [netops]
+    restart: *restart
+
+  # Secret-custody sealing sidecar (#17): a software TPM (swtpm) + tpm2-tools that
+  # seal/unseal ONLY the 32-byte root KEK over a local Unix socket. Tenant secrets
+  # never cross it — the Go Vault does the AES-256-GCM in-process. Opt-in:
+  #   docker compose --profile seal up -d secrets-seal
+  # then set SEAL_PROVIDER=swtpm on the api. swtpm is a SOFTWARE emulator (correct
+  # for lab/dev + building the integration); production needs a real TPM/HSM/KMS
+  # behind the same SealingProvider interface. See docs/design/secret-custody.md.
+  secrets-seal:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/swtpm-sidecar/Dockerfile
+    profiles: ["seal"]
+    mem_limit: ${SEAL_MEM_LIMIT:-128m}
+    environment:
+      SEAL_SOCKET: /run/secrets-seal/seal.sock
+      TPMDIR: /tpmstate
+    volumes:
+      - ../../data/secrets-seal:/run/secrets-seal
+      - ../../data/swtpm:/tpmstate
     networks: [netops]
     restart: *restart
 
