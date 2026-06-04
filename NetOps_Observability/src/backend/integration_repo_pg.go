@@ -111,6 +111,30 @@ INSERT INTO integration_events
 	return id, inserted, err
 }
 
+// GetInboundEvent reconstructs a recorded inbound event from its ledger row (the
+// canonical IntegrationEvent was stored as the payload). Used by the async apply
+// worker. Platform scope (the worker resolves tenant from the event).
+func (s *integrationStore) GetInboundEvent(ctx context.Context, id string) (integration.IntegrationEvent, bool, error) {
+	var ev integration.IntegrationEvent
+	var found bool
+	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		var payload []byte
+		e := tx.QueryRow(ctx, `SELECT payload FROM integration_events WHERE id=$1`, id).Scan(&payload)
+		if e == pgx.ErrNoRows {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		if uerr := json.Unmarshal(payload, &ev); uerr != nil {
+			return uerr
+		}
+		found = true
+		return nil
+	})
+	return ev, found, err
+}
+
 // MarkEvent records the reconciler's verdict (status + reason) for a ledger row.
 func (s *integrationStore) MarkEvent(ctx context.Context, id, status, reason string) error {
 	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {

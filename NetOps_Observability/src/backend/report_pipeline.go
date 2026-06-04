@@ -255,6 +255,8 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 		p.processExport(ctx, jctx, workerID, job, tenant, fields)
 	case jobTypeIncidentSync:
 		p.processIncidentSync(ctx, jctx, workerID, job, tenant, fields)
+	case jobTypeIntegrationInbound:
+		p.processIntegrationInbound(ctx, jctx, workerID, job, tenant, fields)
 	default:
 		p.processReport(ctx, jctx, workerID, job, tenant, fields)
 	}

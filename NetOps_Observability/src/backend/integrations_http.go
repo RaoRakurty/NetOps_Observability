@@ -23,11 +23,13 @@ func readBounded(w http.ResponseWriter, r *http.Request, max int64) ([]byte, err
 //   - inbound webhook (POST /api/integrations/webhook/{provider}/{token}) —
 //     UNAUTHENTICATED by JWT; authenticated by the opaque per-tenant token + the
 //     provider's signature. Verified → normalized → recorded (3-level dedup) →
-//     (when FEATURE_ITSM_INBOUND is on AND the config is bidirectional) ordered,
-//     reconciled, and applied to the incident lifecycle.
+//     (when FEATURE_ITSM_INBOUND is on AND the config is bidirectional) ENQUEUED
+//     to the worker pool, which orders/reconciles/applies it to the incident
+//     lifecycle (integration_inbound_job.go). The webhook returns 200 immediately.
 //
 // The actual incident MUTATION is gated behind FEATURE_ITSM_INBOUND (default OFF)
-// so the ingest path can be enabled and observed before it drives state.
+// so the ingest path can be enabled and observed before it drives state. The
+// apply is async + crash-safe (worker lease re-claim + idempotent re-run).
 
 func itsmInboundEnabled() bool { return os.Getenv("FEATURE_ITSM_INBOUND") == "true" }
 
@@ -191,7 +193,7 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 	}
 
 	ctx := r.Context()
-	applied := 0
+	queued := 0
 	for _, ev := range events {
 		id, inserted, err := s.integrations.RecordInbound(ctx, ev)
 		if err != nil {
@@ -201,16 +203,20 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 		if !inserted {
 			continue // level-1 raw duplicate (redelivery) — already handled
 		}
-		// Mutation is gated: only a bidirectional config with the flag on drives state.
-		if itsmInboundEnabled() && cfg.Bidirectional() {
-			if s.applyInboundEvent(ctx, cfg, ev, id) {
-				applied++
+		// Mutation is gated: only a bidirectional config with the flag on drives
+		// state. The apply is ENQUEUED (async, crash-safe via the worker lease),
+		// so the webhook returns immediately and never blocks the caller.
+		if itsmInboundEnabled() && cfg.Bidirectional() && s.reportPipeline != nil {
+			if _, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, id); err != nil {
+				logError("integration", "enqueue inbound", map[string]any{"provider": providerType, "error": err.Error()})
+				continue
 			}
+			queued++
 		} else {
 			_ = s.integrations.MarkEvent(ctx, id, "received", "ingest-only")
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"received": len(events), "applied": applied})
+	writeJSON(w, http.StatusOK, map[string]any{"received": len(events), "queued": queued})
 }
 
 // applyInboundEvent orders/reconciles one recorded event and applies the verdict
