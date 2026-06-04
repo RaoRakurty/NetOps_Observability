@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -130,7 +131,7 @@ func TestPgJobQueue(t *testing.T) {
 	if js, _ := q.Claim(ctx, "w2", 10, 30*time.Second); len(js) != 0 {
 		t.Fatalf("renewed lease must NOT be re-claimable, got %v", js)
 	}
-	if err := q.RenewLease(ctx, "ren1", "w-other", 60*time.Second); err != errLeaseLost {
+	if err := q.RenewLease(ctx, "ren1", "w-other", 60*time.Second); !errors.Is(err, errLeaseLost) {
 		t.Fatalf("renew by wrong worker = %v, want errLeaseLost", err)
 	}
 	_ = q.Complete(ctx, "ren1")

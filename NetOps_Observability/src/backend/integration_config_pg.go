@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -81,7 +82,7 @@ func (s *integrationStore) GetConfig(ctx context.Context, tenant string, cross b
 		row := tx.QueryRow(ctx, `SELECT `+integrationConfigCols+` FROM integration_configs WHERE provider=$1`, provider)
 		got, err := s.scanConfig(row)
 		if err != nil {
-			if err == pgx.ErrNoRows {
+			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			return err
@@ -152,7 +153,7 @@ func (s *integrationStore) ConfigByToken(ctx context.Context, token string) (int
 		row := tx.QueryRow(ctx, `SELECT `+integrationConfigCols+` FROM integration_configs WHERE webhook_token=$1`, token)
 		got, err := s.scanConfig(row)
 		if err != nil {
-			if err == pgx.ErrNoRows {
+			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			return err

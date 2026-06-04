@@ -68,7 +68,7 @@ func (s *pgSavedStore) Get(id string) (SavedObject, bool) {
 	if err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var data []byte
 		err := tx.QueryRow(ctx, `SELECT data FROM saved_objects WHERE id=$1`, id).Scan(&data)
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
@@ -119,7 +119,7 @@ func (s *pgSavedStore) Update(id, name string, body json.RawMessage) (SavedObjec
 	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var data []byte
 		if err := tx.QueryRow(ctx, `SELECT data FROM saved_objects WHERE id=$1 FOR UPDATE`, id).Scan(&data); err != nil {
-			if err == pgx.ErrNoRows {
+			if errors.Is(err, pgx.ErrNoRows) {
 				return errors.New("not found")
 			}
 			return err

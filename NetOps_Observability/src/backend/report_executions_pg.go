@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -197,7 +198,7 @@ func scanExec(row pgx.Row) (reports.ExecutionRecord, bool, error) {
 	var refJSON, delJSON []byte
 	if err := row.Scan(&r.ID, &r.Kind, &r.TenantID, &r.ScheduleID, &r.JobID, &r.FireTime,
 		&started, &completed, &status, &refJSON, &delJSON, &r.Error); err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return reports.ExecutionRecord{}, false, nil
 		}
 		return reports.ExecutionRecord{}, false, err

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -65,12 +66,12 @@ func TestIncidentDedupAndRLS(t *testing.T) {
 	if _, _, found, _ := store.Get(ctx, "", true, inc1.ID); !found {
 		t.Errorf("platform owner should see the incident")
 	}
-	if _, err := store.Transition(ctx, "globex", false, inc1.ID, statusAcknowledged, "eve", ""); err != errIncidentNotFound {
+	if _, err := store.Transition(ctx, "globex", false, inc1.ID, statusAcknowledged, "eve", ""); !errors.Is(err, errIncidentNotFound) {
 		t.Errorf("cross-tenant transition must fail not-found, got %v", err)
 	}
 
 	// 3) lifecycle: ack → resolve (stamps resolved_at), bad transition rejected.
-	if _, err := store.Transition(ctx, "acme", false, inc1.ID, "bogus", "alice", ""); err != errBadTransition {
+	if _, err := store.Transition(ctx, "acme", false, inc1.ID, "bogus", "alice", ""); !errors.Is(err, errBadTransition) {
 		t.Errorf("invalid status must be rejected, got %v", err)
 	}
 	ack, err := store.Transition(ctx, "acme", false, inc1.ID, statusAcknowledged, "alice", "looking")

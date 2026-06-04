@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,7 +47,7 @@ func (s *integrationStore) GetMapping(ctx context.Context, tenant string, cross 
 SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at
   FROM integration_mappings WHERE provider=$1 AND external_id=$2`, provider, externalID)
 		if err := row.Scan(&m.Tenant, &m.Provider, &m.ExternalID, &m.IncidentID, &m.State, &m.Applied.Seq, &appliedAt); err != nil {
-			if err == pgx.ErrNoRows {
+			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			return err
@@ -150,7 +151,7 @@ INSERT INTO integration_events
  RETURNING id`,
 			id, ev.Tenant, ev.Provider, string(ev.Type), ev.ProviderEvtID, ev.ExternalID, ev.ExternalSeq, ev.AlertID, payload, occurred, correlationID)
 		if scanErr := qerr.Scan(&returned); scanErr != nil {
-			if scanErr == pgx.ErrNoRows {
+			if errors.Is(scanErr, pgx.ErrNoRows) {
 				inserted = false // redelivery — collapsed by the unique index
 				return nil
 			}
@@ -171,7 +172,7 @@ func (s *integrationStore) GetInboundEvent(ctx context.Context, id string) (inte
 	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var payload []byte
 		e := tx.QueryRow(ctx, `SELECT payload FROM integration_events WHERE id=$1`, id).Scan(&payload)
-		if e == pgx.ErrNoRows {
+		if errors.Is(e, pgx.ErrNoRows) {
 			return nil
 		}
 		if e != nil {
