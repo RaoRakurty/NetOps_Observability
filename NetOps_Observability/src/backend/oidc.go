@@ -316,9 +316,6 @@ func (p *oidcProvider) exchange(code, redirectURI string) (string, error) {
 	form.Set("code", code)
 	form.Set("redirect_uri", redirectURI)
 	form.Set("client_id", p.clientID)
-	if p.clientSecret == "" {
-		// public client (PKCE-less here); client_id in body is enough
-	}
 	req, err := http.NewRequest(http.MethodPost, disc.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err

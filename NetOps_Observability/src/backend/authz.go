@@ -122,8 +122,7 @@ func Authorize(p Principal, a Action, r Resource) Decision {
 // (case/space-insensitive, exact match; global/untagged never matches a scoped
 // tenant). The cross-tenant short-circuit lives in Authorize.
 func sameTenantStrict(resourceTenant, principalTenant string) bool {
-	return strings.ToLower(strings.TrimSpace(resourceTenant)) ==
-		strings.ToLower(strings.TrimSpace(principalTenant))
+	return strings.EqualFold(strings.TrimSpace(resourceTenant), strings.TrimSpace(principalTenant))
 }
 
 // can is the boolean convenience for non-HTTP call sites (hub, jobs).

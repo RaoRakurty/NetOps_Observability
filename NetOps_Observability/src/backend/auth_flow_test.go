@@ -213,7 +213,7 @@ func TestRBACGating(t *testing.T) {
 		t.Errorf("admin GET /api/users: %d", st)
 	}
 	// Operator's effective permissions match the built-in role.
-	st, b = do(t, srv, "GET", "/api/auth/permissions", op.Token, nil)
+	_, b = do(t, srv, "GET", "/api/auth/permissions", op.Token, nil)
 	var pr struct {
 		Permissions map[string]int `json:"permissions"`
 	}
