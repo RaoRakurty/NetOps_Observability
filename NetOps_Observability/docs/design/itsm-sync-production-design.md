@@ -266,18 +266,18 @@ wrong state.
 | 7 | Provider API down | Outbound queue backs off; inbound unaffected (NMS is SoR, never blocks) | **[DONE]** |
 | 8 | Tenant misconfig (bad webhook secret) | Signature verify fails → 401, audited, zero state change | **[DONE]** proven |
 | 9 | Two providers on one incident | Hub-and-spoke (one incident) + provider precedence tie-break | **[DONE]** |
-| 10 | **Worker crash mid-apply** | Inbound apply must be **atomic** (Transition + watermark + ledger in ONE tx) and ideally run on the **PG queue** (lease re-claim → idempotent retry). Current P2b is **inline + multi-statement** → a crash between Transition and watermark-advance can leave the watermark stale (redelivery is deduped, so it won't reprocess) — a benign inconsistency, but the production fix is the single-tx + queued apply. | **[PARTIAL — HARDENING]** |
+| 10 | **Worker crash mid-apply** | Inbound apply runs on the **PG worker queue** (`jobTypeIntegrationInbound`): the webhook only verifies+records+enqueues (returns 200 fast); a worker crash lapses the lease, another worker re-claims, and the re-run is **idempotent** (watermark drops an already-applied event; an interrupted apply re-applies a same-state transition = no-op). | **[DONE]** `5acda2b`, verified live |
 
 ---
 
 ## Hardening backlog (to reach the maturity bar)
 
-1. **Atomic inbound apply** — wrap `Transition + UpsertMapping(watermark) + MarkEvent`
-   in one `withTenant` tx (today they're separate calls in `applyInboundEvent`).
-2. **Queue the inbound apply** — move from inline (in the webhook handler) to an
-   `integration_inbound` job (return 200 fast, process via the worker) — true async,
-   crash-safe via lease re-claim. The webhook handler then only verifies + records.
-3. **Drift reconciler** (§7) + `Provider.Poll` implementations.
+1. ~~**Queue the inbound apply**~~ — **[DONE]** `5acda2b`: `integration_inbound`
+   job, crash-safe via lease re-claim + idempotent re-run; webhook returns 200 fast.
+   (Subsumes the "atomic apply" concern — the queue's re-claim + watermark
+   idempotency make a single-tx unnecessary.)
+2. **Drift reconciler** (§7) + `Provider.Poll` implementations — the next big one
+   (the safety net for dropped/duplicated/out-of-order webhooks).
 4. **Outbound on every lifecycle change** (not just create/clear) for full NMS→ITSM.
 5. **Observability**: `correlation_id` column, merged timeline UI, integration metrics.
 6. **Secrets at rest** via #17.
