@@ -238,6 +238,27 @@ export type IncidentEvent = {
   created_at: string;
 };
 
+// TimelineEntry — one item in the merged incident timeline: a lifecycle event
+// (kind="lifecycle") or an ITSM sync event (kind="sync"). The discriminator says
+// which fields are populated; `at` is the unified sort key.
+export type TimelineEntry = {
+  kind: "lifecycle" | "sync";
+  at: string;
+  id: string;
+  // lifecycle
+  event_type?: string;
+  actor?: string;
+  payload?: Record<string, unknown>;
+  // sync
+  provider?: string;
+  direction?: string;
+  type?: string;
+  external_id?: string;
+  status?: string;
+  reason?: string;
+  correlation_id?: string;
+};
+
 export type ExportPolicy = {
   rate_per_min: number;
   max_rows: number;
@@ -784,6 +805,8 @@ export const api = {
   },
   getIncident: (id: string) =>
     request<{ incident: Incident; events: IncidentEvent[] }>(`/api/incidents/${encodeURIComponent(id)}`),
+  getIncidentTimeline: (id: string) =>
+    request<{ incident: Incident; timeline: TimelineEntry[] }>(`/api/incidents/${encodeURIComponent(id)}/timeline`),
   incidentAction: (id: string, action: "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | "assign" | "promote", body: { note?: string; owner?: string } = {}) =>
     request<Incident>(`/api/incidents/${encodeURIComponent(id)}/${action}`, {
       method: "POST",

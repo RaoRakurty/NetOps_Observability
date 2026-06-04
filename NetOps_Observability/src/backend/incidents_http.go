@@ -154,6 +154,37 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Merged timeline: lifecycle events ⨝ ITSM sync events, time-ordered (#43 §9).
+	if action == "timeline" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		inc, events, found, err := s.incidents.Get(r.Context(), tenant, cross, id)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, errIncidentNotFound)
+			return
+		}
+		var sync []timelineEntry
+		if s.integrations != nil {
+			if sync, err = s.integrations.ListSyncEventsForIncident(r.Context(), tenant, cross, id); err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+		}
+		timeline := mergeTimeline(events, sync)
+		if timeline == nil {
+			timeline = []timelineEntry{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"incident": inc, "timeline": timeline})
+		return
+	}
+
 	// Mutation path: ack | resolve | investigate | close | note | assign — needs write.
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")

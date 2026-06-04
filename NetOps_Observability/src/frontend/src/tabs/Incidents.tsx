@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, Incident, IncidentEvent } from "../services/api";
+import { api, Incident, TimelineEntry } from "../services/api";
 import { severityClass, severityRowClass } from "../theme/severity";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
@@ -20,7 +20,7 @@ export default function Incidents() {
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
-  const [detail, setDetail] = useState<{ incident: Incident; events: IncidentEvent[] } | null>(null);
+  const [detail, setDetail] = useState<{ incident: Incident; timeline: TimelineEntry[] } | null>(null);
   const [note, setNote] = useState("");
   const [acting, setActing] = useState(false);
 
@@ -53,7 +53,7 @@ export default function Incidents() {
     setSel(id);
     setDetail(null);
     try {
-      setDetail(await api.getIncident(id));
+      setDetail(await api.getIncidentTimeline(id));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -226,17 +226,47 @@ export default function Incidents() {
             </button>
           </div>
 
-          {/* Timeline */}
+          {/* Timeline — lifecycle events and ITSM sync events, merged chronologically */}
           <h3 style={{ fontSize: 13, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4 }}>Timeline</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {detail.events.map((ev) => (
-              <div key={ev.id} style={{ display: "flex", gap: 10, fontSize: 12, alignItems: "baseline" }}>
+            {detail.timeline.map((ev) => (
+              <div
+                key={ev.id}
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  fontSize: 12,
+                  alignItems: "baseline",
+                  borderLeft: `3px solid ${ev.kind === "sync" ? "var(--accent)" : "transparent"}`,
+                  paddingLeft: 8,
+                }}
+              >
                 <span style={{ fontFamily: "ui-monospace, monospace", color: "var(--muted)", minWidth: 150 }}>
-                  {fmt(ev.created_at)}
+                  {fmt(ev.at)}
                 </span>
-                <span className="badge">{ev.event_type}</span>
-                <span style={{ color: "var(--muted)" }}>{ev.actor}</span>
-                <span>{renderPayload(ev)}</span>
+                {ev.kind === "sync" ? (
+                  <>
+                    <span className="badge" title={`${ev.direction ?? ""} sync via ${ev.provider ?? ""}`}>
+                      {ev.direction === "inbound" ? "↓" : ev.direction === "outbound" ? "↑" : ""} {ev.provider}
+                    </span>
+                    <span style={{ color: "var(--muted)" }}>{ev.status}</span>
+                    <span>{renderSync(ev)}</span>
+                    {ev.correlation_id && (
+                      <span
+                        style={{ marginLeft: "auto", fontFamily: "ui-monospace, monospace", color: "var(--muted)", opacity: 0.7 }}
+                        title="Correlation id — grep this across logs to trace the sync end-to-end"
+                      >
+                        {ev.correlation_id}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="badge">{ev.event_type}</span>
+                    <span style={{ color: "var(--muted)" }}>{ev.actor}</span>
+                    <span>{renderPayload(ev)}</span>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -246,7 +276,7 @@ export default function Incidents() {
   );
 }
 
-function renderPayload(ev: IncidentEvent): string {
+function renderPayload(ev: TimelineEntry): string {
   const p = ev.payload || {};
   switch (ev.event_type) {
     case "status_change":
@@ -264,4 +294,15 @@ function renderPayload(ev: IncidentEvent): string {
     default:
       return "";
   }
+}
+
+// renderSync describes an ITSM sync event: the ticket it touched and, when the
+// event was dropped/failed, why (the reconciler verdict — e.g. stale, terminal).
+function renderSync(ev: TimelineEntry): string {
+  const ticket = ev.external_id ? `${ev.provider ?? ""} ${ev.external_id}`.trim() : "";
+  const base = [ev.type, ticket].filter(Boolean).join(" · ");
+  if (ev.status === "dropped" || ev.status === "failed" || ev.status === "dead") {
+    return `${base}${ev.reason ? ` — ${ev.reason}` : ""}`.trim();
+  }
+  return base;
 }
