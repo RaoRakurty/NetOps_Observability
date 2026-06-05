@@ -132,7 +132,16 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border-right: 1px solid var(--rail-border);
   padding: var(--sp-2) 0; overflow: visible;
 }
-.rail-main { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-1) 8px; flex: 1; overflow-y: auto; overflow-x: visible; }
+.rail-main { display: flex; flex-direction: column; gap: 1px; padding: var(--sp-1) 8px; flex: 1; overflow-y: auto; overflow-x: visible; }
+
+/* Segregated nav groups — a small uppercase label + a thin hairline divider
+   between groups (Datadog-style). The first group has no top rule. */
+.rail-group { display: flex; flex-direction: column; gap: 1px; }
+.rail-group + .rail-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--rail-border); }
+.rail-group-label {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--rail-fg-muted); opacity: 0.75; padding: 4px 10px 3px;
+}
 
 /* Brand lockup — icon mark + wordmark. */
 .rail-brand {
@@ -147,8 +156,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* Rail item — icon BEFORE label, horizontal, small font (Datadog-style). */
 .rail-item {
   position: relative;
-  display: flex; flex-direction: row; align-items: center; gap: 10px;
-  width: 100%; min-height: 34px; padding: 6px 10px;
+  display: flex; flex-direction: row; align-items: center; gap: 9px;
+  width: 100%; min-height: 29px; padding: 4px 10px;
   background: transparent; border: 0; border-radius: var(--r-2);
   color: var(--rail-fg-muted); cursor: pointer; text-align: left;
 }
@@ -199,16 +208,47 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    small sizes; the slightly negative tracking tightens it without crowding. */
 .shell-v2 {
   --topbar-h: 44px;
-  font-family: "Geist Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "Manrope Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   letter-spacing: -0.006em;
 }
-.shell-v2 .topbar { padding: 0 var(--sp-3); border-bottom: 1px solid var(--panel-border); }
-.shell-v2 .main-head { padding: var(--sp-2) var(--sp-4) 0; }
+/* Top bar — same dark tone as the vertical rail (interim, per request), with a
+   thin bottom divider. A slim search bar sits at the top-left. */
+.shell-v2 .topbar {
+  padding: 0 var(--sp-3); background: var(--rail-bg);
+  border-bottom: 1px solid var(--rail-border);
+}
+.shell-v2 .omni {
+  height: 30px; max-width: 440px;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--rail-border);
+}
+.shell-v2 .omni input { color: var(--rail-fg); }
+.shell-v2 .omni input::placeholder { color: var(--rail-fg-muted); }
+.shell-v2 .omni-icon { color: var(--rail-fg-muted); }
+.shell-v2 .omni-kbd { color: var(--rail-fg-muted); border-color: var(--rail-border); }
+.shell-v2 .range-picker {
+  color: var(--rail-fg); background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--rail-border);
+}
+.shell-v2 .health { color: var(--rail-fg-muted); }
+
+/* Content shifted right a touch + Overview pulled up just under the divider. */
+.shell-v2 .main-head { padding: var(--sp-2) var(--sp-5) 0 var(--sp-6); }
 .shell-v2 .crumbs { font-size: var(--fs-meta); }
 .shell-v2 .crumb-section { font-weight: 600; }
 .shell-v2 .subnav { margin-top: 6px; }
 .shell-v2 .subnav button { padding: 6px 10px; }
-.shell-v2 .page { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+.shell-v2 .page { padding: var(--sp-2) var(--sp-5) var(--sp-4) var(--sp-6); }
+
+/* Combined Support + Help row (two compact buttons side by side). */
+.rail-util-row { display: flex; gap: 4px; padding: 2px 4px; }
+.rail-util-icon {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 28px; padding: 4px 6px; background: transparent; border: 0;
+  border-radius: var(--r-2); color: var(--rail-fg-muted); cursor: pointer;
+  font-size: 12px; font-weight: 500;
+}
+.rail-util-icon:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.rail-util-icon:focus-visible { outline: 2px solid var(--rail-accent); outline-offset: -2px; }
 
 /* Flyout overlay */
 .nav-flyout {

@@ -23,6 +23,18 @@ const MOD_HUE: Record<string, string> = {
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 
+// Segregated nav groups (presentation only — the nav data in nav.tsx is shared
+// with the v1 sidebar and stays untouched). Sections render under their group's
+// label with a thin divider between groups. Any section not listed falls into a
+// trailing "More" group so nothing is ever dropped.
+const GROUPS: { label: string; ids: string[] }[] = [
+  { label: "Monitoring", ids: ["overview", "copilot", "alerts", "topology", "reports"] },
+  { label: "Infrastructure & Logs", ids: ["infrastructure", "explore", "stack"] },
+];
+// Administration is anchored at the foot (Datadog-style), above the combined
+// Support/Help row and the account — so it's excluded from the top groups.
+const FOOT_ADMIN = "admin";
+
 type Props = {
   nav: NavSection[];
   activeSection: string;
@@ -96,6 +108,20 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
     );
   };
 
+  // Resolve groups against the (already permission-filtered) nav, preserving
+  // group order; collect any unlisted sections into a trailing group.
+  const byId = new Map(nav.map((s) => [s.id, s]));
+  const claimed = new Set<string>();
+  const groups = GROUPS.map((g) => {
+    const sections = g.ids.map((id) => byId.get(id)).filter(Boolean) as NavSection[];
+    sections.forEach((s) => claimed.add(s.id));
+    return { label: g.label, sections };
+  }).filter((g) => g.sections.length > 0);
+  const adminSection = byId.get(FOOT_ADMIN) ?? null;
+  if (adminSection) claimed.add(FOOT_ADMIN);
+  const leftover = nav.filter((s) => !claimed.has(s.id));
+  if (leftover.length) groups.push({ label: "More", sections: leftover });
+
   const openSection = open ? nav.find((s) => s.id === open.id) ?? null : null;
 
   return (
@@ -112,21 +138,31 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         <span className="rail-brand-name">{BRAND}</span>
       </button>
 
-      {/* All sections in order — Administration is no longer pinned to the foot. */}
+      {/* Segregated groups with thin dividers (Monitoring · Infra & Logs · Admin). */}
       <nav className="rail-main" aria-label="Primary">
-        {nav.map(railItem)}
+        {groups.map((g) => (
+          <div className="rail-group" key={g.label}>
+            <div className="rail-group-label">{g.label}</div>
+            {g.sections.map(railItem)}
+          </div>
+        ))}
       </nav>
 
-      {/* Utility cluster — moved out of the top-right corner. */}
+      {/* Utility cluster — Admin on top, then a combined Support/Help row, then
+          the account (all moved out of the top-right corner, Datadog-style). */}
       <div className="rail-util">
-        <button className="rail-util-item" type="button" title="Support">
-          <span className="rail-icon"><Icon name="support" size={16} /></span>
-          <span className="rail-label">Support</span>
-        </button>
-        <button className="rail-util-item" type="button" title="Help">
-          <span className="rail-icon"><Icon name="help" size={16} /></span>
-          <span className="rail-label">Help</span>
-        </button>
+        {adminSection && railItem(adminSection)}
+
+        <div className="rail-util-row">
+          <button className="rail-util-icon" type="button" title="Support" aria-label="Support">
+            <Icon name="support" size={16} />
+            <span>Support</span>
+          </button>
+          <button className="rail-util-icon" type="button" title="Help" aria-label="Help">
+            <Icon name="help" size={16} />
+            <span>Help</span>
+          </button>
+        </div>
 
         <div className="rail-account" ref={acctRef}>
           <button
