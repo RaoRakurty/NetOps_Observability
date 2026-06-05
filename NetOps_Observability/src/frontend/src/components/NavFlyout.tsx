@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 
 type Props = {
@@ -27,6 +27,17 @@ export default function NavFlyout({
   onNavigate,
   onClose,
 }: Props) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // Keep the panel inside the viewport: anchor at the hovered item's top, but if
+  // it would overflow the bottom (e.g. Administration in the foot), shift it up
+  // so every child stays visible.
+  const [topPx, setTopPx] = useState(top);
+  useLayoutEffect(() => {
+    const h = ref.current?.offsetHeight ?? 0;
+    const max = window.innerHeight - h - 8;
+    setTopPx(Math.max(8, Math.min(top, max)));
+  }, [top, section.id]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -39,10 +50,11 @@ export default function NavFlyout({
 
   return (
     <div
+      ref={ref}
       className="nav-flyout"
       role="menu"
       aria-label={section.label}
-      style={{ top, ["--mod" as string]: hue } as React.CSSProperties}
+      style={{ top: topPx, ["--mod" as string]: hue } as React.CSSProperties}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
     >

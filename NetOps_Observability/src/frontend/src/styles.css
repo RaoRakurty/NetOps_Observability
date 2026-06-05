@@ -178,9 +178,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 
 /* Utility cluster at the foot — Support · Help · Account (replaces top-right). */
 .rail-util {
-  display: flex; flex-direction: column; gap: 2px; padding: var(--sp-1) 8px;
+  display: flex; flex-direction: column; padding: var(--sp-1) 8px;
   margin-top: var(--sp-1); border-top: 1px solid var(--rail-border);
 }
+/* Foot zones separated by a thin hairline (admin | support/help | account). */
+.rail-foot-zone { display: flex; flex-direction: column; gap: 1px; padding: 4px 0; }
+.rail-foot-zone + .rail-foot-zone { border-top: 1px solid var(--rail-border); }
 .rail-util-item {
   display: flex; flex-direction: row; align-items: center; gap: 10px;
   width: 100%; min-height: 32px; padding: 5px 10px;
@@ -207,7 +210,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    so the default (v1) shell is untouched. Geist reads elegant + legible at
    small sizes; the slightly negative tracking tightens it without crowding. */
 .shell-v2 {
-  --topbar-h: 44px;
+  --topbar-h: 52px;
   font-family: "Manrope Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   letter-spacing: -0.006em;
 }
@@ -231,13 +234,14 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 .shell-v2 .health { color: var(--rail-fg-muted); }
 
-/* Content shifted right a touch + Overview pulled up just under the divider. */
-.shell-v2 .main-head { padding: var(--sp-2) var(--sp-5) 0 var(--sp-6); }
-.shell-v2 .crumbs { font-size: var(--fs-meta); }
-.shell-v2 .crumb-section { font-weight: 600; }
-.shell-v2 .subnav { margin-top: 6px; }
-.shell-v2 .subnav button { padding: 6px 10px; }
-.shell-v2 .page { padding: var(--sp-2) var(--sp-5) var(--sp-4) var(--sp-6); }
+/* Content shifted further right + Overview pulled up under the divider. The
+   breadcrumb section label is hidden (it duplicates the subnav tab), and the
+   subnav tabs read as the page title (bigger). */
+.shell-v2 .main-head { padding: var(--sp-2) var(--sp-5) 0 40px; }
+.shell-v2 .crumbs { display: none; }
+.shell-v2 .subnav { margin-top: 2px; }
+.shell-v2 .subnav button { padding: 6px 12px; font-size: 17px; font-weight: 600; }
+.shell-v2 .page { padding: var(--sp-2) var(--sp-5) var(--sp-4) 40px; }
 
 /* Combined Support + Help row (two compact buttons side by side). */
 .rail-util-row { display: flex; gap: 4px; padding: 2px 4px; }
@@ -261,8 +265,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 @keyframes flyin { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .nav-flyout { animation: none; } }
 .nav-flyout-head {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--rail-fg-muted); padding: 4px 8px 8px; margin-bottom: var(--sp-1);
+  font-size: 15px; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--rail-fg); padding: 4px 8px 8px; margin-bottom: var(--sp-1);
   border-bottom: 2px solid var(--mod, var(--rail-accent));
 }
 .nav-flyout-body { display: flex; flex-direction: column; gap: 2px; }

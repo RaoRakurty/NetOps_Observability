@@ -29,11 +29,12 @@ const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 // trailing "More" group so nothing is ever dropped.
 const GROUPS: { label: string; ids: string[] }[] = [
   { label: "Monitoring", ids: ["overview", "copilot", "alerts", "topology", "reports"] },
-  { label: "Infrastructure & Logs", ids: ["infrastructure", "explore", "stack"] },
+  { label: "Infrastructure & Logs", ids: ["infrastructure", "explore"] },
 ];
-// Administration is anchored at the foot (Datadog-style), above the combined
-// Support/Help row and the account — so it's excluded from the top groups.
-const FOOT_ADMIN = "admin";
+// Admin zone anchored at the foot (Datadog-style): Stack + Administration kept
+// together in one zone, above a thin-line-separated Support/Help zone, then the
+// account. Excluded from the top groups.
+const FOOT_ADMIN_IDS = ["stack", "admin"];
 
 type Props = {
   nav: NavSection[];
@@ -117,8 +118,8 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
     sections.forEach((s) => claimed.add(s.id));
     return { label: g.label, sections };
   }).filter((g) => g.sections.length > 0);
-  const adminSection = byId.get(FOOT_ADMIN) ?? null;
-  if (adminSection) claimed.add(FOOT_ADMIN);
+  const adminZone = FOOT_ADMIN_IDS.map((id) => byId.get(id)).filter(Boolean) as NavSection[];
+  adminZone.forEach((s) => claimed.add(s.id));
   const leftover = nav.filter((s) => !claimed.has(s.id));
   if (leftover.length) groups.push({ label: "More", sections: leftover });
 
@@ -148,23 +149,25 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         ))}
       </nav>
 
-      {/* Utility cluster — Admin on top, then a combined Support/Help row, then
-          the account (all moved out of the top-right corner, Datadog-style). */}
+      {/* Foot cluster (Datadog-style), thin-line separated zones:
+          (5) admin zone = Stack + Administration · (6) Support/Help · account. */}
       <div className="rail-util">
-        {adminSection && railItem(adminSection)}
+        <div className="rail-foot-zone">{adminZone.map(railItem)}</div>
 
-        <div className="rail-util-row">
-          <button className="rail-util-icon" type="button" title="Support" aria-label="Support">
-            <Icon name="support" size={16} />
-            <span>Support</span>
-          </button>
-          <button className="rail-util-icon" type="button" title="Help" aria-label="Help">
-            <Icon name="help" size={16} />
-            <span>Help</span>
-          </button>
+        <div className="rail-foot-zone">
+          <div className="rail-util-row">
+            <button className="rail-util-icon" type="button" title="Support" aria-label="Support">
+              <Icon name="support" size={16} />
+              <span>Support</span>
+            </button>
+            <button className="rail-util-icon" type="button" title="Help" aria-label="Help">
+              <Icon name="help" size={16} />
+              <span>Help</span>
+            </button>
+          </div>
         </div>
 
-        <div className="rail-account" ref={acctRef}>
+        <div className="rail-foot-zone rail-account" ref={acctRef}>
           <button
             className="rail-util-item rail-account-btn"
             type="button"

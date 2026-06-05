@@ -35,7 +35,9 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
   const { theme, setTheme, density, setDensity } = usePrefs();
-  const [draft, setDraft] = useState(query);
+  // "*" is the match-all sentinel for the query; don't surface it literally in
+  // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
+  const [draft, setDraft] = useState(query === "*" ? "" : query);
   const [menuOpen, setMenuOpen] = useState(false);
   const [results, setResults] = useState<GlobalResult[]>([]);
   const [open, setOpen] = useState(false);
@@ -44,7 +46,7 @@ export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
 
-  useEffect(() => setDraft(query), [query]);
+  useEffect(() => setDraft(query === "*" ? "" : query), [query]);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
