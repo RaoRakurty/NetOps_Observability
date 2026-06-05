@@ -38,6 +38,14 @@ docker compose exec -T clickhouse clickhouse-client < deployment/docker/clickhou
 
 The `CREATE TABLE IF NOT EXISTS` and `CREATE MATERIALIZED VIEW IF NOT EXISTS` patterns mean re-running is idempotent — existing tables aren't touched.
 
+**Tenant at-rest partitioning (#20 Phase 3).** Fresh installs get `PARTITION BY (tenant_id, …)` from `init.sql`, but **existing** `flows`/`findings`/`tunnels` tables keep their old date-only partition key until you rebuild them. Run the idempotent migration (data preserved via `EXCHANGE TABLES`; safe to re-run — it skips already-migrated tables):
+
+```bash
+docker compose exec -T clickhouse sh -s < deployment/docker/clickhouse/migrate-tenant-partition.sh
+```
+
+> **Transition note (OpenSearch):** after Phase 3, telemetry is written to per-tenant indices (`netops-{signal}-{tenant}-{date}`, untagged → `…-untagged-…`). **Scoped tenants cannot read pre-Phase-3 `netops-{signal}-{date}` indices** (no tenant segment); the platform owner still sees them via `netops-{signal}-*`, and they age out within the ISM retention window (≤30d). No action needed — it self-heals as old indices roll off.
+
 **Postgres schema changes.** Same story if/when we add tables there. The scaffold currently doesn't use Postgres for app state (the user store is JSON-backed), so there's nothing yet.
 
 **User store format changes.** `data/api/users.json` is read on every API start. If the User struct grows fields, old entries get zero-valued defaults — no migration needed. If a field is removed, the old field is ignored. If a field is renamed (rare), you'd need a one-shot migration.

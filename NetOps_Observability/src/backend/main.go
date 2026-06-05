@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -45,6 +46,7 @@ type server struct {
 	apiKeys        *apiKeyStore
 	refresh        *refreshStore
 	snmpCreds      *snmpCredStore
+	sshHosts       *sshHostStore // #20/device-ssh: TOFU host-key store for the SSH gateway
 	snmpProfiles   *snmpProfileStore
 	saved          savedRepo
 	audit          auditRepo
@@ -300,6 +302,7 @@ func newServer() *server {
 		apiKeys:       apiKeys,
 		refresh:       refresh,
 		snmpCreds:     snmpCreds,
+		sshHosts:      newSSHHostStore(envOr("SSH_KNOWN_HOSTS_FILE", "/data/ssh_known_hosts.json")),
 		snmpProfiles:  snmpProfiles,
 		saved:         saved,
 		audit:         audit,
@@ -621,6 +624,12 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
+	// SSH gateway lives under the device path: /api/devices/{id}/ssh (opt-in,
+	// dormant unless FEATURE_DEVICE_SSH). Delegate before the id parse below.
+	if strings.HasSuffix(r.URL.Path, "/ssh") {
+		s.handleDeviceSSH(w, r)
+		return
+	}
 	id := r.URL.Path[len("/api/devices/"):]
 	if id == "" {
 		http.NotFound(w, r)
@@ -713,6 +722,7 @@ func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {
 		"opensearch": os.Getenv("OPENSEARCH_URL") != "",
 		"clickhouse": os.Getenv("CLICKHOUSE_URL") != "",
 		"copilot":    os.Getenv("FEATURE_COPILOT") == "true" && os.Getenv("COPILOT_API_KEY") != "",
+		"device_ssh": os.Getenv("FEATURE_DEVICE_SSH") == "true",
 	})
 }
 

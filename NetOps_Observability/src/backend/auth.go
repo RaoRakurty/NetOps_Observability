@@ -318,7 +318,10 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		// /api/events is a WebSocket — the browser's WS API can't set the
 		// Authorization header, so we accept ?token=<jwt> there.
 		var token string
-		if r.URL.Path == "/api/events" {
+		// WebSocket routes accept ?token=<jwt> (browsers can't set Authorization on
+		// a WS): the events hub and the device-SSH gateway (/api/devices/{id}/ssh).
+		if r.URL.Path == "/api/events" ||
+			(strings.HasPrefix(r.URL.Path, "/api/devices/") && strings.HasSuffix(r.URL.Path, "/ssh")) {
 			token = r.URL.Query().Get("token")
 		}
 		if token == "" {

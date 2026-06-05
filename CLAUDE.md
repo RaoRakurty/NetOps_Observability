@@ -223,6 +223,7 @@ third-party module is allowed only when it clears ALL of these gates:
 |--------|---------|-------|
 | `github.com/jackc/pgx` (or `lib/pq`) | PostgreSQL driver | Required for the relational app-state store (M0). Build-tagged/opt-in; default file build stays dependency-free. |
 | `sqlc` (build-time, not a runtime import) | type-safe SQL → Go codegen | Generated code is checked in; runtime keeps only the driver. |
+| `golang.org/x/crypto/ssh` | SSH client for the device-login gateway | A correct, audited SSH client (host-key verification, kex/cipher negotiation, PTY channels) is **not** in the stdlib and must never be hand-rolled. **Already in the dependency graph** (transitive via pgx → `golang.org/x/crypto`, pinned `v0.37.0`, vendored) — using the `ssh` subpackage promotes it to direct, adding no new module. Gates: ✅ need (foundational, stdlib can't), ✅ offline (vendored), ✅ pinned (`v0.37.0`), ✅ minimal (one subpackage of an already-present module). Powers the opt-in `FEATURE_DEVICE_SSH` WebSocket→SSH proxy (`device_ssh.go`); dormant by default. |
 
 Anything not in this table is **forbidden without first amending this table.**
 No automatic addition of libraries. Keep the dependency graph minimal. When in
