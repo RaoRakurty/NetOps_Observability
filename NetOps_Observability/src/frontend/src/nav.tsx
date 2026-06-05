@@ -142,7 +142,7 @@ export const NAV: NavSection[] = [
   },
   {
     id: "copilot",
-    label: "Copilot",
+    label: "ChatGPT",
     icon: "copilot",
     action: "copilot",
     footer: true,

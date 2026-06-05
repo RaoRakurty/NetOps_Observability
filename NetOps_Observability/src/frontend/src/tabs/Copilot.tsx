@@ -7,7 +7,6 @@ import {
   OpenAIChatResponse,
   CopilotConfig,
 } from "../services/api";
-import { BRAND } from "../brand";
 
 // AI Copilot — chat pane. Posts to /api/copilot/chat. The backend
 // dispatches to Anthropic or OpenAI based on COPILOT_PROVIDER.
@@ -107,7 +106,7 @@ export default function Copilot() {
   if (enabled === false) {
     return (
       <div className="card">
-        <h2>AI Copilot</h2>
+        <h2>ChatGPT</h2>
         <p style={{ color: "var(--muted)" }}>
           Copilot is disabled. Set <code>FEATURE_COPILOT=true</code> and{" "}
           <code>COPILOT_API_KEY=...</code> in <code>deployment/docker/.env</code>, then{" "}
@@ -121,7 +120,7 @@ export default function Copilot() {
     <>
       <div className="card" style={{ display: "flex", flexDirection: "column", height: "65vh" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>{BRAND} Copilot</h2>
+          <h2 style={{ margin: 0 }}>ChatGPT</h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {cfg && (
               <span
@@ -260,7 +259,7 @@ export default function Copilot() {
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Ask the copilot…"
+            placeholder="Ask ChatGPT…"
             rows={3}
             style={{ flex: 1, resize: "vertical", fontFamily: "inherit", fontSize: 13 }}
             onKeyDown={(e) => {

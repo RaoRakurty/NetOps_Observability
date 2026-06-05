@@ -60,8 +60,18 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider := strings.ToLower(envOr("COPILOT_PROVIDER", "anthropic"))
-	model := envOr("COPILOT_MODEL", "claude-sonnet-4-5")
+	// Default provider is OpenAI/ChatGPT (the in-product assistant is branded
+	// "ChatGPT"); Anthropic stays selectable via COPILOT_PROVIDER=anthropic. The
+	// default model tracks the chosen provider unless COPILOT_MODEL overrides.
+	provider := strings.ToLower(envOr("COPILOT_PROVIDER", "openai"))
+	model := os.Getenv("COPILOT_MODEL")
+	if model == "" {
+		if provider == "anthropic" {
+			model = "claude-sonnet-4-5"
+		} else {
+			model = "gpt-4o-mini"
+		}
+	}
 
 	switch provider {
 	case "anthropic":

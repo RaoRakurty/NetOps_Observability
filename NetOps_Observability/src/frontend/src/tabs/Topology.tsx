@@ -68,12 +68,27 @@ function latencyColor(ms: number): string {
   return SEVERITY_COLOR.critical;
 }
 
+// Per-vendor custom icons (operator-assigned). Persisted client-side so each
+// operator can map their fleet's vendors to recognizable glyphs/logos. Keyed by
+// a normalized vendor slug; value is an image URL or a data: URI.
+const VENDOR_ICONS_KEY = "netops_vendor_icons";
+const vendorKey = (v: string) => (v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function loadVendorIcons(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(VENDOR_ICONS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
 export default function Topology() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [vendorIcons, setVendorIcons] = useState<Record<string, string>>(loadVendorIcons);
+  const [iconEditor, setIconEditor] = useState(false);
 
   useEffect(() => {
     api.devices().then((d) => setDevices(d ?? [])).catch((e) => setError((e as Error).message));
@@ -129,6 +144,9 @@ export default function Topology() {
           byId[d.id] = { x, y, tier: t };
           const color = HEALTH_COLOR[h];
           const role = roleOf(d);
+          const vico = vendorIcons[vendorKey(d.vendor || "")];
+          // First label line: health dot + (custom vendor icon | role glyph) + name.
+          const head = vico ? `{dot|●} {vico|} {n|${d.name || d.id}}` : `{dot|●} {g|${ROLE_GLYPH[role] || "▤"}} {n|${d.name || d.id}}`;
           nodes.push({
             id: d.id,
             name: d.name || d.id,
@@ -145,12 +163,13 @@ export default function Topology() {
             label: {
               show: true,
               formatter: [
-                `{dot|●} {g|${ROLE_GLYPH[role] || "▤"}} {n|${d.name || d.id}}`,
+                head,
                 `{m|${role} · ${d.address || ""}}`,
               ].join("\n"),
               rich: {
                 dot: { color, fontSize: 13, padding: [0, 2, 0, 0] },
                 g: { color, fontSize: 15, fontWeight: 700 },
+                vico: { height: 16, width: 16, backgroundColor: vico ? { image: vico } : undefined, padding: [0, 2, 0, 0] },
                 n: { color: "#1a2230", fontSize: 13, fontWeight: 700 },
                 m: { color: "#667085", fontSize: 11, padding: [4, 0, 0, 0] },
               },
@@ -200,7 +219,25 @@ export default function Topology() {
     }
 
     return { nodes, links, counts };
-  }, [devices, alertsByDev, tunnels]);
+  }, [devices, alertsByDev, tunnels, vendorIcons]);
+
+  // Distinct vendors present in the fleet — the rows of the icon editor.
+  const vendors = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of devices) if ((d.vendor || "").trim()) set.add(d.vendor!.trim());
+    return [...set].sort();
+  }, [devices]);
+
+  const setVendorIcon = (vendor: string, url: string) => {
+    setVendorIcons((cur) => {
+      const next = { ...cur };
+      const k = vendorKey(vendor);
+      if (url.trim()) next[k] = url.trim();
+      else delete next[k];
+      try { localStorage.setItem(VENDOR_ICONS_KEY, JSON.stringify(next)); } catch { /* ignore quota */ }
+      return next;
+    });
+  };
 
   const selDevice = selected ? devices.find((d) => d.id === selected) : null;
 
@@ -219,8 +256,43 @@ export default function Topology() {
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
           <span className="topo-stat"><b>{links.length}</b> links</span>
+          <button className="btn" onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per vendor">
+            {iconEditor ? "Done" : "Vendor icons"}
+          </button>
         </div>
       </div>
+
+      {iconEditor && (
+        <div className="card" style={{ margin: "0 0 10px", background: "var(--hover)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <strong style={{ fontSize: 13 }}>Vendor icons</strong>
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>Paste an image URL or data: URI per vendor — shown on each device node.</span>
+          </div>
+          {vendors.length === 0 ? (
+            <p className="empty">No vendors in the inventory yet.</p>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8, marginTop: 8 }}>
+              {vendors.map((v) => {
+                const url = vendorIcons[vendorKey(v)] || "";
+                return (
+                  <div key={v} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 22, height: 22, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--panel-border)", borderRadius: 4, overflow: "hidden", background: "#fff" }}>
+                      {url ? <img src={url} alt={v} style={{ maxWidth: "100%", maxHeight: "100%" }} /> : <span style={{ fontSize: 10, color: "var(--muted)" }}>—</span>}
+                    </span>
+                    <span style={{ width: 90, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</span>
+                    <input
+                      placeholder="https://… or data:image/…"
+                      value={url}
+                      onChange={(e) => setVendorIcon(v, e.target.value)}
+                      style={{ flex: 1, fontSize: 12 }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="topo-legend">
         {(["ok", "warning", "critical"] as Health[]).map((h) => (
