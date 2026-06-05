@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -110,8 +111,6 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	index := indexFor(req.Signal)
-
 	// Compose a query string DSL body. We use query_string so callers
 	// can pass either bare text ("error") or full Lucene syntax
 	// ("severity:err AND host:router-01").
@@ -131,33 +130,20 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Tenant isolation: a scoped principal may only see logs emitted by devices
-	// in its own tenant — matched on the log's host/hostname (device name) or
-	// source_ip (device address). A tenant with no devices sees no logs; the
-	// cross-tenant platform owner is unrestricted. (Logs aren't yet tagged with a
-	// tenant_id at ingestion, so we scope by the caller's visible device set.)
+	// Tenant isolation (#20 Phase 3). The caller may only read its own tenant's
+	// indices (tenantIndexPattern names nothing else) and, within them, only its
+	// own tagged docs plus untagged docs from its own devices (osTenantFilter,
+	// mirroring the ClickHouse row policy). The platform owner is unrestricted.
+	tenant, cross := "", true
 	if claims, ok := userFrom(r.Context()); ok {
-		if names, cross := s.visibleDeviceKeys(claims); !cross {
-			addrs, _ := s.visibleDeviceAddrs(claims)
-			var should []any
-			if len(names) > 0 {
-				should = append(should,
-					map[string]any{"terms": map[string]any{"host": names}},
-					map[string]any{"terms": map[string]any{"hostname": names}},
-				)
-			}
-			if len(addrs) > 0 {
-				should = append(should, map[string]any{"terms": map[string]any{"source_ip": addrs}})
-			}
-			if len(should) == 0 {
-				// No visible devices → no logs are in this tenant's namespace.
-				should = append(should, map[string]any{"match_none": map[string]any{}})
-			}
-			filters = append(filters, map[string]any{
-				"bool": map[string]any{"should": should, "minimum_should_match": 1},
-			})
+		tenant, cross = principalTenant(claims)
+		keys, _ := s.visibleDeviceKeys(claims)
+		addrs, _ := s.visibleDeviceAddrs(claims)
+		if f := osTenantFilter(tenant, cross, keys, addrs); f != nil {
+			filters = append(filters, f)
 		}
 	}
+	index := tenantIndexPattern(req.Signal, tenant, cross)
 
 	body := map[string]any{
 		"size": req.Size,
@@ -191,8 +177,14 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) handleLogsIndices(w http.ResponseWriter, _ *http.Request) {
-	resp, err := openSearch("GET", "/_cat/indices/netops-*?format=json", nil)
+func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
+	// Scope the index listing to the caller (#20 Phase 3) so a scoped tenant can't
+	// enumerate other tenants' index names / doc counts.
+	tenant, cross := "", true
+	if claims, ok := userFrom(r.Context()); ok {
+		tenant, cross = principalTenant(claims)
+	}
+	resp, err := openSearch("GET", "/_cat/indices/"+tenantCatPattern(tenant, cross)+"?format=json", nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -203,17 +195,108 @@ func (s *server) handleLogsIndices(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func indexFor(signal string) string {
+// indexBase maps a signal to its OpenSearch index base name (no tenant/date).
+func indexBase(signal string) string {
 	switch strings.ToLower(signal) {
 	case "applogs", "app":
-		return "netops-applogs-*"
+		return "netops-applogs"
 	case "syslog":
-		return "netops-syslog-*"
+		return "netops-syslog"
 	case "flows", "netflow", "flow":
-		return "netops-flows-*"
+		return "netops-flows"
 	default:
+		return "netops"
+	}
+}
+
+// tenantSegRe strips any character not allowed in an OpenSearch index segment.
+var tenantSegRe = regexp.MustCompile(`[^a-z0-9_-]`)
+
+// indexTenantSeg sanitizes a tenant id into the per-tenant index segment. It MUST
+// match the derivation in deployment/docker/vector-router/vector.yaml (#20 Phase
+// 3) so reads name the same indices ingest writes. "" → "untagged".
+func indexTenantSeg(tenant string) string {
+	seg := strings.ToLower(strings.TrimSpace(tenant))
+	if seg == "" {
+		return "untagged"
+	}
+	return tenantSegRe.ReplaceAllString(seg, "-")
+}
+
+// tenantIndexPattern returns the comma-separated OpenSearch index pattern a caller
+// may read for a signal (#20 Phase 3 — at-rest separation). The platform owner
+// (cross) reads every tenant's indices; a scoped tenant reads ONLY its own tagged
+// indices plus the shared untagged indices (where the per-doc device matcher in
+// osTenantFilter still narrows results — the populate-time fallback, mirroring the
+// ClickHouse row policy). Another tenant's indices are never named, so its docs
+// are unreachable even if the query filter is ever dropped.
+func tenantIndexPattern(signal, tenant string, cross bool) string {
+	base := indexBase(signal)
+	if cross {
+		return base + "-*"
+	}
+	return base + "-" + indexTenantSeg(tenant) + "-*," + base + "-untagged-*"
+}
+
+// tenantCatPattern is the _cat/indices pattern a caller may enumerate: all
+// netops-* for the platform owner; only the caller's own + untagged indices
+// (across signals) for a scoped tenant, so index names/counts don't leak.
+func tenantCatPattern(tenant string, cross bool) string {
+	if cross {
 		return "netops-*"
 	}
+	seg := indexTenantSeg(tenant)
+	bases := []string{"netops-applogs", "netops-syslog", "netops-flows"}
+	parts := make([]string, 0, len(bases)*2)
+	for _, b := range bases {
+		parts = append(parts, b+"-"+seg+"-*", b+"-untagged-*")
+	}
+	return strings.Join(parts, ",")
+}
+
+// osTenantFilter builds the OpenSearch query clause enforcing per-tenant isolation
+// for a scoped caller (#20 Phase 3), mirroring chTenantScope's ClickHouse policy:
+// a doc is visible iff its tenant_id == the caller's tenant, OR it is untagged
+// (tenant_id "" / missing) AND was emitted by one of the caller's devices
+// (host/hostname/source_ip). Returns nil for the platform owner (cross) — no
+// restriction. It is defense in depth UNDER tenantIndexPattern (which already
+// excludes other tenants' indices at the storage layer).
+func osTenantFilter(tenant string, cross bool, deviceKeys, deviceAddrs []string) map[string]any {
+	if cross {
+		return nil
+	}
+	var dev []any
+	if len(deviceKeys) > 0 {
+		dev = append(dev,
+			map[string]any{"terms": map[string]any{"host": deviceKeys}},
+			map[string]any{"terms": map[string]any{"hostname": deviceKeys}},
+		)
+	}
+	if len(deviceAddrs) > 0 {
+		dev = append(dev, map[string]any{"terms": map[string]any{"source_ip": deviceAddrs}})
+	}
+	if len(dev) == 0 {
+		dev = append(dev, map[string]any{"match_none": map[string]any{}})
+	}
+	untagged := map[string]any{"bool": map[string]any{
+		"should": []any{
+			map[string]any{"term": map[string]any{"tenant_id": ""}},
+			map[string]any{"bool": map[string]any{"must_not": []any{
+				map[string]any{"exists": map[string]any{"field": "tenant_id"}},
+			}}},
+		},
+		"minimum_should_match": 1,
+	}}
+	return map[string]any{"bool": map[string]any{
+		"should": []any{
+			map[string]any{"term": map[string]any{"tenant_id": normTenant(tenant)}},
+			map[string]any{"bool": map[string]any{"must": []any{
+				untagged,
+				map[string]any{"bool": map[string]any{"should": dev, "minimum_should_match": 1}},
+			}}},
+		},
+		"minimum_should_match": 1,
+	}}
 }
 
 func queryOrAll(q string) string {

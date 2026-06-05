@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS netops.flows
     tenant_id       LowCardinality(String) DEFAULT ''  -- #20: stamped at Vector ingest (device→tenant); '' = global
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMMDD(ts)
+-- #20 Phase 3 — at-rest separation: tenant_id leads the partition key, so each
+-- tenant's data lives in its own physical parts (independently droppable /
+-- backup-able / per-tenant encryptable, ties into #16). Existing live tables are
+-- rebuilt to this key by clickhouse/migrate-tenant-partition.sh (data preserved).
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, sampler_address, src_addr, dst_addr)
 -- ts is DateTime64(3); TTL expressions must be Date/DateTime, so cast it.
 TTL toDateTime(ts) + INTERVAL 30 DAY
@@ -79,7 +83,7 @@ CREATE TABLE IF NOT EXISTS netops.tunnels
     tenant_id      LowCardinality(String) DEFAULT ''  -- #20: owning tenant; '' = global
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMMDD(ts)
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, id)
 TTL toDateTime(ts) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192;
@@ -104,7 +108,7 @@ CREATE TABLE IF NOT EXISTS netops.findings
     tenant_id   LowCardinality(String) DEFAULT ''  -- #20: stamped by the correlation service (device→tenant); '' = global
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMMDD(ts)
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, severity, score)
 TTL toDateTime(ts) + INTERVAL 30 DAY;
 

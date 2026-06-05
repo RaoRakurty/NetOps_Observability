@@ -38,6 +38,31 @@ sources:
     decoding: { codec: json }
 
 transforms:
+  # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
+  # Each event already carries .tenant_id (stamped at the aggregator from the
+  # device→tenant enrichment table; "" = untagged/global). Derive a filesystem-
+  # /index-safe segment from it so the elasticsearch sinks can route each tenant's
+  # docs into its OWN daily index (netops-{signal}-{tenant}-{date}). Untagged data
+  # goes to a shared "untagged" index. The API read path only ever names the
+  # caller's own index pattern, so another tenant's docs are unreachable even if a
+  # query filter is missed. Keep the segment lowercase + [a-z0-9_-] only (OS index
+  # naming rules); an empty/odd tenant collapses to "untagged".
+  applogs_tagged:
+    type: remap
+    inputs: [kafka_applogs]
+    source: |
+      seg = downcase(to_string(.tenant_id) ?? "")
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
+
+  syslog_tagged:
+    type: remap
+    inputs: [kafka_syslog]
+    source: |
+      seg = downcase(to_string(.tenant_id) ?? "")
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
+
   # goflow2 renders the IP protocol as a NAME ("TCP"/"UDP"/"ICMP"…), but the
   # ClickHouse flows.proto column is UInt8 (the IANA number). Without this
   # coercion every flow batch fails the CH insert with a 400 and is dropped —
@@ -69,16 +94,20 @@ transforms:
       } else {
         .flow_type = "unknown"
       }
+      # #20 Phase 3 — per-tenant index segment (see applogs_tagged).
+      seg = downcase(to_string(.tenant_id) ?? "")
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
 
 sinks:
   # Application + container logs → OpenSearch
   opensearch_applogs:
     type: elasticsearch
-    inputs: [kafka_applogs]
+    inputs: [applogs_tagged]
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:
-      index: "netops-applogs-%Y.%m.%d"
+      index: "netops-applogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: false }
@@ -86,11 +115,11 @@ sinks:
   # Syslog from network devices → OpenSearch
   opensearch_syslog:
     type: elasticsearch
-    inputs: [kafka_syslog]
+    inputs: [syslog_tagged]
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:
-      index: "netops-syslog-%Y.%m.%d"
+      index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: false }
@@ -102,7 +131,7 @@ sinks:
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:
-      index: "netops-flows-%Y.%m.%d"
+      index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: false }

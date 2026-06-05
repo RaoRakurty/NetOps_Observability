@@ -51,6 +51,7 @@ type logExportSpec struct {
 
 	// Frozen tenant-visibility snapshot: the async worker reproduces exactly what
 	// the requester could see at request time (the device set may change later).
+	Tenant      string   `json:"tenant,omitempty"` // #20 Phase 3: caller's tenant for index routing + tenant_id filter
 	Cross       bool     `json:"cross"`
 	DeviceKeys  []string `json:"device_keys,omitempty"`
 	DeviceAddrs []string `json:"device_addrs,omitempty"`
@@ -101,25 +102,12 @@ func buildExportSearchBody(spec logExportSpec, start, end time.Time, size int, s
 			"lte": end.Format(time.RFC3339),
 		}}},
 	}
-	// Tenant isolation: a scoped principal sees only its devices' docs; the
-	// platform owner (Cross) is unrestricted. An empty visible set → match_none.
-	if !spec.Cross {
-		var should []any
-		if len(spec.DeviceKeys) > 0 {
-			should = append(should,
-				map[string]any{"terms": map[string]any{"host": spec.DeviceKeys}},
-				map[string]any{"terms": map[string]any{"hostname": spec.DeviceKeys}},
-			)
-		}
-		if len(spec.DeviceAddrs) > 0 {
-			should = append(should, map[string]any{"terms": map[string]any{"source_ip": spec.DeviceAddrs}})
-		}
-		if len(should) == 0 {
-			should = append(should, map[string]any{"match_none": map[string]any{}})
-		}
-		filters = append(filters, map[string]any{
-			"bool": map[string]any{"should": should, "minimum_should_match": 1},
-		})
+	// Tenant isolation (#20 Phase 3) — same index-pattern + tenant_id/device clause
+	// as handleLogsSearch, frozen onto the spec. The platform owner (Cross) is
+	// unrestricted; the read index pattern (tenantIndexPattern) already excludes
+	// other tenants' indices at the storage layer.
+	if f := osTenantFilter(spec.Tenant, spec.Cross, spec.DeviceKeys, spec.DeviceAddrs); f != nil {
+		filters = append(filters, f)
 	}
 	body := map[string]any{
 		"size": size,
@@ -168,7 +156,7 @@ type exportData struct {
 // caps (the honest Phase-1 contract; a streaming sink is a later substrate add).
 func fetchLogsBounded(ctx context.Context, spec logExportSpec, start, end time.Time, maxRows, maxBytes int) (exportData, error) {
 	const batch = 1000
-	index := indexFor(spec.Signal)
+	index := tenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)
 	var data exportData
 	var after []any
 	for {
@@ -621,9 +609,10 @@ func exportMaxTimeRange() time.Duration {
 func (s *server) exportSpecFor(claims jwtClaims, query, from, to, signal, format string) logExportSpec {
 	keys, cross := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
+	tenant, _ := principalTenant(claims)
 	return logExportSpec{
 		Query: query, From: from, To: to, Signal: signal, Format: format,
-		Cross: cross, DeviceKeys: keys, DeviceAddrs: addrs,
+		Tenant: tenant, Cross: cross, DeviceKeys: keys, DeviceAddrs: addrs,
 	}
 }
 
@@ -649,7 +638,7 @@ func countLogs(ctx context.Context, spec logExportSpec, start, end time.Time) (i
 	body := buildExportSearchBody(spec, start, end, 0, nil)
 	delete(body, "size")
 	delete(body, "sort")
-	resp, err := openSearch("POST", "/"+indexFor(spec.Signal)+"/_count", map[string]any{"query": body["query"]})
+	resp, err := openSearch("POST", "/"+tenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)+"/_count", map[string]any{"query": body["query"]})
 	if err != nil {
 		return 0, err
 	}

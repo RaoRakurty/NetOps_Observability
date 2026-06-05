@@ -1,12 +1,16 @@
 # #20 — Multi-tenant telemetry isolation
 
-Status: **Phase 1 (ingest tagging) + Phase 2 (DB-enforced ClickHouse reads)
-IMPLEMENTED + deployed.** Storage carries a `tenant_id` discriminator (Phase 1);
-ClickHouse row policies on flows/findings/tunnels now enforce it at the DB —
-the API injects a `tenant_scope` custom setting on every telemetry read
+Status: **Phases 1–3 IMPLEMENTED.** Storage carries a `tenant_id` discriminator
+(Phase 1); ClickHouse row policies on flows/findings/tunnels enforce it at the DB
+— the API injects a `tenant_scope` custom setting on every telemetry read
 (`proxyClickHouse`/`chTenantScope`), so another tenant's TAGGED rows are refused
-even if a query filter is forgotten. Untagged rows stay app-layer device-gated
-during the tagging transition.
+even if a query filter is forgotten (Phase 2). Phase 3 adds **at-rest
+separation**: ClickHouse `PARTITION BY (tenant_id, …)` and per-tenant OpenSearch
+indices (`netops-{signal}-{tenant}-{date}`) so each tenant's telemetry lives in
+its own physical storage, and the OpenSearch read path is now `tenant_id`-aware
+(index-pattern isolation + the same tenant/device clause as ClickHouse) instead
+of device-match-only. Untagged rows stay app-layer device-gated as the
+populate-time fallback.
 
 ⚠️ **Phase 2 gotcha (learned the hard way):** a materialized view that reads a
 policy table re-evaluates the row policy on every INSERT, in the inserting
@@ -15,9 +19,31 @@ ERRORS and ingestion stops. We dropped the unused `flows_hourly` MV. Any future
 rollup over a policy table must be policy-exempt or tenant-aware. Row policies
 gate SELECT only; the API self-heals the policies on start (`ensureCHRowPolicies`).
 
-**Phase 3 (open):** at-rest separation (CH `PARTITION BY tenant_id`, per-tenant
-OpenSearch indices/DLS — the latter needs the OS security plugin, off in the
-scaffold). Owner: `docs/TRACKER.md` #20.
+**Phase 3 (DONE 2026-06-05):** at-rest separation.
+- **ClickHouse** — `PARTITION BY (tenant_id, toYYYYMMDD(ts))` on
+  flows/findings/tunnels (`init.sql` for fresh installs;
+  `clickhouse/migrate-tenant-partition.sh` rebuilds live tables idempotently via
+  SHOW CREATE + EXCHANGE TABLES, data preserved, row policies survive the swap).
+  Each tenant's data is now its own physical parts — independently droppable,
+  backup-able, per-tenant encryptable (ties into #16).
+- **OpenSearch — per-tenant index routing, NOT the security plugin.** The decision
+  (2026-06-05) was index-per-tenant over DLS: the Vector router derives a sanitized
+  `tenant_seg` from `.tenant_id` and writes `netops-{signal}-{tenant}-{date}`
+  (untagged → `…-untagged-…`). The API read path (`tenantIndexPattern` +
+  `osTenantFilter` in `logs.go`, used by `handleLogsSearch`, the log-export worker,
+  and `handleLogsIndices`) only ever NAMES the caller's own + untagged indices, and
+  filters within them by `tenant_id == scope OR (untagged AND device-match)` —
+  mirroring the ClickHouse row policy. This gives real at-rest separation
+  (independent snapshot/delete/encryption per tenant) and read isolation with NO
+  security-plugin upheaval (TLS/internal-users/role-mappings avoided). Trade-off:
+  index proliferation at very high tenant counts — a SaaS-scale concern; DLS in a
+  shared index remains a future option if it ever bites. The OS index templates +
+  ISM retention patterns (`netops-{signal}-*`) already match the per-tenant names,
+  so mappings and retention need no change.
+- **VictoriaMetrics** — unchanged by design: single-node VM has no native tenancy
+  (`vmtenant` is a vmcluster feature), so the read-time `extra_filters[]` label
+  scoper (`metrics_query.go`) IS the VM tenant story until/unless vmcluster is
+  adopted.
 
 Companion to #15 (`postgres-rls.md`): that doc isolates **app-state** (Postgres
 RLS); this one isolates **telemetry** (flows/logs/metrics/findings across
