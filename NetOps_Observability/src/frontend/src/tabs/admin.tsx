@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig, IntegrationConfig } from "../services/api";
 import { BRAND } from "../brand";
+import Wizard from "../components/Wizard";
 
 // ---- shared chrome ---------------------------------------------------------
 
@@ -364,48 +365,83 @@ export function ApiAccessAdmin() {
             <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setSecret(null)}>Dismiss</button>
           </div>
         )}
-        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-          <LabeledInput label="Label" value={label} onChange={setLabel} placeholder="e.g. ci-pipeline" required />
-          <LabeledInput label="Rate limit / min" type="number" value={rate} onChange={setRate} placeholder="blank = default (600)" hint="default 600 · 0 = unlimited · blank = inherit default" />
-        </div>
-        <div className="scope-row" style={{ marginTop: 12 }}>
-          {SCOPE_OPTIONS.map((s) => (
-            <label key={s} className={`scope-chip ${scopes.includes(s) ? "on" : ""}`}>
-              <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggleScope(s)} /> {s}
-            </label>
-          ))}
-        </div>
-
-        <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Credential</h3>
-        <div className="scope-row">
-          {GRANT_TYPE_OPTIONS.map((g) => (
-            <label key={g} className={`scope-chip ${grantTypes.includes(g) ? "on" : ""}`}>
-              <input type="checkbox" checked={grantTypes.includes(g)} onChange={() => toggleGrant(g)} /> {g}
-            </label>
-          ))}
-        </div>
-        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 12 }}>
-          <LabeledInput label="Client URL" value={clientUri} onChange={setClientUri} placeholder="https://app.example.com" hint="Public homepage of the client." />
-          <LabeledInput label="Logo URL" value={logoUri} onChange={setLogoUri} placeholder="https://app.example.com/logo.png" hint="Image shown on consent screens." />
-          <LabeledInput label="Allowed source IP / CIDR" value={sourceCidrs} onChange={setSourceCidrs} placeholder="10.0.0.0/8, 192.168.1.0/24" hint="Comma-separated; blank = any source." />
-        </div>
-
-        <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Expiry</h3>
-        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-          <LabeledInput label="Client expires on" type="date" value={clientExpires} onChange={setClientExpires} hint="Optional; blank = never." />
-          <LabeledInput label="Secret expires on" type="date" value={secretExpires} onChange={setSecretExpires} hint="Optional; blank = never." />
-        </div>
-
-        <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Contacts</h3>
-        <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-          <LabeledInput label="Contact email" value={contactEmail} onChange={setContactEmail} placeholder="ops@example.com" hint="Comma-separated for multiple." />
-          <LabeledInput label="Contact phone" value={contactPhone} onChange={setContactPhone} placeholder="+1 555 0100" />
-        </div>
-
-        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12 }}>
-          <button className="dash-btn accent" onClick={generate}>Generate key</button>
-          <RequiredLegend />
-        </div>
+        <Wizard
+          finishLabel="Generate key"
+          onFinish={generate}
+          steps={[
+            {
+              id: "identity",
+              title: "Identity",
+              hint: "Name the key and (optionally) cap its request rate. Label is required.",
+              isValid: () => !!label.trim(),
+              render: () => (
+                <>
+                  <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                    <LabeledInput label="Label" value={label} onChange={setLabel} placeholder="e.g. ci-pipeline" required />
+                    <LabeledInput label="Rate limit / min" type="number" value={rate} onChange={setRate} placeholder="blank = default (600)" hint="default 600 · 0 = unlimited · blank = inherit default" />
+                  </div>
+                  <RequiredLegend />
+                </>
+              ),
+            },
+            {
+              id: "scopes",
+              title: "Scopes & grant",
+              hint: "What the key may do (RBAC role is derived from scopes) and which OAuth grant types it supports.",
+              isValid: () => true,
+              render: () => (
+                <>
+                  <div className="scope-row">
+                    {SCOPE_OPTIONS.map((s) => (
+                      <label key={s} className={`scope-chip ${scopes.includes(s) ? "on" : ""}`}>
+                        <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggleScope(s)} /> {s}
+                      </label>
+                    ))}
+                  </div>
+                  <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Grant types</h3>
+                  <div className="scope-row">
+                    {GRANT_TYPE_OPTIONS.map((g) => (
+                      <label key={g} className={`scope-chip ${grantTypes.includes(g) ? "on" : ""}`}>
+                        <input type="checkbox" checked={grantTypes.includes(g)} onChange={() => toggleGrant(g)} /> {g}
+                      </label>
+                    ))}
+                  </div>
+                </>
+              ),
+            },
+            {
+              id: "client",
+              title: "Client & network",
+              hint: "Optional client metadata (RFC 7591) and a source-IP allowlist.",
+              isValid: () => true,
+              render: () => (
+                <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                  <LabeledInput label="Client URL" value={clientUri} onChange={setClientUri} placeholder="https://app.example.com" hint="Public homepage of the client." />
+                  <LabeledInput label="Logo URL" value={logoUri} onChange={setLogoUri} placeholder="https://app.example.com/logo.png" hint="Image shown on consent screens." />
+                  <LabeledInput label="Allowed source IP / CIDR" value={sourceCidrs} onChange={setSourceCidrs} placeholder="10.0.0.0/8, 192.168.1.0/24" hint="Comma-separated; blank = any source." />
+                </div>
+              ),
+            },
+            {
+              id: "expiry",
+              title: "Expiry & contacts",
+              hint: "Optional lifetime and owner contacts. Review, then generate.",
+              isValid: () => true,
+              render: () => (
+                <>
+                  <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                    <LabeledInput label="Client expires on" type="date" value={clientExpires} onChange={setClientExpires} hint="Optional; blank = never." />
+                    <LabeledInput label="Secret expires on" type="date" value={secretExpires} onChange={setSecretExpires} hint="Optional; blank = never." />
+                  </div>
+                  <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginTop: 12 }}>
+                    <LabeledInput label="Contact email" value={contactEmail} onChange={setContactEmail} placeholder="ops@example.com" hint="Comma-separated for multiple." />
+                    <LabeledInput label="Contact phone" value={contactPhone} onChange={setContactPhone} placeholder="+1 555 0100" />
+                  </div>
+                </>
+              ),
+            },
+          ]}
+        />
       </div>
       <div className="card">
         <div className="admin-card-head"><h2>API keys</h2></div>
@@ -687,58 +723,88 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
         </label>
       </div>
       <p className="admin-sub">Native stdlib LDAP bind (RFC 4511). Directory groups map onto NetOps roles (first match by privilege wins). The bind password is write-only — leave blank to keep the stored one.</p>
-      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="ldap.example.com" required />
-        <LabeledInput label="Port (0 = auto)" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 0 })} />
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-          Encryption
-          <select value={enc} onChange={(e) => setEnc(e.target.value)}>
-            <option value="none">None (389)</option>
-            <option value="starttls">StartTLS</option>
-            <option value="ldaps">LDAPS (636)</option>
-          </select>
-        </label>
-        <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" />
-        <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} />
-        <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" required />
-        <LabeledInput label="User filter" value={cfg.user_filter} onChange={(v) => set({ user_filter: v })} hint="%s = username, e.g. (uid=%s) or (sAMAccountName=%s)" required />
-        <LabeledInput label="Group base DN" value={cfg.group_base_dn} onChange={(v) => set({ group_base_dn: v })} placeholder="(defaults to Base DN)" />
-        <LabeledInput label="Group filter" value={cfg.group_filter} onChange={(v) => set({ group_filter: v })} hint="%s = user DN, e.g. (member=%s)" />
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-          Default role
-          <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
-            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </label>
-        <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
-        <label style={{ fontSize: 12, color: "var(--muted)", alignSelf: "end" }}>
-          <input type="checkbox" checked={cfg.insecure_skip_verify} onChange={(e) => set({ insecure_skip_verify: e.target.checked })} /> Skip TLS verify (lab only)
-        </label>
-      </div>
-
-      <RequiredLegend />
-
-      <h3 style={{ marginTop: 16 }}>Group → role mapping <span className="mini-meta">(highest-privilege match wins; otherwise default role)</span></h3>
-      {cfg.role_mappings.map((m, i) => (
-        <div key={i} className="admin-form" style={{ marginBottom: 6 }}>
-          <input value={m.group} placeholder="cn=netops-admins,ou=groups,dc=example,dc=com" onChange={(e) => setMapping(i, { group: e.target.value })} />
-          <select value={m.role} onChange={(e) => setMapping(i, { role: e.target.value })}>
-            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-          <button onClick={() => set({ role_mappings: cfg.role_mappings.filter((_, j) => j !== i) })}>Remove</button>
-        </div>
-      ))}
-      <button onClick={() => set({ role_mappings: [...cfg.role_mappings, { group: "", role: roleIds[0] || "read-only" }] })}>+ Add mapping</button>
-
-      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
-        <span style={{ flex: 1 }} />
-        <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
-        <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
-        <button disabled={busy} onClick={test}>Test connection</button>
-      </div>
+      <Wizard
+        finishLabel="Save"
+        onFinish={save}
+        steps={[
+          {
+            id: "connect",
+            title: "Connection",
+            hint: "Reach the directory. Host and Base DN are required; the bind password is write-only.",
+            isValid: () => !!cfg.host.trim() && !!cfg.base_dn.trim(),
+            render: () => (
+              <>
+                <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                  <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="ldap.example.com" required />
+                  <LabeledInput label="Port (0 = auto)" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 0 })} />
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                    Encryption
+                    <select value={enc} onChange={(e) => setEnc(e.target.value)}>
+                      <option value="none">None (389)</option>
+                      <option value="starttls">StartTLS</option>
+                      <option value="ldaps">LDAPS (636)</option>
+                    </select>
+                  </label>
+                  <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" />
+                  <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} />
+                  <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" required />
+                  <label style={{ fontSize: 12, color: "var(--muted)", alignSelf: "end" }}>
+                    <input type="checkbox" checked={cfg.insecure_skip_verify} onChange={(e) => set({ insecure_skip_verify: e.target.checked })} /> Skip TLS verify (lab only)
+                  </label>
+                </div>
+                <RequiredLegend />
+              </>
+            ),
+          },
+          {
+            id: "users",
+            title: "Users & groups",
+            hint: "How users are found and how directory groups resolve. User filter is required.",
+            isValid: () => !!cfg.user_filter.trim(),
+            render: () => (
+              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                <LabeledInput label="User filter" value={cfg.user_filter} onChange={(v) => set({ user_filter: v })} hint="%s = username, e.g. (uid=%s) or (sAMAccountName=%s)" required />
+                <LabeledInput label="Group base DN" value={cfg.group_base_dn} onChange={(v) => set({ group_base_dn: v })} placeholder="(defaults to Base DN)" />
+                <LabeledInput label="Group filter" value={cfg.group_filter} onChange={(v) => set({ group_filter: v })} hint="%s = user DN, e.g. (member=%s)" />
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                  Default role
+                  <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
+                    {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </label>
+                <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
+              </div>
+            ),
+          },
+          {
+            id: "roles",
+            title: "Roles & test",
+            hint: "Map directory groups to roles (highest-privilege match wins), then test and save.",
+            isValid: () => true,
+            render: () => (
+              <>
+                {cfg.role_mappings.map((m, i) => (
+                  <div key={i} className="admin-form" style={{ marginBottom: 6 }}>
+                    <input value={m.group} placeholder="cn=netops-admins,ou=groups,dc=example,dc=com" onChange={(e) => setMapping(i, { group: e.target.value })} />
+                    <select value={m.role} onChange={(e) => setMapping(i, { role: e.target.value })}>
+                      {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                    <button onClick={() => set({ role_mappings: cfg.role_mappings.filter((_, j) => j !== i) })}>Remove</button>
+                  </div>
+                ))}
+                <button onClick={() => set({ role_mappings: [...cfg.role_mappings, { group: "", role: roleIds[0] || "read-only" }] })}>+ Add mapping</button>
+                <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
+                  <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
+                  <button disabled={busy} onClick={test}>Test connection</button>
+                </div>
+                <TestResult r={result} />
+              </>
+            ),
+          },
+        ]}
+      />
       {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
-      <TestResult r={result} />
     </div>
   );
 }
@@ -782,29 +848,55 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
         </label>
       </div>
       <p className="admin-sub">Native stdlib TACACS+ PAP (RFC 8907) — authenticate operators against the same AAA server that fronts your routers/switches. The shared secret is write-only.</p>
-      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="tacacs.example.com" required />
-        <LabeledInput label="Port" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 49 })} />
-        <LabeledInput label="Shared secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.secret_set ? "•••••• (unchanged)" : "(none)"} />
-        <LabeledInput label="Timeout (s)" type="number" value={String(cfg.timeout_seconds)} onChange={(v) => set({ timeout_seconds: Number(v) || 5 })} />
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-          Default role
-          <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
-            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </label>
-        <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
-      </div>
-      <RequiredLegend />
-      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
-        <span style={{ flex: 1 }} />
-        <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
-        <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
-        <button disabled={busy} onClick={test}>Test connection</button>
-      </div>
+      <Wizard
+        finishLabel="Save"
+        onFinish={save}
+        steps={[
+          {
+            id: "connect",
+            title: "Connection",
+            hint: "Reach your TACACS+ AAA server. Host is required; the shared secret is write-only.",
+            isValid: () => !!cfg.host.trim(),
+            render: () => (
+              <>
+                <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                  <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="tacacs.example.com" required />
+                  <LabeledInput label="Port" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 49 })} />
+                  <LabeledInput label="Shared secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.secret_set ? "•••••• (unchanged)" : "(none)"} />
+                  <LabeledInput label="Timeout (s)" type="number" value={String(cfg.timeout_seconds)} onChange={(v) => set({ timeout_seconds: Number(v) || 5 })} />
+                </div>
+                <RequiredLegend />
+              </>
+            ),
+          },
+          {
+            id: "defaults",
+            title: "Defaults & test",
+            hint: "Role/tenant for authenticated users, then test and save.",
+            isValid: () => true,
+            render: () => (
+              <>
+                <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                    Default role
+                    <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
+                      {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </label>
+                  <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
+                </div>
+                <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
+                  <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
+                  <button disabled={busy} onClick={test}>Test connection</button>
+                </div>
+                <TestResult r={result} />
+              </>
+            ),
+          },
+        ]}
+      />
       {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
-      <TestResult r={result} />
     </div>
   );
 }
@@ -840,7 +932,6 @@ function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
   const [ready, setReady] = useState(false);
   const [secret, setSecret] = useState(""); // typed client secret (only sent if non-empty)
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const redirectHint = `${window.location.origin}/api/auth/sso/callback`;
 
   useEffect(() => {
@@ -852,14 +943,13 @@ function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
 
   const set = (patch: Partial<OidcConfig>) => setCfg({ ...cfg, ...patch });
 
+  // Throws on error so the Wizard surfaces it; sets a success note otherwise.
   const save = async () => {
-    setBusy(true); setMsg(null);
-    try {
-      const body: Partial<OidcConfig> & { client_secret?: string } = { ...cfg };
-      if (secret) body.client_secret = secret; // only override the secret when re-typed
-      const r = await api.saveOidcConfig(body);
-      setCfg(r.config); setReady(r.ready); setSecret(""); setMsg("Saved.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    setMsg(null);
+    const body: Partial<OidcConfig> & { client_secret?: string } = { ...cfg };
+    if (secret) body.client_secret = secret; // only override the secret when re-typed
+    const r = await api.saveOidcConfig(body);
+    setCfg(r.config); setReady(r.ready); setSecret(""); setMsg("Saved.");
   };
 
   return (
@@ -874,32 +964,65 @@ function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
         </label>
       </div>
       <p className="admin-sub">Federate sign-in to your OIDC identity provider (Authorization Code flow). The platform brokers the login and re-issues its own session. Upstream IdPs such as Okta, Azure AD, Google or any standards-compliant provider are supported. The client secret is write-only — leave blank to keep the stored one.</p>
-      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-        <LabeledInput label="Issuer / Discovery URL" value={cfg.issuer} onChange={(v) => set({ issuer: v })} placeholder="https://idp.example.com/realms/netops" hint="Base issuer URL; /.well-known/openid-configuration is appended." required />
-        <LabeledInput label="Client ID" value={cfg.client_id} onChange={(v) => set({ client_id: v })} placeholder="netops" required />
-        <LabeledInput label="Client secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.client_secret_set ? "•••••• (unchanged)" : "(none / public client)"} />
-        <LabeledInput label="Scopes" value={cfg.scopes} onChange={(v) => set({ scopes: v })} placeholder="openid email profile" />
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-          Default role
-          <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
-            {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </label>
-        <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
-        <LabeledInput label="Admin roles" value={cfg.admin_roles} onChange={(v) => set({ admin_roles: v })} placeholder="super-admin,admin,netops-admin" hint="Comma-separated IdP roles/groups mapped to super-admin." />
-        <LabeledInput label="Operator roles" value={cfg.operator_roles} onChange={(v) => set({ operator_roles: v })} placeholder="operator,netops-operator" hint="Comma-separated IdP roles/groups mapped to operator." />
-        <LabeledInput label="Providers" value={cfg.providers} onChange={(v) => set({ providers: v })} placeholder="okta:Okta:oidc,ad:Azure AD:saml" hint="Optional sign-in buttons: id:Label:kind, comma-separated. Blank = one default button." />
-        <LabeledInput label="Post-login URL" value={cfg.post_login_url} onChange={(v) => set({ post_login_url: v })} placeholder="/" hint="Where the browser lands after a successful login." />
-        <LabeledInput label="Redirect URL override" value={cfg.redirect_url} onChange={(v) => set({ redirect_url: v })} placeholder="(derived from request)" hint="Optional; leave blank to derive from the incoming request." />
-      </div>
-      <p className="mini-meta" style={{ marginTop: 8 }}>
-        Register this Redirect URI with your identity provider:{" "}
-        <code className="mono" style={{ userSelect: "all" }}>{redirectHint}</code>
-      </p>
-      <RequiredLegend />
-      <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
-        <button className="dash-btn" disabled={busy} onClick={save}>Save</button>
-      </div>
+      <Wizard
+        finishLabel="Save"
+        onFinish={save}
+        steps={[
+          {
+            id: "connect",
+            title: "Connection",
+            hint: "Point at your OIDC provider. Issuer and Client ID are required; the secret is write-only.",
+            isValid: () => !!cfg.issuer.trim() && !!cfg.client_id.trim(),
+            render: () => (
+              <>
+                <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                  <LabeledInput label="Issuer / Discovery URL" value={cfg.issuer} onChange={(v) => set({ issuer: v })} placeholder="https://idp.example.com/realms/netops" hint="Base issuer URL; /.well-known/openid-configuration is appended." required />
+                  <LabeledInput label="Client ID" value={cfg.client_id} onChange={(v) => set({ client_id: v })} placeholder="netops" required />
+                  <LabeledInput label="Client secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.client_secret_set ? "•••••• (unchanged)" : "(none / public client)"} />
+                  <LabeledInput label="Scopes" value={cfg.scopes} onChange={(v) => set({ scopes: v })} placeholder="openid email profile" />
+                </div>
+                <p className="mini-meta" style={{ marginTop: 8 }}>
+                  Register this Redirect URI with your identity provider:{" "}
+                  <code className="mono" style={{ userSelect: "all" }}>{redirectHint}</code>
+                </p>
+                <RequiredLegend />
+              </>
+            ),
+          },
+          {
+            id: "mapping",
+            title: "Role mapping",
+            hint: "How IdP identities map to platform roles and tenant.",
+            isValid: () => true,
+            render: () => (
+              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                  Default role
+                  <select value={cfg.default_role} onChange={(e) => set({ default_role: e.target.value })}>
+                    {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </label>
+                <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
+                <LabeledInput label="Admin roles" value={cfg.admin_roles} onChange={(v) => set({ admin_roles: v })} placeholder="super-admin,admin,netops-admin" hint="Comma-separated IdP roles/groups mapped to super-admin." />
+                <LabeledInput label="Operator roles" value={cfg.operator_roles} onChange={(v) => set({ operator_roles: v })} placeholder="operator,netops-operator" hint="Comma-separated IdP roles/groups mapped to operator." />
+              </div>
+            ),
+          },
+          {
+            id: "signin",
+            title: "Sign-in & redirect",
+            hint: "Optional sign-in buttons and post-login behavior. Review, then save.",
+            isValid: () => true,
+            render: () => (
+              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+                <LabeledInput label="Providers" value={cfg.providers} onChange={(v) => set({ providers: v })} placeholder="okta:Okta:oidc,ad:Azure AD:saml" hint="Optional sign-in buttons: id:Label:kind, comma-separated. Blank = one default button." />
+                <LabeledInput label="Post-login URL" value={cfg.post_login_url} onChange={(v) => set({ post_login_url: v })} placeholder="/" hint="Where the browser lands after a successful login." />
+                <LabeledInput label="Redirect URL override" value={cfg.redirect_url} onChange={(v) => set({ redirect_url: v })} placeholder="(derived from request)" hint="Optional; leave blank to derive from the incoming request." />
+              </div>
+            ),
+          },
+        ]}
+      />
       {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
     </div>
   );
