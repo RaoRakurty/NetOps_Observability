@@ -194,6 +194,22 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .rail-account-role { font-size: 10.5px; color: var(--rail-fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-account-pop { position: absolute; left: 6px; right: 6px; bottom: calc(100% + 6px); z-index: 75; }
 
+/* v2 type face + compact top bar (Datadog-zone density). Scoped to .shell-v2
+   so the default (v1) shell is untouched. Geist reads elegant + legible at
+   small sizes; the slightly negative tracking tightens it without crowding. */
+.shell-v2 {
+  --topbar-h: 44px;
+  font-family: "Geist Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: -0.006em;
+}
+.shell-v2 .topbar { padding: 0 var(--sp-3); border-bottom: 1px solid var(--panel-border); }
+.shell-v2 .main-head { padding: var(--sp-2) var(--sp-4) 0; }
+.shell-v2 .crumbs { font-size: var(--fs-meta); }
+.shell-v2 .crumb-section { font-weight: 600; }
+.shell-v2 .subnav { margin-top: 6px; }
+.shell-v2 .subnav button { padding: 6px 10px; }
+.shell-v2 .page { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+
 /* Flyout overlay */
 .nav-flyout {
   position: fixed; left: calc(var(--sidebar-w) + 4px); z-index: 70;

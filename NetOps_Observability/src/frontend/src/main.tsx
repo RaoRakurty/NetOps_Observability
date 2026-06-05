@@ -5,6 +5,9 @@ import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
+// Geist (variable) — the shell-v2 UI face: elegant, legible at small sizes,
+// in the premium/operations zone. Bundled offline like Inter.
+import "@fontsource-variable/geist";
 import App from "./App";
 import { captureSSORedirect } from "./services/api";
 import { applyPrefs } from "./theme/prefs";
