@@ -190,11 +190,11 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 	}
 	var req sshConnectReq
 	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.Username) == "" {
-		ws.writeJSON(map[string]any{"type": "error", "message": "first message must be a JSON connect request with a username"})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "first message must be a JSON connect request with a username"})
 		return
 	}
 	if req.Password == "" && req.PrivateKey == "" {
-		ws.writeJSON(map[string]any{"type": "error", "message": "a password or private key is required"})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "a password or private key is required"})
 		return
 	}
 	port := req.Port
@@ -207,7 +207,7 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 	if req.PrivateKey != "" {
 		signer, perr := parsePrivateKey(req.PrivateKey, req.Passphrase)
 		if perr != nil {
-			ws.writeJSON(map[string]any{"type": "error", "message": "invalid private key: " + perr.Error()})
+			_ = ws.writeJSON(map[string]any{"type": "error", "message": "invalid private key: " + perr.Error()})
 			return
 		}
 		auth = append(auth, ssh.PublicKeys(signer))
@@ -225,7 +225,7 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 		if !okHost {
 			return fmt.Errorf("host key mismatch for %s (possible MITM) — recorded fingerprint differs", dev.Address)
 		}
-		ws.writeJSON(map[string]any{"type": "hostkey", "fingerprint": hostFP, "first_seen": first})
+		_ = ws.writeJSON(map[string]any{"type": "hostkey", "fingerprint": hostFP, "first_seen": first})
 		return nil
 	}
 
@@ -238,13 +238,13 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 
 	conn, err := net.DialTimeout("tcp", addr, sshDialTimeout())
 	if err != nil {
-		ws.writeJSON(map[string]any{"type": "error", "message": "connect failed: " + err.Error()})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "connect failed: " + err.Error()})
 		return
 	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close()
-		ws.writeJSON(map[string]any{"type": "error", "message": "ssh handshake failed: " + err.Error()})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "ssh handshake failed: " + err.Error()})
 		s.audit.Record(s.sshAudit(claims, tenant, cross, dev, hostFP, "deny", 0, 0))
 		return
 	}
@@ -253,14 +253,14 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 
 	session, err := client.NewSession()
 	if err != nil {
-		ws.writeJSON(map[string]any{"type": "error", "message": "session open failed: " + err.Error()})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "session open failed: " + err.Error()})
 		return
 	}
 	defer session.Close()
 
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := session.RequestPty("xterm-256color", rows, cols, modes); err != nil {
-		ws.writeJSON(map[string]any{"type": "error", "message": "pty request failed: " + err.Error()})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "pty request failed: " + err.Error()})
 		return
 	}
 	stdin, err := session.StdinPipe()
@@ -272,7 +272,7 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 	session.Stdout = &wsBinWriter{ws: ws, n: counter}
 	session.Stderr = &wsBinWriter{ws: ws, n: counter}
 	if err := session.Shell(); err != nil {
-		ws.writeJSON(map[string]any{"type": "error", "message": "shell start failed: " + err.Error()})
+		_ = ws.writeJSON(map[string]any{"type": "error", "message": "shell start failed: " + err.Error()})
 		return
 	}
 
@@ -286,7 +286,7 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 	ctx, cancel := context.WithTimeout(context.Background(), sshMaxSession())
 	defer cancel()
 	idle := time.AfterFunc(sshIdleTimeout(), func() {
-		ws.writeJSON(map[string]any{"type": "status", "message": "session idle timeout"})
+		_ = ws.writeJSON(map[string]any{"type": "status", "message": "session idle timeout"})
 		ws.close()
 	})
 	defer idle.Stop()
@@ -327,7 +327,7 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 	select {
 	case <-done:
 	case <-ctx.Done():
-		ws.writeJSON(map[string]any{"type": "status", "message": "max session duration reached"})
+		_ = ws.writeJSON(map[string]any{"type": "status", "message": "max session duration reached"})
 	case <-ws.closed:
 	}
 
@@ -581,7 +581,7 @@ func (c *wsConn) writeFrame(opcode byte, payload []byte) error {
 	defer c.wmu.Unlock()
 	n := len(payload)
 	var hdr []byte
-	b0 := byte(0x80 | opcode) // FIN + opcode
+	b0 := 0x80 | opcode // FIN + opcode
 	switch {
 	case n <= 125:
 		hdr = []byte{b0, byte(n)}
