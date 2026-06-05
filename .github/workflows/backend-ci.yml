@@ -33,7 +33,9 @@ env:
   # Pinned for reproducibility; gosec floats on latest for newest security rules.
   STATICCHECK_VERSION: '2025.1.1'
   GOVULNCHECK_VERSION: 'v1.3.0'
-  GOLANGCI_VERSION: 'v1.64.8'
+  # v2.x: built with go1.25, required since the go 1.25.0 directive (x/crypto
+  # v0.52.0) made the go1.24-built v1.64.8 refuse to load. Config is v2 format.
+  GOLANGCI_VERSION: 'v2.12.2'
 
 defaults:
   run:
@@ -100,7 +102,7 @@ jobs:
       - name: gosec (tlsconfig, internalca)
         run: gosec -quiet ./tlsconfig/... ./internalca/...
       - name: golangci-lint (tlsconfig, internalca)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
@@ -122,7 +124,7 @@ jobs:
       # so one repo-wide run covers the triage set. Suppressions use golangci's
       # native directives (// #nosec, //nolint) consistently across the tree.
       - name: golangci-lint (repo-wide)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
