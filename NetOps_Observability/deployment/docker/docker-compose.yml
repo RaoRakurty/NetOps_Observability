@@ -551,6 +551,11 @@ services:
       STORE_BACKEND: ${STORE_BACKEND:-file}
       DATABASE_URL: ${DATABASE_URL:-}
       STORE_PG_ALLOW_RLS_BYPASS: ${STORE_PG_ALLOW_RLS_BYPASS:-}
+      # Multi-replica cache coherence for the cached-by-design stores (API keys +
+      # SNMP creds). Dormant (0) for a single API instance. Set to e.g. 30 only
+      # when running >1 API replica against a shared backend, so a revoke/rotate
+      # on one replica converges across the others within this many seconds.
+      CRED_CACHE_RELOAD_SEC: ${CRED_CACHE_RELOAD_SEC:-0}
       # One-time file→Postgres import on cutover (idempotent: fills empty tables
       # only). Point at the mounted /data dir; safe to leave set after migrating.
       IMPORT_FILE_STATE_DIR: ${IMPORT_FILE_STATE_DIR:-}

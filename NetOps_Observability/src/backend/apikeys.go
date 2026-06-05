@@ -124,6 +124,16 @@ type apiKeyStore struct {
 	keys         map[string]APIKey     // id -> key
 	windows      map[string]*keyWindow // id -> current rate-limit window
 	defaultLimit int                   // per-minute cap when a key sets none (0 = unlimited)
+
+	// multiWriter is set when more than one API instance shares this backend
+	// store (the cred-cache reload loop is active). It makes Verify update its
+	// per-call usage stats (UseCount/LastUsedAt) IN MEMORY ONLY instead of
+	// rewriting the whole-collection blob: a stale replica must never write its
+	// map back over the shared store, or it would resurrect a key another replica
+	// just revoked. Security-critical mutations (Create/Revoke) always write
+	// through regardless. Single-writer (file) deployments leave this false and
+	// keep per-call usage durability.
+	multiWriter bool
 }
 
 // defaultKeyRateLimit is the fallback per-minute cap, overridable via
@@ -205,6 +215,50 @@ func (s *apiKeyStore) load() error {
 	for _, k := range list {
 		s.keys[k.ID] = k
 	}
+	return nil
+}
+
+// reload re-reads the persisted key set from the shared backend and atomically
+// replaces the in-memory map, so a revocation / rotation / expiry performed by
+// ANOTHER API instance (which writes through the same kvBackend) takes effect
+// here within one reload interval instead of lingering until restart. The
+// per-instance rate-limit windows are deliberately kept (they are ephemeral and
+// instance-local); windows for keys that no longer exist are pruned.
+//
+// This closes the security-critical multi-instance gap: a revoked or expired key
+// must stop authenticating everywhere, which it now does once the persisted
+// RevokedAt/expiry is observed here. Concurrent multi-instance *writes* still
+// follow the blob store's last-writer-wins semantics — acceptable for this
+// bounded, low-write config set (see the "cached by design" note in TRACKER #33).
+// A missing store (never written yet) is treated as empty, not an error.
+func (s *apiKeyStore) reload() error {
+	b, err := kvLoad(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		s.mu.Lock()
+		s.keys = make(map[string]APIKey)
+		s.windows = make(map[string]*keyWindow)
+		s.mu.Unlock()
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var list []APIKey
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+	next := make(map[string]APIKey, len(list))
+	for _, k := range list {
+		next[k.ID] = k
+	}
+	s.mu.Lock()
+	s.keys = next
+	for id := range s.windows {
+		if _, ok := next[id]; !ok {
+			delete(s.windows, id)
+		}
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -404,7 +458,12 @@ func (s *apiKeyStore) Verify(secret string) (APIKey, bool) {
 			k.LastUsedAt = &now
 			k.UseCount++
 			s.keys[id] = k
-			_ = s.flushLocked()
+			// Single-writer: persist usage immediately (durable across restart).
+			// Multi-writer: in-memory only — never rewrite the shared blob from a
+			// possibly-stale map (see multiWriter doc); usage becomes per-instance.
+			if !s.multiWriter {
+				_ = s.flushLocked()
+			}
 			return k, true
 		}
 	}

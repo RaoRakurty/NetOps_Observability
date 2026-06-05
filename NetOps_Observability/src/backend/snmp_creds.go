@@ -186,6 +186,43 @@ func (s *snmpCredStore) load() error {
 	return nil
 }
 
+// reload re-reads the persisted credential set from the shared backend and
+// atomically replaces the in-memory map, so a rotation / deletion performed by
+// ANOTHER API instance takes effect here within one reload interval rather than
+// lingering until restart. Secrets are decrypted on read exactly as load() does.
+// A missing store is treated as empty, not an error. Concurrent multi-instance
+// writes follow the blob store's last-writer-wins semantics (bounded config set;
+// see TRACKER #33). The collector already re-Resolves every poll, so a rotated
+// or deleted credential converges within max(reload interval, poll interval).
+func (s *snmpCredStore) reload() error {
+	b, err := kvLoad(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		s.mu.Lock()
+		s.creds = make(map[string]SNMPCredential)
+		s.mu.Unlock()
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var list []SNMPCredential
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+	next := make(map[string]SNMPCredential, len(list))
+	for _, c := range list {
+		dec, err := s.decryptSecrets(c)
+		if err != nil {
+			return err
+		}
+		next[dec.ID] = dec
+	}
+	s.mu.Lock()
+	s.creds = next
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *snmpCredStore) flushLocked() error {
 	list := make([]SNMPCredential, 0, len(s.creds))
 	for _, c := range s.creds {

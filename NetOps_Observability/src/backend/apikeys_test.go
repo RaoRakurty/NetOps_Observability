@@ -134,3 +134,67 @@ func TestSourceAllowed(t *testing.T) {
 		t.Fatalf("nil IP should be denied when CIDRs are set")
 	}
 }
+
+// TestRevokeBlocksVerify is the cache-invalidation guarantee for the auth hot
+// path: once a key is revoked, Verify must reject it immediately within the same
+// process (write-through, no stale window). Guards against a refactor silently
+// dropping the RevokedAt check.
+func TestRevokeBlocksVerify(t *testing.T) {
+	s := newTestKeyStore(t)
+	rec, secret, err := s.Create(apiKeyInput{Label: "to-revoke"}, "admin")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, ok := s.Verify(secret); !ok {
+		t.Fatalf("Verify should succeed before revocation")
+	}
+	if err := s.Revoke(rec.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if _, ok := s.Verify(secret); ok {
+		t.Fatalf("Verify must fail immediately after revocation (cache-invalidation gap)")
+	}
+}
+
+// TestReloadPropagatesRevocation simulates two API replicas sharing one backend
+// store (the default fileKV here): a key revoked on instance A must stop
+// authenticating on instance B after B reloads — the multi-instance fix. Before
+// reload, B is intentionally stale (proving the gap exists); after reload it
+// converges.
+func TestReloadPropagatesRevocation(t *testing.T) {
+	path := t.TempDir() + "/shared-keys.json"
+	a, err := newAPIKeyStore(path)
+	if err != nil {
+		t.Fatalf("instance A: %v", err)
+	}
+	rec, secret, err := a.Create(apiKeyInput{Label: "shared"}, "admin")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Both run as replicas (multiWriter) so neither rewrites the shared blob from a
+	// stale map on the auth hot path — exactly how the reload loop configures them.
+	a.multiWriter = true
+	// Instance B comes up after the key exists and loads it from the shared store.
+	b, err := newAPIKeyStore(path)
+	if err != nil {
+		t.Fatalf("instance B: %v", err)
+	}
+	b.multiWriter = true
+	if _, ok := b.Verify(secret); !ok {
+		t.Fatalf("B should authenticate the key before it is revoked")
+	}
+	// A revokes (write-through to the shared store).
+	if err := a.Revoke(rec.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	// B is still stale until it reloads — this is the gap the loop closes.
+	if _, ok := b.Verify(secret); !ok {
+		t.Fatalf("precondition: B's cache should still be stale before reload")
+	}
+	if err := b.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, ok := b.Verify(secret); ok {
+		t.Fatalf("after reload, B must reject the revoked key (multi-instance gap)")
+	}
+}

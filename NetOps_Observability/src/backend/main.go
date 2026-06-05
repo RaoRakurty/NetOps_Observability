@@ -374,6 +374,10 @@ func main() {
 	}
 	go srv.startBroadcaster(ctx.Done())
 	go srv.watchAlertsForBroadcast(ctx)
+	// Multi-instance cache coherence for the cached-by-design stores: refresh
+	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
+	// replica converges here (no-op for the single-writer file backend).
+	srv.startCredCacheReload(ctx)
 
 	mux := http.NewServeMux()
 	srv.routes(mux)

@@ -73,3 +73,71 @@ func TestSNMPCredUpdatePreservesSecrets(t *testing.T) {
 		t.Errorf("retries not updated: %d", full.Retries)
 	}
 }
+
+// TestSNMPCredDeleteBlocksResolve is the cache-invalidation guarantee for the
+// poller path: a deleted credential must stop resolving immediately (write-
+// through, no stale window).
+func TestSNMPCredDeleteBlocksResolve(t *testing.T) {
+	cs, _ := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"), nil)
+	if _, err := cs.Upsert(SNMPCredential{Name: "edge", Version: "v2c", Community: "c1"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if _, ok := cs.Resolve("edge"); !ok {
+		t.Fatalf("Resolve should succeed before delete")
+	}
+	if err := cs.Delete("edge"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := cs.Resolve("edge"); ok {
+		t.Fatalf("Resolve must fail immediately after delete (cache-invalidation gap)")
+	}
+}
+
+// TestSNMPCredRotationTakesEffect verifies a rotated secret is what the poller
+// resolves next — the new community fully replaces the old one in the cache.
+func TestSNMPCredRotationTakesEffect(t *testing.T) {
+	cs, _ := newSNMPCredStore(filepath.Join(t.TempDir(), "snmp.json"), nil)
+	cs.Upsert(SNMPCredential{Name: "rot", Version: "v2c", Community: "old-secret"})
+	if c, _ := cs.Resolve("rot"); c.Community != "old-secret" {
+		t.Fatalf("pre-rotation community = %q", c.Community)
+	}
+	// Rotate: same id, new community.
+	if _, err := cs.Upsert(SNMPCredential{ID: "rot", Name: "rot", Version: "v2c", Community: "new-secret"}); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if c, _ := cs.Resolve("rot"); c.Community != "new-secret" {
+		t.Fatalf("rotation did not take effect: Resolve community = %q", c.Community)
+	}
+}
+
+// TestSNMPCredReloadPropagatesChange simulates two replicas sharing one backend:
+// a credential deleted on instance A stops resolving on instance B after B
+// reloads (multi-instance convergence).
+func TestSNMPCredReloadPropagatesChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared-snmp.json")
+	a, err := newSNMPCredStore(path, nil)
+	if err != nil {
+		t.Fatalf("instance A: %v", err)
+	}
+	a.Upsert(SNMPCredential{Name: "shared", Version: "v2c", Community: "live"})
+	b, err := newSNMPCredStore(path, nil)
+	if err != nil {
+		t.Fatalf("instance B: %v", err)
+	}
+	if _, ok := b.Resolve("shared"); !ok {
+		t.Fatalf("B should resolve the credential it loaded")
+	}
+	if err := a.Delete("shared"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// B is stale until it reloads.
+	if _, ok := b.Resolve("shared"); !ok {
+		t.Fatalf("precondition: B's cache should still be stale before reload")
+	}
+	if err := b.reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, ok := b.Resolve("shared"); ok {
+		t.Fatalf("after reload, B must not resolve the deleted credential")
+	}
+}
