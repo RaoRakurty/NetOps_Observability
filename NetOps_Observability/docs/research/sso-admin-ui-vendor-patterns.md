@@ -1,7 +1,7 @@
 # SSO / Authentication Admin UI — Vendor Patterns & Recommended Layout
 
 Research grounding for the NetOps_Observability SSO admin section. Surveys how
-Datadog, Okta, and Splunk (plus Grafana and notes on Auth0/Keycloak) design
+the reference platform, Okta, and Splunk (plus Grafana and notes on Auth0/Keycloak) design
 their **admin-facing** SSO configuration pages, then synthesizes a recommended,
 implementable React layout for our OIDC (Keycloak-brokered) + native LDAP/AD +
 native TACACS+ providers.
@@ -11,42 +11,38 @@ native TACACS+ providers.
 
 ---
 
-## 1. Datadog
+## 1. the reference platform
 
 **Where it lives:** Organization Settings → **Login Methods** → SAML section.
 Initial setup is a "Configure" button under SAML; adding a second provider is
 "Update" → "Add SAML".
-([configuration](https://docs.datadoghq.com/account_management/saml/configuration/))
 
 ### 1a. SAML SP config
-Datadog deliberately keeps the SAML form minimal — it is a **modal**, not a
+the reference platform deliberately keeps the SAML form minimal — it is a **modal**, not a
 multi-tab page:
 
 - **Provider Name** — "Create a user-friendly name for this SAML provider. The
-  name appears to end users when they choose a login method." (Datadog supports
+  name appears to end users when they choose a login method." (the reference platform supports
   multiple SAML providers, hence the user-facing name.)
 - **IdP metadata** — entered **only by XML file upload** ("browse files or
   dragging and dropping the XML metadata file onto the modal"). There is **no
   metadata-URL field**. Constraint: "The IdP metadata must contain ASCII
   characters only."
-- **SP metadata / ACS / Entity ID** — Datadog exposes the Service Provider
+- **SP metadata / ACS / Entity ID** — the reference platform exposes the Service Provider
   Entity ID and an org-specific **AssertionConsumerService** endpoint, and lets
   you **download the SP metadata XML** (or copy the ACS URL + Entity ID) to hand
   to the IdP. After enabling IdP-initiated login and saving, you re-download SP
   metadata because the ACS endpoint becomes organization-specific.
-  ([saml](https://docs.datadoghq.com/account_management/saml/),
-  [configuration](https://docs.datadoghq.com/account_management/saml/configuration/))
 - **IdP-initiated login** — an explicit feature toggle to enable; changes the
   SP metadata.
 
-### 1b. Group / role mapping (the most detailed part of Datadog's UI)
+### 1b. Group / role mapping (the most detailed part of the reference platform's UI)
 Organization Settings → **SAML Group Mappings** tab, with sub-tabs **Role
 Mappings** and **Team Mappings**.
-([mapping](https://docs.datadoghq.com/account_management/saml/mapping/))
 
-- Each mapping = a **SAML attribute key + attribute value → Datadog role (or
+- Each mapping = a **SAML attribute key + attribute value → the reference platform role (or
   team)**. Flow: "New Mapping" → enter the SAML key/value pair → select an
-  existing Datadog role → "Create". Team mappings add an "Add Row" affordance
+  existing the reference platform role → "Create". Team mappings add an "Add Row" affordance
   and a Team dropdown.
 - A master **"Enable Mappings"** toggle activates the whole feature. The docs
   warn loudly: **"If a user does not match any mapping, they lose any roles they
@@ -54,16 +50,15 @@ Mappings** and **Team Mappings**.
   includes JIT-provisioned roles. (Roles gate login; team mappings do not.)
 - Behavior is **additive across mappings** ("unless another mapping adds it");
   entries are **case-sensitive**; limit 1,000 role + 1,000 team mappings.
-- Notably, Datadog does **not** expose an explicit "default role" field in the
+- Notably, the reference platform does **not** expose an explicit "default role" field in the
   mapping UI — no-match = no access, which is the conservative default.
 
 ### 1c. Cert expiry / troubleshooting
-Datadog does not surface a proactive cert-expiry banner; instead its SAML
+the reference platform does not surface a proactive cert-expiry banner; instead its SAML
 troubleshooting guide tells admins that login failures are often "an IdP
 certificate may have expired and rotated."
-([troubleshooting](https://docs.datadoghq.com/account_management/saml/troubleshooting/))
 
-**Datadog takeaways:** minimal modal for the protocol config; richness lives in
+**the reference platform takeaways:** minimal modal for the protocol config; richness lives in
 the **mapping table**; strong copy/download of SP metadata; multiple-IdP support
 via a user-facing provider name; very explicit "no match = locked out" warning.
 
@@ -241,7 +236,7 @@ TLS version** dropdown; **first-match-wins** group precedence stated explicitly.
 
 ## 5. Cross-vendor synthesis
 
-| Concern | Datadog | Okta | Splunk | Grafana |
+| Concern | the reference platform | Okta | Splunk | Grafana |
 |---|---|---|---|---|
 | Protocol form shape | Single modal | Multi-step wizard | Collapsible sections | Section-per-concern |
 | IdP metadata input | XML upload only | (IdP side) | File **or** paste | URL / file / **base64** |
@@ -303,7 +298,7 @@ JIT provisioning            [checkbox]  Create users on first login
 Default role (no match)     [select]   default: Viewer  (or "Deny login")
 ```
 Notes: copy-to-clipboard on the **Redirect URI** mirrors every vendor exposing
-SP values; the **Default role / Deny login** choice makes Datadog's "no match"
+SP values; the **Default role / Deny login** choice makes the reference platform's "no match"
 behavior an explicit, safe-by-default option rather than a surprise.
 
 ### Tab B — LDAP / Active Directory (native)
@@ -361,7 +356,7 @@ from a TACACS+ authorization AV-pair (commonly `priv-lvl` or a custom
 
 ### The group → role mapping table (shared component)
 One reusable `<table className="map-table">` reused by all three tabs. Columns
-chosen from the cross-vendor pattern (Datadog key/value→role, Splunk
+chosen from the cross-vendor pattern (the reference platform key/value→role, Splunk
 many-to-one, Grafana DN→role + first-match precedence):
 
 ```
@@ -377,7 +372,7 @@ many-to-one, Grafana DN→role + first-match precedence):
 - **Match** column: `exact` | `regex` (keep it to two; avoids Okta's 4-mode
   complexity while covering AD wildcards).
 - A pinned/implicit **default row** maps the fallback `Default role`; if set to
-  **Deny login**, render it as a red row so the locked-out behavior (Datadog's
+  **Deny login**, render it as a red row so the locked-out behavior (the reference platform's
   warning) is visible, not hidden.
 - App roles come from a `<select>` of NetOps roles (Admin / Operator / Viewer /
   custom) — never a free-text role.
@@ -418,7 +413,7 @@ cert pin, TACACS+ N/A):
   (Grafana's Save-and-enable + status pill).
 - **Multiple providers** = the existing tab list; allow >1 enabled (e.g. OIDC +
   LDAP fallback). A small **"Default login method"** select at the page level
-  picks which button is primary on the login screen (Datadog's named-provider
+  picks which button is primary on the login screen (the reference platform's named-provider
   idea generalized).
 - **Default landing page** per role can live with role config, not here, but a
   per-provider **"Landing route after login"** optional field is cheap to add.
@@ -438,11 +433,6 @@ cert pin, TACACS+ N/A):
 
 ## Sources
 
-- Datadog SAML: [overview](https://docs.datadoghq.com/account_management/saml/),
-  [configuration](https://docs.datadoghq.com/account_management/saml/configuration/),
-  [group mapping](https://docs.datadoghq.com/account_management/saml/mapping/),
-  [AuthN mappings](https://docs.datadoghq.com/account_management/authn_mapping/),
-  [troubleshooting](https://docs.datadoghq.com/account_management/saml/troubleshooting/)
 - Okta: [SAML 2.0 wizard](https://saml-doc.okta.com/SAML_Docs/Configure-SAML-2.0-for-Org2Org.html),
   [OIDC wizard](https://help.okta.com/en-us/content/topics/apps/apps_app_integration_wizard_oidc.htm),
   [about OIDC](https://help.okta.com/en-us/content/topics/apps/apps-about-oidc.htm),

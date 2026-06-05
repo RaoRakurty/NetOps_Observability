@@ -16,7 +16,7 @@ import (
 
 // tunnels.go — vendor-neutral tunnel discovery (step 1: IF-MIB baseline).
 //
-// Mirrors how the established NMS tools (Datadog NDM, LibreNMS, Observium) get
+// Mirrors how the established NMS tools (leading NMS platforms, LibreNMS, Observium) get
 // broad tunnel coverage: walk the *standard* IF-MIB (RFC 2863) and treat each
 // tunnel interface as an interface — ifOperStatus for up/down, ifHC*Octets for
 // traffic — which works across Cisco/Juniper/Fortinet/Nokia/Linux without any

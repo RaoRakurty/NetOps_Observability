@@ -6,7 +6,7 @@ import { navDestinations, NavSection } from "../nav";
 import Icon from "./Icon";
 
 // CommandPalette — a ⌘K / Ctrl-K overlay that turns the omni-search into a
-// keyboard-first command bar (Datadog/Linear/VS Code style). It unifies three
+// keyboard-first command bar (Linear/VS Code style). It unifies three
 // kinds of entries:
 //   · navigation — jump to any nav destination (built from nav.tsx)
 //   · actions    — toggle theme/density, open Copilot

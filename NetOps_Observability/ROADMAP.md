@@ -1,7 +1,7 @@
 # NetOps Observability — Frontend/Product Roadmap
 
 Goal: evolve the UI from a strip of tabs into one cohesive product in the
-spirit of Splunk / Datadog / Zabbix / Grafana — both in **information
+spirit of Splunk / the reference platform / Zabbix / Grafana — both in **information
 architecture** and in **visual polish**.
 
 ## ✅ Phase 1 — Unified shell (done)
@@ -12,11 +12,11 @@ Overview · Search · Analytics · Datasets · Dashboards · Alerts · Reports �
 Topology. See `src/frontend/src/nav.tsx`.
 
 ## ▶ Phase 2 — Visual design system (in progress)
-Adopt **Datadog's whole look & feel** — not just for the topology, but the
+Adopt **the reference platform's whole look & feel** — not just for the topology, but the
 entire shell: dark nav rail + **light content canvas**, dense-but-legible
 type, soft-elevated cards, vibrant accents.
-- **Light canvas + dark rail** (Datadog convention; the earlier all-dark idea
-  was retired after reviewing Datadog references). Brand lockup moved into the
+- **Light canvas + dark rail** (the reference platform convention; the earlier all-dark idea
+  was retired after reviewing the reference platform references). Brand lockup moved into the
   rail; topbar is now omni-search + global time-range + user.
 - **Design tokens** (`styles.css :root`): type scale (`--fs-*`), space
   (`--sp-*`), radius (`--r-*`), rail palette, vivid accent + gradient
@@ -26,7 +26,7 @@ type, soft-elevated cards, vibrant accents.
   row accents, dots; concrete hex in `theme/severity.ts`.
 - A **vivid categorical chart palette** (10 saturated hues) + area-gradient and
   line-series helpers in `theme/charts.ts`, shared across every ECharts view.
-- **Topology** redrawn Datadog "Network Path"-style: role-tiered node cards
+- **Topology** redrawn a "network-path"-style: role-tiered node cards
   health-tinted by worst active alert, latency-colored tunnel edges with `ms`
   labels, click-to-inspect detail panel.
 

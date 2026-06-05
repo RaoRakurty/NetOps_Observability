@@ -4,7 +4,7 @@ import { api, Device, Alert, Tunnel } from "../services/api";
 import { chartBase, hexToRgba } from "../theme/charts";
 import { SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 
-// Topology — a Datadog "Network Path"-style view. Devices are laid out in
+// Topology — a a "network-path"-style view. Devices are laid out in
 // role tiers (core → distribution → access/edge → firewall) per site, drawn as
 // health-colored node cards. Logical links connect adjacent tiers; if overlay
 // tunnels exist they are drawn on top as latency-colored edges with ms labels.
@@ -36,7 +36,7 @@ const HEALTH_COLOR: Record<Health, string> = {
   critical: SEVERITY_COLOR.critical,
 };
 // Faint health wash for the node card fill — gives the map color at a glance
-// (Datadog tints node cards by status rather than leaving them flat white).
+// (the reference platform tints node cards by status rather than leaving them flat white).
 const HEALTH_TINT: Record<Health, string> = {
   ok: "#f0fdf7",
   warning: "#fffaf0",

@@ -246,7 +246,7 @@ setByType((d?.data as any[]) ?? []);
 // add flowType to the effect deps so changing it re-fetches.
 ```
 
-Header (Datadog-style: title left, controls right):
+Header (reference-grade: title left, controls right):
 
 ```tsx
 <div className="card">

@@ -1,6 +1,6 @@
 [
   {
-    "_comment": "Generic — standard MIBs (HOST-RESOURCES, IF-MIB, ENTITY-SENSOR). Applies to every device; vendor profiles below layer platform OIDs on top. Modeled on Datadog NDM / Zabbix generic SNMP templates.",
+    "_comment": "Generic — standard MIBs (HOST-RESOURCES, IF-MIB, ENTITY-SENSOR). Applies to every device; vendor profiles below layer platform OIDs on top. Modeled on leading NMS platforms / Zabbix generic SNMP templates.",
     "name": "generic",
     "enterprise": 0,
     "metrics": [

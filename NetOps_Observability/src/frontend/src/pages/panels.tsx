@@ -98,7 +98,7 @@ function MetricGauge({
   // ring shows a soft indigo "idle" gradient instead of dead grey.
   const pct = v === null ? 0 : Math.min(1, Math.max(0, v / max));
   // Multi-colored arc: a vivid teal→green→amber→orange→rose sweep along the
-  // wheel (Datadog/Grafana style), so the ring reads lively and the fill colour
+  // wheel (Grafana style), so the ring reads lively and the fill colour
   // naturally tracks severity as it grows. Idle (no data) shows soft indigo.
   const progressColor = v === null
     ? { type: "linear", x: 0, y: 0, x2: 1, y2: 1, colorStops: [{ offset: 0, color: "#a5b4fc" }, { offset: 1, color: "#818cf8" }] }
@@ -136,7 +136,7 @@ function MetricGauge({
             min: 0,
             max,
             // Big, full wheel that fills the card. Thick rounded arc on a light
-            // glassy track — the Datadog/Grafana modern-gauge look.
+            // glassy track — the Grafana modern-gauge look.
             center: ["50%", "60%"],
             radius: "118%",
             startAngle: 220,

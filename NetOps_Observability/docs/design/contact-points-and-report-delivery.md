@@ -71,7 +71,7 @@ DeliveryMode  string    // "body" (email the rendered report) | "link" (secure l
 | **1 (backend foundation)** | `contactpoints.go`: tenant-scoped `contactPointStore` (kv-backed, same pattern as the other stores) + CRUD API `GET/POST/PUT/DELETE /api/notify/contact-points` (admin-gated, tenant-scoped via `principalTenant`/`sameTenant`); resolver `resolveContactPoints(ids) → recipients/targets`. Unit tests. |
 | **2 (reports wiring + UI)** | `reportSpec.ContactPoints` + `DeliveryMode`; scheduler resolves contact points and delivers (body mode) via transient sends. Frontend: manage contact points in the Notifications section; report create/edit + "Send now" gain a contact-point multiselect + delivery-mode toggle. |
 | **3 (secure link)** | Signed, short-lived report-view endpoint (`GET /api/reports/view?token=…`, HMAC over report id + tenant + exp, reuse `JWT_SECRET`/jwt.go); link-mode email template; render the saved report read-only behind the token. |
-| **4 (alerts adopt contact points + routing — later)** | Optional notification-routing policies (severity/tenant/tag → contact points) so alerts use the same audiences. The full Grafana/Datadog "contact points + notification policies" model. Sequenced after Reports proves the model. |
+| **4 (alerts adopt contact points + routing — later)** | Optional notification-routing policies (severity/tenant/tag → contact points) so alerts use the same audiences. The full Grafana "contact points + notification policies" model. Sequenced after Reports proves the model. |
 
 ## 5. Tenancy & security
 

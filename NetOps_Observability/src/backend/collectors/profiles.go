@@ -8,7 +8,7 @@ import (
 )
 
 // profiles.go — vendor SNMP metric profiles, the multivendor lever (the same
-// idea as Datadog NDM "profiles"). A profile is a set of OID→metric definitions
+// idea as leading NMS platforms "profiles"). A profile is a set of OID→metric definitions
 // selected by the device's sysObjectID enterprise number. The generic profile
 // (Enterprise 0) applies to every device using standard MIBs; vendor profiles
 // layer vendor-specific health OIDs on top. Built-ins ship in code; an operator

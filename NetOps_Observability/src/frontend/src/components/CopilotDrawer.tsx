@@ -3,7 +3,7 @@ import Copilot from "../tabs/Copilot";
 import { useShell } from "../context/shell";
 import Icon from "./Icon";
 
-// Copilot as a right-side slide-over (Datadog-style), available from any
+// Copilot as a right-side slide-over (reference-grade), available from any
 // section instead of being a separate destination tab.
 export default function CopilotDrawer() {
   const { copilotOpen, setCopilotOpen } = useShell();

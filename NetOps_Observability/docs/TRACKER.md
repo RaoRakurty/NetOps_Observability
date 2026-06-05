@@ -41,7 +41,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 |---|------|--------|
 | 3 | Flows source-type filter (NetFlow/IPFIX/sFlow) on Explore→Flows | `fc1b5ec` |
 | — | **Per-tenant metrics-query scoping** — VM `extra_filters[]` injects the caller's visible-device matchers (device id / hostname / source) into every selector, parser-free; closes a cross-tenant series read | `0a04690` |
-| 6 | **SNMP profile manager** — vendor OID/metric library + Datadog-style UI + catalog loader (173 profiles / 6,436 OIDs) | `93c9c12` / `8104395` / `fd571c1` |
+| 6 | **SNMP profile manager** — vendor OID/metric library + reference-grade UI + catalog loader (173 profiles / 6,436 OIDs) | `93c9c12` / `8104395` / `fd571c1` |
 | 7 | 69 NOC alert rules (availability/errors/saturation/env/routing/capacity/SLA/security/self-health) | `3147014` |
 | 24 | Collectors v2c/v3 split + gNMI/NETCONF session counters + device discovery-source attribution | `dd904f0` |
 | — | SNMPv3 USM engine (stdlib) + per-device v3 polling | `9a362cc` |

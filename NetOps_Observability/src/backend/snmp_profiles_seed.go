@@ -18,7 +18,7 @@ func m(name, oid, typ, unit, desc string) SNMPMetric {
 }
 
 // mc builds a metric carrying its source MIB and functional category, for the
-// richer Datadog-style profile view (MIB + Category columns).
+// richer reference-grade profile view (MIB + Category columns).
 func mc(name, oid, typ, unit, mib, cat string) SNMPMetric {
 	return SNMPMetric{Name: name, OID: oid, Type: typ, Unit: unit, MIB: mib, Category: cat}
 }

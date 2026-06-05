@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, SnmpProfile, SnmpMetric } from "../services/api";
 
-// SNMP Profiles — the vendor OID/metric library (Datadog "device profiles"
+// SNMP Profiles — the vendor OID/metric library (vendor "device profiles"
 // pattern): profiles grouped by category on the left, the selected profile's
 // metric table on the right, with the ability to add custom metrics. Built-in
 // profiles ship verified OIDs; operators extend them or add new vendors.

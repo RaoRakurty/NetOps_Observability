@@ -53,7 +53,7 @@ export type NavSection = {
 };
 
 // The information architecture. Labels/grouping follow the conventions shared
-// by Datadog, Zabbix 7, Splunk Observability and Grafana:
+// by leading observability tools — Zabbix 7, Splunk Observability and Grafana:
 //   Overview · Explore (ad-hoc query) · Dashboards (curated) · Alerts ·
 //   Infrastructure (fleet) · Topology · Reports, with Administration (settings
 //   + raw-tool escape hatches: Grafana/Prometheus/OpenSearch) pinned at the
@@ -71,7 +71,7 @@ export const NAV: NavSection[] = [
     ],
   },
   // Explore — ad-hoc, query-first work across the data types (Grafana
-  // "Explore" / Datadog "Metrics Explorer"), kept distinct from Dashboards.
+  // "Explore" / the reference platform "Metrics Explorer"), kept distinct from Dashboards.
   {
     id: "explore",
     label: "Explore",
@@ -96,7 +96,7 @@ export const NAV: NavSection[] = [
       { id: "anomalies", label: "Anomalies", render: () => <Findings /> },
     ],
   },
-  // Infrastructure — the device fleet + collection health (Datadog
+  // Infrastructure — the device fleet + collection health (the reference platform
   // "Infrastructure", Zabbix "Hosts"/"Data collection").
   {
     id: "infrastructure",
@@ -148,7 +148,7 @@ export const NAV: NavSection[] = [
     footer: true,
   },
   // Administration — config + power-user escape hatches to the raw backend
-  // tools, kept out of the day-to-day monitoring sections (as Grafana/Datadog
+  // tools, kept out of the day-to-day monitoring sections (as Grafana
   // do: backends live under admin/connections, not next to dashboards).
   {
     id: "admin",

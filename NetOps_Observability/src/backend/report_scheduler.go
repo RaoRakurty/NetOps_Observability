@@ -128,7 +128,7 @@ func (s *server) handleReportChannels(w http.ResponseWriter, r *http.Request) {
 type reportSpec struct {
 	// Kind selects the renderer. Operational: alerts_summary | device_inventory |
 	// health_summary. Executive (added for the exec reporting backlog, modelled
-	// on Datadog/Zabbix scheduled reports): wan_utilization | security_threats |
+	// on Zabbix scheduled reports): wan_utilization | security_threats |
 	// device_utilization | latency_jitter_sla.
 	Kind            string `json:"kind"`
 	IntervalMinutes int    `json:"interval_minutes"` // cadence; <=0 disables scheduling
@@ -702,7 +702,7 @@ func (rs *reportScheduler) renderHealth(now time.Time, tenant string) (string, s
 // telemetry and findings from ClickHouse (netops.tunnels, netops.findings) and
 // device resource metrics from VictoriaMetrics. Each renderer degrades to a
 // clear "no data" line if its backend is empty/unreachable, so a report never
-// fails — it reports the gap, mirroring how Datadog/Zabbix scheduled summaries
+// fails — it reports the gap, mirroring how Zabbix scheduled summaries
 // behave.
 
 // renderWANUtilization summarises per-WAN/overlay link load + health from the

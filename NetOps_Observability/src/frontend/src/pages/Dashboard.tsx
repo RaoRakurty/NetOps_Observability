@@ -2,7 +2,7 @@ import { useState } from "react";
 import { PANELS, PANEL_CATEGORIES, PanelDef } from "./panels";
 import { useShell } from "../context/shell";
 
-// Operations Overview — a modular, Datadog/Zabbix-style board. The layout is a
+// Operations Overview — a modular, Zabbix-style board. The layout is a
 // list of panels the user composes themselves: add from the panel library,
 // resize (column span), and remove. Layout persists in localStorage so it
 // survives reloads. Each panel (see panels.tsx) fetches its own live data.

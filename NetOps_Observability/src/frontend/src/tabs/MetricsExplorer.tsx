@@ -3,11 +3,11 @@ import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../services/api";
 import { chartBase, axisStyle, paletteColor } from "../theme/charts";
 
-// Native Metrics Explorer — a Grafana/Datadog-style surface that renders charts
+// Native Metrics Explorer — a Grafana-style surface that renders charts
 // in-app (ECharts) over the Go /api/metrics/* proxy. Instead of leading with
 // Prometheus self-metrics, it presents a curated, categorized catalog of the
 // network telemetry the stack actually collects (SNMP device health, interface
-// throughput, gNMI streaming, collector health) — the way Datadog's Metric
+// throughput, gNMI streaming, collector health) — the way the reference platform's Metric
 // Explorer and Zabbix's Latest Data front the operator with real signals.
 
 type Props = { rangeMinutes?: number };
@@ -17,7 +17,7 @@ type CatalogGroup = { group: string; items: CatalogItem[] };
 
 // Curated catalog. `base` is the underlying metric name used to check whether
 // the series exists in the store (so we never show a dead quick-pick); `q` is
-// the PromQL actually run. Mirrors Datadog's "pick a metric, get a graph".
+// the PromQL actually run. Mirrors the reference platform's "pick a metric, get a graph".
 // Queries aggregate per device (avg/sum/max by device|source) so a chart shows
 // one clean line per device rather than dozens of raw per-core / per-interface
 // series — the difference between a readable graph and noise. unit drives axis
@@ -268,7 +268,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
           follow the global time range.
         </p>
 
-        {/* Datadog-style categorized quick-picks of real telemetry. */}
+        {/* reference-grade categorized quick-picks of real telemetry. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
           {groups.map((g) => (
             <div key={g.group} style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>

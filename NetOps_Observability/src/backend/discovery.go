@@ -82,7 +82,7 @@ func (a *DiscoveryAggregator) Start(ctx context.Context) {
 
 // vendorLoop periodically fills in the vendor of any inventory device that
 // doesn't have one yet, via SNMP sysObjectID detection — the authoritative
-// signal (LibreNMS/Observium/Datadog all lead with it). Devices whose source
+// signal (LibreNMS/Observium all lead with it). Devices whose source
 // already supplies a vendor (Netbox, static YAML) are left untouched.
 func (a *DiscoveryAggregator) vendorLoop(ctx context.Context) {
 	community := os.Getenv("SNMP_COMMUNITY")

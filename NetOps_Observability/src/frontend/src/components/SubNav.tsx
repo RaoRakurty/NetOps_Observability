@@ -7,7 +7,7 @@ type Props = {
 };
 
 // Secondary horizontal nav, shown only for sections with multiple views
-// (Explore, Alerts, Infrastructure, Topology, Administration). Datadog-style.
+// (Explore, Alerts, Infrastructure, Topology, Administration). reference-grade.
 export default function SubNav({ section, activeLeaf }: Props) {
   const { navigate } = useShell();
   if (!section.children) return null;

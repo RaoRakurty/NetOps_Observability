@@ -1,7 +1,7 @@
 // Shared ECharts theming so every graph in the app reads as one product —
 // a vivid, modern categorical palette tuned for the LIGHT canvas (saturated
 // enough to feel alive on white, still AA-legible), in the spirit of
-// Datadog / Grafana. Ordered so adjacent series stay maximally distinct.
+// the reference platform / Grafana. Ordered so adjacent series stay maximally distinct.
 
 export const CHART_PALETTE = [
   "#4f46e5", // indigo (brand)
@@ -69,7 +69,7 @@ export function areaGradient(i = 0) {
   };
 }
 
-// Datadog-style line series defaults: thin smooth stroke, no markers, a soft
+// reference-grade line series defaults: thin smooth stroke, no markers, a soft
 // area wash keyed to the series hue. Spread into any line series object.
 export function lineSeriesDefaults(i = 0) {
   return {

@@ -8,7 +8,7 @@ import (
 )
 
 // vendor.go — authoritative vendor identification via SNMP, the way modern NMS
-// tools (LibreNMS, Observium, Datadog NDM) do it: read sysObjectID (the
+// tools (LibreNMS, Observium, leading NMS platforms) do it: read sysObjectID (the
 // vendor's own device identity) and map its enterprise number to a vendor;
 // fall back to parsing the sysDescr text. Reuses the GET/decoder in poller.go
 // and tunnels.go, so it stays stdlib-only.

@@ -232,7 +232,7 @@ func (s *server) handleLDAPConfig(w http.ResponseWriter, r *http.Request) {
 
 // ldapTestResult is the structured outcome of a test-connection probe. The
 // headline value operators care about is assigned_role: "what role would this
-// user get" (the Okta/Datadog UX pattern).
+// user get" (the Okta UX pattern).
 type ldapTestResult struct {
 	OK           bool     `json:"ok"`
 	Stage        string   `json:"stage"` // config|connect|service_bind|user_search|user_bind|done

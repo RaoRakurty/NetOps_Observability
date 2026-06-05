@@ -27,10 +27,10 @@
   --sev-ok:       #059669;  --sev-ok-bg:       rgba(5, 150, 105, 0.10);
 
   /* ----- Design tokens (Phase 0) — reference these instead of hardcoding ----- */
-  /* Type scale: dense but legible. Datadog/Splunk/Zabbix run a 13–14px body in
+  /* Type scale: dense but legible. Splunk/Zabbix run a 13–14px body in
      their data tables, but lean on WEIGHT + CONTRAST (not size) for hierarchy,
      and give headline numerals real presence. We bias one step larger than
-     Datadog for comfort: 15px body floor, nothing primary below 13px, and big,
+     the reference platform for comfort: 15px body floor, nothing primary below 13px, and big,
      confident stat numerals so KPIs read across the room. */
   --fs-micro: 12px;   /* tiny chips, sort arrows — never body copy */
   --fs-meta:  13px;   /* secondary text, metadata, table headers */
@@ -97,7 +97,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; font-weight: 700; line-height: 1.2; }
   font-variant-numeric: tabular-nums; letter-spacing: -0.02em; font-weight: 700;
 }
 /* Section-label used by panel/card headers — one consistent treatment.
-   Datadog-style: sentence-case, medium weight, foreground (not shouty caps). */
+   reference-grade: sentence-case, medium weight, foreground (not shouty caps). */
 .card > h2, .panel > h3 {
   font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0;
   text-transform: none; color: var(--fg);
@@ -209,7 +209,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 .menu-pop button:hover { background: var(--hover); }
 
-/* ----- Sidebar: dark full-height nav rail (Datadog-style) ----- */
+/* ----- Sidebar: dark full-height nav rail (reference-grade) ----- */
 .sidebar {
   grid-area: sidebar;
   display: flex; flex-direction: column; justify-content: space-between;
@@ -311,7 +311,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .drawer-close:hover { color: var(--fg); }
 .drawer-body { flex: 1; overflow: auto; padding: 16px; }
 
-/* ----- Overview dashboard — Datadog-style panel grid, clean flat bg ----- */
+/* ----- Overview dashboard — reference-grade panel grid, clean flat bg ----- */
 .ov-head {
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--sp-4); flex-wrap: wrap; margin-bottom: var(--sp-2);
@@ -449,7 +449,7 @@ tr[class*="sevrow-"]:hover { background: var(--hover); }
 
 /* ===========================================================================
    KPI / table kit — big stat cards, heat-shaded cells, sortable headers.
-   Datadog-style: huge severity-colored numerals + conditional cell tints.
+   reference-grade: huge severity-colored numerals + conditional cell tints.
    =========================================================================== */
 
 /* ----- Stat cards: a label over a large status-colored numeral ----- */

@@ -1,7 +1,7 @@
 # Production-grade bidirectional ITSM sync — design enhancement
 
 Status: **DESIGN.** Upgrades the integration platform (`itsm-integration-platform.md`)
-to Datadog↔ServiceNow maturity. **Enhances, does not replace** — most of the spine
+to the reference platform↔ServiceNow maturity. **Enhances, does not replace** — most of the spine
 is already built and live-proven (P1 pure core `5a046a6`, P2a persistence `f1e61b6`,
 P2b inbound→incident `ad998d6`). This doc delivers the 7 requested sections, marks
 **[DONE]** vs **[PLAN]**, and is explicit about the production hardening the current
@@ -304,5 +304,5 @@ resolved-in-SNOW with no webhook → reconcile detected drift → incident conve
    integration counters. See §9.
 6. **Secrets at rest** via #17.
 
-These are the gap between the working, live-proven P2b and Datadog-grade maturity —
+These are the gap between the working, live-proven P2b and the reference platform-grade maturity —
 each is additive and rides the existing primitives.

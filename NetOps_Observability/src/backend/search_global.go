@@ -8,7 +8,7 @@ import (
 
 // Global omni-search — resolves a free-text query to jump targets across the
 // product (devices, active alerts, saved objects) plus a log-search handoff.
-// Powers the top-bar search dropdown so it behaves like Splunk/Datadog's
+// Powers the top-bar search dropdown so it behaves like Splunk's
 // global search rather than only running a log query.
 
 type globalResult struct {
