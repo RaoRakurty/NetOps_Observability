@@ -225,7 +225,7 @@ export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) 
                   <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Compact</button>
                 </span>
               </div>
-              <button onClick={() => { setMenuOpen(false); navigate("settings"); }}>Settings</button>
+              <button onClick={() => { setMenuOpen(false); navigate("admin/settings"); }}>Settings</button>
               <button onClick={onLogout}>Sign out</button>
             </div>
           )}

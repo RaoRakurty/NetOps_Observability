@@ -219,7 +219,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                   <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Compact</button>
                 </span>
               </div>
-              <button onClick={() => { setAcctOpen(false); navigate("settings"); }}>Settings</button>
+              <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
               <button onClick={onLogout}>Sign out</button>
             </div>
           )}
