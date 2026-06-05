@@ -13,7 +13,7 @@
 // gated to what the caller may write (system/global = platform owner only); the
 // backend enforces the same boundary independently.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   PolicyCatalog,
@@ -322,6 +322,60 @@ function SettingRow({
   );
 }
 
+// ---- editor KPI strip + loading skeleton -----------------------------------
+
+function PolicyStats({
+  stats,
+  scope,
+}: {
+  stats: { total: number; set: number; inherited: number; locked: number };
+  scope: PolicyScope;
+}) {
+  const items = [
+    { label: "Controls", value: stats.total, tone: "" },
+    { label: `Set at ${SCOPE_LABEL[scope]}`, value: stats.set, tone: stats.set ? "accent" : "" },
+    { label: "Inherited", value: stats.inherited, tone: "" },
+    { label: "Locked", value: stats.locked, tone: stats.locked ? "warn" : "" },
+  ];
+  return (
+    <div className="pol-stats">
+      {items.map((it) => (
+        <div key={it.label} className={`pol-stat ${it.tone}`}>
+          <span className="pol-stat-num mono">{it.value}</span>
+          <span className="pol-stat-label">{it.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EditorSkeleton() {
+  return (
+    <div className="pol-grid" aria-busy="true" aria-label="Loading effective policy">
+      {[0, 1].map((c) => (
+        <section key={c} className="card pol-card">
+          <header className="pol-card-head">
+            <span className="pol-skeleton" style={{ width: 120, height: 12 }} />
+          </header>
+          <div className="pol-rows">
+            {[0, 1, 2].map((r) => (
+              <div key={r} className="pol-row">
+                <div className="pol-row-main">
+                  <span className="pol-skeleton" style={{ width: "55%", height: 13 }} />
+                  <span className="pol-skeleton" style={{ width: "80%", height: 11, marginTop: 8 }} />
+                </div>
+                <div className="pol-row-ctl">
+                  <span className="pol-skeleton" style={{ width: 84, height: 28 }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 // ---- editor view -----------------------------------------------------------
 
 function PolicyEditor({
@@ -387,12 +441,24 @@ function PolicyEditor({
   };
 
   if (err) return <div className="card pol-note bad">{err}</div>;
-  if (loading) return <div className="card pol-note">Loading effective policy…</div>;
+  if (loading) return <EditorSkeleton />;
 
   const overrides = doc?.overrides ?? {};
+  const allSettings = catalog.domains.flatMap((d) => d.settings);
+  const stats = {
+    total: allSettings.length,
+    set: allSettings.filter((s) => overrides[s.key]).length,
+    inherited: allSettings.filter((s) => {
+      const r = resolved[s.key];
+      return r && !r.from_default && r.source !== scope;
+    }).length,
+    locked: allSettings.filter((s) => resolved[s.key]?.locked).length,
+  };
   return (
-    <div className="pol-grid">
-      {catalog.domains.map((dm) => {
+    <>
+      <PolicyStats stats={stats} scope={scope} />
+      <div className="pol-grid">
+        {catalog.domains.map((dm) => {
         const settings = dm.settings.filter((s) => (tier === "all" ? true : s.tier === "basic"));
         if (settings.length === 0) return null;
         return (
@@ -421,8 +487,9 @@ function PolicyEditor({
             </div>
           </section>
         );
-      })}
-    </div>
+        })}
+      </div>
+    </>
   );
 }
 
@@ -563,9 +630,11 @@ export default function SecurityPolicy() {
   const [err, setErr] = useState<string | null>(null);
   const [mode, setMode] = useState<"editor" | "simulator">("editor");
 
-  // Editor scope target.
-  const [scope, setScope] = useState<PolicyScope>(platform ? "system" : "tenant");
-  const [tenant, setTenant] = useState(platform ? "" : user?.tenant_id ?? "");
+  // Editor scope target. Default to System (populated immediately, no selector
+  // needed); a one-time effect rehomes a scoped admin to its own tenant once
+  // auth resolves (useAuth is async, so the initial render has no user yet).
+  const [scope, setScope] = useState<PolicyScope>("system");
+  const [tenant, setTenant] = useState("");
   const [name, setName] = useState(""); // role id / username for role|user scopes
   const [tier, setTier] = useState<"all" | "basic">("all");
 
@@ -573,10 +642,15 @@ export default function SecurityPolicy() {
     api.policyCatalog().then(setCatalog).catch((e) => setErr((e as Error).message));
   }, []);
 
-  // Keep a scoped admin pinned to its own tenant.
+  const didInit = useRef(false);
   useEffect(() => {
-    if (!platform && user?.tenant_id) setTenant(user.tenant_id);
-  }, [platform, user]);
+    if (!user || didInit.current) return;
+    didInit.current = true;
+    if (!user.platform_admin && user.tenant_id) {
+      setScope("tenant");
+      setTenant(user.tenant_id);
+    }
+  }, [user]);
 
   const ref_: PolicyRef = useMemo(() => {
     switch (scope) {
@@ -648,20 +722,16 @@ export default function SecurityPolicy() {
               <div className="pol-target-field">
                 <label className="mini-meta">Scope</label>
                 <div className="pol-seg" role="tablist" aria-label="Scope">
-                  {SCOPE_ORDER.map((sc) => {
-                    const disabled = sc === "system" && !platform;
-                    return (
-                      <button
-                        key={sc}
-                        disabled={disabled}
-                        title={disabled ? "Only the platform owner edits the system baseline" : ""}
-                        className={scope === sc ? "active" : ""}
-                        onClick={() => setScope(sc)}
-                      >
-                        {SCOPE_LABEL[sc]}
-                      </button>
-                    );
-                  })}
+                  {SCOPE_ORDER.map((sc) => (
+                    <button
+                      key={sc}
+                      title={sc === "system" && !platform ? "System baseline — read-only (platform owner edits it)" : ""}
+                      className={scope === sc ? "active" : ""}
+                      onClick={() => setScope(sc)}
+                    >
+                      {SCOPE_LABEL[sc]}
+                    </button>
+                  ))}
                 </div>
               </div>
               {needsTenant && (
