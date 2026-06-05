@@ -111,6 +111,37 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="6" y1="6" x2="18" y2="18" />
     </>
   ),
+  // Account / session + footer-utility icons (rail bottom cluster).
+  user: (
+    <>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 3.6-6 8-6s8 2 8 6" />
+    </>
+  ),
+  help: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </>
+  ),
+  support: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="3.5" />
+      <line x1="5" y1="5" x2="9.5" y2="9.5" />
+      <line x1="14.5" y1="14.5" x2="19" y2="19" />
+      <line x1="19" y1="5" x2="14.5" y2="9.5" />
+      <line x1="9.5" y1="14.5" x2="5" y2="19" />
+    </>
+  ),
+  logout: (
+    <>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size = 18, className }: Props) {

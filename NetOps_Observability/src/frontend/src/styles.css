@@ -118,6 +118,108 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 .shell.collapsed { --sidebar-w: 56px; }
 
+/* =================================================================
+   Shell v2 (#24, flagged): slim 60px icon rail + hover flyout nav.
+   Additive — only applies under .shell-v2; the default shell/Sidebar
+   is untouched. The flyout is position:fixed so the page never reflows.
+   ================================================================= */
+.shell.shell-v2 { --sidebar-w: 212px; }
+
+.rail {
+  grid-area: sidebar;
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, var(--rail-bg) 0%, var(--rail-bg-2) 100%);
+  border-right: 1px solid var(--rail-border);
+  padding: var(--sp-2) 0; overflow: visible;
+}
+.rail-main { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-1) 8px; flex: 1; overflow-y: auto; overflow-x: visible; }
+
+/* Brand lockup — icon mark + wordmark. */
+.rail-brand {
+  display: flex; align-items: center; gap: var(--sp-2);
+  background: transparent; border: 0; cursor: pointer; color: var(--rail-fg);
+  margin: 0 8px var(--sp-2); padding: 2px 8px var(--sp-3);
+  border-bottom: 1px solid var(--rail-border);
+}
+.rail-brand-mark { color: var(--rail-accent); display: inline-flex; }
+.rail-brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: 0.01em; }
+
+/* Rail item — icon BEFORE label, horizontal, small font (Datadog-style). */
+.rail-item {
+  position: relative;
+  display: flex; flex-direction: row; align-items: center; gap: 10px;
+  width: 100%; min-height: 34px; padding: 6px 10px;
+  background: transparent; border: 0; border-radius: var(--r-2);
+  color: var(--rail-fg-muted); cursor: pointer; text-align: left;
+}
+.rail-item:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.rail-item:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
+.rail-item.active { color: var(--rail-active-fg); background: color-mix(in srgb, var(--mod, #818cf8) 20%, transparent); }
+.rail-item.active::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--mod, var(--rail-accent));
+}
+.rail-item.active .rail-icon { color: var(--mod, var(--rail-accent)); }
+/* Icon sized to sit with the 13px label (16px box, centered). */
+.rail-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; flex-shrink: 0; }
+.rail-label {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Utility cluster at the foot — Support · Help · Account (replaces top-right). */
+.rail-util {
+  display: flex; flex-direction: column; gap: 2px; padding: var(--sp-1) 8px;
+  margin-top: var(--sp-1); border-top: 1px solid var(--rail-border);
+}
+.rail-util-item {
+  display: flex; flex-direction: row; align-items: center; gap: 10px;
+  width: 100%; min-height: 32px; padding: 5px 10px;
+  background: transparent; border: 0; border-radius: var(--r-2);
+  color: var(--rail-fg-muted); cursor: pointer; text-align: left;
+  font-size: 13px; font-weight: 500;
+}
+.rail-util-item:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.rail-util-item:focus-visible { outline: 2px solid var(--rail-accent); outline-offset: -2px; }
+.rail-account { position: relative; }
+.rail-account-btn { gap: 8px; }
+.rail-account-btn .avatar {
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--rail-active-bg); color: var(--rail-fg);
+  font-size: 11px; font-weight: 700;
+}
+.rail-account-id { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.rail-account-name { font-size: 12.5px; font-weight: 600; color: var(--rail-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-account-role { font-size: 10.5px; color: var(--rail-fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-account-pop { position: absolute; left: 6px; right: 6px; bottom: calc(100% + 6px); z-index: 75; }
+
+/* Flyout overlay */
+.nav-flyout {
+  position: fixed; left: calc(var(--sidebar-w) + 4px); z-index: 70;
+  min-width: 240px; max-height: 72vh; overflow-y: auto;
+  background: var(--rail-bg-2); border: 1px solid var(--rail-border);
+  border-radius: var(--r-3); box-shadow: var(--shadow-pop); padding: var(--sp-2);
+  animation: flyin 0.12s ease-out;
+}
+@keyframes flyin { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .nav-flyout { animation: none; } }
+.nav-flyout-head {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--rail-fg-muted); padding: 4px 8px 8px; margin-bottom: var(--sp-1);
+  border-bottom: 2px solid var(--mod, var(--rail-accent));
+}
+.nav-flyout-body { display: flex; flex-direction: column; gap: 2px; }
+.nav-flyout-item {
+  display: flex; align-items: center; height: 30px; padding: 0 10px;
+  background: transparent; border: 0; border-radius: var(--r-1);
+  color: var(--rail-fg); font-size: 13px; font-weight: 500; text-align: left;
+  white-space: nowrap; cursor: pointer;
+}
+.nav-flyout-item:hover { background: var(--rail-hover); }
+.nav-flyout-item:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
+.nav-flyout-item.active { background: color-mix(in srgb, var(--mod, #818cf8) 28%, transparent); color: #fff; }
+
 /* ----- Top bar ----- */
 .topbar {
   grid-area: topbar;

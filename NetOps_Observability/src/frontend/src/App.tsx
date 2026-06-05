@@ -6,6 +6,7 @@ import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
 import { resolveRoute, filteredNav } from "./nav";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
+import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import CopilotDrawer from "./components/CopilotDrawer";
 import CommandPalette from "./components/CommandPalette";
@@ -35,6 +36,26 @@ export default function App() {
   const [query, setQuery] = useState<string>("*");
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+
+  // Shell-v2 (#24): the new slim icon-rail + hover-flyout nav, behind a flag so
+  // the current shell stays the default. `?shell=v2` enables it and is sticky;
+  // `?shell=v1` turns it back off — the runtime rollback.
+  const shellV2 = useMemo(() => {
+    try {
+      const q = new URLSearchParams(location.search).get("shell");
+      if (q === "v2") {
+        localStorage.setItem("shellV2", "1");
+        return true;
+      }
+      if (q === "v1") {
+        localStorage.removeItem("shellV2");
+        return false;
+      }
+      return localStorage.getItem("shellV2") === "1";
+    } catch {
+      return false;
+    }
+  }, []);
 
   useEffect(() => {
     const onHash = () => setHash(location.hash || "#/overview");
@@ -92,15 +113,19 @@ export default function App() {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className={`shell${collapsed ? " collapsed" : ""}`}>
-        <TopBar health={health} user={user} onLogout={logout} />
-        <Sidebar
-          nav={nav}
-          activeSection={section.id}
-          activeLeaf={leaf?.id}
-          collapsed={collapsed}
-          onToggle={() => setCollapsed((c) => !c)}
-        />
+      <div className={`shell${collapsed ? " collapsed" : ""}${shellV2 ? " shell-v2" : ""}`}>
+        <TopBar health={health} user={user} onLogout={logout} hideUserMenu={shellV2} />
+        {shellV2 ? (
+          <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} />
+        ) : (
+          <Sidebar
+            nav={nav}
+            activeSection={section.id}
+            activeLeaf={leaf?.id}
+            collapsed={collapsed}
+            onToggle={() => setCollapsed((c) => !c)}
+          />
+        )}
         <main className="main">
           <div className="main-head">
             <div className="crumbs">

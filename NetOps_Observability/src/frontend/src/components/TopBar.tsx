@@ -9,6 +9,9 @@ type Props = {
   health: Health | null;
   user: AuthUser;
   onLogout: () => void;
+  // Shell v2 relocates the account/user menu into the left rail's utility
+  // cluster, so the top-right copy is suppressed to avoid duplication.
+  hideUserMenu?: boolean;
 };
 
 const KIND_ICON: Record<GlobalResultKind, string> = {
@@ -29,7 +32,7 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // The omni-search shows a live results dropdown (devices, alerts, saved
 // objects) backed by /api/search/global, plus a raw log-search handoff —
 // so it behaves like Splunk's global search, not just a log query.
-export default function TopBar({ health, user, onLogout }: Props) {
+export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
   const { theme, setTheme, density, setDensity } = usePrefs();
   const [draft, setDraft] = useState(query);
@@ -192,6 +195,7 @@ export default function TopBar({ health, user, onLogout }: Props) {
           {ok ? "Healthy" : "Disconnected"}
         </span>
 
+        {!hideUserMenu && (
         <div className="user-menu" ref={menuRef}>
           <button className="user-btn" onClick={() => setMenuOpen((o) => !o)}>
             <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
@@ -223,6 +227,7 @@ export default function TopBar({ health, user, onLogout }: Props) {
             </div>
           )}
         </div>
+        )}
       </div>
     </header>
   );

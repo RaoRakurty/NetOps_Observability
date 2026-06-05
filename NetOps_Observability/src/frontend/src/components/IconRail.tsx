@@ -1,0 +1,187 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { NavSection, routeFor } from "../nav";
+import { useShell } from "../context/shell";
+import { usePrefs } from "../theme/prefs";
+import { AuthUser } from "../services/api";
+import { BRAND } from "../brand";
+import Icon from "./Icon";
+import NavFlyout from "./NavFlyout";
+
+// Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
+// only tints the active indicator + the flyout header; severity colours stay
+// separate and sacred. Falls back to periwinkle for any unmapped section.
+const MOD_HUE: Record<string, string> = {
+  overview: "#2D6BE0", // Pulse — cobalt
+  explore: "#22B8CF", // Explore/Metrics — cyan
+  alerts: "#EC4899", // Monitors/Alerts — pink
+  infrastructure: "#14B8A6", // Fleet — teal
+  topology: "#3B9EFF", // Network — azure
+  reports: "#818CF8", // Reports — periwinkle
+  stack: "#06B6D4", // Stack — bright cyan
+  copilot: "#8B5CF6", // Copilot — violet
+  admin: "#64748B", // Admin — slate
+};
+const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
+
+type Props = {
+  nav: NavSection[];
+  activeSection: string;
+  activeLeaf?: string;
+  user: AuthUser;
+  onLogout: () => void;
+};
+
+type OpenState = { id: string; top: number } | null;
+
+// IconRail — the persistent labeled rail (icon before name, small font). Hovering
+// or focusing a section opens a flyout of its children to the right; the rail
+// never collapses and never reflows (the flyout is a fixed overlay). Click
+// navigates. All sections render in order (Administration is no longer pinned to
+// the very bottom), and a utility cluster (Account · Support · Help) sits at the
+// foot — replacing the top-right user menu.
+export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout }: Props) {
+  const { navigate, setCopilotOpen, copilotOpen } = useShell();
+  const { theme, setTheme, density, setDensity } = usePrefs();
+  const [open, setOpen] = useState<OpenState>(null);
+  const [acctOpen, setAcctOpen] = useState(false);
+  const openTimer = useRef<number | undefined>(undefined);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const acctRef = useRef<HTMLDivElement | null>(null);
+
+  // Hover-intent: open after 80ms, close after a 200ms grace so a diagonal
+  // cursor path into the flyout doesn't dismiss it ("safe triangle").
+  const scheduleOpen = useCallback((id: string, el: HTMLElement) => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    const top = el.getBoundingClientRect().top;
+    openTimer.current = window.setTimeout(() => setOpen({ id, top }), 80);
+  }, []);
+  const scheduleClose = useCallback(() => {
+    window.clearTimeout(openTimer.current);
+    closeTimer.current = window.setTimeout(() => setOpen(null), 200);
+  }, []);
+  const cancelClose = useCallback(() => window.clearTimeout(closeTimer.current), []);
+
+  // Close the account menu on outside click.
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (acctRef.current && !acctRef.current.contains(e.target as Node)) setAcctOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const railItem = (s: NavSection) => {
+    const isCopilot = s.action === "copilot";
+    const active = isCopilot ? copilotOpen : s.id === activeSection;
+    const onActivate = () => (isCopilot ? setCopilotOpen(!copilotOpen) : navigate(routeFor(s)));
+    return (
+      <button
+        key={s.id}
+        type="button"
+        className={`rail-item${active ? " active" : ""}`}
+        style={{ ["--mod" as string]: hueFor(s.id) } as React.CSSProperties}
+        aria-current={active ? "page" : undefined}
+        onClick={onActivate}
+        onMouseEnter={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
+        onFocus={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
+        onMouseLeave={scheduleClose}
+        onBlur={scheduleClose}
+      >
+        <span className="rail-icon">
+          <Icon name={s.icon} size={16} />
+        </span>
+        <span className="rail-label">{s.label}</span>
+      </button>
+    );
+  };
+
+  const openSection = open ? nav.find((s) => s.id === open.id) ?? null : null;
+
+  return (
+    <aside className="rail">
+      <button
+        className="rail-brand"
+        onClick={() => navigate(routeFor(nav[0]))}
+        title={BRAND}
+        aria-label={BRAND}
+      >
+        <span className="rail-brand-mark">
+          <Icon name="logo" size={22} />
+        </span>
+        <span className="rail-brand-name">{BRAND}</span>
+      </button>
+
+      {/* All sections in order — Administration is no longer pinned to the foot. */}
+      <nav className="rail-main" aria-label="Primary">
+        {nav.map(railItem)}
+      </nav>
+
+      {/* Utility cluster — moved out of the top-right corner. */}
+      <div className="rail-util">
+        <button className="rail-util-item" type="button" title="Support">
+          <span className="rail-icon"><Icon name="support" size={16} /></span>
+          <span className="rail-label">Support</span>
+        </button>
+        <button className="rail-util-item" type="button" title="Help">
+          <span className="rail-icon"><Icon name="help" size={16} /></span>
+          <span className="rail-label">Help</span>
+        </button>
+
+        <div className="rail-account" ref={acctRef}>
+          <button
+            className="rail-util-item rail-account-btn"
+            type="button"
+            onClick={() => setAcctOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={acctOpen}
+          >
+            <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+            <span className="rail-account-id">
+              <span className="rail-account-name">{user.username}</span>
+              <span className="rail-account-role">{user.role}</span>
+            </span>
+          </button>
+          {acctOpen && (
+            <div className="menu-pop rail-account-pop" role="menu">
+              <div className="menu-head">
+                {user.username}
+                <span style={{ color: "var(--muted)" }}> · {user.role}</span>
+              </div>
+              <div className="pref-row">
+                <span className="pref-label">Theme</span>
+                <span className="pref-seg">
+                  <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
+                  <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
+                </span>
+              </div>
+              <div className="pref-row">
+                <span className="pref-label">Density</span>
+                <span className="pref-seg">
+                  <button className={density === "comfortable" ? "on" : ""} onClick={() => setDensity("comfortable")}>Cozy</button>
+                  <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Compact</button>
+                </span>
+              </div>
+              <button onClick={() => { setAcctOpen(false); navigate("settings"); }}>Settings</button>
+              <button onClick={onLogout}>Sign out</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {openSection && open && (
+        <NavFlyout
+          section={openSection}
+          top={open.top}
+          hue={hueFor(openSection.id)}
+          activeSection={activeSection}
+          activeLeaf={activeLeaf}
+          onEnter={cancelClose}
+          onLeave={scheduleClose}
+          onNavigate={navigate}
+          onClose={() => setOpen(null)}
+        />
+      )}
+    </aside>
+  );
+}
