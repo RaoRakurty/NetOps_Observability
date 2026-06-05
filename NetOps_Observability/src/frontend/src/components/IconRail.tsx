@@ -192,6 +192,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                 <span className="pref-seg">
                   <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
                   <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
+                  <button className={theme === "oled" ? "on" : ""} onClick={() => setTheme("oled")}>OLED</button>
                 </span>
               </div>
               <div className="pref-row">

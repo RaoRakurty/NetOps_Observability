@@ -78,6 +78,71 @@
   --shadow-pop: 0 12px 32px rgba(17, 24, 39, 0.16);
 }
 
+/* ===========================================================================
+   SEMANTIC TOKEN ARCHITECTURE  (redesign #45 / ui-#24 — spec §8/§9/§9.1)
+   ---------------------------------------------------------------------------
+   Single source of truth for the cockpit's surfaces, text ramp, severity, viz
+   ramp, geometry and per-module identity. ADDITIVE + role-based: components
+   reference a ROLE (--surface, --fg-muted, --ok), never a hex. These names sit
+   alongside the legacy v1 tokens above (--panel/--good/--bad) so the default
+   (v1) shell is untouched; new shell-v2 work consumes these. Reconciling the
+   legacy aliases onto this set happens when v2 graduates to default.
+
+   Three themes drive surfaces + the text ramp via [data-theme] on <html>:
+   light (default, below), dark, oled. Elevation is expressed by LIGHTNESS
+   steps, not drop shadows — shadows are reserved for overlays/menus.
+   Severity (--ok/--warn/--crit) is SACRED: only ever health state, and it
+   overrides any module hue. =========================================== */
+:root {
+  /* — surfaces (light baseline; elevation by lightness) — */
+  --surface:      #ffffff;
+  --surface-2:    #f1f3f7;
+  --overlay:      #ffffff;
+  --border:       #e3e7ef;
+  --border-strong:#cdd4e0;
+
+  /* — neutral text ramp (tuned ≥4.5:1 body / ≥3:1 large on --surface) — */
+  --fg-muted:  #5a6478;
+  --fg-subtle: #8a93a6;
+
+  /* — severity (sacred; --warn lives in the legacy block above and is reused) — */
+  --ok:   #1a7f37;
+  --crit: #cf222e;
+  --info: #0969da;
+  --ack:  #6639ba;
+
+  /* — visualization ramp (color-blind-aware; series order) — */
+  --viz-1:#2563eb; --viz-2:#0e9aa0; --viz-3:#b8860b;
+  --viz-4:#9333ea; --viz-5:#1a9850; --viz-6:#dc5b3c;
+
+  /* — geometry (compact-grade; density variant trims --row-h) — */
+  --radius-sm: 4px; --radius-md: 6px;
+  --row-h: 28px; --toolbar-h: 32px; --rail-w: 60px;
+
+  /* — type families (spec §7) — */
+  --font-ui:   "Inter", "Geist", -apple-system, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* — per-module / per-category color taxonomy (spec §9.1) —
+     Each module carries its own accent hue, grouped into 4 zone families so the
+     rail reads as 4 categories at a glance. A view sets `--accent: var(--mod-x)`
+     on its module root and generic components inherit the identity. Hues are
+     dark-tuned (they render on the always-dark rail in every theme) and
+     deliberately avoid the red/amber/green severity bands. */
+  --mod-pulse:        #2d6be0;  /* 1·Command  — cobalt   */
+  --mod-copilot:      #8b5cf6;  /* 1·Command  — violet   */
+  --mod-fleet:        #14b8a6;  /* 2·Observe  — teal     */
+  --mod-network:      #3b9eff;  /* 2·Observe  — azure (marquee) */
+  --mod-metrics:      #22b8cf;  /* 2·Observe  — cyan     */
+  --mod-logs:         #6366f1;  /* 2·Observe  — indigo   */
+  --mod-monitors:     #ec4899;  /* 3·Respond  — pink     */
+  --mod-incidents:    #a855f7;  /* 3·Respond  — plum     */
+  --mod-reports:      #818cf8;  /* 3·Respond  — periwinkle */
+  --mod-integrations: #5b8db8;  /* 4·Platform — steel-blue */
+  --mod-stack:        #06b6d4;  /* 4·Platform — bright cyan (owner) */
+  --mod-admin:        #64748b;  /* 4·Platform — slate    */
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -995,8 +1060,46 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
+/* Semantic token set (redesign #45) remapped for dark + oled. Surfaces step up
+   by lightness (--bg < --surface < --surface-2 < --overlay); the text ramp and
+   severity hues are tuned for dark contrast. oled shares this dark ramp and
+   only swaps the deepest surfaces to true-black for OLED NOC walls. */
+:root[data-theme="dark"],
+:root[data-theme="oled"] {
+  color-scheme: dark;
+  --surface:      #12161f;
+  --surface-2:    #181d28;
+  --overlay:      #1e2430;
+  --border:       #232a38;
+  --border-strong:#2e3850;
+  --fg-muted:  #9aa4b8;
+  --fg-subtle: #6b7488;
+  --ok:   #2ea043;
+  --crit: #f85149;
+  --info: #3b82f6;
+  --ack:  #8957e5;
+  --viz-1:#4c8dff; --viz-2:#3fb6b2; --viz-3:#e2a03f;
+  --viz-4:#c76fe0; --viz-5:#6fcf97; --viz-6:#f2785c;
+}
+:root[data-theme="oled"] {
+  /* true-black canvas; legacy v1 surfaces follow so both shells read OLED */
+  --bg: #000000;
+  --panel: #0a0d12;       --panel-solid: #0a0d12;
+  --panel-border: #1b2230;
+  --fg: #e7ebf3;          --muted: #9aa6bf;
+  --hover: rgba(255, 255, 255, 0.05);
+  --surface:   #0a0d12;
+  --surface-2: #10141c;
+  --overlay:   #161b25;
+  --border:    #1b2230;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.55);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.60);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.70);
+}
+
 /* A couple of light-mode hardcodes that need a dark counterpart. */
-:root[data-theme="dark"] th { border-bottom-color: var(--panel-border); }
+:root[data-theme="dark"] th,
+:root[data-theme="oled"] th { border-bottom-color: var(--panel-border); }
 
 /* Compact density: tighten the body font and the table/card rhythm so more
    rows fit on screen, without touching the comfortable defaults. */

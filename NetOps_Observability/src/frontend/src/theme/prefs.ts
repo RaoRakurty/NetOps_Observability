@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 // CSS tokens swap with a single attribute (no per-component theming). See the
 // [data-theme="dark"] / [data-density="compact"] blocks in styles.css.
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "oled";
 export type Density = "comfortable" | "compact";
 
 const THEME_KEY = "netops.theme";
@@ -13,7 +13,7 @@ const DENSITY_KEY = "netops.density";
 
 function readTheme(): Theme {
   const v = localStorage.getItem(THEME_KEY);
-  return v === "dark" ? "dark" : "light";
+  return v === "dark" || v === "oled" ? v : "light";
 }
 
 function readDensity(): Density {

@@ -118,7 +118,7 @@ function MetricGauge({
   // Theme-aware glassy track: a soft cool gradient on light, deep slate on dark
   // (the old flat #eef1f6 looked wrong against the dark canvas). A faint idle
   // ring is always drawn so the wheel never reads as empty grey.
-  const dark = theme === "dark";
+  const dark = theme !== "light"; // dark + oled both use the dark track
   const trackColor = {
     type: "linear", x: 0, y: 0, x2: 0, y2: 1,
     colorStops: dark
