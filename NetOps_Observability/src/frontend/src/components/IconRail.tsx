@@ -59,7 +59,19 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
   const [acctOpen, setAcctOpen] = useState(false);
   const openTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
+  const acctCloseTimer = useRef<number | undefined>(undefined);
   const acctRef = useRef<HTMLDivElement | null>(null);
+
+  // Account/preferences opens on hover-intent like the rail items (flyout to the
+  // right), with a close grace so the diagonal path into it doesn't dismiss.
+  const openAcct = useCallback(() => {
+    window.clearTimeout(acctCloseTimer.current);
+    setOpen(null); // don't overlap with a nav flyout
+    setAcctOpen(true);
+  }, []);
+  const closeAcct = useCallback(() => {
+    acctCloseTimer.current = window.setTimeout(() => setAcctOpen(false), 200);
+  }, []);
 
   // Hover-intent: open after 80ms, close after a 200ms grace so a diagonal
   // cursor path into the flyout doesn't dismiss it ("safe triangle").
@@ -167,7 +179,12 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           </div>
         </div>
 
-        <div className="rail-foot-zone rail-account" ref={acctRef}>
+        <div
+          className="rail-foot-zone rail-account"
+          ref={acctRef}
+          onMouseEnter={openAcct}
+          onMouseLeave={closeAcct}
+        >
           <button
             className="rail-util-item rail-account-btn"
             type="button"
