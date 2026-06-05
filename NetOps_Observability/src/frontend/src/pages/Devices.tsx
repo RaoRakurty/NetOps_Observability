@@ -3,6 +3,9 @@ import { api, Device, Alert } from "../services/api";
 import { takeDrill } from "../theme/drill";
 import DeviceDetail from "./DeviceDetail";
 import DeviceTerminal from "./DeviceTerminal";
+import Wizard from "../components/Wizard";
+
+const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
 // Device health is 3-state (#20 follow-up). Thresholds are heartbeat ages on
 // last_seen; "amber" also folds in active alerts so a reachable-but-sick device
@@ -74,7 +77,6 @@ export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [sshEnabled, setSshEnabled] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [draft, setDraft] = useState({ id: "", name: "", address: "", vendor: "" });
@@ -106,20 +108,12 @@ export default function Devices() {
     return () => clearInterval(t);
   }, []);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draft.id || !draft.address) return;
-    setBusy(true);
-    try {
-      await api.upsertDevice(draft);
-      setDraft({ id: "", name: "", address: "", vendor: "" });
-      setShowAdd(false);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+  const addDevice = async () => {
+    if (!draft.id.trim() || !draft.address.trim()) return;
+    await api.upsertDevice(draft);
+    setDraft({ id: "", name: "", address: "", vendor: "" });
+    setShowAdd(false);
+    await load();
   };
 
   const remove = async (id: string) => {
@@ -195,13 +189,51 @@ export default function Devices() {
         </div>
 
         {showAdd && (
-          <form onSubmit={submit} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <input placeholder="id" value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
-            <input placeholder="name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-            <input placeholder="address" value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
-            <input placeholder="vendor (optional)" value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} />
-            <button className="btn accent" disabled={busy} type="submit">{busy ? "Saving…" : "Save"}</button>
-          </form>
+          <div style={{ marginTop: 12, borderTop: "1px solid var(--panel-border, #e2e6ee)", paddingTop: 12 }}>
+            <Wizard
+              finishLabel="Add device"
+              onCancel={() => { setShowAdd(false); setDraft({ id: "", name: "", address: "", vendor: "" }); }}
+              onFinish={addDevice}
+              steps={[
+                {
+                  id: "identity",
+                  title: "Identity",
+                  hint: "How the platform reaches and refers to this device. Both are required.",
+                  isValid: () => !!draft.id.trim() && !!draft.address.trim(),
+                  render: () => (
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontSize: 12 }}>Device ID <Req /></span>
+                        <input placeholder="e.g. leaf1" value={draft.id} autoFocus onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
+                      </label>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontSize: 12 }}>Address <Req /></span>
+                        <input placeholder="IP or hostname" value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
+                      </label>
+                    </div>
+                  ),
+                },
+                {
+                  id: "classify",
+                  title: "Classification",
+                  hint: "Optional — helps grouping and vendor profiles. You can change these later.",
+                  isValid: () => true,
+                  render: () => (
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontSize: 12 }}>Display name</span>
+                        <input placeholder="optional" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                      </label>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontSize: 12 }}>Vendor</span>
+                        <input placeholder="optional" value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} />
+                      </label>
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </div>
         )}
         {error && <p style={{ color: "var(--bad)", marginBottom: 0 }}>{error}</p>}
       </div>
