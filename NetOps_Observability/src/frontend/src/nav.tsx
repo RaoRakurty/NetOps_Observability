@@ -21,6 +21,7 @@ import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
+import SecurityPolicy from "./tabs/SecurityPolicy";
 import StackHealth from "./tabs/StackHealth";
 import AuditLog from "./tabs/AuditLog";
 import {
@@ -166,6 +167,7 @@ export const NAV: NavSection[] = [
       // only the caller's own tenant) — this just stops surfacing the section.
       { id: "tenants", label: "Tenants", platformOnly: true, render: () => <TenantsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
+      { id: "policy", label: "Security Policy", render: () => <SecurityPolicy /> },
       { id: "api", label: "API Access", render: () => <ApiAccessAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
       { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },

@@ -880,7 +880,115 @@ export const api = {
       ? request<SNMPCredential>(`/api/snmp/credentials/${encodeURIComponent(c.id)}`, { method: "PUT", body: JSON.stringify(c) })
       : request<SNMPCredential>("/api/snmp/credentials", { method: "POST", body: JSON.stringify(c) }),
   deleteSnmpCred: (id: string) => request<void>(`/api/snmp/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ----- Security Policy (#24) — NIST-aligned controls resolved through the
+  // System→Tenant→Role→User hierarchy. Admin-gated; system/global = platform
+  // owner. The catalog is the source of truth for what's configurable; documents
+  // only carry per-scope overrides; effective is the deterministic resolution.
+  policyCatalog: () => request<PolicyCatalog>("/api/policy/catalog"),
+  policyEffective: (sub: PolicySubject = {}) => {
+    const p = new URLSearchParams();
+    if (sub.tenant) p.set("tenant", sub.tenant);
+    if (sub.role) p.set("role", sub.role);
+    if (sub.user) p.set("user", sub.user);
+    const qs = p.toString();
+    return request<{ subject: PolicySubject; resolved: PolicyResolved[] }>(`/api/policy/effective${qs ? `?${qs}` : ""}`);
+  },
+  policyDocuments: () => request<{ documents: PolicyDocument[] }>("/api/policy/documents"),
+  policyDocument: (scope: PolicyScope, selector = "", tenant = "") => {
+    const p = new URLSearchParams({ scope });
+    if (selector) p.set("selector", selector);
+    if (tenant) p.set("tenant", tenant);
+    return request<{ document: PolicyDocument; found: boolean }>(`/api/policy/document?${p}`);
+  },
+  setPolicyOverride: (ref: PolicyRef, key: string, value: PolicyValue, locked = false) => {
+    const p = new URLSearchParams({ scope: ref.scope });
+    if (ref.selector) p.set("selector", ref.selector);
+    if (ref.tenant) p.set("tenant", ref.tenant);
+    return request<{ resolved: PolicyResolved }>(`/api/policy/document?${p}`, {
+      method: "PUT",
+      body: JSON.stringify({ key, value, locked }),
+    });
+  },
+  clearPolicyOverride: (ref: PolicyRef, key: string, prune = true) => {
+    const p = new URLSearchParams({ scope: ref.scope, key });
+    if (ref.selector) p.set("selector", ref.selector);
+    if (ref.tenant) p.set("tenant", ref.tenant);
+    if (prune) p.set("prune", "true");
+    return request<void>(`/api/policy/document?${p}`, { method: "DELETE" });
+  },
+  validatePolicyOverride: (ref: PolicyRef, key: string, value: PolicyValue, locked = false) =>
+    request<{ ok: boolean; error?: string }>("/api/policy/validate", {
+      method: "POST",
+      body: JSON.stringify({ scope: ref.scope, selector: ref.selector ?? "", tenant: ref.tenant ?? "", key, value, locked }),
+    }),
 };
+
+// ----- Security Policy types (mirror src/backend/policy/model.go JSON) -----
+export type PolicyScope = "system" | "tenant" | "role" | "user";
+export type PolicyDomain = "authentication" | "password" | "session" | "account_lifecycle";
+export type PolicyKind = "bool" | "int" | "duration" | "enum" | "list";
+export type PolicyHarden = "" | "higher" | "lower";
+
+export type PolicyValue = {
+  kind: PolicyKind;
+  bool?: boolean;
+  num?: number; // int count OR duration seconds
+  str?: string; // enum selection
+  list?: string[]; // list members
+};
+export type PolicyConstraint = {
+  min?: number;
+  max?: number;
+  unit?: string; // "characters" | "attempts" | "seconds" | "days" | "minutes" | "hours" …
+  enum?: string[];
+};
+export type PolicySetting = {
+  key: string;
+  domain: PolicyDomain;
+  label: string;
+  description: string;
+  kind: PolicyKind;
+  default: PolicyValue;
+  constraint: PolicyConstraint;
+  tier: "basic" | "advanced";
+  nist: string[];
+  lockable: boolean;
+  harden: PolicyHarden;
+  rationale: string;
+};
+export type PolicyCatalogDomain = { domain: PolicyDomain; settings: PolicySetting[] };
+export type PolicyCatalog = { scopes: PolicyScope[]; domains: PolicyCatalogDomain[] };
+
+export type PolicyTrailStep = {
+  scope: PolicyScope;
+  selector?: string;
+  value: PolicyValue;
+  locked?: boolean;
+  applied: boolean;
+  note?: string;
+};
+export type PolicyResolved = {
+  key: string;
+  domain: PolicyDomain;
+  value: PolicyValue;
+  source?: PolicyScope; // empty => from_default
+  from_default: boolean;
+  locked?: boolean;
+  locked_at?: PolicyScope;
+  trail?: PolicyTrailStep[];
+};
+export type PolicyOverride = { value: PolicyValue; locked?: boolean };
+export type PolicyDocument = {
+  scope: PolicyScope;
+  selector: string;
+  tenant?: string;
+  overrides: Record<string, PolicyOverride>;
+  updated_at?: string;
+  updated_by?: string;
+};
+export type PolicySubject = { tenant?: string; role?: string; user?: string };
+export type PolicyRef = { scope: PolicyScope; selector?: string; tenant?: string };
 
 export type SNMPOptions = {
   versions: string[];
