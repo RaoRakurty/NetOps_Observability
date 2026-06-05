@@ -72,6 +72,7 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
+	secPolicy   *securityPolicyStore // #24 security-policy engine Source (catalog + per-scope overrides)
 	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
 	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
 	// connector via serviceNowFor()/jiraFor(); the incident-projection worker keys
@@ -334,6 +335,11 @@ func newServer() *server {
 	srv.ldap = newLDAPConfigStore(envOr("LDAP_CONFIG_FILE", "/data/ldap_config.json"), vault)
 	srv.tacacs = newTACACSConfigStore(envOr("TACACS_CONFIG_FILE", "/data/tacacs_config.json"), vault)
 	srv.tokenPolicy = newTokenPolicyStore(envOr("TOKEN_POLICY_FILE", "/data/token_policy.json"), refresh)
+	// Security Policy engine (#24): deterministic System→Tenant→Role→User
+	// resolution of NIST-aligned controls. The store (Phase 2) is the engine's
+	// persistence Source; the handlers (Phase 3, policy_http.go) expose the
+	// catalog, the effective-policy/simulator view, and per-scope editing.
+	srv.secPolicy = newSecurityPolicyStore(envOr("SECURITY_POLICY_FILE", "/data/security_policies.json"))
 	// SSO/OIDC: runtime-configurable overlay over the env defaults. The store
 	// builds the initial live provider into the atomic pointer and swaps it on
 	// every admin save (see oidc_config.go).
@@ -480,6 +486,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/tacacs/config", s.handleTACACSConfig)
 	mux.HandleFunc("/api/auth/tacacs/test", s.handleTACACSTest)
 	mux.HandleFunc("/api/auth/token-policy", s.handleTokenPolicy)
+	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
+	// override editing. Admin-gated; system-scope writes are platform-owner only.
+	mux.HandleFunc("/api/policy/catalog", s.handlePolicyCatalog)
+	mux.HandleFunc("/api/policy/effective", s.handlePolicyEffective)
+	mux.HandleFunc("/api/policy/documents", s.handlePolicyDocuments)
+	mux.HandleFunc("/api/policy/document", s.handlePolicyDocument)
+	mux.HandleFunc("/api/policy/validate", s.handlePolicyValidate)
 	// Identity & access (admin-gated): users, roles, tenants, API keys.
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/", s.handleUserByID)

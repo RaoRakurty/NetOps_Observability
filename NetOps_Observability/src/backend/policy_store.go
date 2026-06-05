@@ -278,6 +278,20 @@ func (s *securityPolicyStore) Documents(tenant string) []policy.Document {
 	return out
 }
 
+// AllDocuments returns every stored document (deep-copied, stable order). This
+// is the cross-tenant listing reserved for the platform owner; tenant-scoped
+// callers must use Documents(tenant), which never crosses the tenant boundary.
+func (s *securityPolicyStore) AllDocuments() []policy.Document {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap := s.snapshotLocked()
+	out := make([]policy.Document, len(snap))
+	for i, d := range snap {
+		out[i] = cloneDocument(d)
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // Write API (zero-trust: validate against inherited policy, then persist)
 // ---------------------------------------------------------------------------
