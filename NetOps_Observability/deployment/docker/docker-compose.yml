@@ -563,11 +563,21 @@ services:
       APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
       # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)
       MAX_USERS: ${MAX_USERS:-0}
-      # AI Copilot
+      # AI assistant (ChatGPT). FEATURE_COPILOT gates it; provider defaults to
+      # OpenAI (set COPILOT_PROVIDER=anthropic to use Claude instead). The model
+      # default tracks the provider in the backend unless COPILOT_MODEL is set.
       FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
-      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-anthropic}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-openai}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
-      COPILOT_MODEL: ${COPILOT_MODEL:-claude-sonnet-4-5}
+      COPILOT_MODEL: ${COPILOT_MODEL:-}
+      # Device SSH gateway: in-browser SSH to devices from Infrastructure →
+      # Devices. DORMANT unless FEATURE_DEVICE_SSH=true — it opens an
+      # authenticated, audited shell to devices (operator supplies their own
+      # credentials per session; nothing stored). Enable deliberately.
+      FEATURE_DEVICE_SSH: ${FEATURE_DEVICE_SSH:-false}
+      DEVICE_SSH_DIAL_TIMEOUT_SEC: ${DEVICE_SSH_DIAL_TIMEOUT_SEC:-10}
+      DEVICE_SSH_IDLE_TIMEOUT_SEC: ${DEVICE_SSH_IDLE_TIMEOUT_SEC:-900}
+      DEVICE_SSH_MAX_SESSION_SEC: ${DEVICE_SSH_MAX_SESSION_SEC:-3600}
       # Secret-custody Vault (#17): envelope-encrypt reversible secrets at rest
       # under per-tenant keys. DORMANT unless SEAL_PROVIDER is set (default: empty
       # = plaintext passthrough, unchanged behavior). Activate by bringing up the
