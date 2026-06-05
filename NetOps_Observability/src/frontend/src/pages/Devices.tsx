@@ -25,13 +25,20 @@ function deviceHealth(d: Device, alertedDevices: Set<string>): Health {
   return "up";
 }
 
+// A compact status dot shown inline, just before the device name. Tooltip
+// carries the label so we don't spend a column on it.
 function StatusDot({ health }: { health: Health }) {
   const m = HEALTH_META[health];
   return (
-    <span title={m.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span style={{ width: 9, height: 9, borderRadius: 999, background: m.color, boxShadow: `0 0 0 3px color-mix(in srgb, ${m.color} 22%, transparent)`, flex: "none" }} />
-      <span style={{ fontSize: 12, color: "var(--muted)" }}>{m.label}</span>
-    </span>
+    <span
+      title={m.label}
+      aria-label={m.label}
+      style={{
+        display: "inline-block", width: 8, height: 8, borderRadius: 999,
+        background: m.color, boxShadow: `0 0 0 2px color-mix(in srgb, ${m.color} 25%, transparent)`,
+        flex: "none", marginRight: 8, verticalAlign: "middle",
+      }}
+    />
   );
 }
 
@@ -210,19 +217,17 @@ export default function Devices() {
           // (multiple <tbody> in one table is valid HTML and keeps alignment).
           <table className="device-table" style={{ tableLayout: "fixed", width: "100%" }}>
             <colgroup>
-              <col style={{ width: 96 }} />
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "18%" }} />
-              <col style={{ width: 150 }} />
-              <col style={{ width: "14%" }} />
-              <col style={{ width: 88 }} />
-              <col style={{ width: 96 }} />
+              <col style={{ width: "17%" }} />
+              <col style={{ width: "19%" }} />
+              <col style={{ width: 160 }} />
+              <col style={{ width: "15%" }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 100 }} />
               <col style={{ width: sshEnabled ? 170 : 90 }} />
             </colgroup>
             <thead>
               <tr>
-                <th>Status</th>
-                <th>ID</th>
+                <th>Device</th>
                 <th>Name</th>
                 <th>Address</th>
                 <th>Model</th>
@@ -234,7 +239,7 @@ export default function Devices() {
             {groups.map(([vendor, list]) => (
               <tbody key={vendor}>
                 <tr className="group-row">
-                  <td colSpan={8} style={{ background: "var(--hover)", padding: "6px 10px", fontWeight: 600 }}>
+                  <td colSpan={7} style={{ background: "var(--hover)", padding: "6px 10px", fontWeight: 600 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                       <span style={{ width: 9, height: 9, borderRadius: 999, background: vendorColor(vendor) }} />
                       {vendor}
@@ -244,8 +249,8 @@ export default function Devices() {
                 </tr>
                 {list.map((d) => (
                   <tr key={d.id}>
-                    <td><StatusDot health={health.get(d.id) ?? "up"} /></td>
                     <td style={ellipsis}>
+                      <StatusDot health={health.get(d.id) ?? "up"} />
                       <a style={{ cursor: "pointer", color: "var(--accent)", fontWeight: 600 }}
                         title="View device details" onClick={() => setDetail(d)}>{d.id}</a>
                     </td>

@@ -220,29 +220,62 @@ export function TenantsAdmin() {
     try { await api.deleteTenant(t.id); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
+  const list = tenants ?? [];
   return (
     <>
-      <AdminHead title="Tenants" sub="Logical isolation boundaries. Devices, dashboards, alerts and users are scoped per tenant." />
+      <AdminHead title="Tenants" sub="Logical isolation boundaries. The Parent Tenant owns the platform; Child Tenants are isolated namespaces — devices, dashboards, alerts and users are scoped to each." />
       <div className="card">
-        <div className="admin-card-head"><h2>New tenant</h2></div>
+        <div className="admin-card-head"><h2>New child tenant</h2></div>
         <ErrLine msg={err} />
         <div className="admin-form">
-          <input placeholder="tenant name" value={name} onChange={(e) => setName(e.target.value)} />
-          <input placeholder="note (optional)" value={note} onChange={(e) => setNote(e.target.value)} style={{ flex: 2 }} />
-          <button className="dash-btn accent" onClick={create}>Create tenant</button>
+          <label className="req-field">
+            <span>Tenant name <Req /></span>
+            <input placeholder="e.g. acme" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label style={{ flex: 2 }}>
+            <span>Note</span>
+            <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create tenant</button>
         </div>
+        <RequiredLegend />
       </div>
-      <div className="ov-grid">
-        {(tenants ?? []).map((t) => (
-          <div className="panel col-4" key={t.id}>
-            <div className="provider-head">
-              <h3>{t.name}</h3>
-              {t.id !== "global" && <button className="dash-btn" onClick={() => remove(t)}>Delete</button>}
-            </div>
-            <p className="mini-meta" style={{ marginTop: 6 }}>{t.note || "—"}</p>
-            <p className="mini-meta mono" style={{ marginTop: 6 }}>id: {t.id}</p>
-          </div>
-        ))}
+      <div className="card" style={{ paddingTop: 8 }}>
+        {list.length === 0 ? (
+          <div className="empty">No tenants yet.</div>
+        ) : (
+          <table style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Tenant</th>
+                <th style={{ width: 130 }}>Type</th>
+                <th>Note</th>
+                <th style={{ width: 140 }}>ID</th>
+                <th style={{ width: 1 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((t) => {
+                const isParent = t.id === "global";
+                return (
+                  <tr key={t.id}>
+                    <td style={{ fontWeight: 600 }}>{t.name}</td>
+                    <td>
+                      <span className={`badge ${isParent ? "accent" : ""}`}>
+                        {isParent ? "Parent Tenant" : "Child Tenant"}
+                      </span>
+                    </td>
+                    <td style={{ color: "var(--muted)" }}>{t.note || "—"}</td>
+                    <td className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{t.id}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {!isParent && <button className="dash-btn" onClick={() => remove(t)}>Delete</button>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
     </>
   );

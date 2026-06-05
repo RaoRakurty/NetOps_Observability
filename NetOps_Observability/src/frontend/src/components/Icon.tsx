@@ -93,6 +93,14 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="17" y1="16" x2="23" y2="16" />
     </>
   ),
+  // Stack — layered planes, for the platform's own infra-stack section.
+  stack: (
+    <>
+      <path d="m12 2 9 5-9 5-9-5 9-5z" />
+      <path d="m3 12 9 5 9-5" />
+      <path d="m3 17 9 5 9-5" />
+    </>
+  ),
   logo: <path d="M2 12h4l3 8 4-16 3 8h6" />,
   "chevron-left": <path d="m15 18-6-6 6-6" />,
   "chevron-right": <path d="m9 18 6-6-6-6" />,

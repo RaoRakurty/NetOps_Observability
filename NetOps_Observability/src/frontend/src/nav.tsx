@@ -7,8 +7,7 @@ import Reports from "./pages/Reports";
 import SavedDashboards from "./pages/SavedDashboards";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
-import SnmpCredentials from "./tabs/SnmpCredentials";
-import SnmpProfiles from "./tabs/SnmpProfiles";
+import SnmpProfileManager from "./tabs/SnmpProfileManager";
 import Alerts from "./tabs/Alerts";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
@@ -107,8 +106,7 @@ export const NAV: NavSection[] = [
       { id: "devices", label: "Devices", render: () => <Devices /> },
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
       { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
-      { id: "snmp", label: "SNMP Credentials", render: () => <SnmpCredentials /> },
-      { id: "profiles", label: "SNMP Profiles", render: () => <SnmpProfiles /> },
+      { id: "snmp", label: "SNMP Profile Manager", render: () => <SnmpProfileManager /> },
     ],
   },
   {
@@ -125,6 +123,22 @@ export const NAV: NavSection[] = [
     label: "Reports",
     icon: "reports",
     render: () => <Reports />,
+  },
+  // Stack — the platform's OWN infra plumbing + raw-backend tools, grouped into
+  // one section instead of being scattered in Administration. Platform-owner only
+  // (tenant admins manage their tenant, never the stack); the backend enforces it
+  // independently (/api/stack/health 403, nginx auth_request on /search, etc.).
+  {
+    id: "stack",
+    label: "Stack",
+    icon: "stack",
+    platformOnly: true,
+    children: [
+      { id: "health", label: "Stack Health", render: () => <StackHealth /> },
+      { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
+      { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
+      { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
+    ],
   },
   {
     id: "copilot",
@@ -156,13 +170,6 @@ export const NAV: NavSection[] = [
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
       { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
       { id: "audit", label: "Audit Log", render: () => <AuditLog /> },
-      // Infra-stack monitoring + raw-backend escape hatches — the platform's own
-      // plumbing. Platform-owner only (tenant admins manage their tenant, never
-      // the stack). Enforced on the backend too (/api/stack/health, nginx).
-      { id: "stack", label: "Stack Health", platformOnly: true, render: () => <StackHealth /> },
-      { id: "grafana", label: "Grafana", platformOnly: true, render: () => <GrafanaTab /> },
-      { id: "prometheus", label: "Prometheus", platformOnly: true, render: () => <PrometheusTab /> },
-      { id: "opensearch", label: "OpenSearch", platformOnly: true, render: () => <SearchDashboardsTab /> },
     ],
   },
 ];
