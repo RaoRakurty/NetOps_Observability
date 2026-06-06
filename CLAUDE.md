@@ -341,3 +341,40 @@ System must enforce:
 If a requirement conflicts with these rules:
 
 👉 ALWAYS choose safety, modularity, and zero-trust design over speed or convenience.
+
+---
+
+## 15. AI / LLM RUNTIME SECURITY (OWASP LLM TOP 10)
+
+Any feature that sends data to, or renders output from, an LLM (today: the
+copilot proxy `copilot.go` + the ChatGPT UI; tomorrow: any GenAI assist) MUST
+be designed against the **OWASP Top 10 for LLM Applications**. The five risks
+that intersect with our code and are mitigatable at dev time:
+
+- **LLM01 Prompt Injection** — the **system prompt is server-controlled**; never
+  let a client override it or inject a `system`-role turn. Sanitize/normalize
+  the message list server-side (`sanitizeCopilotMessages`). Treat all model
+  output as untrusted: a "valid" input can still be malicious.
+- **LLM02 Insecure Output Handling** — never execute or `dangerouslySetInnerHTML`
+  model output. The SPA renders assistant text as **escaped React text** only.
+  Anything derived from model output (SQL, shell, paths) is data, not code —
+  parameterize and validate it like any external input.
+- **LLM03 Training-Data Poisoning / Overreliance** — AI-generated code is
+  untrusted until reviewed: it goes through the **same CI gate** (§12: vet,
+  test, race, staticcheck, gosec, govulncheck) and human review as hand-written
+  code. No "the model wrote it" exemption.
+- **LLM06 Sensitive Information Disclosure** — the copilot forwards only what the
+  caller supplies; the backend must **not auto-inject secrets, credentials,
+  other tenants' data, or PII** into prompts. Secrets stay write-only and out of
+  logs; redact before sending anything to an external provider.
+- **LLM07 Insecure Plugin / Tool Design** — any LLM tool/plugin obeys §4
+  (isolation, schema validation, least privilege) and authenticates + authorizes
+  every call. No implicit trust of model-requested actions (LLM08: least
+  privilege / no excessive agency).
+
+**Cost/DoS (LLM04):** LLM endpoints must be authenticated + audited, **bound the
+request** (`MaxBytesReader`, message/char caps) and **cap output tokens**. No
+unbounded provider calls.
+
+When in doubt, the §3 zero-trust rule applies to the model too: never trust LLM
+input or output.
