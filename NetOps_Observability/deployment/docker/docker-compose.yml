@@ -308,9 +308,10 @@ services:
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:2.16.0
-    # Heavy and redundant with the in-app OpenSearch tab + Grafana, so off by
-    # default to save ~0.7 GiB. Start explicitly: docker compose --profile osd up -d
-    profiles: ["osd"]
+    # Power-user log/index forensics UI (served under /search). Always-on so its
+    # index patterns and Discover are available out of the box. ~0.7 GiB; cap via
+    # OSD_MEM_LIMIT. To run leaner, comment this service out and use the in-app
+    # Logs view + Grafana instead.
     mem_limit: ${OSD_MEM_LIMIT:-768m}
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
@@ -364,6 +365,12 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
       GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Anonymous read-only access so the app's embedded Grafana panels render
+      # without a login prompt (the iframe is same-origin under /grafana/).
+      # The admin account still logs in normally to build/edit dashboards.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
       # Allow the dashboard to embed Grafana in an <iframe>. Without this
       # Grafana sends X-Frame-Options: deny and the UI shows "refused to
       # connect". Served same-origin under /grafana/ via nginx.

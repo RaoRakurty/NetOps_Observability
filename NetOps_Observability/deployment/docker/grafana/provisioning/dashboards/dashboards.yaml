@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Auto-provision dashboards from the json/ folder on Grafana startup. The JSON
+# files reference datasources by stable uid (prometheus / victoriametrics) set
+# in ../datasources/datasources.yaml, so they bind without manual wiring.
+providers:
+  - name: NetOps
+    orgId: 1
+    folder: NetOps
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: false
