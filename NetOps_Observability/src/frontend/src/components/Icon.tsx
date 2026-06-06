@@ -180,6 +180,33 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
     </>
   ),
+  // key — Single Sign-On (OIDC) / federated credentials.
+  key: (
+    <>
+      <circle cx="7.5" cy="15.5" r="4.5" />
+      <path d="m10.7 12.3 8.3-8.3" />
+      <path d="m17 5 2.5 2.5" />
+      <path d="m14 8 2.5 2.5" />
+    </>
+  ),
+  // directory — LDAP / Active Directory (a tree of nodes).
+  directory: (
+    <>
+      <rect x="9" y="2" width="6" height="5" rx="1" />
+      <rect x="3" y="17" width="6" height="5" rx="1" />
+      <rect x="15" y="17" width="6" height="5" rx="1" />
+      <path d="M12 7v5M6 17v-2a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v2" />
+    </>
+  ),
+  // server — TACACS+ AAA host.
+  server: (
+    <>
+      <rect x="3" y="4" width="18" height="7" rx="2" />
+      <rect x="3" y="13" width="18" height="7" rx="2" />
+      <line x1="7" y1="7.5" x2="7.01" y2="7.5" />
+      <line x1="7" y1="16.5" x2="7.01" y2="16.5" />
+    </>
+  ),
   support: (
     <>
       <circle cx="12" cy="12" r="9" />

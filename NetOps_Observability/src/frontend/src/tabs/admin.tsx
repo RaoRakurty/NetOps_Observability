@@ -732,7 +732,7 @@ function RequiredLegend() {
 }
 
 // ---- LDAP / Active Directory form ----
-function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
+function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedded?: boolean }) {
   const [cfg, setCfg] = useState<LdapConfig | null>(null);
   const [pw, setPw] = useState(""); // typed bind password (only sent if non-empty)
   const [msg, setMsg] = useState<string | null>(null);
@@ -746,7 +746,7 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
       .then((r) => setCfg({ ...r.config, role_mappings: r.config.role_mappings ?? [] }))
       .catch((e) => setMsg((e as Error).message));
   }, []);
-  if (!cfg) return <div className="card"><h2>LDAP / Active Directory</h2><p className="mini-meta">Loading…</p></div>;
+  if (!cfg) return embedded ? <p className="mini-meta">Loading…</p> : <div className="card"><h2>LDAP / Active Directory</h2><p className="mini-meta">Loading…</p></div>;
 
   const set = (patch: Partial<LdapConfig>) => setCfg({ ...cfg, ...patch });
   const enc = cfg.use_tls ? "ldaps" : cfg.start_tls ? "starttls" : "none";
@@ -771,14 +771,21 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
     finally { setBusy(false); }
   };
 
+  const enableToggle = (
+    <label className="auth-enable"><input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled</label>
+  );
   return (
-    <div className="card">
-      <div className="admin-card-head">
-        <h2>LDAP / Active Directory <ProviderBadge enabled={cfg.enabled} /></h2>
-        <label style={{ fontSize: 13 }}>
-          <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
-        </label>
-      </div>
+    <div className={embedded ? "auth-form" : "card"}>
+      {embedded ? (
+        <div className="auth-embed-head"><ProviderBadge enabled={cfg.enabled} />{enableToggle}</div>
+      ) : (
+        <div className="admin-card-head">
+          <h2>LDAP / Active Directory <ProviderBadge enabled={cfg.enabled} /></h2>
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+      )}
       <p className="admin-sub">Native stdlib LDAP bind (RFC 4511). Directory groups map onto NetOps roles (first match by privilege wins). The bind password is write-only — leave blank to keep the stored one.</p>
       <Wizard
         finishLabel="Save"
@@ -802,9 +809,9 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
                       <option value="ldaps">LDAPS (636)</option>
                     </select>
                   </label>
-                  <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" />
-                  <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} />
-                  <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" required />
+                  <LabeledInput label="Bind DN (service acct)" value={cfg.bind_dn} onChange={(v) => set({ bind_dn: v })} placeholder="cn=svc,dc=example,dc=com" info="Distinguished Name of the service account used to search the directory. Leave blank for anonymous bind." />
+                  <LabeledInput label="Bind password" type="password" value={pw} onChange={setPw} placeholder={cfg.bind_password_set ? "•••••• (unchanged)" : "(none)"} info="Password for the bind DN service account. Write-only — blank keeps stored." />
+                  <LabeledInput label="Base DN" value={cfg.base_dn} onChange={(v) => set({ base_dn: v })} placeholder="dc=example,dc=com" required info="The directory subtree under which user searches start, e.g. dc=example,dc=com." />
                   <label style={{ fontSize: 12, color: "var(--muted)", alignSelf: "end" }}>
                     <input type="checkbox" checked={cfg.insecure_skip_verify} onChange={(e) => set({ insecure_skip_verify: e.target.checked })} /> Skip TLS verify (lab only)
                   </label>
@@ -867,7 +874,7 @@ function LdapAdminForm({ roleIds }: { roleIds: string[] }) {
 }
 
 // ---- TACACS+ form ----
-function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
+function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedded?: boolean }) {
   const [cfg, setCfg] = useState<TacacsConfig | null>(null);
   const [secret, setSecret] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -877,7 +884,7 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
   const [result, setResult] = useState<AuthTestResult | null>(null);
 
   useEffect(() => { api.tacacsConfig().then((r) => setCfg(r.config)).catch((e) => setMsg((e as Error).message)); }, []);
-  if (!cfg) return <div className="card"><h2>TACACS+</h2><p className="mini-meta">Loading…</p></div>;
+  if (!cfg) return embedded ? <p className="mini-meta">Loading…</p> : <div className="card"><h2>TACACS+</h2><p className="mini-meta">Loading…</p></div>;
   const set = (patch: Partial<TacacsConfig>) => setCfg({ ...cfg, ...patch });
 
   const save = async () => {
@@ -896,14 +903,21 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
     finally { setBusy(false); }
   };
 
+  const enableToggle = (
+    <label className="auth-enable"><input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled</label>
+  );
   return (
-    <div className="card">
-      <div className="admin-card-head">
-        <h2>TACACS+ <ProviderBadge enabled={cfg.enabled} /></h2>
-        <label style={{ fontSize: 13 }}>
-          <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
-        </label>
-      </div>
+    <div className={embedded ? "auth-form" : "card"}>
+      {embedded ? (
+        <div className="auth-embed-head"><ProviderBadge enabled={cfg.enabled} />{enableToggle}</div>
+      ) : (
+        <div className="admin-card-head">
+          <h2>TACACS+ <ProviderBadge enabled={cfg.enabled} /></h2>
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+      )}
       <p className="admin-sub">Native stdlib TACACS+ PAP (RFC 8907) — authenticate operators against the same AAA server that fronts your routers/switches. The shared secret is write-only.</p>
       <Wizard
         finishLabel="Save"
@@ -919,7 +933,7 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
                 <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
                   <LabeledInput label="Host" value={cfg.host} onChange={(v) => set({ host: v })} placeholder="tacacs.example.com" required />
                   <LabeledInput label="Port" type="number" value={String(cfg.port)} onChange={(v) => set({ port: Number(v) || 49 })} />
-                  <LabeledInput label="Shared secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.secret_set ? "•••••• (unchanged)" : "(none)"} />
+                  <LabeledInput label="Shared secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.secret_set ? "•••••• (unchanged)" : "(none)"} info="The TACACS+ shared key configured on the AAA server for this client. Write-only — blank keeps stored." />
                   <LabeledInput label="Timeout (s)" type="number" value={String(cfg.timeout_seconds)} onChange={(v) => set({ timeout_seconds: Number(v) || 5 })} />
                 </div>
                 <RequiredLegend />
@@ -958,24 +972,89 @@ function TacacsAdminForm({ roleIds }: { roleIds: string[] }) {
   );
 }
 
+type AuthProviderId = "local" | "sso" | "ldap" | "tacacs";
+const AUTH_PROVIDERS: { id: AuthProviderId; name: string; tagline: string; icon: string }[] = [
+  { id: "local", name: "Local accounts", tagline: "Username + password (PBKDF2) with JWT + rotating refresh tokens — the always-on fallback.", icon: "lock" },
+  { id: "sso", name: "Single Sign-On", tagline: "Federate sign-in to your OIDC identity provider (Okta, Azure AD, Google…).", icon: "key" },
+  { id: "ldap", name: "LDAP / Active Directory", tagline: "Bind directly to your directory (RFC 4511); directory groups map onto roles.", icon: "directory" },
+  { id: "tacacs", name: "TACACS+", tagline: "Authenticate operators against the AAA server fronting your routers and switches.", icon: "server" },
+];
+
 export function AuthenticationAdmin() {
   const [roles] = useReload(() => api.listRoles());
   const roleIds = (roles?.roles ?? []).map((r) => r.id).filter((x): x is string => !!x);
   const fallbackRoles = roleIds.length ? roleIds : ["super-admin", "operator", "read-only"];
 
+  const [open, setOpen] = useState<AuthProviderId | null>(null);
+  const [sso, setSso] = useState<{ enabled: boolean; ready: boolean } | null>(null);
+  const [ldap, setLdap] = useState<{ enabled: boolean; configured: boolean } | null>(null);
+  const [tac, setTac] = useState<{ enabled: boolean; configured: boolean } | null>(null);
+
+  const reloadStatus = useCallback(() => {
+    api.oidcConfig().then((r) => setSso({ enabled: r.config.enabled, ready: r.ready })).catch(() => {});
+    api.ldapConfig().then((r) => setLdap({ enabled: r.config.enabled, configured: !!r.config.host })).catch(() => {});
+    api.tacacsConfig().then((r) => setTac({ enabled: r.config.enabled, configured: !!r.config.host })).catch(() => {});
+  }, []);
+  useEffect(reloadStatus, [reloadStatus]);
+
+  const loaded = sso !== null && ldap !== null && tac !== null;
+  const enabledCount = 1 + [sso?.enabled, ldap?.enabled, tac?.enabled].filter(Boolean).length; // local always on
+
+  // Per-tile status pill + meta line.
+  const statusFor = (id: AuthProviderId): { tag: string; tone: string; meta: string } => {
+    if (id === "local") return { tag: "Always on", tone: "good", meta: "Built-in · always available" };
+    if (!loaded) return { tag: "…", tone: "", meta: "Loading…" };
+    if (id === "sso") {
+      if (!sso!.enabled) return { tag: "Off", tone: "", meta: "Click to configure" };
+      return sso!.ready ? { tag: "On", tone: "good", meta: "OIDC ready" } : { tag: "On", tone: "warn", meta: "Enabled — finish issuer & client ID" };
+    }
+    const s = id === "ldap" ? ldap! : tac!;
+    if (!s.enabled) return { tag: "Off", tone: "", meta: s.configured ? "Configured — disabled" : "Click to configure" };
+    return { tag: "On", tone: "good", meta: s.configured ? "Enabled" : "Enabled — needs a host" };
+  };
+
   return (
     <>
-      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work. SSO (OIDC) is brokered by your identity provider; native LDAP/AD and TACACS+ authenticate directly. All three are configured below." />
-      <div className="ov-grid">
-        <div className="panel col-12 provider-card">
-          <div className="provider-head"><h3>Local accounts</h3><span className="badge good">Active</span></div>
-          <p className="mini-meta">Username + password (PBKDF2) with JWT + rotating single-use refresh tokens. Always available as a fallback even when an external IdP is down.</p>
-        </div>
+      <AdminHead title="Authentication" sub="How people sign in. Local accounts always work; pick a provider tile to federate sign-in via SSO (OIDC), or authenticate directly against LDAP/AD or TACACS+." />
+      <StatStrip>
+        <Stat label="Providers" value={AUTH_PROVIDERS.length} />
+        <Stat label="Active" value={loaded ? enabledCount : <Skeleton w={26} h={22} />} tone="good" />
+        <Stat label="Local fallback" value="On" tone="good" />
+      </StatStrip>
+
+      <div className="conn-grid">
+        {AUTH_PROVIDERS.map((p) => {
+          const st = statusFor(p.id);
+          return (
+            <button key={p.id} className="conn-tile" onClick={() => setOpen(p.id)} aria-label={`Configure ${p.name}`}>
+              <span className={`conn-logo auth-${p.id}`}><Icon name={p.icon} size={24} /></span>
+              <span className="conn-body">
+                <span className="conn-name">{p.name}<span className={`conn-status ${st.tone}`}>{st.tag}</span></span>
+                <span className="conn-tag">{p.tagline}</span>
+                <span className="conn-meta">{st.meta}</span>
+              </span>
+              <span className="conn-cta">{p.id === "local" ? "Details" : "Configure"} →</span>
+            </button>
+          );
+        })}
       </div>
 
-      <SsoAdminForm roleIds={fallbackRoles} />
-      <LdapAdminForm roleIds={fallbackRoles} />
-      <TacacsAdminForm roleIds={fallbackRoles} />
+      {open && (() => {
+        const p = AUTH_PROVIDERS.find((x) => x.id === open)!;
+        return (
+          <Modal title={p.name} subtitle={p.tagline} logo={<span className={`conn-logo auth-${p.id}`}><Icon name={p.icon} size={26} /></span>} onClose={() => { setOpen(null); reloadStatus(); }}>
+            {open === "local" && (
+              <>
+                <p className="admin-sub">Local accounts are always available — even when an external IdP is down. They authenticate with username + password (PBKDF2) and issue JWT access tokens with rotating, single-use refresh tokens.</p>
+                <p className="mini-meta">Manage individual accounts under <strong>Administration → Users</strong>. Password complexity, lockout and session lifetimes are governed by <strong>Security Policy</strong>.</p>
+              </>
+            )}
+            {open === "sso" && <SsoAdminForm roleIds={fallbackRoles} embedded />}
+            {open === "ldap" && <LdapAdminForm roleIds={fallbackRoles} embedded />}
+            {open === "tacacs" && <TacacsAdminForm roleIds={fallbackRoles} embedded />}
+          </Modal>
+        );
+      })()}
     </>
   );
 }
@@ -984,7 +1063,7 @@ export function AuthenticationAdmin() {
 // Mirrors the LDAP/TACACS forms: a kv-persisted overlay over the env defaults,
 // with the client secret write-only. Saving rebuilds the live provider on the
 // server, so SSO can be turned on without editing .env or restarting.
-function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
+function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedded?: boolean }) {
   const [cfg, setCfg] = useState<OidcConfig | null>(null);
   const [ready, setReady] = useState(false);
   const [secret, setSecret] = useState(""); // typed client secret (only sent if non-empty)
@@ -996,7 +1075,7 @@ function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
       .then((r) => { setCfg(r.config); setReady(r.ready); })
       .catch((e) => setMsg((e as Error).message));
   }, []);
-  if (!cfg) return <div className="card"><h2>Single Sign-On (OIDC)</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+  if (!cfg) return embedded ? <p className="mini-meta">{msg ?? "Loading…"}</p> : <div className="card"><h2>Single Sign-On (OIDC)</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
 
   const set = (patch: Partial<OidcConfig>) => setCfg({ ...cfg, ...patch });
 
@@ -1009,17 +1088,27 @@ function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
     setCfg(r.config); setReady(r.ready); setSecret(""); setMsg("Saved.");
   };
 
+  const head = (
+    <>
+      <ProviderBadge enabled={cfg.enabled} />
+      <span className={`badge ${ready ? "good" : "accent-badge"}`}>{ready ? "Ready" : "Not ready"}</span>
+      <label className="auth-enable"><input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled</label>
+    </>
+  );
   return (
-    <div className="card">
-      <div className="admin-card-head">
-        <h2>
-          Single Sign-On (OIDC) <ProviderBadge enabled={cfg.enabled} />{" "}
-          <span className={`badge ${ready ? "good" : "accent-badge"}`}>{ready ? "Ready" : "Not ready"}</span>
-        </h2>
-        <label style={{ fontSize: 13 }}>
-          <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
-        </label>
-      </div>
+    <div className={embedded ? "auth-form" : "card"}>
+      {embedded ? (
+        <div className="auth-embed-head">{head}</div>
+      ) : (
+        <div className="admin-card-head">
+          <h2>Single Sign-On (OIDC) <ProviderBadge enabled={cfg.enabled} />{" "}
+            <span className={`badge ${ready ? "good" : "accent-badge"}`}>{ready ? "Ready" : "Not ready"}</span>
+          </h2>
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
+          </label>
+        </div>
+      )}
       <p className="admin-sub">Federate sign-in to your OIDC identity provider (Authorization Code flow). The platform brokers the login and re-issues its own session. Upstream IdPs such as Okta, Azure AD, Google or any standards-compliant provider are supported. The client secret is write-only — leave blank to keep the stored one.</p>
       <Wizard
         finishLabel="Save"
@@ -1034,7 +1123,7 @@ function SsoAdminForm({ roleIds }: { roleIds: string[] }) {
               <>
                 <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
                   <LabeledInput label="Issuer / Discovery URL" value={cfg.issuer} onChange={(v) => set({ issuer: v })} placeholder="https://idp.example.com/realms/netops" hint="Base issuer URL; /.well-known/openid-configuration is appended." required />
-                  <LabeledInput label="Client ID" value={cfg.client_id} onChange={(v) => set({ client_id: v })} placeholder="netops" required />
+                  <LabeledInput label="Client ID" value={cfg.client_id} onChange={(v) => set({ client_id: v })} placeholder="netops" required info="The OAuth client/application ID registered for NetOps in your identity provider." />
                   <LabeledInput label="Client secret" type="password" value={secret} onChange={setSecret} placeholder={cfg.client_secret_set ? "•••••• (unchanged)" : "(none / public client)"} />
                   <LabeledInput label="Scopes" value={cfg.scopes} onChange={(v) => set({ scopes: v })} placeholder="openid email profile" />
                 </div>

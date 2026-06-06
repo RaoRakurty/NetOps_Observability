@@ -17,6 +17,19 @@
   --warn: #d97706;
   --bad: #e11d48;
 
+  /* Glassmorphism — frosted translucent surfaces for the tile galleries + modals.
+     Text stays on opaque --fg for 4.5:1 contrast; only the surface is translucent. */
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-bg-strong: rgba(255, 255, 255, 0.74);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-hi: rgba(255, 255, 255, 0.9);            /* top-edge light reflection */
+  --glass-blur: 16px;
+  --glass-shadow: 0 8px 26px rgba(23, 33, 60, 0.10);
+  --glass-shadow-lg: 0 24px 60px rgba(23, 33, 60, 0.20);
+  --glass-tint-a: rgba(79, 70, 229, 0.12);          /* indigo ambient */
+  --glass-tint-b: rgba(16, 185, 129, 0.10);         /* emerald ambient */
+  --glass-scrim: rgba(18, 24, 38, 0.42);
+
   /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
   --sev-critical: #e11d48;  --sev-critical-bg: rgba(225, 29, 72, 0.10);
   --sev-error:    #ea580c;  --sev-error-bg:    rgba(234, 88, 12, 0.10);
@@ -1048,6 +1061,17 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --muted: #9aa6bf;
   --hover: rgba(255, 255, 255, 0.06);
 
+  /* Glass surfaces for the dark canvas — desaturated translucency, hairline edge. */
+  --glass-bg: rgba(26, 34, 52, 0.55);
+  --glass-bg-strong: rgba(24, 32, 49, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-hi: rgba(255, 255, 255, 0.07);
+  --glass-shadow: 0 8px 26px rgba(0, 0, 0, 0.38);
+  --glass-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --glass-tint-a: rgba(99, 102, 241, 0.18);
+  --glass-tint-b: rgba(16, 185, 129, 0.12);
+  --glass-scrim: rgba(4, 8, 16, 0.58);
+
   /* Severity hues stay vivid; lift the translucent fills for the darker canvas. */
   --sev-critical-bg: rgba(244, 63, 94, 0.16);
   --sev-error-bg:    rgba(251, 146, 60, 0.16);
@@ -1405,14 +1429,25 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    Integrations connector gallery — one branded tile per system-of-record,
    click to open the combined guided-setup modal.
    =========================================================================== */
-.conn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--sp-4); margin-bottom: var(--sp-4); }
-.conn-tile { display: flex; align-items: center; gap: var(--sp-4); text-align: left; cursor: pointer;
-  padding: var(--sp-4); background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-2);
-  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
-.conn-tile:hover { border-color: var(--accent); box-shadow: var(--shadow-pop, 0 8px 28px rgba(0,0,0,.18)); transform: translateY(-2px); }
+.conn-grid { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--sp-4); margin-bottom: var(--sp-4); }
+/* ambient colour wash so the frosted tiles have something to refract */
+.conn-grid::before { content: ""; position: absolute; inset: -12% -6%; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(42% 62% at 10% 6%, var(--glass-tint-a), transparent 72%),
+    radial-gradient(46% 66% at 94% 96%, var(--glass-tint-b), transparent 72%);
+  filter: blur(10px); }
+.conn-tile { position: relative; display: flex; align-items: center; gap: var(--sp-4); text-align: left; cursor: pointer;
+  padding: var(--sp-4); border-radius: var(--r-3, 14px);
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%); backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.conn-tile:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--glass-border)); transform: translateY(-3px);
+  box-shadow: var(--glass-shadow-lg), inset 0 1px 0 var(--glass-hi), 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
 .conn-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .conn-logo { display: inline-flex; align-items: center; justify-content: center; flex: none;
-  padding: 10px; border-radius: 14px; background: #fff; border: 1px solid var(--panel-border); }
+  padding: 10px; border-radius: 14px; background: #fff; border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06); }
 .conn-logo.servicenow { background: #f1f7f4; }
 .conn-logo.jira { background: #f3f7ff; }
 .conn-logo.slack { background: #f7f1f7; }
@@ -1420,6 +1455,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 /* generic-icon channels: tinted chip + icon colour (Lucide strokes inherit currentColor) */
 .conn-logo.email { background: #eef2f8; color: #4b6a8a; }
 .conn-logo.mobile { background: #eef7f1; color: #2e9e6b; }
+.conn-logo.auth-local { background: #eef2f8; color: #4b6a8a; }
+.conn-logo.auth-sso { background: #eef0fe; color: var(--accent); }
+.conn-logo.auth-ldap { background: #eef6f1; color: #2e9e6b; }
+.conn-logo.auth-tacacs { background: #fdf1ee; color: #d2691e; }
+
+/* embedded provider form inside a glass modal — no nested card chrome */
+.auth-form { display: block; }
+.auth-embed-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.auth-enable { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: var(--fs-sm); color: var(--muted); }
 .conn-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .conn-name { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); font-weight: 700; color: var(--fg); }
 .conn-status { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
@@ -1432,16 +1476,17 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* centered modal shell (guided setup) */
 .ds-modal-scrim { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
-  padding: var(--sp-4); background: rgba(10, 14, 24, .5); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  padding: var(--sp-4); background: var(--glass-scrim); backdrop-filter: blur(7px) saturate(120%); -webkit-backdrop-filter: blur(7px) saturate(120%);
   animation: ds-scrim-in .15s ease; }
 .ds-modal { display: flex; flex-direction: column; width: min(680px, 94vw); max-height: 90vh; overflow: hidden;
-  background: var(--panel-solid, var(--panel)); border: 1px solid var(--panel-border); border-radius: var(--r-3, 14px);
-  box-shadow: var(--shadow-pop, 0 24px 64px rgba(0,0,0,.4)); animation: ds-modal-in .18s cubic-bezier(.2,.8,.2,1); }
+  background: var(--glass-bg-strong); border: 1px solid var(--glass-border); border-radius: var(--r-3, 16px);
+  -webkit-backdrop-filter: blur(24px) saturate(150%); backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: var(--glass-shadow-lg), inset 0 1px 0 var(--glass-hi); animation: ds-modal-in .2s cubic-bezier(.16,1,.3,1); }
 .ds-modal:focus { outline: none; }
 @keyframes ds-scrim-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ds-modal-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
 .ds-modal-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4);
-  border-bottom: 1px solid var(--panel-border); }
+  border-bottom: 1px solid var(--glass-border); }
 .ds-modal-title { flex: 1; min-width: 0; }
 .ds-modal-title h2 { margin: 0; font-size: var(--fs-lg); }
 .ds-modal-title p { margin: 2px 0 0; }
