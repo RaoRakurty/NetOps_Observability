@@ -255,10 +255,11 @@ export default function Devices() {
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
+              className="form-input"
               placeholder="Filter devices…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              style={{ width: 200 }}
+              style={{ width: 200, height: 34 }}
             />
             <button className="btn" onClick={() => setShowAdd((v) => !v)}>{showAdd ? "Cancel" : "+ Add device"}</button>
           </div>
@@ -277,15 +278,15 @@ export default function Devices() {
                   hint: "How the platform reaches and refers to this device. Both are required.",
                   isValid: () => !!draft.id.trim() && !!draft.address.trim(),
                   render: () => (
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontSize: 12 }}>Device ID <Req /></span>
-                        <input placeholder="e.g. leaf1" value={draft.id} autoFocus onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
-                      </label>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontSize: 12 }}>Address <Req /></span>
-                        <input placeholder="IP or hostname" value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
-                      </label>
+                    <div className="form-grid">
+                      <div className="form-field">
+                        <label className="form-label" htmlFor="dev-id">Device ID <Req /></label>
+                        <input id="dev-id" className="form-input" placeholder="e.g. leaf1" value={draft.id} autoFocus onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label" htmlFor="dev-addr">Address <Req /></label>
+                        <input id="dev-addr" className="form-input" placeholder="IP or hostname" value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
+                      </div>
                     </div>
                   ),
                 },
@@ -295,15 +296,15 @@ export default function Devices() {
                   hint: "Optional — helps grouping and vendor profiles. You can change these later.",
                   isValid: () => true,
                   render: () => (
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontSize: 12 }}>Display name</span>
-                        <input placeholder="optional" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-                      </label>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontSize: 12 }}>Vendor</span>
-                        <input placeholder="optional" value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} />
-                      </label>
+                    <div className="form-grid">
+                      <div className="form-field">
+                        <label className="form-label" htmlFor="dev-name">Display name</label>
+                        <input id="dev-name" className="form-input" placeholder="optional" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label" htmlFor="dev-vendor">Vendor</label>
+                        <input id="dev-vendor" className="form-input" placeholder="optional" value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} />
+                      </div>
                     </div>
                   ),
                 },

@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { Device, getToken } from "../services/api";
+import Icon from "../components/Icon";
 
 // DeviceTerminal — in-browser SSH console for a device, backed by the Go
 // WebSocket→SSH gateway (/api/devices/{id}/ssh, FEATURE_DEVICE_SSH). The operator
@@ -20,6 +21,7 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
   const [passphrase, setPassphrase] = useState("");
   const [port, setPort] = useState(22);
   const [useKey, setUseKey] = useState(false);
+  const [showPw, setShowPw] = useState(false);
   const [banner, setBanner] = useState<{ kind: "info" | "error"; text: string } | null>(null);
 
   const termHost = useRef<HTMLDivElement | null>(null);
@@ -170,35 +172,57 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
         )}
 
         {phase === "form" ? (
-          <form onSubmit={connect} style={{ display: "grid", gap: 8 }}>
-            <p style={{ color: "var(--muted)", fontSize: 12, margin: 0 }}>
+          <form onSubmit={connect} className="form-grid">
+            <p className="form-sub" style={{ gridColumn: "1 / -1", marginBottom: 2 }}>
               You authenticate to the device with your own credentials. They are sent once over the
               encrypted socket and never stored.
             </p>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <input placeholder="username" value={username} autoFocus
-                onChange={(e) => setUsername(e.target.value)} style={{ flex: "1 1 160px" }} />
-              <input placeholder="port" type="number" value={port}
-                onChange={(e) => setPort(Number(e.target.value) || 22)} style={{ width: 90 }} />
+            <div className="form-field">
+              <label className="form-label" htmlFor="ssh-user">Username<span className="form-req">*</span></label>
+              <input id="ssh-user" className="form-input" value={username} autoFocus
+                onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </div>
-            <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
+            <div className="form-field">
+              <label className="form-label" htmlFor="ssh-port">Port</label>
+              <input id="ssh-port" className="form-input" type="number" min={1} value={port}
+                onChange={(e) => setPort(Number(e.target.value) || 22)} />
+            </div>
+
+            <label className="form-check" style={{ gridColumn: "1 / -1" }}>
               <input type="checkbox" checked={useKey} onChange={(e) => setUseKey(e.target.checked)} />
               Use private key instead of password
             </label>
+
             {useKey ? (
               <>
-                <textarea placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" value={privateKey}
-                  onChange={(e) => setPrivateKey(e.target.value)} rows={5}
-                  style={{ fontFamily: "monospace", fontSize: 12 }} />
-                <input placeholder="key passphrase (optional)" type="password" value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)} />
+                <div className="form-field wide">
+                  <label className="form-label" htmlFor="ssh-key">Private key</label>
+                  <textarea id="ssh-key" className="form-input mono" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                    value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} rows={5}
+                    style={{ height: "auto", padding: "8px 12px" }} />
+                </div>
+                <div className="form-field wide">
+                  <label className="form-label" htmlFor="ssh-pass">Key passphrase</label>
+                  <input id="ssh-pass" className="form-input" type="password" placeholder="optional"
+                    value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
+                </div>
               </>
             ) : (
-              <input placeholder="password" type="password" value={password}
-                onChange={(e) => setPassword(e.target.value)} />
+              <div className="form-field wide">
+                <label className="form-label" htmlFor="ssh-pw">Password</label>
+                <div className="pw-input-wrap">
+                  <input id="ssh-pw" className="pw-input" type={showPw ? "text" : "password"} value={password}
+                    onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+                  <button type="button" className="pw-eye" onClick={() => setShowPw((s) => !s)}
+                    aria-label={showPw ? "Hide password" : "Show password"} aria-pressed={showPw} tabIndex={-1}>
+                    <Icon name={showPw ? "eye-off" : "eye"} size={16} />
+                  </button>
+                </div>
+              </div>
             )}
-            <div>
-              <button className="btn accent" type="submit" disabled={!username.trim()}>Connect</button>
+
+            <div className="form-actions">
+              <button className="btn-accent" type="submit" disabled={!username.trim()}>Connect</button>
             </div>
           </form>
         ) : (
