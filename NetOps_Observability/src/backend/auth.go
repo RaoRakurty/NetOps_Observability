@@ -255,6 +255,12 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("current password incorrect"))
 		return
 	}
+	// Enforce the caller's resolved Security Policy (length + complexity) before
+	// the store's own floor — zero-trust, server-authoritative (#24 wiring).
+	if err := validatePasswordAgainstPolicy(req.NewPassword, s.callerPasswordRules(claims)); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if err := s.users.ChangePassword(user.Username, req.NewPassword); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

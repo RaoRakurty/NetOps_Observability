@@ -468,6 +468,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/me", s.handleMe)
 	mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
+	mux.HandleFunc("/api/auth/password-policy", s.handlePasswordPolicy)
 	mux.HandleFunc("/api/auth/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/auth/osd-gate", s.handleOSDGate) // nginx auth_request target for /search
