@@ -78,6 +78,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | 48 | **OWASP LLM Top 10 hardening (copilot proxy)** — server-owned system prompt (LLM01, no client `system`-role override), `MaxBytesReader` + message/char/output-token caps (LLM04 cost/DoS), assistant text rendered as escaped React only (LLM02), no secret auto-injection into prompts (LLM06); unit-tested `sanitizeCopilotMessages`. Codified as standing guardrail **CLAUDE.md §15**. Memory `netops-owasp-llm-compliance`. | `8967758` |
 | — | CI: golangci-lint v1.64.8 → v2.12.2 (go 1.25 compat); x/crypto bump v0.52.0 (GO-2026-5018/5019/5020) | `f6c2a71` / `b97ce09` |
 | — | Grafana out-of-box: anon Viewer + provisioned dashboards (Platform Health, Device Telemetry; **Collector Health** + **Streaming Telemetry/gNMI**); OSD always-on. Queries verified live against VM. | `330068a` / `06626a6` |
+| — | Grafana **ClickHouse datasource** wired (plugin via install.py with --insecure fallback for MITM nets) + **Flow Analytics** & **Anomalies/Findings** dashboards; bound to a read-only `grafana` CH user with `tenant_scope=''` pinned CONST (platform/infra rows only — scope-escape + writes rejected). Verified live (296k flows through the datasource). | `a2a8faa` |
 
 ---
 
