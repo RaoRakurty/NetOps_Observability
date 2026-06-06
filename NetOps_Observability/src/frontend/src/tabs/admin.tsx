@@ -1542,12 +1542,91 @@ function SeveritySelect({ value, onChange }: { value: string; onChange: (v: stri
   );
 }
 
+// SyncSettings — collapsible bidirectional-sync controls for a provider, shown
+// inside that provider's home card (PagerDuty/Slack under Notifications;
+// ServiceNow/Jira have the same controls in their Integrations connector setup).
+// Outbound promotes incidents to the system; bidirectional also applies inbound
+// state changes back via a registered, HMAC-signed webhook. Writes through the
+// Integration Platform (saveIntegration). Signing secret is write-only.
+function SyncSettings({ integration, inboundEnabled, webhookHint, onSaved }: {
+  integration: IntegrationConfig;
+  inboundEnabled: boolean;
+  webhookHint: string;
+  onSaved: (next: IntegrationConfig) => void;
+}) {
+  const [enabled, setEnabled] = useState(integration.enabled);
+  const [syncMode, setSyncMode] = useState<IntegrationConfig["sync_mode"]>(integration.sync_mode);
+  const [webhookEnabled, setWebhookEnabled] = useState(integration.webhook_enabled);
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const fullUrl = integration.webhook_url ? window.location.origin + integration.webhook_url : "";
+  const needsSecret = syncMode === "bidirectional" && webhookEnabled && !integration.webhook_secret_set && !secret.trim();
+  const summary = !enabled ? "Off" : syncMode === "bidirectional" ? "Two-way" : "Outbound";
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(fullUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
+  };
+  const save = async () => {
+    if (needsSecret) { setMsg("A signing secret is required to accept inbound webhooks."); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const body: Partial<{ enabled: boolean; sync_mode: string; webhook_enabled: boolean; webhook_secret: string }> = { enabled, sync_mode: syncMode, webhook_enabled: webhookEnabled };
+      if (secret.trim()) body.webhook_secret = secret.trim();
+      const next = await api.saveIntegration(integration.provider, body);
+      onSaved(next); setSecret(""); setMsg("Saved.");
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <details className="sync-block">
+      <summary>Bidirectional sync <span className={`conn-status ${enabled ? "good" : ""}`}>{summary}</span></summary>
+      <p className="mini-meta">Outbound promotes incidents to this system. Bidirectional also applies inbound state changes (ack, resolve, reassign) back onto the incident via a registered webhook.</p>
+      <label className="scope-chip" style={{ marginBottom: 8 }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enable two-way sync
+      </label>
+      <div className="form-grid">
+        <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} />
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+          <span>Inbound webhook</span>
+          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
+            <input type="checkbox" checked={webhookEnabled} disabled={syncMode !== "bidirectional"} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
+          </label>
+        </label>
+        <LabeledInput label={`Webhook signing secret${integration.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={integration.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} hint="write-only — blank keeps stored" />
+      </div>
+      {needsSecret && <p className="pol-row-err" role="alert">A signing secret is required to accept inbound webhooks.</p>}
+      {fullUrl && (
+        <div style={{ marginTop: 12 }}>
+          <span className="mini-meta">Inbound webhook URL — register this with the provider</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+            <input readOnly value={fullUrl} onFocus={(e) => e.currentTarget.select()} className="mono" style={{ flex: 1, padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
+            <button className="dash-btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+          </div>
+          <p className="mini-meta" style={{ marginTop: 4 }}>{webhookHint}</p>
+        </div>
+      )}
+      {!inboundEnabled && <p className="mini-meta" style={{ marginTop: 8 }}>Inbound webhooks are recorded but not yet driving incident state — pending platform enablement.</p>}
+      <div className="admin-actions">
+        <button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save sync"}</button>
+        {msg && <span className="mini-meta">{msg}</span>}
+      </div>
+    </details>
+  );
+}
+
 export function NotificationsAdmin() {
   const [smtp, setSmtp] = useState<SmtpConfig | null>(null);
   const [twilio, setTwilio] = useState<TwilioConfig | null>(null);
   const [ntfy, setNtfy] = useState<NtfyConfig | null>(null);
   const [slack, setSlack] = useState<SlackConfig | null>(null);
   const [pager, setPager] = useState<PagerDutyConfig | null>(null);
+  // Bidirectional-sync config (Integration Platform) for the channels that
+  // support it — PagerDuty & Slack live here; ServiceNow/Jira sync lives in the
+  // Integrations connector setup.
+  const [integrations, setIntegrations] = useState<IntegrationConfig[] | null>(null);
+  const [inboundEnabled, setInboundEnabled] = useState(false);
   const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "", slack: "", pager: "" });
   const [msg, setMsg] = useState<Record<string, string>>({});
   // Contact points (reusable delivery audiences referenced by reports).
@@ -1564,8 +1643,18 @@ export function NotificationsAdmin() {
     api.ntfyConfig().then(setNtfy).catch(() => {});
     api.slackConfig().then(setSlack).catch(() => {});
     api.pagerDutyConfig().then(setPager).catch(() => {});
+    api.integrations().then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); }).catch(() => {});
     loadCps();
   }, []);
+
+  const integrationFor = (id: string): IntegrationConfig => integrations?.find((i) => i.provider === id) ?? blankIntegration(id);
+  const onIntegrationSaved = (next: IntegrationConfig) =>
+    setIntegrations((cur) => {
+      const arr = (cur ?? []).slice();
+      const i = arr.findIndex((x) => x.provider === next.provider);
+      if (i >= 0) arr[i] = next; else arr.push(next);
+      return arr;
+    });
 
   const editCp = (cp: ContactPoint) => {
     setCpDraft({ ...cp });
@@ -1770,6 +1859,7 @@ export function NotificationsAdmin() {
               <button className="ghost" onClick={() => test("slack", api.testSlack)}>Send test</button>
               {msg.slack && <span className="mini-meta">{msg.slack}</span>}
             </div>
+            <SyncSettings integration={integrationFor("slack")} inboundEnabled={inboundEnabled} webhookHint="Paste into your Slack app's Interactivity & Shortcuts request URL." onSaved={onIntegrationSaved} />
           </>
         )}
       </div>
@@ -1795,6 +1885,7 @@ export function NotificationsAdmin() {
               <button className="ghost" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
               {msg.pager && <span className="mini-meta">{msg.pager}</span>}
             </div>
+            <SyncSettings integration={integrationFor("pagerduty")} inboundEnabled={inboundEnabled} webhookHint="Paste into a PagerDuty v3 webhook subscription." onSaved={onIntegrationSaved} />
           </>
         )}
       </div>
