@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Device, Alert } from "../services/api";
 import { takeDrill } from "../theme/drill";
-import DeviceDetail from "./DeviceDetail";
+import DeviceDetail, { DeviceDetailBody } from "./DeviceDetail";
 import DeviceTerminal from "./DeviceTerminal";
+import Logs from "../tabs/Logs";
 import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
+import { useWorkspace } from "../context/workspace";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -85,6 +87,31 @@ export default function Devices() {
   const [q, setQ] = useState("");
   const [detail, setDetail] = useState<Device | null>(null);
   const [term, setTerm] = useState<Device | null>(null);
+  const ws = useWorkspace();
+
+  // Selecting a device pivots into the dockable Inspector (shell-v2) with its
+  // context + actions (Connect, and a "View logs" NOC pivot that opens the
+  // device's logs in the bottom drawer). In v1 it falls back to the modal.
+  const openDevice = (d: Device) => {
+    if (!ws.enabled) { setDetail(d); return; }
+    ws.openInspector(
+      <DeviceDetailBody
+        device={d}
+        actions={
+          <>
+            {sshEnabled && <button className="btn" onClick={() => setTerm(d)}>Connect</button>}
+            <button
+              className="btn"
+              onClick={() => ws.openDrawer(<Logs initialQuery={d.name || d.id} rangeMinutes={60} />, { title: `Logs · ${d.id}` })}
+            >
+              View logs
+            </button>
+          </>
+        }
+      />,
+      { title: d.name || d.id, subtitle: d.address },
+    );
+  };
 
   useEffect(() => {
     const d = takeDrill().devices;
@@ -162,7 +189,7 @@ export default function Devices() {
         <>
           <StatusDot health={health.get(d.id) ?? "up"} />
           <a className="dtv-link" title="View device details"
-            onClick={(e) => { e.stopPropagation(); setDetail(d); }}>{d.id}</a>
+            onClick={(e) => { e.stopPropagation(); openDevice(d); }}>{d.id}</a>
         </>
       ),
     },
@@ -299,7 +326,7 @@ export default function Devices() {
             height="62vh"
             ariaLabel="Devices"
             initialSort={{ key: "vendor", dir: "asc" }}
-            onRowClick={(d) => setDetail(d)}
+            onRowClick={(d) => openDevice(d)}
             empty="No devices match this filter."
             rowActions={(d) => (
               <>

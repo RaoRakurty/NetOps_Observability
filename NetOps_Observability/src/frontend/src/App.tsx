@@ -10,6 +10,9 @@ import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import CopilotDrawer from "./components/CopilotDrawer";
 import CommandPalette from "./components/CommandPalette";
+import Inspector from "./components/Inspector";
+import BottomDrawer from "./components/BottomDrawer";
+import { WorkspaceProvider } from "./context/workspace";
 import Login from "./pages/Login";
 
 export default function App() {
@@ -113,6 +116,7 @@ export default function App() {
 
   return (
     <ShellContext.Provider value={shell}>
+     <WorkspaceProvider enabled={shellV2}>
       <div className={`shell${collapsed ? " collapsed" : ""}${shellV2 ? " shell-v2" : ""}`}>
         <TopBar health={health} user={user} onLogout={logout} hideUserMenu={shellV2} />
         {shellV2 ? (
@@ -139,7 +143,10 @@ export default function App() {
         </main>
         <CopilotDrawer />
         <CommandPalette nav={nav} />
+        <Inspector />
+        <BottomDrawer />
       </div>
+     </WorkspaceProvider>
     </ShellContext.Provider>
   );
 }

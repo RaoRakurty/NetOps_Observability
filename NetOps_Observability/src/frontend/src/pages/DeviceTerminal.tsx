@@ -211,7 +211,7 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
 
 const backdrop: React.CSSProperties = {
   position: "fixed", inset: 0, background: "rgba(8,12,24,.55)",
-  display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
+  display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100,
 };
 const panel: React.CSSProperties = { width: "min(960px, 94vw)", maxHeight: "90vh", overflow: "auto" };
 const header: React.CSSProperties = {

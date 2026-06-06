@@ -137,6 +137,13 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="6" y1="6" x2="18" y2="18" />
     </>
   ),
+  // pin — a thumbtack for the Inspector "keep open across selections" toggle.
+  pin: (
+    <>
+      <line x1="12" y1="17" x2="12" y2="22" />
+      <path d="M9 2h6l-1 7 3 3v2H7v-2l3-3-1-7z" />
+    </>
+  ),
   // Account / session + footer-utility icons (rail bottom cluster).
   user: (
     <>

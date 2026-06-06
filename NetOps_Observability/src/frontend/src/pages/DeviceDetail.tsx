@@ -11,7 +11,10 @@ function isDown(d: Device): boolean {
   return !!seen && Date.now() - seen > DOWN_AFTER_MS;
 }
 
-export default function DeviceDetail({ device, onClose }: { device: Device; onClose: () => void }) {
+// DeviceDetailBody — the device metadata/labels/alerts content, factored out of
+// the modal so it can also be hosted in the dockable Inspector (shell-v2). The
+// optional `actions` slot renders a row of buttons under the status header.
+export function DeviceDetailBody({ device, actions }: { device: Device; actions?: React.ReactNode }) {
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
 
   useEffect(() => {
@@ -34,73 +37,85 @@ export default function DeviceDetail({ device, onClose }: { device: Device; onCl
   ];
 
   return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>
+          {device.name || device.id}
+          {isDown(device) ? (
+            <span className="badge" style={{ marginLeft: 8, background: "var(--bad)", color: "#fff" }}>Down</span>
+          ) : (
+            <span className="badge good" style={{ marginLeft: 8 }}>Up</span>
+          )}
+        </h3>
+      </div>
+
+      {actions && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>{actions}</div>}
+
+      <table style={{ marginTop: 10 }}>
+        <tbody>
+          {rows.map(([k, v]) => (
+            <tr key={k}>
+              <td style={{ color: "var(--muted)", width: 180 }}>{k}</td>
+              <td>{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {device.labels && Object.keys(device.labels).length > 0 && (
+        <>
+          <div className="mini-meta" style={{ fontWeight: 700, marginTop: 14 }}>Labels</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+            {Object.entries(device.labels).map(([k, v]) => (
+              <span key={k} className="badge">{k}={v}</span>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="mini-meta" style={{ fontWeight: 700, marginTop: 16 }}>Active alerts</div>
+      {alerts === null ? (
+        <div className="empty">Loading…</div>
+      ) : alerts.length === 0 ? (
+        <p className="mini-meta">No active alerts for this device.</p>
+      ) : (
+        <table style={{ marginTop: 6 }}>
+          <thead>
+            <tr>
+              <th>Severity</th>
+              <th>Rule</th>
+              <th>Summary</th>
+              <th>Fired</th>
+            </tr>
+          </thead>
+          <tbody>
+            {alerts.map((a) => (
+              <tr key={a.id}>
+                <td><span className={`badge sev-${a.severity}`}>{a.severity}</span></td>
+                <td>{a.rule}</td>
+                <td>{a.summary}</td>
+                <td className="mini-meta">{new Date(a.fired_at).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+export default function DeviceDetail({ device, onClose }: { device: Device; onClose: () => void }) {
+  return (
     <div
       className="modal-backdrop"
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
       onClick={onClose}
     >
       <div className="card" style={{ width: "min(640px, 94vw)", maxHeight: "88vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ margin: 0 }}>
-            {device.name || device.id}
-            {isDown(device) ? (
-              <span className="badge" style={{ marginLeft: 8, background: "var(--bad)", color: "#fff" }}>Down</span>
-            ) : (
-              <span className="badge good" style={{ marginLeft: 8 }}>Up</span>
-            )}
-          </h3>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button className="btn" onClick={onClose}>Close</button>
         </div>
-
-        <table style={{ marginTop: 10 }}>
-          <tbody>
-            {rows.map(([k, v]) => (
-              <tr key={k}>
-                <td style={{ color: "var(--muted)", width: 180 }}>{k}</td>
-                <td>{v}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {device.labels && Object.keys(device.labels).length > 0 && (
-          <>
-            <div className="mini-meta" style={{ fontWeight: 700, marginTop: 14 }}>Labels</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-              {Object.entries(device.labels).map(([k, v]) => (
-                <span key={k} className="badge">{k}={v}</span>
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="mini-meta" style={{ fontWeight: 700, marginTop: 16 }}>Active alerts</div>
-        {alerts === null ? (
-          <div className="empty">Loading…</div>
-        ) : alerts.length === 0 ? (
-          <p className="mini-meta">No active alerts for this device.</p>
-        ) : (
-          <table style={{ marginTop: 6 }}>
-            <thead>
-              <tr>
-                <th>Severity</th>
-                <th>Rule</th>
-                <th>Summary</th>
-                <th>Fired</th>
-              </tr>
-            </thead>
-            <tbody>
-              {alerts.map((a) => (
-                <tr key={a.id}>
-                  <td><span className={`badge sev-${a.severity}`}>{a.severity}</span></td>
-                  <td>{a.rule}</td>
-                  <td>{a.summary}</td>
-                  <td className="mini-meta">{new Date(a.fired_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <DeviceDetailBody device={device} />
       </div>
     </div>
   );
