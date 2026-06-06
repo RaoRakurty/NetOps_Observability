@@ -1454,6 +1454,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .form-suffix-wrap { position: relative; display: flex; align-items: center; }
 .form-suffix { position: absolute; right: 12px; font-size: var(--fs-meta); color: var(--muted); pointer-events: none; }
 .form-hint { font-size: var(--fs-micro); color: var(--muted); line-height: 1.4; }
+.row-chevron { transition: transform .12s ease; color: var(--muted); vertical-align: middle; }
 .form-check { display: inline-flex; align-items: center; gap: 7px; font-size: var(--fs-meta); color: var(--fg); cursor: pointer; user-select: none; }
 .form-check input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 .form-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: var(--sp-2); grid-column: 1 / -1; }

@@ -335,7 +335,7 @@ export default function Reports() {
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{editingId ? "Edit report" : "New report"}</h2>
-          {!editingId && <button type="button" className="dash-btn accent" onClick={() => setWizard(true)}>✨ Guided setup</button>}
+          {!editingId && <button type="button" className="dash-btn accent" onClick={() => setWizard(true)}>Guided setup</button>}
         </div>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8 }}>
           Choose what to report, when to send it, who receives it, and which formats to produce.
@@ -465,7 +465,7 @@ export default function Reports() {
                       <button className="dash-btn" onClick={() => setHistory(o)} title="Execution history">History</button>{" "}
                       <button className="dash-btn" onClick={() => sendNow(o)} title="Deliver now">Send now</button>{" "}
                       <button className="dash-btn" onClick={() => edit(o)} title="Edit">Edit</button>{" "}
-                      <button className="dash-btn" onClick={() => remove(o)} title="Delete">✕</button>
+                      <button className="dash-btn" onClick={() => remove(o)} title="Delete" aria-label="Delete"><Icon name="close" size={13} /></button>
                     </td>
                   </tr>
                 );
@@ -741,7 +741,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                 return (
                   <Fragment key={e.id}>
                     <tr style={{ cursor: "pointer" }} onClick={() => expand(e.id)}>
-                      <td>{open === e.id ? "▾" : "▸"}</td>
+                      <td><Icon name="chevron" size={13} className="row-chevron" style={open === e.id ? { transform: "rotate(90deg)" } : undefined} /></td>
                       <td className="mini-meta">{fmt(e.fire_time)}</td>
                       <td><span className={`badge sev-${statusSev(e.status)}`}>{e.status}</span></td>
                       <td className="mini-meta">{dur(e.started_at, e.completed_at)}</td>

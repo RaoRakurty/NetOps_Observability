@@ -2,7 +2,7 @@
 // external dependency. Icons inherit color via stroke="currentColor" and the
 // size via the `size` prop, so they adapt to light/dark themes automatically.
 
-type Props = { name: string; size?: number; className?: string };
+type Props = { name: string; size?: number; className?: string; style?: React.CSSProperties };
 
 const PATHS: Record<string, JSX.Element> = {
   overview: (
@@ -213,6 +213,8 @@ const PATHS: Record<string, JSX.Element> = {
   ),
   // check — requirement met / success.
   check: <path d="M20 6 9 17l-5-5" />,
+  // chevron — right-pointing disclosure; rotate 90° for expanded state.
+  chevron: <path d="m9 6 6 6-6 6" />,
   // refresh — circular re-fetch / reload.
   refresh: (
     <>
@@ -276,10 +278,11 @@ const PATHS: Record<string, JSX.Element> = {
   ),
 };
 
-export default function Icon({ name, size = 18, className }: Props) {
+export default function Icon({ name, size = 18, className, style }: Props) {
   return (
     <svg
       className={className}
+      style={style}
       width={size}
       height={size}
       viewBox="0 0 24 24"

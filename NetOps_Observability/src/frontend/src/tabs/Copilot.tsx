@@ -7,6 +7,7 @@ import {
   OpenAIChatResponse,
   CopilotConfig,
 } from "../services/api";
+import Icon from "../components/Icon";
 
 // AI Copilot — chat pane. Posts to /api/copilot/chat. The backend
 // dispatches to Anthropic or OpenAI based on COPILOT_PROVIDER.
@@ -133,8 +134,8 @@ export default function Copilot() {
                 </span>
               </span>
             )}
-            <button type="button" onClick={() => setShowSettings((v) => !v)} title="Assistant settings">
-              ⚙
+            <button className="btn" type="button" onClick={() => setShowSettings((v) => !v)} title="Assistant settings" aria-label="Assistant settings">
+              <Icon name="settings" size={15} />
             </button>
           </div>
         </div>
