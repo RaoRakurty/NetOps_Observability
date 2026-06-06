@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
+import DataTable, { Column } from "../components/DataTable";
+
+const fmtNum = (n: number) => Number(n).toLocaleString();
 
 type TopTalkerRow = {
   src: string;
@@ -60,6 +63,20 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
   useEffect(() => {
     if (sinceSeconds !== undefined) setSince(sinceSeconds);
   }, [sinceSeconds]);
+
+  const mono: React.CSSProperties = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12 };
+  const talkerCols = useMemo<Column<TopTalkerRow>[]>(() => [
+    { key: "src", header: "Source", width: "28%", sortable: true, text: (r) => r.src,
+      render: (r) => <span style={mono} title={r.src}>{r.src}</span> },
+    { key: "dst", header: "Destination", width: "28%", sortable: true, text: (r) => r.dst,
+      render: (r) => <span style={mono} title={r.dst}>{r.dst}</span> },
+    { key: "bytes", header: "Bytes", align: "right", sortable: true,
+      sortValue: (r) => Number(r.bytes_total), render: (r) => fmtNum(r.bytes_total) },
+    { key: "packets", header: "Packets", align: "right", sortable: true,
+      sortValue: (r) => Number(r.packets_total), render: (r) => fmtNum(r.packets_total) },
+    { key: "flows", header: "Flows", align: "right", sortable: true,
+      sortValue: (r) => Number(r.flows), render: (r) => fmtNum(r.flows) },
+  ], []);
 
   useEffect(() => {
     let alive = true;
@@ -183,28 +200,14 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
         {top.length === 0 ? (
           <div className="empty">No flow data yet.</div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Source</th>
-                <th>Destination</th>
-                <th>Bytes</th>
-                <th>Packets</th>
-                <th>Flows</th>
-              </tr>
-            </thead>
-            <tbody>
-              {top.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ fontFamily: "ui-monospace, monospace" }}>{r.src}</td>
-                  <td style={{ fontFamily: "ui-monospace, monospace" }}>{r.dst}</td>
-                  <td>{Number(r.bytes_total).toLocaleString()}</td>
-                  <td>{Number(r.packets_total).toLocaleString()}</td>
-                  <td>{r.flows}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable<TopTalkerRow>
+            rows={top}
+            columns={talkerCols}
+            rowKey={(r) => `${r.src}→${r.dst}`}
+            height={Math.min(440, 40 + top.length * 28)}
+            ariaLabel="Top talkers"
+            initialSort={{ key: "bytes", dir: "desc" }}
+          />
         )}
       </div>
 

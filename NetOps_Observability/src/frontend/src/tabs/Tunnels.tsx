@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Tunnel } from "../services/api";
+import DataTable, { Column, Sev } from "../components/DataTable";
 
-// Heat classes — lower is better for latency/jitter/loss, higher for QoE.
-const latClass = (ms: number) =>
-  ms < 50 ? "cell-ok" : ms < 150 ? "cell-warn" : "cell-bad";
-const jitClass = (ms: number) =>
-  ms < 30 ? "cell-ok" : ms < 60 ? "cell-warn" : "cell-bad";
-const lossClass = (pct: number) =>
-  pct < 1 ? "cell-ok" : pct < 3 ? "cell-warn" : "cell-bad";
-const qoeClass = (q: number) =>
-  q >= 8 ? "cell-ok" : q >= 5 ? "cell-warn" : "cell-bad";
+// Heat severity — lower is better for latency/jitter/loss, higher for QoE.
+// Maps onto the sacred ok/warn/crit ramp the DataTable tints cells with.
+const latSev = (ms: number): Sev => (ms < 50 ? "ok" : ms < 150 ? "warn" : "crit");
+const jitSev = (ms: number): Sev => (ms < 30 ? "ok" : ms < 60 ? "warn" : "crit");
+const lossSev = (pct: number): Sev => (pct < 1 ? "ok" : pct < 3 ? "warn" : "crit");
+const qoeSev = (q: number): Sev => (q >= 8 ? "ok" : q >= 5 ? "warn" : "crit");
 
 // ClickHouse JSON returns UInt64 (uptime) as a string and Float32 as a number;
 // coerce every numeric field so arithmetic and formatting are safe.
@@ -70,6 +68,42 @@ export default function Tunnels() {
         .includes(needle),
     );
   }, [rows, q]);
+
+  // Endpoint cell: device prominent, address a dimmed mono suffix on one line.
+  const endpoint = (device: string, addr: string) => (
+    <span title={`${device || "—"}${addr ? ` · ${addr}` : ""}`}>
+      {device || "—"}
+      {addr && <span className="mini-meta" style={{ marginLeft: 6, fontFamily: "var(--font-mono, monospace)" }}>{addr}</span>}
+    </span>
+  );
+
+  const columns = useMemo<Column<Tunnel>[]>(() => [
+    { key: "type", header: "Type", width: 92, text: (t) => t.type ?? "",
+      render: (t) => <span className="badge">{t.type || "—"}</span> },
+    { key: "local", header: "Local", width: "18%", sortable: true,
+      text: (t) => `${t.local_device} ${t.local_addr}`, sortValue: (t) => t.local_device || "",
+      render: (t) => endpoint(t.local_device, t.local_addr) },
+    { key: "remote", header: "Remote", width: "18%", sortable: true,
+      text: (t) => `${t.remote_device} ${t.remote_addr}`, sortValue: (t) => t.remote_device || "",
+      render: (t) => endpoint(t.remote_device, t.remote_addr) },
+    { key: "latency", header: "Latency", width: 96, align: "right", sortable: true,
+      sortValue: (t) => t.latency_ms, sev: (t) => latSev(t.latency_ms),
+      render: (t) => `${t.latency_ms.toFixed(1)} ms` },
+    { key: "jitter", header: "Jitter", width: 90, align: "right", sortable: true,
+      sortValue: (t) => t.jitter_ms, sev: (t) => jitSev(t.jitter_ms),
+      render: (t) => `${t.jitter_ms.toFixed(1)} ms` },
+    { key: "loss", header: "Loss", width: 84, align: "right", sortable: true,
+      sortValue: (t) => t.loss_pct, sev: (t) => lossSev(t.loss_pct),
+      render: (t) => `${t.loss_pct.toFixed(2)} %` },
+    { key: "qoe", header: "QoE", width: 70, align: "right", sortable: true,
+      sortValue: (t) => t.qoe, sev: (t) => qoeSev(t.qoe),
+      render: (t) => t.qoe.toFixed(1) },
+    { key: "uptime", header: "Uptime", width: 92, align: "right", sortable: true,
+      sortValue: (t) => t.uptime_s, render: (t) => fmtUptime(t.uptime_s) },
+    { key: "status", header: "Status", width: 86, sortable: true,
+      text: (t) => t.status ?? "", sortValue: (t) => t.status ?? "",
+      render: (t) => <span className={`badge ${t.status === "up" ? "good" : "bad"}`}>{t.status || "?"}</span> },
+  ], []);
 
   const up = rows.filter((t) => t.status === "up").length;
   const down = rows.filter((t) => t.status === "down").length;
@@ -134,54 +168,15 @@ export default function Tunnels() {
           collector populates it from device telemetry.
         </div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Local</th>
-              <th>Remote</th>
-              <th className="num">Latency</th>
-              <th className="num">Jitter</th>
-              <th className="num">Loss</th>
-              <th className="num">QoE</th>
-              <th>Uptime</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((t) => (
-              <tr key={t.id} className="dt-row">
-                <td>
-                  <span className="badge">{t.type || "—"}</span>
-                </td>
-                <td>
-                  {t.local_device || "—"}
-                  <div className="stat-sub">{t.local_addr}</div>
-                </td>
-                <td>
-                  {t.remote_device || "—"}
-                  <div className="stat-sub">{t.remote_addr}</div>
-                </td>
-                <td className={`num ${latClass(t.latency_ms)}`}>
-                  {t.latency_ms.toFixed(1)} ms
-                </td>
-                <td className={`num ${jitClass(t.jitter_ms)}`}>
-                  {t.jitter_ms.toFixed(1)} ms
-                </td>
-                <td className={`num ${lossClass(t.loss_pct)}`}>
-                  {t.loss_pct.toFixed(2)} %
-                </td>
-                <td className={`num ${qoeClass(t.qoe)}`}>{t.qoe.toFixed(1)}</td>
-                <td>{fmtUptime(t.uptime_s)}</td>
-                <td>
-                  <span className={`badge ${t.status === "up" ? "good" : "bad"}`}>
-                    {t.status || "?"}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<Tunnel>
+          rows={filtered}
+          columns={columns}
+          rowKey={(t) => t.id}
+          height="60vh"
+          ariaLabel="Tunnels"
+          initialSort={{ key: "loss", dir: "desc" }}
+          empty="No tunnels match this filter."
+        />
       )}
     </div>
   );
