@@ -1,22 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { useWorkspace } from "../context/workspace";
+import { useEffect, useRef } from "react";
+import { useWorkspace, DRW_MIN } from "../context/workspace";
 import Icon from "./Icon";
 
 // BottomDrawer — the collapsible bottom pane (#45 §11): correlated logs / events
-// / timeline for the current selection (the NOC pivot). Height is drag-resizable
-// (top edge) and persisted. Driven via useWorkspace().openDrawer(node).
+// / timeline for the current selection (the NOC pivot). A true docked pane: the
+// shell grid gives it a row (var --drawer-h mirrors ws.drawerHeight), so the
+// center workspace reflows above it. Height is drag-resizable (top edge) +
+// persisted. Driven via useWorkspace().openDrawer(node).
 
-const KEY = "ws.drawerH";
-const MIN = 160;
-const clampH = (h: number) => Math.max(MIN, Math.min(h, Math.round(window.innerHeight * 0.8)));
+const clampH = (h: number) => Math.max(DRW_MIN, Math.min(h, Math.round(window.innerHeight * 0.8)));
 
 export default function BottomDrawer() {
   const ws = useWorkspace();
   const open = ws.enabled && !!ws.drawer;
-  const [height, setHeight] = useState<number>(() => {
-    const v = Number(localStorage.getItem(KEY));
-    return v >= MIN ? v : 300;
-  });
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -29,14 +25,12 @@ export default function BottomDrawer() {
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      setHeight(clampH(window.innerHeight - e.clientY));
+      if (dragging.current) ws.setDrawerHeight(clampH(window.innerHeight - e.clientY));
     };
     const onUp = () => {
       if (!dragging.current) return;
       dragging.current = false;
       document.body.style.userSelect = "";
-      localStorage.setItem(KEY, String(height));
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -44,28 +38,34 @@ export default function BottomDrawer() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [height]);
+  }, [ws]);
 
   if (!ws.enabled) return null;
   const d = ws.drawer;
 
   return (
-    <section className={`bottom-drawer${open ? " open" : ""}`} style={{ height: open ? height : 0 }} aria-hidden={!open}>
-      <div
-        className="bottom-drawer-resize"
-        onMouseDown={() => {
-          dragging.current = true;
-          document.body.style.userSelect = "none";
-        }}
-        title="Drag to resize"
-      />
-      <div className="bottom-drawer-head">
-        <strong>{d?.title ?? "Console"}</strong>
-        <button className="inspector-btn" onClick={ws.closeDrawer} title="Close (Esc)">
-          <Icon name="close" size={15} />
-        </button>
-      </div>
-      <div className="bottom-drawer-body">{d?.node}</div>
+    <section className={`bottom-drawer${open ? " open" : ""}`} aria-hidden={!open} aria-label="Console">
+      {open && (
+        <>
+          <div
+            className="bottom-drawer-resize"
+            role="separator"
+            aria-orientation="horizontal"
+            onMouseDown={() => {
+              dragging.current = true;
+              document.body.style.userSelect = "none";
+            }}
+            title="Drag to resize"
+          />
+          <div className="bottom-drawer-head">
+            <strong>{d?.title ?? "Console"}</strong>
+            <button className="inspector-btn" onClick={ws.closeDrawer} title="Close (Esc)">
+              <Icon name="close" size={15} />
+            </button>
+          </div>
+          <div className="bottom-drawer-body">{d?.node}</div>
+        </>
+      )}
     </section>
   );
 }

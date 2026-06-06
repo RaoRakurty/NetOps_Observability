@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Health } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
@@ -12,8 +12,23 @@ import CopilotDrawer from "./components/CopilotDrawer";
 import CommandPalette from "./components/CommandPalette";
 import Inspector from "./components/Inspector";
 import BottomDrawer from "./components/BottomDrawer";
-import { WorkspaceProvider } from "./context/workspace";
+import { WorkspaceProvider, useWorkspace } from "./context/workspace";
 import Login from "./pages/Login";
+
+// ShellGridSizing mirrors the live pane sizes into the shell grid's track vars
+// (--ins-w / --drawer-h) so the docked Inspector/BottomDrawer reflow the center
+// workspace instead of overlaying it. Runs inside the provider; 0px collapses
+// the track when a pane is closed. useLayoutEffect = applied before paint.
+function ShellGridSizing() {
+  const ws = useWorkspace();
+  useLayoutEffect(() => {
+    const el = document.querySelector(".shell.shell-v2") as HTMLElement | null;
+    if (!el) return;
+    el.style.setProperty("--ins-w", ws.inspector ? `${ws.inspectorWidth}px` : "0px");
+    el.style.setProperty("--drawer-h", ws.drawer ? `${ws.drawerHeight}px` : "0px");
+  }, [ws.inspector, ws.inspectorWidth, ws.drawer, ws.drawerHeight]);
+  return null;
+}
 
 export default function App() {
   const { user, loading, refresh, logout } = useAuth();
@@ -118,6 +133,7 @@ export default function App() {
     <ShellContext.Provider value={shell}>
      <WorkspaceProvider enabled={shellV2}>
       <div className={`shell${collapsed ? " collapsed" : ""}${shellV2 ? " shell-v2" : ""}`}>
+        <ShellGridSizing />
         <TopBar health={health} user={user} onLogout={logout} hideUserMenu={shellV2} />
         {shellV2 ? (
           <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} />

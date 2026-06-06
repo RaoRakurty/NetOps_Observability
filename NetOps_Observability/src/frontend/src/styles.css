@@ -201,7 +201,21 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    Additive — only applies under .shell-v2; the default shell/Sidebar
    is untouched. The flyout is position:fixed so the page never reflows.
    ================================================================= */
-.shell.shell-v2 { --sidebar-w: 212px; }
+/* Shell-v2 extends the shell grid with a right Inspector column and a bottom
+   Drawer row (#45 §11). Both collapse to 0px when their pane is closed (vars set
+   by ShellGridSizing), so the center workspace TRUE-DOCKS — it reflows around
+   the panes instead of being overlaid. */
+.shell.shell-v2 {
+  --sidebar-w: 212px;
+  --ins-w: 0px;
+  --drawer-h: 0px;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--ins-w);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--drawer-h);
+  grid-template-areas:
+    "sidebar topbar topbar"
+    "sidebar main   inspector"
+    "sidebar drawer inspector";
+}
 
 .rail {
   grid-area: sidebar;
@@ -896,20 +910,20 @@ tbody tr.dt-row:hover { background: var(--hover); }
 .dtv-link:hover { text-decoration: underline; }
 .dtv-row.dtv-selected { background: var(--accent-soft, var(--hover)); outline: 1px solid var(--accent-ring, var(--accent)); outline-offset: -1px; }
 
-/* ----- Workspace panes (#45): dockable Inspector (right) + BottomDrawer -----
-   Non-modal overlays mounted only under shell-v2 (the components gate on
-   ws.enabled). Both drag-resizable; offsets read the v2 rail/topbar vars. */
+/* ----- Workspace panes (#45 §11): TRUE-DOCKED Inspector (right) + BottomDrawer
+   -----
+   Real grid items (grid-area inspector/drawer) — the center workspace reflows
+   around them; not overlays. Only rendered under shell-v2 (components gate on
+   ws.enabled). Each drag-resizable from its inner edge; size persisted. */
 .inspector {
-  position: fixed; top: var(--topbar-h, 60px); right: 0; bottom: 0;
+  grid-area: inspector;
+  min-width: 0; overflow: hidden; position: relative;
   background: var(--surface, var(--panel-solid));
-  border-left: 1px solid var(--border, var(--panel-border));
-  transform: translateX(100%); transition: transform 0.18s ease;
-  z-index: 86; display: flex; flex-direction: column;
-  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.14);
+  display: flex; flex-direction: column;
 }
-.inspector.open { transform: translateX(0); }
+.inspector.open { border-left: 1px solid var(--border, var(--panel-border)); }
 .inspector-resize {
-  position: absolute; left: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; z-index: 2;
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2;
 }
 .inspector-resize:hover { background: var(--accent-soft, var(--hover)); }
 .inspector-head {
@@ -927,15 +941,14 @@ tbody tr.dt-row:hover { background: var(--hover); }
 .inspector-body { flex: 1; overflow: auto; padding: 14px; }
 
 .bottom-drawer {
-  position: fixed; left: var(--sidebar-w, 212px); right: 0; bottom: 0;
+  grid-area: drawer;
+  min-height: 0; overflow: hidden; position: relative;
   background: var(--surface, var(--panel-solid));
-  border-top: 1px solid var(--border-strong, var(--panel-border));
-  z-index: 82; display: flex; flex-direction: column; overflow: hidden;
-  box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.14);
+  display: flex; flex-direction: column;
 }
-.bottom-drawer:not(.open) { border-top: 0; }
+.bottom-drawer.open { border-top: 1px solid var(--border-strong, var(--panel-border)); }
 .bottom-drawer-resize {
-  position: absolute; left: 0; right: 0; top: 0; height: 5px; cursor: row-resize; z-index: 2;
+  position: absolute; left: 0; right: 0; top: 0; height: 6px; cursor: row-resize; z-index: 2;
 }
 .bottom-drawer-resize:hover { background: var(--accent-soft, var(--hover)); }
 .bottom-drawer-head {
