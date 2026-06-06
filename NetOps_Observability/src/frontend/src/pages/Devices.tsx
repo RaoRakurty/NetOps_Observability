@@ -4,6 +4,7 @@ import { takeDrill } from "../theme/drill";
 import DeviceDetail from "./DeviceDetail";
 import DeviceTerminal from "./DeviceTerminal";
 import Wizard from "../components/Wizard";
+import DataTable, { Column, Sev } from "../components/DataTable";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -140,21 +141,69 @@ export default function Devices() {
     return c;
   }, [health]);
 
-  const groups = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const by = new Map<string, Device[]>();
-    for (const d of devices) {
-      if (filter !== "all" && health.get(d.id) !== filter) continue;
-      if (needle) {
-        const hay = `${d.id} ${d.name} ${d.address} ${d.vendor ?? ""} ${d.model ?? ""}`.toLowerCase();
-        if (!hay.includes(needle)) continue;
-      }
-      const v = (d.vendor || "").trim() || "Unknown";
-      (by.get(v) ?? by.set(v, []).get(v)!).push(d);
-    }
-    return [...by.entries()].sort(([a], [b]) =>
-      a === "Unknown" ? 1 : b === "Unknown" ? -1 : a.localeCompare(b));
-  }, [devices, filter, q, health]);
+  // Health-filtered flat list; the text filter (q) + sort run inside DataTable.
+  const rows = useMemo(
+    () => devices.filter((d) => filter === "all" || health.get(d.id) === filter),
+    [devices, filter, health],
+  );
+
+  // Map device health → the sacred severity ramp so a stale/down heartbeat tints
+  // its "Last seen" cell (warn = degraded, crit = down).
+  const healthSev = (h: Health): Sev | undefined =>
+    h === "down" ? "crit" : h === "degraded" ? "warn" : undefined;
+
+  // Column defs for the telemetry table primitive. `text` feeds the inline
+  // filter, `sortValue` the header sort, `sev` the conditional cell tint.
+  const columns = useMemo<Column<Device>[]>(() => [
+    {
+      key: "id", header: "Device", width: "16%", sortable: true,
+      text: (d) => d.id, sortValue: (d) => d.id,
+      render: (d) => (
+        <>
+          <StatusDot health={health.get(d.id) ?? "up"} />
+          <a className="dtv-link" title="View device details"
+            onClick={(e) => { e.stopPropagation(); setDetail(d); }}>{d.id}</a>
+        </>
+      ),
+    },
+    {
+      key: "name", header: "Name", width: "16%", sortable: true,
+      text: (d) => d.name ?? "", render: (d) => <span title={d.name || ""}>{d.name || "—"}</span>,
+    },
+    {
+      key: "address", header: "Address", width: 160,
+      text: (d) => d.address,
+      render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{d.address}</span>,
+    },
+    {
+      key: "vendor", header: "Vendor", width: "13%", sortable: true,
+      text: (d) => d.vendor ?? "", sortValue: (d) => (d.vendor || "~").toLowerCase(),
+      render: (d) => {
+        const v = (d.vendor || "").trim() || "Unknown";
+        return (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={v}>
+            <span style={{ width: 8, height: 8, borderRadius: 3, background: vendorColor(v), flex: "none" }} />
+            <span style={{ textTransform: "capitalize" }}>{v}</span>
+          </span>
+        );
+      },
+    },
+    {
+      key: "model", header: "Model", width: "12%",
+      text: (d) => d.model ?? "", render: (d) => <span title={d.model || ""}>{d.model || "—"}</span>,
+    },
+    {
+      key: "source", header: "Source", width: 96,
+      text: (d) => sourceLabel(d.source),
+      render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
+    },
+    {
+      key: "last_seen", header: "Last seen", width: 110, sortable: true,
+      sortValue: (d) => new Date(d.last_seen).getTime() || 0,
+      sev: (d) => healthSev(health.get(d.id) ?? "up"),
+      render: (d) => <span title={new Date(d.last_seen).toLocaleString()}>{relTime(d.last_seen)}</span>,
+    },
+  ], [health]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
@@ -241,67 +290,26 @@ export default function Devices() {
       <div className="card">
         {devices.length === 0 ? (
           <div className="empty">No devices yet — discovery hasn't returned anything.</div>
-        ) : groups.length === 0 ? (
-          <div className="empty">No devices match this filter.</div>
         ) : (
-          // One unified, column-aligned grid: a single <table> with a fixed
-          // colgroup so every row lines up; vendors are section header rows
-          // (multiple <tbody> in one table is valid HTML and keeps alignment).
-          <table className="device-table" style={{ tableLayout: "fixed", width: "100%" }}>
-            <colgroup>
-              <col style={{ width: "17%" }} />
-              <col style={{ width: "19%" }} />
-              <col style={{ width: 160 }} />
-              <col style={{ width: "15%" }} />
-              <col style={{ width: 90 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: sshEnabled ? 170 : 90 }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Device</th>
-                <th>Name</th>
-                <th>Address</th>
-                <th>Model</th>
-                <th>Source</th>
-                <th>Last seen</th>
-                <th style={{ textAlign: "right" }}>Actions</th>
-              </tr>
-            </thead>
-            {groups.map(([vendor, list]) => (
-              <tbody key={vendor}>
-                <tr className="group-row">
-                  <td colSpan={7} style={{ background: "var(--hover)", padding: "6px 10px", fontWeight: 600 }}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 9, height: 9, borderRadius: 999, background: vendorColor(vendor) }} />
-                      {vendor}
-                      <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 12 }}>· {list.length}</span>
-                    </span>
-                  </td>
-                </tr>
-                {list.map((d) => (
-                  <tr key={d.id}>
-                    <td style={ellipsis}>
-                      <StatusDot health={health.get(d.id) ?? "up"} />
-                      <a style={{ cursor: "pointer", color: "var(--accent)", fontWeight: 600 }}
-                        title="View device details" onClick={() => setDetail(d)}>{d.id}</a>
-                    </td>
-                    <td style={ellipsis} title={d.name || ""}>{d.name || "—"}</td>
-                    <td style={{ ...ellipsis, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }} title={d.address}>{d.address}</td>
-                    <td style={ellipsis} title={d.model || ""}>{d.model || "—"}</td>
-                    <td><span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span></td>
-                    <td title={new Date(d.last_seen).toLocaleString()} style={{ fontSize: 12, color: "var(--muted)" }}>{relTime(d.last_seen)}</td>
-                    <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                      {sshEnabled && (
-                        <button className="btn" title="SSH to device" onClick={() => setTerm(d)} style={{ marginRight: 6 }}>Connect</button>
-                      )}
-                      <button className="btn" onClick={() => remove(d.id)}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            ))}
-          </table>
+          <DataTable<Device>
+            rows={rows}
+            columns={columns}
+            rowKey={(d) => d.id}
+            filter={q}
+            height="62vh"
+            ariaLabel="Devices"
+            initialSort={{ key: "vendor", dir: "asc" }}
+            onRowClick={(d) => setDetail(d)}
+            empty="No devices match this filter."
+            rowActions={(d) => (
+              <>
+                {sshEnabled && (
+                  <button className="btn" title="SSH to device" onClick={() => setTerm(d)}>Connect</button>
+                )}
+                <button className="btn" onClick={() => remove(d.id)}>Delete</button>
+              </>
+            )}
+          />
         )}
       </div>
 
@@ -310,8 +318,6 @@ export default function Devices() {
     </>
   );
 }
-
-const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
 // relTime renders a compact "3m ago" / "2h ago" age for the last-seen column.
 function relTime(iso: string): string {

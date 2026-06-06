@@ -833,6 +833,68 @@ th.sorted .sort-arrow { opacity: 1; }
 .dt-row { cursor: default; }
 tbody tr.dt-row:hover { background: var(--hover); }
 
+/* ----- DataTable primitive (virtualized, 28px rows) — components/DataTable.tsx -----
+   Dense telemetry table on the semantic token layer. Header is frozen; body
+   windows its rows (absolute translateY); cells opt into a sacred severity tint. */
+.dtv {
+  --dtv-row: var(--row-h, 28px);
+  position: relative; overflow: auto;
+  border: 1px solid var(--border, var(--panel-border));
+  border-radius: var(--radius-md, 6px);
+  background: var(--surface, var(--panel));
+  font-size: 12.5px;
+}
+.dtv:focus-visible { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: -2px; }
+.dtv-head {
+  position: sticky; top: 0; z-index: 2;
+  display: grid; align-items: center;
+  height: var(--toolbar-h, 32px);
+  background: var(--surface-2, var(--bg));
+  border-bottom: 1px solid var(--border-strong, var(--panel-border));
+  color: var(--fg-muted, var(--muted));
+  font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
+}
+.dtv-th { padding: 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dtv-th.sortable { cursor: pointer; user-select: none; }
+.dtv-th.sortable:hover { color: var(--fg); }
+.dtv-th.sorted { color: var(--accent); }
+.dtv-arrow { margin-left: 5px; font-size: 9px; opacity: 0.55; }
+.dtv-th.sorted .dtv-arrow { opacity: 1; }
+.dtv-body { position: relative; width: 100%; }
+.dtv-row {
+  position: absolute; left: 0; right: 0; top: 0;
+  display: grid; align-items: center;
+  height: var(--dtv-row);
+  border-bottom: 1px solid var(--border, var(--panel-border));
+  font-variant-numeric: tabular-nums;
+}
+.dtv-row.clickable { cursor: pointer; }
+.dtv-row:hover, .dtv-row.active { background: var(--surface-2, var(--hover)); }
+.dtv-cell {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dtv-cell > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dtv-cell[data-sev="ok"]   { color: var(--ok);   background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.dtv-cell[data-sev="warn"] { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); font-weight: 600; }
+.dtv-cell[data-sev="crit"] { color: var(--crit); background: color-mix(in srgb, var(--crit) 14%, transparent); font-weight: 600; }
+.dtv-cell[data-sev="info"] { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); }
+.dtv-cell[data-sev="ack"]  { color: var(--ack);  background: color-mix(in srgb, var(--ack) 10%, transparent); }
+/* Hover/active-revealed right-docked actions overlay (don't reserve a column). */
+.dtv-actions {
+  position: absolute; right: 8px; top: 0; height: var(--dtv-row);
+  display: flex; align-items: center; gap: 6px;
+  padding-left: 16px;
+  background: linear-gradient(90deg, transparent, var(--surface-2, var(--hover)) 24%);
+  opacity: 0; transition: opacity 0.12s;
+}
+.dtv-row:hover .dtv-actions, .dtv-row.active .dtv-actions { opacity: 1; }
+.dtv-actions .btn { padding: 2px 8px; font-size: 12px; }
+.dtv-empty { padding: 28px 12px; text-align: center; color: var(--fg-muted, var(--muted)); }
+.dtv-link { cursor: pointer; color: var(--accent); font-weight: 600; }
+.dtv-link:hover { text-decoration: underline; }
+
 /* ----- Vendor-grouped inventory ----- */
 .vendor-group { margin-top: 18px; }
 .vendor-group:first-of-type { margin-top: 8px; }
