@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, Incident, TimelineEntry } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
+import Icon from "../components/Icon";
 import { useWorkspace } from "../context/workspace";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
@@ -127,8 +128,8 @@ export default function Incidents() {
               </option>
             ))}
           </select>
-          <button type="button" onClick={load} disabled={busy}>
-            {busy ? "Loading…" : "Refresh"}
+          <button className="btn" type="button" onClick={load} disabled={busy}>
+            <Icon name="refresh" size={14} /> {busy ? "Loading…" : "Refresh"}
           </button>
         </div>
         {error && (

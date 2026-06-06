@@ -12,6 +12,7 @@ import {
   ReportExecution,
   ReportExecutionDetail,
 } from "../services/api";
+import Icon from "../components/Icon";
 
 // Reports — build a report (what + when + who + which formats), monitor its
 // runs, and drill into the async execution history (phase timeline, per-recipient
@@ -718,7 +719,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ margin: 0 }}>Execution history — {report.name}</h3>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="dash-btn" onClick={load}>Refresh</button>
+            <button className="dash-btn" onClick={load}><Icon name="refresh" size={13} /> Refresh</button>
             <button className="dash-btn" onClick={onClose}>Close</button>
           </div>
         </div>

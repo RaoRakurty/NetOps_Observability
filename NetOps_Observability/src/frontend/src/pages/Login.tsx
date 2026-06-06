@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { api, AuthMethods } from "../services/api";
 import { BRAND, BRAND_TAGLINE } from "../brand";
+import Icon from "../components/Icon";
 
 type Method = "local" | "ldap" | "tacacs";
 
 export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(
     () => sessionStorage.getItem("netops_sso_error"),
@@ -44,105 +46,93 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        background: "var(--bg)",
-      }}
-    >
-      <form
-        onSubmit={submit}
-        className="card"
-        style={{ width: 360, padding: 32, margin: 0 }}
-      >
-        <h1 style={{ marginTop: 0, fontSize: 26, letterSpacing: "-0.02em" }}>{BRAND}</h1>
-        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}>
-          {BRAND_TAGLINE} · sign in to continue.
-        </p>
+    <div className="login-wrap">
+      <form onSubmit={submit} className="card login-card">
+        <h1 className="login-brand">{BRAND}</h1>
+        <p className="login-sub">{BRAND_TAGLINE} · sign in to continue.</p>
 
-        {/* Method selector only appears when a directory provider is enabled. */}
-        {directMethods.length > 1 && (
-          <>
-            <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--muted)" }}>
-              Sign in with
-            </label>
-            <select
-              value={method}
-              onChange={(e) => setMethod(e.target.value as Method)}
-              style={{ width: "100%", marginTop: 4, padding: 8 }}
-            >
-              {directMethods.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
-          </>
-        )}
+        <div className="login-form">
+          {/* Method selector only appears when a directory provider is enabled. */}
+          {directMethods.length > 1 && (
+            <div className="form-field">
+              <label className="form-label" htmlFor="login-method">Sign in with</label>
+              <select
+                id="login-method"
+                className="form-select"
+                value={method}
+                onChange={(e) => setMethod(e.target.value as Method)}
+              >
+                {directMethods.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
-        <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--muted)" }}>
-          Username
-        </label>
-        <input
-          autoFocus
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          style={{ width: "100%", marginTop: 4, padding: 8 }}
-          autoComplete="username"
-        />
+          <div className="form-field">
+            <label className="form-label" htmlFor="login-user">Username</label>
+            <input
+              id="login-user"
+              className="form-input"
+              autoFocus
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+            />
+          </div>
 
-        <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--muted)" }}>
-          Password
-        </label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ width: "100%", marginTop: 4, padding: 8 }}
-          autoComplete="current-password"
-        />
+          <div className="form-field">
+            <label className="form-label" htmlFor="login-pw">Password</label>
+            <div className="pw-input-wrap">
+              <input
+                id="login-pw"
+                className="pw-input"
+                type={showPw ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="pw-eye"
+                onClick={() => setShowPw((s) => !s)}
+                aria-label={showPw ? "Hide password" : "Show password"}
+                aria-pressed={showPw}
+                tabIndex={-1}
+              >
+                <Icon name={showPw ? "eye-off" : "eye"} size={16} />
+              </button>
+            </div>
+          </div>
 
-        {error && (
-          <p style={{ color: "var(--bad)", marginTop: 12, fontSize: 13 }}>
-            {error}
-          </p>
-        )}
+          {error && (
+            <p className="login-msg" role="alert" aria-live="polite">{error}</p>
+          )}
 
-        <button
-          disabled={busy || !username || !password}
-          type="submit"
-          style={{ width: "100%", marginTop: 16, padding: 10 }}
-        >
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
+          <button className="btn-accent" disabled={busy || !username || !password} type="submit" style={{ width: "100%" }}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </div>
 
         {ssoProviders.length > 0 && (
-          <>
-            <div
-              style={{
-                display: "flex", alignItems: "center", gap: 8,
-                margin: "16px 0 12px", color: "var(--muted)", fontSize: 11,
-              }}
-            >
-              <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
-              or
-              <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
-            </div>
+          <div className="login-sso">
+            <div className="login-divider">or</div>
             {ssoProviders.map((p) => (
               <button
                 key={p.id || "default"}
                 type="button"
+                className="btn"
                 onClick={() => { window.location.href = api.ssoLoginUrl(p.id); }}
-                style={{ width: "100%", marginTop: 8, padding: 10 }}
                 title={`Sign in via ${p.kind.toUpperCase()}`}
+                style={{ width: "100%" }}
               >
                 Sign in with {p.name}
               </button>
             ))}
-          </>
+          </div>
         )}
 
-        <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 16 }}>
+        <p className="login-note">
           First-time install? Initial credentials are in{" "}
           <code>deployment/docker/.env</code> as <code>ADMIN_USERNAME</code> and{" "}
           <code>ADMIN_INITIAL_PASSWORD</code>. Change your password on the

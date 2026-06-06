@@ -3,6 +3,8 @@ import ReactECharts from "echarts-for-react";
 import { api, Device, Alert, Tunnel } from "../services/api";
 import { chartBase, hexToRgba } from "../theme/charts";
 import { SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
+import VendorIcon from "../components/VendorIcon";
+import { brandDataUri, vendorKey } from "../components/vendorBrands";
 
 // Topology — a a "network-path"-style view. Devices are laid out in
 // role tiers (core → distribution → access/edge → firewall) per site, drawn as
@@ -72,7 +74,6 @@ function latencyColor(ms: number): string {
 // operator can map their fleet's vendors to recognizable glyphs/logos. Keyed by
 // a normalized vendor slug; value is an image URL or a data: URI.
 const VENDOR_ICONS_KEY = "netops_vendor_icons";
-const vendorKey = (v: string) => (v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function loadVendorIcons(): Record<string, string> {
   try {
     return JSON.parse(localStorage.getItem(VENDOR_ICONS_KEY) || "{}");
@@ -144,7 +145,8 @@ export default function Topology() {
           byId[d.id] = { x, y, tier: t };
           const color = HEALTH_COLOR[h];
           const role = roleOf(d);
-          const vico = vendorIcons[vendorKey(d.vendor || "")];
+          // Operator override wins; otherwise the bundled vendor brand mark.
+          const vico = vendorIcons[vendorKey(d.vendor || "")] || brandDataUri(d.vendor || "");
           // First label line: health dot + (custom vendor icon | role glyph) + name.
           const head = vico ? `{dot|●} {vico|} {n|${d.name || d.id}}` : `{dot|●} {g|${ROLE_GLYPH[role] || "▤"}} {n|${d.name || d.id}}`;
           nodes.push({
@@ -256,35 +258,43 @@ export default function Topology() {
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
           <span className="topo-stat"><b>{links.length}</b> links</span>
-          <button className="btn" onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per vendor">
-            {iconEditor ? "Done" : "Vendor icons"}
+          <button
+            className={`btn${iconEditor ? "" : " accent"}`}
+            onClick={() => setIconEditor((v) => !v)}
+            title="Assign a custom icon per vendor"
+          >
+            {iconEditor ? "Done" : "+ Vendor icons"}
           </button>
         </div>
       </div>
 
       {iconEditor && (
-        <div className="card" style={{ margin: "0 0 10px", background: "var(--hover)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <strong style={{ fontSize: 13 }}>Vendor icons</strong>
-            <span style={{ color: "var(--muted)", fontSize: 12 }}>Paste an image URL or data: URI per vendor — shown on each device node.</span>
+        <div className="vendor-editor">
+          <div className="vendor-editor-head">
+            <strong>Vendor icons</strong>
+            <span className="vendor-editor-hint">Brand marks are detected automatically. Paste an image URL or data: URI to override one.</span>
           </div>
           {vendors.length === 0 ? (
             <p className="empty">No vendors in the inventory yet.</p>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8, marginTop: 8 }}>
+            <div className="vendor-editor-grid">
               {vendors.map((v) => {
                 const url = vendorIcons[vendorKey(v)] || "";
+                const auto = !url && !!brandDataUri(v);
                 return (
-                  <div key={v} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ width: 22, height: 22, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--panel-border)", borderRadius: 4, overflow: "hidden", background: "#fff" }}>
-                      {url ? <img src={url} alt={v} style={{ maxWidth: "100%", maxHeight: "100%" }} /> : <span style={{ fontSize: 10, color: "var(--muted)" }}>—</span>}
+                  <div key={v} className="vendor-row">
+                    <span className="vendor-tile">
+                      {url ? <img src={url} alt={v} /> : <VendorIcon vendor={v} size={22} />}
                     </span>
-                    <span style={{ width: 90, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</span>
+                    <span className="vendor-name" title={v}>
+                      {v}
+                      {auto && <span className="vendor-auto">auto</span>}
+                    </span>
                     <input
-                      placeholder="https://… or data:image/…"
+                      className="vendor-input"
+                      placeholder="override: https://… or data:image/…"
                       value={url}
                       onChange={(e) => setVendorIcon(v, e.target.value)}
-                      style={{ flex: 1, fontSize: 12 }}
                     />
                   </div>
                 );

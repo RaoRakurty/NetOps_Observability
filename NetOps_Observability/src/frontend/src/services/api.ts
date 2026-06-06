@@ -564,6 +564,11 @@ export const api = {
       body: JSON.stringify({ current_password, new_password }),
     }),
 
+  // The caller's resolved password rules (Security Policy #24) — advisory; the
+  // server re-validates authoritatively on change.
+  passwordPolicy: () =>
+    request<{ min_length: number; complexity_classes: number }>("/api/auth/password-policy"),
+
   health: () => request<Health>("/admin/health"),
   stackHealth: () => request<StackHealth>("/api/stack/health"),
   audit: (limit = 200) => request<AuditEvent[]>(`/api/audit?limit=${limit}`),

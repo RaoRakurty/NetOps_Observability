@@ -333,7 +333,7 @@ export default function Devices() {
                 {sshEnabled && (
                   <button className="btn" title="SSH to device" onClick={() => setTerm(d)}>Connect</button>
                 )}
-                <button className="btn" onClick={() => remove(d.id)}>Delete</button>
+                <button className="btn danger" onClick={() => remove(d.id)}>Delete</button>
               </>
             )}
           />

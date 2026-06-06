@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { PANELS, PANEL_CATEGORIES, PanelDef } from "./panels";
 import { useShell } from "../context/shell";
+import Icon from "../components/Icon";
 
 // Operations Overview — a modular, Zabbix-style board. The layout is a
 // list of panels the user composes themselves: add from the panel library,
@@ -147,8 +148,12 @@ export default function Dashboard() {
                   {def.drill && <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 12 }}>↗</span>}
                 </h3>
                 <div className="panel-tools-btns">
-                  <button onClick={() => resize(item.key)} title="Resize">⤢</button>
-                  <button onClick={() => remove(item.key)} title="Remove">✕</button>
+                  <button onClick={() => resize(item.key)} title="Resize" aria-label="Resize panel">
+                    <Icon name="maximize" size={13} />
+                  </button>
+                  <button onClick={() => remove(item.key)} title="Remove" aria-label="Remove panel">
+                    <Icon name="close" size={13} />
+                  </button>
                 </div>
               </div>
               {def.render()}

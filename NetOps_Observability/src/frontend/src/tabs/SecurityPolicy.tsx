@@ -390,7 +390,7 @@ function PolicyEditor({
   ref_: PolicyRef;
   subject: PolicySubject;
   canWrite: boolean;
-  tier: "all" | "basic";
+  tier: "basic" | "advanced";
 }) {
   const [resolved, setResolved] = useState<Record<string, PolicyResolved>>({});
   const [doc, setDoc] = useState<PolicyDocument | null>(null);
@@ -458,7 +458,7 @@ function PolicyEditor({
       <PolicyStats stats={stats} scope={scope} />
       <div className="pol-grid">
         {catalog.domains.map((dm) => {
-        const settings = dm.settings.filter((s) => (tier === "all" ? true : s.tier === "basic"));
+        const settings = dm.settings.filter((s) => (tier === "advanced" ? true : s.tier === "basic"));
         if (settings.length === 0) return null;
         return (
           <section key={dm.domain} className="card pol-card">
@@ -635,7 +635,7 @@ export default function SecurityPolicy() {
   const [scope, setScope] = useState<PolicyScope>("system");
   const [tenant, setTenant] = useState("");
   const [name, setName] = useState(""); // role id / username for role|user scopes
-  const [tier, setTier] = useState<"all" | "basic">("all");
+  const [tier, setTier] = useState<"basic" | "advanced">("basic");
 
   useEffect(() => {
     api.policyCatalog().then(setCatalog).catch((e) => setErr((e as Error).message));
@@ -754,8 +754,8 @@ export default function SecurityPolicy() {
               <div className="pol-target-field pol-target-tier">
                 <label className="mini-meta">Show</label>
                 <div className="pol-seg">
-                  <button className={tier === "all" ? "active" : ""} onClick={() => setTier("all")}>All</button>
                   <button className={tier === "basic" ? "active" : ""} onClick={() => setTier("basic")}>Basic</button>
+                  <button className={tier === "advanced" ? "active" : ""} onClick={() => setTier("advanced")}>Advanced</button>
                 </div>
               </div>
             </div>
