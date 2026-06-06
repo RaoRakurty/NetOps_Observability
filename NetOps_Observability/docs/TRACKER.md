@@ -1,6 +1,6 @@
 # NetOps_Observability — Consolidated Work Tracker
 
-> Branch: `feat/observability-platform` · Last updated: 2026-06-04
+> Branch: `feat/observability-platform` · Last updated: 2026-06-06
 > Single source of truth for remaining work. Reconciled against the git history
 > on this branch and the roadmap memories. Update status here as items land.
 
@@ -8,7 +8,9 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 
 > **Numbering note:** #1–#20 are the original in-session task IDs. #21+ are
 > tracked items that had shipped (or were identified) but were never recorded
-> here — added during the 2026-06-02 reconciliation.
+> here — added during the 2026-06-02 reconciliation. #46–#48 added during the
+> 2026-06-06 reconciliation (Security Policy engine, Device SSH gateway, OWASP
+> LLM hardening).
 
 ---
 
@@ -35,6 +37,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | — | Runtime-configurable token policy (access/refresh TTL) | `061c736` |
 | — | Required-field asterisk + legend on config forms | `5255b58` |
 | — | Drop backend vendor/module names from user-facing UI | `2d279a3` |
+| 46 | **Security Policy system** — phased, **NIST-aligned** deterministic policy engine (System→Tenant→Role→User resolution order). P1 engine (catalog + resolve + validate), P2 tenant-isolated policy store (engine Source), P3 admin API + Policy Simulator (5 `/api/policy/*` routes, engine goes live), P4 React UI (Admin→Security Policy: editor + simulator, KPI strip/skeleton/a11y, Data-Dense Dashboard style). **COMPLETE.** Memory `netops-security-policy-system`. | `5bb43e7` / `0a321a7` / `9b39b35` / `7d534d9` / `c6ce832` |
 
 ### Telemetry / collectors / flows / alerting
 | # | Item | Commit |
@@ -60,6 +63,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | 44 | **Incident Situations — AIOps noise reduction + 1:N ITSM grouping** (⏳ idea, user parked 2026-06-04) — TWO related asks converge here: (a) group distinct incidents into ONE ServiceNow/Jira ticket; (b) Moogsoft/BigPanda-style noise reduction. Today we have BASIC noise reduction (storm-proof alert→incident dedup by `dedup_key`, z-score anomaly, syslog burst weighting, watermark flap-suppression) but NO cross-source clustering into "situations". Build = upgrade correlation svc to emit grouped **situations** (topology+temporal+similarity) + a **incident-group/parent substrate** that maps 1:N to a ticket (extends the hub-and-spoke: a group hub above incidents; inbound state on the group ticket fans to children). | ⏳ idea (parked) |
 | 10 | **Clickable Overview drilldowns** — panel items link to detail pages | `b215ba7` / `940d595` |
 | 25 | Copilot enablement (Claude provider picker, gated on `FEATURE_COPILOT`) | `dd904f0` |
+| 47 | **Device SSH gateway** — opt-in (`FEATURE_DEVICE_SSH`, dormant by default) WebSocket→SSH proxy (`device_ssh.go`) using the allowlisted `golang.org/x/crypto/ssh` (host-key verification, audited client; already in graph via pgx, promoted to direct — no new module) + xterm.js frontend terminal. Compose wires `FEATURE_DEVICE_SSH`+ssh tunables into the api env. Memory `netops-devices-ssh-and-frontend-overhaul`. | `55a2ec0` / `320f287` / `b97ce09` |
 
 ### Ops / reliability / governance
 | # | Item | Commit |
@@ -71,6 +75,8 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | — | One-time file→Postgres app-state cutover importer (`IMPORT_FILE_STATE_DIR`, idempotent fill-empty-only) | `75d4140` |
 | — | Phase 5 RLS design doc + blocker writeup (`docs/design/postgres-rls.md`) | `1df5e64` |
 | — | Guardrail compliance report; clean new-code lint/gosec | `55434c7` |
+| 48 | **OWASP LLM Top 10 hardening (copilot proxy)** — server-owned system prompt (LLM01, no client `system`-role override), `MaxBytesReader` + message/char/output-token caps (LLM04 cost/DoS), assistant text rendered as escaped React only (LLM02), no secret auto-injection into prompts (LLM06); unit-tested `sanitizeCopilotMessages`. Codified as standing guardrail **CLAUDE.md §15**. Memory `netops-owasp-llm-compliance`. | `8967758` |
+| — | CI: golangci-lint v1.64.8 → v2.12.2 (go 1.25 compat); x/crypto bump v0.52.0 (GO-2026-5018/5019/5020) | `f6c2a71` / `b97ce09` |
 
 ---
 
@@ -151,7 +157,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 
 | # | Task | Pri | Status |
 |---|------|-----|--------|
-| 45 | **Elite-cockpit redesign** — FAANG-grade dense NOC cockpit (icon-rail + hover flyout, VSCode 4-pane, dense 12–13px type, dark-first tokens, Cmd+K). **Locked decisions:** incremental migration behind `?shell=v2` flag (v1 untouched); hybrid stack (CSS shell + selective Radix where it earns its keep); per-module color taxonomy (spec §9.1). | High | 🟡 **shell-v2 in progress.** ✅ Hover-flyout icon rail (`IconRail.tsx`/`NavFlyout.tsx`, grouped + hairline dividers, foot utility cluster), Manrope type, dark topbar/header band, denser Overview, segmented page-tabs + pill chips (`be0cfae`→`4531fb7`). 🟡 **Design-token architecture (§8/§9/§9.1)** — semantic role tokens (surfaces/text ramp/severity/viz/geometry) + per-module `--mod-*` taxonomy across dark/light/oled. 🔜 module hue wiring per view; telemetry table (virtualized, 28px rows); right inspector + bottom drawer panes; reconcile v1 tokens → semantic set; graduate v2 to default. |
+| 45 | **Elite-cockpit redesign** — FAANG-grade dense NOC cockpit (icon-rail + hover flyout, VSCode 4-pane, dense 12–13px type, dark-first tokens, Cmd+K). **Locked decisions:** incremental migration behind `?shell=v2` flag (v1 untouched); hybrid stack (CSS shell + selective Radix where it earns its keep); per-module color taxonomy (spec §9.1). | High | 🟡 **shell-v2 in progress.** ✅ Hover-flyout icon rail (`IconRail.tsx`/`NavFlyout.tsx`, grouped + hairline dividers, foot utility cluster), Manrope type, dark topbar/header band, denser Overview, segmented page-tabs + pill chips (`be0cfae`→`4531fb7`). ✅ **Semantic token architecture + OLED theme** (`bf7bbcf`) — semantic role tokens (surfaces/text ramp/severity/viz/geometry) across dark/light/oled. ✅ **Admin design-system pass** — shared `components/ui.tsx` (StatStrip/Stat/Segmented/Skeleton/InfoTip + `ds-*` CSS): KPI strips + dense tables across admin (`c1afd16`); Security Policy rows decluttered (purpose→hover InfoTip) (`f45fe1b`); field-level InfoTips (`6e76c05`). ✅ **Branded connector/tile galleries + glassmorphism kit** — Integrations connector gallery + combined guided-setup modal (`5ec4324`), Notifications connector-tile gallery w/ PagerDuty/Slack bidirectional sync (`9afb642`/`6e76c05`), Authentication tile gallery (`c146952`), API Access tile gallery + flyout sub-categories (GraphQL→Developer/Stack) (`83922e5`); glass modal brightness/scrim fix (`d165491`). ✅ **Guided wizards** — Wizard primitive (`04239ae`) + API Access/Authentication (OIDC/LDAP/TACACS) wizards (`8f8ae33`); ChatGPT assistant + Topology per-vendor icons (`2211ef3`). 🔜 module hue wiring per view; telemetry table (virtualized, 28px rows); right inspector + bottom drawer panes; reconcile v1 tokens → semantic set; graduate v2 to default. |
 
 ---
 
