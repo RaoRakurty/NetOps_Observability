@@ -19,16 +19,16 @@
 
   /* Glassmorphism — frosted translucent surfaces for the tile galleries + modals.
      Text stays on opaque --fg for 4.5:1 contrast; only the surface is translucent. */
-  --glass-bg: rgba(255, 255, 255, 0.55);
-  --glass-bg-strong: rgba(255, 255, 255, 0.74);
-  --glass-border: rgba(255, 255, 255, 0.7);
-  --glass-hi: rgba(255, 255, 255, 0.9);            /* top-edge light reflection */
+  --glass-bg: rgba(255, 255, 255, 0.68);
+  --glass-bg-strong: rgba(255, 255, 255, 0.94);     /* modal: crisp luminous white, not grey */
+  --glass-border: rgba(255, 255, 255, 0.85);
+  --glass-hi: rgba(255, 255, 255, 0.95);            /* top-edge light reflection */
   --glass-blur: 16px;
   --glass-shadow: 0 8px 26px rgba(23, 33, 60, 0.10);
-  --glass-shadow-lg: 0 24px 60px rgba(23, 33, 60, 0.20);
+  --glass-shadow-lg: 0 28px 70px rgba(23, 33, 60, 0.22);
   --glass-tint-a: rgba(79, 70, 229, 0.12);          /* indigo ambient */
   --glass-tint-b: rgba(16, 185, 129, 0.10);         /* emerald ambient */
-  --glass-scrim: rgba(18, 24, 38, 0.42);
+  --glass-scrim: rgba(17, 24, 39, 0.22);            /* gentle, non-grey dim */
 
   /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
   --sev-critical: #e11d48;  --sev-critical-bg: rgba(225, 29, 72, 0.10);
@@ -1062,8 +1062,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --hover: rgba(255, 255, 255, 0.06);
 
   /* Glass surfaces for the dark canvas — desaturated translucency, hairline edge. */
-  --glass-bg: rgba(26, 34, 52, 0.55);
-  --glass-bg-strong: rgba(24, 32, 49, 0.78);
+  --glass-bg: rgba(26, 34, 52, 0.62);
+  --glass-bg-strong: rgba(26, 34, 52, 0.9);
   --glass-border: rgba(255, 255, 255, 0.10);
   --glass-hi: rgba(255, 255, 255, 0.07);
   --glass-shadow: 0 8px 26px rgba(0, 0, 0, 0.38);
