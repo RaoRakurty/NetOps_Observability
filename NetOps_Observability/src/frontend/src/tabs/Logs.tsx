@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, ExportFmt } from "../services/api";
-import { severityClass, severityColor, severityKey } from "../theme/severity";
+import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
-
-// Sort rank for the Level column (critical first when sorted ascending).
-const SEV_RANK: Record<string, number> = {
-  critical: 0, error: 1, warning: 2, notice: 3, info: 4, debug: 5, ok: 6,
-};
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
   { id: "csv", label: "CSV" },
@@ -224,7 +219,7 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
     },
     {
       key: "level", header: "Level", width: 92, sortable: true,
-      text: (l) => l.level, sortValue: (l) => SEV_RANK[severityKey(l.level)] ?? 9,
+      text: (l) => l.level, sortValue: (l) => severityRank(l.level),
       render: (l) => <span className={`badge ${severityClass(l.level)}`}>{l.level || "—"}</span>,
     },
     {

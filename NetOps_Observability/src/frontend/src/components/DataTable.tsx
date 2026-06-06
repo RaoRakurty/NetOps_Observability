@@ -54,6 +54,8 @@ export interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   /** Optional left-accent bar color per row (e.g. log severity). */
   rowAccent?: (row: T) => string | undefined;
+  /** Optional extra class per row (e.g. a selected/master-detail highlight). */
+  rowClassName?: (row: T) => string;
   /** Hover/active-revealed, right-docked per-row actions. */
   rowActions?: (row: T) => ReactNode;
   empty?: ReactNode;
@@ -72,6 +74,7 @@ export default function DataTable<T>({
   initialSort,
   onRowClick,
   rowAccent,
+  rowClassName,
   rowActions,
   empty,
   ariaLabel,
@@ -226,7 +229,7 @@ export default function DataTable<T>({
                 key={rowKey(row)}
                 role="row"
                 aria-rowindex={idx + 1}
-                className={`dtv-row${idx === active ? " active" : ""}${onRowClick ? " clickable" : ""}`}
+                className={`dtv-row${idx === active ? " active" : ""}${onRowClick ? " clickable" : ""}${rowClassName ? " " + rowClassName(row) : ""}`}
                 style={{
                   gridTemplateColumns: template,
                   transform: `translateY(${idx * rowHeight}px)`,

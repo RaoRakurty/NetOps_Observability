@@ -1,13 +1,34 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, Finding } from "../services/api";
-import { severityClass, severityRowClass } from "../theme/severity";
+import { severityClass, severityColor, severityRank } from "../theme/severity";
+import DataTable, { Column } from "../components/DataTable";
 
 // Findings are written by the Correlation/AI service into ClickHouse
 // table netops.findings. This tab is a triage queue — most-recent first.
 
+const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+
 export default function Findings() {
   const [items, setItems] = useState<Finding[]>([]);
   const [severity, setSeverity] = useState<string>("");
+  const columns = useMemo<Column<Finding>[]>(() => [
+    { key: "ts", header: "Time", width: 168, sortable: true,
+      sortValue: (f) => new Date(f.ts).getTime() || 0,
+      render: (f) => <span style={mono}>{new Date(f.ts).toLocaleString()}</span> },
+    { key: "severity", header: "Severity", width: 92, sortable: true,
+      text: (f) => f.severity, sortValue: (f) => severityRank(f.severity),
+      render: (f) => <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span> },
+    { key: "kind", header: "Kind", width: 120, sortable: true, text: (f) => f.kind,
+      render: (f) => <span title={f.kind}>{f.kind}</span> },
+    { key: "device", header: "Device", width: 150, sortable: true, text: (f) => f.device ?? "",
+      render: (f) => <span style={mono} title={f.device || ""}>{f.device || "—"}</span> },
+    { key: "component", header: "Component", width: 120, text: (f) => f.component ?? "",
+      render: (f) => <span title={f.component || ""}>{f.component || "—"}</span> },
+    { key: "summary", header: "Summary", text: (f) => f.summary,
+      render: (f) => <span title={f.summary}>{f.summary}</span> },
+    { key: "score", header: "Score", width: 64, align: "right", sortable: true,
+      sortValue: (f) => Number(f.score) || 0, render: (f) => f.score?.toFixed(1) },
+  ], []);
 
   useEffect(() => {
     let alive = true;
@@ -44,36 +65,15 @@ export default function Findings() {
           clusters.
         </div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 170 }}>Time</th>
-              <th style={{ width: 90 }}>Severity</th>
-              <th style={{ width: 110 }}>Kind</th>
-              <th style={{ width: 160 }}>Device</th>
-              <th style={{ width: 120 }}>Component</th>
-              <th>Summary</th>
-              <th style={{ width: 60 }}>Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((f) => (
-              <tr key={f.id} className={severityRowClass(f.severity)}>
-                <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                  {new Date(f.ts).toLocaleString()}
-                </td>
-                <td>
-                  <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span>
-                </td>
-                <td>{f.kind}</td>
-                <td style={{ fontFamily: "ui-monospace, monospace" }}>{f.device || "—"}</td>
-                <td>{f.component || "—"}</td>
-                <td>{f.summary}</td>
-                <td>{f.score?.toFixed(1)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<Finding>
+          rows={items}
+          columns={columns}
+          rowKey={(f) => f.id}
+          height="62vh"
+          ariaLabel="Findings"
+          rowAccent={(f) => severityColor(f.severity)}
+          initialSort={{ key: "ts", dir: "desc" }}
+        />
       )}
     </div>
   );

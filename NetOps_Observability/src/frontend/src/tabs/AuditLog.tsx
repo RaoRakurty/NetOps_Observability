@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, AuditEvent } from "../services/api";
+import DataTable, { Column } from "../components/DataTable";
 
 // Audit Log — the tenant-scoped trail of mutations and denials. The backend
 // returns only events the caller may see (platform owner: all; tenant admin:
@@ -11,9 +12,28 @@ function decisionClass(d: string): string {
   return "cell-warn";
 }
 
+const muted: React.CSSProperties = { color: "var(--muted)" };
+
 export default function AuditLog() {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const columns = useMemo<Column<AuditEvent>[]>(() => [
+    { key: "time", header: "Time", width: 168, sortable: true,
+      sortValue: (e) => new Date(e.time).getTime() || 0,
+      render: (e) => new Date(e.time).toLocaleString() },
+    { key: "actor", header: "Actor", width: 150, sortable: true, text: (e) => e.actor ?? "",
+      render: (e) => e.actor || <span style={muted}>—</span> },
+    { key: "tenant", header: "Tenant", width: 110, text: (e) => (e.cross ? "platform" : e.tenant ?? ""),
+      render: (e) => (e.cross ? <span style={muted}>platform</span> : e.tenant || "—") },
+    { key: "action", header: "Action", text: (e) => `${e.method} ${e.path}`,
+      render: (e) => <code title={`${e.method} ${e.path}`}>{e.method} {e.path}</code> },
+    { key: "status", header: "Status", width: 64, align: "right", sortable: true,
+      sortValue: (e) => e.status, render: (e) => e.status },
+    { key: "decision", header: "Decision", width: 92, sortable: true, text: (e) => e.decision,
+      render: (e) => <span className={`pill ${decisionClass(e.decision)}`}>{e.decision}</span> },
+    { key: "from", header: "From", width: 130, text: (e) => e.remote ?? "",
+      render: (e) => <span style={{ ...muted, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{e.remote}</span> },
+  ], []);
 
   useEffect(() => {
     let alive = true;
@@ -42,32 +62,15 @@ export default function AuditLog() {
 
   return (
     <div className="page-stack">
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Actor</th>
-            <th>Tenant</th>
-            <th>Action</th>
-            <th>Status</th>
-            <th>Decision</th>
-            <th>From</th>
-          </tr>
-        </thead>
-        <tbody>
-          {events.map((e) => (
-            <tr key={e.id}>
-              <td style={{ whiteSpace: "nowrap" }}>{new Date(e.time).toLocaleString()}</td>
-              <td>{e.actor || <span style={{ color: "var(--muted)" }}>—</span>}</td>
-              <td>{e.cross ? <span style={{ color: "var(--muted)" }}>platform</span> : e.tenant || "—"}</td>
-              <td><code>{e.method} {e.path}</code></td>
-              <td>{e.status}</td>
-              <td><span className={`pill ${decisionClass(e.decision)}`}>{e.decision}</span></td>
-              <td style={{ color: "var(--muted)" }}>{e.remote}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable<AuditEvent>
+        rows={events}
+        columns={columns}
+        rowKey={(e) => e.id}
+        height="68vh"
+        ariaLabel="Audit log"
+        rowAccent={(e) => (e.decision === "deny" ? "var(--crit)" : e.decision === "allow" ? undefined : "var(--warn)")}
+        initialSort={{ key: "time", dir: "desc" }}
+      />
     </div>
   );
 }

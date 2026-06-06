@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, Incident, TimelineEntry } from "../services/api";
-import { severityClass, severityRowClass } from "../theme/severity";
+import { severityClass, severityColor, severityRank } from "../theme/severity";
+import DataTable, { Column } from "../components/DataTable";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
 // alerts/anomalies), drives the lifecycle in-platform (ack → investigate →
@@ -76,6 +77,38 @@ export default function Incidents() {
 
   const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : "—");
 
+  const ticketCell = (i: Incident) =>
+    i.external_ticket_id ? (
+      i.external_url ? (
+        <a href={i.external_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+          {i.external_system}: {i.external_ticket_id}
+        </a>
+      ) : (
+        <span>{i.external_system}: {i.external_ticket_id}</span>
+      )
+    ) : (
+      <span className="badge" title={`sync: ${i.sync_status}`}>{i.sync_status === "pending" ? "syncing…" : "—"}</span>
+    );
+
+  const columns = useMemo<Column<Incident>[]>(() => [
+    { key: "severity", header: "Severity", width: 84, sortable: true,
+      text: (i) => i.severity, sortValue: (i) => severityRank(i.severity),
+      render: (i) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span> },
+    { key: "status", header: "Status", width: 110, sortable: true, text: (i) => i.status,
+      render: (i) => i.status },
+    { key: "title", header: "Title", text: (i) => i.title,
+      render: (i) => <span title={i.title}>{i.title}</span> },
+    { key: "count", header: "Count", width: 70, align: "right", sortable: true,
+      sortValue: (i) => Number(i.occurrences) || 0, render: (i) => i.occurrences },
+    { key: "source", header: "Source", width: 92, text: (i) => i.source_type,
+      render: (i) => <span style={{ fontSize: 12, color: "var(--muted)" }}>{i.source_type}</span> },
+    { key: "ticket", header: "Ticket", width: 140, text: (i) => i.external_ticket_id ?? "",
+      render: (i) => <span style={{ fontSize: 12 }}>{ticketCell(i)}</span> },
+    { key: "last_seen", header: "Last seen", width: 170, sortable: true,
+      sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
+      render: (i) => <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{fmt(i.last_seen_at)}</span> },
+  ], []);
+
   return (
     <>
       <div className="card">
@@ -121,55 +154,17 @@ export default function Incidents() {
         ) : items.length === 0 ? (
           <div className="empty">{busy ? "Loading…" : "No incidents match. Quiet is good."}</div>
         ) : (
-          <div style={{ maxHeight: "55vh", overflow: "auto" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 80 }}>Severity</th>
-                  <th style={{ width: 110 }}>Status</th>
-                  <th>Title</th>
-                  <th style={{ width: 70 }}>Count</th>
-                  <th style={{ width: 90 }}>Source</th>
-                  <th style={{ width: 130 }}>Ticket</th>
-                  <th style={{ width: 170 }}>Last seen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((i) => (
-                  <tr
-                    key={i.id}
-                    className={severityRowClass(i.severity)}
-                    style={{ cursor: "pointer", outline: sel === i.id ? "2px solid var(--accent)" : "none" }}
-                    onClick={() => openDetail(i.id)}
-                  >
-                    <td>
-                      <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span>
-                    </td>
-                    <td>{i.status}</td>
-                    <td>{i.title}</td>
-                    <td>{i.occurrences}</td>
-                    <td style={{ fontSize: 12, color: "var(--muted)" }}>{i.source_type}</td>
-                    <td style={{ fontSize: 12 }}>
-                      {i.external_ticket_id ? (
-                        i.external_url ? (
-                          <a href={i.external_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-                            {i.external_system}: {i.external_ticket_id}
-                          </a>
-                        ) : (
-                          <span>
-                            {i.external_system}: {i.external_ticket_id}
-                          </span>
-                        )
-                      ) : (
-                        <span className="badge" title={`sync: ${i.sync_status}`}>{i.sync_status === "pending" ? "syncing…" : "—"}</span>
-                      )}
-                    </td>
-                    <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{fmt(i.last_seen_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable<Incident>
+            rows={items}
+            columns={columns}
+            rowKey={(i) => i.id}
+            height="55vh"
+            ariaLabel="Incidents"
+            onRowClick={(i) => openDetail(i.id)}
+            rowAccent={(i) => severityColor(i.severity)}
+            rowClassName={(i) => (sel === i.id ? "dtv-selected" : "")}
+            initialSort={{ key: "last_seen", dir: "desc" }}
+          />
         )}
       </div>
 

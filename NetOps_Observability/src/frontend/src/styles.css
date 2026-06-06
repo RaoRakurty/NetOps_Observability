@@ -894,6 +894,7 @@ tbody tr.dt-row:hover { background: var(--hover); }
 .dtv-empty { padding: 28px 12px; text-align: center; color: var(--fg-muted, var(--muted)); }
 .dtv-link { cursor: pointer; color: var(--accent); font-weight: 600; }
 .dtv-link:hover { text-decoration: underline; }
+.dtv-row.dtv-selected { background: var(--accent-soft, var(--hover)); outline: 1px solid var(--accent-ring, var(--accent)); outline-offset: -1px; }
 
 /* ----- Vendor-grouped inventory ----- */
 .vendor-group { margin-top: 18px; }

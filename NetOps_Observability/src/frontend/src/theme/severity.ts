@@ -51,6 +51,15 @@ export function severityClass(raw: string | number | null | undefined): string {
   return `sev-${severityKey(raw)}`;
 }
 
+// Sort rank (critical=0 … ok=6) for ordering by severity — ascending puts the
+// most severe first. Shared by the DataTable Level/Severity columns.
+const SEV_RANK: Record<SeverityKey, number> = {
+  critical: 0, error: 1, warning: 2, notice: 3, info: 4, debug: 5, ok: 6,
+};
+export function severityRank(raw: string | number | null | undefined): number {
+  return SEV_RANK[severityKey(raw)];
+}
+
 // Class for a table row to get a colored left accent by severity.
 export function severityRowClass(raw: string | number | null | undefined): string {
   return `sevrow-${severityKey(raw)}`;

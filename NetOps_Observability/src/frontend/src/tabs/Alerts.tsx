@@ -1,9 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, Alert } from "../services/api";
-import { severityClass, severityRowClass } from "../theme/severity";
+import { severityClass, severityColor, severityRank } from "../theme/severity";
+import DataTable, { Column } from "../components/DataTable";
 
 export default function Alerts() {
   const [items, setItems] = useState<Alert[]>([]);
+  const columns = useMemo<Column<Alert>[]>(() => [
+    { key: "rule", header: "Rule", width: "18%", sortable: true, text: (a) => a.rule,
+      render: (a) => <span title={a.rule}>{a.rule}</span> },
+    { key: "severity", header: "Severity", width: 96, sortable: true,
+      text: (a) => a.severity, sortValue: (a) => severityRank(a.severity),
+      render: (a) => <span className={`badge ${severityClass(a.severity)}`}>{a.severity}</span> },
+    { key: "device", header: "Device", width: 150, sortable: true, text: (a) => a.device_id ?? "",
+      render: (a) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{a.device_id ?? "—"}</span> },
+    { key: "summary", header: "Summary", text: (a) => a.summary,
+      render: (a) => <span title={a.summary}>{a.summary}</span> },
+    { key: "fired", header: "Fired", width: 168, sortable: true,
+      sortValue: (a) => new Date(a.fired_at).getTime() || 0,
+      render: (a) => new Date(a.fired_at).toLocaleString() },
+  ], []);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -28,30 +43,15 @@ export default function Alerts() {
       {items.length === 0 ? (
         <div className="empty">No active alerts.</div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Rule</th>
-              <th>Severity</th>
-              <th>Device</th>
-              <th>Summary</th>
-              <th>Fired</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((a) => (
-              <tr key={a.id} className={severityRowClass(a.severity)}>
-                <td>{a.rule}</td>
-                <td>
-                  <span className={`badge ${severityClass(a.severity)}`}>{a.severity}</span>
-                </td>
-                <td>{a.device_id ?? "—"}</td>
-                <td>{a.summary}</td>
-                <td>{new Date(a.fired_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<Alert>
+          rows={items}
+          columns={columns}
+          rowKey={(a) => a.id}
+          height="62vh"
+          ariaLabel="Active alerts"
+          rowAccent={(a) => severityColor(a.severity)}
+          initialSort={{ key: "fired", dir: "desc" }}
+        />
       )}
     </div>
   );
