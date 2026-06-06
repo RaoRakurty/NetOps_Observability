@@ -2,15 +2,19 @@ apiVersion: 1
 
 # Datasources auto-provisioned on Grafana startup.
 #
-# The ClickHouse datasource is intentionally commented out by default —
-# it requires the `grafana-clickhouse-datasource` plugin, which Grafana
-# tries to download from grafana.com at boot. Networks doing TLS
-# interception block that download, causing a restart loop.
+# The ClickHouse datasource needs the `grafana-clickhouse-datasource` plugin.
+# Grafana normally downloads it from grafana.com at boot via GF_INSTALL_PLUGINS,
+# but networks doing TLS interception block that download. So the plugin is
+# installed by scripts/install.py (bootstrap_grafana), which falls back to an
+# insecure fetch on intercepted networks, into the bind-mounted plugins dir.
+# If this datasource shows "plugin not found", run: python3 scripts/install.py
+# (or the documented grafana-cli --insecure install) and restart Grafana.
 #
-# To enable ClickHouse in Grafana:
-#   1. In deployment/docker/.env, set: GRAFANA_PLUGINS=grafana-clickhouse-datasource
-#   2. Uncomment the ClickHouse block below.
-#   3. docker compose up -d --force-recreate grafana
+# Tenancy: Grafana connects as the dedicated read-only `grafana` ClickHouse user
+# whose profile pins tenant_scope='' (a readonly CONST), so the row policies on
+# netops.flows/findings/tunnels return ONLY untagged platform/infra rows — never
+# another tenant's tagged data. See scripts/install.py:bootstrap_grafana and
+# deployment/docker/clickhouse/init.sql (#20 row policies).
 
 datasources:
   - name: Prometheus
@@ -32,17 +36,17 @@ datasources:
     jsonData:
       timeInterval: 15s
 
-  # - name: ClickHouse
-  #   type: grafana-clickhouse-datasource
-  #   access: proxy
-  #   url: http://clickhouse:8123
-  #   editable: false
-  #   jsonData:
-  #     defaultDatabase: netops
-  #     protocol: http
-  #     port: 8123
-  #     server: clickhouse
-  #     tlsSkipVerify: true
-  #     username: ${CLICKHOUSE_USER}
-  #   secureJsonData:
-  #     password: ${CLICKHOUSE_PASSWORD}
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      defaultDatabase: netops
+      protocol: native
+      host: clickhouse
+      port: 9000
+      secure: false
+      username: grafana
+    secureJsonData:
+      password: ${GRAFANA_CH_PASSWORD}

@@ -1,0 +1,103 @@
+{
+  "uid": "netops-flows",
+  "title": "NetOps · Flow Analytics",
+  "tags": ["netops", "flows", "clickhouse"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Throughput",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bps", "min": 0, "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 2, "rawSql": "SELECT $__timeInterval(ts) AS time, sum(bytes * if(sampling_rate > 0, sampling_rate, 1)) * 8 / $__interval_s AS \"Throughput bps\" FROM netops.flows WHERE $__timeFilter(ts) GROUP BY time ORDER BY time" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Flow rate",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "fps", "min": 0, "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 2, "rawSql": "SELECT $__timeInterval(ts) AS time, count() / $__interval_s AS \"Flows/s\" FROM netops.flows WHERE $__timeFilter(ts) GROUP BY time ORDER BY time" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Protocol mix (by bytes)",
+      "type": "piechart",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "pieType": "donut" },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT multiIf(proto=6,'TCP',proto=17,'UDP',proto=1,'ICMP',proto=47,'GRE',proto=50,'ESP',proto=89,'OSPF',toString(proto)) AS protocol, sum(bytes) AS bytes FROM netops.flows WHERE $__timeFilter(ts) GROUP BY protocol ORDER BY bytes DESC" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Flow type",
+      "type": "piechart",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "pieType": "donut" },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT flow_type, count() AS flows FROM netops.flows WHERE $__timeFilter(ts) GROUP BY flow_type ORDER BY flows DESC" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Top destination ports",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" } ] } ] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT dst_port AS \"Dst Port\", sum(bytes) AS \"Bytes\", count() AS \"Flows\" FROM netops.flows WHERE $__timeFilter(ts) AND dst_port > 0 GROUP BY dst_port ORDER BY \"Bytes\" DESC LIMIT 20" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Top talkers (source)",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT src_addr AS \"Source\", sum(bytes) AS \"Bytes\", sum(packets) AS \"Packets\", count() AS \"Flows\" FROM netops.flows WHERE $__timeFilter(ts) GROUP BY src_addr ORDER BY \"Bytes\" DESC LIMIT 20" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Top destinations",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT dst_addr AS \"Destination\", sum(bytes) AS \"Bytes\", sum(packets) AS \"Packets\", count() AS \"Flows\" FROM netops.flows WHERE $__timeFilter(ts) GROUP BY dst_addr ORDER BY \"Bytes\" DESC LIMIT 20" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Top conversations",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 25 },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+      "targets": [
+        { "refId": "A", "queryType": "sql", "format": 1, "rawSql": "SELECT concat(src_addr, ' → ', dst_addr) AS \"Conversation\", multiIf(proto=6,'TCP',proto=17,'UDP',proto=1,'ICMP',toString(proto)) AS \"Proto\", sum(bytes) AS \"Bytes\", sum(packets) AS \"Packets\", count() AS \"Flows\" FROM netops.flows WHERE $__timeFilter(ts) GROUP BY src_addr, dst_addr, proto ORDER BY \"Bytes\" DESC LIMIT 25" }
+      ]
+    }
+  ]
+}

@@ -227,6 +227,7 @@ def write_env(env_path: Path, port: int, *, force: bool) -> dict[str, str]:
         "ENCRYPTION_KEY":           generate_token(32),
         "GRAFANA_ADMIN_PASSWORD":   generate_password(20),
         "CLICKHOUSE_PASSWORD":      generate_password(24),
+        "GRAFANA_CH_PASSWORD":      generate_password(24),
         "ADMIN_INITIAL_PASSWORD":   generate_password(16),
         "KEYCLOAK_ADMIN_PASSWORD":  generate_password(20),
     }
@@ -267,6 +268,10 @@ VICTORIA_RETENTION=30d
 # Grafana admin login (force a password change on first browse anyway).
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD={secrets_map["GRAFANA_ADMIN_PASSWORD"]}
+# Read-only ClickHouse user Grafana's provisioned ClickHouse datasource binds to.
+# Its CH profile pins tenant_scope='' (readonly CONST) so it sees only untagged
+# platform/infra rows — never another tenant's data. Created by bootstrap_grafana.
+GRAFANA_CH_PASSWORD={secrets_map["GRAFANA_CH_PASSWORD"]}
 
 # Application secrets
 JWT_SECRET={secrets_map["JWT_SECRET"]}
@@ -563,6 +568,80 @@ def _bootstrap_opensearch_via_exec(root: Path) -> None:
             warn(f"template {name}: {res.stderr.strip()}")
 
 
+def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
+    """Enable Grafana's ClickHouse datasource: (1) create a read-only,
+    tenant-scoped ClickHouse user the datasource binds to, and (2) install the
+    grafana-clickhouse-datasource plugin into the bind-mounted plugins dir,
+    falling back to an insecure fetch on TLS-intercepted networks. Non-fatal —
+    the Prometheus/VictoriaMetrics dashboards work without any of this."""
+    compose_dir = root / "deployment" / "docker"
+    env_path = compose_dir / ".env"
+    env = _parse_env(env_path) if env_path.exists() else {}
+
+    # 1. Ensure GRAFANA_CH_PASSWORD exists (installs predating this step won't
+    #    have it in their .env). Append so the grafana container picks it up.
+    ch_pw = (secrets_map.get("GRAFANA_CH_PASSWORD") or env.get("GRAFANA_CH_PASSWORD") or "").strip()
+    if not ch_pw:
+        ch_pw = generate_password(24)
+        with env_path.open("a") as f:
+            f.write("\n# Read-only ClickHouse user for Grafana (added on upgrade).\n"
+                    f"GRAFANA_CH_PASSWORD={ch_pw}\n")
+        info("added GRAFANA_CH_PASSWORD to .env")
+
+    # 2. Create / update the read-only ClickHouse user. tenant_scope='' is pinned
+    #    CONST so the row policies on netops.* return only untagged platform/infra
+    #    rows — the user cannot widen its own scope even if a query tries. Run as
+    #    the admin (netops) user; password embedded is safe (generator alphabet
+    #    has no quote/backslash) but we double single-quotes defensively.
+    admin_pw = (secrets_map.get("CLICKHOUSE_PASSWORD") or env.get("CLICKHOUSE_PASSWORD") or "").strip()
+    admin_user = env.get("CLICKHOUSE_USER", "netops")
+    esc = ch_pw.replace("'", "''")
+    sql = (
+        f"CREATE USER IF NOT EXISTS grafana IDENTIFIED BY '{esc}';\n"
+        f"ALTER USER grafana IDENTIFIED BY '{esc}' "
+        f"SETTINGS tenant_scope = '' CONST, readonly = 2;\n"
+        "GRANT SELECT ON netops.flows TO grafana;\n"
+        "GRANT SELECT ON netops.findings TO grafana;\n"
+        "GRANT SELECT ON netops.tunnels TO grafana;\n"
+    )
+    res = subprocess.run(
+        ["docker", "compose", "exec", "-T", "clickhouse",
+         "clickhouse-client", "--user", admin_user, "--password", admin_pw,
+         "--multiquery"],
+        cwd=str(compose_dir), input=sql, capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        warn(f"grafana ClickHouse user not created (skipping): {res.stderr.strip()}")
+        info("re-run install.py once ClickHouse is healthy to finish Grafana wiring")
+        return
+    ok("read-only Grafana ClickHouse user ready (tenant_scope='' pinned)")
+
+    # 3. Install the datasource plugin into the bind-mounted plugins dir. Try the
+    #    normal (verified) path first; fall back to --insecure for networks that
+    #    MITM grafana.com. The plugin ships signed, so Grafana loads it either way.
+    plug = "grafana-clickhouse-datasource"
+    base = ["docker", "compose", "exec", "-T", "grafana", "grafana", "cli",
+            "--pluginsDir", "/var/lib/grafana/plugins", "plugins", "install", plug]
+    r = subprocess.run(base, cwd=str(compose_dir), capture_output=True, text=True)
+    if r.returncode != 0:
+        info("plugin download failed verified; retrying with --insecure (TLS-intercepted network)")
+        r = subprocess.run(
+            ["docker", "compose", "exec", "-T", "grafana", "grafana", "cli", "--insecure",
+             "--pluginsDir", "/var/lib/grafana/plugins", "plugins", "install", plug],
+            cwd=str(compose_dir), capture_output=True, text=True)
+    if r.returncode != 0:
+        warn(f"ClickHouse plugin not installed: {r.stderr.strip() or r.stdout.strip()}")
+        info("flow/findings dashboards will be unavailable until the plugin installs")
+        return
+    ok("grafana-clickhouse-datasource installed")
+
+    # 4. Recreate Grafana so it loads the plugin, the ClickHouse datasource, and
+    #    the (possibly newly added) GRAFANA_CH_PASSWORD env.
+    subprocess.run(["docker", "compose", "up", "-d", "grafana"],
+                   cwd=str(compose_dir), check=False)
+    ok("grafana reloaded with ClickHouse datasource + flow/findings dashboards")
+
+
 # ---- main -------------------------------------------------------------------
 
 def main() -> None:
@@ -604,6 +683,9 @@ def main() -> None:
 
     step("bootstrap OpenSearch index templates")
     bootstrap_opensearch(root)
+
+    step("wiring grafana clickhouse datasource")
+    bootstrap_grafana(root, secrets_map)
 
     print()
     print("==============================================================")

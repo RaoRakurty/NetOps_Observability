@@ -376,13 +376,18 @@ services:
       # connect". Served same-origin under /grafana/ via nginx.
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       # Default empty so Grafana boots on networks that block plugin
-      # downloads (corporate TLS interception). Set
-      # GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env to enable.
+      # downloads (corporate TLS interception). scripts/install.py installs
+      # grafana-clickhouse-datasource into the bind-mounted plugins dir with an
+      # insecure fallback for intercepted networks; on clean networks you can
+      # instead set GRAFANA_PLUGINS=grafana-clickhouse-datasource in .env.
       GF_INSTALL_PLUGINS: ${GRAFANA_PLUGINS:-}
+      # Read-only ClickHouse user the provisioned ClickHouse datasource binds to
+      # (tenant_scope='' → platform/infra rows only). Created by install.py.
+      GRAFANA_CH_PASSWORD: ${GRAFANA_CH_PASSWORD:-}
     volumes:
       - ../../data/grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on: [prometheus, victoria]
+    depends_on: [prometheus, victoria, clickhouse]
     networks: [netops]
     restart: *restart
 
