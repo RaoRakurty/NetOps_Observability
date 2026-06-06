@@ -9,12 +9,13 @@
 //     (/api/itsm/servicenow, /api/itsm/jira)
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
-import { StatStrip, Stat, Skeleton } from "../components/ui";
-import { ServiceNowLogo, JiraLogo } from "../components/ConnectorLogos";
+import { StatStrip, Stat, Skeleton, InfoTip, Modal } from "../components/ui";
+import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
+import Icon from "../components/Icon";
 
 // ---- shared chrome ---------------------------------------------------------
 
@@ -687,12 +688,23 @@ function Req() {
   return <span style={{ color: "var(--bad)" }} title="Required" aria-label="required"> *</span>;
 }
 
-function LabeledInput({ label, value, onChange, type = "text", placeholder = "", hint, required = false }: {
-  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string; required?: boolean;
+// FieldLabel — the label row shared by the typed inputs. Renders the field name,
+// an optional required asterisk, and an optional hover "i" InfoTip carrying a
+// brief description of what the field is for.
+function FieldLabel({ label, required, info }: { label: string; required?: boolean; info?: string }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      {label}{required && <Req />}{info && <InfoTip label={info}>{info}</InfoTip>}
+    </span>
+  );
+}
+
+function LabeledInput({ label, value, onChange, type = "text", placeholder = "", hint, info, required = false }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string; info?: string; required?: boolean;
 }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-      <span>{label}{required && <Req />}</span>
+      <FieldLabel label={label} required={required} info={info} />
       <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
       {hint && <span className="mini-meta">{hint}</span>}
@@ -700,12 +712,12 @@ function LabeledInput({ label, value, onChange, type = "text", placeholder = "",
   );
 }
 
-function LabeledSelect({ label, value, onChange, options }: {
-  label: string; value: string; onChange: (v: string) => void; options: string[];
+function LabeledSelect({ label, value, onChange, options, info }: {
+  label: string; value: string; onChange: (v: string) => void; options: string[]; info?: string;
 }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-      <span>{label}</span>
+      <FieldLabel label={label} info={info} />
       <select value={value} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -1363,22 +1375,6 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
   const [copied, setCopied] = useState(false);
 
   const fullUrl = integration.webhook_url ? window.location.origin + integration.webhook_url : "";
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  // Modal a11y: close on Escape, move focus into the dialog on open and restore
-  // it on close, and lock background scroll while open.
-  useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-      prev?.focus?.();
-    };
-  }, [onClose]);
 
   // Step validation — gates the wizard's Next/Save so a half-filled config can't ship.
   const connectValid = isSN
@@ -1420,16 +1416,16 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
           </label>
           {isSN ? (
             <div className="form-grid">
-              <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSn({ ...sn, instance_url: v })} placeholder="https://dev12345.service-now.com" required />
-              <LabeledInput label="User" value={sn.user} onChange={(v) => setSn({ ...sn, user: v })} />
-              <LabeledInput label="Password" type="password" value={sn.password} onChange={(v) => setSn({ ...sn, password: v })} placeholder={snInit.has_password ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
+              <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSn({ ...sn, instance_url: v })} placeholder="https://dev12345.service-now.com" required info="Your ServiceNow instance base URL. Incidents are created here via the Table API." />
+              <LabeledInput label="User" value={sn.user} onChange={(v) => setSn({ ...sn, user: v })} info="ServiceNow account used to authenticate the REST calls (HTTP basic auth)." />
+              <LabeledInput label="Password" type="password" value={sn.password} onChange={(v) => setSn({ ...sn, password: v })} placeholder={snInit.has_password ? "•••••• (unchanged)" : ""} info="Password for the ServiceNow user. Write-only — leave blank to keep the stored value." />
             </div>
           ) : (
             <div className="form-grid">
-              <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJr({ ...jr, base_url: v })} placeholder="https://your-org.atlassian.net" required />
-              <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJr({ ...jr, project_key: v })} placeholder="NOC" required />
-              <LabeledInput label="Email" value={jr.email} onChange={(v) => setJr({ ...jr, email: v })} placeholder="svc@your-org.com" />
-              <LabeledInput label="API token" type="password" value={jr.api_token} onChange={(v) => setJr({ ...jr, api_token: v })} placeholder={jrInit.has_token ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
+              <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJr({ ...jr, base_url: v })} placeholder="https://your-org.atlassian.net" required info="Your Jira Cloud site URL. Issues are created here via the Jira REST API." />
+              <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJr({ ...jr, project_key: v })} placeholder="NOC" required info="The short project key (e.g. NOC) new issues are filed under." />
+              <LabeledInput label="Email" value={jr.email} onChange={(v) => setJr({ ...jr, email: v })} placeholder="svc@your-org.com" info="Atlassian account email paired with the API token for authentication." />
+              <LabeledInput label="API token" type="password" value={jr.api_token} onChange={(v) => setJr({ ...jr, api_token: v })} placeholder={jrInit.has_token ? "•••••• (unchanged)" : ""} info="Atlassian API token for the account (id.atlassian.com → Security → API tokens). Write-only — blank keeps stored." />
             </div>
           )}
           <RequiredLegend />
@@ -1443,14 +1439,14 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
       render: () => (
         isSN ? (
           <div className="form-grid">
-            <LabeledSelect label="Min severity to ticket" value={sn.min_severity} onChange={(v) => setSn({ ...sn, min_severity: v })} options={SEV} />
-            <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSn({ ...sn, assignment_group: v })} />
+            <LabeledSelect label="Min severity to ticket" value={sn.min_severity} onChange={(v) => setSn({ ...sn, min_severity: v })} options={SEV} info="Only alerts at or above this severity open a ServiceNow incident." />
+            <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSn({ ...sn, assignment_group: v })} info="ServiceNow assignment group new incidents are routed to. Leave blank to use the instance default." />
           </div>
         ) : (
           <div className="form-grid">
-            <LabeledSelect label="Min severity to ticket" value={jr.min_severity} onChange={(v) => setJr({ ...jr, min_severity: v })} options={SEV} />
-            <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJr({ ...jr, issue_type: v })} placeholder="Incident" />
-            <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJr({ ...jr, resolve_transition: v })} placeholder="Done" />
+            <LabeledSelect label="Min severity to ticket" value={jr.min_severity} onChange={(v) => setJr({ ...jr, min_severity: v })} options={SEV} info="Only alerts at or above this severity open a Jira issue." />
+            <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJr({ ...jr, issue_type: v })} placeholder="Incident" info="Jira issue type created for new alerts (e.g. Incident, Bug). Defaults to the project's standard type." />
+            <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJr({ ...jr, resolve_transition: v })} placeholder="Done" info="Workflow transition used to close the issue when the alert clears (e.g. Done, Resolve)." />
           </div>
         )
       ),
@@ -1462,14 +1458,14 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
       render: () => (
         <>
           <div className="form-grid">
-            <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} />
+            <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} info="Outbound promotes incidents to tickets. Bidirectional also applies inbound state changes (close, reassign) back onto the incident." />
             <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-              <span>Inbound webhook</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Inbound webhook<InfoTip label="Let the provider push state changes back via a registered, HMAC-signed webhook. Requires bidirectional mode + a signing secret.">Let the provider push state changes back via a registered, HMAC-signed webhook. Requires bidirectional mode + a signing secret.</InfoTip></span>
               <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
                 <input type="checkbox" checked={webhookEnabled} disabled={syncMode !== "bidirectional"} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
               </label>
             </label>
-            <LabeledInput label={`Webhook signing secret${integration.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={integration.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} hint="write-only — blank keeps stored" />
+            <LabeledInput label={`Webhook signing secret${integration.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={integration.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} info="Shared secret used to HMAC-verify inbound webhooks from the provider. Write-only — blank keeps stored." />
           </div>
           {syncMode === "bidirectional" && webhookEnabled && !integration.webhook_secret_set && !secret.trim() && (
             <p className="pol-row-err" role="alert">A signing secret is required to accept inbound webhooks.</p>
@@ -1508,21 +1504,9 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
   ];
 
   return (
-    <div className="ds-modal-scrim" onClick={onClose}>
-      <div className="ds-modal" role="dialog" aria-modal="true" aria-label={`${meta.name} setup`} ref={dialogRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
-        <div className="ds-modal-head">
-          <span className={`conn-logo ${id}`}><meta.Logo size={28} /></span>
-          <div className="ds-modal-title">
-            <h2>{meta.name}</h2>
-            <p className="mini-meta">{meta.tagline}</p>
-          </div>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-        <div className="ds-modal-body">
-          <Wizard steps={steps} onFinish={save} onCancel={onClose} finishLabel="Save & connect" />
-        </div>
-      </div>
-    </div>
+    <Modal title={meta.name} subtitle={meta.tagline} logo={<span className={`conn-logo ${id}`}><meta.Logo size={28} /></span>} onClose={onClose}>
+      <Wizard steps={steps} onFinish={save} onCancel={onClose} finishLabel="Save & connect" />
+    </Modal>
   );
 }
 
@@ -1530,10 +1514,22 @@ function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved
 
 const SEVERITIES = ["info", "notice", "warning", "error", "critical"];
 
+// Notification channels presented as a branded tile gallery (same pattern as
+// Integrations). SMS (Twilio) and Push (ntfy) are grouped into one "SMS & Push"
+// tile since both are phone-delivery channels. Branded channels (Slack,
+// PagerDuty) use their real logos; generic ones use modern stroke icons.
+type ChannelId = "email" | "mobile" | "slack" | "pagerduty";
+const CHANNELS: { id: ChannelId; name: string; tagline: string; logo: JSX.Element }[] = [
+  { id: "email", name: "Email", tagline: "SMTP relay — route alert emails to your NOC distribution list.", logo: <Icon name="mail" size={26} /> },
+  { id: "mobile", name: "SMS & Push", tagline: "Phone alerts — SMS via Twilio and free push via ntfy.", logo: <Icon name="smartphone" size={26} /> },
+  { id: "slack", name: "Slack", tagline: "Post alerts to a Slack channel via an Incoming Webhook.", logo: <SlackLogo size={30} /> },
+  { id: "pagerduty", name: "PagerDuty", tagline: "On-call escalation via the PagerDuty Events API v2.", logo: <PagerDutyLogo size={30} /> },
+];
+
 function SeveritySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-      <span>Send on severity ≥</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Send on severity ≥<InfoTip label="Only alerts at or above this severity are delivered to this channel.">Only alerts at or above this severity are delivered to this channel.</InfoTip></span>
       <select value={value} onChange={(e) => onChange(e.target.value)}
         style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
         {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -1627,6 +1623,7 @@ export function NotificationsAdmin() {
   // Integrations connector setup.
   const [integrations, setIntegrations] = useState<IntegrationConfig[] | null>(null);
   const [inboundEnabled, setInboundEnabled] = useState(false);
+  const [openCh, setOpenCh] = useState<ChannelId | null>(null); // which channel's setup modal is open
   const [secret, setSecret] = useState({ smtp: "", twilio: "", ntfy: "", slack: "", pager: "" });
   const [msg, setMsg] = useState<Record<string, string>>({});
   // Contact points (reusable delivery audiences referenced by reports).
@@ -1733,162 +1730,176 @@ export function NotificationsAdmin() {
     <>
       <AdminHead title="Notifications" sub="Email, SMS and push channels. Critical alerts route here; secrets are write-only." />
       {(() => {
-        const channels = [smtp, twilio, ntfy, slack, pager];
-        const loaded = channels.every((c) => c !== null);
-        const enabled = channels.filter((c) => c?.enabled).length;
+        const loaded = smtp !== null;
+        const groups = [!!smtp?.enabled, !!(twilio?.enabled || ntfy?.enabled), !!slack?.enabled, !!pager?.enabled];
+        const enabled = groups.filter(Boolean).length;
         return (
           <StatStrip>
-            <Stat label="Channels" value={loaded ? channels.length : <Skeleton w={26} h={22} />} />
+            <Stat label="Channels" value={loaded ? CHANNELS.length : <Skeleton w={26} h={22} />} />
             <Stat label="Enabled" value={loaded ? enabled : "—"} tone={enabled ? "good" : ""} />
             <Stat label="Contact points" value={cps.length} tone="accent" />
           </StatStrip>
         );
       })()}
 
-      {/* SMTP */}
-      <div className="card">
-        <div className="admin-card-head">
-          <h2>Email (SMTP)</h2>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={!!smtp?.enabled} onChange={(e) => smtp && setSmtp({ ...smtp, enabled: e.target.checked })} /> Enabled
-          </label>
-        </div>
-        {smtp && (
-          <>
-            <div className="form-grid">
-              <LabeledInput label="Host" value={smtp.host} onChange={(v) => setSmtp({ ...smtp, host: v })} required placeholder="smtp.example.com" />
-              <LabeledInput label="Port" type="number" value={String(smtp.port)} onChange={(v) => setSmtp({ ...smtp, port: Number(v) || 0 })} required placeholder="587" />
-              <LabeledInput label="From" value={smtp.from} onChange={(v) => setSmtp({ ...smtp, from: v })} required placeholder="noc@example.com" />
-              <LabeledInput label="Recipients (comma-separated)" value={smtp.to} onChange={(v) => setSmtp({ ...smtp, to: v })} required />
-              <LabeledInput label="Username" value={smtp.user} onChange={(v) => setSmtp({ ...smtp, user: v })} />
-              <LabeledInput label={`Password${smtp.pass_set ? " (stored)" : ""}`} type="password" value={secret.smtp} onChange={(v) => setSecret((s) => ({ ...s, smtp: v }))} placeholder={smtp.pass_set ? "•••••• (unchanged)" : ""} />
-              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-                <span>Security</span>
-                <select value={smtp.security} onChange={(e) => setSmtp({ ...smtp, security: e.target.value })}
-                  style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
-                  <option value="starttls">STARTTLS (587, secure)</option>
-                  <option value="tls">TLS on connect (465, secure)</option>
-                  <option value="none">None (plain relay, insecure)</option>
-                </select>
-              </label>
-              <SeveritySelect value={smtp.min_severity} onChange={(v) => setSmtp({ ...smtp, min_severity: v })} />
-            </div>
-            <RequiredLegend />
-            <div className="admin-actions">
-              <button onClick={saveSmtp}>Save</button>
-              <button className="ghost" onClick={() => test("smtp", api.testSmtp)}>Send test</button>
-              {msg.smtp && <span className="mini-meta">{msg.smtp}</span>}
-            </div>
-          </>
-        )}
+      {/* Channel gallery — pick a channel to open its guided setup. */}
+      <div className="conn-grid">
+        {CHANNELS.map((c) => {
+          const loaded = smtp !== null;
+          let enabled = false, configured = false, metaLine = "";
+          if (c.id === "email") {
+            enabled = !!smtp?.enabled; configured = !!smtp?.host;
+            metaLine = configured ? `Relay ${smtp?.host}` : "Click to set up";
+          } else if (c.id === "mobile") {
+            enabled = !!(twilio?.enabled || ntfy?.enabled);
+            configured = !!(twilio?.account_sid || ntfy?.topic);
+            metaLine = [twilio?.account_sid ? "SMS" : null, ntfy?.topic ? "Push" : null].filter(Boolean).join(" · ") || "Click to set up";
+          } else if (c.id === "slack") {
+            enabled = !!slack?.enabled; configured = !!slack?.webhook_set;
+            metaLine = configured ? "Webhook configured" : "Click to set up";
+          } else {
+            enabled = !!pager?.enabled; configured = !!pager?.routing_set;
+            metaLine = configured ? "Routing key configured" : "Click to set up";
+          }
+          const tone = !configured ? "" : enabled ? "good" : "warn";
+          const tag = !loaded ? "…" : !configured ? "Not set up" : enabled ? "On" : "Off";
+          return (
+            <button key={c.id} className="conn-tile" onClick={() => setOpenCh(c.id)} aria-label={`Configure ${c.name}`}>
+              <span className={`conn-logo ${c.id}`}>{c.logo}</span>
+              <span className="conn-body">
+                <span className="conn-name">{c.name}<span className={`conn-status ${tone}`}>{tag}</span></span>
+                <span className="conn-tag">{c.tagline}</span>
+                <span className="conn-meta">{metaLine}</span>
+              </span>
+              <span className="conn-cta">{configured ? "Manage" : "Set up"} →</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Twilio */}
-      <div className="card">
-        <div className="admin-card-head">
-          <h2>SMS (Twilio)</h2>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={!!twilio?.enabled} onChange={(e) => twilio && setTwilio({ ...twilio, enabled: e.target.checked })} /> Enabled
-          </label>
-        </div>
-        <p className="mini-meta">Phone SMS for critical alerts. Twilio is metered — use ntfy below for free testing.</p>
-        {twilio && (
-          <>
-            <div className="form-grid">
-              <LabeledInput label="Account SID" value={twilio.account_sid} onChange={(v) => setTwilio({ ...twilio, account_sid: v })} required />
-              <LabeledInput label={`Auth token${twilio.token_set ? " (stored)" : ""}`} type="password" value={secret.twilio} onChange={(v) => setSecret((s) => ({ ...s, twilio: v }))} placeholder={twilio.token_set ? "•••••• (unchanged)" : ""} />
-              <LabeledInput label="From number" value={twilio.from} onChange={(v) => setTwilio({ ...twilio, from: v })} required placeholder="+15555550123" />
-              <LabeledInput label="To numbers (comma-separated)" value={twilio.to} onChange={(v) => setTwilio({ ...twilio, to: v })} required />
-              <SeveritySelect value={twilio.min_severity} onChange={(v) => setTwilio({ ...twilio, min_severity: v })} />
-            </div>
-            <RequiredLegend />
-            <div className="admin-actions">
-              <button onClick={saveTwilio}>Save</button>
-              <button className="ghost" onClick={() => test("twilio", api.testTwilio)}>Send test</button>
-              {msg.twilio && <span className="mini-meta">{msg.twilio}</span>}
-            </div>
-          </>
-        )}
-      </div>
+      {/* Channel setup modal — the selected channel's full configuration. */}
+      {openCh && (() => {
+        const ch = CHANNELS.find((c) => c.id === openCh)!;
+        return (
+          <Modal title={ch.name} subtitle={ch.tagline} logo={<span className={`conn-logo ${ch.id}`}>{ch.logo}</span>} onClose={() => setOpenCh(null)}>
+            {openCh === "email" && smtp && (
+              <>
+                <label className="scope-chip" style={{ marginBottom: 12 }}>
+                  <input type="checkbox" checked={smtp.enabled} onChange={(e) => setSmtp({ ...smtp, enabled: e.target.checked })} /> Enable email delivery
+                </label>
+                <div className="form-grid">
+                  <LabeledInput label="Host" value={smtp.host} onChange={(v) => setSmtp({ ...smtp, host: v })} required placeholder="smtp.example.com" info="Hostname of your SMTP relay (e.g. smtp.example.com)." />
+                  <LabeledInput label="Port" type="number" value={String(smtp.port)} onChange={(v) => setSmtp({ ...smtp, port: Number(v) || 0 })} required placeholder="587" info="SMTP port — 587 for STARTTLS, 465 for TLS-on-connect, 25 for plain relay." />
+                  <LabeledInput label="From" value={smtp.from} onChange={(v) => setSmtp({ ...smtp, from: v })} required placeholder="noc@example.com" info="The From address alert emails are sent as." />
+                  <LabeledInput label="Recipients (comma-separated)" value={smtp.to} onChange={(v) => setSmtp({ ...smtp, to: v })} required info="One or more addresses that receive alert emails, comma-separated." />
+                  <LabeledInput label="Username" value={smtp.user} onChange={(v) => setSmtp({ ...smtp, user: v })} info="SMTP auth username. Leave blank for an unauthenticated relay." />
+                  <LabeledInput label={`Password${smtp.pass_set ? " (stored)" : ""}`} type="password" value={secret.smtp} onChange={(v) => setSecret((s) => ({ ...s, smtp: v }))} placeholder={smtp.pass_set ? "•••••• (unchanged)" : ""} info="SMTP auth password. Write-only — blank keeps the stored value." />
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Security<InfoTip label="Transport encryption: STARTTLS (587), implicit TLS on connect (465), or none (plain, insecure).">Transport encryption: STARTTLS (587), implicit TLS on connect (465), or none (plain, insecure).</InfoTip></span>
+                    <select value={smtp.security} onChange={(e) => setSmtp({ ...smtp, security: e.target.value })} style={{ padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }}>
+                      <option value="starttls">STARTTLS (587, secure)</option>
+                      <option value="tls">TLS on connect (465, secure)</option>
+                      <option value="none">None (plain relay, insecure)</option>
+                    </select>
+                  </label>
+                  <SeveritySelect value={smtp.min_severity} onChange={(v) => setSmtp({ ...smtp, min_severity: v })} />
+                </div>
+                <RequiredLegend />
+                <div className="admin-actions">
+                  <button onClick={saveSmtp}>Save</button>
+                  <button className="ghost" onClick={() => test("smtp", api.testSmtp)}>Send test</button>
+                  {msg.smtp && <span className="mini-meta">{msg.smtp}</span>}
+                </div>
+              </>
+            )}
 
-      {/* ntfy */}
-      <div className="card">
-        <div className="admin-card-head">
-          <h2>Push (ntfy.sh)</h2>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={!!ntfy?.enabled} onChange={(e) => ntfy && setNtfy({ ...ntfy, enabled: e.target.checked })} /> Enabled
-          </label>
-        </div>
-        <p className="mini-meta">Free push to phone/desktop — subscribe to the topic in the ntfy app. Great for testing critical-alert pushes without Twilio.</p>
-        {ntfy && (
-          <>
-            <div className="form-grid">
-              <LabeledInput label="Server" value={ntfy.server} onChange={(v) => setNtfy({ ...ntfy, server: v })} placeholder="https://ntfy.sh" />
-              <LabeledInput label="Topic" value={ntfy.topic} onChange={(v) => setNtfy({ ...ntfy, topic: v })} required placeholder="netops-xxxxxx" />
-              <LabeledInput label={`Token (optional)${ntfy.token_set ? " (stored)" : ""}`} type="password" value={secret.ntfy} onChange={(v) => setSecret((s) => ({ ...s, ntfy: v }))} placeholder={ntfy.token_set ? "•••••• (unchanged)" : "for protected topics"} />
-              <SeveritySelect value={ntfy.min_severity} onChange={(v) => setNtfy({ ...ntfy, min_severity: v })} />
-            </div>
-            <RequiredLegend />
-            <div className="admin-actions">
-              <button onClick={saveNtfy}>Save</button>
-              <button className="ghost" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
-              {msg.ntfy && <span className="mini-meta">{msg.ntfy}</span>}
-            </div>
-          </>
-        )}
-      </div>
+            {openCh === "mobile" && (
+              <>
+                <h3 className="ds-modal-section"><TwilioLogo size={18} /> SMS · Twilio</h3>
+                <p className="mini-meta">Phone SMS for critical alerts. Twilio is metered — use ntfy below for free testing.</p>
+                {twilio && (
+                  <>
+                    <label className="scope-chip" style={{ margin: "10px 0" }}>
+                      <input type="checkbox" checked={twilio.enabled} onChange={(e) => setTwilio({ ...twilio, enabled: e.target.checked })} /> Enable SMS delivery
+                    </label>
+                    <div className="form-grid">
+                      <LabeledInput label="Account SID" value={twilio.account_sid} onChange={(v) => setTwilio({ ...twilio, account_sid: v })} required info="Your Twilio Account SID (starts with AC…), from the Twilio Console dashboard." />
+                      <LabeledInput label={`Auth token${twilio.token_set ? " (stored)" : ""}`} type="password" value={secret.twilio} onChange={(v) => setSecret((s) => ({ ...s, twilio: v }))} placeholder={twilio.token_set ? "•••••• (unchanged)" : ""} info="Twilio auth token paired with the SID. Write-only — blank keeps stored." />
+                      <LabeledInput label="From number" value={twilio.from} onChange={(v) => setTwilio({ ...twilio, from: v })} required placeholder="+15555550123" info="A Twilio phone number in E.164 format that messages are sent from." />
+                      <LabeledInput label="To numbers (comma-separated)" value={twilio.to} onChange={(v) => setTwilio({ ...twilio, to: v })} required info="Recipient phone numbers in E.164 format, comma-separated." />
+                      <SeveritySelect value={twilio.min_severity} onChange={(v) => setTwilio({ ...twilio, min_severity: v })} />
+                    </div>
+                    <div className="admin-actions">
+                      <button onClick={saveTwilio}>Save SMS</button>
+                      <button className="ghost" onClick={() => test("twilio", api.testTwilio)}>Send test</button>
+                      {msg.twilio && <span className="mini-meta">{msg.twilio}</span>}
+                    </div>
+                  </>
+                )}
+                <h3 className="ds-modal-section" style={{ marginTop: 18 }}><Icon name="bell" size={16} /> Push · ntfy</h3>
+                <p className="mini-meta">Free push to phone/desktop — subscribe to the topic in the ntfy app. Great for testing critical-alert pushes without Twilio.</p>
+                {ntfy && (
+                  <>
+                    <label className="scope-chip" style={{ margin: "10px 0" }}>
+                      <input type="checkbox" checked={ntfy.enabled} onChange={(e) => setNtfy({ ...ntfy, enabled: e.target.checked })} /> Enable push delivery
+                    </label>
+                    <div className="form-grid">
+                      <LabeledInput label="Server" value={ntfy.server} onChange={(v) => setNtfy({ ...ntfy, server: v })} placeholder="https://ntfy.sh" info="ntfy server base URL — the public https://ntfy.sh or your self-hosted instance." />
+                      <LabeledInput label="Topic" value={ntfy.topic} onChange={(v) => setNtfy({ ...ntfy, topic: v })} required placeholder="netops-xxxxxx" info="The ntfy topic to publish to — subscribe to it in the ntfy app to receive pushes." />
+                      <LabeledInput label={`Token (optional)${ntfy.token_set ? " (stored)" : ""}`} type="password" value={secret.ntfy} onChange={(v) => setSecret((s) => ({ ...s, ntfy: v }))} placeholder={ntfy.token_set ? "•••••• (unchanged)" : "for protected topics"} info="Access token for protected topics. Write-only — blank keeps stored." />
+                      <SeveritySelect value={ntfy.min_severity} onChange={(v) => setNtfy({ ...ntfy, min_severity: v })} />
+                    </div>
+                    <div className="admin-actions">
+                      <button onClick={saveNtfy}>Save push</button>
+                      <button className="ghost" onClick={() => test("ntfy", api.testNtfy)}>Send test</button>
+                      {msg.ntfy && <span className="mini-meta">{msg.ntfy}</span>}
+                    </div>
+                  </>
+                )}
+                <RequiredLegend />
+              </>
+            )}
 
-      {/* Slack */}
-      <div className="card">
-        <div className="admin-card-head">
-          <h2>Slack</h2>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={!!slack?.enabled} onChange={(e) => slack && setSlack({ ...slack, enabled: e.target.checked })} /> Enabled
-          </label>
-        </div>
-        <p className="mini-meta">Posts alerts to a Slack Incoming Webhook. Create one at api.slack.com → Incoming Webhooks; the URL embeds a secret, so it is write-only.</p>
-        {slack && (
-          <>
-            <div className="form-grid">
-              <LabeledInput label={`Webhook URL${slack.webhook_set ? " (stored)" : ""}`} type="password" value={secret.slack} onChange={(v) => setSecret((s) => ({ ...s, slack: v }))} placeholder={slack.webhook_set ? "•••••• (unchanged)" : "https://hooks.slack.com/services/…"} required={!slack.webhook_set} />
-              <SeveritySelect value={slack.min_severity} onChange={(v) => setSlack({ ...slack, min_severity: v })} />
-            </div>
-            <RequiredLegend />
-            <div className="admin-actions">
-              <button onClick={saveSlack}>Save</button>
-              <button className="ghost" onClick={() => test("slack", api.testSlack)}>Send test</button>
-              {msg.slack && <span className="mini-meta">{msg.slack}</span>}
-            </div>
-            <SyncSettings integration={integrationFor("slack")} inboundEnabled={inboundEnabled} webhookHint="Paste into your Slack app's Interactivity & Shortcuts request URL." onSaved={onIntegrationSaved} />
-          </>
-        )}
-      </div>
+            {openCh === "slack" && slack && (
+              <>
+                <label className="scope-chip" style={{ marginBottom: 12 }}>
+                  <input type="checkbox" checked={slack.enabled} onChange={(e) => setSlack({ ...slack, enabled: e.target.checked })} /> Enable Slack delivery
+                </label>
+                <div className="form-grid">
+                  <LabeledInput label={`Webhook URL${slack.webhook_set ? " (stored)" : ""}`} type="password" value={secret.slack} onChange={(v) => setSecret((s) => ({ ...s, slack: v }))} placeholder={slack.webhook_set ? "•••••• (unchanged)" : "https://hooks.slack.com/services/…"} required={!slack.webhook_set} info="Slack Incoming Webhook URL (api.slack.com → Incoming Webhooks). It embeds a secret, so it's write-only." />
+                  <SeveritySelect value={slack.min_severity} onChange={(v) => setSlack({ ...slack, min_severity: v })} />
+                </div>
+                <RequiredLegend />
+                <div className="admin-actions">
+                  <button onClick={saveSlack}>Save</button>
+                  <button className="ghost" onClick={() => test("slack", api.testSlack)}>Send test</button>
+                  {msg.slack && <span className="mini-meta">{msg.slack}</span>}
+                </div>
+                <SyncSettings integration={integrationFor("slack")} inboundEnabled={inboundEnabled} webhookHint="Paste into your Slack app's Interactivity & Shortcuts request URL." onSaved={onIntegrationSaved} />
+              </>
+            )}
 
-      {/* PagerDuty */}
-      <div className="card">
-        <div className="admin-card-head">
-          <h2>PagerDuty</h2>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={!!pager?.enabled} onChange={(e) => pager && setPager({ ...pager, enabled: e.target.checked })} /> Enabled
-          </label>
-        </div>
-        <p className="mini-meta">On-call escalation via the Events API v2. Add an Events API v2 integration to a PagerDuty service and paste its integration (routing) key.</p>
-        {pager && (
-          <>
-            <div className="form-grid">
-              <LabeledInput label={`Routing key${pager.routing_set ? " (stored)" : ""}`} type="password" value={secret.pager} onChange={(v) => setSecret((s) => ({ ...s, pager: v }))} placeholder={pager.routing_set ? "•••••• (unchanged)" : "32-char integration key"} required={!pager.routing_set} />
-              <SeveritySelect value={pager.min_severity} onChange={(v) => setPager({ ...pager, min_severity: v })} />
-            </div>
-            <RequiredLegend />
-            <div className="admin-actions">
-              <button onClick={savePager}>Save</button>
-              <button className="ghost" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
-              {msg.pager && <span className="mini-meta">{msg.pager}</span>}
-            </div>
-            <SyncSettings integration={integrationFor("pagerduty")} inboundEnabled={inboundEnabled} webhookHint="Paste into a PagerDuty v3 webhook subscription." onSaved={onIntegrationSaved} />
-          </>
-        )}
-      </div>
+            {openCh === "pagerduty" && pager && (
+              <>
+                <label className="scope-chip" style={{ marginBottom: 12 }}>
+                  <input type="checkbox" checked={pager.enabled} onChange={(e) => setPager({ ...pager, enabled: e.target.checked })} /> Enable PagerDuty delivery
+                </label>
+                <div className="form-grid">
+                  <LabeledInput label={`Routing key${pager.routing_set ? " (stored)" : ""}`} type="password" value={secret.pager} onChange={(v) => setSecret((s) => ({ ...s, pager: v }))} placeholder={pager.routing_set ? "•••••• (unchanged)" : "32-char integration key"} required={!pager.routing_set} info="Events API v2 integration (routing) key from your PagerDuty service. Write-only — blank keeps stored." />
+                  <SeveritySelect value={pager.min_severity} onChange={(v) => setPager({ ...pager, min_severity: v })} />
+                </div>
+                <RequiredLegend />
+                <div className="admin-actions">
+                  <button onClick={savePager}>Save</button>
+                  <button className="ghost" onClick={() => test("pager", api.testPagerDuty)}>Send test</button>
+                  {msg.pager && <span className="mini-meta">{msg.pager}</span>}
+                </div>
+                <SyncSettings integration={integrationFor("pagerduty")} inboundEnabled={inboundEnabled} webhookHint="Paste into a PagerDuty v3 webhook subscription." onSaved={onIntegrationSaved} />
+              </>
+            )}
+          </Modal>
+        );
+      })()}
 
       {/* Contact points — reusable, tenant-scoped delivery audiences referenced
           by Reports. Email-type points resolve to addresses the scheduler emails

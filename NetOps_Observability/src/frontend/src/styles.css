@@ -1415,6 +1415,11 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: 10px; border-radius: 14px; background: #fff; border: 1px solid var(--panel-border); }
 .conn-logo.servicenow { background: #f1f7f4; }
 .conn-logo.jira { background: #f3f7ff; }
+.conn-logo.slack { background: #f7f1f7; }
+.conn-logo.pagerduty { background: #eef8f0; }
+/* generic-icon channels: tinted chip + icon colour (Lucide strokes inherit currentColor) */
+.conn-logo.email { background: #eef2f8; color: #4b6a8a; }
+.conn-logo.mobile { background: #eef7f1; color: #2e9e6b; }
 .conn-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .conn-name { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); font-weight: 700; color: var(--fg); }
 .conn-status { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
@@ -1441,6 +1446,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .ds-modal-title h2 { margin: 0; font-size: var(--fs-lg); }
 .ds-modal-title p { margin: 2px 0 0; }
 .ds-modal-body { padding: var(--sp-4); overflow: auto; }
+/* section divider inside a multi-section modal (e.g. SMS & Push) */
+.ds-modal-section { display: flex; align-items: center; gap: 7px; margin: 0 0 2px; font-size: var(--fs-sm);
+  font-weight: 700; color: var(--fg); }
+.ds-modal-section:not(:first-child) { margin-top: var(--sp-4); padding-top: var(--sp-4); border-top: 1px solid var(--panel-border); }
 @media (prefers-reduced-motion: reduce) {
   .conn-tile { transition: none !important; }
   .ds-modal, .ds-modal-scrim { animation: none !important; }

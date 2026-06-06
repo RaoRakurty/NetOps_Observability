@@ -159,6 +159,27 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="12" y1="8" x2="12.01" y2="8" />
     </>
   ),
+  // mail — envelope, for the Email (SMTP) channel.
+  mail: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </>
+  ),
+  // smartphone — for the grouped SMS & Push (mobile) channel.
+  smartphone: (
+    <>
+      <rect x="5" y="2" width="14" height="20" rx="2.5" />
+      <line x1="12" y1="18" x2="12.01" y2="18" />
+    </>
+  ),
+  // bell — push notifications (ntfy).
+  bell: (
+    <>
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </>
+  ),
   support: (
     <>
       <circle cx="12" cy="12" r="9" />
