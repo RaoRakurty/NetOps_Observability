@@ -213,7 +213,21 @@ func (s *server) bridgeSSH(ws *wsConn, claims jwtClaims, tenant string, cross bo
 		auth = append(auth, ssh.PublicKeys(signer))
 	}
 	if req.Password != "" {
+		// Offer BOTH password and keyboard-interactive with the same secret. The
+		// ssh client only attempts a configured method if its name is in the
+		// server's advertised list, and many network devices (Arista EOS, Cisco,
+		// Juniper, …) accept ONLY keyboard-interactive — offering password alone
+		// leaves "none" the only attempted method ("no supported methods remain").
 		auth = append(auth, ssh.Password(req.Password))
+		auth = append(auth, ssh.KeyboardInteractive(
+			func(_, _ string, questions []string, _ []bool) ([]string, error) {
+				// Replay the one password for each prompt the device sends.
+				answers := make([]string, len(questions))
+				for i := range questions {
+					answers[i] = req.Password
+				}
+				return answers, nil
+			}))
 	}
 
 	addr := net.JoinHostPort(dev.Address, fmt.Sprintf("%d", port))
