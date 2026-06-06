@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig, IntegrationConfig } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard from "../components/Wizard";
+import { StatStrip, Stat, Skeleton } from "../components/ui";
 
 // ---- shared chrome ---------------------------------------------------------
 
@@ -58,6 +59,7 @@ export function UsersAdmin() {
   const [tenants] = useReload(() => api.listTenants());
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ ...BLANK_USER });
+  const [q, setQ] = useState("");
 
   const roleList = roles?.roles ?? [];
   const tenantList = tenants ?? [];
@@ -80,9 +82,28 @@ export function UsersAdmin() {
     try { await api.deleteUser(u.username); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
+  const list = users ?? [];
+  const isAdminRole = (role: string) => role === "super-admin" || role === "admin";
+  const stats = {
+    total: list.length,
+    admins: list.filter((u) => isAdminRole(u.role)).length,
+    disabled: list.filter((u) => u.status === "disabled").length,
+    federated: list.filter((u) => u.auth_source && u.auth_source !== "local").length,
+  };
+  const ql = q.trim().toLowerCase();
+  const shown = ql
+    ? list.filter((u) => [u.username, u.email, u.display_name, u.role, u.tenant_id].some((f) => (f ?? "").toLowerCase().includes(ql)))
+    : list;
+
   return (
     <>
       <AdminHead title="Users" sub={`People with access to ${BRAND}. Local accounts today; federated users (SSO/LDAP) arrive once an identity provider is configured.`} />
+      <StatStrip>
+        <Stat label="Users" value={users ? stats.total : <Skeleton w={26} h={22} />} />
+        <Stat label="Admins" value={users ? stats.admins : "—"} tone="accent" />
+        <Stat label="Disabled" value={users ? stats.disabled : "—"} tone={stats.disabled ? "warn" : ""} />
+        <Stat label="Federated" value={users ? stats.federated : "—"} />
+      </StatStrip>
       <div className="card">
         <div className="admin-card-head">
           <h2>Directory</h2>
@@ -105,12 +126,16 @@ export function UsersAdmin() {
             <button className="dash-btn accent" onClick={submit}>Create</button>
           </div>
         )}
-        <table>
+        <div className="ds-toolbar">
+          <input className="ds-search" placeholder="Search users…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
+          <span className="mini-meta">{shown.length} of {list.length}</span>
+        </div>
+        <table className="ds-table">
           <thead>
             <tr><th>User</th><th>Email</th><th>Role</th><th>Tenant</th><th>Auth</th><th>Status</th><th>Last active</th><th></th></tr>
           </thead>
           <tbody>
-            {(users ?? []).map((u) => (
+            {shown.map((u) => (
               <tr key={u.username}>
                 <td style={{ fontWeight: 600 }}>{u.display_name || u.username}</td>
                 <td className="mono">{u.email || "—"}</td>
@@ -129,6 +154,7 @@ export function UsersAdmin() {
             ))}
           </tbody>
         </table>
+        {users && shown.length === 0 && <div className="empty">{list.length === 0 ? "No users yet." : "No users match your search."}</div>}
       </div>
     </>
   );
@@ -160,16 +186,23 @@ export function RolesAdmin() {
     try { await api.deleteRole(role.id!); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
+  const builtin = roles.filter((r) => r.builtin).length;
   return (
     <>
       <AdminHead title="Roles & Permissions" sub="Granular, module-level RBAC. Built-in roles are fixed; click a cell on a custom role to cycle none→read→write→admin." />
+      <StatStrip>
+        <Stat label="Roles" value={data ? roles.length : <Skeleton w={26} h={22} />} />
+        <Stat label="Built-in" value={data ? builtin : "—"} />
+        <Stat label="Custom" value={data ? roles.length - builtin : "—"} tone="accent" />
+        <Stat label="Modules" value={data ? modules.length : "—"} />
+      </StatStrip>
       <div className="card">
         <div className="admin-card-head">
           <h2>Permission matrix</h2>
           <button className="dash-btn accent" onClick={addRole}>+ New custom role</button>
         </div>
         <ErrLine msg={err} />
-        <table>
+        <table className="ds-table">
           <thead>
             <tr><th>Role</th>{modules.map((m) => <th key={m} style={{ textTransform: "capitalize" }}>{m}</th>)}<th></th></tr>
           </thead>
@@ -225,6 +258,11 @@ export function TenantsAdmin() {
   return (
     <>
       <AdminHead title="Tenants" sub="Logical isolation boundaries. The Parent Tenant owns the platform; Child Tenants are isolated namespaces — devices, dashboards, alerts and users are scoped to each." />
+      <StatStrip>
+        <Stat label="Tenants" value={tenants ? list.length : <Skeleton w={26} h={22} />} />
+        <Stat label="Parent" value={tenants ? list.filter((t) => t.id === "global").length : "—"} />
+        <Stat label="Child" value={tenants ? list.filter((t) => t.id !== "global").length : "—"} tone="accent" />
+      </StatStrip>
       <div className="card">
         <div className="admin-card-head"><h2>New child tenant</h2></div>
         <ErrLine msg={err} />
@@ -245,7 +283,7 @@ export function TenantsAdmin() {
         {list.length === 0 ? (
           <div className="empty">No tenants yet.</div>
         ) : (
-          <table style={{ width: "100%" }}>
+          <table className="ds-table" style={{ width: "100%" }}>
             <thead>
               <tr>
                 <th>Tenant</th>
@@ -355,6 +393,12 @@ export function ApiAccessAdmin() {
   return (
     <>
       <AdminHead title="API Access" sub={`${BRAND} is API-first. Mint scoped keys for machine clients; present them as a Bearer token or X-API-Key header.`} />
+      <StatStrip>
+        <Stat label="Keys" value={keys ? keys.length : <Skeleton w={26} h={22} />} />
+        <Stat label="Active" value={keys ? keys.filter((k) => !k.revoked_at).length : "—"} tone="good" />
+        <Stat label="Revoked" value={keys ? keys.filter((k) => k.revoked_at).length : "—"} tone={(keys ?? []).some((k) => k.revoked_at) ? "warn" : ""} />
+        <Stat label="Rate-limited" value={keys ? keys.filter((k) => (k.rate_limit_per_min || 0) > 0).length : "—"} />
+      </StatStrip>
       <div className="card">
         <div className="admin-card-head"><h2>Generate API key</h2></div>
         <ErrLine msg={err} />
@@ -445,7 +489,7 @@ export function ApiAccessAdmin() {
       </div>
       <div className="card">
         <div className="admin-card-head"><h2>API keys</h2></div>
-        <table>
+        <table className="ds-table">
           <thead>
             <tr><th>Label</th><th>Key</th><th>Scopes</th><th>Grant types</th><th>Source CIDRs</th><th>Rate / min</th><th>Usage</th><th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th></th></tr>
           </thead>
@@ -1375,6 +1419,19 @@ export function IntegrationsAdmin() {
   return (
     <>
       <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
+      {(() => {
+        const loaded = sn !== undefined && jira !== undefined;
+        const configured = [snLive, jiraLive].filter(Boolean).length;
+        const connected = [sn?.enabled, jira?.enabled].filter(Boolean).length;
+        const open = (sn?.open_count ?? 0) + (jira?.open_count ?? 0);
+        return (
+          <StatStrip>
+            <Stat label="Providers" value={loaded ? configured : <Skeleton w={26} h={22} />} />
+            <Stat label="Connected" value={loaded ? connected : "—"} tone={connected ? "good" : ""} />
+            <Stat label="Open tickets" value={loaded ? open : "—"} tone={open ? "accent" : ""} />
+          </StatStrip>
+        );
+      })()}
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
         <button className="dash-btn accent" onClick={() => setWizard(true)}>✨ Guided setup</button>
       </div>
@@ -1394,7 +1451,7 @@ export function IntegrationsAdmin() {
             <dt>Open incidents</dt><dd>{sn.open_count ?? 0}</dd>
           </dl>
           {(sn.open?.length ?? 0) > 0 && (
-            <table>
+            <table className="ds-table">
               <thead><tr><th>Incident</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
               <tbody>
                 {sn.open!.map((t) => (
@@ -1425,7 +1482,7 @@ export function IntegrationsAdmin() {
             <dt>Open issues</dt><dd>{jira.open_count ?? 0}</dd>
           </dl>
           {(jira.open?.length ?? 0) > 0 && (
-            <table>
+            <table className="ds-table">
               <thead><tr><th>Issue</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
               <tbody>
                 {jira.open!.map((t) => (
@@ -1716,6 +1773,18 @@ export function NotificationsAdmin() {
   return (
     <>
       <AdminHead title="Notifications" sub="Email, SMS and push channels. Critical alerts route here; secrets are write-only." />
+      {(() => {
+        const channels = [smtp, twilio, ntfy, slack, pager];
+        const loaded = channels.every((c) => c !== null);
+        const enabled = channels.filter((c) => c?.enabled).length;
+        return (
+          <StatStrip>
+            <Stat label="Channels" value={loaded ? channels.length : <Skeleton w={26} h={22} />} />
+            <Stat label="Enabled" value={loaded ? enabled : "—"} tone={enabled ? "good" : ""} />
+            <Stat label="Contact points" value={cps.length} tone="accent" />
+          </StatStrip>
+        );
+      })()}
 
       {/* SMTP */}
       <div className="card">
@@ -1873,7 +1942,7 @@ export function NotificationsAdmin() {
         </p>
 
         {cps.length > 0 && (
-          <table style={{ width: "100%", marginBottom: 12 }}>
+          <table className="ds-table" style={{ width: "100%", marginBottom: 12 }}>
             <thead>
               <tr><th>Name</th><th>Type</th><th>Recipients</th><th>Enabled</th><th></th></tr>
             </thead>
