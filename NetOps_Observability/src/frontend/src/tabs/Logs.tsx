@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, ExportFmt } from "../services/api";
-import { severityClass, severityRowClass } from "../theme/severity";
+import { severityClass, severityColor, severityKey } from "../theme/severity";
+import DataTable, { Column } from "../components/DataTable";
+
+// Sort rank for the Level column (critical first when sorted ascending).
+const SEV_RANK: Record<string, number> = {
+  critical: 0, error: 1, warning: 2, notice: 3, info: 4, debug: 5, ok: 6,
+};
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
   { id: "csv", label: "CSV" },
@@ -51,7 +57,7 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
   const [total, setTotal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
 
@@ -115,7 +121,7 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
   };
 
   const lines = useMemo(() => {
-    return hits.map((h) => {
+    return hits.map((h, i) => {
       const src = h._source || {};
       const ts =
         src["@timestamp"] || src.timestamp || src.ts || src.time_received_ns || new Date().toISOString();
@@ -127,23 +133,26 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
       const source =
         flowHost || src.compose_service || src.container_name || src.hostname || src.appname || h._index;
       const level = src.level || src.severity || "";
-      return { ts: String(ts), message: String(message), source: String(source), level: String(level), index: h._index };
+      // Stable id so selection survives DataTable's internal sort (was index).
+      const id = h._id || `${h._index}#${i}`;
+      return { id, ts: String(ts), message: String(message), source: String(source), level: String(level), index: h._index };
     });
   }, [hits]);
+  type Line = (typeof lines)[number];
 
   const allSelected = lines.length > 0 && selected.size === lines.length;
-  const toggleRow = (i: number) =>
+  const toggleRow = (id: string) =>
     setSelected((s) => {
       const n = new Set(s);
-      if (n.has(i)) n.delete(i);
-      else n.add(i);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
-  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(lines.map((_, i) => i)));
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(lines.map((l) => l.id)));
 
   // Mode A — render the selected (loaded) rows to a file via the server encoders.
   const exportSelected = async (format: ExportFmt) => {
-    const rows = lines.filter((_, i) => selected.has(i)).map((l) => [l.ts, l.source, l.level, l.message]);
+    const rows = lines.filter((l) => selected.has(l.id)).map((l) => [l.ts, l.source, l.level, l.message]);
     if (rows.length === 0) return;
     setExporting(true);
     setExportMsg(null);
@@ -193,6 +202,36 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
       setExporting(false);
     }
   };
+
+  const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+  const columns = useMemo<Column<Line>[]>(() => [
+    {
+      key: "sel", width: 30,
+      header: <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all loaded" />,
+      render: (l) => (
+        <input type="checkbox" checked={selected.has(l.id)}
+          onClick={(e) => e.stopPropagation()} onChange={() => toggleRow(l.id)} />
+      ),
+    },
+    {
+      key: "ts", header: "Time", width: 168, sortable: true,
+      sortValue: (l) => new Date(l.ts).getTime() || 0,
+      render: (l) => <span style={mono}>{new Date(l.ts).toLocaleString()}</span>,
+    },
+    {
+      key: "source", header: "Source", width: 168, sortable: true, text: (l) => l.source,
+      render: (l) => <span style={mono} title={l.source}>{l.source}</span>,
+    },
+    {
+      key: "level", header: "Level", width: 92, sortable: true,
+      text: (l) => l.level, sortValue: (l) => SEV_RANK[severityKey(l.level)] ?? 9,
+      render: (l) => <span className={`badge ${severityClass(l.level)}`}>{l.level || "—"}</span>,
+    },
+    {
+      key: "message", header: "Message", text: (l) => l.message,
+      render: (l) => <span style={mono} title={l.message}>{l.message}</span>,
+    },
+  ], [selected, allSelected]);
 
   return (
     <>
@@ -298,49 +337,15 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
             {busy ? "Loading…" : "No results. Try widening the time range or relaxing the filter."}
           </div>
         ) : (
-          <div style={{ maxHeight: "60vh", overflow: "auto" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 28 }}>
-                    <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all on page" />
-                  </th>
-                  <th style={{ width: 180 }}>Time</th>
-                  <th style={{ width: 180 }}>Source</th>
-                  <th style={{ width: 80 }}>Level</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((r, i) => (
-                  <tr key={i} className={severityRowClass(r.level)}>
-                    <td>
-                      <input type="checkbox" checked={selected.has(i)} onChange={() => toggleRow(i)} />
-                    </td>
-                    <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                      {new Date(r.ts).toLocaleString()}
-                    </td>
-                    <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                      {r.source}
-                    </td>
-                    <td>
-                      <span className={`badge ${severityClass(r.level)}`}>{r.level || "—"}</span>
-                    </td>
-                    <td
-                      style={{
-                        fontFamily: "ui-monospace, monospace",
-                        fontSize: 12,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-all",
-                      }}
-                    >
-                      {r.message}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable<Line>
+            rows={lines}
+            columns={columns}
+            rowKey={(l) => l.id}
+            height="60vh"
+            ariaLabel="Log results"
+            rowAccent={(l) => severityColor(l.level)}
+            empty="No results."
+          />
         )}
       </div>
     </>
