@@ -65,15 +65,23 @@
   /* Nav rail — a modern "elite glass" indigo-slate (lighter & richer than the
      old near-black so it doesn't read as a heavy dark column). A subtle
      top→bottom gradient (applied on .sidebar) gives it depth. */
-  --rail-bg:        #20283c;
-  --rail-bg-2:      #28324a;            /* gradient foot / raised wells */
+  --rail-bg:        #283251;            /* milder indigo-slate (lifted off the
+                                           old near-navy so it reads softer) */
+  --rail-bg-2:      #34406a;            /* gradient foot / raised wells */
   --rail-fg:        #eef1f8;
-  --rail-fg-muted:  #97a1ba;
-  --rail-border:    rgba(255,255,255,0.08);
-  --rail-hover:     rgba(255,255,255,0.07);
-  --rail-active-bg: rgba(129,140,248,0.26);
+  --rail-fg-muted:  #a4afca;
+  --rail-border:    rgba(255,255,255,0.10);
+  --rail-hover:     rgba(255,255,255,0.08);
+  --rail-active-bg: rgba(129,140,248,0.30);
   --rail-active-fg: #ffffff;
-  --rail-accent:    #a5b4fc;            /* bright indigo for dark surfaces */
+  --rail-accent:    #b4c0fd;            /* bright indigo for dark surfaces */
+  --rail-glass:     rgba(129,140,248,0.14);  /* hue tint for the frosted overlay */
+  --rail-sheen:     rgba(255,255,255,0.08);  /* top reflection highlight */
+
+  /* Chrome presets (data-chrome on <html>) — the rail/topbar are always-dark
+     glass; each preset shifts only the hue, staying in the same dark jewel-tone
+     band so it reads cohesive ("shouldn't look too different"). indigo == the
+     defaults above, so it needs no block. */
 
   /* Vivid accents for the light canvas. The flat indigo read "pale" — these
      give buttons/pills/active states a saturated, gradient-driven punch while
@@ -89,6 +97,25 @@
   --shadow-1: 0 1px 2px rgba(17, 24, 39, 0.05);
   --shadow-2: 0 4px 14px rgba(17, 24, 39, 0.08);
   --shadow-pop: 0 12px 32px rgba(17, 24, 39, 0.16);
+}
+
+/* Chrome presets — only the hue moves; lightness/saturation stay in the milder
+   dark jewel-tone band the indigo default sets above. indigo == :root (no block). */
+:root[data-chrome="graphite"] {           /* neutral graphite — Datadog-like */
+  --rail-bg:        #2c313c;
+  --rail-bg-2:      #39404e;
+  --rail-fg-muted:  #aab2c0;
+  --rail-active-bg: rgba(148,163,184,0.26);
+  --rail-accent:    #d6dde8;
+  --rail-glass:     rgba(148,163,184,0.12);
+}
+:root[data-chrome="violet"] {             /* milder premium violet */
+  --rail-bg:        #2f2a4a;
+  --rail-bg-2:      #3c3763;
+  --rail-fg-muted:  #b1a6cd;
+  --rail-active-bg: rgba(167,139,250,0.30);
+  --rail-accent:    #c8bbfb;
+  --rail-glass:     rgba(167,139,250,0.14);
 }
 
 /* ===========================================================================
@@ -220,8 +247,17 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .rail {
   grid-area: sidebar;
   display: flex; flex-direction: column;
-  background: linear-gradient(180deg, var(--rail-bg) 0%, var(--rail-bg-2) 100%);
+  /* Frosted-glass chrome: a hue glow + diagonal sheen + top reflection layered
+     over the base gradient; an inset top highlight reads as a light edge. */
+  background:
+    linear-gradient(180deg, var(--rail-sheen) 0%, transparent 16%),
+    linear-gradient(125deg, rgba(255,255,255,0.05) 0%, transparent 32%),
+    radial-gradient(120% 55% at 50% -8%, var(--rail-glass) 0%, transparent 62%),
+    linear-gradient(180deg, var(--rail-bg) 0%, var(--rail-bg-2) 100%);
   border-right: 1px solid var(--rail-border);
+  box-shadow: inset 0 1px 0 var(--rail-sheen), inset -1px 0 0 rgba(0,0,0,0.18);
+  backdrop-filter: blur(12px) saturate(128%);
+  -webkit-backdrop-filter: blur(12px) saturate(128%);
   padding: var(--sp-2) 0; overflow: visible;
 }
 .rail-main { display: flex; flex-direction: column; gap: 1px; padding: var(--sp-1) 8px; flex: 1; overflow-y: auto; overflow-x: visible; }
@@ -317,8 +353,17 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* Top bar — same dark tone as the vertical rail (interim, per request), with a
    thin bottom divider. A slim search bar sits at the top-left. */
 .shell-v2 .topbar {
-  padding: 0 var(--sp-3); background: var(--rail-bg);
-  border-bottom: 0;
+  padding: 0 var(--sp-3);
+  /* Same frosted-glass chrome as the rail so the top block + left rail read as
+     one continuous pane of glass; hue glow biased toward the rail corner. */
+  background:
+    linear-gradient(180deg, var(--rail-sheen) 0%, transparent 60%),
+    radial-gradient(80% 180% at 0% 0%, var(--rail-glass) 0%, transparent 60%),
+    linear-gradient(90deg, var(--rail-bg-2) 0%, var(--rail-bg) 38%);
+  border-bottom: 1px solid var(--rail-border);
+  box-shadow: inset 0 1px 0 var(--rail-sheen);
+  backdrop-filter: blur(12px) saturate(128%);
+  -webkit-backdrop-filter: blur(12px) saturate(128%);
 }
 .shell-v2 .omni {
   height: 30px; max-width: 440px;
@@ -1297,6 +1342,23 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: 3px 9px; font-size: var(--fs-micro); font-weight: 600;
 }
 .pref-seg button.on { background: var(--accent-soft); color: var(--accent); }
+
+/* Chrome (rail/topbar accent) picker — glassy reflective dots. Each dot is the
+   preset's color with a diagonal highlight so it reads like a bead of glass. */
+.chrome-seg { display: inline-flex; gap: 7px; align-items: center; }
+.chrome-dot {
+  width: 22px; height: 22px; border-radius: 999px; padding: 0; cursor: pointer;
+  background:
+    linear-gradient(150deg, rgba(255,255,255,0.34) 0%, rgba(255,255,255,0.04) 42%, transparent 60%),
+    var(--dot, #2a3450);
+  border: 1px solid rgba(255,255,255,0.20);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.30), 0 1px 3px rgba(0,0,0,0.45);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.chrome-dot:hover { transform: translateY(-1px); }
+.chrome-dot.on {
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.35), 0 0 0 2px var(--accent), 0 1px 4px rgba(0,0,0,0.45);
+}
 
 /* ===== ⌘K command palette =================================================== */
 .cmdk-backdrop {

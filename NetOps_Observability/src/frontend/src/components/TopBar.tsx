@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
 import { useShell } from "../context/shell";
-import { usePrefs } from "../theme/prefs";
+import { usePrefs, CHROME_PRESETS } from "../theme/prefs";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
 import Icon from "./Icon";
 
@@ -34,7 +34,7 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // so it behaves like Splunk's global search, not just a log query.
 export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
-  const { theme, setTheme, density, setDensity } = usePrefs();
+  const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
@@ -216,6 +216,22 @@ export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) 
                   <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
                   <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
                   <button className={theme === "oled" ? "on" : ""} onClick={() => setTheme("oled")}>OLED</button>
+                </span>
+              </div>
+              <div className="pref-row">
+                <span className="pref-label">Accent</span>
+                <span className="chrome-seg">
+                  {CHROME_PRESETS.map((c) => (
+                    <button
+                      key={c.id}
+                      className={`chrome-dot${chrome === c.id ? " on" : ""}`}
+                      style={{ ["--dot" as any]: c.swatch }}
+                      title={c.label}
+                      aria-label={`${c.label} accent`}
+                      aria-pressed={chrome === c.id}
+                      onClick={() => setChrome(c.id)}
+                    />
+                  ))}
                 </span>
               </div>
               <div className="pref-row">

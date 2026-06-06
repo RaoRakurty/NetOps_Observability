@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
-import { usePrefs } from "../theme/prefs";
+import { usePrefs, CHROME_PRESETS } from "../theme/prefs";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
@@ -54,7 +54,7 @@ type OpenState = { id: string; top: number } | null;
 // foot — replacing the top-right user menu.
 export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
-  const { theme, setTheme, density, setDensity } = usePrefs();
+  const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const openTimer = useRef<number | undefined>(undefined);
@@ -210,6 +210,22 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                   <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
                   <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
                   <button className={theme === "oled" ? "on" : ""} onClick={() => setTheme("oled")}>OLED</button>
+                </span>
+              </div>
+              <div className="pref-row">
+                <span className="pref-label">Accent</span>
+                <span className="chrome-seg">
+                  {CHROME_PRESETS.map((c) => (
+                    <button
+                      key={c.id}
+                      className={`chrome-dot${chrome === c.id ? " on" : ""}`}
+                      style={{ ["--dot" as any]: c.swatch }}
+                      title={c.label}
+                      aria-label={`${c.label} accent`}
+                      aria-pressed={chrome === c.id}
+                      onClick={() => setChrome(c.id)}
+                    />
+                  ))}
                 </span>
               </div>
               <div className="pref-row">
