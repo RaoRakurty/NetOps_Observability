@@ -29,6 +29,7 @@ import {
 } from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import Icon from "../components/Icon";
+import { InfoTip } from "../components/ui";
 
 // ---- domain + scope presentation ------------------------------------------
 
@@ -118,15 +119,12 @@ function SourceBadge({ r, scope }: { r: PolicyResolved; scope: PolicyScope }) {
   return <span className="badge pol-badge-muted">Inherited · {SCOPE_LABEL[r.source!]}</span>;
 }
 
-function HardenChip({ s }: { s: PolicySetting }) {
-  if (s.harden !== "higher" && s.harden !== "lower") return null;
-  const up = s.harden === "higher";
-  return (
-    <span className="pol-chip" title={up ? "A more specific scope may only raise this (stricter)" : "A more specific scope may only lower this (stricter)"}>
-      <Icon name={up ? "arrow-up" : "arrow-down"} size={12} />
-      {up ? "tighten ↑" : "tighten ↓"}
-    </span>
-  );
+// hardenNote describes, in prose, the inheritance constraint on a setting — it
+// is surfaced inside the InfoTip rather than as an inline chip.
+function hardenNote(s: PolicySetting): string | null {
+  if (s.harden === "higher") return "More-specific scopes may only raise this (stricter), never weaken it.";
+  if (s.harden === "lower") return "More-specific scopes may only lower this (stricter), never weaken it.";
+  return null;
 }
 
 // ---- typed value control ---------------------------------------------------
@@ -275,19 +273,20 @@ function SettingRow({
       <div className="pol-row-main">
         <div className="pol-row-head">
           <span className="pol-row-label">{setting.label}</span>
+          <InfoTip label={setting.description}>
+            <span className="ds-tip-lead">{setting.description}</span>
+            {setting.rationale && <span className="ds-tip-note">{setting.rationale}</span>}
+            {hardenNote(setting) && <span className="ds-tip-note">{hardenNote(setting)}</span>}
+          </InfoTip>
           {setting.tier === "advanced" && <span className="pol-chip pol-chip-quiet">advanced</span>}
-          <HardenChip s={setting} />
           {resolved.locked && (
             <span className="pol-chip pol-chip-lock" title={`Locked at ${SCOPE_LABEL[resolved.locked_at!]}`}>
               <Icon name="lock" size={12} /> locked · {SCOPE_LABEL[resolved.locked_at!]}
             </span>
           )}
         </div>
-        <p className="pol-row-desc">{setting.description}</p>
         <div className="pol-row-meta">
           <SourceBadge r={resolved} scope={scope} />
-          <span className="mini-meta mono">{setting.key}</span>
-          {setting.nist.length > 0 && <span className="mini-meta" title="NIST reference">{setting.nist.join(" · ")}</span>}
         </div>
         {err && <p className="pol-row-err" role="alert">{err}</p>}
       </div>

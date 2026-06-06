@@ -4,8 +4,22 @@
 // Plain CSS (ds-* classes in styles.css) — no new dependencies.
 
 import { ReactNode, CSSProperties } from "react";
+import Icon from "./Icon";
 
 export type StatTone = "" | "accent" | "good" | "warn" | "bad";
+
+// InfoTip — a quiet "i" affordance that reveals explanatory copy on hover/focus.
+// Keeps dense surfaces free of verbose inline prose: the parameter and its
+// control stay visible; the "why" is one hover away. `label` is the plain-text
+// fallback announced to assistive tech (children may be rich markup).
+export function InfoTip({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <span className="ds-info" tabIndex={0} role="note" aria-label={label}>
+      <Icon name="info" size={13} />
+      <span className="ds-tip" role="tooltip">{children}</span>
+    </span>
+  );
+}
 
 // StatStrip + Stat — the data-dense "indicators first" KPI row that leads a view.
 export function StatStrip({ children }: { children: ReactNode }) {

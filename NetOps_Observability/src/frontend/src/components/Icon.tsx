@@ -151,6 +151,14 @@ const PATHS: Record<string, JSX.Element> = {
       <line x1="12" y1="17" x2="12.01" y2="17" />
     </>
   ),
+  // info — an "i" in a circle, for hover-to-explain affordances.
+  info: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="11" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </>
+  ),
   support: (
     <>
       <circle cx="12" cy="12" r="9" />
