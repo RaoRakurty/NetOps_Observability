@@ -603,7 +603,7 @@ export function GraphQLExplorer() {
     <div className="card">
       <div className="admin-card-head">
         <h2>GraphQL explorer</h2>
-        <a className="dash-btn" href="/api/graphql" target="_blank" rel="noreferrer">/api/graphql ↗</a>
+        <a className="dash-btn" href="/api/graphql" target="_blank" rel="noreferrer">/api/graphql <Icon name="external" size={12} /></a>
       </div>
       <p className="mini-meta" style={{ marginTop: 0 }}>
         Single typed endpoint over <code>devices</code> · <code>alerts</code> · <code>rules</code> ·{" "}
@@ -659,12 +659,12 @@ function OpenAPIReference({ embedded = false }: { embedded?: boolean }) {
       {!embedded && (
         <div className="admin-card-head">
           <h2>REST API reference</h2>
-          <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer">openapi.json ↗</a>
+          <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer">openapi.json <Icon name="external" size={12} /></a>
         </div>
       )}
       <p className="mini-meta" style={{ marginTop: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span>{spec?.info?.title} · v{spec?.info?.version} · OpenAPI {spec?.openapi}. Generated from the Go handlers; import it into Postman or any OpenAPI client.</span>
-        {embedded && <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer" style={{ marginLeft: "auto" }}>openapi.json ↗</a>}
+        {embedded && <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer" style={{ marginLeft: "auto" }}>openapi.json <Icon name="external" size={12} /></a>}
       </p>
       <div className="ov-grid">
         {Object.entries(groups).map(([tag, rows]) => (

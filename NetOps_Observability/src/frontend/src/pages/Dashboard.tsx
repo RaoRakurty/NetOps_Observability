@@ -145,7 +145,7 @@ export default function Dashboard() {
                   title={def.drill ? "Open detail view" : undefined}
                 >
                   {def.title}
-                  {def.drill && <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 12 }}>↗</span>}
+                  {def.drill && <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />}
                 </h3>
                 <div className="panel-tools-btns">
                   <button onClick={() => resize(item.key)} title="Resize" aria-label="Resize panel">

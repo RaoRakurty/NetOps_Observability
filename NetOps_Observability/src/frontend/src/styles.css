@@ -308,7 +308,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: transparent; border: 0; border-radius: var(--r-2);
   color: var(--rail-fg-muted); cursor: pointer; text-align: left;
 }
-.rail-item:hover { background: var(--rail-hover); color: var(--rail-fg); }
+/* Hover reveals the item's own section hue (a soft tint + coloured icon). */
+.rail-item:hover { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 18%, transparent); color: var(--rail-fg); }
+.rail-item:hover .rail-icon { color: var(--mod, var(--rail-accent)); }
 .rail-item:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
 .rail-item.active { color: var(--rail-active-fg); background: color-mix(in srgb, var(--mod, #818cf8) 20%, transparent); }
 .rail-item.active::before {
@@ -1048,6 +1050,11 @@ tbody tr.dt-row:hover { background: var(--hover); }
   gap: 8px; margin-bottom: 10px;
 }
 .panel-tools h3 { margin: 0; }
+/* Drillable panel title — reveals an "open detail" cue that warms to accent on hover. */
+.panel-title-link { display: inline-flex; align-items: center; gap: 5px; transition: color .12s ease; }
+.panel-title-link:hover { color: var(--accent); }
+.panel-drill-icon { color: var(--muted); opacity: 0.55; transition: color .12s ease, opacity .12s ease; }
+.panel-title-link:hover .panel-drill-icon { color: var(--accent); opacity: 1; }
 .panel-tools-btns { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
 .panel:hover .panel-tools-btns { opacity: 1; }
 .panel-tools-btns button {

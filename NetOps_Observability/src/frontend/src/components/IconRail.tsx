@@ -10,16 +10,20 @@ import NavFlyout from "./NavFlyout";
 // Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
 // only tints the active indicator + the flyout header; severity colours stay
 // separate and sacred. Falls back to periwinkle for any unmapped section.
+// Per-section hue — vivid, saturated tones at Alert-pink intensity so hovering
+// any item gives a clear contrast colour (the mild set read too flat on the
+// dark rail). Alerts (pink) and Copilot/ChatGPT (violet) are kept; the rest are
+// spread across the wheel: blue · cyan · green · teal · orange · amber · slate.
 const MOD_HUE: Record<string, string> = {
-  overview: "#2D6BE0", // Pulse — cobalt
-  explore: "#22B8CF", // Explore/Metrics — cyan
-  alerts: "#EC4899", // Monitors/Alerts — pink
-  infrastructure: "#14B8A6", // Fleet — teal
-  topology: "#3B9EFF", // Network — azure
-  reports: "#818CF8", // Reports — periwinkle
-  stack: "#06B6D4", // Stack — bright cyan
-  copilot: "#8B5CF6", // Copilot — violet
-  admin: "#64748B", // Admin — slate
+  overview: "#3B82F6", // Pulse — vivid blue
+  explore: "#0EA5E9", // Explore/Metrics — vivid sky
+  alerts: "#EC4899", // Monitors/Alerts — pink (kept)
+  infrastructure: "#22C55E", // Fleet — vivid leafy green
+  topology: "#D946EF", // Network — vivid fuchsia (distinct from sky/green)
+  reports: "#F97316", // Reports — vivid orange
+  stack: "#EAB308", // Stack — vivid amber/gold
+  copilot: "#8B5CF6", // Copilot/ChatGPT — violet (kept)
+  admin: "#94A3B8", // Admin — slate (utility)
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 

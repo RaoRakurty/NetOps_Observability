@@ -215,6 +215,21 @@ const PATHS: Record<string, JSX.Element> = {
   check: <path d="M20 6 9 17l-5-5" />,
   // chevron — right-pointing disclosure; rotate 90° for expanded state.
   chevron: <path d="m9 6 6 6-6 6" />,
+  // arrow-up-right — "open detail / go to" affordance (internal navigation).
+  "arrow-up-right": (
+    <>
+      <line x1="7" y1="17" x2="17" y2="7" />
+      <polyline points="7 7 17 7 17 17" />
+    </>
+  ),
+  // external — opens in a new tab.
+  external: (
+    <>
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </>
+  ),
   // refresh — circular re-fetch / reload.
   refresh: (
     <>

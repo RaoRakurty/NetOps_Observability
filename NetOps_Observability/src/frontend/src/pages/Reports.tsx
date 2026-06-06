@@ -342,7 +342,10 @@ export default function Reports() {
           The server renders HTML, Excel and PDF in parallel and emails them to your contact points.
         </p>
         <form onSubmit={save} style={{ display: "grid", gap: 10, maxWidth: 560 }}>
-          <input placeholder="Report name (e.g. Weekly exec health)" value={name} onChange={(e) => setName(e.target.value)} />
+          <div className="form-field">
+            <label className="form-label" htmlFor="rpt-name">Report name<span className="form-req">*</span></label>
+            <input id="rpt-name" className="form-input" placeholder="e.g. Weekly exec health" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
 
           <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
             Content
@@ -381,8 +384,13 @@ export default function Reports() {
             </select>
           </label>
 
-          <input placeholder="Optional note prepended to the report" value={draft.description ?? ""}
-            onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+          <div className="form-field">
+            <label className="form-label" htmlFor="rpt-note">Note <span className="form-hint">(optional)</span></label>
+            <textarea id="rpt-note" className="form-input" placeholder="Prepended to the top of the report"
+              value={draft.description ?? ""} rows={2}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              style={{ height: "auto", padding: "8px 12px", resize: "vertical" }} />
+          </div>
 
           {/* Recipients — reusable contact points defined in Notifications. */}
           <div style={{ display: "grid", gap: 4 }}>
