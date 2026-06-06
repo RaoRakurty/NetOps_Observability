@@ -9,11 +9,12 @@
 //     (/api/itsm/servicenow, /api/itsm/jira)
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
-import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmServiceNowConfig, ItsmJiraConfig, IntegrationConfig } from "../services/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
-import Wizard from "../components/Wizard";
+import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton } from "../components/ui";
+import { ServiceNowLogo, JiraLogo } from "../components/ConnectorLogos";
 
 // ---- shared chrome ---------------------------------------------------------
 
@@ -1191,467 +1192,336 @@ export function ExportPolicyForm() {
 
 // ---- ITSM Integrations — planned -------------------------------------------
 
-const ITSM = [
-  { id: "servicenow", name: "ServiceNow", desc: "Critical alerts cut an incident via the Table API (deduped by fingerprint) and auto-resolve when the alert clears; critical incidents auto-promote too. Configure it in the form above — no restart.", tag: "Available" },
-  { id: "jira", name: "Jira", desc: "Alerts at/above the threshold open a deduped Jira issue (REST v2) and transition to Done when the alert clears. Configure it in the form above — no restart.", tag: "Available" },
+// ---- Integrations: connector gallery + combined guided setup ---------------
+//
+// One tile per system-of-record connector (ServiceNow, Jira). Clicking a tile
+// opens a single guided-setup modal that combines EVERYTHING for that connector
+// — connection, ticket routing AND bidirectional sync — in one place, instead
+// of the old split between an inline form and a separate "bidirectional sync"
+// section. Each step refuses to advance until its required fields validate.
+// PagerDuty & Slack are alert channels and are configured under Notifications.
+
+type ConnectorId = "servicenow" | "jira";
+
+const CONNECTORS: { id: ConnectorId; name: string; tagline: string; noun: string; Logo: (p: { size?: number; className?: string }) => JSX.Element }[] = [
+  { id: "servicenow", name: "ServiceNow", noun: "incidents", tagline: "Promote critical incidents to ServiceNow via the Table API; auto-resolve when the alert clears.", Logo: ServiceNowLogo },
+  { id: "jira", name: "Jira", noun: "issues", tagline: "Open deduped Jira issues at or above your threshold; transition to Done on clear.", Logo: JiraLogo },
 ];
 
-// ITSMConfigForm — admin-editable ServiceNow + Jira connector config (replaces the
-// old "Configured via env" greyed cards). Saves to PUT /api/notify/itsm, which
-// rebuilds + hot-swaps the live connectors (no restart). Secrets are write-only:
-// leave the password/token blank to keep the stored one. Platform-owner only —
-// the API 403s otherwise, surfaced as a save error.
-function ITSMConfigForm() {
-  const [cfg, setCfg] = useState<ItsmConfig | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { api.itsmConfig().then(setCfg).catch((e) => setMsg((e as Error).message)); }, []);
-  if (!cfg) return <div className="card"><h2>ServiceNow & Jira configuration</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+const SEV = ["info", "low", "medium", "high", "critical"];
 
-  const sn = cfg.servicenow, jr = cfg.jira;
-  const setSN = (p: Partial<ItsmServiceNowConfig>) => setCfg({ ...cfg, servicenow: { ...cfg.servicenow, ...p } });
-  const setJR = (p: Partial<ItsmJiraConfig>) => setCfg({ ...cfg, jira: { ...cfg.jira, ...p } });
-  const SEV = ["info", "low", "medium", "high", "critical"];
-
-  const save = async () => {
-    setBusy(true); setMsg(null);
-    try {
-      const out = await api.saveItsmConfig({
-        servicenow: { enabled: sn.enabled, instance_url: sn.instance_url, user: sn.user, password: sn.password || "", min_severity: sn.min_severity, assignment_group: sn.assignment_group },
-        jira: { enabled: jr.enabled, base_url: jr.base_url, email: jr.email, api_token: jr.api_token || "", project_key: jr.project_key, issue_type: jr.issue_type, min_severity: jr.min_severity, resolve_transition: jr.resolve_transition },
-      });
-      setCfg(out); setMsg("Saved — connectors updated live (no restart).");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="card">
-      <div className="admin-card-head"><h2>ServiceNow & Jira configuration</h2><RequiredLegend /></div>
-      <p className="admin-sub">Configure your system-of-record connectors here — no environment variables or restart needed. These apply to <strong>your tenant</strong>: your incidents promote to your own ServiceNow/Jira. Secrets are write-only: leave blank to keep the stored value.</p>
-
-      <h3 style={{ marginTop: 14 }}>ServiceNow {sn.configured && <span className="badge good">connected</span>}</h3>
-      <label className="scope-chip" style={{ marginBottom: 8 }}>
-        <input type="checkbox" checked={sn.enabled} onChange={(e) => setSN({ enabled: e.target.checked })} /> Enable ServiceNow ticketing
-      </label>
-      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-        <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSN({ instance_url: v })} placeholder="https://dev12345.service-now.com" required={sn.enabled} />
-        <LabeledInput label="User" value={sn.user} onChange={(v) => setSN({ user: v })} />
-        <LabeledInput label="Password" type="password" value={sn.password ?? ""} onChange={(v) => setSN({ password: v })} placeholder={sn.has_password ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
-        <LabeledSelect label="Min severity to ticket" value={sn.min_severity} onChange={(v) => setSN({ min_severity: v })} options={SEV} />
-        <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSN({ assignment_group: v })} />
-      </div>
-
-      <h3 style={{ marginTop: 18 }}>Jira {jr.configured && <span className="badge good">connected</span>}</h3>
-      <label className="scope-chip" style={{ marginBottom: 8 }}>
-        <input type="checkbox" checked={jr.enabled} onChange={(e) => setJR({ enabled: e.target.checked })} /> Enable Jira ticketing
-      </label>
-      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-        <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJR({ base_url: v })} placeholder="https://your-org.atlassian.net" required={jr.enabled} />
-        <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJR({ project_key: v })} placeholder="NOC" required={jr.enabled} />
-        <LabeledInput label="Email" value={jr.email} onChange={(v) => setJR({ email: v })} placeholder="svc@your-org.com" />
-        <LabeledInput label="API token" type="password" value={jr.api_token ?? ""} onChange={(v) => setJR({ api_token: v })} placeholder={jr.has_token ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
-        <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJR({ issue_type: v })} placeholder="Incident" />
-        <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJR({ resolve_transition: v })} placeholder="Done" />
-        <LabeledSelect label="Min severity to ticket" value={jr.min_severity} onChange={(v) => setJR({ min_severity: v })} options={SEV} />
-      </div>
-
-      <button className="dash-btn primary" style={{ marginTop: 14 }} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save ITSM configuration"}</button>
-      {msg && <p className="mini-meta" style={{ marginTop: 8 }}>{msg}</p>}
-    </div>
-  );
-}
-
-// ITSMWizard — a guided flow (system → connect → routing → review) for wiring a
-// tenant's ServiceNow/Jira, mirroring the Reports guided setup. Builds an
-// ItsmConfigInput and saves it (connectors hot-swap live, no restart).
-function ITSMWizard({ onCancel, onDone }: { onCancel: () => void; onDone: () => Promise<void> }) {
-  const [step, setStep] = useState(0);
-  const [pick, setPick] = useState<"servicenow" | "jira" | "both">("servicenow");
-  const [sn, setSn] = useState({ instance_url: "", user: "", password: "", min_severity: "critical", assignment_group: "" });
-  const [jr, setJr] = useState({ base_url: "", project_key: "", email: "", api_token: "", issue_type: "", resolve_transition: "", min_severity: "critical" });
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const STEPS = ["System", "Connect", "Routing", "Review"];
-  const SEV = ["info", "low", "medium", "high", "critical"];
-  const wantSN = pick === "servicenow" || pick === "both";
-  const wantJR = pick === "jira" || pick === "both";
-
-  const SYSTEMS: { id: typeof pick; icon: string; label: string; blurb: string }[] = [
-    { id: "servicenow", icon: "🧰", label: "ServiceNow", blurb: "Cut incidents via the Table API; auto-resolve when the alert clears." },
-    { id: "jira", icon: "📋", label: "Jira", blurb: "Open deduped issues via REST v2; transition to Done on clear." },
-    { id: "both", icon: "🔗", label: "Both", blurb: "Wire ServiceNow and Jira together." },
-  ];
-
-  const valid = () => {
-    if (wantSN && !/^https?:\/\//.test(sn.instance_url)) return "ServiceNow instance URL must start with http(s)://";
-    if (wantJR && !/^https?:\/\//.test(jr.base_url)) return "Jira base URL must start with http(s)://";
-    if (wantJR && !jr.project_key.trim()) return "Jira project key is required";
-    return null;
-  };
-
-  const save = async () => {
-    const v = valid();
-    if (v) { setMsg(v); setStep(1); return; }
-    setBusy(true); setMsg(null);
-    try {
-      await api.saveItsmConfig({
-        servicenow: { enabled: wantSN, instance_url: sn.instance_url, user: sn.user, password: sn.password, min_severity: sn.min_severity, assignment_group: sn.assignment_group },
-        jira: { enabled: wantJR, base_url: jr.base_url, email: jr.email, api_token: jr.api_token, project_key: jr.project_key, issue_type: jr.issue_type, min_severity: jr.min_severity, resolve_transition: jr.resolve_transition },
-      });
-      await onDone();
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
-  };
-  const cardBtn = (active: boolean): React.CSSProperties => ({ textAlign: "left", padding: 14, borderColor: active ? "var(--accent)" : undefined });
-
-  return (
-    <div className="card" style={{ maxWidth: 760 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2 style={{ margin: 0 }}>Guided ITSM setup</h2>
-        <button className="dash-btn" onClick={onCancel}>Close</button>
-      </div>
-      <p className="mini-meta">Wires your tenant's ticketing — your incidents promote to your own system of record.</p>
-      <div style={{ display: "flex", gap: 14, margin: "14px 0 18px", flexWrap: "wrap" }}>
-        {STEPS.map((s, i) => (
-          <div key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: i === step ? "var(--accent)" : "var(--muted)", fontWeight: i === step ? 700 : 400 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: i < step ? "var(--good)" : i === step ? "var(--accent)" : "var(--panel-border)", color: "#fff", fontSize: 11 }}>{i < step ? "✓" : i + 1}</span>
-            {s}
-          </div>
-        ))}
-      </div>
-
-      {step === 0 && (
-        <div>
-          <p className="mini-meta">Which system of record do you use?</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 10 }}>
-            {SYSTEMS.map((g) => (
-              <button key={g.id} className="dash-btn" style={cardBtn(pick === g.id)} onClick={() => { setPick(g.id); setStep(1); }}>
-                <div style={{ fontSize: 22 }}>{g.icon}</div>
-                <div style={{ fontWeight: 700, marginTop: 4 }}>{g.label}</div>
-                <div className="mini-meta">{g.blurb}</div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {step === 1 && (
-        <div style={{ display: "grid", gap: 16 }}>
-          {wantSN && (
-            <div>
-              <h3 style={{ margin: "0 0 8px" }}>ServiceNow</h3>
-              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-                <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSn({ ...sn, instance_url: v })} placeholder="https://dev12345.service-now.com" required />
-                <LabeledInput label="User" value={sn.user} onChange={(v) => setSn({ ...sn, user: v })} />
-                <LabeledInput label="Password" type="password" value={sn.password} onChange={(v) => setSn({ ...sn, password: v })} hint="write-only" />
-              </div>
-            </div>
-          )}
-          {wantJR && (
-            <div>
-              <h3 style={{ margin: "0 0 8px" }}>Jira</h3>
-              <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-                <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJr({ ...jr, base_url: v })} placeholder="https://your-org.atlassian.net" required />
-                <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJr({ ...jr, project_key: v })} placeholder="NOC" required />
-                <LabeledInput label="Email" value={jr.email} onChange={(v) => setJr({ ...jr, email: v })} placeholder="svc@your-org.com" />
-                <LabeledInput label="API token" type="password" value={jr.api_token} onChange={(v) => setJr({ ...jr, api_token: v })} hint="write-only" />
-              </div>
-            </div>
-          )}
-          <RequiredLegend />
-        </div>
-      )}
-
-      {step === 2 && (
-        <div style={{ display: "grid", gap: 16 }}>
-          {wantSN && (
-            <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-              <LabeledSelect label="ServiceNow — min severity to ticket" value={sn.min_severity} onChange={(v) => setSn({ ...sn, min_severity: v })} options={SEV} />
-              <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSn({ ...sn, assignment_group: v })} />
-            </div>
-          )}
-          {wantJR && (
-            <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-              <LabeledSelect label="Jira — min severity to ticket" value={jr.min_severity} onChange={(v) => setJr({ ...jr, min_severity: v })} options={SEV} />
-              <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJr({ ...jr, issue_type: v })} placeholder="Incident" />
-              <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJr({ ...jr, resolve_transition: v })} placeholder="Done" />
-            </div>
-          )}
-        </div>
-      )}
-
-      {step === 3 && (
-        <div style={{ display: "grid", gap: 8 }}>
-          <p className="mini-meta">Review — connectors hot-swap live on save (no restart).</p>
-          {wantSN && <div className="mini-meta">🧰 <strong>ServiceNow</strong> → {sn.instance_url || "—"} · tickets at <strong>{sn.min_severity}</strong> and worse{sn.assignment_group ? ` · group ${sn.assignment_group}` : ""}</div>}
-          {wantJR && <div className="mini-meta">📋 <strong>Jira</strong> → {jr.base_url || "—"} · project <strong>{jr.project_key || "—"}</strong> · issues at <strong>{jr.min_severity}</strong> and worse</div>}
-          {msg && <p className="mini-meta" style={{ color: "var(--bad)" }}>{msg}</p>}
-        </div>
-      )}
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 18 }}>
-        <button className="dash-btn" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>Back</button>
-        {step < 3 ? (
-          <button className="dash-btn accent" onClick={() => setStep((s) => Math.min(3, s + 1))}>Next</button>
-        ) : (
-          <button className="dash-btn accent" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save & connect"}</button>
-        )}
-      </div>
-    </div>
-  );
-}
+const blankIntegration = (id: string): IntegrationConfig =>
+  ({ provider: id, enabled: false, sync_mode: "outbound", webhook_enabled: false, webhook_secret_set: false, state_map: null });
 
 export function IntegrationsAdmin() {
-  const [sn, , reloadSN] = useReload(() => api.itsmServiceNow());
-  const [jira, , reloadJira] = useReload(() => api.itsmJira());
-  const [wizard, setWizard] = useState(false);
-  const snLive = !!sn?.configured;
-  const jiraLive = !!jira?.configured;
+  const [cfg, setCfg] = useState<ItsmConfig | undefined>(undefined);
+  const [integrations, setIntegrations] = useState<IntegrationConfig[] | undefined>(undefined);
+  const [inboundEnabled, setInboundEnabled] = useState(false);
+  const [sn, setSn] = useState<ServiceNowStatus | undefined>(undefined);
+  const [jira, setJira] = useState<JiraStatus | undefined>(undefined);
+  const [open, setOpen] = useState<ConnectorId | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-  if (wizard) {
-    return (
-      <>
-        <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
-        <ITSMWizard onCancel={() => setWizard(false)} onDone={async () => { setWizard(false); await reloadSN(); await reloadJira(); }} />
-      </>
-    );
-  }
+  const load = useCallback(() => {
+    api.itsmConfig().then(setCfg).catch((e) => setErr((e as Error).message));
+    api.integrations().then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); }).catch(() => {});
+    api.itsmServiceNow().then(setSn).catch(() => {});
+    api.itsmJira().then(setJira).catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+
+  const sectionFor = (id: ConnectorId) => (id === "servicenow" ? cfg?.servicenow : cfg?.jira);
+  const statusFor = (id: ConnectorId) => (id === "servicenow" ? sn : jira);
+  const integrationFor = (id: ConnectorId) => integrations?.find((i) => i.provider === id) ?? blankIntegration(id);
+
+  const loaded = cfg !== undefined;
+  const configuredCount = [sectionFor("servicenow"), sectionFor("jira")].filter((s) => s?.configured).length;
+  const connectedCount = [sectionFor("servicenow"), sectionFor("jira")].filter((s) => s?.configured && s?.enabled).length;
+  const openTickets = (sn?.open_count ?? 0) + (jira?.open_count ?? 0);
 
   return (
     <>
-      <AdminHead title="ITSM & Ticketing" sub="Turn alerts and incidents into tickets in your system of record." />
-      {(() => {
-        const loaded = sn !== undefined && jira !== undefined;
-        const configured = [snLive, jiraLive].filter(Boolean).length;
-        const connected = [sn?.enabled, jira?.enabled].filter(Boolean).length;
-        const open = (sn?.open_count ?? 0) + (jira?.open_count ?? 0);
-        return (
-          <StatStrip>
-            <Stat label="Providers" value={loaded ? configured : <Skeleton w={26} h={22} />} />
-            <Stat label="Connected" value={loaded ? connected : "—"} tone={connected ? "good" : ""} />
-            <Stat label="Open tickets" value={loaded ? open : "—"} tone={open ? "accent" : ""} />
-          </StatStrip>
-        );
-      })()}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-        <button className="dash-btn accent" onClick={() => setWizard(true)}>✨ Guided setup</button>
-      </div>
-      <ITSMConfigForm />
+      <AdminHead title="Integrations" sub="Connect NetOps to your system of record. Pick a connector to set up its connection, ticket routing and two-way sync — all in one guided flow." />
+      <StatStrip>
+        <Stat label="Connectors" value={loaded ? CONNECTORS.length : <Skeleton w={26} h={22} />} />
+        <Stat label="Configured" value={loaded ? configuredCount : "—"} tone={configuredCount ? "accent" : ""} />
+        <Stat label="Connected" value={loaded ? connectedCount : "—"} tone={connectedCount ? "good" : ""} />
+        <Stat label="Open tickets" value={loaded ? openTickets : "—"} tone={openTickets ? "accent" : ""} />
+      </StatStrip>
 
-      <BidirectionalSyncAdmin />
+      {err && <div className="card pol-note bad">{err}</div>}
 
-      {sn?.enabled && (
-        <div className="card">
-          <div className="admin-card-head">
-            <h2>ServiceNow — live</h2>
-            <span className="badge good">connected</span>
-          </div>
-          <dl className="kv-form">
-            <dt>Ticket threshold</dt><dd className="mono">{sn.threshold} and worse</dd>
-            <dt>Auto-resolve</dt><dd>{sn.auto_close ? "on — incident closed when the alert clears" : "off"}</dd>
-            <dt>Open incidents</dt><dd>{sn.open_count ?? 0}</dd>
-          </dl>
-          {(sn.open?.length ?? 0) > 0 && (
-            <table className="ds-table">
-              <thead><tr><th>Incident</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
-              <tbody>
-                {sn.open!.map((t) => (
-                  <tr key={t.fingerprint}>
-                    <td className="mono" style={{ fontWeight: 600 }}>{t.number}</td>
-                    <td><span className="badge">{t.severity}</span></td>
-                    <td className="mono">{t.device || "—"}</td>
-                    <td>{t.summary || "—"}</td>
-                    <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {jira?.enabled && (
-        <div className="card">
-          <div className="admin-card-head">
-            <h2>Jira — live</h2>
-            <span className="badge good">connected</span>
-          </div>
-          <dl className="kv-form">
-            <dt>Project</dt><dd className="mono">{jira.project || "—"}</dd>
-            <dt>Ticket threshold</dt><dd className="mono">{jira.threshold} and worse</dd>
-            <dt>Auto-resolve</dt><dd>{jira.auto_close ? "on — issue transitioned to Done when the alert clears" : "off"}</dd>
-            <dt>Open issues</dt><dd>{jira.open_count ?? 0}</dd>
-          </dl>
-          {(jira.open?.length ?? 0) > 0 && (
-            <table className="ds-table">
-              <thead><tr><th>Issue</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
-              <tbody>
-                {jira.open!.map((t) => (
-                  <tr key={t.fingerprint}>
-                    <td className="mono" style={{ fontWeight: 600 }}>{t.key}</td>
-                    <td><span className="badge">{t.severity}</span></td>
-                    <td className="mono">{t.device || "—"}</td>
-                    <td>{t.summary || "—"}</td>
-                    <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      <div className="ov-grid">
-        {ITSM.map((i) => {
-          // ServiceNow/Jira flip to a "connected" badge once the connector is live.
-          const tag =
-            (i.id === "servicenow" && snLive) || (i.id === "jira" && jiraLive)
-              ? "Connected"
-              : i.tag;
-          const good = tag === "Available" || tag === "Connected";
+      <div className="conn-grid">
+        {CONNECTORS.map((c) => {
+          const sec = sectionFor(c.id);
+          const st = statusFor(c.id);
+          const configured = !!sec?.configured;
+          const enabled = !!sec?.enabled;
+          const tone = !configured ? "" : enabled ? "good" : "warn";
+          const tag = !loaded ? "…" : !configured ? "Not connected" : enabled ? "Connected" : "Disabled";
           return (
-            <div className="panel col-6 provider-card" key={i.id}>
-              <div className="provider-head">
-                <h3>{i.name}</h3>
-                <span className={`badge ${good ? "good" : "accent-badge"}`}>{tag}</span>
-              </div>
-              <p className="mini-meta">{i.desc}</p>
-              <button className="dash-btn" disabled={i.id !== "servicenow" && i.id !== "jira"} style={{ marginTop: 10 }}
-                onClick={() => { if (i.id === "servicenow" || i.id === "jira") window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-                {i.id === "servicenow" || i.id === "jira" ? "Configure above ↑" : "Configure"}
-              </button>
-            </div>
+            <button key={c.id} className="conn-tile" onClick={() => setOpen(c.id)} aria-label={`Configure ${c.name}`}>
+              <span className={`conn-logo ${c.id}`}><c.Logo size={40} /></span>
+              <span className="conn-body">
+                <span className="conn-name">
+                  {c.name}
+                  <span className={`conn-status ${tone}`}>{tag}</span>
+                </span>
+                <span className="conn-tag">{c.tagline}</span>
+                <span className="conn-meta">
+                  {configured && enabled
+                    ? `${st?.open_count ?? 0} open ${c.noun} · tickets ≥ ${sec?.min_severity ?? "critical"}`
+                    : configured
+                      ? "Configured — currently disabled"
+                      : "Click to set up"}
+                </span>
+              </span>
+              <span className="conn-cta">{configured ? "Manage" : "Set up"} →</span>
+            </button>
           );
         })}
       </div>
+
+      {/* Live open tickets per connected connector — real operational data, not config. */}
+      {sn?.enabled && (sn.open?.length ?? 0) > 0 && (
+        <div className="card">
+          <div className="admin-card-head"><h2>ServiceNow — open incidents</h2><span className="badge good">{sn.open_count ?? sn.open!.length}</span></div>
+          <table className="ds-table">
+            <thead><tr><th>Incident</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
+            <tbody>
+              {sn.open!.map((t) => (
+                <tr key={t.fingerprint}>
+                  <td className="mono" style={{ fontWeight: 600 }}>{t.number}</td>
+                  <td><span className="badge">{t.severity}</span></td>
+                  <td className="mono">{t.device || "—"}</td>
+                  <td>{t.summary || "—"}</td>
+                  <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {jira?.enabled && (jira.open?.length ?? 0) > 0 && (
+        <div className="card">
+          <div className="admin-card-head"><h2>Jira — open issues</h2><span className="badge good">{jira.open_count ?? jira.open!.length}</span></div>
+          <table className="ds-table">
+            <thead><tr><th>Issue</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
+            <tbody>
+              {jira.open!.map((t) => (
+                <tr key={t.fingerprint}>
+                  <td className="mono" style={{ fontWeight: 600 }}>{t.key}</td>
+                  <td><span className="badge">{t.severity}</span></td>
+                  <td className="mono">{t.device || "—"}</td>
+                  <td>{t.summary || "—"}</td>
+                  <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {open && cfg && (
+        <ConnectorSetup
+          id={open}
+          cfg={cfg}
+          integration={integrationFor(open)}
+          inboundEnabled={inboundEnabled}
+          onClose={() => setOpen(null)}
+          onSaved={async () => { setOpen(null); load(); }}
+        />
+      )}
     </>
   );
 }
 
-// ---- Bidirectional sync (Integration Platform) -----------------------------
-
-// Per-provider hint on where to paste the inbound webhook URL.
-const SYNC_PROVIDERS: { id: string; name: string; webhookHint: string }[] = [
-  { id: "servicenow", name: "ServiceNow", webhookHint: "Paste into a ServiceNow Business Rule (REST call on incident update)." },
-  { id: "jira", name: "Jira", webhookHint: "Paste into a Jira webhook (Settings → System → Webhooks)." },
-  { id: "pagerduty", name: "PagerDuty", webhookHint: "Paste into a PagerDuty v3 webhook subscription." },
-  { id: "slack", name: "Slack", webhookHint: "Paste into your Slack app's Interactivity & Shortcuts request URL." },
-];
-
-// One provider's bidirectional-sync card: enable, sync mode, inbound webhook
-// toggle + write-only signing secret, and (once a token exists) the full inbound
-// webhook URL to register with the provider. The signing secret is write-only —
-// blank keeps the stored one.
-function SyncProviderCard({ cfg, name, webhookHint, onSaved }: {
-  cfg: IntegrationConfig; name: string; webhookHint: string;
-  onSaved: (next: IntegrationConfig) => void;
+// ConnectorSetup — the combined guided modal for one connector: Connect →
+// Routing → Sync → Review. Writes BOTH the ITSM connector config (connection +
+// routing) and the Integration-Platform sync config in one save, preserving the
+// other connector's stored settings. Secrets (password / API token / webhook
+// signing secret) are write-only: a blank field keeps the stored value.
+function ConnectorSetup({ id, cfg, integration, inboundEnabled, onClose, onSaved }: {
+  id: ConnectorId;
+  cfg: ItsmConfig;
+  integration: IntegrationConfig;
+  inboundEnabled: boolean;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
 }) {
-  const [enabled, setEnabled] = useState(cfg.enabled);
-  const [syncMode, setSyncMode] = useState(cfg.sync_mode);
-  const [webhookEnabled, setWebhookEnabled] = useState(cfg.webhook_enabled);
-  const [secret, setSecret] = useState(""); // typed signing secret (only sent if non-empty)
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const meta = CONNECTORS.find((c) => c.id === id)!;
+  const isSN = id === "servicenow";
+  const snInit = cfg.servicenow, jrInit = cfg.jira;
+
+  // Editable drafts. Secret fields start blank (write-only → blank keeps stored).
+  const [sn, setSn] = useState({ ...snInit, password: "" });
+  const [jr, setJr] = useState({ ...jrInit, api_token: "" });
+  const [enabled, setEnabled] = useState(isSN ? snInit.enabled : jrInit.enabled);
+  const [syncMode, setSyncMode] = useState<IntegrationConfig["sync_mode"]>(integration.sync_mode);
+  const [webhookEnabled, setWebhookEnabled] = useState(integration.webhook_enabled);
+  const [secret, setSecret] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Full URL to register with the provider (the API returns a path only).
-  const fullUrl = cfg.webhook_url ? window.location.origin + cfg.webhook_url : "";
+  const fullUrl = integration.webhook_url ? window.location.origin + integration.webhook_url : "";
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Modal a11y: close on Escape, move focus into the dialog on open and restore
+  // it on close, and lock background scroll while open.
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+      prev?.focus?.();
+    };
+  }, [onClose]);
+
+  // Step validation — gates the wizard's Next/Save so a half-filled config can't ship.
+  const connectValid = isSN
+    ? /^https?:\/\//.test(sn.instance_url.trim())
+    : /^https?:\/\//.test(jr.base_url.trim()) && !!jr.project_key.trim();
+  // Bidirectional inbound needs a signing secret (typed now, or already stored).
+  const syncValid = !(syncMode === "bidirectional" && webhookEnabled && !integration.webhook_secret_set && !secret.trim());
 
   const copy = async () => {
-    try { await navigator.clipboard.writeText(fullUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); }
-    catch { setMsg("Copy failed — select the URL and copy manually."); }
+    try { await navigator.clipboard.writeText(fullUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
   };
 
   const save = async () => {
-    setBusy(true); setMsg(null);
-    try {
-      const body: Partial<{ enabled: boolean; sync_mode: string; webhook_enabled: boolean; webhook_secret: string }> = {
-        enabled, sync_mode: syncMode, webhook_enabled: webhookEnabled,
-      };
-      if (secret) body.webhook_secret = secret; // write-only — omit when blank to keep stored
-      const next = await api.saveIntegration(cfg.provider, body);
-      onSaved(next); setSecret(""); setMsg("Saved.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+    // Preserve the OTHER connector verbatim; only the edited one takes the drafts.
+    const body: ItsmConfigInput = {
+      servicenow: isSN
+        ? { enabled, instance_url: sn.instance_url, user: sn.user, password: sn.password || "", min_severity: sn.min_severity, assignment_group: sn.assignment_group }
+        : { enabled: snInit.enabled, instance_url: snInit.instance_url, user: snInit.user, password: "", min_severity: snInit.min_severity, assignment_group: snInit.assignment_group },
+      jira: !isSN
+        ? { enabled, base_url: jr.base_url, email: jr.email, api_token: jr.api_token || "", project_key: jr.project_key, issue_type: jr.issue_type, min_severity: jr.min_severity, resolve_transition: jr.resolve_transition }
+        : { enabled: jrInit.enabled, base_url: jrInit.base_url, email: jrInit.email, api_token: "", project_key: jrInit.project_key, issue_type: jrInit.issue_type, min_severity: jrInit.min_severity, resolve_transition: jrInit.resolve_transition },
+    };
+    await api.saveItsmConfig(body);
+    const intBody: Partial<{ enabled: boolean; sync_mode: string; webhook_enabled: boolean; webhook_secret: string }> = { enabled, sync_mode: syncMode, webhook_enabled: webhookEnabled };
+    if (secret.trim()) intBody.webhook_secret = secret.trim();
+    await api.saveIntegration(id, intBody);
+    await onSaved();
   };
 
-  return (
-    <div className="card">
-      <div className="admin-card-head">
-        <h2>{name} <ProviderBadge enabled={enabled} /></h2>
-        <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
-        </label>
-      </div>
-      <div className="form-grid">
-        <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} />
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
-          <span>Inbound webhook</span>
-          <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
-            <input type="checkbox" checked={webhookEnabled} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
+  const steps: WizardStep[] = [
+    {
+      id: "connect", title: "Connect",
+      hint: isSN ? "Where your ServiceNow instance lives and how to authenticate." : "Where your Jira site lives and how to authenticate.",
+      isValid: () => connectValid,
+      render: () => (
+        <>
+          <label className="scope-chip" style={{ marginBottom: 12 }}>
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enable this connector
           </label>
-        </label>
-        <LabeledInput label={`Webhook signing secret${cfg.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={cfg.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} hint="write-only — blank keeps stored" />
-      </div>
-
-      {fullUrl && (
-        <div style={{ marginTop: 12 }}>
-          <span className="mini-meta">Inbound webhook URL</span>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
-            <input readOnly value={fullUrl} onFocus={(e) => e.currentTarget.select()} className="mono"
-              style={{ flex: 1, padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
-            <button className="dash-btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+          {isSN ? (
+            <div className="form-grid">
+              <LabeledInput label="Instance URL" value={sn.instance_url} onChange={(v) => setSn({ ...sn, instance_url: v })} placeholder="https://dev12345.service-now.com" required />
+              <LabeledInput label="User" value={sn.user} onChange={(v) => setSn({ ...sn, user: v })} />
+              <LabeledInput label="Password" type="password" value={sn.password} onChange={(v) => setSn({ ...sn, password: v })} placeholder={snInit.has_password ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
+            </div>
+          ) : (
+            <div className="form-grid">
+              <LabeledInput label="Base URL" value={jr.base_url} onChange={(v) => setJr({ ...jr, base_url: v })} placeholder="https://your-org.atlassian.net" required />
+              <LabeledInput label="Project key" value={jr.project_key} onChange={(v) => setJr({ ...jr, project_key: v })} placeholder="NOC" required />
+              <LabeledInput label="Email" value={jr.email} onChange={(v) => setJr({ ...jr, email: v })} placeholder="svc@your-org.com" />
+              <LabeledInput label="API token" type="password" value={jr.api_token} onChange={(v) => setJr({ ...jr, api_token: v })} placeholder={jrInit.has_token ? "•••••• (unchanged)" : ""} hint="write-only — blank keeps stored" />
+            </div>
+          )}
+          <RequiredLegend />
+        </>
+      ),
+    },
+    {
+      id: "routing", title: "Routing",
+      hint: "Which alerts cut a ticket, and where they land.",
+      isValid: () => true,
+      render: () => (
+        isSN ? (
+          <div className="form-grid">
+            <LabeledSelect label="Min severity to ticket" value={sn.min_severity} onChange={(v) => setSn({ ...sn, min_severity: v })} options={SEV} />
+            <LabeledInput label="Assignment group (optional)" value={sn.assignment_group} onChange={(v) => setSn({ ...sn, assignment_group: v })} />
           </div>
-          <p className="mini-meta" style={{ marginTop: 4 }}>{webhookHint}</p>
+        ) : (
+          <div className="form-grid">
+            <LabeledSelect label="Min severity to ticket" value={jr.min_severity} onChange={(v) => setJr({ ...jr, min_severity: v })} options={SEV} />
+            <LabeledInput label="Issue type (optional)" value={jr.issue_type} onChange={(v) => setJr({ ...jr, issue_type: v })} placeholder="Incident" />
+            <LabeledInput label="Resolve transition (optional)" value={jr.resolve_transition} onChange={(v) => setJr({ ...jr, resolve_transition: v })} placeholder="Done" />
+          </div>
+        )
+      ),
+    },
+    {
+      id: "sync", title: "Sync",
+      hint: "Outbound promotes your incidents to tickets. Bidirectional also applies inbound state changes (close, reassign) back onto the incident via a registered webhook.",
+      isValid: () => syncValid,
+      render: () => (
+        <>
+          <div className="form-grid">
+            <LabeledSelect label="Sync mode" value={syncMode} onChange={(v) => setSyncMode(v as IntegrationConfig["sync_mode"])} options={["outbound", "bidirectional"]} />
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--muted)" }}>
+              <span>Inbound webhook</span>
+              <label className="mini-meta" style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 0" }}>
+                <input type="checkbox" checked={webhookEnabled} disabled={syncMode !== "bidirectional"} onChange={(e) => setWebhookEnabled(e.target.checked)} /> Accept inbound state changes
+              </label>
+            </label>
+            <LabeledInput label={`Webhook signing secret${integration.webhook_secret_set ? " (stored)" : ""}`} type="password" value={secret} onChange={setSecret} placeholder={integration.webhook_secret_set ? "•••••• (unchanged)" : "shared secret for HMAC verification"} hint="write-only — blank keeps stored" />
+          </div>
+          {syncMode === "bidirectional" && webhookEnabled && !integration.webhook_secret_set && !secret.trim() && (
+            <p className="pol-row-err" role="alert">A signing secret is required to accept inbound webhooks.</p>
+          )}
+          {fullUrl && (
+            <div style={{ marginTop: 12 }}>
+              <span className="mini-meta">Inbound webhook URL — register this with {meta.name}</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                <input readOnly value={fullUrl} onFocus={(e) => e.currentTarget.select()} className="mono" style={{ flex: 1, padding: 8, color: "var(--fg)", border: "1px solid var(--panel-border)", borderRadius: 6, background: "var(--bg)" }} />
+                <button className="dash-btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+              </div>
+            </div>
+          )}
+          {!inboundEnabled && (
+            <p className="mini-meta" style={{ marginTop: 8 }}>Inbound webhooks are recorded but not yet driving incident state — pending platform enablement.</p>
+          )}
+        </>
+      ),
+    },
+    {
+      id: "review", title: "Review",
+      isValid: () => true,
+      render: () => (
+        <div style={{ display: "grid", gap: 8 }}>
+          <p className="mini-meta">Saving hot-swaps the connector live — no restart.</p>
+          <dl className="kv-form">
+            <dt>Status</dt><dd>{enabled ? "Enabled" : "Disabled"}</dd>
+            <dt>{isSN ? "Instance" : "Site"}</dt><dd className="mono">{isSN ? (sn.instance_url || "—") : (jr.base_url || "—")}</dd>
+            {!isSN && <><dt>Project</dt><dd className="mono">{jr.project_key || "—"}</dd></>}
+            <dt>Tickets at</dt><dd>{(isSN ? sn.min_severity : jr.min_severity)} and worse</dd>
+            <dt>Sync</dt><dd>{syncMode}{syncMode === "bidirectional" && webhookEnabled ? " · inbound webhook on" : ""}</dd>
+          </dl>
         </div>
-      )}
-
-      <div className="admin-actions">
-        <button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-        {msg && <span className="mini-meta">{msg}</span>}
-      </div>
-    </div>
-  );
-}
-
-// BidirectionalSyncAdmin — the Integration Platform's two-way sync config. Lists
-// one card per provider (ServiceNow / Jira / PagerDuty / Slack) for enabling
-// outbound-only vs. bidirectional sync and registering inbound webhooks. The
-// banner reflects whether the server is actually driving incident state from
-// inbound webhooks (FEATURE_ITSM_INBOUND), which an operator enables.
-export function BidirectionalSyncAdmin() {
-  const [integrations, setIntegrations] = useState<IntegrationConfig[] | null>(null);
-  const [inboundEnabled, setInboundEnabled] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.integrations()
-      .then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); })
-      .catch((e) => setErr((e as Error).message));
-  }, []);
-
-  // Replace a single provider's config in place after a save.
-  const onSaved = (next: IntegrationConfig) =>
-    setIntegrations((cur) => (cur ?? []).map((i) => (i.provider === next.provider ? next : i)));
-
-  // Resolve the config for a provider (fall back to a sane default if absent).
-  const cfgFor = (id: string): IntegrationConfig =>
-    integrations?.find((i) => i.provider === id) ??
-    { provider: id, enabled: false, sync_mode: "outbound", webhook_enabled: false, webhook_secret_set: false, state_map: null };
+      ),
+    },
+  ];
 
   return (
-    <div className="card">
-      <div className="admin-card-head"><h2>Bidirectional sync</h2></div>
-      <p className="admin-sub">Sync incident state two ways with your ticketing systems. Outbound promotes your incidents to tickets; bidirectional also applies inbound state changes (close, reassign) back onto the incident when a registered webhook fires.</p>
-
-      {inboundEnabled
-        ? <p style={{ margin: "0 0 12px", padding: "8px 12px", borderRadius: 6, fontSize: 13, border: "1px solid var(--good)", background: "var(--sev-ok-bg)", color: "var(--good)" }}>Inbound sync is active — registered webhooks drive incident state.</p>
-        : <p style={{ margin: "0 0 12px", padding: "8px 12px", borderRadius: 6, fontSize: 13, border: "1px solid var(--panel-border)", background: "var(--bg)", color: "var(--muted)" }}>Inbound webhooks are being recorded but not yet driving incident state — pending platform enablement.</p>}
-
-      {err && <p className="mini-meta">{err}</p>}
-      {!integrations && !err && <p className="mini-meta">Loading…</p>}
-
-      {integrations && SYNC_PROVIDERS.map((p) => (
-        <SyncProviderCard key={p.id} cfg={cfgFor(p.id)} name={p.name} webhookHint={p.webhookHint} onSaved={onSaved} />
-      ))}
+    <div className="ds-modal-scrim" onClick={onClose}>
+      <div className="ds-modal" role="dialog" aria-modal="true" aria-label={`${meta.name} setup`} ref={dialogRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+        <div className="ds-modal-head">
+          <span className={`conn-logo ${id}`}><meta.Logo size={28} /></span>
+          <div className="ds-modal-title">
+            <h2>{meta.name}</h2>
+            <p className="mini-meta">{meta.tagline}</p>
+          </div>
+          <button className="drawer-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="ds-modal-body">
+          <Wizard steps={steps} onFinish={save} onCancel={onClose} finishLabel="Save & connect" />
+        </div>
+      </div>
     </div>
   );
 }
