@@ -328,6 +328,8 @@ const SCOPE_OPTIONS = ["read:metrics", "read:alerts", "read:devices", "read:flow
 
 const GRANT_TYPE_OPTIONS = ["authorization_code", "client_credentials", "refresh_token"];
 
+type ApiTile = "keys" | "token" | "rest";
+
 export function ApiAccessAdmin() {
   const [keys, err, reload, setErr] = useReload(() => api.listApiKeys());
   const [label, setLabel] = useState("");
@@ -345,201 +347,222 @@ export function ApiAccessAdmin() {
   // Contacts
   const [contactEmail, setContactEmail] = useState("");
   const [contactPhone, setContactPhone] = useState("");
+  // Which tile's modal is open (also driven by the flyout deep-link #/admin/api/<tile>).
+  const [open, setOpen] = useState<ApiTile | null>(null);
+
+  useEffect(() => {
+    const read = () => {
+      const seg = window.location.hash.replace(/^#\/?/, "").split("/")[2];
+      if (seg === "keys" || seg === "token" || seg === "rest") setOpen(seg);
+    };
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+  const openTile = (t: ApiTile) => { setOpen(t); if (window.location.hash !== `#/admin/api/${t}`) window.history.replaceState(null, "", `#/admin/api/${t}`); };
+  const closeTile = () => { setOpen(null); window.history.replaceState(null, "", "#/admin/api"); };
 
   const toggleScope = (s: string) =>
     setScopes((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
   const toggleGrant = (g: string) =>
     setGrantTypes((cur) => (cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g]));
 
-  // splitList turns a comma-separated input into a trimmed, non-empty list.
   const splitList = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
-  // toIso converts a yyyy-mm-dd date input into an RFC 3339 timestamp.
   const toIso = (v: string) => (v.trim() ? new Date(v).toISOString() : undefined);
 
   const generate = async () => {
     if (!label.trim()) return;
     setErr(null);
-    try {
-      const req: CreateApiKeyRequest = {
-        label: label.trim(),
-        scopes,
-        rate_limit_per_min: rate.trim() ? Math.max(0, parseInt(rate, 10) || 0) : undefined,
-        grant_types: grantTypes.length ? grantTypes : undefined,
-        client_uri: clientUri.trim() || undefined,
-        logo_uri: logoUri.trim() || undefined,
-        source_cidrs: splitList(sourceCidrs).length ? splitList(sourceCidrs) : undefined,
-        client_expires_at: toIso(clientExpires),
-        secret_expires_at: toIso(secretExpires),
-        contacts: contactEmail.trim() ? splitList(contactEmail) : undefined,
-        contact_phone: contactPhone.trim() || undefined,
-      };
-      const res = await api.createApiKey(req);
-      setSecret(res.secret);
-      setLabel("");
-      setRate("");
-      setClientUri("");
-      setLogoUri("");
-      setSourceCidrs("");
-      setClientExpires("");
-      setSecretExpires("");
-      setContactEmail("");
-      setContactPhone("");
-      reload();
-    } catch (e) { setErr((e as Error).message); }
+    const req: CreateApiKeyRequest = {
+      label: label.trim(),
+      scopes,
+      rate_limit_per_min: rate.trim() ? Math.max(0, parseInt(rate, 10) || 0) : undefined,
+      grant_types: grantTypes.length ? grantTypes : undefined,
+      client_uri: clientUri.trim() || undefined,
+      logo_uri: logoUri.trim() || undefined,
+      source_cidrs: splitList(sourceCidrs).length ? splitList(sourceCidrs) : undefined,
+      client_expires_at: toIso(clientExpires),
+      secret_expires_at: toIso(secretExpires),
+      contacts: contactEmail.trim() ? splitList(contactEmail) : undefined,
+      contact_phone: contactPhone.trim() || undefined,
+    };
+    const res = await api.createApiKey(req); // throws → surfaced by the Wizard
+    setSecret(res.secret);
+    setLabel(""); setRate(""); setClientUri(""); setLogoUri(""); setSourceCidrs("");
+    setClientExpires(""); setSecretExpires(""); setContactEmail(""); setContactPhone("");
+    reload();
   };
   const revoke = async (k: ApiKey) => {
     setErr(null);
     try { await api.revokeApiKey(k.id); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
+  const list = keys ?? [];
+  const active = list.filter((k) => !k.revoked_at).length;
+  const TILES: { id: ApiTile; name: string; tagline: string; icon: string; meta: string }[] = [
+    { id: "keys", name: "Generate API key", icon: "key", tagline: "Mint a scoped client credential for machine clients.", meta: keys ? `${active} active · ${list.length - active} revoked` : "…" },
+    { id: "token", name: "Token Policy", icon: "shield", tagline: "Access & refresh token lifetimes for sessions.", meta: "Clamped to safe bounds" },
+    { id: "rest", name: "REST API Reference", icon: "docs", tagline: "Browse every endpoint; export the OpenAPI spec.", meta: "Live, generated from the API" },
+  ];
+
   return (
     <>
-      <AdminHead title="API Access" sub={`${BRAND} is API-first. Mint scoped keys for machine clients; present them as a Bearer token or X-API-Key header.`} />
+      <AdminHead title="API Access" sub={`${BRAND} is API-first — mint scoped credentials for machine clients and tune session tokens.`} />
       <StatStrip>
-        <Stat label="Keys" value={keys ? keys.length : <Skeleton w={26} h={22} />} />
-        <Stat label="Active" value={keys ? keys.filter((k) => !k.revoked_at).length : "—"} tone="good" />
-        <Stat label="Revoked" value={keys ? keys.filter((k) => k.revoked_at).length : "—"} tone={(keys ?? []).some((k) => k.revoked_at) ? "warn" : ""} />
-        <Stat label="Rate-limited" value={keys ? keys.filter((k) => (k.rate_limit_per_min || 0) > 0).length : "—"} />
+        <Stat label="Keys" value={keys ? list.length : <Skeleton w={26} h={22} />} />
+        <Stat label="Active" value={keys ? active : "—"} tone="good" />
+        <Stat label="Revoked" value={keys ? list.length - active : "—"} tone={list.some((k) => k.revoked_at) ? "warn" : ""} />
+        <Stat label="Rate-limited" value={keys ? list.filter((k) => (k.rate_limit_per_min || 0) > 0).length : "—"} />
       </StatStrip>
-      <div className="card">
-        <div className="admin-card-head"><h2>Generate API key</h2></div>
-        <ErrLine msg={err} />
-        {secret && (
-          <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
-            <span className="badge good">New key</span>
-            <span>Copy it now — it won't be shown again: <code style={{ userSelect: "all" }}>{secret}</code></span>
-            <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setSecret(null)}>Dismiss</button>
-          </div>
-        )}
-        <Wizard
-          finishLabel="Generate key"
-          onFinish={generate}
-          steps={[
-            {
-              id: "identity",
-              title: "Identity",
-              hint: "Name the key and (optionally) cap its request rate. Label is required.",
-              isValid: () => !!label.trim(),
-              render: () => (
-                <>
-                  <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-                    <LabeledInput label="Label" value={label} onChange={setLabel} placeholder="e.g. ci-pipeline" required />
-                    <LabeledInput label="Rate limit / min" type="number" value={rate} onChange={setRate} placeholder="blank = default (600)" hint="default 600 · 0 = unlimited · blank = inherit default" />
-                  </div>
-                  <RequiredLegend />
-                </>
-              ),
-            },
-            {
-              id: "scopes",
-              title: "Scopes & grant",
-              hint: "What the key may do (RBAC role is derived from scopes) and which OAuth grant types it supports.",
-              isValid: () => true,
-              render: () => (
-                <>
-                  <div className="scope-row">
-                    {SCOPE_OPTIONS.map((s) => (
-                      <label key={s} className={`scope-chip ${scopes.includes(s) ? "on" : ""}`}>
-                        <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggleScope(s)} /> {s}
-                      </label>
-                    ))}
-                  </div>
-                  <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>Grant types</h3>
-                  <div className="scope-row">
-                    {GRANT_TYPE_OPTIONS.map((g) => (
-                      <label key={g} className={`scope-chip ${grantTypes.includes(g) ? "on" : ""}`}>
-                        <input type="checkbox" checked={grantTypes.includes(g)} onChange={() => toggleGrant(g)} /> {g}
-                      </label>
-                    ))}
-                  </div>
-                </>
-              ),
-            },
-            {
-              id: "client",
-              title: "Client & network",
-              hint: "Optional client metadata (RFC 7591) and a source-IP allowlist.",
-              isValid: () => true,
-              render: () => (
-                <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-                  <LabeledInput label="Client URL" value={clientUri} onChange={setClientUri} placeholder="https://app.example.com" hint="Public homepage of the client." />
-                  <LabeledInput label="Logo URL" value={logoUri} onChange={setLogoUri} placeholder="https://app.example.com/logo.png" hint="Image shown on consent screens." />
-                  <LabeledInput label="Allowed source IP / CIDR" value={sourceCidrs} onChange={setSourceCidrs} placeholder="10.0.0.0/8, 192.168.1.0/24" hint="Comma-separated; blank = any source." />
-                </div>
-              ),
-            },
-            {
-              id: "expiry",
-              title: "Expiry & contacts",
-              hint: "Optional lifetime and owner contacts. Review, then generate.",
-              isValid: () => true,
-              render: () => (
-                <>
-                  <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-                    <LabeledInput label="Client expires on" type="date" value={clientExpires} onChange={setClientExpires} hint="Optional; blank = never." />
-                    <LabeledInput label="Secret expires on" type="date" value={secretExpires} onChange={setSecretExpires} hint="Optional; blank = never." />
-                  </div>
-                  <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginTop: 12 }}>
-                    <LabeledInput label="Contact email" value={contactEmail} onChange={setContactEmail} placeholder="ops@example.com" hint="Comma-separated for multiple." />
-                    <LabeledInput label="Contact phone" value={contactPhone} onChange={setContactPhone} placeholder="+1 555 0100" />
-                  </div>
-                </>
-              ),
-            },
-          ]}
-        />
+
+      <div className="conn-grid">
+        {TILES.map((t) => (
+          <button key={t.id} className="conn-tile" onClick={() => openTile(t.id)} aria-label={t.name}>
+            <span className={`conn-logo api-${t.id}`}><Icon name={t.icon} size={24} /></span>
+            <span className="conn-body">
+              <span className="conn-name">{t.name}</span>
+              <span className="conn-tag">{t.tagline}</span>
+              <span className="conn-meta">{t.meta}</span>
+            </span>
+            <span className="conn-cta">Open →</span>
+          </button>
+        ))}
       </div>
+
       <div className="card">
-        <div className="admin-card-head"><h2>API keys</h2></div>
+        <div className="admin-card-head">
+          <h2>API keys</h2>
+          <button className="dash-btn accent" onClick={() => openTile("keys")}>+ Generate key</button>
+        </div>
+        <ErrLine msg={err} />
         <table className="ds-table">
           <thead>
-            <tr><th>Label</th><th>Key</th><th>Scopes</th><th>Grant types</th><th>Source CIDRs</th><th>Rate / min</th><th>Usage</th><th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th></th></tr>
+            <tr><th>Label</th><th>Client ID</th><th>Scopes</th><th>Grant types</th><th>Source CIDRs</th><th>Rate / min</th><th>Usage</th><th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
-            {(keys ?? []).map((k) => {
+            {list.map((k) => {
               const cap = k.rate_limit_per_min || 0;
               const near = cap > 0 && k.window_used >= cap * 0.8;
               return (
               <tr key={k.id}>
-                <td style={{ fontWeight: 600 }}>
-                  {k.client_uri ? <a href={k.client_uri} target="_blank" rel="noreferrer">{k.label}</a> : k.label}
-                </td>
+                <td style={{ fontWeight: 600 }}>{k.client_uri ? <a href={k.client_uri} target="_blank" rel="noreferrer">{k.label}</a> : k.label}</td>
                 <td className="mono">{k.prefix}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.scopes || []).join(", ") || "—"}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.grant_types || []).join(", ") || "—"}</td>
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.source_cidrs || []).join(", ") || "any"}</td>
-                <td className="mono">
-                  {cap > 0
-                    ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span>
-                    : <span className="mini-meta">unlimited</span>}
-                </td>
+                <td className="mono">{cap > 0 ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span> : <span className="mini-meta">unlimited</span>}</td>
                 <td className="mono">{(k.use_count ?? 0).toLocaleString()}</td>
                 <td>{k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}</td>
-                <td>{k.client_expires_at || k.secret_expires_at
-                  ? new Date(k.client_expires_at || k.secret_expires_at || "").toLocaleDateString()
-                  : "never"}</td>
+                <td>{k.client_expires_at || k.secret_expires_at ? new Date(k.client_expires_at || k.secret_expires_at || "").toLocaleDateString() : "never"}</td>
                 <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : "never"}</td>
                 <td>{k.revoked_at ? <span className="badge warn">revoked</span> : <span className="badge good">active</span>}</td>
                 <td>{!k.revoked_at && <button className="dash-btn" onClick={() => revoke(k)}>Revoke</button>}</td>
               </tr>
             );})}
-            {(keys ?? []).length === 0 && <tr><td colSpan={12} className="panel-empty">No API keys yet.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={12} className="panel-empty">No API keys yet.</td></tr>}
           </tbody>
         </table>
-        <p className="mini-meta" style={{ marginTop: 8 }}>
-          Each key is rate-limited per minute (fixed window). Allowed values: any whole number ≥ 1
-          (requests/min), <code>0</code> for unlimited, or blank to inherit the server default of
-          <strong> 600/min</strong> (<code>APIKEY_RATE_LIMIT_PER_MIN</code>). Over-cap
-          calls get <code>429 Too Many Requests</code> with a <code>Retry-After</code>. The Rate
-          column shows live current-minute usage; Usage is lifetime authenticated calls.
-        </p>
       </div>
-      <TokenPolicyForm />
-      <GraphQLExplorer />
-      <OpenAPIReference />
-      <div className="ov-grid">
-        <div className="panel col-6"><h3>Authentication</h3><p className="mini-meta">Present a key as <code>Authorization: Bearer ntk_…</code> or <code>X-API-Key</code>. Keys resolve to the same tenant + RBAC context as a user — a key never exceeds its scopes.</p></div>
-      </div>
+
+      {open === "keys" && (
+        <Modal title="Generate API key" subtitle="A scoped client credential for machine clients." logo={<span className="conn-logo api-keys"><Icon name="key" size={26} /></span>} onClose={closeTile}>
+          <ErrLine msg={err} />
+          {secret && (
+            <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
+              <span className="badge good">Client secret</span>
+              <span>Copy it now — it won't be shown again:&nbsp;<code style={{ userSelect: "all" }}>{secret}</code>
+                <InfoTip label="Present it as Authorization: Bearer <secret> or the X-API-Key header. The key resolves to the same tenant + RBAC context as its scopes — never more.">Present it as <code>Authorization: Bearer …</code> or <code>X-API-Key</code>. The key never exceeds its scopes.</InfoTip>
+              </span>
+              <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setSecret(null)}>Dismiss</button>
+            </div>
+          )}
+          <Wizard
+            finishLabel="Generate key"
+            onFinish={generate}
+            steps={[
+              {
+                id: "identity", title: "Identity",
+                hint: "Name the credential and (optionally) cap its request rate.",
+                isValid: () => !!label.trim(),
+                render: () => (
+                  <>
+                    <div className="form-grid">
+                      <LabeledInput label="Label" value={label} onChange={setLabel} placeholder="e.g. ci-pipeline" required info="A human name for this credential — shown in the keys table and audit log." />
+                      <LabeledInput label="Rate limit / min" type="number" value={rate} onChange={setRate} placeholder="blank = default (600)" info="Max requests per minute. Blank inherits the server default (600); 0 means unlimited." />
+                    </div>
+                    <RequiredLegend />
+                  </>
+                ),
+              },
+              {
+                id: "scopes", title: "Scopes & grant",
+                hint: "What the credential may do; its RBAC role is derived from the scopes.",
+                isValid: () => true,
+                render: () => (
+                  <>
+                    <div className="scope-row">
+                      {SCOPE_OPTIONS.map((s) => (
+                        <label key={s} className={`scope-chip ${scopes.includes(s) ? "on" : ""}`}>
+                          <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggleScope(s)} /> {s}
+                        </label>
+                      ))}
+                    </div>
+                    <h3 style={{ margin: "16px 0 4px", fontSize: "var(--fs-meta)", textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)", display: "flex", alignItems: "center", gap: 5 }}>
+                      Grant types<InfoTip label="The OAuth 2.0 grant types this credential supports. client_credentials is the usual machine-to-machine flow.">OAuth 2.0 flows this credential supports. <code>client_credentials</code> is the usual machine-to-machine flow.</InfoTip>
+                    </h3>
+                    <div className="scope-row">
+                      {GRANT_TYPE_OPTIONS.map((g) => (
+                        <label key={g} className={`scope-chip ${grantTypes.includes(g) ? "on" : ""}`}>
+                          <input type="checkbox" checked={grantTypes.includes(g)} onChange={() => toggleGrant(g)} /> {g}
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                ),
+              },
+              {
+                id: "client", title: "Client & network",
+                hint: "Optional client metadata and a source-IP allowlist.",
+                isValid: () => true,
+                render: () => (
+                  <div className="form-grid">
+                    <LabeledInput label="Client URL" value={clientUri} onChange={setClientUri} placeholder="https://app.example.com" info="Public homepage of the client app (RFC 7591 metadata). Optional." />
+                    <LabeledInput label="Logo URL" value={logoUri} onChange={setLogoUri} placeholder="https://app.example.com/logo.png" info="Image shown on consent screens (RFC 7591 metadata). Optional." />
+                    <LabeledInput label="Allowed source IP / CIDR" value={sourceCidrs} onChange={setSourceCidrs} placeholder="10.0.0.0/8, 192.168.1.0/24" info="Comma-separated allowlist of source networks. Blank allows any source IP." />
+                  </div>
+                ),
+              },
+              {
+                id: "expiry", title: "Expiry & contacts",
+                hint: "Optional lifetime and owner contacts. Review, then generate.",
+                isValid: () => true,
+                render: () => (
+                  <>
+                    <div className="form-grid">
+                      <LabeledInput label="Client expires on" type="date" value={clientExpires} onChange={setClientExpires} info="Date the whole credential stops working. Blank = never expires." />
+                      <LabeledInput label="Secret expires on" type="date" value={secretExpires} onChange={setSecretExpires} info="Date the client secret must be rotated by. Blank = never expires." />
+                      <LabeledInput label="Contact email" value={contactEmail} onChange={setContactEmail} placeholder="ops@example.com" info="Owner email(s) for expiry/abuse notices. Comma-separated for multiple." />
+                      <LabeledInput label="Contact phone" value={contactPhone} onChange={setContactPhone} placeholder="+1 555 0100" info="Optional owner phone for the credential." />
+                    </div>
+                  </>
+                ),
+              },
+            ]}
+          />
+        </Modal>
+      )}
+
+      {open === "token" && (
+        <Modal title="Token Policy" subtitle="Session access & refresh token lifetimes." logo={<span className="conn-logo api-token"><Icon name="shield" size={26} /></span>} onClose={closeTile}>
+          <TokenPolicyForm embedded />
+        </Modal>
+      )}
+
+      {open === "rest" && (
+        <Modal title="REST API Reference" subtitle="Every endpoint, generated live from the API." logo={<span className="conn-logo api-rest"><Icon name="docs" size={26} /></span>} onClose={closeTile}>
+          <OpenAPIReference embedded />
+        </Modal>
+      )}
     </>
   );
 }
@@ -556,7 +579,7 @@ const GQL_EXAMPLES: { label: string; query: string }[] = [
   { label: "Schema", query: "{ __schema }" },
 ];
 
-function GraphQLExplorer() {
+export function GraphQLExplorer() {
   const [query, setQuery] = useState(GQL_EXAMPLES[0].query);
   const [result, setResult] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -618,7 +641,7 @@ function GraphQLExplorer() {
 
 // OpenAPIReference renders a live, grouped index of the REST surface from the
 // generated /api/openapi.json — no external Swagger UI / CDN (offline-friendly).
-function OpenAPIReference() {
+function OpenAPIReference({ embedded = false }: { embedded?: boolean }) {
   const [spec, err] = useReload(() => api.openapi());
   if (err) return null;
   const groups: Record<string, { method: string; path: string; summary?: string }[]> = {};
@@ -631,14 +654,17 @@ function OpenAPIReference() {
   const METHOD_COLOR: Record<string, string> = {
     GET: "var(--sev-info)", POST: "var(--good)", PUT: "var(--sev-warning)", PATCH: "var(--sev-warning)", DELETE: "var(--bad)",
   };
-  return (
-    <div className="card">
-      <div className="admin-card-head">
-        <h2>REST API reference</h2>
-        <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer">openapi.json ↗</a>
-      </div>
-      <p className="mini-meta" style={{ marginTop: 0 }}>
-        {spec?.info?.title} · v{spec?.info?.version} · OpenAPI {spec?.openapi}. Generated from the Go handlers; import it into Postman or any OpenAPI client.
+  const inner = (
+    <>
+      {!embedded && (
+        <div className="admin-card-head">
+          <h2>REST API reference</h2>
+          <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer">openapi.json ↗</a>
+        </div>
+      )}
+      <p className="mini-meta" style={{ marginTop: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span>{spec?.info?.title} · v{spec?.info?.version} · OpenAPI {spec?.openapi}. Generated from the Go handlers; import it into Postman or any OpenAPI client.</span>
+        {embedded && <a className="dash-btn" href="/api/openapi.json" target="_blank" rel="noreferrer" style={{ marginLeft: "auto" }}>openapi.json ↗</a>}
       </p>
       <div className="ov-grid">
         {Object.entries(groups).map(([tag, rows]) => (
@@ -657,8 +683,9 @@ function OpenAPIReference() {
           </div>
         ))}
       </div>
-    </div>
+    </>
   );
+  return embedded ? inner : <div className="card">{inner}</div>;
 }
 
 // ---- Authentication (SSO / LDAP / TACACS+) ---------------------------------
@@ -1176,7 +1203,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
 
 // Editable token-lifetime policy. Access TTL is entered in minutes, refresh in
 // days; both are clamped server-side to the RFC 9700 / NIST 800-63B bounds.
-function TokenPolicyForm() {
+function TokenPolicyForm({ embedded = false }: { embedded?: boolean }) {
   const [tp, setTp] = useState<TokenPolicy | null>(null);
   const [accessMin, setAccessMin] = useState("");   // minutes
   const [refreshDays, setRefreshDays] = useState(""); // days
@@ -1189,7 +1216,7 @@ function TokenPolicyForm() {
     setRefreshDays(String(Math.round(p.refresh_ttl_seconds / 86400)));
   };
   useEffect(() => { api.tokenPolicy().then(load).catch((e) => setMsg((e as Error).message)); }, []);
-  if (!tp) return <div className="card"><h2>Token policy</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
+  if (!tp) return embedded ? <p className="mini-meta">{msg ?? "Loading…"}</p> : <div className="card"><h2>Token policy</h2><p className="mini-meta">{msg ?? "Loading…"}</p></div>;
 
   const b = tp.bounds;
   const save = async () => {
@@ -1203,15 +1230,14 @@ function TokenPolicyForm() {
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
 
-  return (
-    <div className="card">
-      <h2>Token policy</h2>
-      <p className="admin-sub">Session token lifetimes. Values are clamped to safe bounds (RFC 9700 / NIST 800-63B); out-of-range entries are adjusted on save.</p>
-      <div className="snmp-form" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-        <LabeledInput label="Access token TTL (minutes)" type="number" value={accessMin} onChange={setAccessMin}
-          hint={`allowed ${Math.round(b.access_min_seconds / 60)}–${Math.round(b.access_max_seconds / 60)} min · recommended ≤ ${Math.round(b.access_recommended_seconds / 60)} min`} required />
-        <LabeledInput label="Refresh token TTL (days)" type="number" value={refreshDays} onChange={setRefreshDays}
-          hint={`allowed ${Math.round(b.refresh_min_seconds / 86400) || 1}–${Math.round(b.refresh_max_seconds / 86400)} days · recommended ≤ ${Math.round(b.refresh_recommended_seconds / 86400)} days`} required />
+  const inner = (
+    <>
+      <p className="admin-sub">Session token lifetimes, clamped to safe bounds (RFC 9700 / NIST 800-63B); out-of-range entries are adjusted on save.</p>
+      <div className="form-grid">
+        <LabeledInput label="Access token TTL (minutes)" type="number" value={accessMin} onChange={setAccessMin} required
+          info={`How long an access token stays valid. Allowed ${Math.round(b.access_min_seconds / 60)}–${Math.round(b.access_max_seconds / 60)} min · recommended ≤ ${Math.round(b.access_recommended_seconds / 60)} min.`} />
+        <LabeledInput label="Refresh token TTL (days)" type="number" value={refreshDays} onChange={setRefreshDays} required
+          info={`How long a refresh token can renew a session. Allowed ${Math.round(b.refresh_min_seconds / 86400) || 1}–${Math.round(b.refresh_max_seconds / 86400)} days · recommended ≤ ${Math.round(b.refresh_recommended_seconds / 86400)} days.`} />
       </div>
       <dl className="kv-form" style={{ marginTop: 12 }}>
         <dt>Refresh rotation</dt><dd>single-use with reuse detection (reuse revokes the lineage)</dd>
@@ -1219,12 +1245,13 @@ function TokenPolicyForm() {
         <dt>Federated tokens</dt><dd className="mono">RS256, verified against the identity provider's JWKS</dd>
       </dl>
       <RequiredLegend />
-      <div style={{ marginTop: 12 }}>
-        <button className="dash-btn" disabled={busy} onClick={save}>Save policy</button>
+      <div className="admin-actions">
+        <button className="dash-btn accent" disabled={busy} onClick={save}>Save policy</button>
+        {msg && <span className="mini-meta">{msg}</span>}
       </div>
-      {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
-    </div>
+    </>
   );
+  return embedded ? inner : <div className="card"><h2>Token policy</h2>{inner}</div>;
 }
 
 // ExportPolicyForm — runtime-tunable log-export limits (anti-exfiltration

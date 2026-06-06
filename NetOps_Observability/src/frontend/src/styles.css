@@ -421,6 +421,24 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .nav-flyout-item:hover { background: var(--rail-hover); }
 .nav-flyout-item:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
 .nav-flyout-item.active { background: color-mix(in srgb, var(--mod, #818cf8) 28%, transparent); color: #fff; }
+/* a leaf that owns sub-categories reads as a heading (bigger), its sub-items smaller */
+.nav-flyout-item.has-sub { height: 32px; font-size: 14px; font-weight: 700; letter-spacing: -0.01em; margin-top: 2px; }
+.nav-flyout-subitem {
+  display: flex; align-items: center; height: 26px; padding: 0 10px 0 26px;
+  background: transparent; border: 0; border-radius: var(--r-1);
+  color: var(--rail-fg-muted, var(--rail-fg)); font-size: 12px; font-weight: 500; text-align: left;
+  white-space: nowrap; cursor: pointer; position: relative;
+}
+.nav-flyout-subitem::before { content: ""; position: absolute; left: 15px; top: 50%; width: 5px; height: 5px;
+  transform: translateY(-50%); border-radius: 50%; background: currentColor; opacity: .45; }
+.nav-flyout-subitem:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.nav-flyout-subitem:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
+/* labelled group divider (e.g. "Developer") */
+.nav-flyout-group {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--rail-fg-muted, var(--muted)); padding: 10px 10px 3px; margin-top: 4px;
+  border-top: 1px solid var(--rail-border);
+}
 
 /* ----- Top bar ----- */
 .topbar {
@@ -1459,6 +1477,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .conn-logo.auth-sso { background: #eef0fe; color: var(--accent); }
 .conn-logo.auth-ldap { background: #eef6f1; color: #2e9e6b; }
 .conn-logo.auth-tacacs { background: #fdf1ee; color: #d2691e; }
+.conn-logo.api-keys { background: #eef0fe; color: var(--accent); }
+.conn-logo.api-token { background: #eef6f1; color: #2e9e6b; }
+.conn-logo.api-rest { background: #eef2f8; color: #4b6a8a; }
 
 /* embedded provider form inside a glass modal — no nested card chrome */
 .auth-form { display: block; }

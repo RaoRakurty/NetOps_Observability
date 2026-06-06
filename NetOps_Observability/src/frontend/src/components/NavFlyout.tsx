@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 
 type Props = {
@@ -70,20 +70,38 @@ export default function NavFlyout({
             Open {section.label}
           </button>
         ) : (
-          children.map((leaf) => {
-            const active = section.id === activeSection && leaf.id === activeLeaf;
-            return (
-              <button
-                key={leaf.id}
-                type="button"
-                role="menuitem"
-                className={`nav-flyout-item${active ? " active" : ""}`}
-                onClick={() => onNavigate(`${section.id}/${leaf.id}`)}
-              >
-                {leaf.label}
-              </button>
-            );
-          })
+          (() => {
+            let lastGroup: string | undefined;
+            return children.map((leaf) => {
+              const active = section.id === activeSection && leaf.id === activeLeaf;
+              const header = leaf.group && leaf.group !== lastGroup ? leaf.group : null;
+              lastGroup = leaf.group;
+              return (
+                <Fragment key={leaf.id}>
+                  {header && <div className="nav-flyout-group">{header}</div>}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={`nav-flyout-item${active ? " active" : ""}${leaf.subItems ? " has-sub" : ""}`}
+                    onClick={() => onNavigate(`${section.id}/${leaf.id}`)}
+                  >
+                    {leaf.label}
+                  </button>
+                  {(leaf.subItems ?? []).map((sub) => (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      role="menuitem"
+                      className="nav-flyout-subitem"
+                      onClick={() => onNavigate(`${section.id}/${leaf.id}/${sub.id}`)}
+                    >
+                      {sub.label}
+                    </button>
+                  ))}
+                </Fragment>
+              );
+            });
+          })()
         )}
       </div>
     </div>

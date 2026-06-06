@@ -32,6 +32,7 @@ import {
   ApiAccessAdmin,
   IntegrationsAdmin,
   NotificationsAdmin,
+  GraphQLExplorer,
 } from "./tabs/admin";
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
@@ -40,6 +41,13 @@ export type NavLeaf = {
   label: string;
   render: (c: SectionCtx) => JSX.Element;
   platformOnly?: boolean; // visible only to the cross-tenant platform owner
+  // group: render this leaf under a labelled heading in the hover flyout
+  // (e.g. "Developer"). Consecutive leaves sharing a group sit under one header.
+  group?: string;
+  // subItems: in-page sub-categories shown (small) beneath this leaf in the
+  // flyout. They deep-link to `#/section/leaf/<subId>`; the page reads the
+  // suffix to open the matching tile/modal. Not separate routes.
+  subItems?: { id: string; label: string }[];
 };
 
 export type NavSection = {
@@ -139,6 +147,8 @@ export const NAV: NavSection[] = [
       { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
       { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
       { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
+      // Developer — power-user, API-first tooling.
+      { id: "graphql", label: "GraphQL Explorer", group: "Developer", render: () => <GraphQLExplorer /> },
     ],
   },
   {
@@ -168,7 +178,14 @@ export const NAV: NavSection[] = [
       { id: "tenants", label: "Tenants", platformOnly: true, render: () => <TenantsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       { id: "policy", label: "Security Policy", render: () => <SecurityPolicy /> },
-      { id: "api", label: "API Access", render: () => <ApiAccessAdmin /> },
+      {
+        id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
+        subItems: [
+          { id: "keys", label: "Generate API key" },
+          { id: "token", label: "Token Policy" },
+          { id: "rest", label: "REST API Reference" },
+        ],
+      },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
       { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
       { id: "audit", label: "Audit Log", render: () => <AuditLog /> },
@@ -232,6 +249,10 @@ export function navDestinations(nav: NavSection[] = NAV): NavDestination[] {
       for (const l of s.children) {
         const label = l.label === s.label ? s.label : `${s.label} · ${l.label}`;
         out.push({ label, section: s.label, route: `${s.id}/${l.id}` });
+        // Deep-link sub-categories (e.g. API Access ▸ Token Policy) into ⌘K.
+        for (const sub of l.subItems ?? []) {
+          out.push({ label: `${s.label} · ${sub.label}`, section: s.label, route: `${s.id}/${l.id}/${sub.id}` });
+        }
       }
     } else {
       out.push({ label: s.label, section: s.label, route: s.id });
