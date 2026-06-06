@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, ExportFmt } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
+import { useWorkspace } from "../context/workspace";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
   { id: "csv", label: "CSV" },
@@ -55,6 +56,8 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const ws = useWorkspace();
 
   const run = async (q = query, m = minutes, sig = signal, sz = size) => {
     setBusy(true);
@@ -130,7 +133,7 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
       const level = src.level || src.severity || "";
       // Stable id so selection survives DataTable's internal sort (was index).
       const id = h._id || `${h._index}#${i}`;
-      return { id, ts: String(ts), message: String(message), source: String(source), level: String(level), index: h._index };
+      return { id, ts: String(ts), message: String(message), source: String(source), level: String(level), index: h._index, raw: src };
     });
   }, [hits]);
   type Line = (typeof lines)[number];
@@ -144,6 +147,19 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
       return n;
     });
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(lines.map((l) => l.id)));
+
+  // Row body click (not the export checkbox) opens the full log document in the
+  // dockable Inspector (shell-v2); v1 falls back to an inline detail card.
+  const selectLine = (l: Line) => {
+    setDetailId(l.id);
+    if (ws.enabled) {
+      ws.openInspector(<LogLineDetailBody line={l} />, {
+        title: l.source,
+        subtitle: `${l.level || "log"} · ${new Date(l.ts).toLocaleString()}`,
+      });
+    }
+  };
+  const detailLine = !ws.enabled && detailId ? lines.find((l) => l.id === detailId) : undefined;
 
   // Mode A — render the selected (loaded) rows to a file via the server encoders.
   const exportSelected = async (format: ExportFmt) => {
@@ -338,11 +354,75 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
             rowKey={(l) => l.id}
             height="60vh"
             ariaLabel="Log results"
+            onRowClick={(l) => selectLine(l)}
             rowAccent={(l) => severityColor(l.level)}
+            rowClassName={(l) => (detailId === l.id ? "dtv-selected" : "")}
             empty="No results."
           />
         )}
+        {detailLine && (
+          <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>
+            <LogLineDetailBody line={detailLine} />
+          </div>
+        )}
       </div>
     </>
+  );
+}
+
+// LogLineDetailBody — the full log document for one result row, rendered in the
+// Inspector (shell-v2) or inline (v1): the headline fields plus the raw source
+// pretty-printed (the value of having OpenSearch behind the search box).
+export function LogLineDetailBody({ line: l }: { line: { ts: string; source: string; level: string; message: string; index: string; raw: Record<string, any> } }) {
+  const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+  const row = (k: string, v: React.ReactNode) => (
+    <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
+      <span style={{ color: "var(--muted)", minWidth: 72 }}>{k}</span>
+      <span style={{ wordBreak: "break-word" }}>{v}</span>
+    </div>
+  );
+  let pretty = "";
+  try {
+    pretty = JSON.stringify(l.raw ?? {}, null, 2);
+  } catch {
+    pretty = String(l.raw);
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span className={`badge ${severityClass(l.level)}`}>{l.level || "log"}</span>
+        <span style={mono}>{l.source}</span>
+      </div>
+      <div>
+        {row("Time", <span style={mono}>{new Date(l.ts).toLocaleString()}</span>)}
+        {row("Index", <span style={mono}>{l.index}</span>)}
+      </div>
+      <div>
+        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+          Message
+        </div>
+        <div style={{ ...mono, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{l.message}</div>
+      </div>
+      <div>
+        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+          Document
+        </div>
+        <pre
+          style={{
+            ...mono,
+            margin: 0,
+            padding: 8,
+            background: "var(--surface-2, rgba(127,127,127,.08))",
+            borderRadius: 6,
+            maxHeight: 320,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {pretty}
+        </pre>
+      </div>
+    </div>
   );
 }
