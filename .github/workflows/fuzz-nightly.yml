@@ -31,8 +31,8 @@ jobs:
           - pkg: .
             target: FuzzParseFederationBundles
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.25.11'
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
@@ -40,7 +40,7 @@ jobs:
         run: go test ${{ matrix.pkg }} -run '^$' -fuzz "^${{ matrix.target }}$" -fuzztime 5m
       - name: upload crashers
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-crashers-${{ matrix.target }}
           path: NetOps_Observability/src/backend/**/testdata/fuzz/**

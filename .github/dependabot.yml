@@ -1,0 +1,57 @@
+# Dependabot — automated dependency-update PRs across every ecosystem in the tree
+# (SC-004). Weekly cadence; grouped where churn would otherwise be noisy. This is
+# the supply-chain "keep current" companion to the blocking CI scanners
+# (govulncheck/pip-audit/npm audit) which catch advisories between bumps.
+version: 2
+updates:
+  # Go backend (stdlib-first; allowlisted deps only — see CLAUDE.md §6).
+  - package-ecosystem: gomod
+    directory: /NetOps_Observability/src/backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+
+  # React/Vite frontend.
+  - package-ecosystem: npm
+    directory: /NetOps_Observability/src/frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  # Python correlation service (== pinned).
+  - package-ecosystem: pip
+    directory: /NetOps_Observability/src/correlation
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+
+  # Container base images (Dockerfiles).
+  - package-ecosystem: docker
+    directory: /NetOps_Observability/deployment/docker
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  - package-ecosystem: docker
+    directory: /NetOps_Observability/deployment/docker/swtpm-sidecar
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+
+  # GitHub Actions — keep the SHA pins (SC-002) current with annotated bumps.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"

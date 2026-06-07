@@ -1,0 +1,15 @@
+# gitleaks config (SC-007). Keep ALL default rules; allowlist only the obvious
+# non-secrets so the blocking history scan doesn't trip on test fixtures.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and the public dev fallback secret — not real credentials"
+regexTarget = "match"
+regexes = [
+  # Dummy credential convention used in *_test.go (e.g. auth-secret-123,
+  # priv-secret-456) — fabricated values, never real keys.
+  '''(auth|priv)-secret-\d+''',
+  # The publicly-known dev signing fallback (SR-017) — intentionally in source.
+  '''dev-only-do-not-use-in-production''',
+]

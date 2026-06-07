@@ -30,9 +30,12 @@ concurrency:
 
 env:
   GO_VERSION: '1.25.11'
-  # Pinned for reproducibility; gosec floats on latest for newest security rules.
+  # All scanners pinned for reproducible, supply-chain-sound builds (SC-010): an
+  # unpinned @latest would let a compromised/regressed release run in CI. Bump
+  # deliberately (Dependabot watches these too).
   STATICCHECK_VERSION: '2025.1.1'
   GOVULNCHECK_VERSION: 'v1.3.0'
+  GOSEC_VERSION: 'v2.27.1'
   # v2.x: built with go1.25, required since the go 1.25.0 directive (x/crypto
   # v0.52.0) made the go1.24-built v1.64.8 refuse to load. Config is v2 format.
   GOLANGCI_VERSION: 'v2.12.2'
@@ -46,8 +49,8 @@ jobs:
     name: build · vet · test · race
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
@@ -74,8 +77,8 @@ jobs:
     name: govulncheck (blocking)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
@@ -88,21 +91,21 @@ jobs:
     name: staticcheck + gosec (crypto/trust packages, blocking)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
       - name: install linters
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@${{ env.GOSEC_VERSION }}
       - name: staticcheck (tlsconfig, internalca)
         run: staticcheck ./tlsconfig/... ./internalca/...
       - name: gosec (tlsconfig, internalca)
         run: gosec -quiet ./tlsconfig/... ./internalca/...
       - name: golangci-lint (tlsconfig, internalca)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
@@ -115,8 +118,8 @@ jobs:
     # this enforces "no new lint findings" across the tree (protocol-mandated or
     # false-positive cases carry inline // #nosec / //nolint with a cited reason).
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
@@ -124,7 +127,7 @@ jobs:
       # so one repo-wide run covers the triage set. Suppressions use golangci's
       # native directives (// #nosec, //nolint) consistently across the tree.
       - name: golangci-lint (repo-wide)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend

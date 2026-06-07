@@ -1,0 +1,58 @@
+name: supply-chain
+
+# Supply-chain security gates (SC-001 Trivy, SC-007 gitleaks). These complement
+# the per-language CI (govulncheck/pip-audit/npm audit) with whole-tree scanning:
+#   - Trivy fs: dependency CVEs + Dockerfile/IaC misconfig across every manifest.
+#   - gitleaks: full-history secret scan (a leaked secret in ANY past commit).
+# Both BLOCK. Actions are SHA-pinned (SC-002); scanners are version-pinned (SC-010).
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trivy-fs:
+    name: Trivy filesystem scan (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Trivy fs (vuln + secret + misconfig)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          # Blocking on OUR layers; ignore-unfixed triages base/distro CVEs that
+          # have no fix available yet (SC-001) so they don't hard-block merges.
+          ignore-unfixed: true
+          exit-code: '1'
+        env:
+          # Pin the vuln/policy DBs to avoid an unbounded rate-limited pull.
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-java-db
+
+  gitleaks:
+    name: gitleaks secret scan (blocking, full history)
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history — a secret in any past commit must surface
+      - name: Install gitleaks (pinned)
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tgz
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: gitleaks detect (full git history)
+        run: gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"

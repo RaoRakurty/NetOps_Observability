@@ -3,11 +3,9 @@ name: correlation-ci
 # CI gate for the Python correlation service (FastAPI, Python 3.10). Mirrors the
 # backend gate's tiered approach:
 #   - `test` is BLOCKING: the existing unit suite must pass.
-#   - `lint` is NON-blocking triage (ruff/bandit/mypy/pip-audit): these were NOT
-#     pre-validated locally (the dev sandbox had no pip), so they surface findings
-#     without gating merges. Once a real run confirms them clean (or the code is
-#     fixed), drop `continue-on-error` to make them blocking — the Python analog of
-#     the backend's govulncheck/gosec gates.
+#   - `lint` is BLOCKING: ruff/bandit/mypy (deterministic, verified clean) and
+#     pip-audit (dependency CVEs — the Python analog of the backend's blocking
+#     govulncheck; SC-005). A new advisory in a pinned dep stops the merge.
 
 on:
   push:
@@ -34,8 +32,8 @@ jobs:
     name: pytest (blocking)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.10'
           cache: pip
@@ -48,15 +46,14 @@ jobs:
         run: python -m pytest test_anomaly.py -v
 
   lint:
-    name: ruff · bandit · mypy (blocking)
+    name: ruff · bandit · mypy · pip-audit (blocking)
     runs-on: ubuntu-latest
-    # BLOCKING for the deterministic checks (ruff/bandit/mypy, verified clean
-    # 2026-06-04). pip-audit is a soft step (see below): it scans dependency CVEs
-    # that appear over time (the Python analog of govulncheck) and couldn't be
-    # validated in the dev sandbox, so a new advisory shouldn't hard-block dev.
+    # All BLOCKING: the deterministic checks (ruff/bandit/mypy, verified clean
+    # 2026-06-04) plus pip-audit (dependency CVEs — SC-005), the Python analog of
+    # the backend's blocking govulncheck.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.10'
       - name: install linters
@@ -67,6 +64,8 @@ jobs:
         run: bandit -r main.py -ll
       - name: mypy (type check)
         run: mypy main.py
-      - name: pip-audit (dependency CVEs — soft)
-        continue-on-error: true
+      - name: pip-audit (dependency CVEs — blocking)
+        # SC-005: blocking, the Python analog of the backend's blocking
+        # govulncheck. A new advisory in a pinned dep stops the merge until the
+        # dep is bumped — the same zero-trust bar we hold the Go tree to.
         run: pip-audit -r requirements.txt

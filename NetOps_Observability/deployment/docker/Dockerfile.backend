@@ -7,12 +7,12 @@
 # Pinned to a patched Go toolchain: govulncheck flagged a batch of stdlib CVEs
 # (crypto/tls, crypto/x509, net/http, html/template, …) present in go1.24 and
 # fixed by go1.25.11. Keep this at or above the latest patched minor.
-FROM golang:1.25.11-alpine AS build
+FROM golang:1.25.11-alpine@sha256:c05ba4b73604069d376c4f41346b05374335b5ca0c46fb6dfede5a59f5196931 AS build
 WORKDIR /src
 COPY src/backend/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api .
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
 COPY --from=build /out/api /api
 USER nonroot:nonroot
 EXPOSE 8080

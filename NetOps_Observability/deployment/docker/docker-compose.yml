@@ -183,7 +183,7 @@ services:
   # streamed samples to VictoriaMetrics. Device gNMI passwords are env-injected
   # (lab defaults below; override in .env). Config: ./gnmic/gnmic.yaml.
   gnmic:
-    image: ghcr.io/openconfig/gnmic:latest
+    image: ghcr.io/openconfig/gnmic:0.46.0@sha256:9538f93a9a85e996d0ad5f7c523835e874557be84b8d279c2a51d2f092b24c7e
     command: ["subscribe", "--config", "/app/gnmic.yaml"]
     environment:
       SRL_GNMI_PASS: ${SRL_GNMI_PASS:-NokiaSrl1!}
