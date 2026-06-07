@@ -111,6 +111,16 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SR-021: per-principal rate limit. Each chat turn is a paid provider call, so
+	// an authenticated user spamming /api/copilot/chat is a provider-cost DoS.
+	// Keyed by tenant|user (authenticated identity, not a spoofable IP);
+	// COPILOT_RATE_PER_MIN tunes the budget (default 20/min, ≤0 disables).
+	claims, _ := userFrom(r.Context())
+	if !s.copilotLimiter.allowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+		writeError(w, http.StatusTooManyRequests, fmt.Errorf("copilot rate limit exceeded — slow down"))
+		return
+	}
+
 	// Bound the request body before decoding (LLM04: no unbounded input).
 	r.Body = http.MaxBytesReader(w, r.Body, maxCopilotBodyBytes)
 	var req copilotRequest
@@ -185,7 +195,22 @@ func (s *server) callAnthropic(w http.ResponseWriter, r *http.Request, apiKey, m
 		return
 	}
 	defer resp.Body.Close()
+	relayProviderResponse(w, resp, "anthropic")
+}
 
+// relayProviderResponse forwards a SUCCESSFUL provider response to the client,
+// but on a non-2xx status it does NOT echo the provider's raw error body
+// (SR-022) — that body can carry upstream account/org/rate-limit metadata. The
+// detail is logged server-side; the client gets a generic gateway error.
+func relayProviderResponse(w http.ResponseWriter, resp *http.Response, provider string) {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		logError("copilot", "provider returned error", map[string]any{
+			"provider": provider, "status": resp.StatusCode, "body": string(body),
+		})
+		writeError(w, http.StatusBadGateway, fmt.Errorf("copilot provider error (status %d)", resp.StatusCode))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
@@ -225,9 +250,7 @@ func (s *server) callOpenAI(w http.ResponseWriter, r *http.Request, apiKey, mode
 		return
 	}
 	defer resp.Body.Close()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	relayProviderResponse(w, resp, "openai")
 }
 
 func defaultSystemPrompt() string {

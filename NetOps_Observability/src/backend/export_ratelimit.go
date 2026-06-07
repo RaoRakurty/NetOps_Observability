@@ -28,16 +28,22 @@ func newTenantRateLimiter() *tenantRateLimiter {
 // The per-minute budget is read live (EXPORT_RATE_PER_MIN) so the runtime export
 // policy takes effect without a restart; ≤0 disables the limit.
 func (l *tenantRateLimiter) allow(tenant string) bool {
-	perMin := envInt("EXPORT_RATE_PER_MIN", 10)
+	return l.allowN(tenant, envInt("EXPORT_RATE_PER_MIN", 10))
+}
+
+// allowN is the generic per-key fixed-window check: at most perMin requests per
+// key per minute (≤0 disables). Keyed off an authenticated identity (tenant, or
+// tenant|user) — never a spoofable client IP.
+func (l *tenantRateLimiter) allowN(key string, perMin int) bool {
 	if l == nil || perMin <= 0 {
 		return true
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
-	w := l.windows[tenant]
+	w := l.windows[key]
 	if w == nil || now.Sub(w.start) >= time.Minute {
-		l.windows[tenant] = &rlWindow{start: now, count: 1}
+		l.windows[key] = &rlWindow{start: now, count: 1}
 		return true
 	}
 	if w.count >= perMin {

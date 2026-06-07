@@ -65,6 +65,7 @@ type server struct {
 	tlsSrv         *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
 	exportPolicy   *exportPolicyStore    // runtime-tunable log-export limits
 	exportLimiter  *tenantRateLimiter    // per-tenant export rate limit
+	copilotLimiter *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
 	copilotCfg     *copilotConfigStore
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
@@ -339,6 +340,7 @@ func newServer() *server {
 	srv.vault = vault
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
 	srv.exportLimiter = newTenantRateLimiter()
+	srv.copilotLimiter = newTenantRateLimiter()
 	engine.OnFire = srv.ingestAlertIncident
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
