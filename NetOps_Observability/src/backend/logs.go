@@ -45,9 +45,15 @@ func (l *jsonLogger) log(level, component, msg string, fields map[string]any) {
 	_ = json.NewEncoder(l.w).Encode(event)
 }
 
-func logInfo(component, msg string, fields map[string]any)  { appLog.log("info", component, msg, fields) }
-func logWarn(component, msg string, fields map[string]any)  { appLog.log("warn", component, msg, fields) }
-func logError(component, msg string, fields map[string]any) { appLog.log("error", component, msg, fields) }
+func logInfo(component, msg string, fields map[string]any) {
+	appLog.log("info", component, msg, fields)
+}
+func logWarn(component, msg string, fields map[string]any) {
+	appLog.log("warn", component, msg, fields)
+}
+func logError(component, msg string, fields map[string]any) {
+	appLog.log("error", component, msg, fields)
+}
 
 // ----------------------------------------------------------------------------
 // Log search — OpenSearch query proxy.
@@ -213,6 +219,8 @@ func indexBase(signal string) string {
 		return "netops-applogs"
 	case "syslog":
 		return "netops-syslog"
+	case "snmptrap", "trap", "traps":
+		return "netops-snmptrap"
 	case "flows", "netflow", "flow":
 		return "netops-flows"
 	default:
@@ -257,7 +265,10 @@ func tenantCatPattern(tenant string, cross bool) string {
 		return "netops-*"
 	}
 	seg := indexTenantSeg(tenant)
-	bases := []string{"netops-applogs", "netops-syslog", "netops-flows"}
+	// App logs are platform-owner only (handled in the search path) — a scoped
+	// tenant doesn't even enumerate their index names. Device telemetry signals
+	// (syslog, snmp traps, flows) are tenant-visible (own + untagged-from-own-devices).
+	bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows"}
 	parts := make([]string, 0, len(bases)*2)
 	for _, b := range bases {
 		parts = append(parts, b+"-"+seg+"-*", b+"-untagged-*")

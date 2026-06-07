@@ -31,10 +31,11 @@ const RANGES: { label: string; minutes: number }[] = [
   { label: "Last 24h", minutes: 1440 },
 ];
 
-const SIGNALS: { id: "" | "applogs" | "syslog" | "flows"; label: string }[] = [
+const SIGNALS: { id: "" | "applogs" | "syslog" | "snmptrap" | "flows"; label: string }[] = [
   { id: "", label: "All" },
   { id: "applogs", label: "App logs" },
   { id: "syslog", label: "Syslog (devices)" },
+  { id: "snmptrap", label: "SNMP traps" },
   { id: "flows", label: "Flows" },
 ];
 
@@ -47,7 +48,7 @@ type Props = {
 
 export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
   const [query, setQuery] = useState(initialQuery ?? "*");
-  const [signal, setSignal] = useState<"" | "applogs" | "syslog" | "flows">("");
+  const [signal, setSignal] = useState<"" | "applogs" | "syslog" | "snmptrap" | "flows">("");
   const [minutes, setMinutes] = useState(rangeMinutes ?? 15);
   const [size, setSize] = useState(200);
   const [hits, setHits] = useState<OSHit[]>([]);

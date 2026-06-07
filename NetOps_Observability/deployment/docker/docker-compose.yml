@@ -493,6 +493,13 @@ services:
       ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # SNMP trap receiver (UDP/162 → log bus → netops-snmptrap-* → Explore→Logs
+      # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the
+      # unprivileged 1162 in-container; the host 162/udp maps to it (see ports).
+      # Decoded traps are POSTed to the Vector aggregator's HTTP source.
+      FEATURE_SNMP_TRAPS: ${FEATURE_SNMP_TRAPS:-false}
+      SNMP_TRAP_LISTEN: ${SNMP_TRAP_LISTEN:-:1162}
+      SNMP_TRAP_SINK_URL: ${SNMP_TRAP_SINK_URL:-http://vector-aggregator:8688/}
       # ITSM inbound (bidirectional) sync: webhooks are verified+recorded always,
       # but only drive incident state when this is true (#43 P2b). Default off.
       FEATURE_ITSM_INBOUND: ${FEATURE_ITSM_INBOUND:-false}
@@ -655,6 +662,12 @@ services:
       # Shared dir for the sealing sidecar's Unix socket (empty/unused when the
       # 'seal' profile isn't up — the Vault stays dormant, see SEAL_PROVIDER).
       - ../../data/secrets-seal:/run/secrets-seal
+    # SNMP traps arrive on host UDP 162 and forward to the in-container
+    # receiver on 1162 (unprivileged). Active only when FEATURE_SNMP_TRAPS=true;
+    # the mapping is harmless otherwise (nothing binds 1162 inside). Override the
+    # host port with SNMP_TRAP_PORT if 162 is taken.
+    ports:
+      - "${SNMP_TRAP_PORT:-162}:1162/udp"
     depends_on:
       postgres:    { condition: service_healthy }
       redis:       { condition: service_healthy }

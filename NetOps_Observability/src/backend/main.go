@@ -182,6 +182,10 @@ func newServer() *server {
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
+	// SNMP trap receiver (UDP/162) — passive listener that decodes v1/v2c/v3
+	// traps and forwards them onto the log bus (→ netops-snmptrap-*). Off by
+	// default; opt in with FEATURE_SNMP_TRAPS=true (see deployment compose).
+	pool.Enable("snmptrap", os.Getenv("FEATURE_SNMP_TRAPS") == "true")
 
 	notifier := notify.NewDispatcher()
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created

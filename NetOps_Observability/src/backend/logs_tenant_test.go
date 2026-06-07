@@ -51,10 +51,20 @@ func TestTenantCatPattern(t *testing.T) {
 		t.Errorf("platform cat = %q", got)
 	}
 	got := tenantCatPattern("acme", false)
-	for _, want := range []string{"netops-applogs-acme-*", "netops-syslog-acme-*", "netops-flows-acme-*", "netops-applogs-untagged-*"} {
+	// Device-telemetry signals (syslog, snmp traps, flows) are tenant-visible:
+	// the caller's own + the shared untagged indices.
+	for _, want := range []string{
+		"netops-syslog-acme-*", "netops-snmptrap-acme-*", "netops-flows-acme-*",
+		"netops-syslog-untagged-*", "netops-snmptrap-untagged-*", "netops-flows-untagged-*",
+	} {
 		if !containsSub(got, want) {
 			t.Errorf("scoped cat %q missing %q", got, want)
 		}
+	}
+	// App logs are the platform's own logs — a scoped tenant doesn't even
+	// enumerate their index names.
+	if containsSub(got, "applogs") {
+		t.Errorf("scoped cat must not expose app-log indices: %q", got)
 	}
 	if containsSub(got, "globex") {
 		t.Errorf("scoped cat leaked another tenant: %q", got)

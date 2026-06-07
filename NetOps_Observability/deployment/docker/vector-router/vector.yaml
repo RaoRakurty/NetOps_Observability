@@ -37,6 +37,13 @@ sources:
     group_id: "netops-router-flows"
     decoding: { codec: json }
 
+  kafka_snmptrap:
+    type: kafka
+    bootstrap_servers: "redpanda:9092"
+    topics: ["netops.snmptrap"]
+    group_id: "netops-router-snmptrap"
+    decoding: { codec: json }
+
 transforms:
   # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
   # Each event already carries .tenant_id (stamped at the aggregator from the
@@ -58,6 +65,14 @@ transforms:
   syslog_tagged:
     type: remap
     inputs: [kafka_syslog]
+    source: |
+      seg = downcase(to_string(.tenant_id) ?? "")
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
+
+  snmptrap_tagged:
+    type: remap
+    inputs: [kafka_snmptrap]
     source: |
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
@@ -120,6 +135,18 @@ sinks:
     mode: bulk
     bulk:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    healthcheck: { enabled: false }
+
+  # SNMP traps from network devices → OpenSearch
+  opensearch_snmptrap:
+    type: elasticsearch
+    inputs: [snmptrap_tagged]
+    endpoints: ["http://opensearch:9200"]
+    mode: bulk
+    bulk:
+      index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: false }

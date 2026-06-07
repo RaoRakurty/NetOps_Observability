@@ -55,6 +55,15 @@ sources:
     address: 0.0.0.0:6601
     mode: tcp
 
+  # SNMP trap receiver (the in-API collectors/snmptrap.go listener on UDP/162)
+  # POSTs each decoded trap here as a JSON object. Kept on the log bus so traps
+  # inherit the same tenant-stamp/retention/export as syslog. (#SNMP traps)
+  trap_in:
+    type: http_server
+    address: 0.0.0.0:8688
+    decoding:
+      codec: json
+
   # Vector's own internal metrics. Exposed at /metrics on port 9598
   # so Prometheus can scrape it (added as a target in prometheus.yml).
   internal_metrics:
@@ -170,6 +179,30 @@ transforms:
       }
       .vendor = vendor
 
+  # SNMP traps — the receiver already decoded the PDU into structured fields
+  # (trap_oid, trap_name, severity, varbinds, snmp_version, device/host). Here we
+  # just stamp the tenant the same way syslog does: match the device id (or the
+  # source IP) against the device→tenant table. No match → "" (global/platform).
+  snmptrap_normalized:
+    type: remap
+    inputs: [trap_in]
+    source: |
+      .signal   = "snmptrap"
+      .severity = string(.severity) ?? "notice"
+      dev = string(.device) ?? ""
+      host = string(.host) ?? ""
+      .hostname = dev
+      if .hostname == "" { .hostname = host }
+      key = dev
+      if key == "" { key = host }
+      .tenant_id = ""
+      if key != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": key }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+
 # ----------------------------------------------------------------------------
 # SINKS — Redpanda topics, one per signal.
 # ----------------------------------------------------------------------------
@@ -196,6 +229,14 @@ sinks:
     inputs: [flows_normalized]
     bootstrap_servers: "redpanda:9092"
     topic: "netops.flows"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_snmptrap:
+    type: kafka
+    inputs: [snmptrap_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.snmptrap"
     encoding: { codec: json }
     compression: snappy
 
