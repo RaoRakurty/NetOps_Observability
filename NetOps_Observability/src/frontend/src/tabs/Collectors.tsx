@@ -41,10 +41,11 @@ export default function Collectors() {
     const tick = async () => {
       try {
         const c = await api.collectors();
-        // This tab is for transport/protocol collectors only. Feature
-        // collectors (e.g. tunnel discovery, kind "discovery") have their own
-        // views and are filtered out here.
-        if (alive) setItems((c ?? []).filter((x) => (x.kind ?? "protocol") === "protocol"));
+        // This tab shows the transport/protocol collectors plus the SNMP trap
+        // receiver (kind "trap": targets = traps received, reachable = decoded).
+        // Feature collectors (e.g. tunnel discovery, kind "discovery") have their
+        // own views and are filtered out here.
+        if (alive) setItems((c ?? []).filter((x) => ["protocol", "trap"].includes(x.kind ?? "protocol")));
       } catch (e) {
         if (alive) setErr((e as Error).message);
       }
