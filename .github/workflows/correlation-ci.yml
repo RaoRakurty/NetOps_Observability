@@ -41,7 +41,10 @@ jobs:
       - name: install deps + pytest
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          # requirements.txt is hash-locked (SC-011) → pip auto-enables
+          # --require-hashes, so it must be installed alone; pytest installs after.
+          pip install -r requirements.txt
+          pip install pytest
       - name: pytest
         run: python -m pytest test_anomaly.py -v
 

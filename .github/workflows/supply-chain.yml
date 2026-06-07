@@ -57,3 +57,30 @@ jobs:
           gitleaks version
       - name: gitleaks detect (full git history)
         run: gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    # SC-006 (SBOM half): emit a CycloneDX software bill of materials over the
+    # whole dependency tree (gomod/npm/pip) on every build, retained as an
+    # artifact for compliance/transparency. Build PROVENANCE (attest-build-
+    # provenance) is intentionally NOT here yet — it must attach to a pushed image
+    # digest, and this stack builds images on the deploy host with no registry
+    # publish. Add provenance once a CI build+push pipeline exists.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Generate CycloneDX SBOM (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: sbom.cdx.json
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-java-db
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error

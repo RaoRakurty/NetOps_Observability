@@ -1,0 +1,17 @@
+# Direct dependencies for the correlation service (SC-011). This is the human-
+# edited source of truth; the pinned, hash-locked requirements.txt is generated:
+#
+#   pip-compile --generate-hashes --output-file=requirements.txt requirements.in
+#
+# requirements.txt is what the Dockerfile/CI install (with --require-hashes
+# enforced automatically by the presence of hashes).
+fastapi==0.133.1
+# SC-005: starlette pinned >=1.0.1 to clear PYSEC-2026-161 / CVE-2025-62727 /
+# CVE-2025-54121 (fastapi 0.133.1 is the first to allow the starlette 1.x line).
+starlette==1.0.1
+uvicorn[standard]==0.30.6
+aiokafka==0.11.0
+httpx==0.27.2
+pydantic==2.9.2
+asyncpg==0.29.0
+numpy==1.26.4
