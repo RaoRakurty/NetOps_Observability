@@ -231,6 +231,30 @@ func TestClientConfigRequiresServerNameAndRoots(t *testing.T) {
 	}
 }
 
+func TestClientConfigSystemRoots(t *testing.T) {
+	// SystemRoots + ServerName → valid, RootCAs left nil (Go uses the system pool).
+	cfg, err := ClientConfig(ClientOptions{ServerName: "ldap.example.com", SystemRoots: true})
+	if err != nil {
+		t.Fatalf("SystemRoots config: %v", err)
+	}
+	if cfg.RootCAs != nil {
+		t.Error("SystemRoots must leave RootCAs nil so Go falls back to the system pool")
+	}
+	if cfg.InsecureSkipVerify {
+		t.Error("SystemRoots must never disable verification")
+	}
+	// SystemRoots still requires a ServerName (hostname verification).
+	if _, err := ClientConfig(ClientOptions{SystemRoots: true}); err == nil {
+		t.Error("SystemRoots without ServerName must error")
+	}
+	// RootCAs and SystemRoots are mutually exclusive.
+	ca := newTestCA(t)
+	bundle, _ := LoadTrustBundle(ca.bundlePath())
+	if _, err := ClientConfig(ClientOptions{ServerName: "x", RootCAs: bundle, SystemRoots: true}); err == nil {
+		t.Error("RootCAs + SystemRoots must be rejected as mutually exclusive")
+	}
+}
+
 func TestServerConfigMTLSRequiresClientCAs(t *testing.T) {
 	ca := newTestCA(t)
 	cp, kp := ca.issue(t, "server", leafOpts{dns: []string{"localhost"}})

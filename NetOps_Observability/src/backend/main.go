@@ -104,6 +104,13 @@ func (s *server) jiraFor(tenant string) *notify.Jira {
 func (s *server) serviceNow() *notify.ServiceNow { return s.serviceNowFor("") }
 
 func newServer() *server {
+	// Fail closed if no JWT_SECRET is configured (SR-017) — the dev fallback is
+	// public and also keys report/export links. Dev runs opt in via
+	// ALLOW_DEV_SECRETS=true.
+	if err := ensureSigningSecret(); err != nil {
+		log.Fatalf("auth: %v", err)
+	}
+
 	// Select where the identity/saved stores persist (file by default; Postgres
 	// when STORE_BACKEND=postgres). Must run before any store is constructed.
 	if err := initStoreBackend(); err != nil {

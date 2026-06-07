@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/tlsconfig"
 )
 
 // ldap.go — stdlib-only LDAP/Active Directory authentication backend (RFC 4511
@@ -36,6 +38,7 @@ type ldapConfig struct {
 	RoleMappings       []ldapRoleMapping `json:"role_mappings"`
 	DefaultRole        string            `json:"default_role"`
 	DefaultTenant      string            `json:"default_tenant"`
+	CAFile             string            `json:"ca_file"` // explicit CA bundle for the LDAP server cert; empty → system trust pool
 	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
 }
 
@@ -86,6 +89,7 @@ func newLDAPConfig() ldapConfig {
 		RoleMappings:       parseLDAPRoleMap(os.Getenv("LDAP_ROLE_MAP")),
 		DefaultRole:        envOr("LDAP_DEFAULT_ROLE", RoleReadOnly),
 		DefaultTenant:      envOr("LDAP_DEFAULT_TENANT", TenantGlobal),
+		CAFile:             os.Getenv("LDAP_CA_FILE"),
 		InsecureSkipVerify: os.Getenv("LDAP_INSECURE_SKIP_VERIFY") == "true",
 	}
 }
@@ -366,14 +370,47 @@ func (lc ldapConfig) addr() string {
 	return net.JoinHostPort(lc.Host, fmt.Sprintf("%d", port))
 }
 
-func (lc ldapConfig) tlsConfig() *tls.Config {
-	return &tls.Config{ServerName: lc.Host, InsecureSkipVerify: lc.InsecureSkipVerify} //nolint:gosec // operator-controlled
+// tlsConfig builds the LDAP client TLS config through the hardened tlsconfig
+// package (SR-014): TLS 1.2+ floor, vetted ciphers/curves, no renegotiation, and
+// — critically — hostname/chain verification that can no longer be silently
+// disabled. An explicit CA bundle (LDAP_CA_FILE) is preferred; absent one we
+// verify against the host's system trust pool (LDAP/AD usually presents a
+// corporate/public cert). InsecureSkipVerify is honored ONLY behind the loud
+// dev-only ALLOW_DEV_SECRETS gate — otherwise it is refused, because skipping
+// verification lets an attacker MITM the bind and harvest every user's password.
+func (lc ldapConfig) tlsConfig() (*tls.Config, error) {
+	opts := tlsconfig.ClientOptions{ServerName: lc.Host}
+	if strings.TrimSpace(lc.CAFile) != "" {
+		bundle, err := tlsconfig.LoadTrustBundle(lc.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("ldap CA bundle: %w", err)
+		}
+		opts.RootCAs = bundle
+	} else {
+		opts.SystemRoots = true
+	}
+	cfg, err := tlsconfig.ClientConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+	if lc.InsecureSkipVerify {
+		if os.Getenv("ALLOW_DEV_SECRETS") != "true" {
+			return nil, errors.New("LDAP_INSECURE_SKIP_VERIFY=true requires ALLOW_DEV_SECRETS=true (dev only) — refusing to disable LDAP certificate verification, which would expose every user's password to a MITM")
+		}
+		logWarn("ldap", "LDAP certificate verification DISABLED (LDAP_INSECURE_SKIP_VERIFY + ALLOW_DEV_SECRETS) — bind credentials are MITM-able; dev only", nil)
+		cfg.InsecureSkipVerify = true // #nosec G402 -- explicit dev-only opt-in, gated behind ALLOW_DEV_SECRETS
+	}
+	return cfg, nil
 }
 
 func (lc ldapConfig) dial() (*ldapConn, error) {
 	d := &net.Dialer{Timeout: ldapDialTimeout}
 	if lc.UseTLS {
-		c, err := tls.DialWithDialer(d, "tcp", lc.addr(), lc.tlsConfig())
+		cfg, err := lc.tlsConfig()
+		if err != nil {
+			return nil, err
+		}
+		c, err := tls.DialWithDialer(d, "tcp", lc.addr(), cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -385,7 +422,12 @@ func (lc ldapConfig) dial() (*ldapConn, error) {
 	}
 	lconn := &ldapConn{conn: c}
 	if lc.StartTLS {
-		if err := lconn.startTLS(lc.tlsConfig()); err != nil {
+		cfg, err := lc.tlsConfig()
+		if err != nil {
+			c.Close()
+			return nil, fmt.Errorf("starttls: %w", err)
+		}
+		if err := lconn.startTLS(cfg); err != nil {
 			c.Close()
 			return nil, fmt.Errorf("starttls: %w", err)
 		}

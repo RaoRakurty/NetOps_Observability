@@ -529,6 +529,29 @@ func jwtSecret() string {
 	}
 	// Last-resort fallback so the API doesn't refuse to start without env.
 	// install.py always sets JWT_SECRET; this branch only matters for
-	// rogue runs (e.g. `go run main.go` directly).
-	return "dev-only-do-not-use-in-production"
+	// rogue runs (e.g. `go run main.go` directly). ensureSigningSecret() makes
+	// boot fail-closed (SR-017) unless ALLOW_DEV_SECRETS=true, so reaching this
+	// fallback at runtime means dev mode was explicitly opted into.
+	return devFallbackSecret
+}
+
+// devFallbackSecret is the publicly-known signing secret used ONLY when no
+// JWT_SECRET is configured AND dev mode was opted into (ALLOW_DEV_SECRETS=true).
+const devFallbackSecret = "dev-only-do-not-use-in-production"
+
+// ensureSigningSecret fails the process closed (SR-017) when no JWT_SECRET is
+// set. The fallback secret is public, and it also keys report/export capability
+// links (report_links.go), so running with it in any real deployment lets anyone
+// forge sessions and signed links. install.py always sets JWT_SECRET; the only
+// way to hit the fallback is an unconfigured run, which must be an explicit
+// dev-only opt-in via ALLOW_DEV_SECRETS=true. Call this at startup.
+func ensureSigningSecret() error {
+	if strings.TrimSpace(os.Getenv("JWT_SECRET")) != "" {
+		return nil
+	}
+	if os.Getenv("ALLOW_DEV_SECRETS") == "true" {
+		logWarn("auth", "JWT_SECRET unset — using the publicly-known dev fallback (ALLOW_DEV_SECRETS=true). NEVER use this outside local dev: sessions and report/export links are forgeable.", nil)
+		return nil
+	}
+	return errors.New("JWT_SECRET is not set — refusing to start with the publicly-known dev fallback secret (it also signs report/export links). Set JWT_SECRET, or set ALLOW_DEV_SECRETS=true for local development only")
 }

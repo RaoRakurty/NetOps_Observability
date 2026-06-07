@@ -72,6 +72,14 @@ func newVault(ctx context.Context) (*Vault, error) {
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("SEAL_PROVIDER")))
 	switch name {
 	case "", "none", "off":
+		// Dormant: reversible secrets (SMTP/Twilio/Slack/PD/OIDC client-secret/
+		// LDAP bind pw/TACACS/SNMP creds/integration webhook secrets/internal-CA
+		// key) are stored in CLEARTEXT. Surface this (SR-016) instead of leaving
+		// it silent; REQUIRE_SEAL=true fails closed for production profiles.
+		if os.Getenv("REQUIRE_SEAL") == "true" {
+			return nil, errors.New("REQUIRE_SEAL=true but SEAL_PROVIDER is unset — refusing to start storing reversible secrets in cleartext; set SEAL_PROVIDER=swtpm")
+		}
+		logWarn("secrets", "secret-custody Vault is DORMANT (no SEAL_PROVIDER) — reversible secrets (SMTP/Slack/PagerDuty/OIDC/LDAP/TACACS/SNMP/webhook/internal-CA key) are stored in cleartext at rest. Set SEAL_PROVIDER=swtpm to encrypt, or REQUIRE_SEAL=true to fail closed.", nil)
 		return &Vault{deks: map[string][]byte{}, wrapped: map[string]string{}}, nil
 	case "swtpm":
 		return newVaultWithProvider(ctx, newSwtpmSidecarProvider())

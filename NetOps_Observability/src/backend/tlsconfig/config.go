@@ -57,20 +57,33 @@ type ClientOptions struct {
 	// Peer optionally constrains the accepted SERVER identity (URI/DNS SAN
 	// allowlist), e.g. pinning that we only talk to the real clickhouse SVID.
 	Peer PeerPolicy
+	// SystemRoots verifies the server against the host's system CA pool instead
+	// of an explicit RootCAs bundle. Use ONLY for EXTERNAL services presenting
+	// publicly/corporate-trusted certs (e.g. an LDAP/AD server) — never for
+	// internal SVIDs, where an explicit root is mandatory. Mutually exclusive
+	// with RootCAs; ServerName is still required, so hostname verification is
+	// never disabled.
+	SystemRoots bool
 }
 
 // ClientConfig builds a hardened *tls.Config for a client. It NEVER sets
 // InsecureSkipVerify and requires both an explicit root bundle and a ServerName,
 // so hostname verification can't be accidentally disabled.
 func ClientConfig(o ClientOptions) (*tls.Config, error) {
-	if o.RootCAs == nil {
-		return nil, errors.New("tlsconfig: ClientConfig requires an explicit RootCAs bundle")
+	if o.RootCAs == nil && !o.SystemRoots {
+		return nil, errors.New("tlsconfig: ClientConfig requires an explicit RootCAs bundle (or SystemRoots:true for external services)")
+	}
+	if o.RootCAs != nil && o.SystemRoots {
+		return nil, errors.New("tlsconfig: ClientConfig RootCAs and SystemRoots are mutually exclusive")
 	}
 	if o.ServerName == "" {
 		return nil, errors.New("tlsconfig: ClientConfig requires a ServerName (hostname verification)")
 	}
 	c := baseConfig()
-	c.RootCAs = o.RootCAs.Pool()
+	// RootCAs nil → Go verifies against the host's system pool (SystemRoots).
+	if o.RootCAs != nil {
+		c.RootCAs = o.RootCAs.Pool()
+	}
 	c.ServerName = o.ServerName
 	if o.Reloader != nil {
 		c.GetClientCertificate = o.Reloader.GetClientCertificate
