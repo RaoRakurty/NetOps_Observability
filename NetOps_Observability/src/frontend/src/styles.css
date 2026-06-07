@@ -1540,6 +1540,36 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .pw-msg.ok { color: var(--good); }
 .pw-msg.err { color: var(--bad); }
 
+/* ===== Stack Health — modern status board (mirrors the .pw-card pattern) === */
+.sh-card { max-width: none; }
+.sh-note { margin: var(--sp-3) 0 0; display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-meta); color: var(--muted); line-height: 1.45; }
+.sh-note.err { color: var(--bad); }
+
+.sh-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--sp-3); margin-top: var(--sp-4); }
+.sh-cat { border: 1px solid var(--panel-border); border-radius: var(--r-2);
+  background: var(--surface); overflow: hidden; }
+.sh-cat-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; font-size: var(--fs-meta); font-weight: 600; color: var(--fg);
+  background: var(--surface-2); border-bottom: 1px solid var(--panel-border); }
+.sh-cat-count { font-size: var(--fs-micro); font-weight: 600; letter-spacing: .03em;
+  font-variant-numeric: tabular-nums; }
+.sh-cat-count.ok { color: var(--good); }
+.sh-cat-count.warn { color: var(--sev-warning); }
+
+.sh-list { list-style: none; margin: 0; padding: 2px 0; }
+.sh-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  gap: 10px; padding: 8px 12px; }
+.sh-row + .sh-row { border-top: 1px solid var(--panel-border); }
+.sh-dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+.sh-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sh-name { font-size: var(--fs-sm); color: var(--fg); }
+.sh-detail { font-size: var(--fs-micro); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-lat { font-size: var(--fs-meta); color: var(--muted); font-variant-numeric: tabular-nums; }
+
 /* ===== Vendor icons (Topology editor + monogram tile) ===================== */
 .vendor-mono {
   display: inline-flex; align-items: center; justify-content: center;

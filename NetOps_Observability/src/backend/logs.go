@@ -143,6 +143,17 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 			filters = append(filters, f)
 		}
 	}
+
+	// App logs are the platform's OWN container/API logs (netops-applogs-untagged-*),
+	// not customer telemetry. They expose infra-stack internals, so only the
+	// cross-tenant platform owner may read them — a scoped tenant is refused even
+	// if it names the signal directly. (UI also hides the option; this is the
+	// enforced boundary per the zero-trust rule.)
+	if sig := strings.ToLower(strings.TrimSpace(req.Signal)); (sig == "applogs" || sig == "app") && !cross {
+		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		return
+	}
+
 	index := tenantIndexPattern(req.Signal, tenant, cross)
 
 	body := map[string]any{

@@ -3,6 +3,7 @@ import { api, OSHit, ExportFmt } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
+import { useAuth } from "../hooks/useAuth";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
   { id: "csv", label: "CSV" },
@@ -58,6 +59,14 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const ws = useWorkspace();
+  const { user } = useAuth();
+  // "App logs" are the platform's own container/API logs — platform-owner only.
+  // Tenant-scoped users don't see the option (the backend also refuses the signal).
+  const platform = !!user?.platform_admin;
+  const signals = useMemo(
+    () => SIGNALS.filter((s) => s.id !== "applogs" || platform),
+    [platform],
+  );
 
   const run = async (q = query, m = minutes, sig = signal, sz = size) => {
     setBusy(true);
@@ -268,7 +277,7 @@ export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
             style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
           />
           <select value={signal} onChange={(e) => setSignal(e.target.value as any)}>
-            {SIGNALS.map((s) => (
+            {signals.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.label}
               </option>
