@@ -334,6 +334,11 @@ func callOpenAI(ctx context.Context, key, model, system string, msgs []copilotMe
 	if err != nil {
 		return "", err
 	}
+	return parseOpenAI(rb)
+}
+
+// parseOpenAI extracts the assistant text from an OpenAI chat-completions body.
+func parseOpenAI(rb []byte) (string, error) {
 	var out struct {
 		Choices []struct {
 			Message struct {
@@ -380,10 +385,17 @@ func callGemini(ctx context.Context, key, model, system string, msgs []copilotMe
 	if err != nil {
 		return "", err
 	}
+	return parseGemini(rb)
+}
+
+// parseGemini extracts the assistant text from a Gemini generateContent body.
+func parseGemini(rb []byte) (string, error) {
 	var out struct {
 		Candidates []struct {
 			Content struct {
-				Parts []gpart `json:"parts"`
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
 	}
@@ -412,6 +424,11 @@ func callAnthropic(ctx context.Context, key, model, system string, msgs []copilo
 	if err != nil {
 		return "", err
 	}
+	return parseAnthropic(rb)
+}
+
+// parseAnthropic extracts the assistant text from an Anthropic Messages body.
+func parseAnthropic(rb []byte) (string, error) {
 	var out struct {
 		Content []struct {
 			Type string `json:"type"`
