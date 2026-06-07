@@ -339,7 +339,11 @@ export type OpenAIChatResponse = {
   choices: { message: { role: string; content: string }; finish_reason: string }[];
   model: string;
 };
-export type CopilotChatResponse = AnthropicChatResponse | OpenAIChatResponse;
+// The backend now normalizes every provider (ChatGPT/Gemini/Copilot) to a single
+// shape: { provider, text }. The old provider-native shapes are kept for
+// backward-compatible parsing.
+export type NormalizedChatResponse = { provider: string; text: string };
+export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
 // Runtime assistant config (admin). The API key stays server-side and is never
 // returned — GET reports key_present instead of the secret.

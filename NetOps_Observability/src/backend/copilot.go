@@ -2,14 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 )
+
+// appKnowledge is the authoritative, version-controlled brief about THIS product,
+// compiled into the binary and injected into the server-owned system prompt so
+// the assistant is grounded in the application (architecture, config,
+// troubleshooting) rather than guessing. Editing the .md updates the assistant.
+//
+//go:embed copilot_knowledge.md
+var appKnowledge string
 
 // copilot.go — AI Copilot endpoint.
 //
@@ -30,7 +41,7 @@ import (
 //   - Responses are rendered as escaped text by the SPA (LLM02: no output-as-HTML).
 
 type copilotMessage struct {
-	Role    string `json:"role"`    // "user" | "assistant" | "system"
+	Role    string `json:"role"` // "user" | "assistant" | "system"
 	Content string `json:"content"`
 }
 
@@ -87,12 +98,18 @@ func sanitizeCopilotMessages(in []copilotMessage) ([]copilotMessage, error) {
 // admin-configured override when set, otherwise the built-in default. The
 // client never gets a say (OWASP LLM01).
 func (s *server) copilotSystemPrompt() string {
+	persona := defaultSystemPrompt()
 	if s.copilotCfg != nil {
 		if sys := strings.TrimSpace(s.copilotCfg.get().System); sys != "" {
-			return sys
+			persona = sys
 		}
 	}
-	return defaultSystemPrompt()
+	// Always ground the assistant in the embedded application knowledge, whether
+	// the persona is the default or an admin override.
+	if k := strings.TrimSpace(appKnowledge); k != "" {
+		return persona + "\n\n" + k
+	}
+	return persona
 }
 
 func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
@@ -103,11 +120,6 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	if os.Getenv("FEATURE_COPILOT") != "true" {
 		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("copilot disabled — set FEATURE_COPILOT=true"))
-		return
-	}
-	apiKey := os.Getenv("COPILOT_API_KEY")
-	if apiKey == "" {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("COPILOT_API_KEY not set"))
 		return
 	}
 
@@ -136,121 +148,289 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// Server-controlled system prompt — req.System is intentionally ignored.
 	system := s.copilotSystemPrompt()
 
-	// Default provider is OpenAI/ChatGPT (the in-product assistant is branded
-	// "ChatGPT"); Anthropic stays selectable via COPILOT_PROVIDER=anthropic. The
-	// default model tracks the chosen provider unless COPILOT_MODEL overrides.
-	provider := strings.ToLower(envOr("COPILOT_PROVIDER", "openai"))
-	model := os.Getenv("COPILOT_MODEL")
-	if model == "" {
-		if provider == "anthropic" {
-			model = "claude-sonnet-4-5"
-		} else {
-			model = "gpt-4o-mini"
+	// Provider fallback chain: ChatGPT (OpenAI) → Gemini → Copilot (Anthropic).
+	// Each provider that has a key is tried in order; on error (no key is skipped,
+	// a provider error/non-2xx falls through) the next is attempted; the first
+	// success wins. Order configurable via COPILOT_PROVIDER_CHAIN.
+	attempted := false
+	for _, name := range copilotProviderChain() {
+		key := providerKey(name)
+		if key == "" {
+			continue // provider not configured — skip silently
+		}
+		attempted = true
+		text, err := callProvider(r.Context(), name, key, providerModel(name), system, msgs)
+		if err == nil && strings.TrimSpace(text) != "" {
+			writeJSON(w, http.StatusOK, map[string]string{"provider": name, "text": text})
+			return
+		}
+		// SR-022: the provider's raw error body is logged server-side by
+		// providerDo, never echoed to the client. Fall through to the next.
+		logWarn("copilot", "provider attempt failed, falling through", map[string]any{"provider": name})
+	}
+	if !attempted {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("copilot has no provider key — set OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY (or legacy COPILOT_API_KEY)"))
+		return
+	}
+	writeError(w, http.StatusBadGateway, fmt.Errorf("all copilot providers failed — see server logs"))
+}
+
+// ---- provider chain ---------------------------------------------------------
+
+// callProvider dispatches one attempt to a named provider, returning the
+// assistant text or an error. Pure (no s) — the chain in handleCopilot owns
+// fallback/ordering.
+func callProvider(ctx context.Context, name, key, model, system string, msgs []copilotMessage) (string, error) {
+	switch name {
+	case "openai":
+		return callOpenAI(ctx, key, model, system, msgs)
+	case "gemini":
+		return callGemini(ctx, key, model, system, msgs)
+	case "anthropic":
+		return callAnthropic(ctx, key, model, system, msgs)
+	}
+	return "", fmt.Errorf("unknown provider %q", name)
+}
+
+// copilotProviderChain returns the fallback order. Default ChatGPT→Gemini→
+// Copilot(Claude); COPILOT_PROVIDER_CHAIN overrides; a legacy COPILOT_PROVIDER is
+// promoted to the front of the default order.
+func copilotProviderChain() []string {
+	if raw := strings.TrimSpace(os.Getenv("COPILOT_PROVIDER_CHAIN")); raw != "" {
+		var out []string
+		for _, t := range strings.Split(raw, ",") {
+			if p := normalizeProvider(t); p != "" && !containsStr(out, p) {
+				out = append(out, p)
+			}
+		}
+		if len(out) > 0 {
+			return out
 		}
 	}
+	order := []string{"openai", "gemini", "anthropic"}
+	if p := normalizeProvider(os.Getenv("COPILOT_PROVIDER")); p != "" && order[0] != p {
+		out := []string{p}
+		for _, o := range order {
+			if o != p {
+				out = append(out, o)
+			}
+		}
+		return out
+	}
+	return order
+}
 
-	switch provider {
-	case "anthropic":
-		s.callAnthropic(w, r, apiKey, model, system, msgs)
+func normalizeProvider(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "openai", "chatgpt", "gpt":
+		return "openai"
+	case "gemini", "google":
+		return "gemini"
+	case "anthropic", "claude", "copilot":
+		return "anthropic"
+	}
+	return ""
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// providerKey resolves a provider's API key: its own env var, else the legacy
+// COPILOT_API_KEY when this provider is the configured COPILOT_PROVIDER.
+func providerKey(name string) string {
+	switch name {
 	case "openai":
-		s.callOpenAI(w, r, apiKey, model, system, msgs)
-	default:
-		writeError(w, http.StatusBadRequest, fmt.Errorf("unknown COPILOT_PROVIDER %q", provider))
+		if k := os.Getenv("OPENAI_API_KEY"); k != "" {
+			return k
+		}
+	case "gemini":
+		if k := os.Getenv("GEMINI_API_KEY"); k != "" {
+			return k
+		}
+		if k := os.Getenv("GOOGLE_API_KEY"); k != "" {
+			return k
+		}
+	case "anthropic":
+		if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
+			return k
+		}
 	}
+	if name == normalizeProvider(envOr("COPILOT_PROVIDER", "openai")) {
+		return os.Getenv("COPILOT_API_KEY")
+	}
+	return ""
 }
 
-// ---- Anthropic --------------------------------------------------------------
-
-func (s *server) callAnthropic(w http.ResponseWriter, r *http.Request, apiKey, model, system string, msgs []copilotMessage) {
-	// Anthropic Messages API: https://docs.anthropic.com/en/api/messages
-	// The "system" field is separate from messages; msgs are already sanitized
-	// to user/assistant only.
-	body := map[string]any{
-		"model":      model,
-		"max_tokens": maxCopilotOutputTokens,
-		"system":     system,
-		"messages":   msgs,
+// providerModel resolves the model: per-provider override, else legacy
+// COPILOT_MODEL for the configured provider, else a sensible default.
+func providerModel(name string) string {
+	envVar := map[string]string{"openai": "OPENAI_MODEL", "gemini": "GEMINI_MODEL", "anthropic": "ANTHROPIC_MODEL"}[name]
+	if m := os.Getenv(envVar); m != "" {
+		return m
 	}
-	buf, _ := json.Marshal(body)
-
-	httpReq, err := http.NewRequestWithContext(
-		r.Context(),
-		http.MethodPost,
-		"https://api.anthropic.com/v1/messages",
-		bytes.NewReader(buf),
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	if name == normalizeProvider(envOr("COPILOT_PROVIDER", "openai")) {
+		if m := os.Getenv("COPILOT_MODEL"); m != "" {
+			return m
+		}
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	switch name {
+	case "openai":
+		return "gpt-4o-mini"
+	case "gemini":
+		return "gemini-1.5-flash"
+	case "anthropic":
+		return "claude-sonnet-4-5"
+	}
+	return ""
+}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(httpReq)
+var copilotHTTP = &http.Client{Timeout: 60 * time.Second}
+
+// providerDo performs one provider HTTP call and returns the 2xx body. On a
+// non-2xx it logs the provider's error body server-side (SR-022 — never echoed
+// to the client) and returns an error so the chain falls through. The URL is
+// never logged (Gemini carries its key in the query string).
+func providerDo(ctx context.Context, urlStr string, headers map[string]string, body []byte, provider string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, bytes.NewReader(body))
 	if err != nil {
-		logError("copilot", "anthropic request failed", map[string]any{"err": err.Error()})
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := copilotHTTP.Do(req)
+	if err != nil {
+		logError("copilot", "provider request failed", map[string]any{"provider": provider, "err": err.Error()})
+		return nil, err
 	}
 	defer resp.Body.Close()
-	relayProviderResponse(w, resp, "anthropic")
-}
-
-// relayProviderResponse forwards a SUCCESSFUL provider response to the client,
-// but on a non-2xx status it does NOT echo the provider's raw error body
-// (SR-022) — that body can carry upstream account/org/rate-limit metadata. The
-// detail is logged server-side; the client gets a generic gateway error.
-func relayProviderResponse(w http.ResponseWriter, resp *http.Response, provider string) {
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-		logError("copilot", "provider returned error", map[string]any{
-			"provider": provider, "status": resp.StatusCode, "body": string(body),
-		})
-		writeError(w, http.StatusBadGateway, fmt.Errorf("copilot provider error (status %d)", resp.StatusCode))
-		return
+		snippet := rb
+		if len(snippet) > 512 {
+			snippet = snippet[:512]
+		}
+		logError("copilot", "provider returned error", map[string]any{"provider": provider, "status": resp.StatusCode, "body": string(snippet)})
+		return nil, fmt.Errorf("%s: status %d", provider, resp.StatusCode)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	return rb, nil
 }
 
-// ---- OpenAI -----------------------------------------------------------------
+// ---- OpenAI (ChatGPT) -------------------------------------------------------
 
-func (s *server) callOpenAI(w http.ResponseWriter, r *http.Request, apiKey, model, system string, msgs []copilotMessage) {
-	// OpenAI chat completions. The server-controlled system prompt goes in as a
-	// leading system-role message; msgs are already sanitized to user/assistant.
+func callOpenAI(ctx context.Context, key, model, system string, msgs []copilotMessage) (string, error) {
+	// The server-controlled system prompt goes in as a leading system-role
+	// message; msgs are already sanitized to user/assistant.
 	all := append([]copilotMessage{{Role: "system", Content: system}}, msgs...)
-	body := map[string]any{
-		"model":      model,
-		"messages":   all,
-		"max_tokens": maxCopilotOutputTokens,
-	}
-	buf, _ := json.Marshal(body)
-
-	httpReq, err := http.NewRequestWithContext(
-		r.Context(),
-		http.MethodPost,
-		"https://api.openai.com/v1/chat/completions",
-		bytes.NewReader(buf),
-	)
+	body, _ := json.Marshal(map[string]any{"model": model, "messages": all, "max_tokens": maxCopilotOutputTokens})
+	rb, err := providerDo(ctx, "https://api.openai.com/v1/chat/completions", map[string]string{"Authorization": "Bearer " + key}, body, "openai")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return "", err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(rb, &out); err != nil {
+		return "", err
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("openai: empty response")
+	}
+	return out.Choices[0].Message.Content, nil
+}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		logError("copilot", "openai request failed", map[string]any{"err": err.Error()})
-		writeError(w, http.StatusBadGateway, err)
-		return
+// ---- Gemini (Google) --------------------------------------------------------
+
+func callGemini(ctx context.Context, key, model, system string, msgs []copilotMessage) (string, error) {
+	type gpart struct {
+		Text string `json:"text"`
 	}
-	defer resp.Body.Close()
-	relayProviderResponse(w, resp, "openai")
+	type gcontent struct {
+		Role  string  `json:"role"`
+		Parts []gpart `json:"parts"`
+	}
+	contents := make([]gcontent, 0, len(msgs))
+	for _, m := range msgs {
+		role := "user"
+		if m.Role == "assistant" {
+			role = "model" // Gemini's assistant role
+		}
+		contents = append(contents, gcontent{Role: role, Parts: []gpart{{Text: m.Content}}})
+	}
+	body, _ := json.Marshal(map[string]any{
+		"system_instruction": map[string]any{"parts": []gpart{{Text: system}}},
+		"contents":           contents,
+		"generationConfig":   map[string]any{"maxOutputTokens": maxCopilotOutputTokens},
+	})
+	// Gemini authenticates via the API key in the query string (over HTTPS). The
+	// URL is never logged (providerDo logs provider/status/body only).
+	endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent?key=" + url.QueryEscape(key)
+	rb, err := providerDo(ctx, endpoint, nil, body, "gemini")
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Candidates []struct {
+			Content struct {
+				Parts []gpart `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(rb, &out); err != nil {
+		return "", err
+	}
+	if len(out.Candidates) == 0 {
+		return "", fmt.Errorf("gemini: empty response")
+	}
+	var sb strings.Builder
+	for _, p := range out.Candidates[0].Content.Parts {
+		sb.WriteString(p.Text)
+	}
+	return sb.String(), nil
+}
+
+// ---- Anthropic (Copilot/Claude) ---------------------------------------------
+
+func callAnthropic(ctx context.Context, key, model, system string, msgs []copilotMessage) (string, error) {
+	// Anthropic Messages API: "system" is separate from messages.
+	body, _ := json.Marshal(map[string]any{
+		"model": model, "max_tokens": maxCopilotOutputTokens, "system": system, "messages": msgs,
+	})
+	rb, err := providerDo(ctx, "https://api.anthropic.com/v1/messages",
+		map[string]string{"x-api-key": key, "anthropic-version": "2023-06-01"}, body, "anthropic")
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(rb, &out); err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	for _, c := range out.Content {
+		if c.Type == "text" {
+			sb.WriteString(c.Text)
+		}
+	}
+	if sb.Len() == 0 {
+		return "", fmt.Errorf("anthropic: empty response")
+	}
+	return sb.String(), nil
 }
 
 func defaultSystemPrompt() string {

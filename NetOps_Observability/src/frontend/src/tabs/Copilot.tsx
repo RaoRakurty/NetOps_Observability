@@ -295,6 +295,10 @@ export default function Copilot() {
 }
 
 function extractAssistantText(r: CopilotChatResponse): string {
+  // Normalized { provider, text } (current backend — provider-agnostic).
+  if (typeof (r as { text?: unknown }).text === "string") {
+    return (r as { text: string }).text;
+  }
   // Anthropic
   if ((r as AnthropicChatResponse).content) {
     return (r as AnthropicChatResponse).content
