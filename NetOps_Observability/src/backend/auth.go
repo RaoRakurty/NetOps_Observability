@@ -123,6 +123,13 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
+	// SR-029: opportunistically upgrade a hash stored at a weaker iteration count
+	// to the current cost. Best-effort — never fail the login if rehash fails.
+	if passwordNeedsRehash(user.PasswordHash) {
+		if err := s.users.ChangePassword(user.Username, req.Password); err != nil {
+			logWarn("auth", "password rehash-on-login failed", map[string]any{"user": user.Username, "err": err.Error()})
+		}
+	}
 	ttl := accessTokenTTL()
 	tok, err := signJWT(jwtClaims{
 		Sub:    user.Username,
@@ -141,7 +148,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.users.TouchLogin(user.Username)
-	setOSDCookie(w, tok, ttl) // /search gate cookie (enforced for platform owner only)
+	setOSDCookie(w, r, tok, ttl) // /search gate cookie (enforced for platform owner only)
 	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role})
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
@@ -185,7 +192,7 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Refresh the /search gate cookie too, so it tracks the rotating session and
 	// covers principals that authenticated via SSO/LDAP/TACACS (they reach a fresh
 	// access token through this path).
-	setOSDCookie(w, tok, ttl)
+	setOSDCookie(w, r, tok, ttl)
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, RefreshToken: newRefresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
 	})
@@ -206,7 +213,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if req.RefreshToken != "" {
 		s.refresh.Revoke(req.RefreshToken)
 	}
-	clearOSDCookie(w)
+	clearOSDCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -251,6 +258,7 @@ type changePasswordRequest struct {
 //   - authenticated: the signed-in user changes its own password (account = token).
 //   - unauthenticated: the login-window "Change password" form names the account
 //     and proves ownership with the current password (this path is in publicPaths).
+//
 // Either way the change is server-authoritative: the current password must verify,
 // the account must be local, and the new password must satisfy the Security Policy.
 func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -463,37 +471,50 @@ func userFrom(ctx context.Context) (jwtClaims, bool) {
 // only ever sent on /search requests and never reaches /api.
 const osdCookieName = "netops_osd"
 
-// secureCookies marks session cookies Secure (HTTPS-only). Off by default
-// because the stack currently serves plain HTTP on :8000; flip SECURE_COOKIES=
-// true once TLS (#18) terminates at nginx. A Secure cookie over plain HTTP is
-// silently dropped by the browser, which would break the gate — hence opt-in.
+// secureCookies marks session cookies Secure (HTTPS-only) via explicit env
+// override. Used as a fallback; cookieSecure also auto-detects HTTPS per request.
 func secureCookies() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("SECURE_COOKIES")), "true")
+}
+
+// cookieSecure decides the Secure flag for a session cookie (SR-030). It is set
+// whenever the request arrived over HTTPS (direct TLS or X-Forwarded-Proto from
+// the TLS edge), OR when SECURE_COOKIES=true forces it. This auto-protects the
+// JWT-bearing cookie on HTTPS deployments without breaking the plain-HTTP default
+// (a Secure cookie over HTTP is silently dropped by the browser).
+func cookieSecure(r *http.Request) bool {
+	if secureCookies() {
+		return true
+	}
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // setOSDCookie issues/refreshes the /search gate cookie carrying the caller's
 // access token. Path=/search confines it to the Dashboards route; SameSite=Lax
 // is sufficient (the iframe is same-origin). Lifetime tracks the access token.
-func setOSDCookie(w http.ResponseWriter, token string, ttl time.Duration) {
+func setOSDCookie(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     osdCookieName,
 		Value:    token,
 		Path:     "/search",
 		HttpOnly: true,
-		Secure:   secureCookies(),
+		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(ttl.Seconds()),
 	})
 }
 
 // clearOSDCookie expires the gate cookie on logout (same attributes, MaxAge<0).
-func clearOSDCookie(w http.ResponseWriter) {
+func clearOSDCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     osdCookieName,
 		Value:    "",
 		Path:     "/search",
 		HttpOnly: true,
-		Secure:   secureCookies(),
+		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

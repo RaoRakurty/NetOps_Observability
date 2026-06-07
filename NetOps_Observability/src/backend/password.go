@@ -71,6 +71,20 @@ func verifyPassword(password, encoded string) bool {
 	return hmac.Equal(actual, expected)
 }
 
+// passwordNeedsRehash reports whether a stored hash uses fewer PBKDF2 iterations
+// than the current cost (SR-029). When true, the caller should opportunistically
+// re-hash the just-verified plaintext at the current cost and persist it, so a
+// hash minted under a weaker (or attacker-supplied low) iteration count is
+// upgraded on next successful login.
+func passwordNeedsRehash(encoded string) bool {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 4 || parts[0] != "pbkdf2_sha256" {
+		return false
+	}
+	iter, err := strconv.Atoi(parts[1])
+	return err == nil && iter < pbkdf2Iter
+}
+
 // pbkdf2SHA256 — RFC 8018 §5.2 with HMAC-SHA256 as the underlying PRF.
 func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	prf := hmac.New(sha256.New, password)
@@ -82,7 +96,7 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	for i := 1; i <= blocks; i++ {
 		prf.Reset()
 		prf.Write(salt)
-		binary.BigEndian.PutUint32(buf[:], uint32(i))  // #nosec G115 -- PBKDF2 32-bit block index (RFC 8018); i is a small bounded counter
+		binary.BigEndian.PutUint32(buf[:], uint32(i)) // #nosec G115 -- PBKDF2 32-bit block index (RFC 8018); i is a small bounded counter
 		prf.Write(buf[:])
 		u := prf.Sum(nil)
 		f := make([]byte, hashLen)
@@ -110,11 +124,13 @@ type jwtClaims struct {
 	Tenant string   `json:"tenant,omitempty"` // tenant id the principal is bound to
 	Scopes []string `json:"scopes,omitempty"` // API-key scopes (empty for human sessions)
 	Iat    int64    `json:"iat"`
+	Nbf    int64    `json:"nbf,omitempty"` // not-before; enforced by verifyJWT (SR-024)
 	Exp    int64    `json:"exp"`
 }
 
 // hasScope reports whether the principal carries an API-key scope. Human
 // sessions carry none, so they fall through to RBAC role checks instead.
+//
 //nolint:unused // API-token scope check (#23); sessions use RBAC roles, so unwired until API tokens land
 func (c jwtClaims) hasScope(want string) bool {
 	for _, s := range c.Scopes {

@@ -20,6 +20,15 @@ import (
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
 
 func signJWT(claims jwtClaims, secret string) (string, error) {
+	// SR-024: stamp iat/nbf even if a caller forgot, so every token verifyJWT
+	// sees can be time-validated.
+	now := time.Now().Unix()
+	if claims.Iat == 0 {
+		claims.Iat = now
+	}
+	if claims.Nbf == 0 {
+		claims.Nbf = claims.Iat
+	}
 	headerEnc := b64url([]byte(jwtHeader))
 	claimsBytes, err := json.Marshal(claims)
 	if err != nil {
@@ -53,11 +62,21 @@ func verifyJWT(token, secret string) (jwtClaims, error) {
 	if err := json.Unmarshal(claimsBytes, &c); err != nil {
 		return jwtClaims{}, errJWT
 	}
-	if c.Exp != 0 && time.Now().Unix() > c.Exp {
+	// SR-024: enforce time bounds with a small clock-skew allowance. exp (expiry),
+	// nbf (not-before), and a future-dated iat are all rejected.
+	const skew = 60 // seconds
+	now := time.Now().Unix()
+	if c.Exp != 0 && now > c.Exp {
+		return jwtClaims{}, errJWT
+	}
+	if c.Nbf != 0 && now+skew < c.Nbf {
+		return jwtClaims{}, errJWT
+	}
+	if c.Iat != 0 && now+skew < c.Iat {
 		return jwtClaims{}, errJWT
 	}
 	return c, nil
 }
 
-func b64url(b []byte) string             { return base64.RawURLEncoding.EncodeToString(b) }
+func b64url(b []byte) string                { return base64.RawURLEncoding.EncodeToString(b) }
 func b64urlDecode(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
