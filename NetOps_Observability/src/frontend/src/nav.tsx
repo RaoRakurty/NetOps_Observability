@@ -21,6 +21,7 @@ import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
+import SourceOfTruth from "./tabs/SourceOfTruth";
 import SecurityPolicy from "./tabs/SecurityPolicy";
 import StackHealth from "./tabs/StackHealth";
 import AuditLog from "./tabs/AuditLog";
@@ -116,6 +117,17 @@ export const NAV: NavSection[] = [
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
       { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
       { id: "snmp", label: "SNMP Profile Manager", render: () => <SnmpProfileManager /> },
+    ],
+  },
+  // Automation — system-of-record + automation integrations that feed the
+  // platform. Platform-owner only (the NetBox config is platform infrastructure).
+  {
+    id: "automation",
+    label: "Automation",
+    icon: "automation",
+    platformOnly: true,
+    children: [
+      { id: "sot", label: "Source Of Truth", render: () => <SourceOfTruth /> },
     ],
   },
   {

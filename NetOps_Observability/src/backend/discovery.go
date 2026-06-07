@@ -431,21 +431,26 @@ func (s *SNMPSource) Poll(_ context.Context) ([]models.Device, error) { return n
 // =============================================================================
 
 type NetboxSource struct {
-	url    string
-	token  string
+	cfg    func() netboxConfig // live config (UI-set store, env fallback)
 	client *http.Client
 }
 
-func NewNetboxSource(rawURL, token string) *NetboxSource {
+// NewNetboxSource takes a live config getter so the poller honors runtime changes
+// from the Automation → Source of Truth UI without a restart, falling back to env.
+func NewNetboxSource(cfg func() netboxConfig) *NetboxSource {
 	return &NetboxSource{
-		url:    strings.TrimRight(rawURL, "/"),
-		token:  token,
+		cfg:    cfg,
 		client: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-func (n *NetboxSource) Name() string            { return "netbox" }
-func (n *NetboxSource) Interval() time.Duration { return 60 * time.Second }
+func (n *NetboxSource) Name() string { return "netbox" }
+func (n *NetboxSource) Interval() time.Duration {
+	if c := n.cfg(); c.IntervalSec > 0 {
+		return time.Duration(c.IntervalSec) * time.Second
+	}
+	return 60 * time.Second
+}
 
 // netboxDevice is the subset of /dcim/devices/ we care about.
 type netboxDevice struct {
@@ -480,28 +485,31 @@ type netboxResp struct {
 }
 
 func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
-	if n.url == "" || n.token == "" {
-		return nil, errors.New("netbox not configured")
+	cfg := n.cfg()
+	nbURL := strings.TrimRight(cfg.URL, "/")
+	token := cfg.Token
+	if !cfg.Enabled || nbURL == "" || token == "" {
+		return nil, nil // unconfigured / disabled → no-op (not an error)
 	}
 
 	// SR-023: the API token rides in the Authorization header on EVERY request,
 	// including the upstream-supplied `next` pagination URL. A compromised or
 	// MITM'd Netbox could point `next` at an attacker host and harvest the token
 	// (and SSRF the backend). Pin pagination to the configured instance's host.
-	base, err := url.Parse(n.url)
+	base, err := url.Parse(nbURL)
 	if err != nil || base.Host == "" {
-		return nil, fmt.Errorf("netbox: invalid NETBOX_URL %q: %w", n.url, err)
+		return nil, fmt.Errorf("netbox: invalid URL %q: %w", nbURL, err)
 	}
 
 	// Page through /dcim/devices/?limit=200.
-	next := n.url + "/api/dcim/devices/?limit=200"
+	next := nbURL + "/api/dcim/devices/?limit=200"
 	var out []models.Device
 	for next != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, next, nil)
 		if err != nil {
 			return out, err
 		}
-		req.Header.Set("Authorization", "Token "+n.token)
+		req.Header.Set("Authorization", "Token "+token)
 		req.Header.Set("Accept", "application/json")
 
 		resp, err := n.client.Do(req)

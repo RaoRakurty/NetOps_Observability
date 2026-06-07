@@ -1,65 +1,74 @@
-import { useEffect, useState } from "react";
-import { api } from "../services/api";
+import { useState } from "react";
 import { ExportPolicyForm } from "./admin";
 import Icon from "../components/Icon";
 
+// Administration → Settings. Trimmed (C1/C2/C3):
+//   - the redundant per-integration credentials table is gone — each connector
+//     shows its own status under Integrations / Notifications;
+//   - discovery refresh moved to Automation → Source of Truth;
+//   - log-export limits are now a tile that opens a guided setup modal.
 export default function Settings() {
-  const [creds, setCreds] = useState<Record<string, boolean>>({});
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => setCreds((await api.credentials()) ?? {}))();
-  }, []);
-
-  const refresh = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await api.refreshDiscovery();
-      setMsg("Discovery refresh requested.");
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const [showExport, setShowExport] = useState(false);
 
   return (
     <>
-      {/* Self-service password change lives on the login window ("Change password")
-          for local accounts; admins reset others under Administration → Users. */}
       <div className="card">
-        <h2>Integrations</h2>
-        <p style={{ color: "var(--muted)", fontSize: 13 }}>
-          Configure credentials via <code>deployment/docker/.env</code> or your secret manager.
-          The API never echoes secrets back — only whether each integration is configured.
+        <h2 style={{ margin: 0 }}>Settings</h2>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>
+          Platform configuration. Integration credentials live with their connectors
+          (Administration → Integrations and Notifications); discovery sources are under
+          Automation → Source of Truth.
         </p>
-        <table>
-          <tbody>
-            {Object.entries(creds).map(([k, v]) => (
-              <tr key={k}>
-                <td>{k}</td>
-                <td>
-                  <span className={`badge ${v ? "good" : "warn"}`}>
-                    {v ? "configured" : "not configured"}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
 
-      <div className="card">
-        <h2>Discovery</h2>
-        <button className="btn" disabled={busy} onClick={refresh}>
-          <Icon name="refresh" size={14} /> {busy ? "Refreshing…" : "Refresh now"}
+      {/* Log export limits — tile + guided setup (C3). */}
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 8,
+            background: "var(--panel-2, #f4f4f8)",
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
+          <Icon name="external" size={20} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700 }}>Log export limits</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            Anti-exfiltration guardrails for log exports — rate, row/size caps, runtime, link TTL.
+          </div>
+        </div>
+        <button className="btn" onClick={() => setShowExport(true)}>
+          Configure
         </button>
-        {msg && <p style={{ marginTop: 12, color: "var(--muted)" }}>{msg}</p>}
       </div>
 
-      <ExportPolicyForm />
+      {showExport && (
+        <div
+          onClick={() => setShowExport(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(10,10,20,.45)",
+            display: "grid",
+            placeItems: "center",
+            zIndex: 50,
+            padding: 16,
+          }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, width: "100%", maxHeight: "86vh", overflow: "auto" }}>
+            <ExportPolicyForm />
+            <div style={{ textAlign: "right", marginTop: 8 }}>
+              <button className="btn" onClick={() => setShowExport(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

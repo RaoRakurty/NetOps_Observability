@@ -33,7 +33,7 @@ const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 // trailing "More" group so nothing is ever dropped.
 const GROUPS: { label: string; ids: string[] }[] = [
   { label: "Monitoring", ids: ["overview", "copilot", "alerts", "topology", "reports"] },
-  { label: "Infrastructure & Logs", ids: ["infrastructure", "explore"] },
+  { label: "Infrastructure & Logs", ids: ["infrastructure", "automation", "explore"] },
 ];
 // Admin zone anchored at the foot (Datadog-style): Stack + Administration kept
 // together in one zone, above a thin-line-separated Support/Help zone, then the

@@ -16,15 +16,23 @@ package main
 // Vault AAD field-ids for config secrets. Stable strings — changing one would
 // make existing ciphertext for that field undecryptable (AAD mismatch).
 const (
-	fieldSMTPPass        = "notify.smtp.pass"  // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldTwilioAuthToken = "notify.twilio.auth_token"  // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldNtfyToken       = "notify.ntfy.token"  // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldSMTPPass        = "notify.smtp.pass"         // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldTwilioAuthToken = "notify.twilio.auth_token" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldNtfyToken       = "notify.ntfy.token"        // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
 	fieldSlackWebhookURL = "notify.slack.webhook_url"
 	fieldPagerDutyKey    = "notify.pagerduty.routing_key"
-	fieldOIDCSecret      = "oidc.client_secret"  // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldLDAPBindPass    = "ldap.bind_password"  // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldOIDCSecret      = "oidc.client_secret" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldLDAPBindPass    = "ldap.bind_password" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
 	fieldTACACSSecret    = "tacacs.secret"
+	fieldNetboxToken     = "netbox.token" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
 )
+
+// mapNetbox transforms the NetBox config's API token (platform DEK).
+func mapNetbox(c netboxConfig, f secretXform) (netboxConfig, error) {
+	var e error
+	c.Token, e = f("", fieldNetboxToken, c.Token)
+	return c, e
+}
 
 // secretXform is Vault.Encrypt or Vault.Decrypt (same signature), or a passthrough.
 type secretXform = func(tenant, fieldID, val string) (string, error)

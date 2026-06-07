@@ -67,6 +67,7 @@ type server struct {
 	exportLimiter  *tenantRateLimiter    // per-tenant export rate limit
 	copilotLimiter *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
 	copilotCfg     *copilotConfigStore
+	netboxCfg      *netboxConfigStore // NetBox source-of-truth discovery config
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -137,9 +138,11 @@ func newServer() *server {
 	if os.Getenv("ENABLE_SNMP_DISCOVERY") == "true" {
 		d.Register(NewSNMPSource(os.Getenv("SNMP_CIDR_RANGES")))
 	}
-	if os.Getenv("NETBOX_TOKEN") != "" {
-		d.Register(NewNetboxSource(os.Getenv("NETBOX_URL"), os.Getenv("NETBOX_TOKEN")))
-	}
+	// NetBox source-of-truth: registered always with a LIVE config getter (UI-set
+	// store, env fallback). Poll is a no-op while unconfigured/disabled, so it
+	// honors runtime changes from Automation → Source of Truth without a restart.
+	netboxCfg := newNetboxConfigStore(envOr("NETBOX_CONFIG_FILE", "/data/netbox_config.json"), vault)
+	d.Register(NewNetboxSource(netboxCfg.effective))
 
 	// SNMP credential store is created below; capture a pointer the target
 	// builder can resolve device credential_refs against (set after init).
@@ -344,6 +347,7 @@ func newServer() *server {
 	engine.OnFire = srv.ingestAlertIncident
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
+	srv.netboxCfg = netboxCfg
 	// UI-configurable email/SMS/push channels (registers live channels into the
 	// dispatcher built above). Must come after notifier is set on srv.
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
@@ -532,6 +536,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
+	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig) // Source-of-Truth (platform-owner)
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
 	mux.HandleFunc("/api/logs/export", s.handleLogsExport)          // Mode B: whole result set (sync/async)

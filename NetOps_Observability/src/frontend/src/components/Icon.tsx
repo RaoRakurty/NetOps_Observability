@@ -5,6 +5,15 @@
 type Props = { name: string; size?: number; className?: string; style?: React.CSSProperties };
 
 const PATHS: Record<string, JSX.Element> = {
+  // Automation — a workflow: two nodes wired through a junction.
+  automation: (
+    <>
+      <rect x="3" y="3" width="6" height="6" rx="1" />
+      <rect x="15" y="15" width="6" height="6" rx="1" />
+      <path d="M9 6h5a4 4 0 0 1 4 4v5" />
+      <circle cx="6" cy="18" r="3" />
+    </>
+  ),
   overview: (
     <>
       <rect x="3" y="3" width="7" height="9" rx="1" />

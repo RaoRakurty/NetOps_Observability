@@ -65,6 +65,17 @@ export type Health = {
   alerts?: Record<string, unknown>;
 };
 
+// ---------- Automation: NetBox source-of-truth config ----------
+// GET shape is redacted: `token_set` reflects whether a token is stored; the
+// token itself is never returned. On save, send `token` only to change it.
+export type NetboxConfig = {
+  enabled: boolean;
+  url: string;
+  interval_sec: number;
+  token_set: boolean;
+  token?: string; // write-only
+};
+
 // ---------- Platform stack health (platform-owner only) ----------
 
 export type StackComponent = {
@@ -630,6 +641,14 @@ export const api = {
   credentials: () => request<Record<string, boolean>>("/api/credentials"),
   refreshDiscovery: () =>
     request<{ status: string }>("/api/discovery/refresh", { method: "POST" }),
+
+  // Automation → Source of Truth: NetBox discovery config (platform-owner).
+  // GET is redacted (token_set bool, never the token); PUT preserves the stored
+  // token when `token` is left blank.
+  netboxConfig: () =>
+    request<{ config: NetboxConfig }>("/api/automation/netbox"),
+  saveNetboxConfig: (c: Partial<NetboxConfig>) =>
+    request<{ config: NetboxConfig }>("/api/automation/netbox", { method: "PUT", body: JSON.stringify(c) }),
 
   // Dashboard tile data — same shape /api/events emits via
   // { type: "metric_update", data: <tile> }.
