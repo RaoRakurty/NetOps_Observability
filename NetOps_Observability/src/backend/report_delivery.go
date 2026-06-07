@@ -103,7 +103,7 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 		var err error
 		switch {
 		case req.Mode == "link":
-			err = sender.SendDocument(req.Subject, "text/html; charset=UTF-8", buildLinkEmail(req.ReportName, reportViewLink(req.ExecutionID, "html")))
+			err = sender.SendDocument(req.Subject, "text/html; charset=UTF-8", buildLinkEmail(req.ReportName, reportViewLink(req.ExecutionID, req.Tenant, "html")))
 		case len(toAttachments(req.Attachments)) > 0:
 			err = sender.SendReport(req.Subject, string(req.Body), toAttachments(req.Attachments))
 		default:
@@ -126,7 +126,7 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 			}
 			text := req.ReportName + ": " + req.Subject
 			if req.ExecutionID != "" {
-				text += "\n" + reportViewLink(req.ExecutionID, "html")
+				text += "\n" + reportViewLink(req.ExecutionID, req.Tenant, "html")
 			}
 			err := d.postWebhook(cp.Target, text)
 			ds := reports.DeliveryStatus{Channel: cp.Type, Recipient: cp.Name, OK: err == nil, Attempt: attempt, At: at}

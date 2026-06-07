@@ -484,6 +484,15 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 		return nil, errors.New("netbox not configured")
 	}
 
+	// SR-023: the API token rides in the Authorization header on EVERY request,
+	// including the upstream-supplied `next` pagination URL. A compromised or
+	// MITM'd Netbox could point `next` at an attacker host and harvest the token
+	// (and SSRF the backend). Pin pagination to the configured instance's host.
+	base, err := url.Parse(n.url)
+	if err != nil || base.Host == "" {
+		return nil, fmt.Errorf("netbox: invalid NETBOX_URL %q: %w", n.url, err)
+	}
+
 	// Page through /dcim/devices/?limit=200.
 	next := n.url + "/api/dcim/devices/?limit=200"
 	var out []models.Device
@@ -543,12 +552,20 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 			out = append(out, dev)
 		}
 
-		// Advance to the next page if Netbox supplied a URL. Netbox
-		// returns absolute URLs in `next`, so we just take them as-is
-		// (after a defensive scheme check).
+		// Advance to the next page only if Netbox supplied an absolute URL on the
+		// SAME host as the configured instance (SR-023) — never follow a
+		// cross-host `next` (it would leak the token / SSRF).
 		next = ""
-		if page.Next != nil && (strings.HasPrefix(*page.Next, "http://") || strings.HasPrefix(*page.Next, "https://")) {
-			next = *page.Next
+		if page.Next != nil && *page.Next != "" {
+			nu, perr := url.Parse(*page.Next)
+			switch {
+			case perr != nil || (nu.Scheme != "http" && nu.Scheme != "https"):
+				logWarn("discovery", "netbox: ignoring malformed pagination URL", nil)
+			case !strings.EqualFold(nu.Host, base.Host):
+				logWarn("discovery", "netbox: ignoring cross-host pagination URL", map[string]any{"got": nu.Host, "want": base.Host})
+			default:
+				next = *page.Next
+			}
 		}
 	}
 

@@ -29,47 +29,52 @@ func reportLinkSecret() string {
 	return jwtSecret() // falls back to the app signing secret
 }
 
-// signReportLink mints "b64(execID).b64(expiryUnix).b64(hmac)".
-func signReportLink(execID string, ttl time.Duration) string {
+// signReportLink mints "b64(execID).b64(tenant).b64(expiryUnix).b64(hmac)".
+// SR-018: the tenant is bound INTO the token (like export links) so a leaked
+// token can't be replayed against another tenant's execution id.
+func signReportLink(execID, tenant string, ttl time.Duration) string {
 	exp := strconv.FormatInt(time.Now().Add(ttl).Unix(), 10)
-	sig := linkSig(execID, exp)
 	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(execID)) + "." + enc([]byte(exp)) + "." + sig
+	return enc([]byte(execID)) + "." + enc([]byte(tenant)) + "." + enc([]byte(exp)) + "." + linkSig(execID, tenant, exp)
 }
 
-func linkSig(execID, exp string) string {
+func linkSig(execID, tenant, exp string) string {
 	mac := hmac.New(sha256.New, []byte(reportLinkSecret()))
-	mac.Write([]byte(execID + "." + exp))
+	mac.Write([]byte("report." + execID + "." + tenant + "." + exp))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// verifyReportLink returns the execution id if the token is well-formed, the
+// verifyReportLink returns (execID, tenant) if the token is well-formed, the
 // signature matches, and it has not expired.
-func verifyReportLink(token string) (string, error) {
+func verifyReportLink(token string) (string, string, error) {
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", errors.New("malformed token")
+	if len(parts) != 4 {
+		return "", "", errors.New("malformed token")
 	}
 	idB, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	expB, err := base64.RawURLEncoding.DecodeString(parts[1])
+	tenantB, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	execID, exp := string(idB), string(expB)
-	if !hmac.Equal([]byte(linkSig(execID, exp)), []byte(parts[2])) {
-		return "", errors.New("bad signature")
+	expB, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", "", err
+	}
+	execID, tenant, exp := string(idB), string(tenantB), string(expB)
+	if !hmac.Equal([]byte(linkSig(execID, tenant, exp)), []byte(parts[3])) {
+		return "", "", errors.New("bad signature")
 	}
 	expUnix, err := strconv.ParseInt(exp, 10, 64)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if time.Now().Unix() > expUnix {
-		return "", errors.New("link expired")
+		return "", "", errors.New("link expired")
 	}
-	return execID, nil
+	return execID, tenant, nil
 }
 
 // ---- export links --------------------------------------------------------
@@ -135,9 +140,9 @@ func verifyExportLink(token string) (string, string, error) {
 // reportViewLink builds the absolute URL recipients click. REPORT_PUBLIC_BASE_URL
 // should be the externally-reachable origin; when unset the link is path-only
 // (works behind the same nginx, but set it for email clients).
-func reportViewLink(execID, format string) string {
+func reportViewLink(execID, tenant, format string) string {
 	base := strings.TrimRight(os.Getenv("REPORT_PUBLIC_BASE_URL"), "/")
-	u := base + "/api/reports/view/" + signReportLink(execID, reportLinkTTL)
+	u := base + "/api/reports/view/" + signReportLink(execID, tenant, reportLinkTTL)
 	if format != "" && format != "html" {
 		u += "?format=" + format
 	}
@@ -170,7 +175,7 @@ func (s *server) handleReportView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimPrefix(r.URL.Path, "/api/reports/view/")
-	execID, err := verifyReportLink(token)
+	execID, tenant, err := verifyReportLink(token)
 	if err != nil {
 		writeError(w, http.StatusForbidden, errors.New("invalid or expired report link"))
 		return
@@ -179,6 +184,14 @@ func (s *server) handleReportView(w http.ResponseWriter, r *http.Request) {
 	rec, _, found, err := s.reportPipeline.execs.Get(r.Context(), "", true, execID)
 	if err != nil || !found {
 		writeError(w, http.StatusNotFound, errors.New("report not found"))
+		return
+	}
+	// SR-018: the token is bound to a tenant — it may only open an execution that
+	// actually belongs to that tenant. Defends against a leaked/forwarded token
+	// being replayed against another tenant's execution id (defense in depth with
+	// the SR-002 authz fix).
+	if rec.TenantID != tenant {
+		writeError(w, http.StatusForbidden, errors.New("invalid or expired report link"))
 		return
 	}
 	ref := rec.PrimaryArtifact()
