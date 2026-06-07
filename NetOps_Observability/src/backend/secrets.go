@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -232,6 +235,29 @@ func (v *Vault) unwrapLocked(tenant, wrappedB64 string) ([]byte, error) {
 	return dek, nil
 }
 
+// wrappedStore is the on-disk shape of the wrapped-DEK custody store. The MAC
+// (SR-027) is an HMAC-SHA256 over the canonical Keys JSON keyed by the root KEK,
+// giving the whole map top-level integrity: deleting or tampering with an entry
+// is DETECTED on load (fail-closed) instead of silently causing the next write
+// to mint a fresh DEK — which would render that tenant's existing ciphertext
+// permanently unrecoverable (a stealthy tamper/DoS).
+type wrappedStore struct {
+	Keys map[string]string `json:"keys"`
+	MAC  string            `json:"mac"`
+}
+
+// wrappedMAC computes the integrity tag over the canonical (sorted-key) JSON of
+// the wrapped map, keyed by the root KEK.
+func (v *Vault) wrappedMAC(keys map[string]string) (string, error) {
+	canon, err := json.Marshal(keys) // Go sorts string map keys → deterministic
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, v.kek)
+	mac.Write(canon)
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
 func (v *Vault) loadWrapped() error {
 	b, err := kvLoad(wrappedKeysKey)
 	if err != nil {
@@ -240,18 +266,40 @@ func (v *Vault) loadWrapped() error {
 		}
 		return err
 	}
-	m := map[string]string{}
-	if len(b) > 0 {
+	if len(b) == 0 {
+		return nil
+	}
+	var s wrappedStore
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s.Keys == nil {
+		// Legacy plain-map format (pre-SR-027): accept once, migrate to a MAC'd
+		// store on the next write.
+		m := map[string]string{}
 		if err := json.Unmarshal(b, &m); err != nil {
 			return err
 		}
+		v.wrapped = m
+		return nil
 	}
-	v.wrapped = m
+	want, err := v.wrappedMAC(s.Keys)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal([]byte(want), []byte(s.MAC)) {
+		return errors.New("vault: wrapped-DEK store integrity check failed (tampered or truncated) — refusing to start; restore the custody store from backup")
+	}
+	v.wrapped = s.Keys
 	return nil
 }
 
 func (v *Vault) saveWrappedLocked() error {
-	b, err := json.MarshalIndent(v.wrapped, "", "  ")
+	mac, err := v.wrappedMAC(v.wrapped)
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(wrappedStore{Keys: v.wrapped, MAC: mac}, "", "  ")
 	if err != nil {
 		return err
 	}

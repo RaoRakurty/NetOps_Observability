@@ -2,9 +2,42 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+// SR-027: tampering with the wrapped-DEK store (here, deleting a tenant's entry
+// while keeping the old MAC) must be DETECTED on load — fail closed rather than
+// silently minting a fresh DEK that orphans existing ciphertext.
+func TestVaultWrappedStoreIntegrity(t *testing.T) {
+	withTempKV(t)
+	prov := &memSealing{}
+	v1, err := newVaultWithProvider(context.Background(), prov)
+	if err != nil {
+		t.Fatalf("vault: %v", err)
+	}
+	if _, err := v1.Encrypt("acme", "f1", "secret"); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	// Tamper: drop the tenant entry but leave the MAC (covering the original map).
+	raw, err := kvLoad(wrappedKeysKey)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var s wrappedStore
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	delete(s.Keys, "acme")
+	b, _ := json.Marshal(s)
+	if err := kvSave(wrappedKeysKey, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := newVaultWithProvider(context.Background(), prov); err == nil {
+		t.Fatal("tampered wrapped-DEK store must fail the integrity check")
+	}
+}
 
 // memSealing is an in-memory SealingProvider for unit tests — it holds the KEK in
 // a field instead of a TPM, so the Vault's envelope logic is exercised without
