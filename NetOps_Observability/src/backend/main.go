@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -575,6 +576,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	mux.HandleFunc("/api/audit", s.handleAudit)
+	// Authenticated detailed health (SR-009) — backs the in-app indicator;
+	// fleet/collector detail is platform-owner-gated inside the handler.
+	mux.HandleFunc("/api/health", s.handleHealthDetail)
 	// Dashboard live data
 	mux.HandleFunc("/api/metrics", s.handleMetricTiles)
 	mux.HandleFunc("/api/metrics/query", s.handleMetricsQuery)
@@ -585,15 +589,37 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/metrics", s.handlePromMetrics)
 }
 
+// handleHealth (`/admin/health`, public) is a minimal liveness probe (SR-009).
+// It MUST stay unauthenticated for Docker/LB/watchdog probes, so it reveals
+// nothing beyond "the process is up" — no version, uptime, or fleet/collector
+// inventory (those were an anonymous recon/fingerprinting surface). The detailed
+// view moved to the authenticated handleHealthDetail (`/api/health`).
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     "healthy",
-		"version":    version,
-		"uptime":     time.Since(s.startedAt).String(),
-		"discovery":  s.discovery.Health(),
-		"collectors": s.collectors.Health(),
-		"alerts":     s.alerts.Health(),
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "healthy"})
+}
+
+// handleHealthDetail (`/api/health`, authenticated) backs the in-app health
+// indicator. Any authenticated principal gets liveness + version + uptime; the
+// fleet/collector/discovery aggregates are platform plumbing that reveal global
+// fleet size, so they're gated to the platform owner (SR-009, mirroring the
+// REST handleCollectors / GraphQL health gates for SR-010).
+func (s *server) handleHealthDetail(w http.ResponseWriter, r *http.Request) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	out := map[string]any{
+		"status":  "healthy",
+		"version": version,
+		"uptime":  time.Since(s.startedAt).String(),
+	}
+	if s.can(claims, ActionView, Resource{Type: ResInfraStack}) {
+		out["discovery"] = s.discovery.Health()
+		out["collectors"] = s.collectors.Health()
+		out["alerts"] = s.alerts.Health()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {

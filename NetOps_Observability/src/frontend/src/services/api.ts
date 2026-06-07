@@ -58,9 +58,11 @@ export type Health = {
   status: string;
   version: string;
   uptime: string;
-  discovery: Record<string, unknown>;
-  collectors: Record<string, boolean>;
-  alerts: Record<string, unknown>;
+  // Fleet/collector detail is platform-owner-only (SR-009) — absent for
+  // scoped tenants, so these are optional.
+  discovery?: Record<string, unknown>;
+  collectors?: Record<string, boolean>;
+  alerts?: Record<string, unknown>;
 };
 
 // ---------- Platform stack health (platform-owner only) ----------
@@ -575,7 +577,7 @@ export const api = {
   passwordPolicy: () =>
     request<{ min_length: number; complexity_classes: number }>("/api/auth/password-policy"),
 
-  health: () => request<Health>("/admin/health"),
+  health: () => request<Health>("/api/health"),
   stackHealth: () => request<StackHealth>("/api/stack/health"),
   audit: (limit = 200) => request<AuditEvent[]>(`/api/audit?limit=${limit}`),
 
