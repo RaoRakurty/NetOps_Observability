@@ -56,6 +56,9 @@ func TestServiceNow_VerifyAndNormalize(t *testing.T) {
 func TestJira_VerifyAndNormalize(t *testing.T) {
 	p := NewJiraProvider()
 	body := []byte(`{"webhookEvent":"jira:issue_updated","timestamp":1700000000000,"issue":{"id":"10001","key":"NOC-1","fields":{"status":{"name":"In Progress"},"assignee":{"displayName":"Jane"}}},"changelog":{"id":"99999"}}`)
+	// SR-020: pin "now" near the body's event timestamp so the replay window passes.
+	timeNow = func() time.Time { return time.Unix(1700000000, 0) }
+	defer func() { timeNow = time.Now }()
 	sig := "sha256=" + hmacSHA256Hex([]byte("whk"), body)
 	if err := p.VerifyWebhook(req(map[string]string{"X-Hub-Signature": sig}), body, "whk"); err != nil {
 		t.Fatalf("valid jira sig should pass: %v", err)
@@ -63,6 +66,12 @@ func TestJira_VerifyAndNormalize(t *testing.T) {
 	if err := p.VerifyWebhook(req(map[string]string{"X-Hub-Signature": sig + "00"}), body, "whk"); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatal("tampered jira sig must fail")
 	}
+	// SR-020: a validly-signed request replayed long after its event time is rejected.
+	timeNow = func() time.Time { return time.Unix(1700000000, 0).Add(2 * time.Hour) }
+	if err := p.VerifyWebhook(req(map[string]string{"X-Hub-Signature": sig}), body, "whk"); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatal("replayed (stale) jira request must be rejected")
+	}
+	timeNow = func() time.Time { return time.Unix(1700000000, 0) }
 	evs, _ := p.Normalize("acme", body)
 	e := evs[0]
 	if e.ExternalID != "NOC-1" || e.ExternalSeq != 99999 || e.ExternalState != "In Progress" || e.Assignee != "Jane" || e.Type != EventAcknowledged {
@@ -79,6 +88,10 @@ func TestJira_VerifyAndNormalize(t *testing.T) {
 func TestPagerDuty_VerifyAndNormalize(t *testing.T) {
 	p := NewPagerDutyProvider()
 	body := []byte(`{"event":{"id":"ev-1","event_type":"incident.acknowledged","occurred_at":"2026-06-03T21:00:00Z","agent":{"summary":"Jane"},"data":{"id":"PINC1","status":"acknowledged","assignees":[{"summary":"Jane"}]}}}`)
+	// SR-020: pin "now" near occurred_at so the replay window passes.
+	occurred, _ := time.Parse(time.RFC3339, "2026-06-03T21:00:00Z")
+	timeNow = func() time.Time { return occurred }
+	defer func() { timeNow = time.Now }()
 	good := "v1=" + hmacSHA256Hex([]byte("pdk"), body)
 	// Multi-value header (key rotation) — one valid token among others must pass.
 	if err := p.VerifyWebhook(req(map[string]string{"X-PagerDuty-Signature": "v1=deadbeef, " + good}), body, "pdk"); err != nil {
@@ -87,6 +100,12 @@ func TestPagerDuty_VerifyAndNormalize(t *testing.T) {
 	if err := p.VerifyWebhook(req(map[string]string{"X-PagerDuty-Signature": "v1=deadbeef"}), body, "pdk"); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatal("no matching PD sig must fail")
 	}
+	// SR-020: validly-signed but replayed long after occurred_at → rejected.
+	timeNow = func() time.Time { return occurred.Add(2 * time.Hour) }
+	if err := p.VerifyWebhook(req(map[string]string{"X-PagerDuty-Signature": good}), body, "pdk"); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatal("replayed (stale) PD request must be rejected")
+	}
+	timeNow = func() time.Time { return occurred }
 	evs, _ := p.Normalize("acme", body)
 	e := evs[0]
 	if e.ProviderEvtID != "ev-1" || e.ExternalID != "PINC1" || e.Type != EventAcknowledged || e.Assignee != "Jane" {

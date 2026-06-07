@@ -29,6 +29,18 @@ func (jiraProvider) VerifyWebhook(r *http.Request, body []byte, secret string) e
 	if !constEq(r.Header.Get("X-Hub-Signature"), expected) {
 		return ErrSignatureInvalid
 	}
+	// SR-020: replay bound on the HMAC-covered event timestamp (epoch millis).
+	// An attacker can't alter it without breaking the signature, so a captured
+	// request replayed outside the window is rejected.
+	var meta struct {
+		Timestamp int64 `json:"timestamp"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil || meta.Timestamp == 0 {
+		return ErrSignatureInvalid
+	}
+	if !withinSkew(meta.Timestamp/1000, bodyReplayWindow()) {
+		return ErrSignatureInvalid
+	}
 	return nil
 }
 
@@ -83,7 +95,7 @@ func (jiraProvider) Normalize(tenant string, body []byte) ([]IntegrationEvent, e
 		Tenant:   tenant,
 		// Correlates to the incident's external_ticket_id, stored as the Jira KEY
 		// (NOC-1) on outbound. Prefer key; fall back to numeric id.
-		ExternalID: firstNonEmpty(p.Issue.Key, p.Issue.ID),
+		ExternalID:    firstNonEmpty(p.Issue.Key, p.Issue.ID),
 		ExternalSeq:   seq,
 		OccurredAt:    occurred,
 		ExternalState: p.Issue.Fields.Status.Name,

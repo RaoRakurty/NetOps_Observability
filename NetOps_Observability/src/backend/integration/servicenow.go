@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // servicenow.go — ServiceNow inbound translator. ServiceNow has no standard
-// webhook HMAC, so a Business Rule / Scripted REST posts a shared secret in the
-// X-NetOps-Webhook-Secret header (per-tenant token); we compare it constant-time.
-// (HMAC can be added later if the instance computes one.)
+// webhook HMAC. PREFERRED (SR-019): a Business Rule sends a request timestamp
+// (X-NetOps-Webhook-Timestamp) and HMAC-SHA256 over "{ts}.{body}" in
+// X-NetOps-Webhook-Signature — giving authenticity + replay protection like the
+// other providers. FALLBACK (legacy): a static shared secret in
+// X-NetOps-Webhook-Secret, compared constant-time (no replay protection).
 
 type serviceNowProvider struct{}
 
@@ -21,10 +24,33 @@ func (serviceNowProvider) Capabilities() Capabilities {
 	return Capabilities{Ticketing: true, Webhooks: true, Polling: true, Interactive: false}
 }
 
-const headerWebhookSecret = "X-NetOps-Webhook-Secret" // #nosec G101 -- HTTP header NAME, not a credential value
+const (
+	headerWebhookSecret    = "X-NetOps-Webhook-Secret"    // #nosec G101 -- HTTP header NAME, not a credential value
+	headerWebhookTimestamp = "X-NetOps-Webhook-Timestamp" // #nosec G101 -- HTTP header NAME
+	headerWebhookSignature = "X-NetOps-Webhook-Signature" // #nosec G101 -- HTTP header NAME
+)
 
-func (serviceNowProvider) VerifyWebhook(r *http.Request, _ []byte, secret string) error {
-	if secret == "" || !constEq(r.Header.Get(headerWebhookSecret), secret) {
+const serviceNowReplayWindow = 5 * time.Minute
+
+func (serviceNowProvider) VerifyWebhook(r *http.Request, body []byte, secret string) error {
+	if secret == "" {
+		return ErrSignatureInvalid
+	}
+	// Preferred: signed + replay-protected (SR-019).
+	if sig := r.Header.Get(headerWebhookSignature); sig != "" {
+		tsHdr := r.Header.Get(headerWebhookTimestamp)
+		ts, err := strconv.ParseInt(tsHdr, 10, 64)
+		if err != nil || !withinSkew(ts, serviceNowReplayWindow) {
+			return ErrSignatureInvalid
+		}
+		expected := hmacSHA256Hex([]byte(secret), append([]byte(tsHdr+"."), body...))
+		if !constEq(sig, expected) {
+			return ErrSignatureInvalid
+		}
+		return nil
+	}
+	// Fallback: legacy static shared-secret header (no replay protection).
+	if !constEq(r.Header.Get(headerWebhookSecret), secret) {
 		return ErrSignatureInvalid
 	}
 	return nil
@@ -57,7 +83,7 @@ func (serviceNowProvider) Normalize(tenant string, body []byte) ([]IntegrationEv
 		// ExternalID correlates to the incident's external_ticket_id, which we
 		// store as the SN NUMBER (INC00…) on outbound. Prefer number; fall back to
 		// sys_id if a webhook omits it.
-		ExternalID: firstNonEmpty(p.Number, p.SysID),
+		ExternalID:    firstNonEmpty(p.Number, p.SysID),
 		AlertID:       p.AlertID,
 		ExternalSeq:   p.SysModCount,
 		OccurredAt:    parseLooseTime(p.UpdatedOn),

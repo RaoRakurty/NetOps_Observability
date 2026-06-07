@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // pagerduty.go — PagerDuty inbound translator. PagerDuty v3 webhooks are signed
@@ -27,12 +28,31 @@ func (pagerDutyProvider) VerifyWebhook(r *http.Request, body []byte, secret stri
 		return ErrSignatureInvalid
 	}
 	expected := "v1=" + hmacSHA256Hex([]byte(secret), body)
+	matched := false
 	for _, tok := range strings.Split(r.Header.Get("X-PagerDuty-Signature"), ",") {
 		if constEq(strings.TrimSpace(tok), expected) {
-			return nil
+			matched = true
+			break
 		}
 	}
-	return ErrSignatureInvalid
+	if !matched {
+		return ErrSignatureInvalid
+	}
+	// SR-020: replay bound on the HMAC-covered occurred_at. Tamper-proof (signed),
+	// so a captured request replayed outside the window is rejected.
+	var meta struct {
+		Event struct {
+			OccurredAt string `json:"occurred_at"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return ErrSignatureInvalid
+	}
+	ts, err := time.Parse(time.RFC3339, meta.Event.OccurredAt)
+	if err != nil || !withinSkew(ts.Unix(), bodyReplayWindow()) {
+		return ErrSignatureInvalid
+	}
+	return nil
 }
 
 type pdWebhook struct {

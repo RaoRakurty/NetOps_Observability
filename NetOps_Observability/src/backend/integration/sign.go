@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"time"
 )
 
@@ -11,6 +12,20 @@ import (
 // constant-time. `timeNow` is a package var so replay-window checks are testable.
 
 var timeNow = time.Now
+
+// bodyReplayWindow bounds how far an inbound webhook's (HMAC-covered) event
+// timestamp may lag (SR-020). Generous by default (1h) to tolerate provider
+// delivery retries while still capping replay; WEBHOOK_REPLAY_WINDOW tunes it.
+// Exact idempotency/stale-drop is additionally enforced by the reconcile
+// ordering layer (ExternalSeq monotonicity).
+func bodyReplayWindow() time.Duration {
+	if v := os.Getenv("WEBHOOK_REPLAY_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return time.Hour
+}
 
 // hmacSHA256Hex returns the lowercase hex HMAC-SHA256 of msg under key.
 func hmacSHA256Hex(key, msg []byte) string {
