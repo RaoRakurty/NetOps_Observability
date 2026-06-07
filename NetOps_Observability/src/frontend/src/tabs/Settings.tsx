@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import { ExportPolicyForm } from "./admin";
-import ChangePasswordCard from "../components/ChangePasswordCard";
 import Icon from "../components/Icon";
 
 export default function Settings() {
@@ -28,8 +27,8 @@ export default function Settings() {
 
   return (
     <>
-      <ChangePasswordCard />
-
+      {/* Change password moved to Administration → Security Policy → "My Password"
+          (it lives with the password rules it must satisfy). */}
       <div className="card">
         <h2>Integrations</h2>
         <p style={{ color: "var(--muted)", fontSize: 13 }}>
