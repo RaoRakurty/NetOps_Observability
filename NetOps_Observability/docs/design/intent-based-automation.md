@@ -202,7 +202,110 @@ approvals, history) as a sibling of **Source of Truth**; new pkg `intent/`
   drivers, optional auto-apply for trusted low-risk kinds, Git-backed intent
   (network-as-code) with PR review as the change-management front door.
 
-## 11. Open decisions
+Config-management track (§12), can run in parallel — it has value even before
+intent execution:
+- **C0 — Backup + history.** NETCONF/gNMI/SSH config collector + `ConfigStore`
+  (internal backend) + manual/scheduled snapshots + per-device Config tab (revision
+  history + diffs). Pure read — no device writes.
+- **C1 — Drift + Sync column.** 5-minute drift checker, golden baseline, the
+  🟢🟡🔴⚪ Sync column + drift Findings.
+- **C2 — Rollback + external store.** One-click rollback to a snapshot via the
+  safe executor (NETCONF confirmed-commit); opt-in Git/S3 external backend.
+
+## 12. Config management, backup, drift & rollback
+
+These five capabilities form a **Config Management subsystem** that the intent
+pipeline reuses (snapshot before apply; verify by full-config compare; rollback
+to a known-good). They also stand alone as classic config backup + drift (think
+Oxidized/RANCID, done natively and observably).
+
+```
+   per device, per transport (NETCONF / gNMI / SSH)
+   ┌─────────────┐   pull running-config        ┌──────────────────────────┐
+   │ Config       │ ───────────────────────────►│ ConfigStore (versioned)  │
+   │ Collector    │                              │  backends:               │
+   └─────┬───────┘                               │   • internal (PG/object) │
+         │ hash + diff vs baseline               │   • EXTERNAL: Git / S3   │
+         ▼                                        │  immutable revisions     │
+   ┌─────────────┐  every 5m (CONFIG_DRIFT_INTERVAL)└──────────┬─────────────┘
+   │ Drift Checker│ ◄─ baseline = golden/approved snapshot      │ snapshots
+   │  sets SYNC   │     (or previous backup)                    │ (labeled
+   │  status      │ ── drift → new revision + diff + Finding     │  revisions)
+   └─────┬───────┘                                              ▼
+         ▼                                            ┌──────────────────┐
+   Devices UI: "Sync" column  🟢🟡🔴⚪                 │ Rollback (apply a │
+                                                       │ stored snapshot)  │──► Executor
+                                                       └──────────────────┘    (§3.7, safe)
+```
+
+### 12.1 NETCONF transport (feature 1)
+A **NETCONF driver** alongside the SSH-gateway and gNMI transports, used to both
+**push** config (candidate datastore → validate → `commit`, with
+**confirmed-commit** for auto-rollback) and **pull** running-config
+(`<get-config>`). NETCONF runs over the SSH "netconf" subsystem (RFC 6242 framing
++ XML RPC), so it is built on the **already-allowlisted `golang.org/x/crypto/ssh`**
+(the device-SSH gateway precedent) + stdlib `encoding/xml` — **no new module**.
+The executor (§3.7) picks the transport per device capability: NETCONF where
+available (best: candidate + confirmed-commit), else gNMI Set, else CLI over the
+SSH gateway. Confirmed-commit is the safety jewel: push → `commit confirmed 120`
+→ post-check → confirm; miss the confirm window → device auto-reverts.
+
+### 12.2 Config store — internal or external (feature 2)
+A `ConfigStore` interface; the config text/XML is opaque, keyed by
+`(tenant, device, revision)` with metadata (hash, captured_at, trigger, author,
+transport). **Pluggable backends:**
+- **internal** (default): Postgres + the existing object/artifact store (like the
+  report `ArtifactStore`) — zero new infra.
+- **external** (opt-in): **Git** (configs-as-code — diff/blame/history for free,
+  the network-engineering norm) or **S3/MinIO** object storage. Selected by
+  `CONFIG_STORE_BACKEND`; credentials via the secret-custody Vault.
+Revisions are **immutable**; a config is stored **only when its hash changes**
+(dedup) so the 5-minute poll doesn't explode storage.
+
+### 12.3 Snapshots (feature 3)
+A **snapshot** is a labeled config revision with a trigger:
+`manual | scheduled | pre-change | post-change`, plus an optional **`golden`**
+(approved/intended) flag. The intent executor takes a **pre-change snapshot**
+automatically before every apply (the rollback target) and a **post-change**
+snapshot after. Scheduled daily snapshots give a backup history; `golden` marks
+the compliance baseline.
+
+### 12.4 Drift check every 5 min + Sync column (feature 4)
+A scheduled job (default `CONFIG_DRIFT_INTERVAL=5m`, reusing the report-pipeline
+worker/queue pattern) for each device: pull running-config → hash → compare to
+the **baseline** (the `golden` snapshot if set, else the previous backup):
+- **🟢 green** — matches the golden/approved baseline. In sync.
+- **🟡 amber** — changed since last check; a new revision was captured and a diff
+  recorded, pending review (or no golden set yet → compares to previous backup).
+- **🔴 red** — drifted from the **golden/intended** config (unauthorized /
+  non-compliant change) — raises a **drift Finding/Incident** with the diff.
+- **⚪ grey** — unknown / unreachable (couldn't fetch config).
+
+Surfaced as a **"Sync" column** in **Infrastructure → Devices** (per device:
+color + last-checked + a click-through to the diff), and as a fleet rollup.
+When an intent is active, "golden" can be *derived from intent* so drift = "the
+box no longer matches what we declared," closing the §8 loop at full-config
+granularity.
+
+### 12.5 Rollback (feature 5)
+Restore a device to any stored snapshot. Rollback is just an **apply of a
+known-good revision** through the same safe executor (§3.7): show the diff
+(current → snapshot), approve, push via NETCONF candidate + **confirmed-commit**
+(or vendor config-replace: IOS-XE `configure replace`, Junos `load override`),
+then **verify** the device now matches the snapshot. One-click "roll back to
+pre-change snapshot" is offered automatically when an intent apply fails its
+post-check.
+
+### 12.6 New surfaces / reuse
+- New pkg `config/` (collector, ConfigStore + backends, drift checker, NETCONF
+  driver), reusing the report-pipeline async substrate + the secret Vault for
+  store/device creds.
+- Devices gains a **Sync** column + a per-device **Config** tab (revision history,
+  diffs, snapshot/restore).
+- Routes `/api/devices/{id}/config[/snapshots|/diff|/rollback]`,
+  platform/automation-scoped, RBAC + audit.
+
+## 13. Open decisions
 - **Intent store**: Git-first (network-as-code, PR review) vs DB-first (UI-native)
   vs both (DB mirror of Git). Recommendation: DB for v1 UX, add Git sync in P3.
 - **Renderer engine**: hand-written Go templates (stdlib, matches the dependency
@@ -211,3 +314,13 @@ approvals, history) as a sibling of **Source of Truth**; new pkg `intent/`
 - **Auto-apply**: which kinds (if any) may skip approval, and the trust criteria.
 - **Verification depth**: config-presence (cheap) vs operational-state (e.g. SVI
   up, MAC learned) per intent kind.
+- **Config store backend**: internal PG/object (no new infra) vs Git (configs-as-
+  code, best history/diff) vs S3/MinIO. Recommendation: internal for C0, add Git
+  as the first external backend in C2.
+- **Golden baseline source**: an explicitly-approved snapshot vs *derived from
+  active intent* (drift = divergence from declared intent). Support both; prefer
+  intent-derived once the intent pipeline is live.
+- **NETCONF library**: hand-rolled over `x/crypto/ssh` + `encoding/xml` (no new
+  module, matches the dependency budget) vs adopting a NETCONF/automation library.
+- **Confirmed-commit coverage**: native on Junos/SR Linux; for EOS/IOS use
+  config-replace/checkpoint + verify-or-revert — confirm per-vendor rollback story.
