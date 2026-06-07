@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // Jira is an ITSM connector that AUTO-TICKETS alerts bi-directionally, mirroring
@@ -120,7 +121,7 @@ func NewJira(baseURL, email, apiToken, projectKey string) *Jira {
 		apiToken:      apiToken,
 		projectKey:    strings.TrimSpace(projectKey),
 		issueType:     "Task",
-		client:        &http.Client{Timeout: 15 * time.Second},
+		client:        safehttp.Client(15 * time.Second),
 		threshold:     severityRank("critical"),
 		thresholdName: "critical",
 		open:          make(map[string]*JiraTicket),

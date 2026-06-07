@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // ServiceNow is an ITSM connector that AUTO-TICKETS alerts bi-directionally:
@@ -142,7 +143,7 @@ func NewServiceNow(instanceURL, user, password string) *ServiceNow {
 		instanceURL:   strings.TrimRight(instanceURL, "/"),
 		user:          user,
 		password:      password,
-		client:        &http.Client{Timeout: 15 * time.Second},
+		client:        safehttp.Client(15 * time.Second),
 		threshold:     severityRank("critical"),
 		thresholdName: "critical",
 		open:          make(map[string]*ServiceNowTicket),

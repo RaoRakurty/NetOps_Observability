@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // Ntfy publishes alerts to an ntfy.sh topic — free push notifications to phone
@@ -33,7 +34,7 @@ func NewNtfy(server, topic, token string) *Ntfy {
 		server: strings.TrimRight(server, "/"),
 		topic:  topic,
 		token:  token,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: safehttp.Client(10 * time.Second),
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // pagerDutyEventsV2URL is the Events API v2 endpoint. A var (not const) so tests
@@ -24,7 +25,7 @@ type PagerDuty struct {
 func NewPagerDuty(routingKey string) *PagerDuty {
 	return &PagerDuty{
 		routingKey: routingKey,
-		client:     &http.Client{Timeout: 10 * time.Second},
+		client:     safehttp.Client(10 * time.Second),
 	}
 }
 

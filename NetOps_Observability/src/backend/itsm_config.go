@@ -3,12 +3,15 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 
 	"netops/backend/notify"
+	"netops/backend/safehttp"
 )
 
 // itsm_config.go — PER-TENANT, runtime-configurable, kv-persisted config for the
@@ -334,6 +337,9 @@ func validateITSM(c itsmConfig) error {
 		if !strings.HasPrefix(c.ServiceNow.InstanceURL, "http://") && !strings.HasPrefix(c.ServiceNow.InstanceURL, "https://") {
 			return errors.New("ServiceNow: instance URL must start with http:// or https://")
 		}
+		if err := validateOutboundURL(c.ServiceNow.InstanceURL); err != nil {
+			return fmt.Errorf("ServiceNow: %w", err)
+		}
 	}
 	if c.Jira.Enabled {
 		if c.Jira.BaseURL == "" {
@@ -345,8 +351,24 @@ func validateITSM(c itsmConfig) error {
 		if !strings.HasPrefix(c.Jira.BaseURL, "http://") && !strings.HasPrefix(c.Jira.BaseURL, "https://") {
 			return errors.New("Jira: base URL must start with http:// or https://")
 		}
+		if err := validateOutboundURL(c.Jira.BaseURL); err != nil {
+			return fmt.Errorf("Jira: %w", err)
+		}
 	}
 	return nil
+}
+
+// validateOutboundURL rejects an integration target that the SSRF guard
+// (safehttp) would refuse at request time (SR-015), giving the admin an
+// immediate error at save rather than a silent never-tickets later. Internal
+// targets (self-hosted ServiceNow/Jira, lab) are accommodated via
+// SSRF_ALLOWED_HOSTS / SSRF_ALLOW_PRIVATE — see the safehttp package.
+func validateOutboundURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	return safehttp.ValidateURL(u.Hostname())
 }
 
 // handleITSMConfig serves GET/PUT /api/notify/itsm, scoped to the caller's tenant.

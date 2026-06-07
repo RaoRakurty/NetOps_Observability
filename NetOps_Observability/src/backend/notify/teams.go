@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // Teams posts to a Microsoft Teams Incoming Webhook using the MessageCard
@@ -19,7 +20,7 @@ type Teams struct {
 }
 
 func NewTeams(webhookURL string) *Teams {
-	return &Teams{webhookURL: webhookURL, client: &http.Client{Timeout: 10 * time.Second}}
+	return &Teams{webhookURL: webhookURL, client: safehttp.Client(10 * time.Second)}
 }
 
 func (t *Teams) Name() string { return "teams" }
@@ -77,7 +78,7 @@ func PostWebhook(url, text string) error {
 		return errors.New("webhook url is empty")
 	}
 	buf, _ := json.Marshal(map[string]string{"text": text})
-	c := &http.Client{Timeout: 10 * time.Second}
+	c := safehttp.Client(10 * time.Second)
 	resp, err := c.Post(url, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		return err

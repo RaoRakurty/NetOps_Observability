@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netops/backend/models"
+	"netops/backend/safehttp"
 )
 
 // Slack posts incident messages to an Incoming Webhook URL.
@@ -21,7 +22,7 @@ type Slack struct {
 func NewSlack(webhookURL string) *Slack {
 	return &Slack{
 		webhookURL: webhookURL,
-		client:     &http.Client{Timeout: 10 * time.Second},
+		client:     safehttp.Client(10 * time.Second),
 	}
 }
 
