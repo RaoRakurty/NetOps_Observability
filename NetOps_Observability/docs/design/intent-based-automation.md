@@ -1,6 +1,55 @@
 # Intent-Based Automation — Architecture (with Opsis Ai intake)
 
-Status: **design / proposal**. Date: 2026-06-07.
+Status: **design / proposal — awaiting review & sign-off (no code yet).**
+Date: 2026-06-07.
+
+---
+
+## 0. Executive summary & review guide
+
+**What this is.** A plan to turn a *desired outcome* — typed into a form, written
+as a declarative file, or asked in plain English to **Opsis Ai** ("configure VLAN
+100 on the access leaves in BLR") — into the right config on the right devices,
+**safely**, and then keep it that way. Plus a config-management layer: **NETCONF
+push, config backup/storage, snapshots, 5-minute drift detection with a Sync
+status, and rollback.**
+
+**The one idea that drives the whole design.** Because a request can come from an
+LLM, **Opsis Ai only *proposes* a structured intent (validated JSON) — it never
+renders config and never touches a device.** A deterministic, reviewable,
+human-approved pipeline does everything downstream. (Zero-trust; OWASP LLM02/08.)
+
+**What you're being asked to review.**
+- The **pipeline** (§3) and **intent model** (§4) — is this the right shape?
+- The **safety/trust model** for AI-originated change (§6) — is it strict enough?
+- The **config-management subsystem** (§12) — does it match features 1–5?
+- The **build phases** (§10) and the **decisions to confirm** (below / §13).
+
+**How to read it.** §0 → §3 (the pipeline) → §5 (the VLAN-100 walkthrough) → §6
+(safety) → §12 (config mgmt) → §10 (phasing). The rest is depth.
+
+### Decisions to confirm before we build (sign-off checklist)
+1. **Approval posture** — AI-originated changes are *approval-required, dry-run-
+   first* by default. OK? Any kinds allowed to auto-apply later, and when?
+2. **Intent store** — DB-first (UI-native) for v1, add Git (network-as-code) later
+   — or Git-first from day one?
+3. **Config store backend** — internal (Postgres/object, no new infra) for v1;
+   external **Git** vs **S3/MinIO** as the first add-on?
+4. **Golden baseline for drift** — an explicitly-approved snapshot, or *derived
+   from active intent*, or both?
+5. **NETCONF** — hand-rolled over the existing `x/crypto/ssh` + `encoding/xml` (no
+   new dependency, matches the budget) — acceptable?
+6. **Rendering engine** — in-house Go templates (stdlib) vs an external automation
+   engine (Ansible/Nornir) as an executor driver.
+7. **First scope** — start with the **config-management track (C0: backup +
+   history, read-only/no device writes)** as the safe entry point, or the
+   **intent track (P0: NL→intent→diff)** first? (They can run in parallel.)
+8. **Vendor priority** — confirm the first drivers: Arista EOS + Nokia SR Linux
+   (the lab), then Cisco IOS-XE/Junos?
+
+Annotate inline or reply with answers; nothing gets built until you're satisfied.
+
+---
 
 ## 1. Goal
 
