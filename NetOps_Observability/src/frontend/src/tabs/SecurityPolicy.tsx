@@ -625,6 +625,10 @@ function PolicySimulator({ catalog }: { catalog: PolicyCatalog }) {
 export default function SecurityPolicy() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
+  // Only local accounts can change their password in-app — federated accounts
+  // (oidc/saml/ldap/tacacs) manage it at the IdP. The "My Password" tab is hidden
+  // for them; the backend also refuses the change. Empty source = legacy local.
+  const localAccount = !user?.auth_source || user.auth_source === "local";
 
   const [catalog, setCatalog] = useState<PolicyCatalog | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -712,9 +716,11 @@ export default function SecurityPolicy() {
           <button role="tab" aria-selected={mode === "simulator"} className={mode === "simulator" ? "active" : ""} onClick={() => setMode("simulator")}>
             Simulator
           </button>
-          <button role="tab" aria-selected={mode === "mypassword"} className={mode === "mypassword" ? "active" : ""} onClick={() => setMode("mypassword")}>
-            My Password
-          </button>
+          {localAccount && (
+            <button role="tab" aria-selected={mode === "mypassword"} className={mode === "mypassword" ? "active" : ""} onClick={() => setMode("mypassword")}>
+              My Password
+            </button>
+          )}
         </div>
       </header>
 
@@ -780,15 +786,15 @@ export default function SecurityPolicy() {
             </div>
           )}
         </>
-      ) : mode === "simulator" ? (
-        <PolicySimulator catalog={catalog} />
-      ) : (
+      ) : mode === "mypassword" && localAccount ? (
         // Self-service: change your own password. The card reads the resolved
         // password policy live, so it enforces exactly the rules authored in the
-        // Editor tab — the "comply" companion to "author".
+        // Editor tab — the "comply" companion to "author". Local accounts only.
         <div style={{ marginTop: 12 }}>
           <ChangePasswordCard />
         </div>
+      ) : (
+        <PolicySimulator catalog={catalog} />
       )}
     </div>
   );

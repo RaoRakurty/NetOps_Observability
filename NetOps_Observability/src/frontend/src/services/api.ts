@@ -461,6 +461,10 @@ export type AuthUser = {
   // platform_admin = the cross-tenant platform owner. Gates infra-stack
   // monitoring + platform-wide admin in the UI. Mirrors the backend rule.
   platform_admin?: boolean;
+  // auth_source = how the account authenticates: local | oidc | saml | ldap |
+  // tacacs. Only local accounts can change their password in-app (federated
+  // passwords live at the IdP). Empty/undefined = legacy local account.
+  auth_source?: string;
   last_login_at?: string;
 };
 export type LoginResponse = { token: string; refresh_token?: string; expires_in?: number; user: AuthUser };

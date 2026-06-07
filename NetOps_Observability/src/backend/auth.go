@@ -229,6 +229,14 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}{toPublic(user), cross})
 }
 
+// isLocalAccount reports whether an account's password is managed locally (so it
+// can be changed in-app). Federated sources (oidc/saml/ldap/tacacs) are managed
+// by the IdP. An empty source means a legacy/bootstrap local account.
+func isLocalAccount(authSource string) bool {
+	s := strings.ToLower(strings.TrimSpace(authSource))
+	return s == "" || s == "local"
+}
+
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
@@ -251,7 +259,19 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, ok := s.users.Get(claims.Sub)
-	if !ok || !verifyPassword(req.CurrentPassword, user.PasswordHash) {
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("current password incorrect"))
+		return
+	}
+	// Only LOCAL accounts have a password we own. Federated accounts (oidc/saml/
+	// ldap/tacacs) authenticate against the IdP and carry no usable local hash, so
+	// refuse explicitly rather than returning a misleading "current password
+	// incorrect". The UI also hides the option for them; this is the enforced rule.
+	if !isLocalAccount(user.AuthSource) {
+		writeError(w, http.StatusBadRequest, errors.New("password is managed by your identity provider; change it there"))
+		return
+	}
+	if !verifyPassword(req.CurrentPassword, user.PasswordHash) {
 		writeError(w, http.StatusUnauthorized, errors.New("current password incorrect"))
 		return
 	}

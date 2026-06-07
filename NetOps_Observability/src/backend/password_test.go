@@ -54,3 +54,20 @@ func TestUniqueSalts(t *testing.T) {
 		t.Fatalf("two hashes of the same password should differ (random salt)")
 	}
 }
+
+// TestIsLocalAccount locks which auth sources may change their password in-app:
+// only local (or legacy empty); federated sources are managed by the IdP.
+func TestIsLocalAccount(t *testing.T) {
+	local := []string{"", "local", "LOCAL", " local "}
+	for _, s := range local {
+		if !isLocalAccount(s) {
+			t.Errorf("isLocalAccount(%q) = false, want true", s)
+		}
+	}
+	federated := []string{"oidc", "saml", "ldap", "tacacs", "OIDC"}
+	for _, s := range federated {
+		if isLocalAccount(s) {
+			t.Errorf("isLocalAccount(%q) = true, want false (IdP-managed)", s)
+		}
+	}
+}
