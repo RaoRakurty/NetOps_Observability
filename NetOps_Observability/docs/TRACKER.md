@@ -48,6 +48,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | 7 | 69 NOC alert rules (availability/errors/saturation/env/routing/capacity/SLA/security/self-health) | `3147014` |
 | 24 | Collectors v2c/v3 split + gNMI/NETCONF session counters + device discovery-source attribution | `dd904f0` |
 | — | SNMPv3 USM engine (stdlib) + per-device v3 polling | `9a362cc` |
+| — | **SNMP trap receiver (v1/v2c/v3)** — passive UDP/162 listener (`collectors/snmptrap.go`, Pool Collector, reuses BER+USM engine; v3 auth+priv verified/decrypted) → Vector http_server source → `netops.snmptrap` → OpenSearch `netops-snmptrap-*` → Explore→Logs "SNMP traps" (tenant-visible). Opt-in `FEATURE_SNMP_TRAPS`; host 162→1162. App logs made platform-only. Verified live (synthetic + real Arista trap). | `6738b87` |
 | — | gnmic sidecar streaming telemetry → VictoriaMetrics | `9ceb889` |
 | — | Expanded SNMP + gNMI metric coverage | `8f4db1e` |
 
