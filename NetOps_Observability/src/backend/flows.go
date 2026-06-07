@@ -2,12 +2,29 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
+
+// isAlphaToken reports whether s is non-empty and contains only ASCII letters.
+// Used to allowlist enum-like query parameters (e.g. severity) before they are
+// interpolated into a ClickHouse string literal — quote-stripping is not enough
+// because ClickHouse honors backslash escapes (SR-011).
+func isAlphaToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
 
 // flows.go — ClickHouse-backed analytics endpoints.
 //
@@ -111,7 +128,17 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	sev := r.URL.Query().Get("severity")
 	var conds []string
 	if sev != "" {
-		conds = append(conds, "severity = '"+strings.ReplaceAll(sev, "'", "")+"'")
+		// SR-011: severity must be an allowlisted alphabetic token. Quote-stripping
+		// alone is unsafe — ClickHouse honors backslash escapes, so a value ending
+		// in `\` would escape the closing quote and break out of the string literal.
+		// (The Python correlation service guards this exact case with .isalpha().)
+		// Tenant isolation is independently enforced by ClickHouse row policies, but
+		// we still must not let the query shape be attacker-controlled.
+		if !isAlphaToken(sev) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid severity"))
+			return
+		}
+		conds = append(conds, "severity = '"+sev+"'")
 	}
 	// Tenant isolation: a scoped principal only sees findings on devices it can
 	// view (matched by the finding's `device` column against the device id/name).

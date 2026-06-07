@@ -43,6 +43,13 @@ func hashPassword(password string) (string, error) {
 }
 
 func verifyPassword(password, encoded string) bool {
+	// SR-013: bound the input BEFORE running the 600k-round KDF. An over-long
+	// password can never be valid (creation/change reject > maxPasswordLen), so
+	// reject it cheaply rather than hashing megabytes 600k times — closes a
+	// pre-hash amplification DoS on the unauthenticated login path.
+	if len(password) > maxPasswordLen {
+		return false
+	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 4 || parts[0] != "pbkdf2_sha256" {
 		return false

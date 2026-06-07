@@ -55,6 +55,28 @@ func TestUniqueSalts(t *testing.T) {
 	}
 }
 
+// SR-013: over-long passwords are rejected at create/change and cheaply refused
+// by verifyPassword BEFORE the 600k-round KDF runs (pre-hash amplification DoS).
+func TestPasswordLengthBounds(t *testing.T) {
+	long := strings.Repeat("a", maxPasswordLen+1)
+	if err := validatePassword(long); err != errLongPassword {
+		t.Errorf("over-long password should be errLongPassword, got %v", err)
+	}
+	if err := validatePassword("short"); err != errShortPassword {
+		t.Errorf("short password should be errShortPassword, got %v", err)
+	}
+	if err := validatePassword("a-perfectly-fine-passphrase"); err != nil {
+		t.Errorf("valid password rejected: %v", err)
+	}
+	hash, err := hashPassword("correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("hashPassword: %v", err)
+	}
+	if verifyPassword(long, hash) {
+		t.Error("verifyPassword accepted an over-long password")
+	}
+}
+
 // TestIsLocalAccount locks which auth sources may change their password in-app:
 // only local (or legacy empty); federated sources are managed by the IdP.
 func TestIsLocalAccount(t *testing.T) {

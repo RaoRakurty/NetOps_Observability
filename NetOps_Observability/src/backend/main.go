@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -395,7 +396,7 @@ func main() {
 	mux := http.NewServeMux()
 	srv.routes(mux)
 
-	handler := withCORS(withLogging(srv.withAuth(srv.withAudit(mux))))
+	handler := withCORS(withLogging(withBodyLimit(maxRequestBodyBytes(), srv.withAuth(srv.withAudit(mux)))))
 
 	// Internal CA bootstrap (#18 phase 2). When TLS_INTERNAL_CA=true, self-issue
 	// the API server + nginx client SVIDs and the CA bundle (CA key sealed by the
@@ -417,6 +418,7 @@ func main() {
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB header cap (SR-012); default is also 1 MiB, set explicitly.
 	}
 	if tlsSrv != nil {
 		httpSrv.TLSConfig = tlsSrv.config
@@ -838,6 +840,31 @@ func withCORS(next http.Handler) http.Handler {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxRequestBodyBytes is the global per-request body backstop. nginx caps ingress
+// at 50m, but in TLS/mTLS mode the Go server is reachable directly (bypassing
+// nginx), and most handlers decode JSON without their own MaxBytesReader (SR-012).
+// This wraps every request body so an oversized payload is refused at the reader
+// rather than fully buffered into a struct. Tighter per-handler caps (copilot
+// 256 KiB, login 64 KiB, the 1 MiB config handlers) still apply on top — the
+// inner, smaller limit wins. Override with MAX_REQUEST_BODY_BYTES.
+func maxRequestBodyBytes() int64 {
+	if v := os.Getenv("MAX_REQUEST_BODY_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 50 << 20 // 50 MiB, matching nginx client_max_body_size
+}
+
+func withBodyLimit(limit int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})

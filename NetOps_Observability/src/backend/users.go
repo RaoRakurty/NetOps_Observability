@@ -390,8 +390,16 @@ func (s *userStore) SeedAdmin(username, password string) error {
 // or normalized Postgres rows. Both userStore and pgUsersStore call them so the
 // rules can't drift apart.
 
+// maxPasswordLen caps password length to bound the work the PBKDF2 KDF
+// (pbkdf2Iter = 600k HMAC-SHA256 rounds) performs per login/change. Without an
+// upper bound, a multi-MB "password" forces the server to hash the whole input
+// 600k times per request — an amplification DoS on the (unauthenticated) login
+// path (SR-013). 128 chars comfortably exceeds any real passphrase.
+const maxPasswordLen = 128
+
 var (
 	errShortPassword        = errors.New("password must be at least 8 characters")
+	errLongPassword         = errors.New("password must be at most 128 characters")
 	errLastSuperAdmin       = errors.New("cannot demote or disable the last super-admin")
 	errLastSuperAdminDelete = errors.New("cannot delete the last super-admin")
 	errNoSuchUser           = errors.New("no such user")
@@ -403,6 +411,9 @@ var (
 func validatePassword(password string) error {
 	if len(password) < 8 {
 		return errShortPassword
+	}
+	if len(password) > maxPasswordLen {
+		return errLongPassword
 	}
 	return nil
 }
