@@ -54,9 +54,11 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "reports", LevelWrite); !ok {
+	claims, ok := s.requirePerm(w, r, "reports", LevelWrite)
+	if !ok {
 		return
 	}
+	tenant, cross := principalTenant(claims)
 	var req struct {
 		ID       string   `json:"id"`
 		Channels []string `json:"channels,omitempty"`
@@ -72,7 +74,13 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 	// execution; the client polls /api/reports/executions/{id} for progress.
 	if s.reportPipeline != nil {
 		o, ok := s.saved.Get(id)
-		if !ok || o.Type != "report" {
+		// Tenant isolation (SR-002): the saved store Get is unscoped, and EnqueueNow
+		// runs the job — and delivers to its channels — under the report's OWN tenant.
+		// Without this ownership check a tenant holding reports:write could trigger
+		// another tenant's report and have it exfiltrated to that tenant's channels
+		// (or, with link-delivery, obtain the capability URL). 404 (not 403) so the
+		// id's existence in another tenant isn't revealed.
+		if !ok || o.Type != "report" || !canSeeSaved(o, tenant, cross) {
 			writeError(w, http.StatusNotFound, errors.New("report not found"))
 			return
 		}
@@ -90,7 +98,12 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Synchronous fallback (file backend).
+	// Synchronous fallback (file backend). Same tenant-ownership gate as the async
+	// path (SR-002) before running/delivering the report.
+	if o, ok := s.saved.Get(id); !ok || o.Type != "report" || !canSeeSaved(o, tenant, cross) {
+		writeError(w, http.StatusNotFound, errors.New("report not found"))
+		return
+	}
 	run, err := s.reports.RunNow(id, req.Channels)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"netops/backend/alerts"
 	"netops/backend/models"
 )
 
@@ -26,7 +27,13 @@ func tenantServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatalf("savedStore: %v", err)
 	}
-	return &server{discovery: d, saved: sv}
+	// Device/rule handlers now enforce RBAC (SR-003) via s.roles — seed the
+	// built-in role store so requirePerm resolves.
+	roles, err := newRoleStore(t.TempDir() + "/roles.json")
+	if err != nil {
+		t.Fatalf("roleStore: %v", err)
+	}
+	return &server{discovery: d, saved: sv, roles: roles}
 }
 
 // req builds a request whose context carries the given principal's claims, as
@@ -114,6 +121,98 @@ func TestHTTPDeviceDeleteCrossTenantIs404(t *testing.T) {
 	// globex-core must still exist.
 	if _, ok := s.discovery.Get("globex-core"); !ok {
 		t.Fatal("TENANT LEAK: acme deleted globex-core")
+	}
+}
+
+func readonly() jwtClaims {
+	return jwtClaims{Sub: "ro@acme", Role: RoleReadOnly, Tenant: "acme"}
+}
+
+// SR-003: device mutations require infrastructure:write — a read-only principal
+// (authenticated) must be refused, not silently allowed by the auth-only chain.
+func TestHTTPDeviceWriteRequiresPermission(t *testing.T) {
+	s := tenantServer(t)
+
+	// read-only POST → 403, and no device is created.
+	w := httptest.NewRecorder()
+	s.handleDevices(w, req("POST", "/api/devices", `{"id":"ro1"}`, readonly()))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("read-only create should be 403, got %d", w.Code)
+	}
+	if _, ok := s.discovery.Get("ro1"); ok {
+		t.Fatal("read-only principal created a device despite 403")
+	}
+
+	// read-only DELETE of an existing device → 403, device survives.
+	w = httptest.NewRecorder()
+	s.handleDeviceByID(w, req("DELETE", "/api/devices/acme-core", "", readonly()))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("read-only delete should be 403, got %d", w.Code)
+	}
+	if _, ok := s.discovery.Get("acme-core"); !ok {
+		t.Fatal("read-only principal deleted a device despite 403")
+	}
+
+	// operator (infrastructure:write) DELETE of its own device → 204.
+	w = httptest.NewRecorder()
+	s.handleDeviceByID(w, req("DELETE", "/api/devices/acme-core", "", acme()))
+	if w.Code != http.StatusNoContent {
+		t.Errorf("operator delete of own device should be 204, got %d", w.Code)
+	}
+}
+
+// SR-004: alert rules are platform-global; a scoped tenant must neither read nor
+// write them. Only the platform owner (cross-tenant super-admin) may.
+func TestHTTPRulesPlatformOwnerOnly(t *testing.T) {
+	s := tenantServer(t)
+	s.alerts = alerts.NewEngine("", nil)
+
+	// tenant operator GET → 403.
+	w := httptest.NewRecorder()
+	s.handleRules(w, req("GET", "/api/rules", "", acme()))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("tenant GET /api/rules should be 403, got %d", w.Code)
+	}
+
+	// tenant operator POST → 403, no rule added.
+	w = httptest.NewRecorder()
+	s.handleRules(w, req("POST", "/api/rules", `{"name":"x","expr":"up==0"}`, acme()))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("tenant POST /api/rules should be 403, got %d", w.Code)
+	}
+
+	// platform owner GET → 200.
+	w = httptest.NewRecorder()
+	s.handleRules(w, req("GET", "/api/rules", "", superA()))
+	if w.Code != http.StatusOK {
+		t.Errorf("platform owner GET /api/rules should be 200, got %d", w.Code)
+	}
+}
+
+// SR-002: a tenant holding reports:write must not be able to run another tenant's
+// report (which would deliver to the victim tenant's channels). Cross-tenant
+// run-now → 404, before any render/delivery.
+func TestHTTPReportRunNowCrossTenantIs404(t *testing.T) {
+	s := tenantServer(t)
+
+	// acme owns a report saved object.
+	w := httptest.NewRecorder()
+	s.handleSaved(w, req("POST", "/api/saved", `{"type":"report","name":"acme rpt","body":{}}`, acme()))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("acme create report: %d", w.Code)
+	}
+	var obj SavedObject
+	json.NewDecoder(w.Body).Decode(&obj)
+
+	// A globex TENANT super-admin (reports:write, but scoped to globex — not the
+	// cross-tenant platform owner) tries to run acme's report → 404. reportPipeline
+	// and reports are nil here; the ownership gate returns 404 BEFORE either is
+	// touched, which is exactly the property under test.
+	globexAdmin := jwtClaims{Sub: "admin@globex", Role: RoleSuperAdmin, Tenant: "globex"}
+	w = httptest.NewRecorder()
+	s.handleReportRunNow(w, req("POST", "/api/reports/run", `{"id":"`+obj.ID+`"}`, globexAdmin))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("cross-tenant report run-now should be 404, got %d", w.Code)
 	}
 }
 

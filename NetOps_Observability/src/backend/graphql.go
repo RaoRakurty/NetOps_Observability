@@ -48,6 +48,7 @@ func (s *server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	// Tenant isolation: a scoped principal sees only its own devices/alerts here,
 	// matching the REST surface (this endpoint is behind the same auth middleware).
 	claims, _ := userFrom(r.Context())
+	_, cross := principalTenant(claims)
 
 	// Naïve string-match dispatch. Replace with a real parser when we
 	// promote this from scaffold to product.
@@ -69,16 +70,29 @@ func (s *server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		data["alerts"] = active
 	}
 	if contains(q, "rules") {
-		data["rules"] = s.alerts.Rules()
+		// SR-004/SR-010: rules are platform-global (cross-tenant leak of infra
+		// topology); match the REST gate — platform owner only.
+		if cross {
+			data["rules"] = s.alerts.Rules()
+		} else {
+			data["rules"] = []any{}
+		}
 	}
 	if contains(q, "health") {
-		data["health"] = map[string]any{
-			"status":     "healthy",
-			"version":    version,
-			"discovery":  s.discovery.Health(),
-			"collectors": s.collectors.Health(),
-			"alerts":     s.alerts.Health(),
+		// SR-010: collectors/discovery health is a fleet-wide aggregate the REST
+		// handleCollectors restricts to the platform owner; don't leak it to a
+		// scoped tenant via GraphQL. Tenant callers get only liveness + their
+		// own alert health.
+		health := map[string]any{
+			"status":  "healthy",
+			"version": version,
+			"alerts":  s.alerts.Health(),
 		}
+		if cross {
+			health["discovery"] = s.discovery.Health()
+			health["collectors"] = s.collectors.Health()
+		}
+		data["health"] = health
 	}
 	if contains(q, "__schema") {
 		data["__schema"] = staticSchema()

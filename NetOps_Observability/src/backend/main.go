@@ -615,13 +615,23 @@ func (s *server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
-	claims, _ := userFrom(r.Context())
 	switch r.Method {
 	case http.MethodGet:
-		// Tenant isolation: scoped principals only see their tenant's (and
-		// shared/global) devices.
+		// SR-003: read requires infrastructure:read (the middleware chain only
+		// authenticates; RBAC is per-handler). Tenant isolation: scoped principals
+		// only see their tenant's (and shared/global) devices.
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+		if !ok {
+			return
+		}
 		writeJSON(w, http.StatusOK, visibleDevices(s.discovery.Devices(), claims))
 	case http.MethodPost:
+		// SR-003: creating a device is a write — gate it. Previously any
+		// authenticated principal (incl. read-only) could create/overwrite devices.
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
+			return
+		}
 		var d models.Device
 		if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -653,10 +663,14 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	claims, _ := userFrom(r.Context())
-	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
+		// SR-003: read requires infrastructure:read.
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
 		d, ok := s.discovery.Get(id)
 		// 404 (not 403) for out-of-tenant devices: don't reveal that the id
 		// exists in another tenant.
@@ -666,6 +680,12 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, d)
 	case http.MethodDelete:
+		// SR-003: deleting a device is a write — gate it.
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
 		// A scoped principal may only delete a device owned by its own tenant
 		// (not shared/global ones, which belong to no single tenant).
 		if !cross {
@@ -711,6 +731,14 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleRules(w http.ResponseWriter, r *http.Request) {
+	// SR-004: alert rules are PLATFORM-GLOBAL (no TenantID) — they encode device
+	// names/thresholds/topology and fire across every tenant. So both reading and
+	// writing them is platform-owner-only, mirroring handleCollectors. (A future
+	// per-tenant rule model would relax the read gate; until then a scoped tenant
+	// must neither enumerate global rules nor inject one.)
+	if _, ok := s.requireCrossTenant(w, r); !ok {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.alerts.Rules())
@@ -744,7 +772,12 @@ func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *server) handleDiscoveryRefresh(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleDiscoveryRefresh(w http.ResponseWriter, r *http.Request) {
+	// SR-003: triggering a discovery scan (against the configured CIDR/Netbox) is
+	// an infrastructure write; previously it had no authz at all.
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		return
+	}
 	s.discovery.RefreshNow()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "refresh scheduled"})
 }
