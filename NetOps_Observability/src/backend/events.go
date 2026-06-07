@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -127,9 +128,35 @@ func (h *Hub) Count() int {
 // HTTP handler: upgrade and serve.
 // ----------------------------------------------------------------------------
 
+// wsOriginAllowed defends WebSocket upgrades against Cross-Site WebSocket
+// Hijacking (SR-006). WS handshakes are exempt from the same-origin policy and
+// CORS, so a malicious page could open a socket to our event feed using a token
+// it observed. Browsers always send Origin on a WS handshake, so: a present
+// Origin MUST be same-origin (matches the request Host) or explicitly
+// allowlisted (CORS_ALLOWED_ORIGINS). A missing Origin is a non-browser client
+// (CLI/agent) which can't be a CSWSH victim and still needs a valid token.
+func wsOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	return corsAllowedOrigins()[origin]
+}
+
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		http.Error(w, "websocket upgrade required", http.StatusBadRequest)
+		return
+	}
+	if !wsOriginAllowed(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
 	key := r.Header.Get("Sec-WebSocket-Key")

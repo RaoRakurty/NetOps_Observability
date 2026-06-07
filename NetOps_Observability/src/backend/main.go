@@ -832,11 +832,36 @@ func envOr(key, fallback string) string {
 
 func envBool(key string) bool { return os.Getenv(key) == "true" }
 
+// corsAllowedOrigins is the explicit cross-origin allowlist (SR-005). The SPA is
+// served same-origin behind nginx on :8000, so by DEFAULT no CORS headers are
+// emitted (the previous wildcard `*` let any site read API JSON if it held a
+// token, and broadcast the full method surface). Set CORS_ALLOWED_ORIGINS to a
+// comma-separated list only if the API must be reached from another origin.
+func corsAllowedOrigins() map[string]bool {
+	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
+	if raw == "" {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, o := range strings.Split(raw, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out[o] = true
+		}
+	}
+	return out
+}
+
 func withCORS(next http.Handler) http.Handler {
+	allowed := corsAllowedOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		origin := r.Header.Get("Origin")
+		// Reflect ONLY an explicitly-allowlisted origin — never a wildcard.
+		if origin != "" && allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

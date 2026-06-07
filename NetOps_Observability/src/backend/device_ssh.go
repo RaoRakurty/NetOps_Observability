@@ -468,6 +468,12 @@ func wsUpgrade(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
 		http.Error(w, "websocket upgrade required", http.StatusBadRequest)
 		return nil, errors.New("not a websocket request")
 	}
+	// SR-006: reject cross-origin WS handshakes (CSWSH). Shared with the
+	// /api/events upgrade; see wsOriginAllowed in events.go.
+	if !wsOriginAllowed(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return nil, errors.New("forbidden origin")
+	}
 	key := r.Header.Get("Sec-WebSocket-Key")
 	if key == "" {
 		http.Error(w, "missing Sec-WebSocket-Key", http.StatusBadRequest)
