@@ -1,0 +1,105 @@
+name: publish-images
+
+# SC-006 (provenance + SBOM): on a version tag, build the four app images, push
+# them to PRIVATE GHCR, and attach a verifiable SLSA build-provenance attestation
+# plus a CycloneDX SBOM to each pushed digest.
+#
+# This does NOT change the deploy path: install.py / docker compose still BUILD
+# images locally on the host (the offline-buildable ethos, CLAUDE.md). Publishing
+# here is purely for provenance/SBOM/distribution. Triggered on `v*.*.*` tags
+# (immutable releases) or manual dispatch — never per-push (4 image builds).
+#
+# Packages are private by default on first push; keep them private in GHCR
+# settings (the correlation image carries readable Python source).
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Write scopes confined to THIS job; every other workflow stays contents:read.
+    permissions:
+      contents: read
+      packages: write # push images to GHCR
+      id-token: write # OIDC for keyless attestation signing
+      attestations: write # write provenance/SBOM attestations
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.backend
+          - name: correlation
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.correlation
+          - name: nginx
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.nginx
+          - name: frontend
+            dockerfile: NetOps_Observability/deployment/docker/Dockerfile.frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The frontend image copies a prebuilt SPA bundle (src/frontend/dist),
+      # which is gitignored — build it here, same as the host install does.
+      - if: matrix.name == 'frontend'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+      - if: matrix.name == 'frontend'
+        working-directory: NetOps_Observability/src/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compute (lowercase) image ref
+        id: img
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netops-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ steps.img.outputs.ref }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: NetOps_Observability
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # SLSA build provenance, attached to the image digest and verifiable with
+      # `gh attestation verify oci://<image>@<digest>`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ${{ steps.img.outputs.ref }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # CycloneDX SBOM of the actual pushed image (uses the docker login creds).
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.img.outputs.ref }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.name }}.cdx.json
+          artifact-name: sbom-${{ matrix.name }}
