@@ -30,6 +30,7 @@ jobs:
           scan-ref: .
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
           # Blocking on OUR layers; ignore-unfixed triages base/distro CVEs that
           # have no fix available yet (SC-001) so they don't hard-block merges.
           ignore-unfixed: true

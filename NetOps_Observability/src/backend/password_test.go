@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -59,10 +60,10 @@ func TestUniqueSalts(t *testing.T) {
 // by verifyPassword BEFORE the 600k-round KDF runs (pre-hash amplification DoS).
 func TestPasswordLengthBounds(t *testing.T) {
 	long := strings.Repeat("a", maxPasswordLen+1)
-	if err := validatePassword(long); err != errLongPassword {
+	if err := validatePassword(long); !errors.Is(err, errLongPassword) {
 		t.Errorf("over-long password should be errLongPassword, got %v", err)
 	}
-	if err := validatePassword("short"); err != errShortPassword {
+	if err := validatePassword("short"); !errors.Is(err, errShortPassword) {
 		t.Errorf("short password should be errShortPassword, got %v", err)
 	}
 	if err := validatePassword("a-perfectly-fine-passphrase"); err != nil {

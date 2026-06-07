@@ -537,7 +537,7 @@ func jwtSecret() string {
 
 // devFallbackSecret is the publicly-known signing secret used ONLY when no
 // JWT_SECRET is configured AND dev mode was opted into (ALLOW_DEV_SECRETS=true).
-const devFallbackSecret = "dev-only-do-not-use-in-production"
+const devFallbackSecret = "dev-only-do-not-use-in-production" // #nosec G101 -- intentionally public placeholder, not a real credential; ensureSigningSecret fails closed unless ALLOW_DEV_SECRETS=true
 
 // ensureSigningSecret fails the process closed (SR-017) when no JWT_SECRET is
 // set. The fallback secret is public, and it also keys report/export capability

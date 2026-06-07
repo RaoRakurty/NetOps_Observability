@@ -634,7 +634,8 @@ func (r *trapReceiver) resolve(ip string) (Target, bool) {
 }
 
 func (r *trapReceiver) Run(ctx context.Context) error {
-	pc, err := net.ListenPacket("udp", r.addr)
+	var lc net.ListenConfig
+	pc, err := lc.ListenPacket(ctx, "udp", r.addr)
 	if err != nil {
 		r.mu.Lock()
 		r.status.Healthy = false

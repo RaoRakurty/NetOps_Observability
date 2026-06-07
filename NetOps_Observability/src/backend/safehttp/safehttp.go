@@ -23,6 +23,7 @@
 package safehttp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -32,6 +33,23 @@ import (
 	"syscall"
 	"time"
 )
+
+// resolveHost looks up a host's IPs with a bounded context (noctx-clean). Used by
+// the allowlist and the save-time pre-check; the dial-time Control hook is the
+// actual SSRF enforcement.
+func resolveHost(host string) ([]net.IP, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, len(addrs))
+	for i, a := range addrs {
+		ips[i] = a.IP
+	}
+	return ips, nil
+}
 
 // maxRedirects bounds redirect chains; each hop is re-validated by the dialer.
 const maxRedirects = 5
@@ -104,7 +122,7 @@ func allowlisted(ip net.IP) bool {
 			continue
 		}
 		// Hostname: resolve and compare.
-		if addrs, err := net.LookupIP(tok); err == nil {
+		if addrs, err := resolveHost(tok); err == nil {
 			for _, a := range addrs {
 				if a.Equal(ip) {
 					return true
@@ -155,7 +173,7 @@ func ValidateURL(host string) error {
 		}
 		return fmt.Errorf("%w: %s", ErrBlocked, ip)
 	}
-	addrs, err := net.LookupIP(host)
+	addrs, err := resolveHost(host)
 	if err != nil || len(addrs) == 0 {
 		return nil // unresolved — let the dialer decide at request time
 	}

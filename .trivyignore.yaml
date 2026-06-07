@@ -1,0 +1,13 @@
+# Trivy ignore file (SC-001). Scoped, justified exceptions only — the check stays
+# active everywhere else.
+misconfigurations:
+  # DS-0002 "Specify a USER" — intentionally NOT applied to the swtpm sealing
+  # sidecar. swtpm is a DORMANT (SEAL_PROVIDER=swtpm only) software-TPM that
+  # manages a bind-mounted TPM state directory (../../data/swtpm:/tpmstate) and a
+  # Unix control socket; pinning it to a fixed non-root uid against an operator-
+  # provided bind mount creates a state-ownership failure mode for a component
+  # that, when active, custodies the root sealing key. It stays root-managed by
+  # design. All other Dockerfiles run non-root (SC-008) and remain enforced.
+  - id: DS-0002
+    paths:
+      - "NetOps_Observability/deployment/docker/swtpm-sidecar/Dockerfile"
