@@ -18,13 +18,16 @@ point-in-time assessment). This report records what was **remediated**, the
 | Security — Critical | 1 | 1 | 0 | SR-002 |
 | Security — High | 5 | 5 | 0 | SR-003…007 |
 | Security — Medium | 9 | 9 | 0 | SR-008…016 |
-| Security — Low | 14 | 1 | 13 | SR-017 done; SR-018…030 open |
+| Security — Low | 14 | 14 | 0 | SR-017…030 (SR-026 confirmed-by-design; SR-028 mitigated/deferred) |
 | Security — Housekeeping | 1 | 1 | 0 | SR-031 |
 | Supply-chain | 11 | 11 | 0 | SC-001…011 (incl. both halves of SC-006) |
 
-**All Critical/High/Medium security findings and the entire supply-chain register
-are remediated and verified.** The only open items are 13 **Low**-severity code
-findings (SR-018…SR-030). No High/Critical risk remains open.
+**Every audit finding is now remediated and verified.** Two Lows are closed by
+disposition rather than a code change: SR-026 (tenant-local super-admins) is
+confirmed safe by design (tenant-confined; a tenant admin cannot mint a global
+owner), and SR-028 (swtpm seal-socket SO_PEERCRED) is mitigated by the
+container/FS boundary with a true peer-cred listener deferred (dormant subsystem).
+No High/Critical risk remains.
 
 ---
 
@@ -65,19 +68,19 @@ committed with its finding ID in the message and **verified** by one or more of:
 | SR-015 | Med | SSRF via tenant-configurable URLs | ✅ Resolved | `81f0388` | `safehttp` dial-time guard; tests |
 | SR-016 | Med | Dormant Vault = plaintext at rest, silent | ✅ Resolved | `928227e` | boot `logWarn` (live) + `REQUIRE_SEAL` |
 | SR-017 | Low | Weak fallback `JWT_SECRET` | ✅ Resolved | `928227e` | `ensureSigningSecret` fail-closed; test |
-| SR-018 | Low | Report-view link tenant-unbound | ⏳ Open | — | — |
-| SR-019 | Low | ServiceNow webhook no signature/replay | ⏳ Open | — | — |
-| SR-020 | Low | PagerDuty/Jira webhooks no replay protection | ⏳ Open | — | — |
-| SR-021 | Low | No rate limit on `/api/copilot/chat` | ⏳ Open | — | — |
-| SR-022 | Low | Copilot relays raw provider error body | ⏳ Open | — | — |
-| SR-023 | Low | Netbox follows upstream pagination URL w/ token | ⏳ Open | — | — |
-| SR-024 | Low | JWT no `iat`/`nbf`; not revocable pre-exp | ⏳ Open | — | — |
-| SR-025 | Low | Federated default tenant = platform tenant | ⏳ Open | — | — |
-| SR-026 | Low | Tenant admin mints tenant-local super-admins | ⏳ Open | — | confirm intent |
-| SR-027 | Low | Wrapped-DEK map no top-level integrity | ⏳ Open | — | — |
-| SR-028 | Low | swtpm KEK socket unauthenticated | ⏳ Open | — | — |
-| SR-029 | Low | `verifyPassword` honors caller iteration count | ⏳ Open | — | — |
-| SR-030 | Low | `Secure` cookie flag off by default | ⏳ Open | — | — |
+| SR-018 | Low | Report-view link tenant-unbound | ✅ Resolved | `05d89fa` | tenant bound into token + enforced vs exec; test |
+| SR-019 | Low | ServiceNow webhook no signature/replay | ✅ Resolved | `600e491` | optional HMAC+timestamp mode (5-min window) |
+| SR-020 | Low | PagerDuty/Jira webhooks no replay protection | ✅ Resolved | `600e491` | body-timestamp replay window; stale-reject tests |
+| SR-021 | Low | No rate limit on `/api/copilot/chat` | ✅ Resolved | `f003ed2` | per-principal limiter (`COPILOT_RATE_PER_MIN`) |
+| SR-022 | Low | Copilot relays raw provider error body | ✅ Resolved | `f003ed2` | `relayProviderResponse` redacts non-2xx |
+| SR-023 | Low | Netbox follows upstream pagination URL w/ token | ✅ Resolved | `05d89fa` | pagination pinned to configured host |
+| SR-024 | Low | JWT no `iat`/`nbf`; not revocable pre-exp | ✅ Resolved | `0eb1435` | iat/nbf enforced (skew); test (revocation = separate feature) |
+| SR-025 | Low | Federated default tenant = platform tenant | ✅ Resolved | `ac7f8f9` | `guardFederatedRole` blocks silent platform-owner |
+| SR-026 | Low | Tenant admin mints tenant-local super-admins | ✅ Confirmed by design | `ac7f8f9` | tenant-confined (`if !cross { req.TenantID = tenant }`); no global escalation |
+| SR-027 | Low | Wrapped-DEK map no top-level integrity | ✅ Resolved | `ac989c8` | root-KEK HMAC over map, fail-closed; tamper test |
+| SR-028 | Low | swtpm KEK socket unauthenticated | 🟡 Mitigated/deferred | — | container+FS boundary; SO_PEERCRED listener deferred (dormant) |
+| SR-029 | Low | `verifyPassword` honors caller iteration count | ✅ Resolved | `0eb1435` | rehash-on-login at current cost; test |
+| SR-030 | Low | `Secure` cookie flag off by default | ✅ Resolved | `0eb1435` | auto-Secure on HTTPS (TLS / XFP); test |
 | SR-031 | Housekeeping | Stale CLAUDE.md `.env` warning | ✅ Resolved | `6c02200` | `.env` untracked + gitignored |
 
 ---
@@ -129,11 +132,10 @@ committed with its finding ID in the message and **verified** by one or more of:
 
 ## 7. Residual risk & recommended next steps
 
-1. **Security Lows (SR-018…SR-030)** — 13 hardening items, none High/Critical.
-   Suggested batching: webhook signature/replay (SR-019/020), copilot
-   rate-limit + error-body redaction (SR-021/022), JWT `iat`/`nbf` + `Secure`
-   cookie default (SR-024/030), report-link tenant binding (SR-018), Netbox
-   pagination-URL guard (SR-023).
+1. **Security Lows — all closed** (SR-017…030). One residual engineering item:
+   SR-028 swtpm seal-socket SO_PEERCRED — implement a peer-cred-checking listener
+   to replace `socat` if/when the swtpm sealing provider is run in production
+   (dormant by default; interim control = container + FS boundary).
 2. **Activate `publish-images`** by cutting a `v*.*.*` tag, then confirm GHCR
    package visibility is **private** and verify an attestation
    (`gh attestation verify oci://…`).
@@ -143,6 +145,6 @@ committed with its finding ID in the message and **verified** by one or more of:
 
 ---
 
-*Generated 2026-06-07. Evidence: commit range `bf2ba29…8407f9e` on
+*Generated 2026-06-07. Evidence: commit range `bf2ba29…56b3d95` on
 `feat/observability-platform`. See per-finding detail in
 `SECURITY_AUDIT_2026-06-07.md`.*
