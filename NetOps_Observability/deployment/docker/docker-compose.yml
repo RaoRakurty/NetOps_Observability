@@ -94,11 +94,11 @@ services:
     command: ["start", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
-      # Override KEYCLOAK_ADMIN_PASSWORD in .env before enabling SSO. A soft
-      # default (not `:?`) is used on purpose: a hard-required var would break the
-      # DEFAULT `docker compose up`, since Compose interpolates the whole file
-      # regardless of the `sso` profile gating this service.
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-before-enabling-sso}
+      # SC-009: hard-required (`:?`), not a weak baked-in default. install.py
+      # always generates a random KEYCLOAK_ADMIN_PASSWORD, and `docker compose up`
+      # already requires .env anyway (DB_PASSWORD:?), so this never silently boots
+      # Keycloak with a known password.
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD required (install.py generates it)}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
       KC_DB_USERNAME: ${DB_USER}
@@ -186,6 +186,11 @@ services:
     image: ghcr.io/openconfig/gnmic:0.46.0@sha256:9538f93a9a85e996d0ad5f7c523835e874557be84b8d279c2a51d2f092b24c7e
     command: ["subscribe", "--config", "/app/gnmic.yaml"]
     environment:
+      # SC-009: these are the bundled containerlab fabric's DEVICE login passwords
+      # (creds the collector uses to reach lab nodes), not platform secrets — they
+      # match the lab's device config and install.py can't generate them. For a
+      # REAL fabric, override SRL_GNMI_PASS/EOS_GNMI_PASS in .env with your device
+      # credentials. Left as lab defaults so the bundled lab works zero-config.
       SRL_GNMI_PASS: ${SRL_GNMI_PASS:-NokiaSrl1!}
       EOS_GNMI_PASS: ${EOS_GNMI_PASS:-admin}
     volumes:
@@ -426,6 +431,9 @@ services:
   # =========================================================================
 
   correlation:
+    # SC-008: runs as non-root appuser (see Dockerfile); lock down escalation+caps.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.correlation
@@ -455,6 +463,10 @@ services:
   # =========================================================================
 
   api:
+    # SC-008: distroless-nonroot already; lock down escalation + caps (pure Go
+    # binary on :8080 needs none).
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
@@ -713,6 +725,9 @@ services:
     restart: *restart
 
   frontend:
+    # SC-008: nginx-unprivileged (non-root, :8080); lock down escalation+caps.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.frontend
@@ -720,9 +735,15 @@ services:
     restart: *restart
 
   nginx:
-    image: nginx:1.27-alpine
+    # SC-008: non-root reverse proxy (uid 101, :8080) built from stock nginx;
+    # lock down escalation + caps.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.nginx
     ports:
-      - "${BASE_PORT:-8000}:80"
+      - "${BASE_PORT:-8000}:8080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro

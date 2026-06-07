@@ -1,0 +1,16 @@
+# Outer reverse-proxy nginx, hardened to run NON-ROOT (SC-008).
+#
+# Built from the stock nginx image we already use (no new external image, stays
+# offline-buildable) rather than a separate unprivileged image. The actual config
+# is bind-mounted at runtime (nginx/nginx.conf + nginx/conf.d/default.conf) so the
+# stale-bind-mount restart workflow is unchanged; this image only prepares the
+# filesystem for uid 101: a writable pid path and cache dirs, then drops to USER
+# 101. The mounted nginx.conf already uses `pid /tmp/nginx.pid`, no `user`
+# directive, and logs to stdout/stderr; default.conf binds the unprivileged :8080.
+FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+
+RUN touch /tmp/nginx.pid \
+    && chown -R 101:101 /var/cache/nginx /tmp/nginx.pid
+
+USER 101
+EXPOSE 8080
