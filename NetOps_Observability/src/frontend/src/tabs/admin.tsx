@@ -62,6 +62,10 @@ export function UsersAdmin() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ ...BLANK_USER });
   const [q, setQ] = useState("");
+  // Directory-level selection: pick one or more users, then act on them with the
+  // toolbar knobs (Reset / Lock / Unlock / Delete) — no per-row action buttons.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
 
   const roleList = roles?.roles ?? [];
   const tenantList = tenants ?? [];
@@ -79,10 +83,6 @@ export function UsersAdmin() {
     setErr(null);
     try { await api.updateUser(u.username, { role }); reload(); } catch (e) { setErr((e as Error).message); }
   };
-  const remove = async (u: AdminUser) => {
-    setErr(null);
-    try { await api.deleteUser(u.username); reload(); } catch (e) { setErr((e as Error).message); }
-  };
 
   const list = users ?? [];
   const isAdminRole = (role: string) => role === "super-admin" || role === "admin";
@@ -97,6 +97,45 @@ export function UsersAdmin() {
     ? list.filter((u) => [u.username, u.email, u.display_name, u.role, u.tenant_id].some((f) => (f ?? "").toLowerCase().includes(ql)))
     : list;
 
+  // ---- selection + bulk actions --------------------------------------------
+  const toggle = (name: string) =>
+    setSelected((s) => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
+  const allShownSelected = shown.length > 0 && shown.every((u) => selected.has(u.username));
+  const toggleAll = () => setSelected(allShownSelected ? new Set() : new Set(shown.map((u) => u.username)));
+  const clearSel = () => setSelected(new Set());
+  const selUsers = list.filter((u) => selected.has(u.username));
+  const selCount = selUsers.length;
+  const isLocal = (u: AdminUser) => !u.auth_source || u.auth_source === "local";
+
+  const runBatch = async (fn: (u: AdminUser) => Promise<unknown>) => {
+    setErr(null); setBusy(true);
+    try {
+      for (const u of selUsers) await fn(u);
+      clearSel();
+      reload();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const lock = () => runBatch((u) => api.updateUser(u.username, { status: "disabled" }));
+  const unlock = () => runBatch((u) => api.updateUser(u.username, { status: "active" }));
+  const del = () => {
+    if (!window.confirm(`Delete ${selCount} user${selCount > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    runBatch((u) => api.deleteUser(u.username));
+  };
+  const resetPw = async () => {
+    if (selCount !== 1) return;
+    const u = selUsers[0];
+    const pw = window.prompt(`Set a new password for "${u.username}" (must meet the password policy):`);
+    if (!pw) return;
+    setErr(null); setBusy(true);
+    try { await api.updateUser(u.username, { password: pw }); clearSel(); reload(); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  // Knob enablement reflects what the selection can actually do.
+  const canReset = selCount === 1 && isLocal(selUsers[0]);
+  const canLock = selCount > 0 && selUsers.some((u) => u.status !== "disabled");
+  const canUnlock = selCount > 0 && selUsers.some((u) => u.status === "disabled");
+
   return (
     <>
       <AdminHead title="Users" sub={`People with access to ${BRAND}. Local accounts today; federated users (SSO/LDAP) arrive once an identity provider is configured.`} />
@@ -109,7 +148,17 @@ export function UsersAdmin() {
       <div className="card">
         <div className="admin-card-head">
           <h2>Directory</h2>
-          <button className="dash-btn accent" onClick={() => setAdding((v) => !v)}>{adding ? "Cancel" : "+ Add user"}</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {selCount > 0 && <span className="mini-meta">{selCount} selected</span>}
+            <button className="dash-btn" disabled={!canReset || busy} onClick={resetPw}
+              title={selCount !== 1 ? "Select one user" : canReset ? "Set a new password" : "Federated accounts reset at the identity provider"}>
+              Reset password
+            </button>
+            <button className="dash-btn" disabled={!canLock || busy} onClick={lock} title="Disable sign-in for the selected users">Lock</button>
+            <button className="dash-btn" disabled={!canUnlock || busy} onClick={unlock} title="Re-enable the selected users">Unlock</button>
+            <button className="dash-btn" disabled={selCount === 0 || busy} onClick={del} title="Delete the selected users">Delete</button>
+            <button className="dash-btn accent" onClick={() => setAdding((v) => !v)}>{adding ? "Cancel" : "+ Add user"}</button>
+          </div>
         </div>
         <ErrLine msg={err} />
         {adding && (
@@ -134,11 +183,19 @@ export function UsersAdmin() {
         </div>
         <table className="ds-table">
           <thead>
-            <tr><th>User</th><th>Email</th><th>Role</th><th>Tenant</th><th>Auth</th><th>Status</th><th>Last active</th><th></th></tr>
+            <tr>
+              <th style={{ width: 28 }}>
+                <input type="checkbox" checked={allShownSelected} onChange={toggleAll} aria-label="Select all users" />
+              </th>
+              <th>User</th><th>Email</th><th>Role</th><th>Tenant</th><th>Auth</th><th>Status</th><th>Last active</th>
+            </tr>
           </thead>
           <tbody>
             {shown.map((u) => (
-              <tr key={u.username}>
+              <tr key={u.username} className={selected.has(u.username) ? "row-selected" : ""}>
+                <td>
+                  <input type="checkbox" checked={selected.has(u.username)} onChange={() => toggle(u.username)} aria-label={`Select ${u.username}`} />
+                </td>
                 <td style={{ fontWeight: 600 }}>{u.display_name || u.username}</td>
                 <td className="mono">{u.email || "—"}</td>
                 <td>
@@ -151,7 +208,6 @@ export function UsersAdmin() {
                 <td><span className="badge">{u.auth_source || "local"}</span></td>
                 <td><span className={`badge ${u.status === "disabled" ? "warn" : "good"}`}>{u.status || "active"}</span></td>
                 <td>{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "—"}</td>
-                <td><button className="dash-btn" onClick={() => remove(u)}>Delete</button></td>
               </tr>
             ))}
           </tbody>

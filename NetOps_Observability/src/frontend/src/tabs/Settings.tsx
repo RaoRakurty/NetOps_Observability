@@ -27,8 +27,8 @@ export default function Settings() {
 
   return (
     <>
-      {/* Change password moved to Administration → Security Policy → "My Password"
-          (it lives with the password rules it must satisfy). */}
+      {/* Self-service password change lives on the login window ("Change password")
+          for local accounts; admins reset others under Administration → Users. */}
       <div className="card">
         <h2>Integrations</h2>
         <p style={{ color: "var(--muted)", fontSize: 13 }}>

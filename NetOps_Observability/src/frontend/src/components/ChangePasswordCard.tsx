@@ -88,8 +88,12 @@ function Req({ met, children }: { met: boolean; children: React.ReactNode }) {
   );
 }
 
-export default function ChangePasswordCard() {
+// preAuth renders the card for the login window (no session yet): it adds a
+// username field and posts it so the server can identify the account. onDone is
+// called after a successful change (e.g. to return to the sign-in form).
+export default function ChangePasswordCard({ preAuth = false, onDone }: { preAuth?: boolean; onDone?: () => void } = {}) {
   const [rules, setRules] = useState<Rules>({ min_length: 8, complexity_classes: 0 });
+  const [username, setUsername] = useState("");
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -109,7 +113,7 @@ export default function ChangePasswordCard() {
   const lenOK = next.length >= rules.min_length;
   const classesOK = rules.complexity_classes === 0 || classCount(next) >= rules.complexity_classes;
   const matchOK = next.length > 0 && next === confirm;
-  const valid = lenOK && classesOK && matchOK && current.length > 0;
+  const valid = lenOK && classesOK && matchOK && current.length > 0 && (!preAuth || username.trim().length > 0);
   const score = useMemo(() => strength(next, rules.min_length), [next, rules.min_length]);
 
   const submit = async (e: React.FormEvent) => {
@@ -118,9 +122,10 @@ export default function ChangePasswordCard() {
     if (!valid) return;
     setBusy(true);
     try {
-      await api.changePassword(current, next);
+      await api.changePassword(current, next, preAuth ? username.trim() : undefined);
       setCurrent(""); setNext(""); setConfirm("");
-      setMsg({ kind: "ok", text: "Password updated." });
+      setMsg({ kind: "ok", text: "Password updated." + (preAuth ? " You can sign in now." : "") });
+      if (preAuth && onDone) setTimeout(onDone, 1200);
     } catch (err) {
       setMsg({ kind: "err", text: (err as Error).message });
     } finally {
@@ -134,11 +139,29 @@ export default function ChangePasswordCard() {
         <span className="pw-head-icon"><Icon name="lock" size={18} /></span>
         <div>
           <h2>Change password</h2>
-          <p className="pw-sub">Choose a strong password that meets your organization's security policy.</p>
+          <p className="pw-sub">
+            {preAuth
+              ? "Set a new password for your local account. Federated (SSO/LDAP) accounts change it at the identity provider."
+              : "Choose a strong password that meets your organization's security policy."}
+          </p>
         </div>
       </div>
 
       <form onSubmit={submit} className="pw-form">
+        {preAuth && (
+          <div className="pw-field">
+            <label className="pw-label" htmlFor="pw-username">Username</label>
+            <div className="pw-input-wrap">
+              <input
+                id="pw-username"
+                className="pw-input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+              />
+            </div>
+          </div>
+        )}
         <PasswordInput id="pw-current" label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
         <PasswordInput id="pw-next" label="New password" value={next} onChange={setNext} autoComplete="new-password" />
 
@@ -165,6 +188,9 @@ export default function ChangePasswordCard() {
           <button className="btn-accent" disabled={!valid || busy} type="submit">
             {busy ? "Updating…" : "Update password"}
           </button>
+          {preAuth && onDone && (
+            <button type="button" className="btn" onClick={onDone}>Back to sign in</button>
+          )}
           {msg && (
             <p className={`pw-msg ${msg.kind}`} role={msg.kind === "err" ? "alert" : "status"} aria-live="polite">
               {msg.kind === "ok" && <Icon name="check" size={14} />} {msg.text}

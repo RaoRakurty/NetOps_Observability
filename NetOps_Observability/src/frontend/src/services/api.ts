@@ -562,10 +562,12 @@ export const api = {
     request<TokenPolicy>("/api/auth/token-policy", { method: "PUT", body: JSON.stringify(p) }),
 
   me: () => request<AuthUser>("/api/auth/me"),
-  changePassword: (current_password: string, new_password: string) =>
+  // username is supplied only by the unauthenticated login-window flow; omit it
+  // when already signed in (the server takes the account from the token).
+  changePassword: (current_password: string, new_password: string, username?: string) =>
     request<{ status: string }>("/api/auth/change-password", {
       method: "POST",
-      body: JSON.stringify({ current_password, new_password }),
+      body: JSON.stringify(username ? { username, current_password, new_password } : { current_password, new_password }),
     }),
 
   // The caller's resolved password rules (Security Policy #24) — advisory; the

@@ -2,10 +2,14 @@ import { useEffect, useState } from "react";
 import { api, AuthMethods } from "../services/api";
 import { BRAND, BRAND_TAGLINE } from "../brand";
 import Icon from "../components/Icon";
+import ChangePasswordCard from "../components/ChangePasswordCard";
 
 type Method = "local" | "ldap" | "tacacs";
 
 export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
+  // The login window doubles as the self-service "Change password" entry point
+  // for local accounts (federated users change it at their IdP).
+  const [view, setView] = useState<"signin" | "changepw">("signin");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -44,6 +48,14 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       setBusy(false);
     }
   };
+
+  if (view === "changepw") {
+    return (
+      <div className="login-wrap">
+        <ChangePasswordCard preAuth onDone={() => setView("signin")} />
+      </div>
+    );
+  }
 
   return (
     <div className="login-wrap">
@@ -112,6 +124,10 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
           <button className="btn-accent" disabled={busy || !username || !password} type="submit" style={{ width: "100%" }}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
+
+          <button type="button" className="login-link" onClick={() => setView("changepw")}>
+            Change password
+          </button>
         </div>
 
         {ssoProviders.length > 0 && (
@@ -135,8 +151,8 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
         <p className="login-note">
           First-time install? Initial credentials are in{" "}
           <code>deployment/docker/.env</code> as <code>ADMIN_USERNAME</code> and{" "}
-          <code>ADMIN_INITIAL_PASSWORD</code>. Change your password on the
-          Settings tab after signing in.
+          <code>ADMIN_INITIAL_PASSWORD</code>. Use “Change password” above to set
+          your own (local accounts only).
         </p>
       </form>
     </div>

@@ -238,19 +238,23 @@ func isLocalAccount(authSource string) bool {
 }
 
 type changePasswordRequest struct {
+	// Username is used only by the unauthenticated login-window flow to name the
+	// account; an authenticated caller's account comes from its token instead.
+	Username        string `json:"username,omitempty"`
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 }
 
+// handleChangePassword serves self-service password change in two modes:
+//   - authenticated: the signed-in user changes its own password (account = token).
+//   - unauthenticated: the login-window "Change password" form names the account
+//     and proves ownership with the current password (this path is in publicPaths).
+// Either way the change is server-authoritative: the current password must verify,
+// the account must be local, and the new password must satisfy the Security Policy.
 func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	claims, ok := userFrom(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
 		return
 	}
 	var req changePasswordRequest
@@ -258,26 +262,43 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	user, ok := s.users.Get(claims.Sub)
+	// Identify the account. An authenticated caller can only change its own.
+	username := ""
+	authed := false
+	if claims, ok := userFrom(r.Context()); ok {
+		username, authed = claims.Sub, true
+	} else {
+		username = strings.TrimSpace(req.Username)
+	}
+	if username == "" {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	// Generic credential error so the pre-auth path doesn't enumerate usernames;
+	// the authed path keeps the clearer "current password incorrect".
+	badCreds := errors.New("invalid username or password")
+	if authed {
+		badCreds = errors.New("current password incorrect")
+	}
+	user, ok := s.users.Get(username)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, errors.New("current password incorrect"))
+		writeError(w, http.StatusUnauthorized, badCreds)
 		return
 	}
 	// Only LOCAL accounts have a password we own. Federated accounts (oidc/saml/
-	// ldap/tacacs) authenticate against the IdP and carry no usable local hash, so
-	// refuse explicitly rather than returning a misleading "current password
-	// incorrect". The UI also hides the option for them; this is the enforced rule.
+	// ldap/tacacs) authenticate against the IdP and carry no usable local hash.
 	if !isLocalAccount(user.AuthSource) {
 		writeError(w, http.StatusBadRequest, errors.New("password is managed by your identity provider; change it there"))
 		return
 	}
 	if !verifyPassword(req.CurrentPassword, user.PasswordHash) {
-		writeError(w, http.StatusUnauthorized, errors.New("current password incorrect"))
+		writeError(w, http.StatusUnauthorized, badCreds)
 		return
 	}
-	// Enforce the caller's resolved Security Policy (length + complexity) before
+	// Enforce the account's resolved Security Policy (length + complexity) before
 	// the store's own floor — zero-trust, server-authoritative (#24 wiring).
-	if err := validatePasswordAgainstPolicy(req.NewPassword, s.callerPasswordRules(claims)); err != nil {
+	rules := s.callerPasswordRules(jwtClaims{Sub: user.Username, Role: user.Role, Tenant: user.TenantID})
+	if err := validatePasswordAgainstPolicy(req.NewPassword, rules); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -285,7 +306,7 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	logInfo("auth", "password changed", map[string]any{"user": user.Username})
+	logInfo("auth", "password changed", map[string]any{"user": user.Username, "pre_auth": !authed})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -304,7 +325,8 @@ var publicPaths = []string{
 	"/api/auth/methods",
 	"/api/auth/ldap/login",
 	"/api/auth/tacacs/login",
-	"/api/auth/osd-gate", // cookie-authenticated nginx auth_request target; does its own authz
+	"/api/auth/change-password", // self-service from the login window; names the account + verifies the current password (local accounts only)
+	"/api/auth/osd-gate",        // cookie-authenticated nginx auth_request target; does its own authz
 	"/metrics",
 }
 

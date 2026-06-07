@@ -174,9 +174,10 @@ func TestLogoutRevokesRefresh(t *testing.T) {
 
 func TestChangePasswordHTTP(t *testing.T) {
 	srv := newTestServer(t)
-	lr := login(t, srv, "admin", "password123")
-	st, b := do(t, srv, "POST", "/api/auth/change-password", lr.Token,
-		map[string]string{"current_password": "password123", "new_password": "newpassword456"})
+	// Self-service from the login window: unauthenticated, names the account and
+	// proves ownership with the current password (no bearer token).
+	st, b := do(t, srv, "POST", "/api/auth/change-password", "",
+		map[string]string{"username": "admin", "current_password": "password123", "new_password": "newpassword456"})
 	if st != 200 {
 		t.Fatalf("change-password: %d: %s", st, b)
 	}
@@ -185,6 +186,11 @@ func TestChangePasswordHTTP(t *testing.T) {
 	}
 	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "admin", "password": "newpassword456"}); st != 200 {
 		t.Errorf("new password rejected: %d", st)
+	}
+	// Wrong current password is rejected with a generic credential error.
+	if st, _ := do(t, srv, "POST", "/api/auth/change-password", "",
+		map[string]string{"username": "admin", "current_password": "wrong", "new_password": "anotherpass789"}); st != 401 {
+		t.Errorf("wrong current password accepted: %d", st)
 	}
 }
 
