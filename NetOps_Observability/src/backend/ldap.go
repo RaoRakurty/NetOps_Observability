@@ -27,12 +27,12 @@ type ldapConfig struct {
 	Enabled            bool              `json:"enabled"`
 	Host               string            `json:"host"`
 	Port               int               `json:"port"`
-	UseTLS             bool              `json:"use_tls"`    // LDAPS (TLS from connect, typically :636)
-	StartTLS           bool              `json:"start_tls"`  // plain :389 then upgrade via StartTLS extended op
-	BindDN             string            `json:"bind_dn"`    // service account to search with (empty = anonymous search)
+	UseTLS             bool              `json:"use_tls"`   // LDAPS (TLS from connect, typically :636)
+	StartTLS           bool              `json:"start_tls"` // plain :389 then upgrade via StartTLS extended op
+	BindDN             string            `json:"bind_dn"`   // service account to search with (empty = anonymous search)
 	BindPassword       string            `json:"bind_password"`
 	BaseDN             string            `json:"base_dn"`
-	UserFilter         string            `json:"user_filter"`  // e.g. (uid=%s) or (sAMAccountName=%s); %s = escaped username
+	UserFilter         string            `json:"user_filter"` // e.g. (uid=%s) or (sAMAccountName=%s); %s = escaped username
 	GroupBaseDN        string            `json:"group_base_dn"`
 	GroupFilter        string            `json:"group_filter"` // e.g. (member=%s); %s = escaped user DN
 	RoleMappings       []ldapRoleMapping `json:"role_mappings"`
@@ -599,7 +599,7 @@ func (c *ldapConn) readMessage(wantID int32) (int32, protocolOp, error) {
 	if err != nil || idTag != tagInteger {
 		return 0, protocolOp{}, errors.New("malformed messageID")
 	}
-	id := int32(beInt(idBytes))  // #nosec G115 -- LDAP messageID is INTEGER 0..2^31-1 (RFC 4511); int32 is the protocol type
+	id := int32(beInt(idBytes)) // #nosec G115 -- LDAP messageID is INTEGER 0..2^31-1 (RFC 4511); int32 is the protocol type
 	opTag, opContent, err := r.next()
 	if err != nil {
 		return 0, protocolOp{}, errors.New("missing protocolOp")
