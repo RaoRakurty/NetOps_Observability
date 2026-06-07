@@ -1,7 +1,14 @@
 # Network Device Monitoring (NDM) — dashboard design
 
-Status: **design / proposal — for review.** Date: 2026-06-07.
+Status: **direction-setting for the NEXT PHASE — not started.** Date: 2026-06-07.
 Reference screenshots: `/var/tmp/` (Datadog NDM captures, 2026-06-05) — see §1.
+
+> **Sequencing (owner-driven):** NDM is the agreed next phase. Before any build,
+> the owner will provide: **(1)** the finalized **left-navigation structure / IA**,
+> then **(2)** the **NDM display spec** (what each NDM view shows). Those inputs
+> SUPERSEDE the proposed nav (§2.1) and panel catalog (§2.2) here — treat §2 as a
+> reference menu to align against, not the final layout. §1 (Datadog reference) and
+> §3 (data sources / gaps) stand regardless.
 
 ## 0. Goal
 Bring a first-class **Network Device Monitoring** experience to the platform,
