@@ -824,6 +824,9 @@ services:
       CSRF_TRUSTED_ORIGINS: ${NETBOX_CSRF_ORIGINS:-http://localhost:8000}
     volumes:
       - ../../data/netbox-media:/opt/netbox/netbox/media
+      # Wire BASE_PATH (netbox-docker's configuration.py ignores the env var) so
+      # NetBox serves under /netbox/ behind nginx.
+      - ./netbox/extra.py:/etc/netbox/config/extra.py:ro
     networks: [netops]
     restart: *restart
 
