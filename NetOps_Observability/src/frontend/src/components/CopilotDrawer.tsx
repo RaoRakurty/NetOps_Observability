@@ -25,7 +25,7 @@ export default function CopilotDrawer() {
       <aside className={`drawer${copilotOpen ? " open" : ""}`} aria-hidden={!copilotOpen}>
         <div className="drawer-head">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <Icon name="copilot" size={16} /> ChatGPT
+            <Icon name="copilot" size={16} /> Opsis Ai
           </span>
           <button className="drawer-close" onClick={() => setCopilotOpen(false)} title="Close (Esc)">
             <Icon name="close" size={16} />

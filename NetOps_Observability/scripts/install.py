@@ -364,7 +364,10 @@ KEYCLOAK_DB_NAME=keycloak
 # token, so the UI needs no URL/token. Start it with:  docker compose --profile
 # netbox up -d   (omit the profile to run without the bundled NetBox). To use an
 # EXTERNAL NetBox instead, leave NETBOX_INTERNAL_URL blank and set NETBOX_URL.
-NETBOX_INTERNAL_URL=http://netbox:8080
+NETBOX_INTERNAL_URL=http://netbox:8080/netbox
+# Origins NetBox trusts for POST/edit (creating inventory) via the proxied UI at
+# /netbox/. Set to the URL you browse from, e.g. http://<host>:8000.
+NETBOX_CSRF_ORIGINS=http://localhost:8000
 NETBOX_SECRET_KEY={secrets_map["NETBOX_SECRET_KEY"]}
 NETBOX_DB_PASSWORD={secrets_map["NETBOX_DB_PASSWORD"]}
 NETBOX_SUPERUSER=admin

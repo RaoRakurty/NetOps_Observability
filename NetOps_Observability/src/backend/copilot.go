@@ -24,7 +24,7 @@ var appKnowledge string
 
 // copilot.go — AI Copilot endpoint.
 //
-// The frontend Copilot tab posts a chat history to /api/copilot/chat.
+// The frontend Opsis Ai tab posts a chat history to /api/copilot/chat.
 // We forward to the configured LLM provider and stream the response back.
 // Provider credentials are read from env at request time so rotating
 // COPILOT_API_KEY doesn't require a restart.

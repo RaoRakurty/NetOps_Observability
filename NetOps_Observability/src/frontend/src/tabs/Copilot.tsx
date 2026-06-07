@@ -107,7 +107,7 @@ export default function Copilot() {
   if (enabled === false) {
     return (
       <div className="card">
-        <h2>ChatGPT</h2>
+        <h2>Opsis Ai</h2>
         <p style={{ color: "var(--muted)" }}>
           Copilot is disabled. Set <code>FEATURE_COPILOT=true</code> and{" "}
           <code>COPILOT_API_KEY=...</code> in <code>deployment/docker/.env</code>, then{" "}
@@ -121,7 +121,7 @@ export default function Copilot() {
     <>
       <div className="card" style={{ display: "flex", flexDirection: "column", height: "65vh" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>ChatGPT</h2>
+          <h2 style={{ margin: 0 }}>Opsis Ai</h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {cfg && (
               <span
@@ -260,7 +260,7 @@ export default function Copilot() {
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Ask ChatGPT…"
+            placeholder="Ask Opsis Ai…"
             rows={3}
             style={{ flex: 1, resize: "vertical", fontFamily: "inherit", fontSize: 13 }}
             onKeyDown={(e) => {

@@ -214,6 +214,13 @@ export default function SourceOfTruth() {
           </div>
         </div>
         <span className={`badge ${st.tone}`}>{st.label}</span>
+        {cfg?.managed && (
+          // The bundled NetBox UI is proxied at /netbox/ (platform-owner-gated) —
+          // create sites/devices/IPs there; discovery pulls them into Devices.
+          <a className="btn" href="/netbox/" target="_blank" rel="noreferrer">
+            <Icon name="external" size={14} /> Open NetBox
+          </a>
+        )}
         <button
           className="btn primary"
           onClick={() => {
@@ -226,6 +233,14 @@ export default function SourceOfTruth() {
         <button className="btn" disabled={refreshing} onClick={refresh}>
           <Icon name="refresh" size={14} /> {refreshing ? "…" : "Refresh"}
         </button>
+      </div>
+
+      <div className="card" style={{ fontSize: 12, color: "var(--muted)" }}>
+        <strong style={{ color: "var(--text, inherit)" }}>Where do I create inventory?</strong> NetBox is the
+        source of truth — add sites, devices and IPs in its UI (<b>Open NetBox</b> above; it's empty on a fresh
+        install). Discovery then pulls those devices into <b>Infrastructure → Devices</b> tagged{" "}
+        <span className="badge accent" style={{ fontSize: 10 }}>NetBox</span>. You can also point discovery at an
+        external NetBox via <b>Manage → Connect an external NetBox</b>.
       </div>
 
       {poll && (

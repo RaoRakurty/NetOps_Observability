@@ -816,6 +816,12 @@ services:
       SUPERUSER_PASSWORD: ${NETBOX_SUPERUSER_PASSWORD:?NETBOX_SUPERUSER_PASSWORD required (install.py generates it)}
       SUPERUSER_API_TOKEN: ${NETBOX_TOKEN:?NETBOX_TOKEN required (install.py generates it)}
       ALLOWED_HOSTS: "*"
+      # Served behind nginx at /netbox/ (platform-owner-gated) so operators can
+      # CREATE inventory in NetBox's UI. BASE_PATH makes NetBox emit correct
+      # subpath URLs; CSRF_TRUSTED_ORIGINS must list the origin you browse from
+      # (set NETBOX_CSRF_ORIGINS in .env to e.g. http://<host>:8000 for POST/edit).
+      BASE_PATH: netbox
+      CSRF_TRUSTED_ORIGINS: ${NETBOX_CSRF_ORIGINS:-http://localhost:8000}
     volumes:
       - ../../data/netbox-media:/opt/netbox/netbox/media
     networks: [netops]

@@ -22,7 +22,7 @@ import (
 )
 
 // keyPrefix makes keys recognizable and greppable in logs/secret scanners.
-const keyPrefix = "ntk_" // "netra key"
+const keyPrefix = "ntk_" // "opsis key"
 
 type APIKey struct {
 	ID              string     `json:"id"`
