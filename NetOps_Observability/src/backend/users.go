@@ -34,6 +34,7 @@ import (
 //     resolves a user's tenant FROM the record before any tenant scope exists, so
 //     the lookup must span all tenants. Authorization on the resolved user stays
 //     at the handler/Authorize() chokepoint.
+//
 // Mutations likewise run at platform scope on the pg backend (global username PK,
 // platform-wide super-admin invariant); the handler gates who may mutate whom.
 type usersRepo interface {
@@ -242,6 +243,19 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 // IdP-derived role so Keycloak role/group changes propagate. A pre-existing
 // LOCAL account of the same name is never silently converted or re-roled — the
 // federated login is accepted against it but local management wins.
+// guardFederatedRole prevents a federated identity from SILENTLY becoming the
+// platform owner (global tenant + super-admin) via an IdP role/tenant mapping
+// (SR-025). A mis-mapped IdP group must not seize cross-tenant control; require
+// an explicit FEDERATION_ALLOW_PLATFORM_OWNER=true opt-in, otherwise downgrade.
+func guardFederatedRole(role, tenant, username, source string) string {
+	if tenant == TenantGlobal && role == RoleSuperAdmin && os.Getenv("FEDERATION_ALLOW_PLATFORM_OWNER") != "true" {
+		logWarn("auth", "refused federated platform-owner mapping — downgrading role; set FEDERATION_ALLOW_PLATFORM_OWNER=true to allow",
+			map[string]any{"user": username, "source": source})
+		return RoleReadOnly
+	}
+	return role
+}
+
 func (s *userStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
@@ -255,8 +269,10 @@ func (s *userStore) UpsertFederated(username, email, displayName, role, source, 
 	defer s.mu.Unlock()
 	if u, ok := s.users[key]; ok {
 		if u.AuthSource != "local" {
-			// Federated account — keep it in sync with the IdP.
-			u = mergeFederated(u, email, displayName, role, source)
+			// Federated account — keep it in sync with the IdP (SR-025: guard the
+			// IdP-mapped role against silent platform-owner escalation, using the
+			// account's existing tenant).
+			u = mergeFederated(u, email, displayName, guardFederatedRole(role, u.TenantID, username, source), source)
 			s.users[key] = u
 			if err := s.flushLocked(); err != nil {
 				return User{}, err
@@ -267,6 +283,7 @@ func (s *userStore) UpsertFederated(username, email, displayName, role, source, 
 	if tenant == "" {
 		tenant = TenantGlobal
 	}
+	role = guardFederatedRole(role, tenant, username, source)
 	u := User{
 		Username: username, Role: role, Email: email, DisplayName: displayName,
 		TenantID: tenant, Status: "active", AuthSource: source, CreatedAt: time.Now().UTC(),
