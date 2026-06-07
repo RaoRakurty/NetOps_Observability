@@ -9,6 +9,9 @@ type Props = {
   health: Health | null;
   user: AuthUser;
   onLogout: () => void;
+  // Open the self-service change-password modal. Undefined for federated accounts
+  // (they change it at the IdP), which hides the menu item.
+  onChangePassword?: () => void;
   // Shell v2 relocates the account/user menu into the left rail's utility
   // cluster, so the top-right copy is suppressed to avoid duplication.
   hideUserMenu?: boolean;
@@ -32,7 +35,7 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // The omni-search shows a live results dropdown (devices, alerts, saved
 // objects) backed by /api/search/global, plus a raw log-search handoff —
 // so it behaves like Splunk's global search, not just a log query.
-export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) {
+export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
   const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
   // "*" is the match-all sentinel for the query; don't surface it literally in
@@ -242,6 +245,9 @@ export default function TopBar({ health, user, onLogout, hideUserMenu }: Props) 
                 </span>
               </div>
               <button onClick={() => { setMenuOpen(false); navigate("admin/settings"); }}>Settings</button>
+              {onChangePassword && (
+                <button onClick={() => { setMenuOpen(false); onChangePassword(); }}>Change password</button>
+              )}
               <button onClick={onLogout}>Sign out</button>
             </div>
           )}

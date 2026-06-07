@@ -14,6 +14,8 @@ import Inspector from "./components/Inspector";
 import BottomDrawer from "./components/BottomDrawer";
 import { WorkspaceProvider, useWorkspace } from "./context/workspace";
 import Login from "./pages/Login";
+import { Modal } from "./components/ui";
+import ChangePasswordCard from "./components/ChangePasswordCard";
 
 // ShellGridSizing mirrors the live pane sizes into the shell grid's track vars
 // (--ins-w / --drawer-h) so the docked Inspector/BottomDrawer reflow the center
@@ -33,6 +35,12 @@ function ShellGridSizing() {
 export default function App() {
   const { user, loading, refresh, logout } = useAuth();
   const [health, setHealth] = useState<Health | null>(null);
+  // Self-service change-password modal, reachable from either account menu while
+  // signed in (TopBar in v1, IconRail foot in v2) — local accounts only; federated
+  // users change it at their IdP. Works for global and tenant-scoped users alike.
+  const [pwOpen, setPwOpen] = useState(false);
+  const localAccount = !user?.auth_source || user.auth_source === "local";
+  const onChangePassword = localAccount ? () => setPwOpen(true) : undefined;
 
   // The nav tree is gated to the principal: tenant-scoped users don't see the
   // platform's own infra-stack monitoring (Stack Health + raw backends). The
@@ -134,9 +142,9 @@ export default function App() {
      <WorkspaceProvider enabled={shellV2}>
       <div className={`shell${collapsed ? " collapsed" : ""}${shellV2 ? " shell-v2" : ""}`}>
         <ShellGridSizing />
-        <TopBar health={health} user={user} onLogout={logout} hideUserMenu={shellV2} />
+        <TopBar health={health} user={user} onLogout={logout} onChangePassword={onChangePassword} hideUserMenu={shellV2} />
         {shellV2 ? (
-          <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} />
+          <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} />
         ) : (
           <Sidebar
             nav={nav}
@@ -161,6 +169,11 @@ export default function App() {
         <CommandPalette nav={nav} />
         <Inspector />
         <BottomDrawer />
+        {pwOpen && (
+          <Modal title="Change password" subtitle={user.username} onClose={() => setPwOpen(false)}>
+            <ChangePasswordCard fixedUsername={user.username} onDone={() => setPwOpen(false)} />
+          </Modal>
+        )}
       </div>
      </WorkspaceProvider>
     </ShellContext.Provider>

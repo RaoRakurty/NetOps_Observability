@@ -16,6 +16,7 @@ import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal } from "../components/ui";
 import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
 import Icon from "../components/Icon";
+import { useAuth } from "../hooks/useAuth";
 
 // ---- shared chrome ---------------------------------------------------------
 
@@ -55,13 +56,25 @@ const LEVEL_VAR: Record<string, string> = {
 
 const BLANK_USER = { username: "", email: "", display_name: "", password: "", role: "read-only", tenant_id: "" };
 
+// Scope sentinels for the platform-owner tenant filter.
+const SCOPE_ALL = "__all__";
+const SCOPE_GLOBAL = "__global__"; // untagged / platform users (tenant_id === "")
+
 export function UsersAdmin() {
+  const { user } = useAuth();
+  // The cross-tenant platform owner manages every tenant's users and can scope
+  // the directory to Global (platform) or a specific tenant — "go into a tenant
+  // to manage its users". A tenant admin is implicitly locked to its own tenant
+  // (the backend only ever returns/accepts that tenant's users).
+  const platform = !!user?.platform_admin;
+
   const [users, err, reload, setErr] = useReload(() => api.listUsers());
   const [roles] = useReload(() => api.listRoles());
   const [tenants] = useReload(() => api.listTenants());
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ ...BLANK_USER });
   const [q, setQ] = useState("");
+  const [scope, setScope] = useState<string>(SCOPE_ALL); // platform-owner tenant filter
   // Directory-level selection: pick one or more users, then act on them with the
   // toolbar knobs (Reset / Lock / Unlock / Delete) — no per-row action buttons.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -69,6 +82,9 @@ export function UsersAdmin() {
 
   const roleList = roles?.roles ?? [];
   const tenantList = tenants ?? [];
+  // The tenant a newly-created user should default to, given the active scope.
+  const scopeTenantId = scope === SCOPE_ALL || scope === SCOPE_GLOBAL ? (scope === SCOPE_GLOBAL ? "" : "") : scope;
+  const startAdd = () => { setForm({ ...BLANK_USER, tenant_id: scopeTenantId }); setAdding((v) => !v); };
 
   const submit = async () => {
     setErr(null);
@@ -84,7 +100,13 @@ export function UsersAdmin() {
     try { await api.updateUser(u.username, { role }); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
-  const list = users ?? [];
+  const all = users ?? [];
+  // Tenant scope (platform owner only): narrow the directory to Global or a tenant.
+  const list = !platform || scope === SCOPE_ALL
+    ? all
+    : scope === SCOPE_GLOBAL
+      ? all.filter((u) => !u.tenant_id)
+      : all.filter((u) => u.tenant_id === scope);
   const isAdminRole = (role: string) => role === "super-admin" || role === "admin";
   const stats = {
     total: list.length,
@@ -103,7 +125,7 @@ export function UsersAdmin() {
   const allShownSelected = shown.length > 0 && shown.every((u) => selected.has(u.username));
   const toggleAll = () => setSelected(allShownSelected ? new Set() : new Set(shown.map((u) => u.username)));
   const clearSel = () => setSelected(new Set());
-  const selUsers = list.filter((u) => selected.has(u.username));
+  const selUsers = all.filter((u) => selected.has(u.username));
   const selCount = selUsers.length;
   const isLocal = (u: AdminUser) => !u.auth_source || u.auth_source === "local";
 
@@ -149,6 +171,14 @@ export function UsersAdmin() {
         <div className="admin-card-head">
           <h2>Directory</h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Platform owner: scope the directory to Global (platform) or a tenant. */}
+            {platform && (
+              <select className="inline-select" value={scope} onChange={(e) => { setScope(e.target.value); clearSel(); }} aria-label="Tenant scope" title="Show users for">
+                <option value={SCOPE_ALL}>All scopes</option>
+                <option value={SCOPE_GLOBAL}>Global (platform)</option>
+                {tenantList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
             {selCount > 0 && <span className="mini-meta">{selCount} selected</span>}
             <button className="dash-btn" disabled={!canReset || busy} onClick={resetPw}
               title={selCount !== 1 ? "Select one user" : canReset ? "Set a new password" : "Federated accounts reset at the identity provider"}>
@@ -157,7 +187,7 @@ export function UsersAdmin() {
             <button className="dash-btn" disabled={!canLock || busy} onClick={lock} title="Disable sign-in for the selected users">Lock</button>
             <button className="dash-btn" disabled={!canUnlock || busy} onClick={unlock} title="Re-enable the selected users">Unlock</button>
             <button className="dash-btn" disabled={selCount === 0 || busy} onClick={del} title="Delete the selected users">Delete</button>
-            <button className="dash-btn accent" onClick={() => setAdding((v) => !v)}>{adding ? "Cancel" : "+ Add user"}</button>
+            <button className="dash-btn accent" onClick={startAdd}>{adding ? "Cancel" : "+ Add user"}</button>
           </div>
         </div>
         <ErrLine msg={err} />

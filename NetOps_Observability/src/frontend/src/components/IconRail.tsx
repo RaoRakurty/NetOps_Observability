@@ -46,6 +46,9 @@ type Props = {
   activeLeaf?: string;
   user: AuthUser;
   onLogout: () => void;
+  // Opens the self-service change-password modal; undefined for federated
+  // accounts (they change it at the IdP) so the item is hidden.
+  onChangePassword?: () => void;
 };
 
 type OpenState = { id: string; top: number } | null;
@@ -56,7 +59,7 @@ type OpenState = { id: string; top: number } | null;
 // navigates. All sections render in order (Administration is no longer pinned to
 // the very bottom), and a utility cluster (Account · Support · Help) sits at the
 // foot — replacing the top-right user menu.
-export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout }: Props) {
+export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
   const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
   const [open, setOpen] = useState<OpenState>(null);
@@ -240,6 +243,9 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                 </span>
               </div>
               <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
+              {onChangePassword && (
+                <button onClick={() => { setAcctOpen(false); onChangePassword(); }}>Change password</button>
+              )}
               <button onClick={onLogout}>Sign out</button>
             </div>
           )}
