@@ -73,6 +73,7 @@ export type NetboxConfig = {
   url: string;
   interval_sec: number;
   token_set: boolean;
+  managed: boolean; // bundled internal NetBox — URL/token auto-wired
   token?: string; // write-only
 };
 

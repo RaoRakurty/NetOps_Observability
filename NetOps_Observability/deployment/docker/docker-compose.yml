@@ -496,6 +496,10 @@ services:
       TENANT_ENRICHMENT_DIR: /data/enrichment
       STATIC_DEVICES_PATH: /config/devices.yaml
       RULES_FILE: /config/rules.yaml
+      # Bundled (internal) NetBox: when present, the API auto-wires to it (managed
+      # mode) so the UI needs no URL/token. Set by install.py with the netbox
+      # profile; NETBOX_URL/NETBOX_TOKEN remain for pointing at an EXTERNAL NetBox.
+      NETBOX_INTERNAL_URL: ${NETBOX_INTERNAL_URL:-}
       NETBOX_URL: ${NETBOX_URL:-}
       NETBOX_TOKEN: ${NETBOX_TOKEN:-}
       ENABLE_SNMP_DISCOVERY: ${ENABLE_SNMP_DISCOVERY:-true}
@@ -754,6 +758,66 @@ services:
       - frontend
       - prometheus
       - grafana
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # SOURCE OF TRUTH (optional — bundled NetBox, profile "netbox")
+  # =========================================================================
+  #
+  # NetBox runs INSIDE the stack so the platform is its own source of truth —
+  # no external instance or hand-pasted token. install.py seeds NETBOX_SECRET_KEY
+  # + NETBOX_TOKEN (a 40-char API token, also seeded as NetBox's superuser token)
+  # and points the API at it via NETBOX_INTERNAL_URL. Heavy (its own Postgres +
+  # shares Redis on dedicated DBs), hence profile-gated:
+  #
+  #   docker compose --profile netbox up -d
+  netbox-postgres:
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+    profiles: ["netbox"]
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: ${NETBOX_DB_PASSWORD:?NETBOX_DB_PASSWORD required (install.py generates it)}
+    volumes:
+      - ../../data/netbox-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [netops]
+    restart: *restart
+
+  netbox:
+    image: netboxcommunity/netbox:v4.1-3.0.2@sha256:d1260201d775b3f1d0b19e425bd19facc1e907e7153a8247d04d996037969e53
+    profiles: ["netbox"]
+    mem_limit: ${NETBOX_MEM_LIMIT:-1g}
+    depends_on:
+      netbox-postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      DB_HOST: netbox-postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: ${NETBOX_DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DATABASE: "9"
+      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_PORT: "6379"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_CACHE_DATABASE: "10"
+      SECRET_KEY: ${NETBOX_SECRET_KEY:?NETBOX_SECRET_KEY required (install.py generates it)}
+      SKIP_SUPERUSER: "false"
+      SUPERUSER_NAME: ${NETBOX_SUPERUSER:-admin}
+      SUPERUSER_EMAIL: admin@local
+      SUPERUSER_PASSWORD: ${NETBOX_SUPERUSER_PASSWORD:?NETBOX_SUPERUSER_PASSWORD required (install.py generates it)}
+      SUPERUSER_API_TOKEN: ${NETBOX_TOKEN:?NETBOX_TOKEN required (install.py generates it)}
+      ALLOWED_HOSTS: "*"
+    volumes:
+      - ../../data/netbox-media:/opt/netbox/netbox/media
     networks: [netops]
     restart: *restart
 

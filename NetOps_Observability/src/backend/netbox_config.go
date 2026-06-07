@@ -23,6 +23,10 @@ type netboxConfig struct {
 	URL         string `json:"url"`
 	Token       string `json:"token,omitempty"`
 	IntervalSec int    `json:"interval_sec"` // poll cadence; 0 → default 60s
+	// Managed is derived (not persisted): true when the connection is the
+	// platform-bundled internal NetBox (auto-wired URL+token), so the UI needs no
+	// URL/token — just an enable toggle.
+	Managed bool `json:"managed,omitempty"`
 }
 
 type netboxConfigStore struct {
@@ -54,29 +58,49 @@ func (s *netboxConfigStore) load() {
 	s.cfg = &c
 }
 
-// effective returns the live config: the stored config when present, else the
-// env-var defaults (NETBOX_URL/NETBOX_TOKEN) so an env-configured deployment
-// keeps working until something is saved from the UI.
+// effective resolves the live config, internal-first:
+//   - an explicitly UI-configured EXTERNAL NetBox (stored cfg with its own URL)
+//     wins and is used as-is;
+//   - otherwise, if the platform ships a bundled internal NetBox
+//     (NETBOX_INTERNAL_URL set, with the seeded NETBOX_TOKEN), that MANAGED
+//     connection is used — URL/token are auto-wired, only the enable toggle is
+//     stored;
+//   - else a legacy env external (NETBOX_URL/NETBOX_TOKEN) keeps working.
 func (s *netboxConfigStore) effective() netboxConfig {
 	s.mu.RLock()
 	c := s.cfg
 	s.mu.RUnlock()
+
+	if c != nil && strings.TrimSpace(c.URL) != "" {
+		return *c // UI-configured external instance
+	}
+	if internal := strings.TrimRight(os.Getenv("NETBOX_INTERNAL_URL"), "/"); internal != "" {
+		enabled, interval := true, 0
+		if c != nil { // stored enable/interval override for the managed connector
+			enabled, interval = c.Enabled, c.IntervalSec
+		}
+		return netboxConfig{Enabled: enabled, URL: internal, Token: os.Getenv("NETBOX_TOKEN"), IntervalSec: interval, Managed: true}
+	}
+	if tok := os.Getenv("NETBOX_TOKEN"); tok != "" && os.Getenv("NETBOX_URL") != "" {
+		return netboxConfig{Enabled: true, URL: os.Getenv("NETBOX_URL"), Token: tok}
+	}
 	if c != nil {
 		return *c
-	}
-	if tok := os.Getenv("NETBOX_TOKEN"); tok != "" {
-		return netboxConfig{Enabled: true, URL: os.Getenv("NETBOX_URL"), Token: tok}
 	}
 	return netboxConfig{}
 }
 
 func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	in.URL = strings.TrimRight(strings.TrimSpace(in.URL), "/")
-	if in.Enabled {
+	in.Managed = false // never persisted; derived in effective()
+	if in.URL != "" {
 		u, err := url.Parse(in.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return netboxConfig{}, errors.New("NetBox URL must be a valid http(s):// URL")
 		}
+	} else if in.Enabled && os.Getenv("NETBOX_INTERNAL_URL") == "" {
+		// No URL and no bundled NetBox to fall back on.
+		return netboxConfig{}, errors.New("NetBox URL is required (no bundled NetBox is available)")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -108,10 +132,11 @@ type publicNetboxConfig struct {
 	URL         string `json:"url"`
 	IntervalSec int    `json:"interval_sec"`
 	TokenSet    bool   `json:"token_set"`
+	Managed     bool   `json:"managed"` // bundled internal NetBox (no URL/token needed)
 }
 
 func (c netboxConfig) public() publicNetboxConfig {
-	return publicNetboxConfig{Enabled: c.Enabled, URL: c.URL, IntervalSec: c.IntervalSec, TokenSet: c.Token != ""}
+	return publicNetboxConfig{Enabled: c.Enabled, URL: c.URL, IntervalSec: c.IntervalSec, TokenSet: c.Token != "", Managed: c.Managed}
 }
 
 // handleNetboxConfig serves GET/PUT /api/automation/netbox (platform-owner only).

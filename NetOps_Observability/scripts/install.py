@@ -230,6 +230,11 @@ def write_env(env_path: Path, port: int, *, force: bool) -> dict[str, str]:
         "GRAFANA_CH_PASSWORD":      generate_password(24),
         "ADMIN_INITIAL_PASSWORD":   generate_password(16),
         "KEYCLOAK_ADMIN_PASSWORD":  generate_password(20),
+        # Bundled (internal) NetBox source-of-truth.
+        "NETBOX_SECRET_KEY":         generate_token(40),    # >=50 url-safe chars
+        "NETBOX_DB_PASSWORD":        generate_password(24),
+        "NETBOX_SUPERUSER_PASSWORD": generate_password(20),
+        "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
     }
 
     body = f"""# NetOps Observability — environment.
@@ -276,10 +281,6 @@ GRAFANA_CH_PASSWORD={secrets_map["GRAFANA_CH_PASSWORD"]}
 # Application secrets
 JWT_SECRET={secrets_map["JWT_SECRET"]}
 ENCRYPTION_KEY={secrets_map["ENCRYPTION_KEY"]}
-
-# Netbox integration (optional — leave blank to disable)
-NETBOX_URL=
-NETBOX_TOKEN=
 
 # Feature toggles
 ENABLE_SNMP_DISCOVERY=true
@@ -357,6 +358,19 @@ OIDC_DEFAULT_ROLE=read-only
 KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD={secrets_map["KEYCLOAK_ADMIN_PASSWORD"]}
 KEYCLOAK_DB_NAME=keycloak
+
+# Bundled NetBox (Automation → Source of Truth). The platform runs NetBox
+# internally; the API auto-wires to it (NETBOX_INTERNAL_URL) with the seeded
+# token, so the UI needs no URL/token. Start it with:  docker compose --profile
+# netbox up -d   (omit the profile to run without the bundled NetBox). To use an
+# EXTERNAL NetBox instead, leave NETBOX_INTERNAL_URL blank and set NETBOX_URL.
+NETBOX_INTERNAL_URL=http://netbox:8080
+NETBOX_SECRET_KEY={secrets_map["NETBOX_SECRET_KEY"]}
+NETBOX_DB_PASSWORD={secrets_map["NETBOX_DB_PASSWORD"]}
+NETBOX_SUPERUSER=admin
+NETBOX_SUPERUSER_PASSWORD={secrets_map["NETBOX_SUPERUSER_PASSWORD"]}
+NETBOX_TOKEN={secrets_map["NETBOX_TOKEN"]}
+NETBOX_URL=
 
 # Identity/saved-object persistence backend. "file" (default) keeps the JSON
 # stores on the data volume; "postgres" moves them into a single key/value table
