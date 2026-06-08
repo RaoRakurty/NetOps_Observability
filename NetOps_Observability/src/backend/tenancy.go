@@ -87,6 +87,72 @@ func deviceTenant(d models.Device) string {
 	return strings.ToLower(strings.TrimSpace(d.TenantID))
 }
 
+// telemetryRestriction is the device-keyed form of the operator-visibility
+// compliance rule, for stores keyed by device (ClickHouse flows by src/dst addr,
+// findings by device id/name, VictoriaMetrics by device label) rather than by a
+// tenant_id column. deny means the operator scoped INTO a restricted tenant (serve
+// nothing); the slices are the identifiers of restricted tenants' devices to
+// EXCLUDE from the operator's cross-tenant (Global) view.
+type telemetryRestriction struct {
+	deny  bool
+	keys  []string // device id + name  (findings `device`, log host/hostname)
+	addrs []string // device address    (flow src_addr/dst_addr)
+	ids   []string // device id         (metric `device` label)
+	names []string // device name       (metric hostname/source labels)
+}
+
+// restrictedTelemetry resolves the device-keyed operator-visibility restriction
+// for the caller. It is a no-op (zero value) for non-operators, when no tenant is
+// restricted, or for an operator in a non-restricted scope — so normal use and
+// tenants' own access are unaffected. Mirrors operatorTelemetryRestriction (which
+// is the tenant_id form used for the OpenSearch logs path).
+func (s *server) restrictedTelemetry(c jwtClaims) telemetryRestriction {
+	tenant, cross := principalTenant(c)
+	if !isPlatformOwner(c) || s.tenants == nil {
+		return telemetryRestriction{}
+	}
+	restricted := s.tenants.restrictedIDs()
+	if len(restricted) == 0 {
+		return telemetryRestriction{}
+	}
+	if !cross { // operator scoped into a tenant → deny iff it's restricted
+		for _, id := range restricted {
+			if strings.EqualFold(id, tenant) {
+				return telemetryRestriction{deny: true}
+			}
+		}
+		return telemetryRestriction{}
+	}
+	rset := make(map[string]bool, len(restricted))
+	for _, id := range restricted {
+		rset[id] = true
+	}
+	var out telemetryRestriction
+	seenKey, seenAddr := map[string]bool{}, map[string]bool{}
+	for _, d := range s.discovery.Devices() {
+		if !rset[deviceTenant(d)] {
+			continue
+		}
+		for _, k := range []string{d.ID, d.Name} {
+			if k != "" && !seenKey[k] {
+				seenKey[k] = true
+				out.keys = append(out.keys, k)
+			}
+		}
+		if d.Address != "" && !seenAddr[d.Address] {
+			seenAddr[d.Address] = true
+			out.addrs = append(out.addrs, d.Address)
+		}
+		if d.ID != "" {
+			out.ids = append(out.ids, d.ID)
+		}
+		if d.Name != "" {
+			out.names = append(out.names, d.Name)
+		}
+	}
+	return out
+}
+
 // operatorTelemetryRestriction enforces the per-tenant operator-visibility
 // compliance switch (Tenant.OperatorRestricted) for telemetry reads. Given the
 // principal's effective tenant/cross scope it returns:
@@ -98,7 +164,7 @@ func deviceTenant(d models.Device) string {
 // their own data, so this is a no-op for them. It is also a no-op when no tenant
 // is marked restricted (the default), so normal deployments are unaffected.
 func (s *server) operatorTelemetryRestriction(c jwtClaims, tenant string, cross bool) (exclude []string, deny bool) {
-	if !isPlatformOwner(c) {
+	if !isPlatformOwner(c) || s.tenants == nil {
 		return nil, false
 	}
 	restricted := s.tenants.restrictedIDs()

@@ -143,12 +143,21 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	// Tenant isolation: a scoped principal only sees findings on devices it can
 	// view (matched by the finding's `device` column against the device id/name).
 	claims, _ := userFrom(r.Context())
+	// Compliance (operator-visibility): deny if the operator scoped into a
+	// restricted tenant; in the Global view exclude restricted tenants' devices.
+	rt := s.restrictedTelemetry(claims)
+	if rt.deny {
+		writeEmptyClickHouse(w)
+		return
+	}
 	if keys, cross := s.visibleDeviceKeys(claims); !cross {
 		if len(keys) == 0 {
 			writeEmptyClickHouse(w)
 			return
 		}
 		conds = append(conds, "device IN ("+sqlInList(keys)+")")
+	} else if len(rt.keys) > 0 {
+		conds = append(conds, "device NOT IN ("+sqlInList(rt.keys)+")")
 	}
 	where := ""
 	if len(conds) > 0 {
@@ -189,7 +198,15 @@ func flowTypeClause(r *http.Request) string {
 func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
 	claims, _ := userFrom(r.Context())
 	addrs, cross := s.visibleDeviceAddrs(claims)
-	if cross {
+	// Compliance (operator-visibility): deny if the operator scoped into a
+	// restricted tenant; in the Global view exclude restricted tenants' devices.
+	if rt := s.restrictedTelemetry(claims); rt.deny {
+		return "", true
+	} else if cross {
+		if len(rt.addrs) > 0 {
+			in := sqlInList(rt.addrs)
+			return " AND src_addr NOT IN (" + in + ") AND dst_addr NOT IN (" + in + ")", false
+		}
 		return "", false
 	}
 	if len(addrs) == 0 {

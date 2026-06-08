@@ -59,6 +59,26 @@ import (
 //     set), regex-escaping every value.
 //   - scoped with NO visible devices: returns a single matcher that can never
 //     match (an impossible label value), so the result set is empty.
+//
+// metricsExcludeFilter builds ONE VictoriaMetrics extra_filters[] entry that
+// EXCLUDES the given device ids/names (operator-visibility for restricted tenants).
+// All matchers are AND'd within the single filter so a restricted device's series
+// is dropped regardless of which label identifies it (device id, or hostname/source
+// name) — OR'd separate filters would let a series slip through on an absent label.
+func metricsExcludeFilter(ids, names []string) string {
+	var parts []string
+	if idRe := regexAlternation(ids); idRe != "" {
+		parts = append(parts, `device!~"`+idRe+`"`)
+	}
+	if nameRe := regexAlternation(names); nameRe != "" {
+		parts = append(parts, `hostname!~"`+nameRe+`"`, `source!~"`+nameRe+`"`)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
 func metricsScopeFilters(ids, names []string, cross bool) []string {
 	if cross {
 		return nil
@@ -132,13 +152,28 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 
 	// Tenant isolation: inject server-side extra_filters[] so a scoped principal
 	// can only read its own devices' series. The platform owner (cross) is
-	// unrestricted and keeps the raw pass-through behaviour.
+	// unrestricted EXCEPT for the operator-visibility compliance rule below.
 	claims, _ := userFrom(r.Context())
 	ids, names, cross := s.visibleDeviceMetricLabels(claims)
-	if !cross {
+	rt := s.restrictedTelemetry(claims)
+	var scopeFilters []string
+	switch {
+	case rt.deny:
+		// Operator scoped into a restricted tenant → match nothing.
+		scopeFilters = []string{`{device="__netops_no_visible_device__"}`}
+	case !cross:
+		// Scoped tenant → only its own devices' series.
+		scopeFilters = metricsScopeFilters(ids, names, cross)
+	case len(rt.ids) > 0 || len(rt.names) > 0:
+		// Operator Global view → exclude restricted tenants' devices.
+		if f := metricsExcludeFilter(rt.ids, rt.names); f != "" {
+			scopeFilters = []string{f}
+		}
+	}
+	if len(scopeFilters) > 0 {
 		if !metricsUpstreamIsVictoria(base) {
 			// Fail closed: the upstream can't enforce label scoping, so we must
-			// not serve a scoped tenant unfiltered metrics.
+			// not serve filtered/excluded series unscoped.
 			writeError(w, http.StatusNotImplemented,
 				errors.New("metrics scoping requires a VictoriaMetrics backend"))
 			return
@@ -147,7 +182,7 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 		// pre-load the arg and dodge our scoping (we own these args).
 		q.Del("extra_filters[]")
 		q.Del("extra_label")
-		for _, f := range metricsScopeFilters(ids, names, cross) {
+		for _, f := range scopeFilters {
 			q.Add("extra_filters[]", f)
 		}
 	}

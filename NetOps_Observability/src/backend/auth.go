@@ -604,6 +604,15 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("platform administrator access required"))
 		return
 	}
+	// Compliance: the RAW OpenSearch Dashboards console (c=search) can't be
+	// per-tenant filtered (its security plugin is off), so an operator could query a
+	// restricted tenant's indices directly. When ANY tenant is operator-restricted we
+	// deny the raw console — the operator uses the in-app Logs view, which enforces
+	// the restriction. /netbox (no c=search) is unaffected.
+	if r.URL.Query().Get("c") == "search" && len(s.tenants.restrictedIDs()) > 0 {
+		writeError(w, http.StatusForbidden, errors.New("raw search console disabled while operator-restricted tenants exist — use the in-app Logs view"))
+		return
+	}
 	w.Header().Set("X-Netbox-User", netboxRemoteUser())
 	w.WriteHeader(http.StatusOK)
 }

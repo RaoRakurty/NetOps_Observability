@@ -3,6 +3,8 @@ package main
 import (
 	"path/filepath"
 	"testing"
+
+	"netops/backend/models"
 )
 
 // The per-tenant operator-visibility restriction (compliance) must:
@@ -68,4 +70,48 @@ func TestOperatorTelemetryRestriction(t *testing.T) {
 func ownerActing(owner jwtClaims, tenant string) jwtClaims {
 	owner.actingTenant = tenant
 	return owner
+}
+
+// The device-keyed restriction (flows/findings/metrics) must exclude a restricted
+// tenant's device identifiers from the operator's Global view, deny when scoped
+// into one, and be a no-op for non-operators / when nothing is restricted.
+func TestRestrictedTelemetryDeviceKeyed(t *testing.T) {
+	d := NewDiscoveryAggregator()
+	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
+	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
+	ts, err := newTenantStore(filepath.Join(t.TempDir(), "tenants.json"))
+	if err != nil {
+		t.Fatalf("newTenantStore: %v", err)
+	}
+	_, _ = ts.Create("Acme", "", "")
+	_, _ = ts.Create("Globex", "", "")
+	s := &server{discovery: d, tenants: ts}
+	owner := jwtClaims{Sub: "root", Role: RoleSuperAdmin, Tenant: TenantGlobal}
+
+	if rt := s.restrictedTelemetry(owner); rt.deny || len(rt.addrs) != 0 || len(rt.keys) != 0 {
+		t.Fatalf("nothing restricted → want no-op, got %+v", rt)
+	}
+	if _, err := ts.SetOperatorRestricted("acme", true); err != nil {
+		t.Fatalf("restrict acme: %v", err)
+	}
+
+	rt := s.restrictedTelemetry(owner) // operator Global view
+	if rt.deny {
+		t.Fatal("Global view must not deny")
+	}
+	if !containsStr(rt.addrs, "10.1.0.1") || !containsStr(rt.keys, "acme-core") || !containsStr(rt.ids, "acme-core") {
+		t.Errorf("acme device not excluded: %+v", rt)
+	}
+	if containsStr(rt.addrs, "10.2.0.1") || containsStr(rt.keys, "globex-core") {
+		t.Errorf("globex (not restricted) must NOT be excluded: %+v", rt)
+	}
+	if rt := s.restrictedTelemetry(ownerActing(owner, "acme")); !rt.deny {
+		t.Error("operator scoped into restricted acme must deny")
+	}
+	if rt := s.restrictedTelemetry(ownerActing(owner, "globex")); rt.deny {
+		t.Error("operator scoped into globex must not deny")
+	}
+	if rt := s.restrictedTelemetry(jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme"}); rt.deny || len(rt.addrs) != 0 {
+		t.Error("a tenant's own admin must never be restricted from its data")
+	}
 }
