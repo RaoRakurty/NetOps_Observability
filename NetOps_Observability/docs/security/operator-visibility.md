@@ -23,35 +23,38 @@ super-admin) **not be able to view their data**. This is the
 Enforced server-side via `operatorTelemetryRestriction()` (tenancy.go) — only ever
 applies to the platform operator, and is a no-op when no tenant is restricted.
 
-## Enforcement coverage (what is binding today)
+## Enforcement coverage (binding on every telemetry surface)
 
-✅ **OpenSearch telemetry API** — the primary log/telemetry read path:
-  - `GET /api/logs/search` (logs · syslog · **flows** · snmptraps) — `must_not`
+✅ **OpenSearch telemetry API** (`operatorTelemetryRestriction`, tenant_id based):
+  - `GET /api/logs/search` (logs · syslog · flows-in-OS · snmptraps) — `must_not`
     tenant exclusion in the Global view; `match_none` when scoped into a restricted
     tenant.
   - `GET/POST /api/logs/export` (sync + async worker) — restriction **frozen onto
     the export spec** at request time, so a queued export can't exfiltrate later.
-  - `GET /api/logs/indices` — restricted tenants' index names are filtered out
+  - `GET /api/logs/indices` — restricted tenants' index names filtered out
     (zero-knowledge); **fails closed** (empty) on any parse error.
-  - The Opsis Ai "+ context" button reads through `/api/logs/search`, so it inherits
-    the restriction.
+  - Opsis Ai "+ context" reads through `/api/logs/search`, so it inherits it.
 
-## Known gaps (NOT yet binding — follow-ups for full zero-knowledge)
+✅ **ClickHouse + VictoriaMetrics** (`restrictedTelemetry`, device-keyed):
+  - **Flows** (`flowTenantClause`) — `src/dst NOT IN` restricted tenants' device
+    addresses in the Global view; deny when scoped in.
+  - **Findings** (`handleFindings`) — `device NOT IN` restricted tenants' keys.
+  - **Metrics** (`proxyMetrics`) — a single AND'd negative `extra_filters[]`
+    excludes restricted tenants' device id/name labels; deny → match-nothing.
 
-These surfaces still scope by tenant but do **not** yet honor
-`OperatorRestricted`; an operator could see a restricted tenant's data through
-them. Document/▢ before promising a customer full zero-knowledge:
+✅ **Raw OpenSearch Dashboards console** (`/search`) — can't be per-tenant filtered
+  (security plugin off), so it is **denied entirely whenever any tenant is
+  operator-restricted** (`?c=search` gate). The operator uses the in-app Logs view
+  (which IS filtered). NetBox is unaffected (it's inventory, not tenant telemetry).
 
-1. **ClickHouse flows** (`flows.go` / `flowTenantClause`) — the dedicated Flows UI
-   reads netflow from ClickHouse, scoped by device address, not by the restriction.
-   Fix: exclude restricted tenants' device addresses (chokepoint exists).
-2. **ClickHouse findings** (correlation anomalies) — same shape as flows.
-3. **Metrics** (VictoriaMetrics) — per-device series; restricted tenant's metrics
-   are still visible. Lower PII sensitivity but in scope for strict compliance.
-4. **Raw OpenSearch Dashboards console** (`/search`, platform-owner only) — a raw
-   query tool that bypasses the API filter entirely. True enforcement here needs
-   per-tenant index restrictions at the OpenSearch security layer (the security
-   plugin is disabled in the scaffold) or removing operator OSD access.
+A tenant's OWN users are never restricted from their own data on any surface, and
+all checks are a no-op when no tenant is restricted (default).
 
-The right long-term home for (1)–(3) is a single tenant-exclusion clause applied
-at each store's query chokepoint, mirroring `operatorTelemetryRestriction()`.
+## Residual notes
+
+- Device→tenant attribution drives the ClickHouse/metrics exclusion, so a device
+  must be tagged to the restricted tenant for its flows/findings/metrics to be
+  hidden (untagged/platform devices stay visible — by design).
+- For defence-in-depth beyond the API, ClickHouse row policies + the OpenSearch
+  security plugin (per-tenant index roles) would enforce at the datastore layer;
+  today enforcement is at the API query chokepoints.
