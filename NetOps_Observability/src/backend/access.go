@@ -49,25 +49,6 @@ func (s *server) reachesTenant(principalID, tenantID string) bool {
 	return allow
 }
 
-// reachesAllTenants reports the platform-owner case: an active super-admin
-// binding at platform scope or at the global tenant. Mirrors isPlatformOwner.
-func (s *server) reachesAllTenants(principalID string) bool {
-	if s.bindings == nil {
-		return false
-	}
-	now := time.Now().UTC()
-	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if b.Effect != EffectAllow || !b.active(now) || !isSuperAdminRole(b.RoleID) {
-			continue
-		}
-		st, slug := parseScope(b.ScopeID)
-		if st == ScopePlatform || (st == scopeTypeTenant && (slug == "" || slug == TenantGlobal)) {
-			return true
-		}
-	}
-	return false
-}
-
 // accessibleTenants returns the tenant ids a principal may act in (sorted,
 // Global-first), and all=true when it reaches every tenant (platform owner).
 // Feeds the top-bar scope selector and /api/me. Empty + all=false ⇒ no access.
