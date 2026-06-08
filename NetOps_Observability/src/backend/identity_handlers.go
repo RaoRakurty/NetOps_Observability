@@ -285,6 +285,8 @@ type createTenantRequest struct {
 	Name          string `json:"name"`
 	Note          string `json:"note"`
 	IsolationMode string `json:"isolation_mode"`
+	// OrgID is the Organization the new tenant belongs to. Blank → Global org.
+	OrgID string `json:"org_id"`
 	// OperatorRestricted hides the tenant's data from the global/operator view from
 	// the moment it's created (data-privacy / compliance) — see Tenant.OperatorRestricted.
 	OperatorRestricted bool `json:"operator_restricted"`
@@ -321,7 +323,15 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		t, err := s.tenants.Create(req.Name, req.Note, req.IsolationMode)
+		// Validate the org exists before creating the tenant under it (zero-trust
+		// on input). Blank org → Global, which always exists.
+		if req.OrgID != "" {
+			if _, ok := s.orgs.Get(req.OrgID); !ok {
+				writeError(w, http.StatusBadRequest, errors.New("unknown organization"))
+				return
+			}
+		}
+		t, err := s.tenants.Create(req.Name, req.Note, req.IsolationMode, req.OrgID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return

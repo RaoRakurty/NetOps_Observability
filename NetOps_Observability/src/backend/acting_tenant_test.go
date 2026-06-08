@@ -36,7 +36,7 @@ func TestWithActingTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTenantStore: %v", err)
 	}
-	if _, err := ts.Create("Acme", "", ""); err != nil {
+	if _, err := ts.Create("Acme", "", "", ""); err != nil {
 		t.Fatalf("create tenant: %v", err)
 	}
 	s := &server{tenants: ts}

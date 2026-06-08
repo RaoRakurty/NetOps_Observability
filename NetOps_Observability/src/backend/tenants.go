@@ -18,10 +18,14 @@ import (
 const TenantGlobal = "global"
 
 type Tenant struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	Slug          string        `json:"slug"`
-	Note          string        `json:"note,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Note string `json:"note,omitempty"`
+	// OrgID is the Organization this tenant belongs to (orgs.go). Every tenant
+	// belongs to exactly one org; blank is treated as the Global org for
+	// backward compatibility with tenants created before the org layer existed.
+	OrgID         string        `json:"org_id,omitempty"`
 	IsolationMode IsolationMode `json:"isolation_mode,omitempty"` // shared (default) | dedicated_schema|db|cluster
 	// OperatorRestricted is the data-privacy / compliance switch: when true, the
 	// platform operator (cross-tenant super-admin) may NOT view this tenant's
@@ -49,7 +53,7 @@ func newTenantStore(path string) (*tenantStore, error) {
 	}
 	if _, ok := s.tenants[TenantGlobal]; !ok {
 		s.tenants[TenantGlobal] = Tenant{
-			ID: TenantGlobal, Name: "Global", Slug: TenantGlobal,
+			ID: TenantGlobal, Name: "Global", Slug: TenantGlobal, OrgID: OrgGlobal,
 			Note:          "Root tenant — owns shared infrastructure & defaults.",
 			IsolationMode: IsolationShared, CreatedAt: time.Now().UTC(),
 		}
@@ -147,7 +151,7 @@ func (s *tenantStore) SetOperatorRestricted(id string, restricted bool) (Tenant,
 	return t, nil
 }
 
-func (s *tenantStore) Create(name, note, isolationMode string) (Tenant, error) {
+func (s *tenantStore) Create(name, note, isolationMode, orgID string) (Tenant, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Tenant{}, errors.New("tenant name required")
@@ -160,18 +164,67 @@ func (s *tenantStore) Create(name, note, isolationMode string) (Tenant, error) {
 	if err != nil {
 		return Tenant{}, err
 	}
+	org := strings.ToLower(strings.TrimSpace(orgID))
+	if org == "" {
+		org = OrgGlobal
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tenants[id]; ok {
 		return Tenant{}, errors.New("tenant already exists")
 	}
-	t := Tenant{ID: id, Name: name, Slug: id, Note: note, IsolationMode: mode, CreatedAt: time.Now().UTC()}
+	t := Tenant{ID: id, Name: name, Slug: id, Note: note, OrgID: org, IsolationMode: mode, CreatedAt: time.Now().UTC()}
 	s.tenants[id] = t
 	if err := s.flushLocked(); err != nil {
 		delete(s.tenants, id)
 		return Tenant{}, err
 	}
 	return t, nil
+}
+
+// orgOf returns the org a tenant belongs to, treating blank as the Global org
+// (tenants predating the org layer). Centralizes the backward-compat default.
+func orgOf(t Tenant) string {
+	if t.OrgID == "" {
+		return OrgGlobal
+	}
+	return t.OrgID
+}
+
+// ListByOrg returns the tenants belonging to the given org, Global tenant first
+// then alphabetical. Used by org-scoped views and delete-guard counting.
+func (s *tenantStore) ListByOrg(orgID string) []Tenant {
+	orgID = strings.ToLower(strings.TrimSpace(orgID))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Tenant, 0)
+	for _, t := range s.tenants {
+		if strings.EqualFold(orgOf(t), orgID) {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].ID == TenantGlobal) != (out[j].ID == TenantGlobal) {
+			return out[i].ID == TenantGlobal
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// CountByOrg reports how many tenants belong to an org — used to refuse deleting
+// an org that still owns tenants.
+func (s *tenantStore) CountByOrg(orgID string) int {
+	orgID = strings.ToLower(strings.TrimSpace(orgID))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, t := range s.tenants {
+		if strings.EqualFold(orgOf(t), orgID) {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *tenantStore) Delete(id string) error {

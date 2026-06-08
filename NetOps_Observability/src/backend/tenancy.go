@@ -57,6 +57,23 @@ func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
 	return strings.ToLower(strings.TrimSpace(c.Tenant)), false
 }
 
+// principalOrg resolves the Organization a caller belongs to, by following its
+// tenant → org. The platform owner (cross-tenant) maps to the Global org. Used to
+// scope org-level views/governance to the caller's own organization.
+func (s *server) principalOrg(c jwtClaims) string {
+	if isPlatformOwner(c) {
+		return OrgGlobal
+	}
+	tenant, _ := principalTenant(c)
+	if s.tenants == nil {
+		return OrgGlobal
+	}
+	if t, ok := s.tenants.Get(tenant); ok {
+		return orgOf(t)
+	}
+	return OrgGlobal
+}
+
 // actingAll is the switcher sentinel for the default Global (cross-tenant) view.
 const actingAll = "all"
 

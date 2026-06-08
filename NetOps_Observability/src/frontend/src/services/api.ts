@@ -483,6 +483,9 @@ export type AuthUser = {
   // platform_admin = the cross-tenant platform owner. Gates infra-stack
   // monitoring + platform-wide admin in the UI. Mirrors the backend rule.
   platform_admin?: boolean;
+  // org_id = the organization the caller belongs to (its tenant's org; Global
+  // for the platform owner).
+  org_id?: string;
   // auth_source = how the account authenticates: local | oidc | saml | ldap |
   // tacacs. Only local accounts can change their password in-app (federated
   // passwords live at the IdP). Empty/undefined = legacy local account.
@@ -903,8 +906,8 @@ export const api = {
   deleteRole: (id: string) => request<void>(`/api/roles/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   listTenants: () => request<Tenant[]>("/api/tenants"),
-  createTenant: (name: string, note?: string, operatorRestricted?: boolean) =>
-    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note, operator_restricted: !!operatorRestricted }) }),
+  createTenant: (name: string, note?: string, operatorRestricted?: boolean, orgId?: string) =>
+    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note, operator_restricted: !!operatorRestricted, org_id: orgId || "" }) }),
   // Destructive: requires the exact tenant name echoed back (server-enforced) and
   // refuses a non-empty tenant unless force=true.
   deleteTenant: (id: string, confirm: string, force = false) =>
@@ -912,6 +915,17 @@ export const api = {
   // Compliance: toggle whether the platform operator may view this tenant's telemetry.
   setTenantOperatorRestricted: (id: string, restricted: boolean) =>
     request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ operator_restricted: restricted }) }),
+
+  // ---------- Organizations (the account layer above tenants) ----------
+  listOrgs: () => request<Org[]>("/api/orgs"),
+  listRegions: () => request<Region[]>("/api/regions"),
+  createOrg: (name: string, opts: { note?: string; homeRegion?: string; ssoConnection?: string } = {}) =>
+    request<Org>("/api/orgs", { method: "POST", body: JSON.stringify({ name, note: opts.note || "", home_region: opts.homeRegion || "", sso_connection: opts.ssoConnection || "" }) }),
+  updateOrg: (id: string, patch: { note?: string; home_region?: string; sso_connection?: string }) =>
+    request<Org>(`/api/orgs/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  // Refused (409) if the org still owns tenants; the Global org is permanent.
+  deleteOrg: (id: string) =>
+    request<void>(`/api/orgs/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // Self-describing API + ITSM connector status.
   openapi: () => request<OpenAPISpec>("/api/openapi.json"),
@@ -1116,9 +1130,20 @@ export type Tenant = {
   name: string;
   slug: string;
   note?: string;
+  org_id?: string; // the organization this tenant belongs to (blank = Global)
   operator_restricted?: boolean; // compliance: operator may NOT view this tenant's telemetry
   created_at?: string;
 };
+export type Org = {
+  id: string;
+  name: string;
+  slug: string;
+  note?: string;
+  home_region: string; // data-residency region id
+  sso_connection?: string; // bound identity-provider connection (optional)
+  created_at?: string;
+};
+export type Region = { id: string; label: string };
 export type ApiKey = {
   id: string;
   tenant_id: string;

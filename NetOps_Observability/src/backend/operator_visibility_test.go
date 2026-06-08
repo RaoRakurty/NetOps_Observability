@@ -18,10 +18,10 @@ func TestOperatorTelemetryRestriction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTenantStore: %v", err)
 	}
-	if _, err := ts.Create("Acme", "", ""); err != nil {
+	if _, err := ts.Create("Acme", "", "", ""); err != nil {
 		t.Fatalf("create acme: %v", err)
 	}
-	if _, err := ts.Create("Globex", "", ""); err != nil {
+	if _, err := ts.Create("Globex", "", "", ""); err != nil {
 		t.Fatalf("create globex: %v", err)
 	}
 	s := &server{tenants: ts}
@@ -83,8 +83,8 @@ func TestRestrictedTelemetryDeviceKeyed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTenantStore: %v", err)
 	}
-	_, _ = ts.Create("Acme", "", "")
-	_, _ = ts.Create("Globex", "", "")
+	_, _ = ts.Create("Acme", "", "", "")
+	_, _ = ts.Create("Globex", "", "", "")
 	s := &server{discovery: d, tenants: ts}
 	owner := jwtClaims{Sub: "root", Role: RoleSuperAdmin, Tenant: TenantGlobal}
 

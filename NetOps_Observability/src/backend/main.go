@@ -45,6 +45,7 @@ type server struct {
 	users          usersRepo
 	roles          *roleStore
 	tenants        *tenantStore
+	orgs           *orgStore
 	apiKeys        *apiKeyStore
 	refresh        *refreshStore
 	snmpCreds      *snmpCredStore
@@ -274,6 +275,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("tenant store: %v", err)
 	}
+	orgs, err := newOrgStore(envOr("ORGS_FILE", "/data/orgs.json"))
+	if err != nil {
+		log.Fatalf("org store: %v", err)
+	}
 	apiKeys, err := newAPIKeyStore(envOr("APIKEYS_FILE", "/data/apikeys.json"))
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
@@ -317,6 +322,7 @@ func newServer() *server {
 		users:         users,
 		roles:         roles,
 		tenants:       tenants,
+		orgs:          orgs,
 		apiKeys:       apiKeys,
 		refresh:       refresh,
 		snmpCreds:     snmpCreds,
@@ -530,6 +536,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/roles/", s.handleRoleByID)
 	mux.HandleFunc("/api/tenants", s.handleTenants)
 	mux.HandleFunc("/api/tenants/", s.handleTenantByID)
+	mux.HandleFunc("/api/orgs", s.handleOrgs)
+	mux.HandleFunc("/api/orgs/", s.handleOrgByID)
+	mux.HandleFunc("/api/regions", s.handleRegions)
 	mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/apikeys/", s.handleAPIKeyByID)
 	// SNMP credential profiles (v1/v2c/v3) — infrastructure-gated.

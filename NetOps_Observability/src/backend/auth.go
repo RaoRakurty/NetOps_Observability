@@ -309,8 +309,9 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		publicUser
-		PlatformAdmin bool `json:"platform_admin"`
-	}{toPublic(user), owner})
+		PlatformAdmin bool   `json:"platform_admin"`
+		OrgID         string `json:"org_id"`
+	}{toPublic(user), owner, s.principalOrg(claims)})
 }
 
 // isLocalAccount reports whether an account's password is managed locally (so it

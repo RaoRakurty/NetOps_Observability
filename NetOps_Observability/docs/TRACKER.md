@@ -26,6 +26,7 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 | 13 | Phase 3 — Audit trail (`audit.go` + `/api/audit` + UI) | `5ef4389` |
 | 14 | Phase 4 — `Tenant.IsolationMode` seam + `TenantRouter` | `a732c43` |
 | 26 | Tenants admin (renameable global tenant, view-scope catalog, TopBar tenant chip, `handleMe` enrich) | `dd904f0` |
+| — | **Organization layer (above Tenant)** — `Org` entity (`orgs.go`, file-backed store mirroring `tenantStore`, seeds Global org), `Tenant.OrgID` (blank→Global, back-compat) + `ListByOrg`/`CountByOrg`, canonical data-residency regions (`regions.go`, `home_region` validated). REST `/api/orgs[/{id}]` + `/api/regions` (platform-owner mutate; tenant-admin sees only own org); org create validates region, delete refused (409) while it owns tenants; Global org permanent. `principalOrg(claims)` seam + `org_id` on `/api/auth/me`. Admin→Identity & Access gains an **Organizations** tier (CRUD + edit modal); Tenants create gets an org selector + Organization column. The agreed Phase-1 (Org layer) of the SaaS orgs/regions plan; region *routing* + regional data planes are later phases (deployment topology). Tests: `orgs_test.go` + `org_handlers_test.go`. | ✅ done |
 | — | Overview tiles + WS feeds scoped to caller's tenant | `6d116cc` |
 | — | Infrastructure (SNMP credentials + Collectors) scoped | `78a702c` |
 

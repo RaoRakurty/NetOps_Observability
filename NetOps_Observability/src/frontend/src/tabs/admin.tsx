@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
+import { api, AdminUser, Role, Tenant, Org, Region, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
@@ -356,9 +356,12 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
 
 export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string, name: string) => void } = {}) {
   const [tenants, err, reload, setErr] = useReload(() => api.listTenants());
+  const [orgs] = useReload(() => api.listOrgs());
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
+  const [org, setOrg] = useState("");
   const [hideGlobal, setHideGlobal] = useState(false);
+  const orgName = (id?: string) => (orgs ?? []).find((o) => o.id === (id || "global"))?.name || (id || "global");
   // Type-to-confirm delete modal state.
   const [delTarget, setDelTarget] = useState<Tenant | null>(null);
   const [delTyped, setDelTyped] = useState("");
@@ -369,7 +372,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   const create = async () => {
     if (!name.trim()) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim(), hideGlobal); setName(""); setNote(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, org); setName(""); setNote(""); setOrg(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
   const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
   const confirmDelete = async () => {
@@ -409,6 +412,12 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
             <span>Tenant name <Req /></span>
             <input placeholder="e.g. acme" value={name} onChange={(e) => setName(e.target.value)} />
           </label>
+          <label>
+            <span>Organization</span>
+            <select value={org} onChange={(e) => setOrg(e.target.value)}>
+              {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          </label>
           <label style={{ flex: 2 }}>
             <span>Note</span>
             <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -430,6 +439,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
               <tr>
                 <th>Tenant</th>
                 <th style={{ width: 130 }}>Type</th>
+                <th style={{ width: 150 }}>Organization</th>
                 <th style={{ width: 190 }}>Global visibility</th>
                 <th>Note</th>
                 <th style={{ width: 140 }}>ID</th>
@@ -447,6 +457,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                         {isParent ? "Parent Tenant" : "Child Tenant"}
                       </span>
                     </td>
+                    <td style={{ color: "var(--muted)", fontSize: 12 }}>{orgName(t.org_id)}</td>
                     <td>
                       {isParent ? (
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
@@ -534,6 +545,165 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   );
 }
 
+// ---- Organizations (the account layer above tenants) ----------------------
+//
+// An Organization is the top-level customer/account. Each tenant belongs to one
+// org; data region and sign-in are set on the org and inherited by its tenants.
+export function OrgsAdmin() {
+  const [orgs, err, reload, setErr] = useReload(() => api.listOrgs());
+  const [regions] = useReload(() => api.listRegions());
+  const [tenants] = useReload(() => api.listTenants());
+  const [name, setName] = useState("");
+  const [region, setRegion] = useState("");
+  const [sso, setSso] = useState("");
+  const [note, setNote] = useState("");
+  const [edit, setEdit] = useState<Org | null>(null);
+
+  const regionLabel = (id: string) => (regions ?? []).find((r) => r.id === id)?.label || id;
+  const tenantCount = (orgId: string) =>
+    (tenants ?? []).filter((t) => (t.org_id || "global") === orgId).length;
+
+  const create = async () => {
+    if (!name.trim()) return;
+    setErr(null);
+    try {
+      await api.createOrg(name.trim(), { homeRegion: region, ssoConnection: sso.trim(), note: note.trim() });
+      setName(""); setRegion(""); setSso(""); setNote(""); reload();
+    } catch (e) { setErr((e as Error).message); }
+  };
+  const remove = async (o: Org) => {
+    if (!window.confirm(`Delete organization "${o.name}"?\n\nThis can't be undone. An organization that still has tenants can't be deleted — move or remove its tenants first.`)) return;
+    setErr(null);
+    try { await api.deleteOrg(o.id); reload(); }
+    catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+  };
+
+  const list = orgs ?? [];
+  return (
+    <>
+      <AdminHead title="Organizations" sub="Top-level accounts. Each organization has a home data region and sign-in, inherited by the tenants inside it." />
+      <StatStrip>
+        <Stat label="Organizations" value={orgs ? list.length : <Skeleton w={26} h={22} />} />
+        <Stat label="Data regions in use" value={orgs ? new Set(list.map((o) => o.home_region)).size : "—"} tone="accent" />
+      </StatStrip>
+      <div className="card">
+        <div className="admin-card-head"><h2>New organization</h2></div>
+        <ErrLine msg={err} />
+        <div className="admin-form">
+          <label className="req-field">
+            <span>Name <Req /></span>
+            <input placeholder="e.g. Acme Corp" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            <span>Data region</span>
+            <select value={region} onChange={(e) => setRegion(e.target.value)}>
+              <option value="">Default</option>
+              {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Sign-in connection</span>
+            <input placeholder="optional" value={sso} onChange={(e) => setSso(e.target.value)} />
+          </label>
+          <label style={{ flex: 2 }}>
+            <span>Note</span>
+            <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create organization</button>
+        </div>
+        <RequiredLegend />
+      </div>
+      <div className="card" style={{ paddingTop: 8 }}>
+        {list.length === 0 ? (
+          <div className="empty">No organizations yet.</div>
+        ) : (
+          <table className="ds-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Organization</th>
+                <th style={{ width: 150 }}>Data region</th>
+                <th style={{ width: 90 }}>Tenants</th>
+                <th style={{ width: 160 }}>Sign-in</th>
+                <th>Note</th>
+                <th style={{ width: 1 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((o) => {
+                const isRoot = o.id === "global";
+                return (
+                  <tr key={o.id}>
+                    <td style={{ fontWeight: 600 }}>{o.name}{isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Root</span>}</td>
+                    <td><span className="badge">{regionLabel(o.home_region)}</span></td>
+                    <td style={{ color: "var(--muted)" }}>{tenantCount(o.id)}</td>
+                    <td style={{ color: "var(--muted)", fontSize: 12 }}>{o.sso_connection || "Platform default"}</td>
+                    <td style={{ color: "var(--muted)" }}>{o.note || "—"}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button className="dash-btn" style={{ marginRight: 6 }} onClick={() => setEdit(o)}>Edit</button>
+                      {!isRoot && <button className="dash-btn" onClick={() => remove(o)}>Delete</button>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {edit && (
+        <OrgEditModal
+          org={edit}
+          regions={regions ?? []}
+          onClose={() => setEdit(null)}
+          onSaved={() => { setEdit(null); reload(); }}
+        />
+      )}
+    </>
+  );
+}
+
+// OrgEditModal edits an org's mutable settings: data region, sign-in connection, note.
+function OrgEditModal({ org, regions, onClose, onSaved }: { org: Org; regions: Region[]; onClose: () => void; onSaved: () => void }) {
+  const [region, setRegion] = useState(org.home_region);
+  const [sso, setSso] = useState(org.sso_connection || "");
+  const [note, setNote] = useState(org.note || "");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setErr(null); setBusy(true);
+    try {
+      await api.updateOrg(org.id, { home_region: region, sso_connection: sso.trim(), note: note.trim() });
+      onSaved();
+    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal title={org.name} subtitle="Organization settings" onClose={onClose}>
+      <div className="dc">
+        <label className="dc-field">
+          <span>Data region</span>
+          <select value={region} onChange={(e) => setRegion(e.target.value)}>
+            {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+        </label>
+        <label className="dc-field">
+          <span>Sign-in connection</span>
+          <input value={sso} placeholder="Platform default" onChange={(e) => setSso(e.target.value)} />
+        </label>
+        <label className="dc-field">
+          <span>Note</span>
+          <input value={note} placeholder="optional" onChange={(e) => setNote(e.target.value)} />
+        </label>
+        {err && <p className="dc-err">{err}</p>}
+        <div className="dc-actions">
+          <button className="dc-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="dc-btn" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save changes"}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ---- Identity & Access (Global vs Tenants, same items each) ----------------
 //
 // One page that consolidates Users · Roles · Security Policy · MFA, split into a
@@ -587,7 +757,7 @@ function IAItems({ scopeTenant }: { scopeTenant: string }) {
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
-  const [section, setSection] = useState<"global" | "tenants">("global");
+  const [section, setSection] = useState<"global" | "orgs" | "tenants">("global");
   const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
 
   // A tenant admin governs only its own tenant — no Global, no picker.
@@ -602,17 +772,19 @@ export function IdentityAccess() {
 
   return (
     <>
-      <AdminHead title="Identity & Access" sub="People, roles and security — for everyone (Global) or for a specific tenant." />
+      <AdminHead title="Identity & Access" sub="People, roles and security — platform-wide (Global), per organization, or per tenant." />
       <div style={{ marginBottom: 12 }}>
         <Segmented
           ariaLabel="Identity scope"
           value={section}
           onChange={(v) => { setSection(v); setSel(null); }}
-          options={[{ value: "global", label: "Global" }, { value: "tenants", label: "Tenants" }]}
+          options={[{ value: "global", label: "Global" }, { value: "orgs", label: "Organizations" }, { value: "tenants", label: "Tenants" }]}
         />
       </div>
 
       {section === "global" && <IAItems scopeTenant="" />}
+
+      {section === "orgs" && <OrgsAdmin />}
 
       {section === "tenants" && (
         sel ? (

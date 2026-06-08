@@ -119,7 +119,7 @@ func TestTenantStore(t *testing.T) {
 	if err := ts.Delete(TenantGlobal); err == nil {
 		t.Error("expected refusal deleting Global tenant")
 	}
-	tn, err := ts.Create("Acme Corp", "isolated", "")
+	tn, err := ts.Create("Acme Corp", "isolated", "", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
