@@ -502,6 +502,10 @@ services:
       NETBOX_INTERNAL_URL: ${NETBOX_INTERNAL_URL:-}
       NETBOX_URL: ${NETBOX_URL:-}
       NETBOX_TOKEN: ${NETBOX_TOKEN:-}
+      # Superuser the embedded Source of Truth auto-logs-in as (must match the
+      # NetBox SUPERUSER_NAME below). The osd-gate handler returns it so nginx can
+      # forward it as NetBox's REMOTE_AUTH header for seamless SSO.
+      NETBOX_SUPERUSER: ${NETBOX_SUPERUSER:-admin}
       ENABLE_SNMP_DISCOVERY: ${ENABLE_SNMP_DISCOVERY:-true}
       SNMP_CIDR_RANGES: ${SNMP_CIDR_RANGES:-10.0.0.0/8}
       ENABLE_SNMP_COLLECTION: ${ENABLE_SNMP_COLLECTION:-true}
@@ -816,6 +820,16 @@ services:
       SUPERUSER_PASSWORD: ${NETBOX_SUPERUSER_PASSWORD:?NETBOX_SUPERUSER_PASSWORD required (install.py generates it)}
       SUPERUSER_API_TOKEN: ${NETBOX_TOKEN:?NETBOX_TOKEN required (install.py generates it)}
       ALLOWED_HOSTS: "*"
+      # Seamless SSO for the embedded Source of Truth. nginx authenticates the
+      # platform owner, then forwards the superuser name as X-Remote-User; NetBox
+      # logs that request straight in (no NetBox login screen). REMOTE_AUTH only
+      # ever sees nginx-set headers — the netbox port is internal-only and the
+      # proxy overwrites any client-supplied X-Remote-User. Auto-create is on as a
+      # safety net, but the forwarded name matches the existing superuser.
+      REMOTE_AUTH_ENABLED: "true"
+      REMOTE_AUTH_BACKEND: netbox.authentication.RemoteUserBackend
+      REMOTE_AUTH_HEADER: HTTP_X_REMOTE_USER
+      REMOTE_AUTH_AUTO_CREATE_USER: "true"
       # Served behind nginx at /netbox/ (platform-owner-gated) so operators can
       # CREATE inventory in NetBox's UI. BASE_PATH makes NetBox emit correct
       # subpath URLs; CSRF_TRUSTED_ORIGINS must list the origin you browse from

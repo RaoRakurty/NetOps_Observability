@@ -492,14 +492,21 @@ func cookieSecure(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
-// setOSDCookie issues/refreshes the /search gate cookie carrying the caller's
-// access token. Path=/search confines it to the Dashboards route; SameSite=Lax
-// is sufficient (the iframe is same-origin). Lifetime tracks the access token.
+// consoleGatePath is the cookie path for the embedded-console gate cookie. It
+// must cover every same-origin console nginx guards with the auth_request gate —
+// today /search (OpenSearch Dashboards) AND /netbox/ (the bundled Source of
+// Truth, embedded in-app). Path="/" so one cookie reaches them all; the cookie
+// is HttpOnly + SameSite=Lax and carries only the access token the gate verifies.
+const consoleGatePath = "/"
+
+// setOSDCookie issues/refreshes the embedded-console gate cookie carrying the
+// caller's access token. SameSite=Lax is sufficient (the consoles are embedded
+// same-origin). Lifetime tracks the access token.
 func setOSDCookie(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     osdCookieName,
 		Value:    token,
-		Path:     "/search",
+		Path:     consoleGatePath,
 		HttpOnly: true,
 		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
@@ -512,7 +519,7 @@ func clearOSDCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     osdCookieName,
 		Value:    "",
-		Path:     "/search",
+		Path:     consoleGatePath,
 		HttpOnly: true,
 		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
@@ -520,12 +527,18 @@ func clearOSDCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleOSDGate is the nginx auth_request target for /search. It authenticates
-// from the gate cookie (not a Bearer token) and authorizes ONLY the platform
-// owner — a super-admin in the global tenant (principalTenant cross==true).
-// 200 = allow, 401 = no/invalid session, 403 = authenticated but not platform
-// owner. It is in publicPaths so the bearer-token middleware doesn't reject the
-// cookie-only subrequest; the authorization lives here.
+// handleOSDGate is the nginx auth_request target for the embedded consoles
+// (/search, /netbox). It authenticates from the gate cookie (not a Bearer token)
+// and authorizes ONLY the platform owner — a super-admin in the global tenant
+// (principalTenant cross==true). 200 = allow, 401 = no/invalid session, 403 =
+// authenticated but not platform owner. It is in publicPaths so the bearer-token
+// middleware doesn't reject the cookie-only subrequest; the authz lives here.
+//
+// On allow it returns X-Netbox-User: the NetBox superuser name. nginx captures
+// it (auth_request_set) and forwards it to NetBox as the REMOTE_AUTH header so
+// the embedded Source of Truth auto-logs-in as that superuser — no NetBox login
+// screen. Safe because the header is emitted ONLY after the platform-owner check
+// passes, and nginx strips any client-supplied copy.
 func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(osdCookieName)
 	if err != nil || c.Value == "" {
@@ -541,7 +554,19 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("platform administrator access required"))
 		return
 	}
+	w.Header().Set("X-Netbox-User", netboxRemoteUser())
 	w.WriteHeader(http.StatusOK)
+}
+
+// netboxRemoteUser is the NetBox username the embedded console auto-logs-in as.
+// It MUST match the bundled NetBox superuser (compose SUPERUSER_NAME) so NetBox's
+// REMOTE_AUTH maps the request to that existing superuser rather than minting a
+// permissionless auto-created user. Sourced from the same env compose feeds NetBox.
+func netboxRemoteUser() string {
+	if u := strings.TrimSpace(os.Getenv("NETBOX_SUPERUSER")); u != "" {
+		return u
+	}
+	return "admin"
 }
 
 func jwtSecret() string {

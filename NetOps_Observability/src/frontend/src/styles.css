@@ -581,6 +581,23 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
   border-radius: 8px; padding: 6px 8px; font-size: 12px;
 }
+/* Source of Truth — embedded inventory console. */
+.sot-head { margin-bottom: 10px; }
+.sot-frame-wrap {
+  border: 1px solid var(--panel-border); border-radius: 10px; overflow: hidden;
+  background: var(--bg);
+}
+.sot-frame {
+  display: block; width: 100%; height: calc(100vh - 220px); min-height: 540px; border: 0;
+}
+.sot-frame-wrap.full {
+  position: fixed; inset: 0; z-index: 60; border-radius: 0; border: 0;
+}
+.sot-frame-wrap.full .sot-frame { height: 100vh; min-height: 0; }
+.sot-exit {
+  position: absolute; top: 12px; right: 16px; z-index: 61;
+  box-shadow: 0 2px 10px rgba(0,0,0,.25);
+}
 /* Tenant "view as" switcher (platform owner). When narrowed to one tenant it
    takes the accent so the operator never forgets the app is scoped. */
 .tenant-switch {
