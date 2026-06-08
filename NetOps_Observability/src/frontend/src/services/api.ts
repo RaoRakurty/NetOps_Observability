@@ -940,6 +940,13 @@ export const api = {
   revokeBinding: (id: string) =>
     request<void>(`/api/bindings/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
+  // ---------- Break-glass (time-boxed, audited operator elevation) ----------
+  listBreakGlass: () => request<RoleBinding[]>("/api/breakglass"),
+  openBreakGlass: (tenantId: string, reason: string, durationMinutes = 60) =>
+    request<RoleBinding>("/api/breakglass", { method: "POST", body: JSON.stringify({ tenant_id: tenantId, reason, duration_minutes: durationMinutes }) }),
+  endBreakGlass: (id: string) =>
+    request<void>(`/api/breakglass/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   // Self-describing API + ITSM connector status.
   openapi: () => request<OpenAPISpec>("/api/openapi.json"),
   itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),

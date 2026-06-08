@@ -19,12 +19,21 @@ import (
 	"time"
 )
 
-// userBindingScope is the canonical scope id for a user's single Phase-A binding:
-// its tenant (blank tenant → the Global tenant, matching isPlatformOwner).
+// userBindingScope is the canonical scope id for a user's single mirror binding.
+// PBAC Phase C — the control-plane realm split: the PLATFORM OWNER (a super-admin
+// in the global/blank tenant) is bound at the `platform` scope, not at a customer
+// tenant, so control-plane identity is no longer expressed as "a customer tenant
+// that happens to be god." Everyone else is bound at their tenant scope. This is
+// behaviour-neutral: reachesAllTenants / accessibleTenants / bindingDerivedScope
+// all already treat super-admin@platform identically to the legacy
+// super-admin@tenant:global (isPlatformOwner).
 func userBindingScope(u User) string {
 	t := strings.ToLower(strings.TrimSpace(u.TenantID))
 	if t == "" {
 		t = TenantGlobal
+	}
+	if t == TenantGlobal && isSuperAdminRole(u.Role) {
+		return ScopePlatform
 	}
 	return scopeTenant(t)
 }
@@ -48,11 +57,10 @@ func (s *server) syncUserBinding(u User) {
 	_, _ = s.bindings.Add(RoleBinding{
 		PrincipalID: pid,
 		RoleID:      u.Role,
-		ScopeType:   scopeTypeTenant,
-		ScopeID:     userBindingScope(u),
+		ScopeID:     userBindingScope(u), // ScopeType derived by Add (tenant or platform)
 		Effect:      EffectAllow,
 		GrantedBy:   "system:sync",
-		Reason:      "Phase A mirror of legacy user role+tenant",
+		Reason:      "mirror of legacy user role+tenant",
 	})
 }
 

@@ -144,7 +144,8 @@ func (s *server) restrictedTelemetry(c jwtClaims) telemetryRestriction {
 	if !isPlatformOwner(c) || s.tenants == nil {
 		return telemetryRestriction{}
 	}
-	restricted := s.tenants.restrictedIDs()
+	// Break-glass (Phase C): a live session un-hides that tenant for its window.
+	restricted := s.effectiveRestrictedIDs(c.Sub)
 	if len(restricted) == 0 {
 		return telemetryRestriction{}
 	}
@@ -200,7 +201,9 @@ func (s *server) operatorTelemetryRestriction(c jwtClaims, tenant string, cross 
 	if !isPlatformOwner(c) || s.tenants == nil {
 		return nil, false
 	}
-	restricted := s.tenants.restrictedIDs()
+	// Break-glass (Phase C): exclude restricted tenants the operator does NOT
+	// currently hold a live session into; a session un-hides its tenant.
+	restricted := s.effectiveRestrictedIDs(c.Sub)
 	if len(restricted) == 0 {
 		return nil, false
 	}

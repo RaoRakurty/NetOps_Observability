@@ -368,6 +368,19 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   const [delForce, setDelForce] = useState(false);
   const [delErr, setDelErr] = useState<string | null>(null);
   const [delBusy, setDelBusy] = useState(false);
+  // Break-glass (time-boxed, audited access into a restricted tenant) modal state.
+  const [bgTarget, setBgTarget] = useState<Tenant | null>(null);
+  const [bgReason, setBgReason] = useState("");
+  const [bgMins, setBgMins] = useState(60);
+  const [bgErr, setBgErr] = useState<string | null>(null);
+  const [bgBusy, setBgBusy] = useState(false);
+  const openBreakGlass = async () => {
+    if (!bgTarget || !bgReason.trim()) return;
+    setBgErr(null); setBgBusy(true);
+    try { await api.openBreakGlass(bgTarget.id, bgReason.trim(), bgMins); setBgTarget(null); setBgReason(""); }
+    catch (e) { setBgErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    finally { setBgBusy(false); }
+  };
 
   const create = async () => {
     if (!name.trim()) return;
@@ -474,6 +487,9 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                     <td style={{ color: "var(--muted)" }}>{t.note || "—"}</td>
                     <td className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{t.id}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {!isParent && t.operator_restricted && (
+                        <button className="dash-btn" style={{ marginRight: 6 }} title="Request time-boxed, audited access to this restricted tenant" onClick={() => { setBgTarget(t); setBgReason(""); setBgErr(null); }}>Break-glass</button>
+                      )}
                       {!isParent && onManageTenant && (
                         <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageTenant(t.id, t.name)}>Manage →</button>
                       )}
@@ -486,6 +502,34 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
           </table>
         )}
       </div>
+
+      {bgTarget && (
+        <Modal title="Break-glass access" subtitle={`Time-boxed, audited access to ${bgTarget.name}`} onClose={() => setBgTarget(null)}>
+          <div className="dc">
+            <p className="dc-lead">
+              This tenant's data is hidden for compliance. Opening a break-glass session grants you access for a limited time. The reason and the session are recorded.
+            </p>
+            <label className="dc-field">
+              <span>Reason <Req /></span>
+              <input value={bgReason} autoFocus placeholder="e.g. INC-1234 investigation" onChange={(e) => setBgReason(e.target.value)} />
+            </label>
+            <label className="dc-field">
+              <span>Duration</span>
+              <select value={bgMins} onChange={(e) => setBgMins(Number(e.target.value))}>
+                <option value={15}>15 minutes</option>
+                <option value={60}>1 hour</option>
+                <option value={240}>4 hours</option>
+                <option value={480}>8 hours (max)</option>
+              </select>
+            </label>
+            {bgErr && <p className="dc-err">{bgErr}</p>}
+            <div className="dc-actions">
+              <button className="dc-btn ghost" onClick={() => setBgTarget(null)} disabled={bgBusy}>Cancel</button>
+              <button className="dc-btn danger" disabled={bgBusy || !bgReason.trim()} onClick={openBreakGlass}>{bgBusy ? "Opening…" : "Open break-glass session"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {delTarget && (
         <Modal

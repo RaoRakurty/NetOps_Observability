@@ -52,6 +52,7 @@ var apiRoutes = []apiRoute{
 	{"GET", "/api/regions", "Identity", "List data-residency regions (administration:admin)"},
 	{"GET", "/api/bindings", "Identity", "List role bindings the caller may see (administration:admin)"},
 	{"POST", "/api/bindings", "Identity", "Grant a role binding — principal→role→scope (platform owner / org-admin)"},
+	{"POST", "/api/breakglass", "Identity", "Open a time-boxed, audited break-glass session into a restricted tenant (platform operator)"},
 	{"GET", "/api/apikeys", "Identity", "List API keys (administration:admin)"},
 	{"POST", "/api/apikeys", "Identity", "Mint a scoped API key (administration:admin)"},
 	{"GET", "/api/policy/catalog", "Security Policy", "NIST-aligned security-control catalog (administration:admin)"},
