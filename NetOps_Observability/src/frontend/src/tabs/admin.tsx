@@ -1416,6 +1416,13 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
                 <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
                 <LabeledInput label="Admin roles" value={cfg.admin_roles} onChange={(v) => set({ admin_roles: v })} placeholder="super-admin,admin,netops-admin" hint="Comma-separated IdP roles/groups mapped to super-admin." />
                 <LabeledInput label="Operator roles" value={cfg.operator_roles} onChange={(v) => set({ operator_roles: v })} placeholder="operator,netops-operator" hint="Comma-separated IdP roles/groups mapped to operator." />
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginTop: 6 }}>
+                  <input type="checkbox" checked={!!cfg.require_mfa} onChange={(e) => set({ require_mfa: e.target.checked })} />
+                  Require multi-factor authentication (reject sign-ins your identity provider didn't verify with a second factor)
+                </label>
+                {cfg.require_mfa && (
+                  <LabeledInput label="MFA assurance values (optional)" value={cfg.mfa_acr ?? ""} onChange={(v) => set({ mfa_acr: v })} placeholder="urn:okta:loa:2fa,gold" hint="Comma-separated acr values your IdP sends for MFA. Leave blank to detect MFA from the sign-in methods (amr)." />
+                )}
               </div>
             ),
           },

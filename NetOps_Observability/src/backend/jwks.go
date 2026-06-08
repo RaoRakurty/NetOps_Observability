@@ -66,6 +66,11 @@ type oidcClaims struct {
 		Roles []string `json:"roles"`
 	} `json:"realm_access"`
 	Groups []string `json:"groups"`
+	// Authentication assurance (OIDC): amr = methods used (e.g. pwd, otp, mfa, hwk,
+	// sms, webauthn), acr = assurance class. Used to verify the IdP performed MFA
+	// when the SSO config requires it.
+	Amr []string `json:"amr"`
+	Acr string   `json:"acr"`
 }
 
 func (c oidcClaims) audiences() []string {
@@ -216,7 +221,7 @@ func rsaKeyFromJWK(k jwk) (*rsa.PublicKey, error) {
 	// e is a big-endian integer, usually 65537. Left-pad to 8 bytes for Uint64.
 	var eb [8]byte
 	copy(eb[8-len(eBytes):], eBytes)
-	e := int(binary.BigEndian.Uint64(eb[:]))  // #nosec G115 -- RSA exponent (tiny, e.g. 65537); the e<=0 guard below rejects any wrap
+	e := int(binary.BigEndian.Uint64(eb[:])) // #nosec G115 -- RSA exponent (tiny, e.g. 65537); the e<=0 guard below rejects any wrap
 	if e <= 0 {
 		return nil, errors.New("invalid RSA exponent")
 	}

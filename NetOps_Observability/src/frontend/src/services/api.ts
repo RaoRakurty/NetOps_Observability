@@ -1285,6 +1285,8 @@ export type OidcConfig = {
   admin_roles: string;
   operator_roles: string;
   providers: string;
+  require_mfa?: boolean; // reject SSO sign-ins the IdP didn't MFA (amr/acr)
+  mfa_acr?: string; // optional csv of acr values that count as MFA
 };
 
 // Native (non-Keycloak) auth providers, configured at runtime via the admin UI.

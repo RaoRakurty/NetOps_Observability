@@ -51,8 +51,35 @@ type oidcProvider struct {
 	adminRoles    map[string]bool
 	operatorRoles map[string]bool
 	providers     []ssoProviderInfo
+	requireMFA    bool
+	mfaAcr        map[string]bool // acr values that count as MFA (IdP-specific)
 
 	jwks *jwksCache
+}
+
+// mfaAmrMethods are amr values that indicate a SECOND factor was used (anything
+// beyond a bare password). Broad on purpose to interop across IdPs (Okta, Entra,
+// Keycloak, Auth0, Ping…). "pwd"/"password" alone is NOT MFA.
+var mfaAmrMethods = map[string]bool{
+	"mfa": true, "otp": true, "totp": true, "hwk": true, "swk": true, "sms": true,
+	"tel": true, "phone": true, "phr": true, "phrh": true, "pin": true, "fpt": true,
+	"face": true, "iris": true, "vbm": true, "kba": true, "webauthn": true, "u2f": true,
+	"hotp": true, "mca": true, "sc": true, "wia": true,
+}
+
+// mfaSatisfied reports whether the IdP token asserts a second factor: an amr entry
+// in mfaAmrMethods, or an acr value the operator listed as MFA. Used only when
+// requireMFA is on.
+func (p *oidcProvider) mfaSatisfied(c oidcClaims) bool {
+	for _, m := range c.Amr {
+		if mfaAmrMethods[strings.ToLower(strings.TrimSpace(m))] {
+			return true
+		}
+	}
+	if p.mfaAcr != nil && c.Acr != "" && p.mfaAcr[strings.TrimSpace(c.Acr)] {
+		return true
+	}
+	return false
 }
 
 func splitSet(csv string) map[string]bool {
@@ -116,6 +143,8 @@ func newOIDCProviderFromConfig(c oidcConfig) *oidcProvider {
 		adminRoles:    splitSet(firstNonEmpty(strings.TrimSpace(c.AdminRoles), "super-admin,admin,netops-admin")),
 		operatorRoles: splitSet(firstNonEmpty(strings.TrimSpace(c.OperatorRoles), "operator,netops-operator")),
 		providers:     parseProviders(c.Providers),
+		requireMFA:    c.RequireMFA,
+		mfaAcr:        splitSet(strings.TrimSpace(c.MFAAcr)),
 	}
 	if p.enabled && p.issuer != "" {
 		p.jwks = newJWKSCache(p.issuer)
@@ -215,6 +244,15 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 	if idp := strings.TrimSpace(r.URL.Query().Get("idp")); idp != "" {
 		q.Set("kc_idp_hint", idp)
 	}
+	// When MFA is required, ASK the IdP to step up (acr_values). Enforcement still
+	// happens at the callback (mfaSatisfied) — this just nudges the IdP to do it.
+	if p.requireMFA && len(p.mfaAcr) > 0 {
+		acrs := make([]string, 0, len(p.mfaAcr))
+		for a := range p.mfaAcr {
+			acrs = append(acrs, a)
+		}
+		q.Set("acr_values", strings.Join(acrs, " "))
+	}
 	http.Redirect(w, r, disc.AuthEndpoint+"?"+q.Encode(), http.StatusFound)
 }
 
@@ -252,6 +290,13 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	claims, err := p.jwks.verifyRS256(idToken, p.issuer, p.clientID)
 	if err != nil {
 		s.ssoFail(w, r, "id token rejected: "+err.Error())
+		return
+	}
+	// Honor the IdP's MFA: when required, the token must assert a second factor
+	// (amr/acr). We don't run MFA for SSO users — we verify the IdP did.
+	if p.requireMFA && !p.mfaSatisfied(claims) {
+		logWarn("auth", "sso login rejected — MFA required but not asserted by IdP", map[string]any{"sub": claims.Sub, "amr": claims.Amr, "acr": claims.Acr})
+		s.ssoFail(w, r, "multi-factor authentication is required — your identity provider did not confirm a second factor")
 		return
 	}
 

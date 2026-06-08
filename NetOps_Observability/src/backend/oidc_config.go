@@ -44,6 +44,10 @@ type oidcConfig struct {
 	AdminRoles    string `json:"admin_roles"`    // csv
 	OperatorRoles string `json:"operator_roles"` // csv
 	Providers     string `json:"providers"`      // OIDC_PROVIDERS csv: "id:Label:kind,..."
+	// RequireMFA rejects an SSO sign-in unless the IdP's token asserts a second
+	// factor (amr/acr) — i.e. we HONOR the IdP's MFA instead of trusting it blindly.
+	RequireMFA bool   `json:"require_mfa"`
+	MFAAcr     string `json:"mfa_acr,omitempty"` // csv of acr values that count as MFA (IdP-specific; optional)
 }
 
 // newOIDCConfigFromEnv reads the same env vars newOIDCProvider() reads today so
@@ -62,6 +66,8 @@ func newOIDCConfigFromEnv() oidcConfig {
 		AdminRoles:    envOr("OIDC_ADMIN_ROLES", "super-admin,admin,netops-admin"),
 		OperatorRoles: envOr("OIDC_OPERATOR_ROLES", "operator,netops-operator"),
 		Providers:     os.Getenv("OIDC_PROVIDERS"),
+		RequireMFA:    os.Getenv("OIDC_REQUIRE_MFA") == "true",
+		MFAAcr:        os.Getenv("OIDC_MFA_ACR"),
 	}
 }
 
@@ -121,6 +127,8 @@ type publicOIDCConfig struct {
 	AdminRoles      string `json:"admin_roles"`
 	OperatorRoles   string `json:"operator_roles"`
 	Providers       string `json:"providers"`
+	RequireMFA      bool   `json:"require_mfa"`
+	MFAAcr          string `json:"mfa_acr,omitempty"`
 }
 
 func (c oidcConfig) public() publicOIDCConfig {
@@ -137,6 +145,8 @@ func (c oidcConfig) public() publicOIDCConfig {
 		AdminRoles:      c.AdminRoles,
 		OperatorRoles:   c.OperatorRoles,
 		Providers:       c.Providers,
+		RequireMFA:      c.RequireMFA,
+		MFAAcr:          c.MFAAcr,
 	}
 }
 
