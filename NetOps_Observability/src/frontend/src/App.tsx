@@ -8,7 +8,7 @@ import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
-import CopilotDrawer from "./components/CopilotDrawer";
+import OpsisDrawer from "./components/OpsisDrawer";
 import CommandPalette from "./components/CommandPalette";
 import Inspector from "./components/Inspector";
 import BottomDrawer from "./components/BottomDrawer";
@@ -165,7 +165,7 @@ export default function App() {
           </div>
           <div className="page">{view}</div>
         </main>
-        <CopilotDrawer />
+        <OpsisDrawer />
         <CommandPalette nav={nav} />
         <Inspector />
         <BottomDrawer />
