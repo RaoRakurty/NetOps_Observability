@@ -422,14 +422,14 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				Tenant: k.TenantID,
 				Scopes: k.Scopes,
 			}
-			ctx := context.WithValue(r.Context(), userCtxKey, claims)
+			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		// Our own session tokens are HS256. Try that first (the common path).
 		claims, err := verifyJWT(token, jwtSecret())
 		if err == nil {
-			ctx := context.WithValue(r.Context(), userCtxKey, claims)
+			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -437,11 +437,11 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		// (service accounts / direct API clients) verified against its JWKS.
 		if op := s.oidcProvider(); op.ready() {
 			if oc, verr := op.jwks.verifyRS256(token, op.issuer, op.clientID); verr == nil {
-				ctx := context.WithValue(r.Context(), userCtxKey, jwtClaims{
+				ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, jwtClaims{
 					Sub:    firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub),
 					Role:   op.roleFor(oc),
 					Tenant: op.defaultTenant,
-				})
+				}))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}

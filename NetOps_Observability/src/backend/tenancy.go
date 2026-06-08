@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"strings"
 
 	"netops/backend/models"
@@ -21,15 +22,65 @@ import (
 // platform owner — a new tenant therefore starts as an empty namespace and can
 // never see another tenant's (or the platform's) data. See docs/IDENTITY_ACCESS.md.
 
-// principalTenant resolves the caller's tenant id and whether they may read
-// across all tenants. crossTenant is true ONLY for a super-admin whose own tenant
-// is the global/platform tenant (the SaaS operator).
-func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
+// isPlatformOwner reports whether the principal is the cross-tenant SaaS operator
+// — a super-admin whose own token tenant is the global/platform tenant. This is
+// the ONLY identity that may read across tenants or scope into a specific one via
+// the tenant switcher; it is derived from the token, never from a request header.
+func isPlatformOwner(c jwtClaims) bool {
 	t := strings.ToLower(strings.TrimSpace(c.Tenant))
-	if isSuperAdminRole(c.Role) && (t == "" || t == TenantGlobal) {
-		return TenantGlobal, true
+	return isSuperAdminRole(c.Role) && (t == "" || t == TenantGlobal)
+}
+
+// principalTenant resolves the caller's tenant id and whether they may read
+// across all tenants. crossTenant is true ONLY for the platform owner with no
+// active "view as tenant" override.
+//
+// The platform owner may narrow their view with the tenant switcher (carried as a
+// validated, server-set actingTenant — see withActingTenant): selecting a specific
+// tenant drops them to that tenant's scope (cross=false), and selecting "Global"
+// scopes them to the global/infra namespace only. The override can only NARROW —
+// it is honored solely for the platform owner, so no other principal can use it to
+// widen their reach. Every tenant-scoped read funnels through here, so one override
+// scopes the whole app (logs, flows, metrics, findings, devices) at once.
+func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
+	if isPlatformOwner(c) {
+		switch act := strings.ToLower(strings.TrimSpace(c.actingTenant)); act {
+		case "": // no override → full cross-tenant view (all tenants)
+			return TenantGlobal, true
+		case TenantGlobal: // narrowed to the global / infra namespace only
+			return TenantGlobal, false
+		default: // narrowed to one specific tenant
+			return act, false
+		}
 	}
-	return t, false
+	return strings.ToLower(strings.TrimSpace(c.Tenant)), false
+}
+
+// actingAll is the switcher value for the default, un-narrowed all-tenants view.
+const actingAll = "all"
+
+// withActingTenant applies an optional platform-owner "view as tenant" override
+// from the request (X-Acting-Tenant header, or ?as_tenant= query param) onto the
+// claims. Zero trust: the override is honored ONLY for the platform owner and ONLY
+// when it names a real tenant (or "global"); anything else — a non-owner caller,
+// an unknown tenant, the "all" sentinel — leaves the claims untouched, so the
+// override can never widen visibility. The result feeds principalTenant.
+func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
+	v := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Acting-Tenant")))
+	if v == "" {
+		v = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("as_tenant")))
+	}
+	if v == "" || v == actingAll || !isPlatformOwner(c) {
+		return c // no narrowing requested, or caller may not narrow
+	}
+	if v == TenantGlobal {
+		c.actingTenant = TenantGlobal
+		return c
+	}
+	if _, ok := s.tenants.Get(v); ok {
+		c.actingTenant = v
+	}
+	return c
 }
 
 func deviceTenant(d models.Device) string {

@@ -140,8 +140,9 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// indices (tenantIndexPattern names nothing else) and, within them, only its
 	// own tagged docs plus untagged docs from its own devices (osTenantFilter,
 	// mirroring the ClickHouse row policy). The platform owner is unrestricted.
+	claims, authed := userFrom(r.Context())
 	tenant, cross := "", true
-	if claims, ok := userFrom(r.Context()); ok {
+	if authed {
 		tenant, cross = principalTenant(claims)
 		keys, _ := s.visibleDeviceKeys(claims)
 		addrs, _ := s.visibleDeviceAddrs(claims)
@@ -152,10 +153,11 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 
 	// App logs are the platform's OWN container/API logs (netops-applogs-untagged-*),
 	// not customer telemetry. They expose infra-stack internals, so only the
-	// cross-tenant platform owner may read them — a scoped tenant is refused even
-	// if it names the signal directly. (UI also hides the option; this is the
-	// enforced boundary per the zero-trust rule.)
-	if sig := strings.ToLower(strings.TrimSpace(req.Signal)); (sig == "applogs" || sig == "app") && !cross {
+	// platform owner may read them — a scoped tenant is refused even if it names the
+	// signal directly. Gate on identity (isPlatformOwner), not on the cross flag, so
+	// the owner keeps infra access while narrowed to a tenant/Global via the switcher.
+	// (UI also hides the option; this is the enforced boundary per the zero-trust rule.)
+	if sig := strings.ToLower(strings.TrimSpace(req.Signal)); (sig == "applogs" || sig == "app") && !isPlatformOwner(claims) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
 		return
 	}

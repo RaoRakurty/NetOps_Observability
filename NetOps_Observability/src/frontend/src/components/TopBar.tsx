@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
+import { AuthUser, Health, api, GlobalResult, GlobalResultKind, Tenant, getActingTenant, setActingTenant } from "../services/api";
 import { useShell } from "../context/shell";
 import { usePrefs, CHROME_PRESETS } from "../theme/prefs";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
@@ -48,6 +48,22 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
   const [ranges, setRanges] = useState(() => allRanges());
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
+
+  // Tenant switcher ("view as tenant"): platform owner only. Lets the SaaS
+  // operator scope the WHOLE app to one tenant (or the global/infra namespace).
+  // The choice is stamped on every API call (X-Acting-Tenant) — see api.ts.
+  const platformOwner = !!user.platform_admin;
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const acting = getActingTenant();
+  useEffect(() => {
+    if (!platformOwner) return;
+    let alive = true;
+    api.listTenants().then((ts) => alive && setTenants(ts)).catch(() => {});
+    return () => { alive = false; };
+  }, [platformOwner]);
+  // Changing scope re-scopes every view at once; a full reload is the simplest
+  // correct way to refetch all mounted data against the new tenant.
+  const onScope = (v: string) => { setActingTenant(v); window.location.reload(); };
 
   useEffect(() => setDraft(query === "*" ? "" : query), [query]);
 
@@ -166,6 +182,22 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
       </form>
 
       <div className="topbar-right">
+        {platformOwner && (
+          <select
+            className={`tenant-switch${acting ? " scoped" : ""}`}
+            value={acting || "all"}
+            onChange={(e) => onScope(e.target.value)}
+            title={acting ? "Viewing one tenant — switch scope" : "Viewing all tenants — switch scope"}
+            aria-label="Tenant scope"
+          >
+            <option value="all">All tenants</option>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.id === "global" ? "Global (infra)" : t.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           className="range-picker"
           value={range.minutes}

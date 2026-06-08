@@ -126,6 +126,12 @@ type jwtClaims struct {
 	Iat    int64    `json:"iat"`
 	Nbf    int64    `json:"nbf,omitempty"` // not-before; enforced by verifyJWT (SR-024)
 	Exp    int64    `json:"exp"`
+
+	// actingTenant is the platform owner's "view as tenant" override, set
+	// server-side by withActingTenant from a request header — NEVER from the
+	// token (it is unexported, so JSON (un)marshal cannot populate it). Empty
+	// means no override (all-tenants view). See principalTenant.
+	actingTenant string
 }
 
 // hasScope reports whether the principal carries an API-key scope. Human

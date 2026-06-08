@@ -45,8 +45,8 @@ func (slackProvider) VerifyWebhook(r *http.Request, body []byte, secret string) 
 }
 
 type slackInteraction struct {
-	Type    string `json:"type"` // block_actions
-	User    struct {
+	Type string `json:"type"` // block_actions
+	User struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 	} `json:"user"`

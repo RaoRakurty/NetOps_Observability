@@ -581,6 +581,17 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
   border-radius: 8px; padding: 6px 8px; font-size: 12px;
 }
+/* Tenant "view as" switcher (platform owner). When narrowed to one tenant it
+   takes the accent so the operator never forgets the app is scoped. */
+.tenant-switch {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 6px 8px; font-size: 12px; max-width: 180px;
+}
+.tenant-switch.scoped {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 600;
+}
 .health { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
 .health.bad .dot { background: var(--bad); }

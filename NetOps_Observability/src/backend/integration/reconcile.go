@@ -29,20 +29,20 @@ type MappingEngine struct {
 // their native/raw state into these lowercase tokens in Normalize().
 func defaultStateMap() map[string]InternalState {
 	return map[string]InternalState{
-		"new":          StateOpen,
-		"open":         StateOpen,
-		"triggered":    StateOpen,
-		"reopened":     StateOpen,
-		"acknowledged": StateAcknowledged,
-		"ack":          StateAcknowledged,
-		"in progress":  StateAcknowledged,
-		"in-progress":  StateAcknowledged,
+		"new":           StateOpen,
+		"open":          StateOpen,
+		"triggered":     StateOpen,
+		"reopened":      StateOpen,
+		"acknowledged":  StateAcknowledged,
+		"ack":           StateAcknowledged,
+		"in progress":   StateAcknowledged,
+		"in-progress":   StateAcknowledged,
 		"investigating": StateInvestigating,
-		"on hold":      StateInvestigating,
-		"resolved":     StateResolved,
-		"done":         StateResolved,
-		"closed":       StateClosed,
-		"cancelled":    StateClosed,
+		"on hold":       StateInvestigating,
+		"resolved":      StateResolved,
+		"done":          StateResolved,
+		"closed":        StateClosed,
+		"cancelled":     StateClosed,
 		// "escalated" intentionally maps to Open (severity bump is a separate concern).
 		"escalated": StateOpen,
 	}
@@ -96,11 +96,11 @@ func (m *MappingEngine) Wins(a, b string) bool {
 
 // Reconcile applies the conflict ladder (§4c) to a single ordered, deduped event.
 //
-//	0. stale (≤ watermark, §4a)            → drop, no replay  (stops flapping)
-//	1. assignment / comment (ITSM-owned)   → apply field, no lifecycle change
-//	2. terminal already (NMS owns terminal)→ a non-terminal external update never reopens
-//	3. mapped state                        → apply the transition
-//	   unmapped                            → drop (caller DLQs for operator review)
+//  0. stale (≤ watermark, §4a)            → drop, no replay  (stops flapping)
+//  1. assignment / comment (ITSM-owned)   → apply field, no lifecycle change
+//  2. terminal already (NMS owns terminal)→ a non-terminal external update never reopens
+//  3. mapped state                        → apply the transition
+//     unmapped                            → drop (caller DLQs for operator review)
 func (m *MappingEngine) Reconcile(ev IntegrationEvent, current InternalState, wm Watermark) Decision {
 	// §4a — never replay a stale/superseded event.
 	if IsStale(ev, wm) {
