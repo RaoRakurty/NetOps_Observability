@@ -346,7 +346,7 @@ func newServer() *server {
 	srv.copilotLimiter = newTenantRateLimiter()
 	engine.OnFire = srv.ingestAlertIncident
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
-	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"))
+	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.netboxCfg = netboxCfg
 	// UI-configurable email/SMS/push channels (registers live channels into the
 	// dispatcher built above). Must come after notifier is set on srv.
@@ -809,7 +809,9 @@ func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {
 		"aws_sns":    os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_REGION") != "",
 		"opensearch": os.Getenv("OPENSEARCH_URL") != "",
 		"clickhouse": os.Getenv("CLICKHOUSE_URL") != "",
-		"copilot":    os.Getenv("FEATURE_COPILOT") == "true" && os.Getenv("COPILOT_API_KEY") != "",
+		// Feature availability only — the assistant UI renders whenever the feature
+		// is on, then prompts in-panel for an API key (env or UI-stored) if missing.
+		"copilot":    os.Getenv("FEATURE_COPILOT") == "true",
 		"device_ssh": os.Getenv("FEATURE_DEVICE_SSH") == "true",
 	})
 }

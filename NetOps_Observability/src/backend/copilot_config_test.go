@@ -13,7 +13,7 @@ import (
 func copilotTempStore(t *testing.T) *copilotConfigStore {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
-	return newCopilotConfigStore(path)
+	return newCopilotConfigStore(path, nil)
 }
 
 // Defaults come from env (COPILOT_PROVIDER/COPILOT_MODEL) when nothing is stored.
@@ -69,7 +69,7 @@ func TestCopilotConfigProviderNormalization(t *testing.T) {
 // fresh store loading the same path reproduces them.
 func TestCopilotConfigSetGetPersistAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
-	s := newCopilotConfigStore(path)
+	s := newCopilotConfigStore(path, nil)
 
 	out := s.set(copilotConfig{Provider: "openai", Model: "  gpt-4o  ", System: "  be terse  "})
 	if out.Model != "gpt-4o" {
@@ -84,7 +84,7 @@ func TestCopilotConfigSetGetPersistAndReload(t *testing.T) {
 		t.Fatalf("get() = %+v, want %+v", got, out)
 	}
 
-	reloaded := newCopilotConfigStore(path)
+	reloaded := newCopilotConfigStore(path, nil)
 	if r := reloaded.get(); r != out {
 		t.Fatalf("reloaded get() = %+v, want %+v", r, out)
 	}
@@ -96,7 +96,7 @@ func TestCopilotConfigSetGetPersistAndReload(t *testing.T) {
 func TestCopilotConfigNeverPersistsAPIKey(t *testing.T) {
 	t.Setenv("COPILOT_API_KEY", "sk-super-secret-should-not-be-stored")
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
-	s := newCopilotConfigStore(path)
+	s := newCopilotConfigStore(path, nil)
 	s.set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", System: "hi"})
 
 	raw, err := kvLoad(path)
@@ -120,12 +120,30 @@ func TestCopilotConfigNeverPersistsAPIKey(t *testing.T) {
 	}
 }
 
+// A UI-supplied key is stored and returned by apiKey(); saving again with a
+// blank key preserves it (the redacted form never round-trips the secret).
+func TestCopilotConfigKeyStoreAndPreserve(t *testing.T) {
+	s := copilotTempStore(t)
+	if s.apiKey() != "" {
+		t.Fatalf("fresh store apiKey = %q, want empty", s.apiKey())
+	}
+	s.set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", Key: "sk-ui-key"})
+	if got := s.apiKey(); got != "sk-ui-key" {
+		t.Fatalf("apiKey after set = %q, want sk-ui-key", got)
+	}
+	// Save settings again WITHOUT a key (blank) — must keep the stored key.
+	s.set(copilotConfig{Provider: "anthropic", Model: "claude-sonnet-4-6"})
+	if got := s.apiKey(); got != "sk-ui-key" {
+		t.Fatalf("apiKey after blank re-save = %q, want preserved sk-ui-key", got)
+	}
+}
+
 // A store pointed at a non-existent / empty path loads cleanly (no panic) and
 // falls through to env defaults.
 func TestCopilotConfigLoadMissingFileIsClean(t *testing.T) {
 	t.Setenv("COPILOT_PROVIDER", "")
 	t.Setenv("COPILOT_MODEL", "")
-	s := newCopilotConfigStore(filepath.Join(t.TempDir(), "does-not-exist.json"))
+	s := newCopilotConfigStore(filepath.Join(t.TempDir(), "does-not-exist.json"), nil)
 	got := s.get()
 	if got.Provider != "anthropic" || got.Model != "claude-sonnet-4-6" {
 		t.Fatalf("missing-file load did not fall back to defaults: %+v", got)

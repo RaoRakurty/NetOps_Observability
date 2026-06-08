@@ -152,14 +152,28 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// Each provider that has a key is tried in order; on error (no key is skipped,
 	// a provider error/non-2xx falls through) the next is attempted; the first
 	// success wins. Order configurable via COPILOT_PROVIDER_CHAIN.
+	// The UI-stored (encrypted) key + model apply to the configured provider, used
+	// as the fallback when no per-provider env key is set — so the platform owner
+	// can enable the assistant by pasting a key in settings (no .env edit).
+	storedKey := s.copilotCfg.apiKey()
+	cfgProvider := s.copilotCfg.get().Provider
+	cfgModel := s.copilotCfg.get().Model
+
 	attempted := false
 	for _, name := range copilotProviderChain() {
 		key := providerKey(name)
+		if key == "" && storedKey != "" && name == cfgProvider {
+			key = storedKey
+		}
 		if key == "" {
 			continue // provider not configured — skip silently
 		}
+		model := providerModel(name)
+		if name == cfgProvider && cfgModel != "" {
+			model = cfgModel
+		}
 		attempted = true
-		text, err := callProvider(r.Context(), name, key, providerModel(name), system, msgs)
+		text, err := callProvider(r.Context(), name, key, model, system, msgs)
 		if err == nil && strings.TrimSpace(text) != "" {
 			writeJSON(w, http.StatusOK, map[string]string{"provider": name, "text": text})
 			return
@@ -169,10 +183,10 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		logWarn("copilot", "provider attempt failed, falling through", map[string]any{"provider": name})
 	}
 	if !attempted {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("copilot has no provider key — set OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY (or legacy COPILOT_API_KEY)"))
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Opsis Ai isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
 		return
 	}
-	writeError(w, http.StatusBadGateway, fmt.Errorf("all copilot providers failed — see server logs"))
+	writeError(w, http.StatusBadGateway, fmt.Errorf("Opsis Ai couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
 }
 
 // ---- provider chain ---------------------------------------------------------

@@ -29,6 +29,7 @@ export default function Copilot() {
   const [cfg, setCfg] = useState<CopilotConfig | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [savingCfg, setSavingCfg] = useState(false);
+  const [keyDraft, setKeyDraft] = useState("");
 
   useEffect(() => {
     api
@@ -47,8 +48,10 @@ export default function Copilot() {
         provider: cfg.provider,
         model: cfg.model,
         system: cfg.system,
+        ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
       });
       setCfg((c) => ({ ...(c ?? saved), ...saved }));
+      setKeyDraft("");
       setShowSettings(false);
     } catch (e) {
       setError((e as Error).message);
@@ -152,10 +155,35 @@ export default function Copilot() {
           >
             <h3 style={{ marginTop: 0 }}>Assistant settings</h3>
             <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-              Runs on Claude by default. The API key is held server-side (
-              <code>COPILOT_API_KEY</code>) and never shown here.
+              Runs on Claude by default. Paste a provider API key below — it's encrypted at rest and never
+              shown again.
             </p>
             <div style={{ display: "grid", gap: 10, maxWidth: 460 }}>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span style={{ color: "var(--muted)", fontSize: 11 }}>
+                  {cfg.provider === "openai" ? "OpenAI" : "Anthropic"} API key{" "}
+                  {cfg.key_present ? (
+                    <span className="badge good" style={{ fontSize: 10 }}>
+                      {cfg.key_source === "env" ? "set via environment" : "configured"}
+                    </span>
+                  ) : (
+                    <span className="badge warn" style={{ fontSize: 10 }}>not set</span>
+                  )}
+                </span>
+                <input
+                  type="password"
+                  value={keyDraft}
+                  onChange={(e) => setKeyDraft(e.target.value)}
+                  placeholder={cfg.key_present ? "•••••••• (stored — leave blank to keep)" : "paste an API key (e.g. sk-…)"}
+                  autoComplete="off"
+                  disabled={cfg.key_source === "env"}
+                />
+                {cfg.key_source === "env" && (
+                  <span style={{ color: "var(--muted)", fontSize: 11 }}>
+                    A key is set in the environment; clear it from <code>.env</code> to manage the key here instead.
+                  </span>
+                )}
+              </label>
               <label style={{ display: "grid", gap: 4 }}>
                 <span style={{ color: "var(--muted)", fontSize: 11 }}>Provider</span>
                 <select
@@ -206,6 +234,29 @@ export default function Copilot() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+        {cfg && !cfg.key_present && !showSettings && (
+          <div
+            style={{
+              margin: "10px 0",
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid var(--warn, #b8860b)",
+              background: "rgba(184,134,11,0.08)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              fontSize: 13,
+            }}
+          >
+            <Icon name="key" size={16} />
+            <span style={{ flex: 1 }}>
+              Opsis Ai needs an AI provider API key before it can answer. Add one to get started.
+            </span>
+            <button type="button" onClick={() => setShowSettings(true)}>
+              Add API key
+            </button>
           </div>
         )}
         <div

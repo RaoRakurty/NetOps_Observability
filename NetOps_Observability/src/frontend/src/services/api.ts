@@ -353,6 +353,7 @@ export type CopilotConfig = {
   system?: string;
   feature_enabled?: boolean;
   key_present?: boolean;
+  key_source?: "env" | "stored" | "none";
   providers?: string[];
   model_suggestions?: Record<string, string[]>;
 };
@@ -721,7 +722,7 @@ export const api = {
     }),
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
-  setCopilotConfig: (cfg: { provider: string; model: string; system?: string }) =>
+  setCopilotConfig: (cfg: { provider: string; model: string; system?: string; key?: string }) =>
     request<CopilotConfig>("/api/copilot/config", {
       method: "PUT",
       body: JSON.stringify(cfg),

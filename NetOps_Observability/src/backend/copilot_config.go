@@ -16,27 +16,32 @@ import (
 // OpenAI, without editing .env and restarting. Persisted via the kv store (file
 // or postgres) under one key, mirroring tenantStore/snmpCredStore.
 //
-// The API KEY is deliberately NOT part of this stored config and is never
-// returned to the client: it stays in the COPILOT_API_KEY environment variable
-// (a secret), so "wire everything but the key" works — provider/model are set,
-// the feature flag can be on, and the assistant stays dormant until the key is
-// supplied out-of-band.
+// The API KEY may be supplied two ways: out-of-band via the COPILOT_API_KEY /
+// per-provider env vars (a secret never persisted by us), OR pasted in the
+// assistant settings UI — in which case it is stored encrypted at rest (platform
+// DEK, like every other config secret; see mapCopilot) and NEVER returned to the
+// client. Either path lets the platform owner turn the assistant on without
+// editing .env. get() returns the decrypted key for server-side use only; the
+// HTTP handler builds its response field-by-field and omits it.
 
-// copilotConfig is the operator-tunable assistant settings (no secrets).
+// copilotConfig is the operator-tunable assistant settings. Key is a reversible
+// secret (in-memory plaintext, sealed at rest); the rest are non-secret.
 type copilotConfig struct {
-	Provider string `json:"provider"` // "anthropic" | "openai"
-	Model    string `json:"model"`    // e.g. claude-sonnet-4-6, claude-opus-4-8, gpt-4o
-	System   string `json:"system"`   // optional system-prompt override ("" => default)
+	Provider string `json:"provider"`      // "anthropic" | "openai"
+	Model    string `json:"model"`         // e.g. claude-sonnet-4-6, claude-opus-4-8, gpt-4o
+	System   string `json:"system"`        // optional system-prompt override ("" => default)
+	Key      string `json:"key,omitempty"` // provider API key — sealed at rest, never sent to clients
 }
 
 type copilotConfigStore struct {
-	mu   sync.RWMutex
-	cfg  copilotConfig
-	path string
+	mu    sync.RWMutex
+	cfg   copilotConfig
+	path  string
+	vault *Vault
 }
 
-func newCopilotConfigStore(path string) *copilotConfigStore {
-	s := &copilotConfigStore{path: path}
+func newCopilotConfigStore(path string, v *Vault) *copilotConfigStore {
+	s := &copilotConfigStore{path: path, vault: v}
 	s.load()
 	return s
 }
@@ -47,9 +52,14 @@ func (s *copilotConfigStore) load() {
 		return
 	}
 	var c copilotConfig
-	if json.Unmarshal(b, &c) == nil {
-		s.cfg = c
+	if json.Unmarshal(b, &c) != nil {
+		return
 	}
+	// Decrypt the key (no-op when the Vault is dormant / nil).
+	if out, err := mapCopilot(c, openFn(s.vault)); err == nil {
+		c = out
+	}
+	s.cfg = c
 }
 
 // get returns the effective config: stored values where set, else the env-var
@@ -75,14 +85,30 @@ func (s *copilotConfigStore) set(c copilotConfig) copilotConfig {
 	}
 	c.Model = strings.TrimSpace(c.Model)
 	c.System = strings.TrimSpace(c.System)
+	c.Key = strings.TrimSpace(c.Key)
 	s.mu.Lock()
-	s.cfg = c
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err == nil {
-		_ = kvSave(s.path, b)
+	// A blank key on save preserves the stored one — the GET form is redacted and
+	// never round-trips the secret, so "save settings" mustn't wipe the key.
+	if c.Key == "" {
+		c.Key = s.cfg.Key
+	}
+	s.cfg = c // in-memory stays plaintext
+	if sealed, err := mapCopilot(c, sealFn(s.vault)); err == nil { // encrypt at rest
+		if b, err := json.MarshalIndent(sealed, "", "  "); err == nil {
+			_ = kvSave(s.path, b)
+		}
 	}
 	s.mu.Unlock()
 	return s.get()
+}
+
+// apiKey returns the UI-configured provider key (decrypted), or "" if none was
+// stored. Used to resolve the assistant key for the configured provider when no
+// env key is set.
+func (s *copilotConfigStore) apiKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return strings.TrimSpace(s.cfg.Key)
 }
 
 // handleCopilotConfig: GET/PUT /api/copilot/config (admin-gated).
@@ -98,12 +124,13 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		c := s.copilotCfg.get()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"provider":      c.Provider,
-			"model":         c.Model,
-			"system":        c.System,
+			"provider":        c.Provider,
+			"model":           c.Model,
+			"system":          c.System,
 			"feature_enabled": os.Getenv("FEATURE_COPILOT") == "true",
-			"key_present":   os.Getenv("COPILOT_API_KEY") != "",
-			"providers":     []string{"anthropic", "openai"},
+			"key_present":     s.copilotKeyPresent(),
+			"key_source":      s.copilotKeySource(),
+			"providers":       []string{"anthropic", "openai"},
 			// Suggested models per provider for the UI dropdown (free-text also allowed).
 			"model_suggestions": map[string][]string{
 				"anthropic": {"claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"},
@@ -122,10 +149,41 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 			"model":           out.Model,
 			"system":          out.System,
 			"feature_enabled": os.Getenv("FEATURE_COPILOT") == "true",
-			"key_present":     os.Getenv("COPILOT_API_KEY") != "",
+			"key_present":     s.copilotKeyPresent(),
+			"key_source":      s.copilotKeySource(),
 		})
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// copilotEnvKeyVars are the env vars that can carry a provider key out-of-band.
+var copilotEnvKeyVars = []string{"COPILOT_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY"}
+
+func copilotAnyEnvKey() bool {
+	for _, k := range copilotEnvKeyVars {
+		if strings.TrimSpace(os.Getenv(k)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// copilotKeyPresent reports whether the assistant has any usable provider key —
+// from the environment OR the UI-stored (encrypted) key.
+func (s *server) copilotKeyPresent() bool {
+	return copilotAnyEnvKey() || s.copilotCfg.apiKey() != ""
+}
+
+// copilotKeySource tells the UI where the active key comes from: "env", "stored"
+// (pasted in settings), or "none". env wins (it's resolved first per provider).
+func (s *server) copilotKeySource() string {
+	if copilotAnyEnvKey() {
+		return "env"
+	}
+	if s.copilotCfg.apiKey() != "" {
+		return "stored"
+	}
+	return "none"
 }
