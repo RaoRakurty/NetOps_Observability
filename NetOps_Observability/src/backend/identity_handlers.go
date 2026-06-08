@@ -284,6 +284,9 @@ type createTenantRequest struct {
 	Name          string `json:"name"`
 	Note          string `json:"note"`
 	IsolationMode string `json:"isolation_mode"`
+	// OperatorRestricted hides the tenant's data from the global/operator view from
+	// the moment it's created (data-privacy / compliance) — see Tenant.OperatorRestricted.
+	OperatorRestricted bool `json:"operator_restricted"`
 }
 
 func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +324,12 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		// Apply the "hide from global view" setting at creation time, if requested.
+		if req.OperatorRestricted {
+			if updated, e := s.tenants.SetOperatorRestricted(t.ID, true); e == nil {
+				t = updated
+			}
 		}
 		writeJSON(w, http.StatusCreated, t)
 	default:

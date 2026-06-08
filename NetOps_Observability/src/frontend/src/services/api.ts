@@ -376,24 +376,8 @@ export function setRefresh(t: string | null): void {
   else localStorage.setItem(REFRESH_KEY, t);
 }
 
-// ---- Acting tenant ("view as tenant") ------------------------------------
-// The platform owner can scope the whole app to one tenant via the top-bar
-// switcher. We persist the choice and stamp every API call with X-Acting-Tenant;
-// the backend honors it ONLY for the platform owner and only to narrow (zero
-// trust — see withActingTenant/principalTenant). "" / "all" means all tenants.
-export const ACTING_TENANT_KEY = "netops_acting_tenant";
-export function getActingTenant(): string {
-  return localStorage.getItem(ACTING_TENANT_KEY) || "";
-}
-export function setActingTenant(id: string): void {
-  const v = (id || "").trim().toLowerCase();
-  if (!v || v === "all") localStorage.removeItem(ACTING_TENANT_KEY);
-  else localStorage.setItem(ACTING_TENANT_KEY, v);
-}
-function actingTenantHeader(): Record<string, string> {
-  const t = getActingTenant();
-  return t ? { "X-Acting-Tenant": t } : {};
-}
+// (Removed the "view as tenant" switcher. Per-tenant data privacy is now a tenant
+// config — "hide from global view" — enforced server-side, not a client view mode.)
 
 // captureSSORedirect inspects the URL fragment the SSO callback redirects to
 // (#token=…&refresh=…&sso=1, or #sso_error=…) and, on success, stores the
@@ -465,7 +449,6 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  Object.assign(headers, actingTenantHeader());
 
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
@@ -791,7 +774,7 @@ export const api = {
     const token = getToken();
     const res = await fetch(`/api/reports/preview?format=${encodeURIComponent(format)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...actingTenantHeader() },
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ name, body }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
@@ -801,7 +784,7 @@ export const api = {
   downloadArtifact: async (execId: string, format: ReportFormat): Promise<void> => {
     const token = getToken();
     const res = await fetch(`/api/reports/executions/${encodeURIComponent(execId)}/artifact?format=${encodeURIComponent(format)}`, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...actingTenantHeader() },
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
     if (!res.ok) throw new Error(`${res.status}`);
     const blob = await res.blob();
@@ -823,7 +806,7 @@ export const api = {
     const token = getToken();
     const res = await fetch("/api/logs/export/rows", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...actingTenantHeader() },
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ format, columns, rows, filename }),
     });
     if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
@@ -843,7 +826,7 @@ export const api = {
     if (opts.signal) params.set("signal", opts.signal);
     if (opts.mode) params.set("mode", opts.mode);
     const res = await fetch(`/api/logs/export?${params.toString()}`, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...actingTenantHeader() },
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
     if (res.status === 202) {
       const body = await res.json();
@@ -899,8 +882,8 @@ export const api = {
   deleteRole: (id: string) => request<void>(`/api/roles/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   listTenants: () => request<Tenant[]>("/api/tenants"),
-  createTenant: (name: string, note?: string) =>
-    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note }) }),
+  createTenant: (name: string, note?: string, operatorRestricted?: boolean) =>
+    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note, operator_restricted: !!operatorRestricted }) }),
   deleteTenant: (id: string) => request<void>(`/api/tenants/${encodeURIComponent(id)}`, { method: "DELETE" }),
   // Compliance: toggle whether the platform operator may view this tenant's telemetry.
   setTenantOperatorRestricted: (id: string, restricted: boolean) =>

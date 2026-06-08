@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AuthUser, Health, api, GlobalResult, GlobalResultKind, Tenant, getActingTenant, setActingTenant } from "../services/api";
+import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
 import { useShell } from "../context/shell";
 import { usePrefs, CHROME_PRESETS } from "../theme/prefs";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
@@ -46,26 +46,8 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [ranges, setRanges] = useState(() => allRanges());
-  const [tenantOpen, setTenantOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
-  const tenantRef = useRef<HTMLDivElement | null>(null);
-
-  // Tenant switcher ("view as tenant"): platform owner only. Lets the SaaS
-  // operator scope the WHOLE app to one tenant (or the global/infra namespace).
-  // The choice is stamped on every API call (X-Acting-Tenant) — see api.ts.
-  const platformOwner = !!user.platform_admin;
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const acting = getActingTenant();
-  useEffect(() => {
-    if (!platformOwner) return;
-    let alive = true;
-    api.listTenants().then((ts) => alive && setTenants(ts)).catch(() => {});
-    return () => { alive = false; };
-  }, [platformOwner]);
-  // Changing scope re-scopes every view at once; a full reload is the simplest
-  // correct way to refetch all mounted data against the new tenant.
-  const onScope = (v: string) => { setActingTenant(v); window.location.reload(); };
 
   useEffect(() => setDraft(query === "*" ? "" : query), [query]);
 
@@ -73,7 +55,6 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     const onDoc = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
       if (omniRef.current && !omniRef.current.contains(e.target as Node)) setOpen(false);
-      if (tenantRef.current && !tenantRef.current.contains(e.target as Node)) setTenantOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -185,53 +166,6 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
       </form>
 
       <div className="topbar-right">
-        {platformOwner && (() => {
-          // Two scopes only: Global (platform-wide — every tenant + your own
-          // devices; the default) or one specific tenant. "Global" = no override.
-          const tenantList = tenants.filter((t) => t.id !== "global");
-          const label = !acting ? "Global" : (tenantList.find((t) => t.id === acting)?.name ?? acting);
-          const choose = (v: string) => { setTenantOpen(false); onScope(v); };
-          const Item = ({ v, name, sub }: { v: string; name: string; sub?: string }) => {
-            const on = (acting || "all") === v;
-            return (
-              <button type="button" className={`tsw-item${on ? " on" : ""}`} onClick={() => choose(v)}>
-                <Icon name={v === "all" ? "server" : "infrastructure"} size={14} />
-                <span className="tsw-item-text"><span className="tsw-item-name">{name}</span>{sub && <span className="tsw-item-sub">{sub}</span>}</span>
-                {on && <Icon name="check" size={14} />}
-              </button>
-            );
-          };
-          return (
-            <div className="tsw-wrap">
-              <div className="tenant-switch2" ref={tenantRef}>
-                <button
-                  type="button"
-                  className={`tsw-btn${acting ? " scoped" : ""}`}
-                  onClick={() => setTenantOpen((o) => !o)}
-                  aria-haspopup="listbox"
-                  aria-expanded={tenantOpen}
-                  title={acting ? "Viewing one tenant — switch scope" : "Viewing everything (Global) — switch scope"}
-                >
-                  <Icon name={acting ? "infrastructure" : "server"} size={14} />
-                  <span className="tsw-label"><span className="tsw-cap">Viewing</span>{label}</span>
-                  <span className="tsw-caret">▾</span>
-                </button>
-                {tenantOpen && (
-                  <div className="tsw-pop" role="listbox">
-                    <Item v="all" name="Global" sub="Platform-wide — every tenant + your devices" />
-                    {tenantList.length > 0 && <div className="tsw-group">View one tenant</div>}
-                    {tenantList.map((t) => <Item key={t.id} v={t.id} name={t.name} />)}
-                  </div>
-                )}
-              </div>
-              {acting && (
-                <button type="button" className="tsw-exit" onClick={() => onScope("all")} title="Back to the Global platform-wide view">
-                  <Icon name="close" size={13} /> Exit tenant
-                </button>
-              )}
-            </div>
-          );
-        })()}
         <select
           className="range-picker"
           value={range.minutes}

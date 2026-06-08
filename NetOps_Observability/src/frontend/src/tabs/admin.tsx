@@ -332,21 +332,22 @@ export function TenantsAdmin() {
   const [tenants, err, reload, setErr] = useReload(() => api.listTenants());
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
+  const [hideGlobal, setHideGlobal] = useState(false);
 
   const create = async () => {
     if (!name.trim()) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim()); setName(""); setNote(""); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal); setName(""); setNote(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
   const remove = async (t: Tenant) => {
     setErr(null);
     try { await api.deleteTenant(t.id); reload(); } catch (e) { setErr((e as Error).message); }
   };
-  const toggleOperator = async (t: Tenant) => {
+  const toggleGlobalVisibility = async (t: Tenant) => {
     setErr(null);
-    const restrict = !t.operator_restricted;
-    if (restrict && !window.confirm(`Restrict operator access to "${t.name}"?\n\nThe platform operator will no longer be able to view this tenant's logs/telemetry (in the Global view or by switching into the tenant). The tenant's own users are unaffected. Use this for data-privacy / compliance.`)) return;
-    try { await api.setTenantOperatorRestricted(t.id, restrict); reload(); } catch (e) { setErr((e as Error).message); }
+    const hide = !t.operator_restricted;
+    if (hide && !window.confirm(`Hide "${t.name}" from the global view?\n\nGlobal/platform-level users will no longer see this tenant's logs, flows, findings or metrics. The tenant's own users are unaffected. Use this for data-privacy / compliance.`)) return;
+    try { await api.setTenantOperatorRestricted(t.id, hide); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
   const list = tenants ?? [];
@@ -372,6 +373,10 @@ export function TenantsAdmin() {
           </label>
           <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create tenant</button>
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+          <input type="checkbox" checked={hideGlobal} onChange={(e) => setHideGlobal(e.target.checked)} />
+          Hide this tenant's data from the global view (data privacy — global/platform users won't see its logs, flows, findings or metrics)
+        </label>
         <RequiredLegend />
       </div>
       <div className="card" style={{ paddingTop: 8 }}>
@@ -383,7 +388,7 @@ export function TenantsAdmin() {
               <tr>
                 <th>Tenant</th>
                 <th style={{ width: 130 }}>Type</th>
-                <th style={{ width: 180 }}>Operator access</th>
+                <th style={{ width: 190 }}>Global visibility</th>
                 <th>Note</th>
                 <th style={{ width: 140 }}>ID</th>
                 <th style={{ width: 1 }}></th>
@@ -404,12 +409,12 @@ export function TenantsAdmin() {
                       {isParent ? (
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
                       ) : t.operator_restricted ? (
-                        <button className="dash-btn" onClick={() => toggleOperator(t)} title="Operator is blocked from this tenant's telemetry — click to allow">
-                          🔒 Restricted
+                        <button className="dash-btn" onClick={() => toggleGlobalVisibility(t)} title="Hidden from the global view — global users can't see this tenant's data. Click to make visible.">
+                          🔒 Hidden from global
                         </button>
                       ) : (
-                        <button className="dash-btn" onClick={() => toggleOperator(t)} title="Operator can view this tenant's telemetry — click to restrict (data privacy)">
-                          Visible to operator
+                        <button className="dash-btn" onClick={() => toggleGlobalVisibility(t)} title="Visible in the global view — click to hide this tenant's data from global/platform users (data privacy)">
+                          Visible in global
                         </button>
                       )}
                     </td>

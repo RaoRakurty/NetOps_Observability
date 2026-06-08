@@ -598,47 +598,6 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   position: absolute; top: 12px; right: 16px; z-index: 61;
   box-shadow: 0 2px 10px rgba(0,0,0,.25);
 }
-/* Tenant "view as" switcher (platform owner) — custom popover. When narrowed to
-   one tenant the trigger takes the accent so the operator never forgets the app
-   is scoped. */
-.tsw-wrap { display: inline-flex; align-items: center; gap: 6px; }
-.tsw-exit {
-  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
-  border: 1px solid var(--accent); border-radius: 8px; padding: 6px 9px; font-size: 12px;
-  color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600;
-}
-.tsw-exit:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
-.tenant-switch2 { position: relative; }
-.tsw-btn {
-  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
-  background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
-  border-radius: 8px; padding: 6px 9px; font-size: 12px; max-width: 220px;
-}
-.tsw-btn:hover { background: var(--hover); }
-.tsw-label { display: inline-flex; align-items: baseline; gap: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tsw-cap { font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
-.tsw-caret { opacity: .6; font-size: 10px; }
-.tsw-btn.scoped {
-  border-color: var(--accent); color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-.tsw-btn.scoped .tsw-cap { color: color-mix(in srgb, var(--accent) 75%, var(--muted)); }
-.tsw-pop {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; min-width: 240px;
-  background: var(--panel, var(--bg)); border: 1px solid var(--panel-border);
-  border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 6px;
-}
-.tsw-group { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: 8px 8px 4px; }
-.tsw-item {
-  display: flex; align-items: center; gap: 9px; width: 100%; cursor: pointer;
-  background: transparent; border: 0; color: var(--fg); text-align: left;
-  padding: 7px 8px; border-radius: 7px; font-size: 13px;
-}
-.tsw-item:hover { background: var(--hover); }
-.tsw-item.on { color: var(--accent); }
-.tsw-item-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.tsw-item-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tsw-item-sub { font-size: 11px; color: var(--muted); }
 .health { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
 .health.bad .dot { background: var(--bad); }
