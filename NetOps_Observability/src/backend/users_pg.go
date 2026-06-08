@@ -244,6 +244,20 @@ func (s *pgUsersStore) Update(username string, patch User) (User, error) {
 	return out, nil
 }
 
+func (s *pgUsersStore) SetMFA(username string, enabled bool, secret, pending string) error {
+	ctx, cancel := usersCtx()
+	defer cancel()
+	id := userID(username)
+	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		u, err := loadUserTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		u.MFAEnabled, u.MFASecret, u.MFAPending = enabled, secret, pending
+		return writeUserTx(ctx, tx, u)
+	})
+}
+
 func (s *pgUsersStore) Delete(username string) error {
 	ctx, cancel := usersCtx()
 	defer cancel()

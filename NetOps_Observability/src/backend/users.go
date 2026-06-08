@@ -47,6 +47,9 @@ type usersRepo interface {
 	UpsertFederated(username, email, displayName, role, source, tenant string) (User, error)
 	ChangePassword(username, newPassword string) error
 	ResetPassword(username, newPassword string) error
+	// SetMFA sets the account's MFA state atomically (secret/pending already sealed
+	// by the caller). enabled=false + empty strings clears MFA.
+	SetMFA(username string, enabled bool, secret, pending string) error
 	TouchLogin(username string)
 	Count() int
 	SeedAdmin(username, password string) error
@@ -75,6 +78,14 @@ type User struct {
 	PasswordHash string    `json:"password_hash"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastLoginAt  time.Time `json:"last_login_at,omitempty"`
+
+	// MFA (TOTP) for local accounts. MFASecret/MFAPending hold the base32 seed
+	// SEALED at rest (platform DEK) — never returned to clients. MFAPending is the
+	// not-yet-confirmed seed during enrollment; on confirm it becomes MFASecret and
+	// MFAEnabled flips true. Federated users don't use these (their IdP owns MFA).
+	MFAEnabled bool   `json:"mfa_enabled,omitempty"`
+	MFASecret  string `json:"mfa_secret,omitempty"`
+	MFAPending string `json:"mfa_pending,omitempty"`
 }
 
 type userStore struct {
@@ -365,6 +376,18 @@ func (s *userStore) ChangePassword(username, newPassword string) error {
 		return errNoSuchUser
 	}
 	u.PasswordHash = hash
+	s.users[strings.ToLower(username)] = u
+	return s.flushLocked()
+}
+
+func (s *userStore) SetMFA(username string, enabled bool, secret, pending string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[strings.ToLower(username)]
+	if !ok {
+		return errNoSuchUser
+	}
+	u.MFAEnabled, u.MFASecret, u.MFAPending = enabled, secret, pending
 	s.users[strings.ToLower(username)] = u
 	return s.flushLocked()
 }

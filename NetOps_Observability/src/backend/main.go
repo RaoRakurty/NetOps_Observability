@@ -493,6 +493,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/auth/osd-gate", s.handleOSDGate)         // nginx auth_request target for /search + /netbox
 	mux.HandleFunc("/api/auth/console-gate", s.handleConsoleGate) // SPA re-mints the embedded-console gate cookie
+	// MFA (TOTP) for local accounts. /login completes the password→code challenge
+	// (public); the rest are self-service (authed); mfa-reset is admin recovery.
+	mux.HandleFunc("/api/auth/mfa/setup", s.handleMFASetup)
+	mux.HandleFunc("/api/auth/mfa/activate", s.handleMFAActivate)
+	mux.HandleFunc("/api/auth/mfa/disable", s.handleMFADisable)
+	mux.HandleFunc("/api/auth/mfa/status", s.handleMFAStatus)
+	mux.HandleFunc("/api/auth/mfa/login", s.handleMFALogin)
+	mux.HandleFunc("/api/users/mfa-reset", s.handleMFAAdminReset)
 	mux.HandleFunc("/api/auth/permissions", s.handlePermissions)
 	// SSO (OIDC/SAML/LDAP via Keycloak) — config + Authorization Code flow.
 	mux.HandleFunc("/api/auth/sso/config", s.handleSSOConfig)

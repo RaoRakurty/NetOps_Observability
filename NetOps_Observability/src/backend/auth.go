@@ -86,6 +86,7 @@ type publicUser struct {
 	TenantID    string    `json:"tenant_id,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	AuthSource  string    `json:"auth_source,omitempty"`
+	MFAEnabled  bool      `json:"mfa_enabled"` // status only — the secret never leaves the server
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 	LastLoginAt time.Time `json:"last_login_at,omitempty"`
 }
@@ -99,6 +100,7 @@ func toPublic(u User) publicUser {
 		TenantID:    u.TenantID,
 		Status:      u.Status,
 		AuthSource:  u.AuthSource,
+		MFAEnabled:  u.MFAEnabled,
 		CreatedAt:   u.CreatedAt,
 		LastLoginAt: u.LastLoginAt,
 	}
@@ -130,6 +132,29 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			logWarn("auth", "password rehash-on-login failed", map[string]any{"user": user.Username, "err": err.Error()})
 		}
 	}
+	// MFA gate: an enrolled (local) user gets a short-lived challenge instead of a
+	// session — they complete it at /api/auth/mfa/login with a one-time code.
+	if user.MFAEnabled {
+		now := time.Now()
+		ch, err := signJWT(jwtClaims{
+			Sub: user.Username, Scopes: []string{mfaChallengeScope},
+			Iat: now.Unix(), Exp: now.Add(mfaChallengeTTL).Unix(),
+		}, jwtSecret())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		logInfo("auth", "mfa challenge issued", map[string]any{"user": user.Username})
+		writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true, "mfa_token": ch})
+		return
+	}
+	s.issueSession(w, r, user)
+}
+
+// issueSession mints the access + refresh tokens, refreshes the console gate
+// cookie, and returns the standard login response. Shared by password login and
+// MFA-challenge completion (handleMFALogin).
+func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
 	ttl := accessTokenTTL()
 	tok, err := signJWT(jwtClaims{
 		Sub:    user.Username,
@@ -387,6 +412,7 @@ var publicPaths = []string{
 	"/api/auth/tacacs/login",
 	"/api/auth/change-password", // self-service from the login window; names the account + verifies the current password (local accounts only)
 	"/api/auth/osd-gate",        // cookie-authenticated nginx auth_request target; does its own authz
+	"/api/auth/mfa/login",       // completes the login MFA challenge; authenticates via the challenge token + code
 	"/metrics",
 }
 
@@ -479,6 +505,13 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		// Our own session tokens are HS256. Try that first (the common path).
 		claims, err := verifyJWT(token, jwtSecret())
 		if err == nil {
+			// An MFA challenge token is NOT a session: it's the half-authenticated
+			// token issued between password success and code entry. Reject it here so
+			// it can only be spent at /api/auth/mfa/login, never as a Bearer.
+			if claims.hasScope(mfaChallengeScope) {
+				writeError(w, http.StatusUnauthorized, errors.New("MFA challenge token is not a session"))
+				return
+			}
 			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
