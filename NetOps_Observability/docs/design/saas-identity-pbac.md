@@ -1,6 +1,7 @@
 # SaaS Identity & Access — Principal-Based Access Control (PBAC)
 
-**Status:** Design ratified (§7 decisions signed off) — Phase A buildable; no code yet
+**Status:** IMPLEMENTED — Phases A–E shipped (commits `5c63832` → `40ee846`),
+behaviour-preserving, CI-gated. Remaining depth flagged inline in §6.
 **Author:** Platform / NetOps_Observability
 **Supersedes (evolves):** the single-`role`+single-`tenant_id` model in `rbac.go` /
 `tenancy.go` / `authz.go`; builds on the Org layer (`orgs.go`, commit `119dcd0`).
@@ -279,6 +280,17 @@ codebase carries scope in the SVID, which is exactly the L0 fast path for ingest
 The current `user.role` + `user.tenant_id` and the Global tenant are load-bearing
 across auth, RLS, ClickHouse row policies, OpenSearch index routing, and the SPA.
 The sequence preserves behaviour at every step.
+
+> **Implementation status (all shipped, behaviour-preserving):**
+> A ✅ `5c63832` · B ✅ `0f82b06` · C ✅ `fda2191` · D ✅ `4e4d1a9` · E ✅ `40ee846`.
+> **Remaining depth (explicitly deferred, not silently dropped):** live re-pointing
+> of RLS / OpenSearch index routing / VM scoping off the global tenant onto a
+> dedicated system scope (needs the regional data plane + staged rollout, Phase C);
+> tag/data-condition ENFORCEMENT across telemetry read paths and agent/device
+> authentication via SPIFFE SVID → principal (Phase D); the event-driven
+> control→data-plane binding replication + per-region L2 cache (needs regional data
+> planes to exist). The MODEL for all of these is in place; the integrations are
+> the deferred work.
 
 ### Phase A — binding table, behaviour-preserving  *(keystone, ships first)*
 - Add `principal`, `scope`, `role_binding` (PG migration; file-kv fallback as
