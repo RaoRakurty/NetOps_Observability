@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -103,9 +104,24 @@ func newJWKSCache(issuer string) *jwksCache {
 	return &jwksCache{
 		issuer: strings.TrimRight(issuer, "/"),
 		client: &http.Client{Timeout: 10 * time.Second},
-		ttl:    10 * time.Minute,
+		ttl:    jwksTTL(),
 		keys:   make(map[string]*rsa.PublicKey),
 	}
+}
+
+// jwksTTL is how long signing keys are cached before a refresh. This is the IdP
+// cert-rollover refresh interval (best practice: hours). We default to 10 minutes
+// — well within range and more current than typical — and also refresh on an
+// unknown-kid miss, so a rotation is picked up immediately regardless. Tunable via
+// OIDC_JWKS_TTL_MIN (minutes); clamped to [1, 1440].
+func jwksTTL() time.Duration {
+	m := 10
+	if v := os.Getenv("OIDC_JWKS_TTL_MIN"); v != "" {
+		if n, err := parseIntStrict(v); err == nil && n >= 1 && n <= 1440 {
+			m = n
+		}
+	}
+	return time.Duration(m) * time.Minute
 }
 
 func (c *jwksCache) discovery() (*oidcDiscovery, error) {
