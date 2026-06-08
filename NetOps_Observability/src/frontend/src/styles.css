@@ -601,6 +601,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* Tenant "view as" switcher (platform owner) — custom popover. When narrowed to
    one tenant the trigger takes the accent so the operator never forgets the app
    is scoped. */
+.tsw-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.tsw-exit {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  border: 1px solid var(--accent); border-radius: 8px; padding: 6px 9px; font-size: 12px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600;
+}
+.tsw-exit:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .tenant-switch2 { position: relative; }
 .tsw-btn {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
