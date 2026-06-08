@@ -186,40 +186,48 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
 
       <div className="topbar-right">
         {platformOwner && (() => {
-          const label = !acting ? "All tenants" : acting === "global" ? "Global" : (tenants.find((t) => t.id === acting)?.name ?? acting);
+          // Two scopes only: Global (platform-wide — every tenant + your own
+          // devices; the default) or one specific tenant. "Global" = no override.
+          const tenantList = tenants.filter((t) => t.id !== "global");
+          const label = !acting ? "Global" : (tenantList.find((t) => t.id === acting)?.name ?? acting);
           const choose = (v: string) => { setTenantOpen(false); onScope(v); };
           const Item = ({ v, name, sub }: { v: string; name: string; sub?: string }) => {
             const on = (acting || "all") === v;
             return (
               <button type="button" className={`tsw-item${on ? " on" : ""}`} onClick={() => choose(v)}>
-                <Icon name={v === "all" ? "datasets" : v === "global" ? "server" : "infrastructure"} size={14} />
+                <Icon name={v === "all" ? "server" : "infrastructure"} size={14} />
                 <span className="tsw-item-text"><span className="tsw-item-name">{name}</span>{sub && <span className="tsw-item-sub">{sub}</span>}</span>
                 {on && <Icon name="check" size={14} />}
               </button>
             );
           };
           return (
-            <div className="tenant-switch2" ref={tenantRef}>
-              <button
-                type="button"
-                className={`tsw-btn${acting ? " scoped" : ""}`}
-                onClick={() => setTenantOpen((o) => !o)}
-                aria-haspopup="listbox"
-                aria-expanded={tenantOpen}
-                title="Choose which tenant you're viewing"
-              >
-                <Icon name={acting ? "infrastructure" : "datasets"} size={14} />
-                <span className="tsw-label"><span className="tsw-cap">Viewing</span>{label}</span>
-                <span className="tsw-caret">▾</span>
-              </button>
-              {tenantOpen && (
-                <div className="tsw-pop" role="listbox">
-                  <div className="tsw-group">Scope</div>
-                  <Item v="all" name="All tenants" sub="Everything, merged" />
-                  <Item v="global" name="Global" sub="Platform / infra only" />
-                  {tenants.filter((t) => t.id !== "global").length > 0 && <div className="tsw-group">Tenants</div>}
-                  {tenants.filter((t) => t.id !== "global").map((t) => <Item key={t.id} v={t.id} name={t.name} />)}
-                </div>
+            <div className="tsw-wrap">
+              <div className="tenant-switch2" ref={tenantRef}>
+                <button
+                  type="button"
+                  className={`tsw-btn${acting ? " scoped" : ""}`}
+                  onClick={() => setTenantOpen((o) => !o)}
+                  aria-haspopup="listbox"
+                  aria-expanded={tenantOpen}
+                  title={acting ? "Viewing one tenant — switch scope" : "Viewing everything (Global) — switch scope"}
+                >
+                  <Icon name={acting ? "infrastructure" : "server"} size={14} />
+                  <span className="tsw-label"><span className="tsw-cap">Viewing</span>{label}</span>
+                  <span className="tsw-caret">▾</span>
+                </button>
+                {tenantOpen && (
+                  <div className="tsw-pop" role="listbox">
+                    <Item v="all" name="Global" sub="Platform-wide — every tenant + your devices" />
+                    {tenantList.length > 0 && <div className="tsw-group">View one tenant</div>}
+                    {tenantList.map((t) => <Item key={t.id} v={t.id} name={t.name} />)}
+                  </div>
+                )}
+              </div>
+              {acting && (
+                <button type="button" className="tsw-exit" onClick={() => onScope("all")} title="Back to the Global platform-wide view">
+                  <Icon name="close" size={13} /> Exit tenant
+                </button>
               )}
             </div>
           );

@@ -215,7 +215,7 @@ func (s *server) handleConsoleGate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
-	if _, cross := principalTenant(claims); !cross {
+	if !isPlatformOwner(claims) { // identity check — ignore any view-as-tenant override
 		writeError(w, http.StatusForbidden, errors.New("platform administrator access required"))
 		return
 	}
@@ -265,13 +265,27 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// platform_admin tells the SPA whether to surface infra-stack monitoring and
-	// platform-wide administration. It mirrors the backend's own cross-tenant
-	// rule (principalTenant) so the UI never re-derives the policy itself.
-	_, cross := principalTenant(claims)
+	// platform-wide administration — including the tenant "view as" switcher. This
+	// is an IDENTITY question (is the caller the platform owner?), so it MUST use
+	// isPlatformOwner, NOT principalTenant: the latter honors the view-as-tenant
+	// override, which would flip platform_admin to false while scoped and hide the
+	// very switcher needed to scope back (locking the owner into a tenant).
+	owner := isPlatformOwner(claims)
+	// Keep the embedded-console gate cookie fresh for the platform owner. /me is
+	// hit on app load, so the bundled NetBox / Dashboards iframes always carry a
+	// valid, correctly-pathed cookie without a separate round-trip (no 403 wall).
+	if owner {
+		if tok, err := signJWT(jwtClaims{
+			Sub: claims.Sub, Role: claims.Role, Tenant: claims.Tenant,
+			Iat: time.Now().Unix(), Exp: time.Now().Add(accessTokenTTL()).Unix(),
+		}, jwtSecret()); err == nil {
+			setOSDCookie(w, r, tok, accessTokenTTL())
+		}
+	}
 	writeJSON(w, http.StatusOK, struct {
 		publicUser
 		PlatformAdmin bool `json:"platform_admin"`
-	}{toPublic(user), cross})
+	}{toPublic(user), owner})
 }
 
 // isLocalAccount reports whether an account's password is managed locally (so it
@@ -586,7 +600,7 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
 		return
 	}
-	if _, cross := principalTenant(claims); !cross {
+	if !isPlatformOwner(claims) { // identity check — ignore any view-as-tenant override
 		writeError(w, http.StatusForbidden, errors.New("platform administrator access required"))
 		return
 	}

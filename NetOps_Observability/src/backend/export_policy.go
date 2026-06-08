@@ -113,7 +113,7 @@ func (s *server) handleExportPolicy(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.exportPolicy.effective())
 	case http.MethodPut:
-		if _, cross := principalTenant(claims); !cross {
+		if !isPlatformOwner(claims) { // identity check — ignore any view-as-tenant override
 			writeError(w, http.StatusForbidden, errors.New("only the platform owner may change export limits"))
 			return
 		}

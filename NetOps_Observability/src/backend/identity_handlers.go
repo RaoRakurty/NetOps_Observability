@@ -41,8 +41,11 @@ func (s *server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (j
 	if !ok {
 		return claims, false
 	}
-	// Platform-wide mutation (role defs, tenant registry): central policy decides.
-	if !s.can(claims, ActionUpdate, Resource{Type: ResTenant}) {
+	// Platform-wide capability is an IDENTITY question — is the caller the platform
+	// owner? Use isPlatformOwner, NOT principalTenant/can(): the latter honor the
+	// "view as tenant" override and would falsely deny the owner while scoped into
+	// a tenant (which broke the bundled NetBox config + platform admin pages).
+	if !isPlatformOwner(claims) {
 		writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
 		return claims, false
 	}

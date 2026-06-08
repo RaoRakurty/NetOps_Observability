@@ -27,8 +27,9 @@ func (s *server) requireCrossTenant(w http.ResponseWriter, r *http.Request) (jwt
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
 		return claims, false
 	}
-	// Infra-stack is platform plumbing — central policy decides (authz.go).
-	if !s.can(claims, ActionView, Resource{Type: ResInfraStack}) {
+	// Infra-stack is platform plumbing — an IDENTITY check (platform owner), not a
+	// view-scope one, so the owner keeps access while scoped "view as tenant".
+	if !isPlatformOwner(claims) {
 		writeError(w, http.StatusForbidden, errors.New("platform administrator required"))
 		return claims, false
 	}

@@ -44,37 +44,37 @@ func isPlatformOwner(c jwtClaims) bool {
 // scopes the whole app (logs, flows, metrics, findings, devices) at once.
 func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
 	if isPlatformOwner(c) {
-		switch act := strings.ToLower(strings.TrimSpace(c.actingTenant)); act {
-		case "": // no override → full cross-tenant view (all tenants)
-			return TenantGlobal, true
-		case TenantGlobal: // narrowed to the global / infra namespace only
-			return TenantGlobal, false
-		default: // narrowed to one specific tenant
+		// Global view (no override) is CROSS-TENANT: the platform owner sees
+		// everything — every tenant PLUS untagged/platform-owned resources (their
+		// own devices). Selecting a specific tenant narrows to just that tenant.
+		// There is deliberately no "global-tenant-only" scope: "Global" == platform
+		// == cross-tenant, which is the user's mental model and shows their devices.
+		if act := strings.ToLower(strings.TrimSpace(c.actingTenant)); act != "" {
 			return act, false
 		}
+		return TenantGlobal, true
 	}
 	return strings.ToLower(strings.TrimSpace(c.Tenant)), false
 }
 
-// actingAll is the switcher value for the default, un-narrowed all-tenants view.
+// actingAll is the switcher sentinel for the default Global (cross-tenant) view.
 const actingAll = "all"
 
 // withActingTenant applies an optional platform-owner "view as tenant" override
 // from the request (X-Acting-Tenant header, or ?as_tenant= query param) onto the
-// claims. Zero trust: the override is honored ONLY for the platform owner and ONLY
-// when it names a real tenant (or "global"); anything else — a non-owner caller,
-// an unknown tenant, the "all" sentinel — leaves the claims untouched, so the
-// override can never widen visibility. The result feeds principalTenant.
+// claims. Zero trust: honored ONLY for the platform owner and ONLY when it names a
+// real, NON-global tenant. Everything else — a non-owner caller, an unknown
+// tenant, the "all"/"global" sentinels (which mean the default Global view), or no
+// header — leaves the claims untouched, so the override can only ever NARROW from
+// the cross-tenant Global view, never widen. The result feeds principalTenant.
 func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
 	v := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Acting-Tenant")))
 	if v == "" {
 		v = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("as_tenant")))
 	}
-	if v == "" || v == actingAll || !isPlatformOwner(c) {
-		return c // no narrowing requested, or caller may not narrow
-	}
-	if v == TenantGlobal {
-		c.actingTenant = TenantGlobal
+	// "", "all", "global" => Global (cross-tenant) view, i.e. no narrowing. The
+	// global tenant is the platform/cross identity, never a narrowing target.
+	if v == "" || v == actingAll || v == TenantGlobal || !isPlatformOwner(c) {
 		return c
 	}
 	if _, ok := s.tenants.Get(v); ok {

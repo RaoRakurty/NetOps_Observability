@@ -21,12 +21,6 @@ func TestPrincipalTenantOverride(t *testing.T) {
 	if tn, cross := principalTenant(scoped); cross || tn != "acme" {
 		t.Errorf("owner→acme = (%q,%v), want (acme,false)", tn, cross)
 	}
-	// Narrowed to Global → global namespace only, not cross.
-	g := owner
-	g.actingTenant = TenantGlobal
-	if tn, cross := principalTenant(g); cross || tn != TenantGlobal {
-		t.Errorf("owner→global = (%q,%v), want (global,false)", tn, cross)
-	}
 	// A tenant's own super-admin can NOT widen via the override.
 	tenantAdmin := jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme", actingTenant: "globex"}
 	if tn, cross := principalTenant(tenantAdmin); cross || tn != "acme" {
@@ -59,8 +53,9 @@ func TestWithActingTenant(t *testing.T) {
 	if c := req("acme"); c.actingTenant != "acme" {
 		t.Errorf("owner→acme: actingTenant=%q, want acme", c.actingTenant)
 	}
-	if c := req("global"); c.actingTenant != TenantGlobal {
-		t.Errorf("owner→global: actingTenant=%q, want global", c.actingTenant)
+	// "global" means the default Global (cross-tenant) view — NOT a narrowing.
+	if c := req("global"); c.actingTenant != "" {
+		t.Errorf("owner→global: actingTenant=%q, want empty (Global = cross-tenant)", c.actingTenant)
 	}
 	if c := req("all"); c.actingTenant != "" {
 		t.Errorf("owner→all: actingTenant=%q, want empty", c.actingTenant)
