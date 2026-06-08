@@ -56,16 +56,16 @@ const LEVEL_VAR: Record<string, string> = {
 
 const BLANK_USER = { username: "", email: "", display_name: "", password: "", role: "read-only", tenant_id: "" };
 
-// Scope sentinels for the platform-owner tenant filter.
-const SCOPE_ALL = "__all__";
-const SCOPE_GLOBAL = "__global__"; // untagged / platform users (tenant_id === "")
+// Directory scope: just two — Global (the global tenant; tenant_id === "") or a
+// specific tenant. (Collapsed from the old three-way All/Global/tenant filter.)
+const SCOPE_GLOBAL = "__global__";
 
 export function UsersAdmin() {
   const { user } = useAuth();
-  // The cross-tenant platform owner manages every tenant's users and can scope
-  // the directory to Global (platform) or a specific tenant — "go into a tenant
-  // to manage its users". A tenant admin is implicitly locked to its own tenant
-  // (the backend only ever returns/accepts that tenant's users).
+  // A super-admin in the global tenant manages every tenant's users and can scope
+  // the directory to Global (the global tenant) or a specific tenant — "go into a
+  // tenant to manage its users". A tenant admin is implicitly locked to its own
+  // tenant (the backend only ever returns/accepts that tenant's users).
   const platform = !!user?.platform_admin;
 
   const [users, err, reload, setErr] = useReload(() => api.listUsers());
@@ -74,7 +74,7 @@ export function UsersAdmin() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ ...BLANK_USER });
   const [q, setQ] = useState("");
-  const [scope, setScope] = useState<string>(SCOPE_ALL); // platform-owner tenant filter
+  const [scope, setScope] = useState<string>(SCOPE_GLOBAL); // Global or a specific tenant
   // Directory-level selection: pick one or more users, then act on them with the
   // toolbar knobs (Reset / Lock / Unlock / Delete) — no per-row action buttons.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -83,7 +83,7 @@ export function UsersAdmin() {
   const roleList = roles?.roles ?? [];
   const tenantList = tenants ?? [];
   // The tenant a newly-created user should default to, given the active scope.
-  const scopeTenantId = scope === SCOPE_ALL || scope === SCOPE_GLOBAL ? (scope === SCOPE_GLOBAL ? "" : "") : scope;
+  const scopeTenantId = scope === SCOPE_GLOBAL ? "" : scope;
   const startAdd = () => { setForm({ ...BLANK_USER, tenant_id: scopeTenantId }); setAdding((v) => !v); };
 
   const submit = async () => {
@@ -101,8 +101,8 @@ export function UsersAdmin() {
   };
 
   const all = users ?? [];
-  // Tenant scope (platform owner only): narrow the directory to Global or a tenant.
-  const list = !platform || scope === SCOPE_ALL
+  // Tenant scope (super-admin only): narrow the directory to Global or a tenant.
+  const list = !platform
     ? all
     : scope === SCOPE_GLOBAL
       ? all.filter((u) => !u.tenant_id)
@@ -171,11 +171,10 @@ export function UsersAdmin() {
         <div className="admin-card-head">
           <h2>Directory</h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {/* Platform owner: scope the directory to Global (platform) or a tenant. */}
+            {/* Super-admin: scope the directory to Global or a specific tenant. */}
             {platform && (
               <select className="inline-select" value={scope} onChange={(e) => { setScope(e.target.value); clearSel(); }} aria-label="Tenant scope" title="Show users for">
-                <option value={SCOPE_ALL}>All scopes</option>
-                <option value={SCOPE_GLOBAL}>Global (platform)</option>
+                <option value={SCOPE_GLOBAL}>Global</option>
                 {tenantList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             )}
