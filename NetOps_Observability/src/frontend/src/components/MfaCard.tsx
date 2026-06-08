@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { api } from "../services/api";
 import Icon from "./Icon";
 
@@ -71,11 +72,16 @@ export default function MfaCard() {
       {!status.enabled && setup && (
         <div style={{ display: "grid", gap: 12 }}>
           <div>
-            <div className="mini-meta">1. Add this key to your authenticator app</div>
-            <code style={{ display: "block", padding: "10px 12px", background: "var(--bg)", border: "1px solid var(--panel-border)", borderRadius: 8, fontSize: 14, letterSpacing: "0.12em", wordBreak: "break-all", marginTop: 4 }}>
-              {setup.secret.replace(/(.{4})/g, "$1 ").trim()}
-            </code>
-            <a href={setup.uri} style={{ fontSize: 12 }}>Open in authenticator app</a>
+            <div className="mini-meta">1. Scan this with your authenticator app</div>
+            <div style={{ display: "inline-block", background: "#fff", padding: 12, borderRadius: 10, marginTop: 6 }}>
+              <QRCodeSVG value={setup.uri} size={172} level="M" />
+            </div>
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer" }}>Can't scan? Enter this key manually</summary>
+              <code style={{ display: "block", padding: "10px 12px", background: "var(--bg)", border: "1px solid var(--panel-border)", borderRadius: 8, fontSize: 14, letterSpacing: "0.12em", wordBreak: "break-all", marginTop: 6 }}>
+                {setup.secret.replace(/(.{4})/g, "$1 ").trim()}
+              </code>
+            </details>
           </div>
           <label className="form-field" style={{ display: "grid", gap: 4 }}>
             <span className="mini-meta">2. Enter the 6-digit code it shows</span>
