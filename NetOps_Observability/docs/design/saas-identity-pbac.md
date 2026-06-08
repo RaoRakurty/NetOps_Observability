@@ -1,6 +1,6 @@
 # SaaS Identity & Access — Principal-Based Access Control (PBAC)
 
-**Status:** Proposed (design under review — no code yet)
+**Status:** Design ratified (§7 decisions signed off) — Phase A buildable; no code yet
 **Author:** Platform / NetOps_Observability
 **Supersedes (evolves):** the single-`role`+single-`tenant_id` model in `rbac.go` /
 `tenancy.go` / `authz.go`; builds on the Org layer (`orgs.go`, commit `119dcd0`).
@@ -114,6 +114,10 @@ scope(
 )
 ```
 
+- **Ids are `type:slug`** (`org:acme`, `tenant:acme-prod`, `resource:device-123`)
+  and creation is **hybrid**: org/tenant **eager**, resource **lazy** (first ACL /
+  observation). **Invariant: a scope id, once minted, is STABLE — never re-mapped.**
+  (§7.4)
 - **Ancestor check = walk `parent_id`** (depth ≤ 4) — the *only* traversal
   authorization performs.
 - **Cross-cutting access (MSP / shared / break-glass) is NOT re-parenting.** It is
@@ -163,6 +167,9 @@ role = { id, name, builtin, rules[] }
   validated against the rule schema via the existing `policy/` gate) **without a
   breaking interface change.** Don't over-freeze roles; don't bake `module→level`
   into the token or decider.
+- **Custom roles are sandboxed** (§7.2): schema-validated bundles only — no
+  free-form graphs, no override of platform invariants (e.g. `infra_stack`), no
+  custom `deny`-bypass, no cross-scope escalation. Rejected at the `policy/` gate.
 
 ---
 
@@ -309,19 +316,85 @@ The sequence preserves behaviour at every step.
 
 ---
 
-## 7. Open decisions (need sign-off before Phase A)
+## 7. Ratified decisions (signed off — gate to Phase A cleared)
 
-1. **Operator access posture** — (a) zero standing access + audited, time-boxed
-   break-glass [strongest]; (b) standing cross-tenant read, fully audited
-   [today's behaviour]; (c) per-org configurable (extends `OperatorRestricted`).
-2. **Custom/tenant-defined roles** — allow tenants to author their own role
-   bundles (validated via the `policy/` gate), or keep roles platform-defined
-   only at first?
-3. **Binding replica transport & lag** — how bindings/roles replicate
-   control-plane → per-region data plane, and the acceptable staleness window
-   (bounded by version + token TTL).
-4. **Scope id scheme** — confirm `type:slug` ids (`org:acme`, `tenant:acme-prod`)
-   and whether resource-scope ids are minted eagerly or lazily on first ACL.
+The four open decisions are resolved. They are now **design constraints**, not
+options; the migration phases below are bound by them.
+
+### 7.1 Operator access posture → **Zero standing access + break-glass**
+
+**Access is an event, not a state.** Operators have **no standing cross-tenant
+or elevated access** by default. Elevation is a **break-glass session**:
+
+- modelled as a **time-bound `allow` binding** at the needed scope, with
+  `condition.break_glass=true`, mandatory `reason`, and a short `expires_at`;
+- **fully audited** as a first-class event (who/what/why/scope/duration);
+- **optional approval gate** for sensitive tenants (`OperatorRestricted` becomes
+  "break-glass requires approval" rather than "hidden");
+- self-expiring — no manual cleanup, no lingering privilege.
+
+This keeps **one consistent model across humans and agents** (access = a binding
+with a lifetime), gives a clean SOC2/ISO narrative ("no hidden privilege paths"),
+and is the single most important decision — the whole architecture already
+assumes access-as-event (binding-based authz, audit-first, scope separation).
+*Replaces today's standing platform-owner cross-tenant read.*
+
+### 7.2 Custom/tenant-defined roles → **Allowed, but sandboxed policy bundles**
+
+Tenants may author roles, but only as **constrained rule bundles validated by the
+platform schema** (via the existing `policy/` write gate). Hard guardrails — a
+custom role **may NOT**:
+
+- use **free-form / arbitrary** permission graphs (must conform to the rule
+  schema: `{effect, resource_type, actions[], condition?}`);
+- **override platform security invariants** (e.g. can't grant `infra_stack`,
+  can't self-grant `administration:admin` at a scope above its own);
+- define **custom `deny`-bypass** rules (deny-wins is platform-owned, §2);
+- express **cross-scope escalation** (a rule whose scope exceeds the role's
+  assignable scope is rejected at validation).
+
+"Flexible inside a sandboxed policy language" — enough for enterprise pushback
+("network-ops-lite: ack alerts + read devices"), never enough to make the system
+un-auditable.
+
+### 7.3 Binding replication → **Event-driven, versioned, eventually consistent**
+
+- **Writes** are strongly consistent in the **control plane** (source of truth =
+  an append binding **event log**).
+- Replicated to each region via an **event stream** (Kafka/NATS/Pulsar preferred;
+  Postgres CDC acceptable) into a **local replicated binding store + versioned
+  snapshot cache**.
+- **Reads** in the data plane are **eventually consistent**; correctness is
+  guaranteed by `bindings_version` + short token TTL + the **L0 embedded scope
+  set** (SPIFFE/SVID / token).
+- **Hard rule: authorization NEVER blocks on a cross-region call.**
+- **Acceptable lag:** 5–30 s typical for control operations; **revocation
+  worst-case < 1–2 min** (bounded by token TTL + version bump). Documented as the
+  SLO.
+
+### 7.4 Scope ids → **`type:slug` canonical ids, hybrid eager/lazy creation**
+
+- Canonical ids: `platform`, `org:acme`, `tenant:acme-prod`, `resource:device-123`.
+  Human-readable (incidents / audits / logs / support), not UUID-debugging-hell,
+  and maps cleanly onto ancestor-or-self traversal.
+- **Creation strategy by type:**
+
+  | Scope type | Strategy | Why |
+  |------------|----------|-----|
+  | `org` | **eager** | identity boundary |
+  | `tenant` | **eager** | isolation boundary |
+  | `resource` | **lazy** (on first ACL / first observation) | high cardinality (devices/alerts/metrics) |
+
+- **Invariant (do not skip): once a scope id is created it is STABLE — never
+  re-mapped.** Lazy creation mints once; the id is immutable thereafter.
+
+### 7.5 Maturity note
+
+This is no longer "RBAC for a SaaS" — it is **a distributed identity +
+authorization system with control-plane separation**. At this stage the
+**consistency model (7.3), the scope-identity model (7.4), and the access model
+(7.1)** matter more than feature completeness, and are treated as the load-bearing
+invariants of every phase below.
 
 ---
 
