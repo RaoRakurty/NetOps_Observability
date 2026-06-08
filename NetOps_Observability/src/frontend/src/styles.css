@@ -598,6 +598,46 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   position: absolute; top: 12px; right: 16px; z-index: 61;
   box-shadow: 0 2px 10px rgba(0,0,0,.25);
 }
+/* Danger-confirm dialog (destructive delete) — modern, type-to-confirm. */
+.dc-badge {
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 10%, transparent);
+}
+.dc { display: grid; gap: 14px; max-width: 440px; }
+.dc-lead { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--fg); }
+.dc-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+.dc-list li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--muted); }
+.dc-list li svg { color: var(--muted); flex: 0 0 auto; }
+.dc-field { display: grid; gap: 6px; font-size: 13px; }
+.dc-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; font-weight: 600;
+  background: var(--bg); border: 1px solid var(--panel-border); border-radius: 6px; padding: 1px 6px; color: var(--fg);
+}
+.dc-input { position: relative; display: flex; align-items: center; }
+.dc-input input {
+  width: 100%; font-size: 14px; padding: 9px 34px 9px 11px; border-radius: 9px;
+  border: 1px solid var(--panel-border); background: var(--bg); color: var(--fg);
+}
+.dc-input input:focus { outline: none; border-color: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+.dc-input.ok input { border-color: var(--good); }
+.dc-input.ok input:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
+.dc-input svg { position: absolute; right: 10px; color: var(--good); pointer-events: none; }
+.dc-force {
+  display: flex; align-items: flex-start; gap: 9px; font-size: 12.5px; line-height: 1.45;
+  color: var(--fg); padding: 10px 12px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--panel-border)); background: color-mix(in srgb, var(--bad) 7%, transparent);
+}
+.dc-force input { margin-top: 2px; }
+.dc-err { margin: 0; font-size: 12.5px; color: var(--bad); }
+.dc-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+.dc-btn { cursor: pointer; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--panel-border); }
+.dc-btn.ghost { background: transparent; color: var(--fg); }
+.dc-btn.ghost:hover { background: var(--hover); }
+.dc-btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.dc-btn.danger:hover:not(:disabled) { filter: brightness(1.07); }
+.dc-btn:disabled { opacity: .5; cursor: default; }
+
 /* Identity & Access — sub-tabs + tenant breadcrumb */
 .ia-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--panel-border); }
 .ia-tabs button {

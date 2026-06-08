@@ -477,35 +477,57 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
       </div>
 
       {delTarget && (
-        <Modal title="Delete tenant" subtitle={delTarget.name} onClose={() => setDelTarget(null)}>
-          <div style={{ display: "grid", gap: 12, maxWidth: 460 }}>
-            <div style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid var(--bad, #c0392b)", background: "rgba(192,57,43,0.08)", fontSize: 13 }}>
-              <b>This permanently deletes “{delTarget.name}”</b> — its users, devices, dashboards, alerts and data.
-              This <b>cannot be undone</b>.
-            </div>
-            <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
-              <span>Type <b>{delTarget.name}</b> to confirm</span>
-              <input className="input" value={delTyped} autoFocus onChange={(e) => setDelTyped(e.target.value)} placeholder={delTarget.name} />
-            </label>
-            {delForce && (
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--bad)" }}>
-                <input type="checkbox" checked={delForce} onChange={(e) => setDelForce(e.target.checked)} />
-                This tenant still has users — force delete anyway (orphans them)
-              </label>
-            )}
-            {delErr && <p style={{ color: "var(--bad)", margin: 0, fontSize: 13 }}>{delErr}</p>}
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="dash-btn" onClick={() => setDelTarget(null)} disabled={delBusy}>Cancel</button>
-              <button
-                className="dash-btn"
-                style={{ borderColor: "var(--bad)", color: "var(--bad)" }}
-                disabled={delBusy || delTyped.trim().toLowerCase() !== delTarget.name.toLowerCase()}
-                onClick={confirmDelete}
-              >
-                {delBusy ? "Deleting…" : "Delete tenant"}
-              </button>
-            </div>
-          </div>
+        <Modal
+          title="Delete tenant"
+          subtitle="This action can't be undone"
+          logo={<span className="dc-badge" aria-hidden><Icon name="alerts" size={18} /></span>}
+          onClose={() => setDelTarget(null)}
+        >
+          {(() => {
+            const matches = delTyped.trim().toLowerCase() === delTarget.name.toLowerCase();
+            return (
+              <div className="dc">
+                <p className="dc-lead">
+                  You're about to permanently delete <b>{delTarget.name}</b>. This also removes everything in it:
+                </p>
+                <ul className="dc-list">
+                  <li><Icon name="user" size={14} /> Users &amp; roles</li>
+                  <li><Icon name="infrastructure" size={14} /> Devices &amp; inventory</li>
+                  <li><Icon name="dashboards" size={14} /> Dashboards &amp; saved views</li>
+                  <li><Icon name="alerts" size={14} /> Alerts &amp; incidents</li>
+                  <li><Icon name="explore" size={14} /> Logs, flows &amp; metrics</li>
+                </ul>
+                <label className="dc-field">
+                  <span>Type <code className="dc-chip">{delTarget.name}</code> to confirm</span>
+                  <div className={`dc-input${matches ? " ok" : ""}`}>
+                    <input
+                      value={delTyped}
+                      autoFocus
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder={delTarget.name}
+                      onChange={(e) => setDelTyped(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && matches && !delBusy) confirmDelete(); }}
+                    />
+                    {matches && <Icon name="check" size={16} />}
+                  </div>
+                </label>
+                {delForce && (
+                  <label className="dc-force">
+                    <input type="checkbox" checked={delForce} onChange={(e) => setDelForce(e.target.checked)} />
+                    <span>This tenant still has users — <b>force delete anyway</b> (their accounts are orphaned).</span>
+                  </label>
+                )}
+                {delErr && <p className="dc-err">{delErr}</p>}
+                <div className="dc-actions">
+                  <button className="dc-btn ghost" onClick={() => setDelTarget(null)} disabled={delBusy}>Cancel</button>
+                  <button className="dc-btn danger" disabled={delBusy || !matches} onClick={confirmDelete}>
+                    {delBusy ? "Deleting…" : "Delete tenant"}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </Modal>
       )}
     </>
