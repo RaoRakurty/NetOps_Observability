@@ -359,15 +359,31 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const [hideGlobal, setHideGlobal] = useState(false);
+  // Type-to-confirm delete modal state.
+  const [delTarget, setDelTarget] = useState<Tenant | null>(null);
+  const [delTyped, setDelTyped] = useState("");
+  const [delForce, setDelForce] = useState(false);
+  const [delErr, setDelErr] = useState<string | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
 
   const create = async () => {
     if (!name.trim()) return;
     setErr(null);
     try { await api.createTenant(name.trim(), note.trim(), hideGlobal); setName(""); setNote(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
-  const remove = async (t: Tenant) => {
-    setErr(null);
-    try { await api.deleteTenant(t.id); reload(); } catch (e) { setErr((e as Error).message); }
+  const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
+  const confirmDelete = async () => {
+    if (!delTarget) return;
+    setDelErr(null); setDelBusy(true);
+    try {
+      await api.deleteTenant(delTarget.id, delTyped.trim(), delForce);
+      setDelTarget(null); reload();
+    } catch (e) {
+      const m = (e as Error).message;
+      // 409 = tenant still has users; reveal the force option.
+      if (/\b409\b|still has/.test(m)) setDelForce(true);
+      setDelErr(m.replace(/^\d+[^:]*:\s*/, ""));
+    } finally { setDelBusy(false); }
   };
   const toggleGlobalVisibility = async (t: Tenant) => {
     setErr(null);
@@ -450,7 +466,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                       {!isParent && onManageTenant && (
                         <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageTenant(t.id, t.name)}>Manage →</button>
                       )}
-                      {!isParent && <button className="dash-btn" onClick={() => remove(t)}>Delete</button>}
+                      {!isParent && <button className="dash-btn" onClick={() => openDelete(t)}>Delete</button>}
                     </td>
                   </tr>
                 );
@@ -459,6 +475,39 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
           </table>
         )}
       </div>
+
+      {delTarget && (
+        <Modal title="Delete tenant" subtitle={delTarget.name} onClose={() => setDelTarget(null)}>
+          <div style={{ display: "grid", gap: 12, maxWidth: 460 }}>
+            <div style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid var(--bad, #c0392b)", background: "rgba(192,57,43,0.08)", fontSize: 13 }}>
+              <b>This permanently deletes “{delTarget.name}”</b> — its users, devices, dashboards, alerts and data.
+              This <b>cannot be undone</b>.
+            </div>
+            <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
+              <span>Type <b>{delTarget.name}</b> to confirm</span>
+              <input className="input" value={delTyped} autoFocus onChange={(e) => setDelTyped(e.target.value)} placeholder={delTarget.name} />
+            </label>
+            {delForce && (
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--bad)" }}>
+                <input type="checkbox" checked={delForce} onChange={(e) => setDelForce(e.target.checked)} />
+                This tenant still has users — force delete anyway (orphans them)
+              </label>
+            )}
+            {delErr && <p style={{ color: "var(--bad)", margin: 0, fontSize: 13 }}>{delErr}</p>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="dash-btn" onClick={() => setDelTarget(null)} disabled={delBusy}>Cancel</button>
+              <button
+                className="dash-btn"
+                style={{ borderColor: "var(--bad)", color: "var(--bad)" }}
+                disabled={delBusy || delTyped.trim().toLowerCase() !== delTarget.name.toLowerCase()}
+                onClick={confirmDelete}
+              >
+                {delBusy ? "Deleting…" : "Delete tenant"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

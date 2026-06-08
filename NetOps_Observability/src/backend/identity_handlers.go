@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -369,10 +370,30 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
 		writeJSON(w, http.StatusOK, t)
 	case http.MethodDelete:
+		t, ok := s.tenants.Get(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, errors.New("tenant not found"))
+			return
+		}
+		// Guard a high-impact, irreversible action (GitHub/AWS/GCP pattern), enforced
+		// server-side so the API can't be hit without the safeguards:
+		// 1) Type-to-confirm — the caller must echo the EXACT tenant name.
+		if !strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("confirm")), t.Name) {
+			writeError(w, http.StatusBadRequest, errors.New("deletion not confirmed — re-enter the exact tenant name"))
+			return
+		}
+		// 2) Refuse a populated tenant unless explicitly forced — deleting it orphans
+		//    its users/data. Surface the impact so removal is a deliberate decision.
+		force := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("force")), "true")
+		if n := len(s.users.List(id, false)); n > 0 && !force {
+			writeError(w, http.StatusConflict, fmt.Errorf("tenant still has %d user(s) — reassign or remove them first, or confirm a force delete", n))
+			return
+		}
 		if err := s.tenants.Delete(id); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		logWarn("tenants", "tenant deleted", map[string]any{"tenant_id": id, "name": t.Name, "forced": force})
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "PATCH, DELETE")

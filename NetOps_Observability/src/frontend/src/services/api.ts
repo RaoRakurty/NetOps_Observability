@@ -905,7 +905,10 @@ export const api = {
   listTenants: () => request<Tenant[]>("/api/tenants"),
   createTenant: (name: string, note?: string, operatorRestricted?: boolean) =>
     request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note, operator_restricted: !!operatorRestricted }) }),
-  deleteTenant: (id: string) => request<void>(`/api/tenants/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // Destructive: requires the exact tenant name echoed back (server-enforced) and
+  // refuses a non-empty tenant unless force=true.
+  deleteTenant: (id: string, confirm: string, force = false) =>
+    request<void>(`/api/tenants/${encodeURIComponent(id)}?confirm=${encodeURIComponent(confirm)}${force ? "&force=true" : ""}`, { method: "DELETE" }),
   // Compliance: toggle whether the platform operator may view this tenant's telemetry.
   setTenantOperatorRestricted: (id: string, restricted: boolean) =>
     request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ operator_restricted: restricted }) }),
