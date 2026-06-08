@@ -1097,6 +1097,7 @@ export type AdminUser = {
   tenant_id?: string;
   status?: string;
   auth_source?: string;
+  mfa_enabled?: boolean;
   created_at?: string;
   last_login_at?: string;
 };

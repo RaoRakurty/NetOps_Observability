@@ -232,7 +232,7 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
               <th style={{ width: 28 }}>
                 <input type="checkbox" checked={allShownSelected} onChange={toggleAll} aria-label="Select all users" />
               </th>
-              <th>User</th><th>Email</th><th>Role</th><th>Tenant</th><th>Auth</th><th>Status</th><th>Last active</th>
+              <th>User</th><th>Email</th><th>Role</th><th>Tenant</th><th>Auth</th><th>MFA</th><th>Status</th><th>Last active</th>
             </tr>
           </thead>
           <tbody>
@@ -251,6 +251,7 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
                 </td>
                 <td>{u.tenant_id || "—"}</td>
                 <td><span className="badge">{u.auth_source || "local"}</span></td>
+                <td>{u.mfa_enabled ? <span className="badge good" title="Two-factor enabled">On</span> : <span className="mini-meta">—</span>}</td>
                 <td><span className={`badge ${u.status === "disabled" ? "warn" : "good"}`}>{u.status || "active"}</span></td>
                 <td>{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "—"}</td>
               </tr>
