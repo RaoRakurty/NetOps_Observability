@@ -621,7 +621,10 @@ function PolicySimulator({ catalog }: { catalog: PolicyCatalog }) {
 
 // ---- page shell ------------------------------------------------------------
 
-export default function SecurityPolicy() {
+// SecurityPolicy. `scopeTenant` is passed when embedded in Identity & Access:
+// "" → Global (System defaults), a tenant id → that tenant's policy (pre-seeds the
+// Tenant scope, wiring it to the chosen tenant instead of a raw id field).
+export default function SecurityPolicy({ scopeTenant }: { scopeTenant?: string } = {}) {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
 
@@ -632,8 +635,9 @@ export default function SecurityPolicy() {
   // Editor scope target. Default to System (populated immediately, no selector
   // needed); a one-time effect rehomes a scoped admin to its own tenant once
   // auth resolves (useAuth is async, so the initial render has no user yet).
-  const [scope, setScope] = useState<PolicyScope>("system");
-  const [tenant, setTenant] = useState("");
+  // When embedded with scopeTenant, start on that scope directly.
+  const [scope, setScope] = useState<PolicyScope>(scopeTenant ? "tenant" : "system");
+  const [tenant, setTenant] = useState(scopeTenant ?? "");
   const [name, setName] = useState(""); // role id / username for role|user scopes
   const [tier, setTier] = useState<"basic" | "advanced">("basic");
 

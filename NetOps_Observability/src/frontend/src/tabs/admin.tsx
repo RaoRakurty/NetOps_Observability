@@ -13,7 +13,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, Role, Tenant, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
-import { StatStrip, Stat, Skeleton, InfoTip, Modal } from "../components/ui";
+import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
+import SecurityPolicy from "./SecurityPolicy";
 import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
@@ -60,13 +61,17 @@ const BLANK_USER = { username: "", email: "", display_name: "", password: "", ro
 // specific tenant. (Collapsed from the old three-way All/Global/tenant filter.)
 const SCOPE_GLOBAL = "__global__";
 
-export function UsersAdmin() {
+// UsersAdmin. When embedded in the Identity & Access page, `scopeTenant` locks the
+// directory to one scope and hides the internal selector: "" = Global, a tenant id
+// = that tenant. Standalone (prop undefined), it keeps its own Global/tenant picker.
+export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
   const { user } = useAuth();
   // A super-admin in the global tenant manages every tenant's users and can scope
   // the directory to Global (the global tenant) or a specific tenant — "go into a
   // tenant to manage its users". A tenant admin is implicitly locked to its own
   // tenant (the backend only ever returns/accepts that tenant's users).
   const platform = !!user?.platform_admin;
+  const locked = scopeTenant !== undefined; // embedded → scope fixed by the parent
 
   const [users, err, reload, setErr] = useReload(() => api.listUsers());
   const [roles] = useReload(() => api.listRoles());
@@ -74,7 +79,9 @@ export function UsersAdmin() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ ...BLANK_USER });
   const [q, setQ] = useState("");
-  const [scope, setScope] = useState<string>(SCOPE_GLOBAL); // Global or a specific tenant
+  const [scopeState, setScope] = useState<string>(SCOPE_GLOBAL); // Global or a specific tenant
+  // Effective scope: the parent's lock when embedded, else the local picker.
+  const scope = locked ? (scopeTenant ? scopeTenant : SCOPE_GLOBAL) : scopeState;
   // Directory-level selection: pick one or more users, then act on them with the
   // toolbar knobs (Reset / Lock / Unlock / Delete) — no per-row action buttons.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -173,8 +180,9 @@ export function UsersAdmin() {
         <div className="admin-card-head">
           <h2>Directory</h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {/* Super-admin: scope the directory to Global or a specific tenant. */}
-            {platform && (
+            {/* Super-admin: scope the directory to Global or a specific tenant.
+                Hidden when embedded in Identity & Access (the parent owns scope). */}
+            {platform && !locked && (
               <select className="inline-select" value={scope} onChange={(e) => { setScope(e.target.value); clearSel(); }} aria-label="Tenant scope" title="Show users for">
                 <option value={SCOPE_GLOBAL}>Global</option>
                 {tenantList.filter((t) => t.id !== "global").map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -251,10 +259,15 @@ export function UsersAdmin() {
 
 // ---- Roles (RBAC) ----------------------------------------------------------
 
-export function RolesAdmin() {
+// RolesAdmin. `scopeTenant` (a tenant id) is passed when embedded under a tenant
+// in Identity & Access. Role DEFINITIONS are platform-wide today, so we surface a
+// note in that case rather than implying per-tenant role editing (a backend
+// follow-up). Global scope ("" / undefined) shows the normal editor.
+export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
   const [data, err, reload, setErr] = useReload(() => api.listRoles());
   const modules = data?.modules ?? [];
   const roles = data?.roles ?? [];
+  const tenantScoped = !!scopeTenant;
 
   // Click a cell on a CUSTOM role to cycle its level; persists immediately.
   const cycle = async (role: Role, module: string) => {
@@ -285,10 +298,16 @@ export function RolesAdmin() {
         <Stat label="Custom" value={data ? roles.length - builtin : "—"} tone="accent" />
         <Stat label="Modules" value={data ? modules.length : "—"} />
       </StatStrip>
+      {tenantScoped && (
+        <div className="card" style={{ fontSize: 12, color: "var(--muted)", borderLeft: "3px solid var(--accent)" }}>
+          Role <b>definitions</b> are platform-wide today and shown here for reference. Assigning these roles to
+          this tenant's users is done in <b>Users</b>. Per-tenant role definitions are coming soon.
+        </div>
+      )}
       <div className="card">
         <div className="admin-card-head">
           <h2>Permission matrix</h2>
-          <button className="dash-btn accent" onClick={addRole}>+ New custom role</button>
+          {!tenantScoped && <button className="dash-btn accent" onClick={addRole}>+ New custom role</button>}
         </div>
         <ErrLine msg={err} />
         <table className="ds-table">
@@ -328,7 +347,7 @@ export function RolesAdmin() {
 
 // ---- Tenants (multi-tenancy) ----------------------------------------------
 
-export function TenantsAdmin() {
+export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string, name: string) => void } = {}) {
   const [tenants, err, reload, setErr] = useReload(() => api.listTenants());
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
@@ -420,7 +439,10 @@ export function TenantsAdmin() {
                     </td>
                     <td style={{ color: "var(--muted)" }}>{t.note || "—"}</td>
                     <td className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{t.id}</td>
-                    <td style={{ textAlign: "right" }}>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {!isParent && onManageTenant && (
+                        <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageTenant(t.id, t.name)}>Manage →</button>
+                      )}
                       {!isParent && <button className="dash-btn" onClick={() => remove(t)}>Delete</button>}
                     </td>
                   </tr>
@@ -430,6 +452,106 @@ export function TenantsAdmin() {
           </table>
         )}
       </div>
+    </>
+  );
+}
+
+// ---- Identity & Access (Global vs Tenants, same items each) ----------------
+//
+// One page that consolidates Users · Roles · Security Policy · MFA, split into a
+// Global section (platform-wide) and a Tenants section (per tenant, configured
+// independently). Each item is the existing admin panel, scoped via `scopeTenant`
+// ("" = Global, a tenant id = that tenant). Per-tenant ROLE definitions and the MFA
+// feature are backend follow-ups; surfaced here as a note / "coming soon".
+
+type IATab = "users" | "roles" | "policy" | "mfa";
+const IA_TABS: { id: IATab; label: string }[] = [
+  { id: "users", label: "Users" },
+  { id: "roles", label: "Roles" },
+  { id: "policy", label: "Security Policy" },
+  { id: "mfa", label: "MFA" },
+];
+
+function MfaSoon({ scopeLabel }: { scopeLabel: string }) {
+  return (
+    <div className="card" style={{ textAlign: "center", padding: "40px 20px" }}>
+      <div style={{ width: 44, height: 44, borderRadius: 12, margin: "0 auto 12px", display: "grid", placeItems: "center", background: "var(--accent-soft, rgba(79,70,229,.1))", color: "var(--accent)" }}>
+        <Icon name="lock" size={22} />
+      </div>
+      <div style={{ fontWeight: 600 }}>Multi-factor authentication</div>
+      <p style={{ color: "var(--muted)", fontSize: 13, maxWidth: 440, margin: "8px auto 0" }}>
+        MFA (TOTP enrollment + enforcement) for <b>{scopeLabel}</b> is coming soon. It will let you require a
+        second factor for sign-in, configured independently per scope.
+      </p>
+      <span className="badge warn" style={{ marginTop: 12, display: "inline-block" }}>Coming soon</span>
+    </div>
+  );
+}
+
+// IAItems renders the four panels for one scope ("" = Global, else a tenant id).
+function IAItems({ scopeTenant, scopeLabel }: { scopeTenant: string; scopeLabel: string }) {
+  const [tab, setTab] = useState<IATab>("users");
+  return (
+    <>
+      <div className="ia-tabs" role="tablist">
+        {IA_TABS.map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} onClick={() => setTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "users" && <UsersAdmin scopeTenant={scopeTenant} />}
+      {tab === "roles" && <RolesAdmin scopeTenant={scopeTenant || undefined} />}
+      {tab === "policy" && <SecurityPolicy scopeTenant={scopeTenant} />}
+      {tab === "mfa" && <MfaSoon scopeLabel={scopeLabel} />}
+    </>
+  );
+}
+
+export function IdentityAccess() {
+  const { user } = useAuth();
+  const platform = !!user?.platform_admin;
+  const [section, setSection] = useState<"global" | "tenants">("global");
+  const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
+
+  // A tenant admin governs only its own tenant — no Global, no picker.
+  if (!platform) {
+    return (
+      <>
+        <AdminHead title="Identity & Access" sub="Users, roles and security policy for your tenant." />
+        <IAItems scopeTenant={user?.tenant_id || ""} scopeLabel="your tenant" />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <AdminHead title="Identity & Access" sub="Users, roles, MFA and security policy — for the platform (Global) and per tenant, each configured independently." />
+      <div style={{ marginBottom: 12 }}>
+        <Segmented
+          ariaLabel="Identity scope"
+          value={section}
+          onChange={(v) => { setSection(v); setSel(null); }}
+          options={[{ value: "global", label: "Global" }, { value: "tenants", label: "Tenants" }]}
+        />
+      </div>
+
+      {section === "global" && <IAItems scopeTenant="" scopeLabel="the platform" />}
+
+      {section === "tenants" && (
+        sel ? (
+          <>
+            <div className="ia-crumb">
+              <button className="dash-btn" onClick={() => setSel(null)}>← Tenants</button>
+              <span className="ia-crumb-name">{sel.name}</span>
+              <span className="mini-meta">configured independently</span>
+            </div>
+            <IAItems scopeTenant={sel.id} scopeLabel={sel.name} />
+          </>
+        ) : (
+          <TenantsAdmin onManageTenant={(id, name) => setSel({ id, name })} />
+        )
+      )}
     </>
   );
 }

@@ -22,13 +22,10 @@ import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
 import SourceOfTruth from "./tabs/SourceOfTruth";
-import SecurityPolicy from "./tabs/SecurityPolicy";
 import StackHealth from "./tabs/StackHealth";
 import AuditLog from "./tabs/AuditLog";
 import {
-  UsersAdmin,
-  RolesAdmin,
-  TenantsAdmin,
+  IdentityAccess,
   AuthenticationAdmin,
   ApiAccessAdmin,
   IntegrationsAdmin,
@@ -180,16 +177,11 @@ export const NAV: NavSection[] = [
     footer: true,
     children: [
       { id: "settings", label: "Settings", render: () => <Settings /> },
-      // Identity & access (planned scaffolding — see tabs/admin.tsx + docs/).
-      { id: "users", label: "Users", render: () => <UsersAdmin /> },
-      { id: "roles", label: "Roles", render: () => <RolesAdmin /> },
-      // Platform-owner only: the tenant registry is the platform's namespace map,
-      // not a tenant's to see or manage (a tenant admin governs WITHIN its tenant).
-      // Backend already enforces this (handleTenants: POST needs cross; GET shows
-      // only the caller's own tenant) — this just stops surfacing the section.
-      { id: "tenants", label: "Tenants", platformOnly: true, render: () => <TenantsAdmin /> },
+      // Identity & Access — consolidates Users · Roles · MFA · Security Policy,
+      // split into Global (platform-wide) and Tenants (per tenant, configured
+      // independently). The tenant registry + per-tenant drill-in live inside it.
+      { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
-      { id: "policy", label: "Security Policy", render: () => <SecurityPolicy /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
         subItems: [
