@@ -12,4 +12,7 @@ regexes = [
   '''(auth|priv)-secret-\d+''',
   # The publicly-known dev signing fallback (SR-017) — intentionally in source.
   '''dev-only-do-not-use-in-production''',
+  # RFC 6238 published TOTP test seed (base32 of "12345678901234567890"), used in
+  # totp_test.go to pin our implementation against the spec — not a real secret.
+  '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',
 ]
