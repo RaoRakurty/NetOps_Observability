@@ -6,6 +6,8 @@ import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
+import { Modal } from "./ui";
+import MfaCard from "./MfaCard";
 
 // Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
 // only tints the active indicator + the flyout header; severity colours stay
@@ -64,6 +66,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
   const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
+  const [mfaOpen, setMfaOpen] = useState(false);
   const openTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
   const acctCloseTimer = useRef<number | undefined>(undefined);
@@ -243,6 +246,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                 </span>
               </div>
               <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
+              <button onClick={() => { setAcctOpen(false); setMfaOpen(true); }}>Two-factor authentication</button>
               {onChangePassword && (
                 <button onClick={() => { setAcctOpen(false); onChangePassword(); }}>Change password</button>
               )}
@@ -264,6 +268,11 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           onNavigate={navigate}
           onClose={() => setOpen(null)}
         />
+      )}
+      {mfaOpen && (
+        <Modal title="Two-factor authentication" subtitle={user.username} onClose={() => setMfaOpen(false)}>
+          <MfaCard />
+        </Modal>
       )}
     </aside>
   );

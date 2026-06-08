@@ -506,16 +506,37 @@ async function downloadResponse(res: Response, filename: string): Promise<void> 
 
 export const api = {
   // ---- auth ----
-  login: async (username: string, password: string) => {
-    const r = await request<LoginResponse>("/api/auth/login", {
+  // Returns { mfaRequired:false } on success (session set), or
+  // { mfaRequired:true, mfaToken } when the account has MFA — complete via mfaLogin.
+  login: async (username: string, password: string): Promise<{ mfaRequired: boolean; mfaToken?: string }> => {
+    const r = await request<LoginResponse & { mfa_required?: boolean; mfa_token?: string }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
+    });
+    if (r.mfa_required && r.mfa_token) return { mfaRequired: true, mfaToken: r.mfa_token };
+    setToken(r.token);
+    setRefresh(r.refresh_token ?? null);
+    fireAuthChange(true);
+    return { mfaRequired: false };
+  },
+  // Complete the login MFA challenge with the one-time code → issues the session.
+  mfaLogin: async (mfaToken: string, code: string) => {
+    const r = await request<LoginResponse>("/api/auth/mfa/login", {
+      method: "POST",
+      body: JSON.stringify({ mfa_token: mfaToken, code }),
     });
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
     fireAuthChange(true);
     return r;
   },
+  // MFA self-service (authed).
+  mfaStatus: () => request<{ enabled: boolean; pending: boolean; local: boolean }>("/api/auth/mfa/status"),
+  mfaSetup: () => request<{ secret: string; uri: string }>("/api/auth/mfa/setup", { method: "POST" }),
+  mfaActivate: (code: string) => request<{ enabled: boolean }>("/api/auth/mfa/activate", { method: "POST", body: JSON.stringify({ code }) }),
+  mfaDisable: (code: string) => request<{ enabled: boolean }>("/api/auth/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
+  // Admin recovery: clear a user's MFA (lost device).
+  adminResetMfa: (username: string) => request<{ enabled: boolean }>("/api/users/mfa-reset", { method: "POST", body: JSON.stringify({ username }) }),
   logout: async () => {
     const rt = getRefresh();
     if (rt) {

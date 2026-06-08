@@ -4,6 +4,8 @@ import { useShell } from "../context/shell";
 import { usePrefs, CHROME_PRESETS } from "../theme/prefs";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
 import Icon from "./Icon";
+import { Modal } from "./ui";
+import MfaCard from "./MfaCard";
 
 type Props = {
   health: Health | null;
@@ -42,6 +44,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mfaOpen, setMfaOpen] = useState(false);
   const [results, setResults] = useState<GlobalResult[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -245,6 +248,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
                 </span>
               </div>
               <button onClick={() => { setMenuOpen(false); navigate("admin/settings"); }}>Settings</button>
+              <button onClick={() => { setMenuOpen(false); setMfaOpen(true); }}>Two-factor authentication</button>
               {onChangePassword && (
                 <button onClick={() => { setMenuOpen(false); onChangePassword(); }}>Change password</button>
               )}
@@ -254,6 +258,11 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
         </div>
         )}
       </div>
+      {mfaOpen && (
+        <Modal title="Two-factor authentication" subtitle={user.username} onClose={() => setMfaOpen(false)}>
+          <MfaCard />
+        </Modal>
+      )}
     </header>
   );
 }

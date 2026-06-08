@@ -15,6 +15,7 @@ import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
 import SecurityPolicy from "./SecurityPolicy";
+import MfaCard from "../components/MfaCard";
 import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
@@ -152,6 +153,10 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
     if (!window.confirm(`Delete ${selCount} user${selCount > 1 ? "s" : ""}? This cannot be undone.`)) return;
     runBatch((u) => api.deleteUser(u.username));
   };
+  const resetMfa = () => {
+    if (!window.confirm(`Reset two-factor for ${selCount} user${selCount > 1 ? "s" : ""}? They'll sign in with just their password until they set it up again.`)) return;
+    runBatch((u) => api.adminResetMfa(u.username));
+  };
   const resetPw = async () => {
     if (selCount !== 1) return;
     const u = selUsers[0];
@@ -195,6 +200,7 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
             </button>
             <button className="dash-btn" disabled={!canLock || busy} onClick={lock} title="Disable sign-in for the selected users">Lock</button>
             <button className="dash-btn" disabled={!canUnlock || busy} onClick={unlock} title="Re-enable the selected users">Unlock</button>
+            <button className="dash-btn" disabled={selCount === 0 || busy} onClick={resetMfa} title="Reset two-factor for the selected users (lost device recovery)">Reset MFA</button>
             <button className="dash-btn" disabled={selCount === 0 || busy} onClick={del} title="Delete the selected users">Delete</button>
             <button className="dash-btn accent" onClick={startAdd}>{adding ? "Cancel" : "+ Add user"}</button>
           </div>
@@ -472,23 +478,22 @@ const IA_TABS: { id: IATab; label: string }[] = [
   { id: "mfa", label: "MFA" },
 ];
 
-function MfaSoon({ scopeLabel }: { scopeLabel: string }) {
+// MfaPanel — two-factor management. Enrollment is per account (your own 2FA);
+// admins reset a user's device from the Users tab.
+function MfaPanel() {
   return (
-    <div className="card" style={{ textAlign: "center", padding: "40px 20px" }}>
-      <div style={{ width: 44, height: 44, borderRadius: 12, margin: "0 auto 12px", display: "grid", placeItems: "center", background: "var(--accent-soft, rgba(79,70,229,.1))", color: "var(--accent)" }}>
-        <Icon name="lock" size={22} />
+    <>
+      <MfaCard />
+      <div className="card" style={{ fontSize: 12, color: "var(--muted)" }}>
+        Two-factor is set up per person on their own account. To reset someone who lost their device, select them
+        in <b>Users</b> and choose <b>Reset MFA</b>. Accounts that sign in through an external provider manage it there.
       </div>
-      <div style={{ fontWeight: 600 }}>Multi-factor authentication</div>
-      <p style={{ color: "var(--muted)", fontSize: 13, maxWidth: 440, margin: "8px auto 0" }}>
-        Require a second step at sign-in for <b>{scopeLabel}</b>. Coming soon.
-      </p>
-      <span className="badge warn" style={{ marginTop: 12, display: "inline-block" }}>Coming soon</span>
-    </div>
+    </>
   );
 }
 
 // IAItems renders the four panels for one scope ("" = Global, else a tenant id).
-function IAItems({ scopeTenant, scopeLabel }: { scopeTenant: string; scopeLabel: string }) {
+function IAItems({ scopeTenant }: { scopeTenant: string }) {
   const [tab, setTab] = useState<IATab>("users");
   return (
     <>
@@ -502,7 +507,7 @@ function IAItems({ scopeTenant, scopeLabel }: { scopeTenant: string; scopeLabel:
       {tab === "users" && <UsersAdmin scopeTenant={scopeTenant} />}
       {tab === "roles" && <RolesAdmin scopeTenant={scopeTenant || undefined} />}
       {tab === "policy" && <SecurityPolicy scopeTenant={scopeTenant} />}
-      {tab === "mfa" && <MfaSoon scopeLabel={scopeLabel} />}
+      {tab === "mfa" && <MfaPanel />}
     </>
   );
 }
@@ -518,7 +523,7 @@ export function IdentityAccess() {
     return (
       <>
         <AdminHead title="Identity & Access" sub="Users, roles and security policy for your tenant." />
-        <IAItems scopeTenant={user?.tenant_id || ""} scopeLabel="your tenant" />
+        <IAItems scopeTenant={user?.tenant_id || ""} />
       </>
     );
   }
@@ -535,7 +540,7 @@ export function IdentityAccess() {
         />
       </div>
 
-      {section === "global" && <IAItems scopeTenant="" scopeLabel="the platform" />}
+      {section === "global" && <IAItems scopeTenant="" />}
 
       {section === "tenants" && (
         sel ? (
@@ -545,7 +550,7 @@ export function IdentityAccess() {
               <span className="ia-crumb-name">{sel.name}</span>
               <span className="mini-meta">configured independently</span>
             </div>
-            <IAItems scopeTenant={sel.id} scopeLabel={sel.name} />
+            <IAItems scopeTenant={sel.id} />
           </>
         ) : (
           <TenantsAdmin onManageTenant={(id, name) => setSel({ id, name })} />

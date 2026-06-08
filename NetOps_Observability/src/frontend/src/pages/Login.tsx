@@ -19,6 +19,9 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   );
   const [methods, setMethods] = useState<AuthMethods | null>(null);
   const [method, setMethod] = useState<Method>("local");
+  // MFA challenge: set after a password succeeds for an MFA-enabled account.
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
 
   useEffect(() => {
     sessionStorage.removeItem("netops_sso_error");
@@ -40,7 +43,10 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
     try {
       if (method === "ldap") await api.ldapLogin(username, password);
       else if (method === "tacacs") await api.tacacsLogin(username, password);
-      else await api.login(username, password);
+      else {
+        const r = await api.login(username, password);
+        if (r.mfaRequired && r.mfaToken) { setMfaToken(r.mfaToken); return; } // → code step
+      }
       onLoggedIn();
     } catch (e) {
       setError((e as Error).message.replace(/^401 Unauthorized: ?/, ""));
@@ -48,6 +54,57 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       setBusy(false);
     }
   };
+
+  const submitMfa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfaToken) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.mfaLogin(mfaToken, mfaCode.trim());
+      onLoggedIn();
+    } catch (e) {
+      setError((e as Error).message.replace(/^401 Unauthorized: ?/, ""));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Step 2: authenticator code entry (after a password succeeds for an MFA account).
+  if (mfaToken) {
+    return (
+      <div className="login-wrap">
+        <form onSubmit={submitMfa} className="card login-card">
+          <h1 className="login-brand">{BRAND}</h1>
+          <p className="login-sub">Enter the 6-digit code from your authenticator app.</p>
+          <div className="login-form">
+            <div className="form-field">
+              <label className="form-label" htmlFor="mfa-code">Authentication code</label>
+              <input
+                id="mfa-code"
+                className="form-input"
+                autoFocus
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                placeholder="123456"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                style={{ letterSpacing: "0.3em", fontSize: 18, textAlign: "center" }}
+              />
+            </div>
+            {error && <p className="login-msg" role="alert" aria-live="polite">{error}</p>}
+            <button className="btn-accent" disabled={busy || mfaCode.length < 6} type="submit" style={{ width: "100%" }}>
+              {busy ? "Verifying…" : "Verify"}
+            </button>
+            <button type="button" className="login-link" onClick={() => { setMfaToken(null); setMfaCode(""); setError(null); }}>
+              Back to sign in
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
 
   if (view === "changepw") {
     return (
