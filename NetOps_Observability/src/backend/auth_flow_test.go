@@ -31,6 +31,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	os, err := newOrgStore(dir + "/orgs.json")
 	must(err)
+	bs, err := newBindingStore(dir + "/role_bindings.json")
+	must(err)
 	ks, err := newAPIKeyStore(dir + "/apikeys.json")
 	must(err)
 	rf, err := newRefreshStore(dir+"/refresh.json", time.Hour)
@@ -44,11 +46,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	sp, err := newSNMPProfileStore(dir + "/snmp_profiles.json")
 	must(err)
 	s := &server{
-		users: us, roles: rs, tenants: ts, orgs: os, apiKeys: ks, refresh: rf,
+		users: us, roles: rs, tenants: ts, orgs: os, bindings: bs, apiKeys: ks, refresh: rf,
 		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
 		audit: au, startedAt: time.Now().UTC(),
 	}
 	must(us.SeedAdmin("admin", "password123"))
+	s.backfillBindings() // PBAC Phase A: mirror seeded users into role_bindings
 	mux := http.NewServeMux()
 	s.routes(mux)
 	srv := httptest.NewServer(s.withAuth(s.withAudit(mux)))

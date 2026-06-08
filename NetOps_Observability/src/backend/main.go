@@ -46,6 +46,7 @@ type server struct {
 	roles          *roleStore
 	tenants        *tenantStore
 	orgs           *orgStore
+	bindings       *bindingStore
 	apiKeys        *apiKeyStore
 	refresh        *refreshStore
 	snmpCreds      *snmpCredStore
@@ -279,6 +280,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("org store: %v", err)
 	}
+	bindings, err := newBindingStore(envOr("BINDINGS_FILE", "/data/role_bindings.json"))
+	if err != nil {
+		log.Fatalf("binding store: %v", err)
+	}
 	apiKeys, err := newAPIKeyStore(envOr("APIKEYS_FILE", "/data/apikeys.json"))
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
@@ -323,6 +328,7 @@ func newServer() *server {
 		roles:         roles,
 		tenants:       tenants,
 		orgs:          orgs,
+		bindings:      bindings,
 		apiKeys:       apiKeys,
 		refresh:       refresh,
 		snmpCreds:     snmpCreds,
@@ -370,6 +376,9 @@ func newServer() *server {
 	// every admin save (see oidc_config.go).
 	srv.oidcCfg = newOIDCConfigStore(envOr("OIDC_CONFIG_FILE", "/data/oidc_config.json"), srv)
 	srv.oidc.Store(newOIDCProviderFromConfig(srv.oidcCfg.effective()))
+	// PBAC Phase A: ensure every existing user has its mirror role_binding so the
+	// auditable artifact is complete on boot. Idempotent; behaviour-preserving.
+	srv.backfillBindings()
 	return srv
 }
 

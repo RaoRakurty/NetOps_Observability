@@ -130,6 +130,7 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.syncUserBinding(u) // keep the role_binding mirror in sync (PBAC Phase A)
 		logInfo("identity", "user created", map[string]any{"user": u.Username, "role": u.Role})
 		writeJSON(w, http.StatusCreated, toPublic(u))
 	default:
@@ -199,12 +200,14 @@ func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		s.syncUserBinding(u) // re-sync the role_binding mirror (PBAC Phase A)
 		writeJSON(w, http.StatusOK, toPublic(u))
 	case http.MethodDelete:
 		if err := s.users.Delete(id); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		s.removeUserBindings(id) // drop the deleted principal's bindings (PBAC Phase A)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "PATCH, PUT, DELETE")
