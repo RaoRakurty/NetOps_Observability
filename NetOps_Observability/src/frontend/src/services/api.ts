@@ -720,6 +720,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ messages, system }),
     }),
+  // (Re)issue the embedded-console gate cookie for the current session so a raw
+  // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
+  ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),
+
   // Runtime assistant config (admin): provider/model picker. Key never returned.
   copilotConfig: () => request<CopilotConfig>("/api/copilot/config"),
   setCopilotConfig: (cfg: { provider: string; model: string; system?: string; key?: string }) =>

@@ -29,6 +29,7 @@ export default function SourceOfTruth() {
   const [err, setErr] = useState<string | null>(null);
   const [poll, setPoll] = useState<{ last_poll?: string; devices?: number; last_error?: string } | null>(null);
   const [full, setFull] = useState(false);
+  const [gateReady, setGateReady] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   // Wizard working state.
@@ -61,6 +62,20 @@ export default function SourceOfTruth() {
   useEffect(() => {
     load();
   }, []);
+
+  // The embedded console is a raw iframe that doesn't pass through the SPA's
+  // Bearer/refresh path, so its gate cookie can be stale/missing. Re-mint it
+  // before showing the frame so /netbox/ always authenticates (no 403 wall).
+  useEffect(() => {
+    if (!(cfg?.managed && cfg.enabled)) return;
+    let alive = true;
+    api.ensureConsoleGate().finally(() => {
+      if (alive) setGateReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [cfg?.managed, cfg?.enabled]);
 
   const validURL = (u: string) => /^https?:\/\/.+/.test(u.trim());
 
@@ -193,7 +208,10 @@ export default function SourceOfTruth() {
   const externalConnected = !cfg?.managed && cfg?.enabled && !!cfg?.url;
 
   const reloadFrame = () => {
-    if (frameRef.current) frameRef.current.src = "/netbox/";
+    // Re-mint the gate cookie first in case it expired during a long session.
+    api.ensureConsoleGate().finally(() => {
+      if (frameRef.current) frameRef.current.src = "/netbox/";
+    });
   };
 
   return (
@@ -255,12 +273,18 @@ export default function SourceOfTruth() {
               <Icon name="close" size={14} /> Exit full screen
             </button>
           )}
-          <iframe
-            ref={frameRef}
-            title="Source of Truth"
-            src="/netbox/"
-            className="sot-frame"
-          />
+          {gateReady ? (
+            <iframe
+              ref={frameRef}
+              title="Source of Truth"
+              src="/netbox/"
+              className="sot-frame"
+            />
+          ) : (
+            <div className="sot-frame" style={{ display: "grid", placeItems: "center", color: "var(--muted)", fontSize: 13 }}>
+              Connecting to the inventory…
+            </div>
+          )}
         </div>
       ) : externalConnected ? (
         <div className="card" style={{ fontSize: 13, color: "var(--muted)" }}>

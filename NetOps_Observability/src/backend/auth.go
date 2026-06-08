@@ -198,6 +198,42 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleConsoleGate (re)issues the embedded-console gate cookie for the current
+// session, on demand. The embedded consoles (/netbox, /search) are loaded as raw
+// browser iframes that don't pass through the SPA's Bearer/refresh path, so their
+// gate cookie can go stale (short TTL) or be missing/old-path after a deploy. The
+// SPA calls this (Bearer-authed) right before mounting an embedded console so the
+// iframe always carries a fresh, correctly-pathed cookie. Platform-owner only.
+func (s *server) handleConsoleGate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	if _, cross := principalTenant(claims); !cross {
+		writeError(w, http.StatusForbidden, errors.New("platform administrator access required"))
+		return
+	}
+	// Re-sign a fresh session JWT for the cookie so it verifies at osd-gate
+	// regardless of how the caller authenticated (session/SSO).
+	ttl := accessTokenTTL()
+	tok, err := signJWT(jwtClaims{
+		Sub: claims.Sub, Role: claims.Role, Tenant: claims.Tenant,
+		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
+	}, jwtSecret())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	setOSDCookie(w, r, tok, ttl)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleLogout revokes the presented refresh token. Idempotent; reachable
 // without a valid access token (the access token may already be expired).
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {

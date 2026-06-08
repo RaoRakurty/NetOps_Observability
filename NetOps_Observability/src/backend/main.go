@@ -491,7 +491,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/password-policy", s.handlePasswordPolicy)
 	mux.HandleFunc("/api/auth/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
-	mux.HandleFunc("/api/auth/osd-gate", s.handleOSDGate) // nginx auth_request target for /search
+	mux.HandleFunc("/api/auth/osd-gate", s.handleOSDGate)         // nginx auth_request target for /search + /netbox
+	mux.HandleFunc("/api/auth/console-gate", s.handleConsoleGate) // SPA re-mints the embedded-console gate cookie
 	mux.HandleFunc("/api/auth/permissions", s.handlePermissions)
 	// SSO (OIDC/SAML/LDAP via Keycloak) — config + Authorization Code flow.
 	mux.HandleFunc("/api/auth/sso/config", s.handleSSOConfig)
