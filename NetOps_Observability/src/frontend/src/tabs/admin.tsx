@@ -291,7 +291,7 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
   const builtin = roles.filter((r) => r.builtin).length;
   return (
     <>
-      <AdminHead title="Roles & Permissions" sub="Granular, module-level RBAC. Built-in roles are fixed; click a cell on a custom role to cycle none→read→write→admin." />
+      <AdminHead title="Roles & Permissions" sub="Control what each role can see and change. Built-in roles are fixed; click a cell on a custom role to set its access." />
       <StatStrip>
         <Stat label="Roles" value={data ? roles.length : <Skeleton w={26} h={22} />} />
         <Stat label="Built-in" value={data ? builtin : "—"} />
@@ -300,8 +300,8 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
       </StatStrip>
       {tenantScoped && (
         <div className="card" style={{ fontSize: 12, color: "var(--muted)", borderLeft: "3px solid var(--accent)" }}>
-          Role <b>definitions</b> are platform-wide today and shown here for reference. Assigning these roles to
-          this tenant's users is done in <b>Users</b>. Per-tenant role definitions are coming soon.
+          These roles are shared across the platform and shown here for reference. Assign them to this tenant's
+          people in <b>Users</b>. Tenant-specific roles are coming soon.
         </div>
       )}
       <div className="card">
@@ -480,8 +480,7 @@ function MfaSoon({ scopeLabel }: { scopeLabel: string }) {
       </div>
       <div style={{ fontWeight: 600 }}>Multi-factor authentication</div>
       <p style={{ color: "var(--muted)", fontSize: 13, maxWidth: 440, margin: "8px auto 0" }}>
-        MFA (TOTP enrollment + enforcement) for <b>{scopeLabel}</b> is coming soon. It will let you require a
-        second factor for sign-in, configured independently per scope.
+        Require a second step at sign-in for <b>{scopeLabel}</b>. Coming soon.
       </p>
       <span className="badge warn" style={{ marginTop: 12, display: "inline-block" }}>Coming soon</span>
     </div>
@@ -526,7 +525,7 @@ export function IdentityAccess() {
 
   return (
     <>
-      <AdminHead title="Identity & Access" sub="Users, roles, MFA and security policy — for the platform (Global) and per tenant, each configured independently." />
+      <AdminHead title="Identity & Access" sub="People, roles and security — for everyone (Global) or for a specific tenant." />
       <div style={{ marginBottom: 12 }}>
         <Segmented
           ariaLabel="Identity scope"

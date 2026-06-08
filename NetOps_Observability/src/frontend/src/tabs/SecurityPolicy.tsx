@@ -627,6 +627,9 @@ function PolicySimulator({ catalog }: { catalog: PolicyCatalog }) {
 export default function SecurityPolicy({ scopeTenant }: { scopeTenant?: string } = {}) {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
+  // Embedded in Identity & Access: the parent Global/Tenant section already chose
+  // the scope, so hide this editor's own scope picker + duplicate title.
+  const embedded = scopeTenant !== undefined;
 
   const [catalog, setCatalog] = useState<PolicyCatalog | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -699,15 +702,22 @@ export default function SecurityPolicy({ scopeTenant }: { scopeTenant?: string }
   return (
     <div className="pol-page">
       <header className="pol-page-head">
-        <div className="pol-title">
-          <Icon name="shield" size={22} />
-          <div>
-            <h1>Security Policy</h1>
-            <p className="admin-sub">
-              NIST-aligned authentication, password, session and account-lifecycle controls, resolved deterministically through System → Tenant → Role → User.
-            </p>
+        {!embedded && (
+          <div className="pol-title">
+            <Icon name="shield" size={22} />
+            <div>
+              <h1>Security Policy</h1>
+              <p className="admin-sub">
+                Sign-in, password, session and account security rules.
+              </p>
+            </div>
           </div>
-        </div>
+        )}
+        {embedded && (
+          <p className="admin-sub" style={{ margin: 0 }}>
+            Sign-in, password and session rules {scopeTenant ? "for this tenant" : "for everyone"}.
+          </p>
+        )}
         <div className="pol-seg" role="tablist" aria-label="View">
           <button role="tab" aria-selected={mode === "editor"} className={mode === "editor" ? "active" : ""} onClick={() => setMode("editor")}>
             Editor
@@ -722,22 +732,26 @@ export default function SecurityPolicy({ scopeTenant }: { scopeTenant?: string }
         <>
           <div className="card pol-target">
             <div className="pol-target-row">
-              <div className="pol-target-field">
-                <label className="mini-meta">Scope</label>
-                <div className="pol-seg" role="tablist" aria-label="Scope">
-                  {SCOPE_ORDER.map((sc) => (
-                    <button
-                      key={sc}
-                      title={sc === "system" && !platform ? "System baseline — read-only (platform owner edits it)" : ""}
-                      className={scope === sc ? "active" : ""}
-                      onClick={() => setScope(sc)}
-                    >
-                      {SCOPE_LABEL[sc]}
-                    </button>
-                  ))}
+              {/* Scope picker — hidden when embedded in Identity & Access, where the
+                  Global/Tenant section already chose the scope. */}
+              {!embedded && (
+                <div className="pol-target-field">
+                  <label className="mini-meta">Scope</label>
+                  <div className="pol-seg" role="tablist" aria-label="Scope">
+                    {SCOPE_ORDER.map((sc) => (
+                      <button
+                        key={sc}
+                        title={sc === "system" && !platform ? "System baseline — read-only (platform owner edits it)" : ""}
+                        className={scope === sc ? "active" : ""}
+                        onClick={() => setScope(sc)}
+                      >
+                        {SCOPE_LABEL[sc]}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              {needsTenant && (
+              )}
+              {!embedded && needsTenant && (
                 <div className="pol-target-field">
                   <label className="mini-meta">Tenant</label>
                   <input
@@ -749,7 +763,7 @@ export default function SecurityPolicy({ scopeTenant }: { scopeTenant?: string }
                   />
                 </div>
               )}
-              {needsName && (
+              {!embedded && needsName && (
                 <div className="pol-target-field">
                   <label className="mini-meta">{scope === "role" ? "Role" : "Username"}</label>
                   <input className="pol-input" value={name} placeholder={scope === "role" ? "role id" : "username"} onChange={(e) => setName(e.target.value)} />
@@ -765,10 +779,10 @@ export default function SecurityPolicy({ scopeTenant }: { scopeTenant?: string }
             </div>
             <p className="mini-meta" style={{ marginTop: 8 }}>
               {scope === "system"
-                ? "The platform-wide baseline. More-specific scopes may only tighten hardened controls, never weaken them."
+                ? "Applies to everyone by default. A tenant can tighten these rules but not weaken the protected ones."
                 : canWrite
-                  ? `Editing ${SCOPE_LABEL[scope]} policy. Inherited values flow down from higher scopes; set a control to override it here.`
-                  : "Read-only — this scope belongs to another tenant or the platform."}
+                  ? "These rules apply to this tenant. Anything left unset follows the global default."
+                  : "Read-only — this belongs to another tenant."}
             </p>
           </div>
 
