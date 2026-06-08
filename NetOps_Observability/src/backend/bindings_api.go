@@ -21,13 +21,14 @@ import (
 )
 
 type grantBindingRequest struct {
-	PrincipalID string         `json:"principal_id"`
-	RoleID      string         `json:"role_id"`
-	ScopeID     string         `json:"scope_id"`
-	Effect      string         `json:"effect"`    // allow (default) | deny
-	ExpiresAt   *time.Time     `json:"expires_at"` // optional (break-glass)
-	Reason      string         `json:"reason"`
-	Condition   map[string]any `json:"condition,omitempty"`
+	PrincipalID   string         `json:"principal_id"`
+	PrincipalType string         `json:"principal_type"` // user (default) | service_account | agent | device
+	RoleID        string         `json:"role_id"`
+	ScopeID       string         `json:"scope_id"`
+	Effect        string         `json:"effect"`     // allow (default) | deny
+	ExpiresAt     *time.Time     `json:"expires_at"` // optional (break-glass)
+	Reason        string         `json:"reason"`
+	Condition     map[string]any `json:"condition,omitempty"`
 }
 
 // scopeOrg resolves the org id that owns a scope (for org-admin authz). platform
@@ -110,10 +111,14 @@ func (s *server) handleBindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.PrincipalID = strings.ToLower(strings.TrimSpace(req.PrincipalID))
-		// Validate referents (zero-trust on input).
-		if _, ok := s.users.Get(req.PrincipalID); !ok {
-			writeError(w, http.StatusBadRequest, errors.New("unknown principal"))
-			return
+		// Validate referents (zero-trust on input). A user principal must exist as
+		// an account; machine principals (service_account/agent/device) reference an
+		// API token / SVID identity verified elsewhere, so are accepted by id.
+		if req.PrincipalType == "" || req.PrincipalType == PrincipalUser {
+			if _, ok := s.users.Get(req.PrincipalID); !ok {
+				writeError(w, http.StatusBadRequest, errors.New("unknown principal"))
+				return
+			}
 		}
 		if _, ok := s.roles.Get(req.RoleID); !ok {
 			writeError(w, http.StatusBadRequest, errors.New("unknown role"))
@@ -128,7 +133,7 @@ func (s *server) handleBindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b, err := s.bindings.Add(RoleBinding{
-			PrincipalID: req.PrincipalID, RoleID: req.RoleID, ScopeID: req.ScopeID,
+			PrincipalID: req.PrincipalID, PrincipalType: req.PrincipalType, RoleID: req.RoleID, ScopeID: req.ScopeID,
 			Effect: req.Effect, ExpiresAt: req.ExpiresAt, Condition: req.Condition,
 			GrantedBy: claims.Sub, Reason: req.Reason,
 		})

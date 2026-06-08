@@ -32,21 +32,32 @@ const (
 	EffectDeny  = "deny"
 )
 
+// Principal types (PBAC Phase D, §5). user is the default; the rest are
+// first-class machine identities (service_account = API token, agent =
+// SPIFFE/mTLS collector, device = device-bound credential).
+const (
+	PrincipalUser    = "user"
+	PrincipalService = "service_account"
+	PrincipalAgent   = "agent"
+	PrincipalDevice  = "device"
+)
+
 // RoleBinding grants (or denies) a role to a principal at a scope. Optional
 // condition/time-bounds support tag filters and break-glass sessions (§7.1).
 type RoleBinding struct {
-	ID          string         `json:"id"`
-	PrincipalID string         `json:"principal_id"`
-	RoleID      string         `json:"role_id"`
-	ScopeType   string         `json:"scope_type"` // platform | org | tenant | resource
-	ScopeID     string         `json:"scope_id"`   // canonical scope id (scopes.go)
-	Effect      string         `json:"effect"`     // allow | deny (default allow)
-	Condition   map[string]any `json:"condition,omitempty"`
-	NotBefore   *time.Time     `json:"not_before,omitempty"`
-	ExpiresAt   *time.Time     `json:"expires_at,omitempty"` // nil = permanent
-	GrantedBy   string         `json:"granted_by,omitempty"`
-	Reason      string         `json:"reason,omitempty"`
-	GrantedAt   time.Time      `json:"granted_at"`
+	ID            string         `json:"id"`
+	PrincipalID   string         `json:"principal_id"`
+	PrincipalType string         `json:"principal_type,omitempty"` // user (default) | service_account | agent | device
+	RoleID        string         `json:"role_id"`
+	ScopeType     string         `json:"scope_type"` // platform | org | tenant | resource
+	ScopeID       string         `json:"scope_id"`   // canonical scope id (scopes.go)
+	Effect        string         `json:"effect"`     // allow | deny (default allow)
+	Condition     map[string]any `json:"condition,omitempty"`
+	NotBefore     *time.Time     `json:"not_before,omitempty"`
+	ExpiresAt     *time.Time     `json:"expires_at,omitempty"` // nil = permanent
+	GrantedBy     string         `json:"granted_by,omitempty"`
+	Reason        string         `json:"reason,omitempty"`
+	GrantedAt     time.Time      `json:"granted_at"`
 }
 
 // active reports whether the binding is in effect at time now.
@@ -169,6 +180,9 @@ func (s *bindingStore) Add(b RoleBinding) (RoleBinding, error) {
 	}
 	if b.Effect != EffectAllow && b.Effect != EffectDeny {
 		return RoleBinding{}, errors.New("binding effect must be allow or deny")
+	}
+	if b.PrincipalType == "" {
+		b.PrincipalType = PrincipalUser
 	}
 	if b.ScopeType == "" {
 		b.ScopeType, _ = parseScope(b.ScopeID)

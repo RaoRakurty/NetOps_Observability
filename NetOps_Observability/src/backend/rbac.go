@@ -42,13 +42,60 @@ func levelName(l int) string {
 	}
 }
 
+// RoleRule is the rule-bundle form of a role's grant (PBAC Phase D, §1.4): a
+// role is a named bundle of rules, not a frozen module→level matrix. Today rules
+// are COMPILED from the Permissions grid so nothing changes; tomorrow custom and
+// tenant-defined roles can be authored directly as validated rule bundles, and
+// the decider can grow resource/action/condition granularity without a breaking
+// interface change. The decider takes rules; a role is just a rule source.
+type RoleRule struct {
+	Effect       string   `json:"effect"`        // allow | deny
+	ResourceType string   `json:"resource_type"` // a Module (product area)
+	Actions      []string `json:"actions"`       // view | write | admin
+}
+
+// actionsForLevel maps a monotonic permission level to the rule actions it grants.
+func actionsForLevel(level int) []string {
+	switch {
+	case level >= LevelAdmin:
+		return []string{"view", "write", "admin"}
+	case level >= LevelWrite:
+		return []string{"view", "write"}
+	case level >= LevelRead:
+		return []string{"view"}
+	default:
+		return nil
+	}
+}
+
+// compileRoleRules derives the rule-bundle view from a module→level grid. Pure;
+// the grid stays authoritative for can()/requirePerm, so this is non-behavioural.
+func compileRoleRules(perms map[string]int) []RoleRule {
+	out := make([]RoleRule, 0, len(Modules))
+	for _, mod := range Modules {
+		if acts := actionsForLevel(perms[mod]); len(acts) > 0 {
+			out = append(out, RoleRule{Effect: EffectAllow, ResourceType: mod, Actions: acts})
+		}
+	}
+	return out
+}
+
 // Role is a named permission grid. Built-in roles are seeded and protected.
 type Role struct {
 	ID          string         `json:"id"`
 	Name        string         `json:"name"`
 	Builtin     bool           `json:"builtin"`
 	Description string         `json:"description"`
-	Permissions map[string]int `json:"permissions"` // module -> level
+	Permissions map[string]int `json:"permissions"` // module -> level (authoritative)
+	// Rules is the compiled rule-bundle view (PBAC Phase D), populated on read.
+	// Forward representation; the grid above stays authoritative.
+	Rules []RoleRule `json:"rules,omitempty"`
+}
+
+// withRules returns a copy of the role with its compiled rule bundle attached.
+func (r Role) withRules() Role {
+	r.Rules = compileRoleRules(r.Permissions)
+	return r
 }
 
 // Built-in role IDs.
@@ -197,7 +244,7 @@ func (s *roleStore) List() []Role {
 	defer s.mu.RUnlock()
 	out := make([]Role, 0, len(s.roles))
 	for _, r := range s.roles {
-		out = append(out, r)
+		out = append(out, r.withRules()) // attach the compiled rule bundle
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Builtin != out[j].Builtin {
@@ -246,6 +293,15 @@ func (s *roleStore) Upsert(r Role) (Role, error) {
 		clean[mod] = r.Permissions[mod] // defaults to 0 (none)
 	}
 	r.Permissions = clean
+	r.Rules = nil // never persist the compiled view; it is derived on read
+	// Sandbox (PBAC Phase D, §7.2): a CUSTOM role can never grant administration
+	// at admin level — platform/identity control (minting roles, tenants, users
+	// platform-wide) is reserved for the built-in super-admin / org-admin. This
+	// keeps custom and (future) tenant-authored roles from being an escalation
+	// path. Operational admin within a scope is still expressible via write.
+	if err := validateCustomRole(r); err != nil {
+		return Role{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.roles[r.ID]; ok && existing.Builtin {
@@ -256,6 +312,16 @@ func (s *roleStore) Upsert(r Role) (Role, error) {
 		return Role{}, err
 	}
 	return r, nil
+}
+
+// validateCustomRole enforces the sandbox for non-built-in roles (§7.2): no
+// administration:admin (the escalation vector). Returns a clear error so the UI
+// can explain the rejection.
+func validateCustomRole(r Role) error {
+	if r.Permissions["administration"] >= LevelAdmin {
+		return errors.New("a custom role cannot grant administration at admin level — that is reserved for built-in administrators")
+	}
+	return nil
 }
 
 func (s *roleStore) Delete(id string) error {
