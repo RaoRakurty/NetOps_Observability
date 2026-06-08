@@ -102,10 +102,12 @@ export function UsersAdmin() {
 
   const all = users ?? [];
   // Tenant scope (super-admin only): narrow the directory to Global or a tenant.
+  // "Global" = the platform namespace: untagged users plus the global tenant
+  // (both resolve to the platform owner), so they aren't split across two options.
   const list = !platform
     ? all
     : scope === SCOPE_GLOBAL
-      ? all.filter((u) => !u.tenant_id)
+      ? all.filter((u) => !u.tenant_id || u.tenant_id === "global")
       : all.filter((u) => u.tenant_id === scope);
   const isAdminRole = (role: string) => role === "super-admin" || role === "admin";
   const stats = {
@@ -175,7 +177,7 @@ export function UsersAdmin() {
             {platform && (
               <select className="inline-select" value={scope} onChange={(e) => { setScope(e.target.value); clearSel(); }} aria-label="Tenant scope" title="Show users for">
                 <option value={SCOPE_GLOBAL}>Global</option>
-                {tenantList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                {tenantList.filter((t) => t.id !== "global").map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             )}
             {selCount > 0 && <span className="mini-meta">{selCount} selected</span>}

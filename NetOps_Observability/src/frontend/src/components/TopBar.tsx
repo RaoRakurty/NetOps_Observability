@@ -46,8 +46,10 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [ranges, setRanges] = useState(() => allRanges());
+  const [tenantOpen, setTenantOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const omniRef = useRef<HTMLFormElement | null>(null);
+  const tenantRef = useRef<HTMLDivElement | null>(null);
 
   // Tenant switcher ("view as tenant"): platform owner only. Lets the SaaS
   // operator scope the WHOLE app to one tenant (or the global/infra namespace).
@@ -71,6 +73,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     const onDoc = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
       if (omniRef.current && !omniRef.current.contains(e.target as Node)) setOpen(false);
+      if (tenantRef.current && !tenantRef.current.contains(e.target as Node)) setTenantOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -182,22 +185,45 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
       </form>
 
       <div className="topbar-right">
-        {platformOwner && (
-          <select
-            className={`tenant-switch${acting ? " scoped" : ""}`}
-            value={acting || "all"}
-            onChange={(e) => onScope(e.target.value)}
-            title={acting ? "Viewing one tenant — switch scope" : "Viewing all tenants — switch scope"}
-            aria-label="Tenant scope"
-          >
-            <option value="all">All tenants</option>
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.id === "global" ? "Global (infra)" : t.name}
-              </option>
-            ))}
-          </select>
-        )}
+        {platformOwner && (() => {
+          const label = !acting ? "All tenants" : acting === "global" ? "Global" : (tenants.find((t) => t.id === acting)?.name ?? acting);
+          const choose = (v: string) => { setTenantOpen(false); onScope(v); };
+          const Item = ({ v, name, sub }: { v: string; name: string; sub?: string }) => {
+            const on = (acting || "all") === v;
+            return (
+              <button type="button" className={`tsw-item${on ? " on" : ""}`} onClick={() => choose(v)}>
+                <Icon name={v === "all" ? "datasets" : v === "global" ? "server" : "infrastructure"} size={14} />
+                <span className="tsw-item-text"><span className="tsw-item-name">{name}</span>{sub && <span className="tsw-item-sub">{sub}</span>}</span>
+                {on && <Icon name="check" size={14} />}
+              </button>
+            );
+          };
+          return (
+            <div className="tenant-switch2" ref={tenantRef}>
+              <button
+                type="button"
+                className={`tsw-btn${acting ? " scoped" : ""}`}
+                onClick={() => setTenantOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={tenantOpen}
+                title="Choose which tenant you're viewing"
+              >
+                <Icon name={acting ? "infrastructure" : "datasets"} size={14} />
+                <span className="tsw-label"><span className="tsw-cap">Viewing</span>{label}</span>
+                <span className="tsw-caret">▾</span>
+              </button>
+              {tenantOpen && (
+                <div className="tsw-pop" role="listbox">
+                  <div className="tsw-group">Scope</div>
+                  <Item v="all" name="All tenants" sub="Everything, merged" />
+                  <Item v="global" name="Global" sub="Platform / infra only" />
+                  {tenants.filter((t) => t.id !== "global").length > 0 && <div className="tsw-group">Tenants</div>}
+                  {tenants.filter((t) => t.id !== "global").map((t) => <Item key={t.id} v={t.id} name={t.name} />)}
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <select
           className="range-picker"
           value={range.minutes}
