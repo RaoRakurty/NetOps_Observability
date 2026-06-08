@@ -164,22 +164,31 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 
 	index := tenantIndexPattern(req.Signal, tenant, cross)
 
-	body := map[string]any{
-		"size": req.Size,
-		"sort": []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
-		"query": map[string]any{
-			"bool": map[string]any{
-				"must": []any{
-					map[string]any{
-						"query_string": map[string]any{
-							"query":            queryOrAll(req.Query),
-							"analyze_wildcard": true,
-						},
-					},
+	boolQuery := map[string]any{
+		"must": []any{
+			map[string]any{
+				"query_string": map[string]any{
+					"query":            queryOrAll(req.Query),
+					"analyze_wildcard": true,
 				},
-				"filter": filters,
 			},
 		},
+		"filter": filters,
+	}
+	// Compliance: enforce per-tenant operator-visibility (Tenant.OperatorRestricted).
+	// A restricted tenant's telemetry is excluded from the operator's Global view,
+	// and the operator is denied if it scoped into one. No-op for a tenant's own
+	// users and when nothing is restricted.
+	if exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+		boolQuery["filter"] = append(filters, map[string]any{"match_none": map[string]any{}})
+	} else if len(exclude) > 0 {
+		boolQuery["must_not"] = []any{map[string]any{"terms": map[string]any{"tenant_id": exclude}}}
+	}
+
+	body := map[string]any{
+		"size":  req.Size,
+		"sort":  []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
+		"query": map[string]any{"bool": boolQuery},
 	}
 
 	resp, err := openSearch("POST", "/"+index+"/_search", body)
@@ -199,8 +208,10 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
 	// Scope the index listing to the caller (#20 Phase 3) so a scoped tenant can't
 	// enumerate other tenants' index names / doc counts.
+	var claims jwtClaims
 	tenant, cross := "", true
-	if claims, ok := userFrom(r.Context()); ok {
+	if c, ok := userFrom(r.Context()); ok {
+		claims = c
 		tenant, cross = principalTenant(claims)
 	}
 	resp, err := openSearch("GET", "/_cat/indices/"+tenantCatPattern(tenant, cross)+"?format=json", nil)
@@ -209,9 +220,49 @@ func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+
+	// Compliance: drop restricted tenants' indices from the operator's listing so
+	// it can't even enumerate their index names / doc counts (zero-knowledge). Only
+	// applies to the operator's cross-tenant view and when something is restricted.
+	if exclude, _ := s.operatorTelemetryRestriction(claims, tenant, cross); len(exclude) > 0 {
+		s.writeFilteredIndices(w, resp, exclude)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// writeFilteredIndices re-emits a _cat/indices JSON array with any index belonging
+// to a restricted tenant removed. An index is netops-{signal}-{tenantseg}-{date};
+// we drop those whose tenant segment matches a restricted tenant. On any parse
+// error it fails CLOSED (empty list) rather than leaking the unfiltered listing.
+func (s *server) writeFilteredIndices(w http.ResponseWriter, resp *http.Response, excludeTenants []string) {
+	w.Header().Set("Content-Type", "application/json")
+	var rows []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		_, _ = w.Write([]byte("[]"))
+		return
+	}
+	segs := make(map[string]bool, len(excludeTenants))
+	for _, t := range excludeTenants {
+		segs["-"+indexTenantSeg(t)+"-"] = true
+	}
+	kept := rows[:0]
+	for _, row := range rows {
+		name, _ := row["index"].(string)
+		restricted := false
+		for seg := range segs {
+			if strings.Contains(name, seg) {
+				restricted = true
+				break
+			}
+		}
+		if !restricted {
+			kept = append(kept, row)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(kept)
 }
 
 // indexBase maps a signal to its OpenSearch index base name (no tenant/date).

@@ -338,16 +338,37 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid tenant id"))
 		return
 	}
-	if r.Method != http.MethodDelete {
-		w.Header().Set("Allow", "DELETE")
+	switch r.Method {
+	case http.MethodPatch:
+		// Update mutable tenant settings. Today: operator-visibility (compliance).
+		var req struct {
+			OperatorRestricted *bool `json:"operator_restricted"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.OperatorRestricted == nil {
+			writeError(w, http.StatusBadRequest, errors.New("no updatable field provided"))
+			return
+		}
+		t, err := s.tenants.SetOperatorRestricted(id, *req.OperatorRestricted)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
+		writeJSON(w, http.StatusOK, t)
+	case http.MethodDelete:
+		if err := s.tenants.Delete(id); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "PATCH, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	if err := s.tenants.Delete(id); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---- api keys --------------------------------------------------------------

@@ -342,6 +342,12 @@ export function TenantsAdmin() {
     setErr(null);
     try { await api.deleteTenant(t.id); reload(); } catch (e) { setErr((e as Error).message); }
   };
+  const toggleOperator = async (t: Tenant) => {
+    setErr(null);
+    const restrict = !t.operator_restricted;
+    if (restrict && !window.confirm(`Restrict operator access to "${t.name}"?\n\nThe platform operator will no longer be able to view this tenant's logs/telemetry (in the Global view or by switching into the tenant). The tenant's own users are unaffected. Use this for data-privacy / compliance.`)) return;
+    try { await api.setTenantOperatorRestricted(t.id, restrict); reload(); } catch (e) { setErr((e as Error).message); }
+  };
 
   const list = tenants ?? [];
   return (
@@ -377,6 +383,7 @@ export function TenantsAdmin() {
               <tr>
                 <th>Tenant</th>
                 <th style={{ width: 130 }}>Type</th>
+                <th style={{ width: 180 }}>Operator access</th>
                 <th>Note</th>
                 <th style={{ width: 140 }}>ID</th>
                 <th style={{ width: 1 }}></th>
@@ -392,6 +399,19 @@ export function TenantsAdmin() {
                       <span className={`badge ${isParent ? "accent" : ""}`}>
                         {isParent ? "Parent Tenant" : "Child Tenant"}
                       </span>
+                    </td>
+                    <td>
+                      {isParent ? (
+                        <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
+                      ) : t.operator_restricted ? (
+                        <button className="dash-btn" onClick={() => toggleOperator(t)} title="Operator is blocked from this tenant's telemetry — click to allow">
+                          🔒 Restricted
+                        </button>
+                      ) : (
+                        <button className="dash-btn" onClick={() => toggleOperator(t)} title="Operator can view this tenant's telemetry — click to restrict (data privacy)">
+                          Visible to operator
+                        </button>
+                      )}
                     </td>
                     <td style={{ color: "var(--muted)" }}>{t.note || "—"}</td>
                     <td className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{t.id}</td>

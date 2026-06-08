@@ -902,6 +902,9 @@ export const api = {
   createTenant: (name: string, note?: string) =>
     request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note }) }),
   deleteTenant: (id: string) => request<void>(`/api/tenants/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // Compliance: toggle whether the platform operator may view this tenant's telemetry.
+  setTenantOperatorRestricted: (id: string, restricted: boolean) =>
+    request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ operator_restricted: restricted }) }),
 
   // Self-describing API + ITSM connector status.
   openapi: () => request<OpenAPISpec>("/api/openapi.json"),
@@ -1105,6 +1108,7 @@ export type Tenant = {
   name: string;
   slug: string;
   note?: string;
+  operator_restricted?: boolean; // compliance: operator may NOT view this tenant's telemetry
   created_at?: string;
 };
 export type ApiKey = {

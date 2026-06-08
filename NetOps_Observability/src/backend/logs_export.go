@@ -55,6 +55,13 @@ type logExportSpec struct {
 	Cross       bool     `json:"cross"`
 	DeviceKeys  []string `json:"device_keys,omitempty"`
 	DeviceAddrs []string `json:"device_addrs,omitempty"`
+
+	// Compliance: operator-visibility restriction, frozen at request time so the
+	// async worker reproduces it. ExcludeTenants are tenant ids whose telemetry is
+	// filtered out of an operator's Global export; DenyAll empties the result when
+	// the operator scoped into a restricted tenant. See operatorTelemetryRestriction.
+	ExcludeTenants []string `json:"exclude_tenants,omitempty"`
+	DenyAll        bool     `json:"deny_all,omitempty"`
 }
 
 // exportColumns is the canonical tabular projection used for csv/xlsx (and for
@@ -109,19 +116,27 @@ func buildExportSearchBody(spec logExportSpec, start, end time.Time, size int, s
 	if f := osTenantFilter(spec.Tenant, spec.Cross, spec.DeviceKeys, spec.DeviceAddrs); f != nil {
 		filters = append(filters, f)
 	}
+	// Compliance: operator-visibility restriction frozen onto the spec (mirrors
+	// handleLogsSearch). DenyAll → empty result; ExcludeTenants → drop their docs.
+	boolQuery := map[string]any{
+		"must": []any{map[string]any{"query_string": map[string]any{
+			"query":            queryOrAll(spec.Query),
+			"analyze_wildcard": true,
+		}}},
+		"filter": filters,
+	}
+	if spec.DenyAll {
+		boolQuery["filter"] = append(filters, map[string]any{"match_none": map[string]any{}})
+	} else if len(spec.ExcludeTenants) > 0 {
+		boolQuery["must_not"] = []any{map[string]any{"terms": map[string]any{"tenant_id": spec.ExcludeTenants}}}
+	}
 	body := map[string]any{
 		"size": size,
 		"sort": []any{
 			map[string]any{"timestamp": map[string]string{"order": "asc", "unmapped_type": "date"}},
 			map[string]any{"_id": "asc"}, // unique tiebreaker for search_after
 		},
-		"query": map[string]any{"bool": map[string]any{
-			"must": []any{map[string]any{"query_string": map[string]any{
-				"query":            queryOrAll(spec.Query),
-				"analyze_wildcard": true,
-			}}},
-			"filter": filters,
-		}},
+		"query": map[string]any{"bool": boolQuery},
 	}
 	if len(searchAfter) > 0 {
 		body["search_after"] = searchAfter
@@ -605,14 +620,18 @@ func exportMaxTimeRange() time.Duration {
 
 // ---- helpers shared with the worker ----------------------------------------
 
-// exportSpecFor builds a spec with the caller's tenant-visibility frozen in.
+// exportSpecFor builds a spec with the caller's tenant-visibility frozen in,
+// including the operator-visibility compliance restriction (so an export can never
+// exfiltrate a restricted tenant's telemetry, even via the async worker later).
 func (s *server) exportSpecFor(claims jwtClaims, query, from, to, signal, format string) logExportSpec {
 	keys, cross := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
 	tenant, _ := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
 	return logExportSpec{
 		Query: query, From: from, To: to, Signal: signal, Format: format,
 		Tenant: tenant, Cross: cross, DeviceKeys: keys, DeviceAddrs: addrs,
+		ExcludeTenants: exclude, DenyAll: deny,
 	}
 }
 

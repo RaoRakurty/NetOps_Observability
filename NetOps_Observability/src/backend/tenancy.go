@@ -87,6 +87,35 @@ func deviceTenant(d models.Device) string {
 	return strings.ToLower(strings.TrimSpace(d.TenantID))
 }
 
+// operatorTelemetryRestriction enforces the per-tenant operator-visibility
+// compliance switch (Tenant.OperatorRestricted) for telemetry reads. Given the
+// principal's effective tenant/cross scope it returns:
+//   - exclude: tenant ids whose telemetry must be filtered OUT of a cross-tenant
+//     (Global) view, or
+//   - deny: true when the operator has scoped INTO a restricted tenant (no access).
+//
+// Only the platform operator is ever restricted — a tenant's OWN users always see
+// their own data, so this is a no-op for them. It is also a no-op when no tenant
+// is marked restricted (the default), so normal deployments are unaffected.
+func (s *server) operatorTelemetryRestriction(c jwtClaims, tenant string, cross bool) (exclude []string, deny bool) {
+	if !isPlatformOwner(c) {
+		return nil, false
+	}
+	restricted := s.tenants.restrictedIDs()
+	if len(restricted) == 0 {
+		return nil, false
+	}
+	if cross {
+		return restricted, false // Global view → hide restricted tenants' telemetry
+	}
+	for _, id := range restricted { // scoped into a tenant → deny if it's restricted
+		if strings.EqualFold(id, tenant) {
+			return nil, true
+		}
+	}
+	return nil, false
+}
+
 // sameTenant reports whether a resource owned by resourceTenant is visible to a
 // principal scoped to `tenant` (cross-tenant principals see everything). Strict:
 // only an exact tenant match — global/unassigned resources are platform-owned.

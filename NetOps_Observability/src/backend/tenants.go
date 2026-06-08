@@ -23,7 +23,14 @@ type Tenant struct {
 	Slug          string        `json:"slug"`
 	Note          string        `json:"note,omitempty"`
 	IsolationMode IsolationMode `json:"isolation_mode,omitempty"` // shared (default) | dedicated_schema|db|cluster
-	CreatedAt     time.Time     `json:"created_at"`
+	// OperatorRestricted is the data-privacy / compliance switch: when true, the
+	// platform operator (cross-tenant super-admin) may NOT view this tenant's
+	// telemetry — its logs/syslog/flows/traps are excluded from the operator's
+	// Global view and the operator is denied if it scopes into the tenant. The
+	// tenant's OWN users are unaffected (they always see their own data). Default
+	// false (zero value) = operator-visible, preserving existing behavior.
+	OperatorRestricted bool      `json:"operator_restricted,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type tenantStore struct {
@@ -43,7 +50,7 @@ func newTenantStore(path string) (*tenantStore, error) {
 	if _, ok := s.tenants[TenantGlobal]; !ok {
 		s.tenants[TenantGlobal] = Tenant{
 			ID: TenantGlobal, Name: "Global", Slug: TenantGlobal,
-			Note: "Root tenant — owns shared infrastructure & defaults.",
+			Note:          "Root tenant — owns shared infrastructure & defaults.",
 			IsolationMode: IsolationShared, CreatedAt: time.Now().UTC(),
 		}
 		if err := s.flushLocked(); err != nil {
@@ -102,6 +109,42 @@ func (s *tenantStore) Get(id string) (Tenant, bool) {
 	defer s.mu.RUnlock()
 	t, ok := s.tenants[id]
 	return t, ok
+}
+
+// restrictedIDs returns the (lower-cased) ids of tenants the platform operator may
+// NOT view (OperatorRestricted). Used to exclude their telemetry from the
+// operator's cross-tenant view. Empty when no tenant is restricted (the default).
+func (s *tenantStore) restrictedIDs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []string
+	for id, t := range s.tenants {
+		if t.OperatorRestricted {
+			out = append(out, strings.ToLower(id))
+		}
+	}
+	return out
+}
+
+// SetOperatorRestricted toggles a tenant's operator-visibility (compliance). The
+// global tenant can never be restricted (it IS the platform/operator namespace).
+func (s *tenantStore) SetOperatorRestricted(id string, restricted bool) (Tenant, error) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if id == TenantGlobal {
+		return Tenant{}, errors.New("the global tenant cannot be operator-restricted")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tenants[id]
+	if !ok {
+		return Tenant{}, errors.New("tenant not found")
+	}
+	t.OperatorRestricted = restricted
+	s.tenants[id] = t
+	if err := s.flushLocked(); err != nil {
+		return Tenant{}, err
+	}
+	return t, nil
 }
 
 func (s *tenantStore) Create(name, note, isolationMode string) (Tenant, error) {
