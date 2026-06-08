@@ -307,11 +307,18 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 			setOSDCookie(w, r, tok, accessTokenTTL())
 		}
 	}
+	// Accessible scopes (PBAC Phase B): the tenants the principal may act in and
+	// the orgs it administers — feeds the L1 top-bar Org|Region|Tenant selector.
+	// all_tenants=true ⇒ platform owner (reaches every tenant).
+	tenants, allTenants := s.accessibleTenants(claims.Sub)
 	writeJSON(w, http.StatusOK, struct {
 		publicUser
-		PlatformAdmin bool   `json:"platform_admin"`
-		OrgID         string `json:"org_id"`
-	}{toPublic(user), owner, s.principalOrg(claims)})
+		PlatformAdmin    bool     `json:"platform_admin"`
+		OrgID            string   `json:"org_id"`
+		AccessibleTenants []string `json:"accessible_tenants"`
+		AllTenants       bool     `json:"all_tenants"`
+		OrgAdminOf       []string `json:"org_admin_of"`
+	}{toPublic(user), owner, s.principalOrg(claims), tenants, allTenants, s.orgAdminOrgs(claims.Sub)})
 }
 
 // isLocalAccount reports whether an account's password is managed locally (so it

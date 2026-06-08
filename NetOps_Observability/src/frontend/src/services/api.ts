@@ -486,6 +486,11 @@ export type AuthUser = {
   // org_id = the organization the caller belongs to (its tenant's org; Global
   // for the platform owner).
   org_id?: string;
+  // PBAC: the scopes the principal may act in — feeds the top-bar scope selector.
+  // all_tenants=true ⇒ platform owner (reaches every tenant).
+  accessible_tenants?: string[];
+  all_tenants?: boolean;
+  org_admin_of?: string[];
   // auth_source = how the account authenticates: local | oidc | saml | ldap |
   // tacacs. Only local accounts can change their password in-app (federated
   // passwords live at the IdP). Empty/undefined = legacy local account.
@@ -927,6 +932,14 @@ export const api = {
   deleteOrg: (id: string) =>
     request<void>(`/api/orgs/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
+  // ---------- Role bindings (PBAC: principal → role → scope) ----------
+  listBindings: (principal?: string) =>
+    request<RoleBinding[]>(`/api/bindings${principal ? `?principal=${encodeURIComponent(principal)}` : ""}`),
+  grantBinding: (b: { principal_id: string; role_id: string; scope_id: string; effect?: string; expires_at?: string; reason?: string }) =>
+    request<RoleBinding>("/api/bindings", { method: "POST", body: JSON.stringify(b) }),
+  revokeBinding: (id: string) =>
+    request<void>(`/api/bindings/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   // Self-describing API + ITSM connector status.
   openapi: () => request<OpenAPISpec>("/api/openapi.json"),
   itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),
@@ -1144,6 +1157,18 @@ export type Org = {
   created_at?: string;
 };
 export type Region = { id: string; label: string };
+export type RoleBinding = {
+  id: string;
+  principal_id: string;
+  role_id: string;
+  scope_type: string;
+  scope_id: string;
+  effect: string; // allow | deny
+  expires_at?: string;
+  granted_by?: string;
+  reason?: string;
+  granted_at?: string;
+};
 export type ApiKey = {
   id: string;
   tenant_id: string;

@@ -54,11 +54,20 @@ type Role struct {
 // Built-in role IDs.
 const (
 	RoleSuperAdmin = "super-admin"
+	RoleOrgAdmin   = "org-admin" // admin WITHIN one org (bound at org scope; PBAC Phase B)
 	RoleOperator   = "operator"
 	RoleReadOnly   = "read-only"
 	RoleAuditor    = "auditor"    // compliance: read everything incl. the audit trail, change nothing
 	RoleAPIClient  = "api-client" // least-privilege machine identity for programmatic access
 )
+
+// isOrgManagerRole reports whether a role, when bound at an org scope, lets the
+// principal manage that org's tenants/users (an org administrator). The platform
+// super-admin also qualifies. Used by access.go reachability.
+func isOrgManagerRole(role string) bool {
+	r := strings.ToLower(strings.TrimSpace(role))
+	return r == RoleOrgAdmin || isSuperAdminRole(role)
+}
 
 // isSuperAdminRole maps both the new role id and the legacy "admin" value onto
 // super-admin, so pre-existing users.json accounts keep full access.
@@ -103,9 +112,16 @@ func builtinRoles() []Role {
 	apiClient := all(LevelRead)
 	apiClient["reports"] = LevelNone
 	apiClient["administration"] = LevelNone
+	// Org admin: full administration, but only ever bound at an org scope — its
+	// reach is the tenants inside that org (access.go), never platform plumbing
+	// (Authorize blocks ResInfraStack for any non-platform-owner). Same grid as
+	// super-admin; the SCOPE is the limiter.
+	orgAdmin := all(LevelAdmin)
 	return []Role{
 		{ID: RoleSuperAdmin, Name: "Super Admin", Builtin: true,
 			Description: "Full control across all tenants, including identity.", Permissions: all(LevelAdmin)},
+		{ID: RoleOrgAdmin, Name: "Org Admin", Builtin: true,
+			Description: "Administers the tenants and people within a single organization.", Permissions: orgAdmin},
 		{ID: RoleOperator, Name: "Operator", Builtin: true,
 			Description: "Acknowledge/silence alerts, run discovery, manage devices.", Permissions: operator},
 		{ID: RoleReadOnly, Name: "Read-only", Builtin: true,

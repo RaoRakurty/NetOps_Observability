@@ -54,6 +54,10 @@ func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
 		}
 		return TenantGlobal, true
 	}
+	// A non-owner is confined to its token tenant. Defense-in-depth: actingTenant is
+	// NEVER trusted here for a non-owner — a multi-tenant switch is applied by
+	// withActingTenant rewriting the effective Tenant (after a reachesTenant check),
+	// so this function ignoring actingTenant for non-owners stays a hard invariant.
 	return strings.ToLower(strings.TrimSpace(c.Tenant)), false
 }
 
@@ -77,25 +81,37 @@ func (s *server) principalOrg(c jwtClaims) string {
 // actingAll is the switcher sentinel for the default Global (cross-tenant) view.
 const actingAll = "all"
 
-// withActingTenant applies an optional platform-owner "view as tenant" override
-// from the request (X-Acting-Tenant header, or ?as_tenant= query param) onto the
-// claims. Zero trust: honored ONLY for the platform owner and ONLY when it names a
-// real, NON-global tenant. Everything else — a non-owner caller, an unknown
-// tenant, the "all"/"global" sentinels (which mean the default Global view), or no
-// header — leaves the claims untouched, so the override can only ever NARROW from
-// the cross-tenant Global view, never widen. The result feeds principalTenant.
+// withActingTenant applies an optional "view as tenant" override from the request
+// (X-Acting-Tenant header, or ?as_tenant= query param) onto the claims. Zero
+// trust: the override can only ever NARROW, never widen —
+//   - the platform owner may select any real, non-global tenant (its default view
+//     is cross-tenant Global; selecting narrows to that tenant);
+//   - PBAC Phase B: a NON-owner principal may select any tenant it REACHES via its
+//     bindings (reachesTenant) — the multi-tenant/MSP/SRE switcher. A single-tenant
+//     user only reaches its own tenant, so this is behaviour-preserving for them.
+// "", "all", "global" mean the default view (no narrowing). An unknown/unreachable
+// target is ignored. The result feeds principalTenant.
 func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
 	v := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Acting-Tenant")))
 	if v == "" {
 		v = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("as_tenant")))
 	}
-	// "", "all", "global" => Global (cross-tenant) view, i.e. no narrowing. The
-	// global tenant is the platform/cross identity, never a narrowing target.
-	if v == "" || v == actingAll || v == TenantGlobal || !isPlatformOwner(c) {
+	if v == "" || v == actingAll || v == TenantGlobal {
 		return c
 	}
-	if _, ok := s.tenants.Get(v); ok {
-		c.actingTenant = v
+	if isPlatformOwner(c) {
+		if _, ok := s.tenants.Get(v); ok {
+			c.actingTenant = v
+		}
+		return c
+	}
+	// Non-owner: honor the selection only if the principal is actually bound to a
+	// scope that reaches this tenant (and the tenant exists). We rewrite the
+	// EFFECTIVE tenant (not actingTenant) so principalTenant — which ignores
+	// actingTenant for non-owners as a hard invariant — resolves to the target.
+	// A single-tenant user only reaches its own tenant, so this is a no-op for them.
+	if _, ok := s.tenants.Get(v); ok && s.reachesTenant(c.Sub, v) {
+		c.Tenant = v
 	}
 	return c
 }

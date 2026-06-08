@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, Org, Region, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
+import { api, AdminUser, Role, Tenant, Org, Region, RoleBinding, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
@@ -712,13 +712,125 @@ function OrgEditModal({ org, regions, onClose, onSaved }: { org: Org; regions: R
 // ("" = Global, a tenant id = that tenant). Per-tenant ROLE definitions and the MFA
 // feature are backend follow-ups; surfaced here as a note / "coming soon".
 
-type IATab = "users" | "roles" | "policy" | "mfa";
+type IATab = "users" | "roles" | "access" | "policy" | "mfa";
 const IA_TABS: { id: IATab; label: string }[] = [
   { id: "users", label: "Users" },
   { id: "roles", label: "Roles" },
+  { id: "access", label: "Access" },
   { id: "policy", label: "Security Policy" },
   { id: "mfa", label: "MFA" },
 ];
+
+// BindingsAdmin — the Access screen (L2 governance, /admin/bindings): a
+// principal's role bindings (principal → role → scope). Grant a user access to a
+// tenant or org, deny, or revoke. The server enforces no-escalation (an org-admin
+// can only grant within its org, never super-admin / platform).
+function BindingsAdmin({ scopeTenant }: { scopeTenant?: string }) {
+  const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
+  const [roles] = useReload(() => api.listRoles());
+  const [tenants] = useReload(() => api.listTenants());
+  const [orgs] = useReload(() => api.listOrgs());
+  const [principal, setPrincipal] = useState("");
+  const [roleId, setRoleId] = useState("operator");
+  const [scopeId, setScopeId] = useState(scopeTenant ? `tenant:${scopeTenant}` : "");
+  const [effect, setEffect] = useState("allow");
+
+  // Build the scope options: every tenant and org the admin can see.
+  const scopeOptions: { id: string; label: string }[] = [
+    ...(orgs ?? []).map((o) => ({ id: `org:${o.id}`, label: `Organization · ${o.name}` })),
+    ...(tenants ?? []).map((t) => ({ id: `tenant:${t.id}`, label: `Tenant · ${t.name}` })),
+  ];
+
+  const grant = async () => {
+    if (!principal.trim() || !scopeId) return;
+    setErr(null);
+    try {
+      await api.grantBinding({ principal_id: principal.trim(), role_id: roleId, scope_id: scopeId, effect });
+      setPrincipal(""); reload();
+    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+  };
+  const revoke = async (b: RoleBinding) => {
+    if (!window.confirm(`Revoke ${b.role_id} on ${b.scope_id} for ${b.principal_id}?`)) return;
+    setErr(null);
+    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+  };
+
+  const list = bindings ?? [];
+  const scopeLabel = (id: string) => scopeOptions.find((o) => o.id === id)?.label || id;
+  return (
+    <>
+      <AdminHead title="Access" sub="Who can do what, where. Grant a person access to a tenant or organization, then pick their role. Access can be time-boxed and revoked any time." />
+      <StatStrip>
+        <Stat label="Bindings" value={bindings ? list.length : <Skeleton w={26} h={22} />} />
+        <Stat label="People with access" value={bindings ? new Set(list.map((b) => b.principal_id)).size : "—"} tone="accent" />
+      </StatStrip>
+      <div className="card">
+        <div className="admin-card-head"><h2>Grant access</h2></div>
+        <ErrLine msg={err} />
+        <div className="admin-form">
+          <label className="req-field">
+            <span>Person <Req /></span>
+            <input placeholder="username" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
+          </label>
+          <label>
+            <span>Role</span>
+            <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+              {(roles?.roles ?? []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Scope</span>
+            <select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+              <option value="">Select…</option>
+              {scopeOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Effect</span>
+            <select value={effect} onChange={(e) => setEffect(e.target.value)}>
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+            </select>
+          </label>
+          <button className="dash-btn accent" disabled={!principal.trim() || !scopeId} onClick={grant}>Grant</button>
+        </div>
+        <RequiredLegend />
+      </div>
+      <div className="card" style={{ paddingTop: 8 }}>
+        {list.length === 0 ? (
+          <div className="empty">No access bindings yet.</div>
+        ) : (
+          <table className="ds-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th style={{ width: 130 }}>Role</th>
+                <th>Scope</th>
+                <th style={{ width: 90 }}>Effect</th>
+                <th>Granted by</th>
+                <th style={{ width: 1 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((b) => (
+                <tr key={b.id}>
+                  <td style={{ fontWeight: 600 }}>{b.principal_id}</td>
+                  <td><span className="badge">{b.role_id}</span></td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{scopeLabel(b.scope_id)}</td>
+                  <td>{b.effect === "deny" ? <span className="badge" style={{ color: "var(--bad)" }}>Deny</span> : <span className="badge accent">Allow</span>}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{b.granted_by || "—"}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button className="dash-btn" onClick={() => revoke(b)}>Revoke</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
 
 // MfaPanel — two-factor management. Enrollment is per account (your own 2FA);
 // admins reset a user's device from the Users tab.
@@ -748,6 +860,7 @@ function IAItems({ scopeTenant }: { scopeTenant: string }) {
       </div>
       {tab === "users" && <UsersAdmin scopeTenant={scopeTenant} />}
       {tab === "roles" && <RolesAdmin scopeTenant={scopeTenant || undefined} />}
+      {tab === "access" && <BindingsAdmin scopeTenant={scopeTenant} />}
       {tab === "policy" && <SecurityPolicy scopeTenant={scopeTenant} />}
       {tab === "mfa" && <MfaPanel />}
     </>
