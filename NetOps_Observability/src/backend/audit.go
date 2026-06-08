@@ -213,7 +213,46 @@ func auditClientIP(r *http.Request) string {
 	return host
 }
 
-// handleAudit serves the audit trail, scoped to the caller's tenant. Admin-gated.
+// auditScopedList returns the audit trail visible to the caller (PBAC Phase E,
+// scoped audit visibility):
+//   - platform owner → every event (cross);
+//   - org-admin → events for ALL tenants in the org(s) it administers (queried
+//     per-tenant and merged, so each read stays under its tenant's RLS — no
+//     bypass, works for the file and Postgres backends alike);
+//   - tenant admin → only its own tenant's events.
+// Break-glass sessions are recorded like any other mutation, so they surface here.
+func (s *server) auditScopedList(claims jwtClaims, q auditQuery) []AuditEvent {
+	tenant, cross := principalTenant(claims)
+	if cross {
+		return s.audit.List(tenant, true, q)
+	}
+	// Org-admin: union of the tenants in the orgs it administers, plus its own.
+	if orgs := s.orgAdminOrgs(claims.Sub); len(orgs) > 0 {
+		seen := map[string]bool{}
+		var merged []AuditEvent
+		add := func(tid string) {
+			if tid == "" || seen[tid] {
+				return
+			}
+			seen[tid] = true
+			merged = append(merged, s.audit.List(tid, false, q)...)
+		}
+		for _, org := range orgs {
+			for _, t := range s.tenants.ListByOrg(org) {
+				add(t.ID)
+			}
+		}
+		add(tenant) // its own tenant, in case it's outside the administered orgs
+		sort.Slice(merged, func(i, j int) bool { return merged[i].Time.After(merged[j].Time) })
+		if limit := clampAuditLimit(q.Limit); len(merged) > limit {
+			merged = merged[:limit]
+		}
+		return merged
+	}
+	return s.audit.List(tenant, false, q)
+}
+
+// handleAudit serves the audit trail, scoped to the caller (Phase E). Admin-gated.
 func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -224,7 +263,6 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tenant, cross := principalTenant(claims)
 	q := auditQuery{Limit: auditDefaultLimit}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -243,5 +281,5 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			q.Since = t
 		}
 	}
-	writeJSON(w, http.StatusOK, s.audit.List(tenant, cross, q))
+	writeJSON(w, http.StatusOK, s.auditScopedList(claims, q))
 }
