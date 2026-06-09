@@ -244,6 +244,35 @@ func (s *sessionStore) RevokeAllForUser(userID string) int {
 	return n
 }
 
+// Get returns a session by id.
+func (s *sessionStore) Get(id string) (Session, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.byID[id]
+	return x, ok
+}
+
+// IsActive reports whether a session is currently active — the cheap per-request
+// check withAuth uses for instant revocation (admin kill / logout / pw-change).
+func (s *sessionStore) IsActive(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.byID[id]
+	return ok && x.Status == sessionActive
+}
+
+// List returns all sessions, most-recently-active first (admin/device UI).
+func (s *sessionStore) List() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Session, 0, len(s.byID))
+	for _, x := range s.byID {
+		out = append(out, x)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastActivityAt.After(out[j].LastActivityAt) })
+	return out
+}
+
 // ListForUser returns a user's sessions, newest first (for the admin/device UI).
 func (s *sessionStore) ListForUser(userID string) []Session {
 	s.mu.Lock()

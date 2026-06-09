@@ -555,6 +555,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Identity & access (admin-gated): users, roles, tenants, API keys.
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/", s.handleUserByID)
+	mux.HandleFunc("/api/sessions", s.handleSessions)     // admin: list live sessions
+	mux.HandleFunc("/api/sessions/", s.handleSessionByID) // admin: revoke a session
 	mux.HandleFunc("/api/roles", s.handleRoles)
 	mux.HandleFunc("/api/roles/", s.handleRoleByID)
 	mux.HandleFunc("/api/tenants", s.handleTenants)

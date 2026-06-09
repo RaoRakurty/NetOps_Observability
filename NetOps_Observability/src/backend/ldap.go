@@ -319,28 +319,8 @@ func (s *server) handleLDAPLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
 		return
 	}
-	ttl := accessTokenTTL()
-	tok, err := signJWT(jwtClaims{
-		Sub:    user.Username,
-		Role:   user.Role,
-		Tenant: user.TenantID,
-		Iat:    time.Now().Unix(),
-		Exp:    time.Now().Add(ttl).Unix(),
-	}, jwtSecret())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	refresh, err := s.refresh.Issue(user.Username)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.users.TouchLogin(user.Username)
 	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "ldap"})
-	writeJSON(w, http.StatusOK, loginResponse{
-		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
-	})
+	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
 }
 
 func first(ss []string) string {

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // oidc.go — Single Sign-On via Keycloak (broker-and-reissue model).
@@ -317,16 +316,9 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ttl := accessTokenTTL()
-	access, err := signJWT(jwtClaims{
-		Sub: user.Username, Role: user.Role, Tenant: user.TenantID,
-		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
-	}, jwtSecret())
-	if err != nil {
-		s.ssoFail(w, r, err.Error())
-		return
-	}
-	refresh, err := s.refresh.Issue(user.Username)
+	// Open a server-side session (same lifecycle as every other login path) and
+	// hand the SPA a fresh access token (with sid) + refresh token.
+	access, refresh, err := s.mintSession(r, user)
 	if err != nil {
 		s.ssoFail(w, r, err.Error())
 		return

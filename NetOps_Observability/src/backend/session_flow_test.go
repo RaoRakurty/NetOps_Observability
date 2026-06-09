@@ -116,6 +116,40 @@ func TestSessionMaxConcurrent(t *testing.T) {
 	}
 }
 
+// Admin can list live sessions and revoke one — and the revocation is INSTANT
+// (the victim's existing access token is rejected on its next request).
+func TestSessionAdminListAndRevoke(t *testing.T) {
+	srv, _ := newTestServerState(t)
+	admin := login(t, srv, "admin", "password123")
+	if st, _ := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
+		"username": "victim2", "password": "victim2-pass-1", "role": "read-only"}); st != 201 {
+		t.Fatal("create user")
+	}
+	victim := login(t, srv, "victim2", "victim2-pass-1")
+	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 200 {
+		t.Fatal("victim token should work before revoke")
+	}
+	// Admin lists the victim's sessions.
+	st, b := do(t, srv, "GET", "/api/sessions?user=victim2", admin.Token, nil)
+	if st != 200 {
+		t.Fatalf("list sessions: %d", st)
+	}
+	var list []map[string]any
+	json.Unmarshal(b, &list)
+	if len(list) == 0 {
+		t.Fatal("expected a session for victim2")
+	}
+	sid, _ := list[0]["id"].(string)
+	// Admin revokes it.
+	if st, _ := do(t, srv, "DELETE", "/api/sessions/"+sid, admin.Token, nil); st != 204 {
+		t.Fatalf("revoke session: %d", st)
+	}
+	// Victim's existing access token is now instantly rejected.
+	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 401 {
+		t.Errorf("revoked session token: status %d, want 401 (instant)", st)
+	}
+}
+
 func countActive(s *server, user string) int {
 	n := 0
 	for _, x := range s.sessions.ListForUser(user) {

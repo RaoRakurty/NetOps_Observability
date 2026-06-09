@@ -29,6 +29,7 @@ import {
   IdentityAccess,
   RegionsAdmin,
   BindingsAdmin,
+  SessionsAdmin,
   AuthenticationAdmin,
   ApiAccessAdmin,
   IntegrationsAdmin,
@@ -196,6 +197,7 @@ export const NAV: NavSection[] = [
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
       { id: "access", label: "Access", render: () => <BindingsAdmin /> },
+      { id: "sessions", label: "Sessions", platformOnly: true, render: () => <SessionsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,

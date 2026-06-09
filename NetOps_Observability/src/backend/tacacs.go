@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/md5"  // #nosec G501 -- RFC 8907 §4.5: TACACS+ body obfuscation is MD5-based; protocol-mandated
+	"crypto/md5" // #nosec G501 -- RFC 8907 §4.5: TACACS+ body obfuscation is MD5-based; protocol-mandated
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
@@ -42,8 +42,8 @@ import (
 
 // TACACS+ packet constants (RFC 8907 §4).
 const (
-	tacVersionMajor = 0xc        // major version 12 (0xc)
-	tacVersionMinor = 0x0        // minor 0 = ASCII/PAP/CHAP authentication
+	tacVersionMajor = 0xc // major version 12 (0xc)
+	tacVersionMinor = 0x0 // minor 0 = ASCII/PAP/CHAP authentication
 	tacVersion      = (tacVersionMajor << 4) | tacVersionMinor
 
 	tacTypeAuthen = 0x01 // packet type: authentication
@@ -106,7 +106,7 @@ func tacacsPad(secret string, sessionID uint32, version, seqNo byte, bodyLen int
 	var sid [4]byte
 	binary.BigEndian.PutUint32(sid[:], sessionID)
 	seed := func(prev []byte) []byte {
-		h := md5.New()  // #nosec G401 -- RFC 8907 §4.5 MD5 obfuscation pad; protocol-mandated
+		h := md5.New() // #nosec G401 -- RFC 8907 §4.5 MD5 obfuscation pad; protocol-mandated
 		h.Write(sid[:])
 		h.Write([]byte(secret))
 		h.Write([]byte{version})
@@ -148,7 +148,7 @@ func tacacsHeaderVer(version, pktType, seqNo, flags byte, sessionID uint32, body
 	h[2] = seqNo
 	h[3] = flags
 	binary.BigEndian.PutUint32(h[4:8], sessionID)
-	binary.BigEndian.PutUint32(h[8:12], uint32(bodyLen))  // #nosec G115 -- TACACS+ body length is a 32-bit wire field
+	binary.BigEndian.PutUint32(h[8:12], uint32(bodyLen)) // #nosec G115 -- TACACS+ body length is a 32-bit wire field
 	return h
 }
 
@@ -184,7 +184,7 @@ func tacacsSessionID() uint32 {
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand failing is fatal-grade; fall back to a time-derived id so
 		// we never emit a fixed/zero session id (which would weaken the pad).
-		return uint32(time.Now().UnixNano())  // #nosec G115 -- session_id is a 32-bit field; low-bits truncation is intentional
+		return uint32(time.Now().UnixNano()) // #nosec G115 -- session_id is a 32-bit field; low-bits truncation is intentional
 	}
 	return binary.BigEndian.Uint32(b[:])
 }
@@ -327,26 +327,6 @@ func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
 		return
 	}
-	ttl := accessTokenTTL()
-	tok, err := signJWT(jwtClaims{
-		Sub:    user.Username,
-		Role:   user.Role,
-		Tenant: user.TenantID,
-		Iat:    time.Now().Unix(),
-		Exp:    time.Now().Add(ttl).Unix(),
-	}, jwtSecret())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	refresh, err := s.refresh.Issue(user.Username)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.users.TouchLogin(user.Username)
 	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "tacacs"})
-	writeJSON(w, http.StatusOK, loginResponse{
-		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
-	})
+	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
 }

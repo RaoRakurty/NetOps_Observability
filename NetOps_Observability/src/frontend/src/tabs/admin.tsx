@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
+import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
@@ -1382,6 +1382,76 @@ export function IdentityAccess() {
           <OrgsAdmin onManageOrg={(id, name) => setSel({ id, name })} />
         )
       )}
+    </>
+  );
+}
+
+// ---- Sessions (admin: live session listing + revocation) -------------------
+
+export function SessionsAdmin() {
+  const [sessions, err, reload, setErr] = useReload(() => api.listSessions());
+  const [q, setQ] = useState("");
+  const list = sessions ?? [];
+  const active = list.filter((s) => s.status === "active");
+  const ql = q.trim().toLowerCase();
+  const shown = ql
+    ? list.filter((s) => [s.user_id, s.display_name, s.issued_ip, s.tenant_id].some((f) => (f ?? "").toLowerCase().includes(ql)))
+    : list;
+  const revoke = async (s: AdminSession) => {
+    if (!window.confirm(`Revoke this session for ${s.display_name || s.user_id}?\n\nThey'll be signed out immediately.`)) return;
+    setErr(null);
+    try { await api.revokeSession(s.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+  };
+  const fmt = (t?: string) => (t ? new Date(t).toLocaleString() : "—");
+  const statusBadge = (st: string) => {
+    const tone = st === "active" ? "good" : st === "revoked" ? "warn" : "";
+    const label = st === "expired_idle" ? "idle-out" : st === "expired_absolute" ? "expired" : st;
+    return <span className={`badge ${tone}`}>{label}</span>;
+  };
+  return (
+    <>
+      <div className="admin-head-row">
+        <AdminHead title="Sessions" sub="Live sign-in sessions. Revoke one to sign that person out immediately. Idle and maximum-lifetime limits apply automatically per the scope's Security Settings." />
+        <button className="dash-btn" onClick={reload}>↻ Refresh</button>
+      </div>
+      <StatStrip>
+        <Stat label="Active" value={sessions ? active.length : <Skeleton w={26} h={22} />} tone="accent" />
+        <Stat label="Total" value={sessions ? list.length : "—"} />
+        <Stat label="People" value={sessions ? new Set(active.map((s) => s.user_id)).size : "—"} />
+      </StatStrip>
+      <ErrLine msg={err} />
+      <div className="card" style={{ paddingTop: 8 }}>
+        <div className="ds-toolbar">
+          <input className="ds-search" placeholder="Search sessions…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search sessions" />
+          <span className="mini-meta">{shown.length} of {list.length}</span>
+        </div>
+        {sessions && shown.length === 0 ? (
+          <div className="empty">No sessions.</div>
+        ) : (
+          <table className="ds-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Person</th><th>Tenant</th><th>IP</th><th>Status</th>
+                <th>Started</th><th>Last activity</th><th style={{ width: 70 }}>Idle</th><th style={{ width: 1 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ fontWeight: 600 }}>{s.display_name || s.user_id}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{s.tenant_id || "—"}</td>
+                  <td className="mono">{s.issued_ip || "—"}</td>
+                  <td>{statusBadge(s.status)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{fmt(s.created_at)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{fmt(s.last_activity_at)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{s.idle_timeout_sec ? `${Math.round(s.idle_timeout_sec / 60)}m` : "off"}</td>
+                  <td style={{ textAlign: "right" }}>{s.status === "active" && <button className="dash-btn" onClick={() => revoke(s)}>Revoke</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </>
   );
 }

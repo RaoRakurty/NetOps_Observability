@@ -239,14 +239,12 @@ func (s *server) recordSessionEvent(r *http.Request, event, userID, sessionID, t
 	}
 }
 
-// issueSession opens a server-side session, mints the access (carrying sid) +
-// refresh (bound to the session) tokens, refreshes the console gate cookie, and
-// returns the standard login response. Shared by password login and MFA-challenge
-// completion (handleMFALogin).
-func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
+// mintSession opens a server-side session for user (snapshotting the scope's
+// idle/absolute policy) and returns a fresh access token carrying its sid plus a
+// refresh token bound to it. Shared by EVERY login path — password, MFA, LDAP,
+// TACACS and SSO — so all sessions get lifecycle enforcement + observability.
+func (s *server) mintSession(r *http.Request, user User) (token, refresh string, err error) {
 	ttl := accessTokenTTL()
-	// Open the lifecycle session first (source of truth), snapshotting the scope's
-	// idle/absolute policy onto it.
 	var sid string
 	if s.sessions != nil {
 		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID)
@@ -256,10 +254,9 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User)
 		if !enforceAbsolute {
 			absolute = 0
 		}
-		sess, evicted, err := s.sessions.Create(user.Username, clientIP(r).String(), r.UserAgent(), idle, absolute)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+		sess, evicted, e := s.sessions.Create(user.Username, clientIP(r).String(), r.UserAgent(), idle, absolute)
+		if e != nil {
+			return "", "", e
 		}
 		sid = sess.ID
 		s.recordSessionEvent(r, "SESSION_CREATED", user.Username, sid, user.TenantID, map[string]any{
@@ -269,19 +266,26 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User)
 			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, ev, user.TenantID, map[string]any{"reason": "max_sessions"})
 		}
 	}
-	tok, err := signJWT(jwtClaims{
-		Sub:    user.Username,
-		Role:   user.Role,
-		Tenant: user.TenantID,
-		Sid:    sid,
-		Iat:    time.Now().Unix(),
-		Exp:    time.Now().Add(ttl).Unix(),
+	token, err = signJWT(jwtClaims{
+		Sub: user.Username, Role: user.Role, Tenant: user.TenantID, Sid: sid,
+		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return "", "", err
 	}
-	refresh, err := s.refresh.IssueForSession(user.Username, sid)
+	refresh, err = s.refresh.IssueForSession(user.Username, sid)
+	if err != nil {
+		return "", "", err
+	}
+	return token, refresh, nil
+}
+
+// issueSession mints a session and returns the standard JSON login response
+// (also refreshing the console gate cookie). Shared by password login and
+// MFA-challenge completion (handleMFALogin).
+func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
+	ttl := accessTokenTTL()
+	tok, refresh, err := s.mintSession(r, user)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -685,6 +689,15 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			// return early above and never reach here.
 			if u, ok := s.users.Get(claims.Sub); !ok || u.Status == "disabled" {
 				writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
+				return
+			}
+			// Instant session revocation: if the token carries a session id, the
+			// session must still be active. Catches logout, admin kill, password-change
+			// and max-session eviction immediately (idle/absolute still flip at the
+			// refresh boundary). Cheap in-memory check; tokens without a sid (legacy)
+			// skip it.
+			if claims.Sid != "" && s.sessions != nil && !s.sessions.IsActive(claims.Sid) {
+				writeJSONError(w, http.StatusUnauthorized, "session ended", "SESSION_REVOKED")
 				return
 			}
 			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))

@@ -1003,6 +1003,12 @@ export const api = {
   saveSecuritySettings: (scope: string, s: SecuritySettings) =>
     request<SecuritySettings>(`/api/security-settings?scope=${encodeURIComponent(scope)}`, { method: "PUT", body: JSON.stringify(s) }),
 
+  // ---------- Sessions (admin: live session listing + revocation) ----------
+  listSessions: (user?: string) =>
+    request<AdminSession[]>(`/api/sessions${user ? `?user=${encodeURIComponent(user)}` : ""}`),
+  revokeSession: (id: string) =>
+    request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   // ---------- Access Explorer (L3: "what can X access, and why?") ----------
   explainAccess: (principal?: string) =>
     request<AccessExplanation>(`/api/access/explain${principal ? `?principal=${encodeURIComponent(principal)}` : ""}`),
@@ -1249,6 +1255,12 @@ export type SecuritySettings = {
   // standard default. enforce_* gate each at /api/auth/refresh.
   idle_timeout_minutes: number; absolute_timeout_minutes: number;
   enforce_idle_timeout: boolean; enforce_absolute_timeout: boolean;
+};
+export type AdminSession = {
+  id: string; user_id: string; display_name?: string; tenant_id?: string;
+  created_at: string; last_activity_at: string; last_refresh_at: string;
+  issued_ip?: string; user_agent_hash?: string; status: string;
+  idle_timeout_sec: number; absolute_timeout_sec: number;
 };
 export type GrantReason = { role_id: string; scope_id: string; effect: string; granted_by?: string; reason?: string; break_glass?: boolean; expires_at?: string };
 export type TenantReach = { tenant_id: string; tenant_name: string; org_id: string; org_name: string; granted_by: GrantReason[] };
