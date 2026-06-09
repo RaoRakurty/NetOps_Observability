@@ -682,14 +682,24 @@ export function OrgsAdmin() {
               <input autoFocus placeholder="e.g. Acme Corp" value={name} onChange={(e) => setName(e.target.value)} />
             </label>
             <label className="req-field">
-              <span>Region <Req /></span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                Region <Req />
+                <InfoTip label="The data-residency region for this organization — where its tenants' telemetry is meant to live. Tenants inherit it unless overridden.">
+                  The data-residency region for this organization — where its tenants' telemetry is meant to live. Tenants inherit this unless you override it per tenant.
+                </InfoTip>
+              </span>
               <select value={region} onChange={(e) => setRegion(e.target.value)}>
                 <option value="">Select region…</option>
                 {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
               </select>
             </label>
             <label>
-              <span>Sign-in connection</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                Sign-in connection
+                <InfoTip label="Optional. Binds this organization to its own identity provider so its people sign in through their company's SSO; leave blank to use the platform's default sign-in.">
+                  Optional. Bind this organization to its own identity provider (SSO) so its people sign in through their company's login. Leave blank to use the platform default.
+                </InfoTip>
+              </span>
               <input placeholder="optional" value={sso} onChange={(e) => setSso(e.target.value)} />
             </label>
             <label style={{ flex: 2 }}>
