@@ -73,6 +73,7 @@ type server struct {
 	copilotLimiter   *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
 	copilotCfg       *copilotConfigStore
 	netboxCfg        *netboxConfigStore // NetBox source-of-truth discovery config
+	netboxSync       *netboxSyncer      // reconciles discovered devices INTO NetBox (write-through)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -374,6 +375,9 @@ func newServer() *server {
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.netboxCfg = netboxCfg
+	// Write-through: reconcile discovered devices INTO NetBox (the source of truth),
+	// reading the deduped inventory. No-op while NetBox is disabled.
+	srv.netboxSync = newNetboxSyncer(netboxCfg.effective, srv.discovery.Devices)
 	// UI-configurable email/SMS/push channels (registers live channels into the
 	// dispatcher built above). Must come after notifier is set on srv.
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
@@ -403,6 +407,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.discovery.Start(ctx)
+	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	srv.alerts.Start(ctx)
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
@@ -587,7 +592,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
-	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig) // Source-of-Truth (platform-owner)
+	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig)    // Source-of-Truth config (platform-owner)
+	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
 	mux.HandleFunc("/api/logs/export", s.handleLogsExport)          // Mode B: whole result set (sync/async)

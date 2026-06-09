@@ -201,14 +201,104 @@ func (a *DiscoveryAggregator) RefreshNow() {
 	}
 }
 
+// Devices returns the de-duplicated device inventory. The cache is keyed by
+// source-prefixed ID (snmp-…/netbox-…/static-…), so the SAME physical device seen
+// by multiple sources would otherwise appear multiple times. We collapse entries
+// that share a STABLE identity (mgmt IP → serial → normalized name) into one,
+// preferring the NetBox record (richer source-of-truth metadata) and folding in
+// the live discovery fields (vendor/model/status/last-seen). Collectors read this
+// too, so each physical device is polled once.
 func (a *DiscoveryAggregator) Devices() []models.Device {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	out := make([]models.Device, 0, len(a.cache))
+	merged := make(map[string]models.Device, len(a.cache))
+	order := make([]string, 0, len(a.cache))
 	for _, d := range a.cache {
-		out = append(out, d)
+		k := deviceKey(d)
+		if cur, ok := merged[k]; ok {
+			merged[k] = mergeDevices(cur, d)
+		} else {
+			merged[k] = d
+			order = append(order, k)
+		}
+	}
+	out := make([]models.Device, 0, len(merged))
+	for _, k := range order {
+		out = append(out, merged[k])
 	}
 	return out
+}
+
+// deviceKey is a device's stable cross-source identity: management IP, else
+// serial (from labels), else normalized name. Two records with the same key are
+// the same physical device regardless of which source reported them.
+func deviceKey(d models.Device) string {
+	if ip := strings.TrimSpace(d.Address); ip != "" {
+		return "ip:" + ip
+	}
+	if sn := strings.TrimSpace(d.Labels["serial"]); sn != "" {
+		return "sn:" + strings.ToLower(sn)
+	}
+	return "name:" + strings.ToLower(strings.TrimSpace(d.Name))
+}
+
+// mergeDevices folds two records for the same physical device into one. The
+// NetBox record (source of truth) is the base when present; the other record
+// fills gaps and contributes the freshest live signal (vendor/model/status via
+// labels, last-seen, credential ref for polling).
+func mergeDevices(x, y models.Device) models.Device {
+	base, other := x, y
+	if y.Source == "netbox" && x.Source != "netbox" {
+		base, other = y, x
+	}
+	if base.Vendor == "" {
+		base.Vendor = other.Vendor
+	}
+	if base.Model == "" {
+		base.Model = other.Model
+	}
+	if base.OS == "" {
+		base.OS = other.OS
+	}
+	if base.Address == "" {
+		base.Address = other.Address
+	}
+	if base.Name == "" {
+		base.Name = other.Name
+	}
+	if base.CredentialRef == "" {
+		base.CredentialRef = other.CredentialRef // keep the SNMP cred so collectors can poll
+	}
+	if base.PreferredProtocol == "" {
+		base.PreferredProtocol = other.PreferredProtocol
+	}
+	if other.LastSeen.After(base.LastSeen) {
+		base.LastSeen = other.LastSeen
+	}
+	if len(other.Labels) > 0 {
+		if base.Labels == nil {
+			base.Labels = map[string]string{}
+		}
+		for k, v := range other.Labels {
+			if _, ok := base.Labels[k]; !ok {
+				base.Labels[k] = v
+			}
+		}
+	}
+	if base.Source != other.Source && other.Source != "" {
+		base.Labels = withSourceLabel(base.Labels, base.Source, other.Source)
+	}
+	return base
+}
+
+// withSourceLabel records that a device was corroborated by more than one source
+// (e.g. "snmp+netbox") in the labels, for visibility in the UI.
+func withSourceLabel(labels map[string]string, a, b string) map[string]string {
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels["sources"] = a + "+" + b
+	return labels
 }
 
 func (a *DiscoveryAggregator) Get(id string) (models.Device, bool) {
