@@ -603,6 +603,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/exports/", s.handleExportStatus)           // async export status poll
 	mux.HandleFunc("/api/flows/top", s.handleFlowsTopTalkers)
 	mux.HandleFunc("/api/flows/topn", s.handleFlowsTopN)
+	mux.HandleFunc("/api/flows/fanout", s.handleFlowsFanout)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)

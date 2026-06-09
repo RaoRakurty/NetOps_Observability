@@ -801,6 +801,12 @@ export const api = {
     request<ClickHouseResponse>(
       `/api/flows/topn?by=${by}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
+  // Flow fan-out for threat detection: per-source distinct dst hosts/ports
+  // (scan signal). sort=hosts (horizontal) | ports (vertical).
+  flowsFanout: (sort: "hosts" | "ports" = "hosts", sinceSeconds = 3600, limit = 15, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/fanout?sort=${sort}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
   flowsByProto: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,

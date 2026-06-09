@@ -132,6 +132,43 @@ SELECT ` + dim.expr + ` AS k,
 	proxyClickHouse(w, r, sql)
 }
 
+// handleFlowsFanout powers flow-based threat detection: per source address, the
+// count of distinct destination hosts and distinct destination ports it touched
+// in the window — the classic horizontal-scan (many hosts) / vertical-scan (many
+// ports) signal. Pure IPFIX/NetFlow, no new collection. ?sort=hosts|ports picks
+// the ordering column (server-side allowlist, injection-safe).
+func (s *server) handleFlowsFanout(w http.ResponseWriter, r *http.Request) {
+	limit := intQuery(r, "limit", 15, 1, 200)
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	order := "dst_count"
+	if strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort"))) == "ports" {
+		order = "port_count"
+	}
+	sql := `
+SELECT src_addr AS k,
+       uniqExact(dst_addr) AS dst_count,
+       uniqExact(dst_port) AS port_count,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
+ GROUP BY k
+ ORDER BY ` + order + ` DESC
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+	proxyClickHouse(w, r, sql)
+}
+
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)

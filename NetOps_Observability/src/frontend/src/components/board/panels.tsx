@@ -199,6 +199,40 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys }
   );
 }
 
+// ── BarPanel — horizontal bars from an arbitrary {label,value} list ───────────
+// For non-Prometheus data (flows/ClickHouse). Optional per-row tint via `danger`.
+export function BarPanel({ title, rows, fmtX, loading, err, danger }: {
+  title: string; rows: { label: string; value: number; danger?: boolean }[];
+  fmtX: (n: number) => string; loading?: boolean; err?: string | null; danger?: boolean;
+}) {
+  return (
+    <Panel title={title}>
+      {err ? (
+        <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
+      ) : loading && rows.length === 0 ? (
+        <div className="empty">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="empty">No flow data in this window.</div>
+      ) : (
+        <ReactECharts
+          style={{ height: Math.min(380, 36 + rows.length * 26) }}
+          option={{
+            ...chartBase,
+            grid: { left: 8, right: 76, top: 6, bottom: 6, containLabel: true },
+            tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, formatter: (ps: any) => { const p = Array.isArray(ps) ? ps[0] : ps; return `${p.name}<br/><b>${fmtX(p.value)}</b>`; } },
+            xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtX(v) } },
+            yAxis: { type: "category", inverse: true, data: rows.map((r) => r.label), ...axisStyle, splitLine: { show: false } },
+            series: [{
+              type: "bar", barMaxWidth: 16,
+              data: rows.map((r) => ({ value: r.value, itemStyle: { color: (danger || r.danger) ? "#EF4444" : paletteColor(0), borderRadius: [0, 3, 3, 0] } })),
+            }],
+          }}
+        />
+      )}
+    </Panel>
+  );
+}
+
 // ── MetricStat — single scalar tile (latest of an aggregated query) ───────────
 export function MetricStat({ label, query, minutes, fmt, tone }: {
   label: string; query: string; minutes: number; fmt: (n: number) => string; tone?: (n: number) => StatTone;

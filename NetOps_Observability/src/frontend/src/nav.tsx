@@ -7,6 +7,7 @@ import DeviceMonitoring from "./pages/DeviceMonitoring";
 import InterfacePerformance from "./pages/InterfacePerformance";
 import BgpOspf from "./pages/BgpOspf";
 import Troubleshooting from "./pages/Troubleshooting";
+import ThreatDetection from "./pages/ThreatDetection";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -49,7 +50,6 @@ import {
   DeviceGeomap,
   FlowTrace,
   VulnerabilityManagement,
-  ThreatDetection,
   ComplianceMonitoring,
 } from "./pages/Placeholders";
 
@@ -185,7 +185,7 @@ export const NAV: NavSection[] = [
     icon: "shield",
     children: [
       { id: "vuln", label: "Vulnerability Management", render: () => <VulnerabilityManagement /> },
-      { id: "threat", label: "Threat Detection", render: () => <ThreatDetection /> },
+      { id: "threat", label: "Threat Detection", render: (c) => <ThreatDetection sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "compliance", label: "Compliance Monitoring", render: () => <ComplianceMonitoring /> },
     ],
   },
