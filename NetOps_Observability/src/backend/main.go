@@ -48,6 +48,7 @@ type server struct {
 	orgs             *orgStore
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
+	loginThrottle    *loginThrottle // in-memory failed-login lockout (best-effort)
 	apiKeys          *apiKeyStore
 	refresh          *refreshStore
 	snmpCreds        *snmpCredStore
@@ -335,6 +336,7 @@ func newServer() *server {
 		orgs:             orgs,
 		bindings:         bindings,
 		securitySettings: securitySettings,
+		loginThrottle:    newLoginThrottle(),
 		apiKeys:          apiKeys,
 		refresh:          refresh,
 		snmpCreds:        snmpCreds,

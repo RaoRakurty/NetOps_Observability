@@ -45,9 +45,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	sp, err := newSNMPProfileStore(dir + "/snmp_profiles.json")
 	must(err)
+	ss, err := newSecuritySettingsStore(dir + "/security_settings.json")
+	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, orgs: os, bindings: bs, apiKeys: ks, refresh: rf,
 		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
+		securitySettings: ss, loginThrottle: newLoginThrottle(),
 		audit: au, startedAt: time.Now().UTC(),
 	}
 	must(us.SeedAdmin("admin", "password123"))
@@ -138,6 +141,77 @@ func TestLoginDisabledAccountRejected(t *testing.T) {
 	}
 }
 
+// Instant revocation: an already-issued access token must stop working the moment
+// the account is disabled or deleted — not only when the token expires.
+func TestInstantRevokeOnDisableAndDelete(t *testing.T) {
+	srv := newTestServer(t)
+	admin := login(t, srv, "admin", "password123")
+	if st, b := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
+		"username": "ghosted", "password": "ghosted-pass-1", "role": "read-only"}); st != 201 {
+		t.Fatalf("create user: %d %s", st, b)
+	}
+	victim := login(t, srv, "ghosted", "ghosted-pass-1")
+	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 200 {
+		t.Fatalf("active token /me: want 200")
+	}
+	// Disable → the SAME token is rejected on the very next request.
+	if st, _ := do(t, srv, "PATCH", "/api/users/ghosted", admin.Token, map[string]string{"status": "disabled"}); st != 200 {
+		t.Fatalf("disable: not 200")
+	}
+	if st, _ := do(t, srv, "GET", "/api/auth/me", victim.Token, nil); st != 401 {
+		t.Errorf("disabled user's existing token: status %d, want 401 (instant revoke)", st)
+	}
+	// Re-enable + fresh token, then delete → existing token rejected immediately.
+	do(t, srv, "PATCH", "/api/users/ghosted", admin.Token, map[string]string{"status": "active"})
+	again := login(t, srv, "ghosted", "ghosted-pass-1")
+	do(t, srv, "DELETE", "/api/users/ghosted", admin.Token, nil)
+	if st, _ := do(t, srv, "GET", "/api/auth/me", again.Token, nil); st != 401 {
+		t.Errorf("deleted user's existing token: status %d, want 401", st)
+	}
+}
+
+// Account lockout: after login_attempts_allowed consecutive failures the account
+// is locked, so even the correct password is refused until the window elapses.
+func TestLoginLockout(t *testing.T) {
+	srv := newTestServer(t)
+	admin := login(t, srv, "admin", "password123")
+	if st, _ := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
+		"username": "brute", "password": "brute-pass-1", "role": "read-only"}); st != 201 {
+		t.Fatal("create user")
+	}
+	// Default policy allows 3 attempts; exhaust them with wrong passwords.
+	for i := 0; i < 3; i++ {
+		if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "brute", "password": "wrong"}); st != 401 {
+			t.Fatalf("attempt %d: status %d, want 401", i, st)
+		}
+	}
+	// Now even the correct password is refused (429 locked).
+	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "brute", "password": "brute-pass-1"}); st != 429 {
+		t.Errorf("after lockout, correct password: status %d, want 429", st)
+	}
+}
+
+// change-password must reject a new password identical to the current one.
+func TestChangePasswordNoReuse(t *testing.T) {
+	srv := newTestServer(t)
+	admin := login(t, srv, "admin", "password123")
+	if st, _ := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
+		"username": "reuser", "password": "Reuser-Pass-1", "role": "read-only"}); st != 201 {
+		t.Fatal("create user")
+	}
+	// change-password is public; identify by username + current password.
+	st, b := do(t, srv, "POST", "/api/auth/change-password", "", map[string]string{
+		"username": "reuser", "current_password": "Reuser-Pass-1", "new_password": "Reuser-Pass-1"})
+	if st != 400 {
+		t.Errorf("reuse (new==current): status %d, want 400 (%s)", st, b)
+	}
+	// A genuinely new password still works.
+	if st, _ := do(t, srv, "POST", "/api/auth/change-password", "", map[string]string{
+		"username": "reuser", "current_password": "Reuser-Pass-1", "new_password": "Reuser-Pass-2-new"}); st != 200 {
+		t.Errorf("legit change: status %d, want 200", st)
+	}
+}
+
 func TestMeAndUnauthenticated(t *testing.T) {
 	srv := newTestServer(t)
 	if st, _ := do(t, srv, "GET", "/api/users", "", nil); st != 401 {
@@ -211,14 +285,14 @@ func TestChangePasswordHTTP(t *testing.T) {
 	// Self-service from the login window: unauthenticated, names the account and
 	// proves ownership with the current password (no bearer token).
 	st, b := do(t, srv, "POST", "/api/auth/change-password", "",
-		map[string]string{"username": "admin", "current_password": "password123", "new_password": "newpassword456"})
+		map[string]string{"username": "admin", "current_password": "password123", "new_password": "NewPassw0rd!9"})
 	if st != 200 {
 		t.Fatalf("change-password: %d: %s", st, b)
 	}
 	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "admin", "password": "password123"}); st != 401 {
 		t.Errorf("old password still works: %d", st)
 	}
-	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "admin", "password": "newpassword456"}); st != 200 {
+	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "admin", "password": "NewPassw0rd!9"}); st != 200 {
 		t.Errorf("new password rejected: %d", st)
 	}
 	// Wrong current password is rejected with a generic credential error.

@@ -29,16 +29,38 @@ type passwordRules struct {
 // own subject (tenant/role/user). Missing settings fall back to the catalog
 // defaults via the resolver, so this never returns a weaker-than-baseline rule.
 func (s *server) callerPasswordRules(claims jwtClaims) passwordRules {
-	sub := policy.Subject{Tenant: claims.Tenant, Role: claims.Role, User: claims.Sub}
-	rules := passwordRules{MinLength: 8} // conservative floor if the engine is unavailable
-	if s.secPolicy == nil {
-		return rules
+	rules := passwordRules{MinLength: 8} // conservative floor if nothing is wired
+	// #24 policy engine (System→Tenant→Role→User).
+	if s.secPolicy != nil {
+		sub := policy.Subject{Tenant: claims.Tenant, Role: claims.Role, User: claims.Sub}
+		if r, ok := s.secPolicy.ResolveSetting(sub, "password.min_length"); ok {
+			rules.MinLength = int(r.Value.Num)
+		}
+		if r, ok := s.secPolicy.ResolveSetting(sub, "password.complexity_classes"); ok {
+			rules.ComplexityClasses = int(r.Value.Num)
+		}
 	}
-	if r, ok := s.secPolicy.ResolveSetting(sub, "password.min_length"); ok {
-		rules.MinLength = int(r.Value.Num)
-	}
-	if r, ok := s.secPolicy.ResolveSetting(sub, "password.complexity_classes"); ok {
-		rules.ComplexityClasses = int(r.Value.Num)
+	// Per-scope Security Settings (the password toggles the admin UI exposes). Take
+	// the STRICTER of the two systems so neither weakens the other and the UI's
+	// require_uppercase/lowercase/number/special toggles are actually enforced.
+	if s.securitySettings != nil {
+		scope := claims.Tenant
+		if scope == "" {
+			scope = "provider"
+		}
+		ss := s.securitySettings.Get(scope)
+		if ss.MinPasswordLength > rules.MinLength {
+			rules.MinLength = ss.MinPasswordLength
+		}
+		classes := 0
+		for _, on := range []bool{ss.RequireUppercase, ss.RequireLowercase, ss.RequireNumber, ss.RequireSpecial} {
+			if on {
+				classes++
+			}
+		}
+		if classes > rules.ComplexityClasses {
+			rules.ComplexityClasses = classes
+		}
 	}
 	return rules
 }

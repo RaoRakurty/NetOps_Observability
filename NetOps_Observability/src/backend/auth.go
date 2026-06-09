@@ -119,12 +119,24 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Account lockout (best-effort, in-memory): reject while locked, before we even
+	// check the password, so a brute-forcer can't keep guessing. Per the scope's
+	// Security Settings (login_attempts_allowed / unlock_time_seconds).
+	if locked, d := s.loginThrottle.locked(req.Username); locked {
+		w.Header().Set("Retry-After", intToString(int(d.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests, errors.New("account temporarily locked due to failed sign-ins; try again later"))
+		return
+	}
 	user, ok := s.users.Get(req.Username)
 	if !ok || !verifyPassword(req.Password, user.PasswordHash) {
+		// Count the failure against the lockout policy for the account's scope.
+		allowed, unlock := s.lockoutPolicy(user, ok)
+		s.loginThrottle.fail(req.Username, allowed, unlock)
 		// Generic message: don't leak whether the username exists.
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
+	s.loginThrottle.success(req.Username) // clear any prior failures on success
 	// A disabled account cannot sign in — parity with the refresh / MFA / SSO /
 	// LDAP / TACACS paths, which all reject status=="disabled". Checked AFTER the
 	// password verifies, so an unauthenticated probe can't use it to enumerate
@@ -158,6 +170,21 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.issueSession(w, r, user)
+}
+
+// lockoutPolicy resolves the failed-login lockout thresholds for an account's
+// scope (its tenant, else the provider scope). Returns allowed<=0 — lockout
+// disabled — when Security Settings aren't wired (e.g. a minimal test server).
+func (s *server) lockoutPolicy(user User, found bool) (allowed, unlockSeconds int) {
+	if s.securitySettings == nil {
+		return 0, 0
+	}
+	scope := "provider"
+	if found && user.TenantID != "" {
+		scope = user.TenantID
+	}
+	ss := s.securitySettings.Get(scope)
+	return ss.LoginAttemptsAllowed, ss.UnlockTimeSeconds
 }
 
 // issueSession mints the access + refresh tokens, refreshes the console gate
@@ -404,6 +431,13 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// No-reuse: the new password must differ from the current one. (A full
+	// password-history check would compare against the last N hashes; this blocks
+	// the common new==current case, which is the reuse the audit flags.)
+	if verifyPassword(req.NewPassword, user.PasswordHash) {
+		writeError(w, http.StatusBadRequest, errors.New("new password must differ from the current password"))
+		return
+	}
 	if err := s.users.ChangePassword(user.Username, req.NewPassword); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -527,6 +561,15 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			// it can only be spent at /api/auth/mfa/login, never as a Bearer.
 			if claims.hasScope(mfaChallengeScope) {
 				writeError(w, http.StatusUnauthorized, errors.New("MFA challenge token is not a session"))
+				return
+			}
+			// Instant revocation: re-check the live account on EVERY request so a
+			// disabled or deleted user loses access immediately — not only when the
+			// stateless access token eventually expires. Cheap (in-memory map). Only
+			// our own session subjects (usernames) are checked; api-key principals
+			// return early above and never reach here.
+			if u, ok := s.users.Get(claims.Sub); !ok || u.Status == "disabled" {
+				writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
 				return
 			}
 			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
