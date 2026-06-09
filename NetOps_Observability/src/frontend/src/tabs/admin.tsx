@@ -90,7 +90,14 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
   const tenantList = tenants ?? [];
   // The tenant a newly-created user should default to, given the active scope.
   const scopeTenantId = scope === SCOPE_GLOBAL ? "" : scope;
+  // Provider users are associated with NOTHING (no org/tenant); tenant users are
+  // fixed to their tenant. isProvider = the platform realm.
+  const isProvider = scopeTenantId === "";
+  const scopeTenantName = tenantList.find((t) => t.id === scopeTenantId)?.name || scopeTenantId;
   const startAdd = () => { setForm({ ...BLANK_USER, tenant_id: scopeTenantId }); setAdding((v) => !v); };
+  // The security settings that will apply to a user created in this scope.
+  const [secSettings, setSecSettings] = useState<SecuritySettingsT | null>(null);
+  useEffect(() => { api.getSecuritySettings(scopeTenantId || "provider").then(setSecSettings).catch(() => setSecSettings(null)); }, [scopeTenantId]);
 
   const submit = async () => {
     setErr(null);
@@ -205,19 +212,55 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
         </div>
         <ErrLine msg={err} />
         {adding && (
-          <div className="admin-form">
-            <input placeholder="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-            <input placeholder="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-            <input placeholder="display name" value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} />
-            <input type="password" placeholder="password (min 8)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {roleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-            </select>
-            <select value={form.tenant_id} onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}>
-              <option value="">— tenant —</option>
-              {tenantList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            <button className="dash-btn accent" onClick={submit}>Create</button>
+          <div className="user-form">
+            <div className="uf-head">{isProvider ? "New Provider user" : `New user · ${scopeTenantName}`}</div>
+            <div className="uf-grid">
+              <label className="req-field"><span>Username <Req /></span>
+                <input autoFocus value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
+              <label><span>Display name</span>
+                <input value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} /></label>
+              <label><span>Email</span>
+                <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
+              <label className="req-field"><span>Password <Req /></span>
+                <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+              <label><span>Role</span>
+                <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                  {roleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select></label>
+              {/* Provider users are associated with nothing. Tenant users are fixed
+                  to their tenant (no picker). Only the standalone directory picks one. */}
+              {!isProvider && (
+                locked ? (
+                  <label><span>Tenant</span><div className="uf-fixed">{scopeTenantName}</div></label>
+                ) : (
+                  <label><span>Tenant</span>
+                    <select value={form.tenant_id} onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}>
+                      <option value="">— tenant —</option>
+                      {tenantList.filter((t) => t.id !== "global").map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select></label>
+                )
+              )}
+            </div>
+
+            {secSettings && (
+              <div className="uf-policy">
+                <div className="uf-policy-h">Security settings <span className="mini-meta">— apply to this {isProvider ? "Provider user" : "tenant's users"}</span></div>
+                <div className="uf-policy-row">
+                  <span>Min password length <b>{secSettings.min_password_length}</b></span>
+                  <span>Complexity <b>{[secSettings.require_uppercase && "A", secSettings.require_lowercase && "a", secSettings.require_number && "1", secSettings.require_special && "#"].filter(Boolean).join(" ") || "none"}</b></span>
+                  <span>Expiry <b>{secSettings.password_expire_enabled ? `${secSettings.password_expire_days}d` : "off"}</b></span>
+                  <span>Lockout <b>{secSettings.login_attempts_allowed} tries</b></span>
+                  <span>Sessions <b>{secSettings.concurrent_login === "deny" ? "single" : "concurrent"}</b></span>
+                </div>
+                <div className="mini-meta">Change these in the <b>Security Settings</b> tab for this scope.</div>
+              </div>
+            )}
+
+            <div className="uf-actions">
+              <button className="dash-btn" onClick={() => { setAdding(false); setForm({ ...BLANK_USER }); }}>Cancel</button>
+              <button className="dash-btn accent" disabled={!form.username.trim() || !form.password} onClick={submit}>Create user</button>
+            </div>
+            <RequiredLegend />
           </div>
         )}
         <div className="ds-toolbar">
