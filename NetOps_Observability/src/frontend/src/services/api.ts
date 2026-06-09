@@ -1245,6 +1245,10 @@ export type SecuritySettings = {
   login_attempts_allowed: number; unlock_time_seconds: number;
   account_validity_days: number; account_inactivity_days: number;
   concurrent_login: string;
+  // Session lifecycle (per scope). idle is operator-facing; absolute is a hidden
+  // standard default. enforce_* gate each at /api/auth/refresh.
+  idle_timeout_minutes: number; absolute_timeout_minutes: number;
+  enforce_idle_timeout: boolean; enforce_absolute_timeout: boolean;
 };
 export type GrantReason = { role_id: string; scope_id: string; effect: string; granted_by?: string; reason?: string; break_glass?: boolean; expires_at?: string };
 export type TenantReach = { tenant_id: string; tenant_name: string; org_id: string; org_name: string; granted_by: GrantReason[] };

@@ -1108,6 +1108,15 @@ function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
               <option value="allow">Allow</option><option value="deny">Deny</option>
             </select>
           </label>
+          <label>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              Sign out after inactivity (min)
+              <InfoTip label="Idle timeout: users inactive longer than this are signed out at their next request. Configurable per Provider, Organization and Tenant. Sessions also have a fixed maximum lifetime enforced behind the scenes.">
+                Idle timeout — a session with no activity for this many minutes is ended (checked at the token-refresh boundary). Set per scope. A fixed maximum session lifetime applies on top, as a standard default.
+              </InfoTip>
+            </span>
+            {num("idle_timeout_minutes")}
+          </label>
         </div>
       </div>
     </>
