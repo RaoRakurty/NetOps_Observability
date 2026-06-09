@@ -22,8 +22,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.dirname(HERE)
 
-# Stable ordering; iam first (deepest), then breadth, then the rest.
-ORDER = ["iam", "platform", "collectors", "notify", "copilot"]
+# Stable ordering; iam first (deepest), then breadth, then per-module.
+ORDER = ["iam", "platform", "alerts", "telemetry", "collectors", "notify", "reports", "integrations"]
 
 
 def discover():

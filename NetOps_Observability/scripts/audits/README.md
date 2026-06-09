@@ -30,11 +30,14 @@ Exit code: `0` if no module reports a FAIL, `1` otherwise (`--strict` also fails
 
 | Module | Path | Covers |
 |--------|------|--------|
-| `iam` | `scripts/iam_audit.py` | Region→Org→Tenant→User tree, bindings, disable/delete + token caching window, cross-tenant leak, password policy (length/complexity/reuse/lockout/idle) |
+| `iam` | `scripts/iam_audit.py` | Region→Org→Tenant→User tree, bindings, disable/delete + instant revocation, cross-tenant leak, password policy (length/complexity/reuse/lockout/idle) |
 | `platform` | `audits/platform.py` | Breadth smoke across every backend module's API surface + unauthenticated rejection |
+| `alerts` | `audits/alerts.py` | Alert rules (shape), active alerts, incidents (read-only) |
+| `telemetry` | `audits/telemetry.py` | Data flow: logs / metrics / flows / findings reachable; WARN (not FAIL) on a dry pipe |
 | `collectors` | `audits/collectors.py` | Collector status, SNMP credential CRUD + secret hygiene (v3 keys masked) |
 | `notify` | `audits/notify.py` | Notification channel config + contact-point CRUD (never triggers real `/test` sends) |
-| `copilot` | `audits/copilot.py` | LLM guardrails (OWASP-LLM §15): no key leak, request bounding, fail-closed |
+| `reports` | `audits/reports.py` | Report channels, schedules/runs, execution history (never calls run/preview) |
+| `integrations` | `audits/integrations.py` | ITSM/integration config + connector status + signed-webhook gate (config-only) |
 
 ## Severities
 
