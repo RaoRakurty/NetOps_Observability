@@ -16,6 +16,8 @@ package main
 // the conformance test.
 
 import (
+	"errors"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -127,6 +129,57 @@ func (s *server) orgAdminOrgs(principalID string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ScopeDetail is one selectable scope for the top-bar Org|Region|Tenant selector.
+type ScopeDetail struct {
+	TenantID   string `json:"tenant_id"`
+	TenantName string `json:"tenant_name"`
+	OrgID      string `json:"org_id"`
+	OrgName    string `json:"org_name"`
+	Region     string `json:"region"`
+}
+
+// accessibleScopeDetails resolves the principal's reachable tenants into rich,
+// named, org-grouped entries for the scope selector (platform owner → all).
+func (s *server) accessibleScopeDetails(principalID string) (scopes []ScopeDetail, all bool) {
+	if s.tenants == nil {
+		return nil, false
+	}
+	ids, allTenants := s.accessibleTenants(principalID)
+	var list []Tenant
+	if allTenants {
+		list = s.tenants.List()
+	} else {
+		for _, id := range ids {
+			if t, ok := s.tenants.Get(id); ok {
+				list = append(list, t)
+			}
+		}
+	}
+	out := make([]ScopeDetail, 0, len(list))
+	for _, t := range list {
+		org := orgOf(t)
+		orgName, region := org, RegionDefault
+		if s.orgs != nil {
+			if o, ok := s.orgs.Get(org); ok {
+				orgName, region = o.Name, o.HomeRegion
+			}
+		}
+		out = append(out, ScopeDetail{TenantID: t.ID, TenantName: t.Name, OrgID: org, OrgName: orgName, Region: region})
+	}
+	return out, allTenants
+}
+
+// handleMyScopes serves the authenticated caller's selectable scopes.
+func (s *server) handleMyScopes(w http.ResponseWriter, r *http.Request) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	scopes, all := s.accessibleScopeDetails(claims.Sub)
+	writeJSON(w, http.StatusOK, map[string]any{"scopes": scopes, "all_tenants": all})
 }
 
 // isOrgAdminOf reports whether the principal administers the given org.

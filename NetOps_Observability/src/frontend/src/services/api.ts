@@ -442,6 +442,23 @@ function fireAuthChange(signedIn: boolean) {
   for (const fn of authListeners) fn(signedIn);
 }
 
+// ---- Active scope (the top-bar Org|Region|Tenant selector) ----------------
+// The selected tenant is carried on EVERY API call as X-Acting-Tenant; the
+// backend's withActingTenant narrows the caller to that scope IFF it is one the
+// principal is bound to (it can only narrow, never widen — server-validated).
+// Empty = the caller's default view (home tenant, or cross for the platform
+// owner). Persisted so a returning multi-scope user lands where they left off.
+const ACTIVE_SCOPE_KEY = "netops.activeScope";
+export function getActiveScope(): string {
+  try { return localStorage.getItem(ACTIVE_SCOPE_KEY) || ""; } catch { return ""; }
+}
+export function setActiveScope(tenantId: string) {
+  try {
+    if (tenantId) localStorage.setItem(ACTIVE_SCOPE_KEY, tenantId);
+    else localStorage.removeItem(ACTIVE_SCOPE_KEY);
+  } catch { /* ignore storage errors */ }
+}
+
 async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -449,6 +466,8 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  const scope = getActiveScope();
+  if (scope && !headers["X-Acting-Tenant"]) headers["X-Acting-Tenant"] = scope;
 
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
@@ -940,6 +959,9 @@ export const api = {
   revokeBinding: (id: string) =>
     request<void>(`/api/bindings/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
+  // ---------- Accessible scopes (the top-bar Org|Region|Tenant selector) ----
+  myScopes: () => request<{ scopes: ScopeDetail[]; all_tenants: boolean }>("/api/scopes"),
+
   // ---------- Break-glass (time-boxed, audited operator elevation) ----------
   listBreakGlass: () => request<RoleBinding[]>("/api/breakglass"),
   openBreakGlass: (tenantId: string, reason: string, durationMinutes = 60) =>
@@ -1164,6 +1186,7 @@ export type Org = {
   created_at?: string;
 };
 export type Region = { id: string; label: string };
+export type ScopeDetail = { tenant_id: string; tenant_name: string; org_id: string; org_name: string; region: string };
 export type RoleBinding = {
   id: string;
   principal_id: string;

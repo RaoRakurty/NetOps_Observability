@@ -6,6 +6,7 @@ import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs
 import Icon from "./Icon";
 import { Modal } from "./ui";
 import MfaCard from "./MfaCard";
+import ScopeSelector from "./ScopeSelector";
 
 type Props = {
   health: Health | null;
@@ -169,6 +170,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
       </form>
 
       <div className="topbar-right">
+        <ScopeSelector />
         <select
           className="range-picker"
           value={range.minutes}

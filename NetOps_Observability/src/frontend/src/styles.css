@@ -581,6 +581,40 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
   border-radius: 8px; padding: 6px 8px; font-size: 12px;
 }
+
+/* Scope selector — the Org | Region | Tenant context control in the top bar. */
+.scope-sel { position: relative; }
+.scope-chip, .scope-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 6px 9px; font-size: 12px; max-width: 260px;
+}
+.scope-btn { cursor: pointer; }
+.scope-btn:hover { border-color: var(--accent); }
+.scope-chip-text, .scope-btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.scope-region {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); background: var(--hover); border-radius: 4px; padding: 1px 5px;
+}
+.scope-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 50;
+  min-width: 240px; max-height: 60vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 6px; box-shadow: 0 8px 28px rgba(0,0,0,0.28);
+}
+.scope-group-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); padding: 6px 8px 2px;
+}
+.scope-opt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  width: 100%; text-align: left; background: transparent; border: 0;
+  border-radius: 7px; padding: 6px 8px; cursor: pointer; color: var(--fg);
+}
+.scope-opt:hover { background: var(--hover); }
+.scope-opt.on { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.scope-opt-title { font-size: 12.5px; font-weight: 600; }
+.scope-opt-sub { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
 /* Source of Truth — embedded inventory console. */
 .sot-head { margin-bottom: 10px; }
 .sot-frame-wrap {
