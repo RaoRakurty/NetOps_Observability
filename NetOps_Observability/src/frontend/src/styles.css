@@ -2345,3 +2345,26 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .seg-mini button + button { border-left: 1px solid var(--border); }
 .seg-mini button:hover { background: var(--surface-2); color: var(--fg); }
 .seg-mini button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* ============================================================================
+   Device Monitoring — fleet board (collapsible section groups + panels)
+   ========================================================================== */
+.dm-board { display: flex; flex-direction: column; gap: 14px; }
+.dm-group { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
+.dm-group-head {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--fg);
+  background: color-mix(in srgb, var(--g, var(--accent)) 14%, var(--surface));
+  border-left: 3px solid var(--g, var(--accent)); list-style: none;
+}
+.dm-group-head::-webkit-details-marker { display: none; }
+.dm-group-head:hover { background: color-mix(in srgb, var(--g, var(--accent)) 22%, var(--surface)); }
+.dm-group-chevron { transition: transform .15s ease; color: var(--g, var(--accent)); flex: 0 0 auto; }
+.dm-group[open] .dm-group-chevron { transform: rotate(90deg); }
+.dm-group-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.dm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.dm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dm-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.dm-list li:last-child { border-bottom: none; }
+.dm-list li span { color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-list li strong { color: var(--fg); white-space: nowrap; }

@@ -3,6 +3,7 @@ import { SectionCtx } from "./context/shell";
 // Pages / tabs (existing components, reparented into product sections).
 import Dashboard from "./pages/Dashboard";
 import Devices from "./pages/Devices";
+import DeviceMonitoring from "./pages/DeviceMonitoring";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -129,7 +130,7 @@ export const NAV: NavSection[] = [
     label: "Incident Response",
     icon: "incident",
     children: [
-      { id: "overview", label: "Overview", render: () => <IncidentResponse /> },
+      { id: "overview", label: "Command Center", render: () => <IncidentResponse /> },
       { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
     ],
@@ -154,6 +155,7 @@ export const NAV: NavSection[] = [
     icon: "infrastructure",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
+      { id: "monitoring", label: "Device Monitoring", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
       // Flows live in the Data zone (canonical netflow/sflow/telemetry explorer),
@@ -193,7 +195,7 @@ export const NAV: NavSection[] = [
     label: "Logs",
     icon: "logs",
     children: [
-      { id: "logs", label: "Logs", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
+      { id: "logs", label: "Log Explorer", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
     ],
   },
@@ -246,7 +248,7 @@ export const NAV: NavSection[] = [
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
-      { id: "access", label: "Access", render: () => <BindingsAdmin /> },
+      { id: "access", label: "Access Grants", render: () => <BindingsAdmin /> },
       { id: "sessions", label: "Sessions", platformOnly: true, render: () => <SessionsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
