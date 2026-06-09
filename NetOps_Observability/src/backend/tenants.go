@@ -25,7 +25,12 @@ type Tenant struct {
 	// OrgID is the Organization this tenant belongs to (orgs.go). Every tenant
 	// belongs to exactly one org; blank is treated as the Global org for
 	// backward compatibility with tenants created before the org layer existed.
-	OrgID         string        `json:"org_id,omitempty"`
+	OrgID string `json:"org_id,omitempty"`
+	// Region is the data-residency region this tenant is assigned to. Blank means
+	// "inherit the org's home_region" — see effectiveTenantRegion. It is a MODEL
+	// attribute (where the tenant's data is meant to live); routing telemetry to a
+	// per-region data plane is a later, deployment-time concern (regionDataPlane).
+	Region        string        `json:"region,omitempty"`
 	IsolationMode IsolationMode `json:"isolation_mode,omitempty"` // shared (default) | dedicated_schema|db|cluster
 	// OperatorRestricted is the data-privacy / compliance switch: when true, the
 	// platform operator (cross-tenant super-admin) may NOT view this tenant's
@@ -128,6 +133,30 @@ func (s *tenantStore) restrictedIDs() []string {
 		}
 	}
 	return out
+}
+
+// SetRegion assigns a tenant to a data-residency region (blank = inherit the
+// org's home_region). Validated against the known region set.
+func (s *tenantStore) SetRegion(id, region string) (Tenant, error) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	reg := strings.ToLower(strings.TrimSpace(region))
+	if reg != "" {
+		if _, err := normalizeRegion(reg); err != nil {
+			return Tenant{}, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tenants[id]
+	if !ok {
+		return Tenant{}, errors.New("tenant not found")
+	}
+	t.Region = reg
+	s.tenants[id] = t
+	if err := s.flushLocked(); err != nil {
+		return Tenant{}, err
+	}
+	return t, nil
 }
 
 // SetOperatorRestricted toggles a tenant's operator-visibility (compliance). The

@@ -160,13 +160,13 @@ func (s *server) accessibleScopeDetails(principalID string) (scopes []ScopeDetai
 	out := make([]ScopeDetail, 0, len(list))
 	for _, t := range list {
 		org := orgOf(t)
-		orgName, region := org, RegionDefault
+		orgName := org
 		if s.orgs != nil {
 			if o, ok := s.orgs.Get(org); ok {
-				orgName, region = o.Name, o.HomeRegion
+				orgName = o.Name
 			}
 		}
-		out = append(out, ScopeDetail{TenantID: t.ID, TenantName: t.Name, OrgID: org, OrgName: orgName, Region: region})
+		out = append(out, ScopeDetail{TenantID: t.ID, TenantName: t.Name, OrgID: org, OrgName: orgName, Region: s.effectiveTenantRegion(t)})
 	}
 	return out, allTenants
 }

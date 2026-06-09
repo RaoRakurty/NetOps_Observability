@@ -290,6 +290,8 @@ type createTenantRequest struct {
 	IsolationMode string `json:"isolation_mode"`
 	// OrgID is the Organization the new tenant belongs to. Blank → Global org.
 	OrgID string `json:"org_id"`
+	// Region assigns the tenant to a data-residency region. Blank → inherit org.
+	Region string `json:"region"`
 	// OperatorRestricted hides the tenant's data from the global/operator view from
 	// the moment it's created (data-privacy / compliance) — see Tenant.OperatorRestricted.
 	OperatorRestricted bool `json:"operator_restricted"`
@@ -339,6 +341,15 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		// Assign the data-residency region at creation time, if provided.
+		if req.Region != "" {
+			updated, e := s.tenants.SetRegion(t.ID, req.Region)
+			if e != nil {
+				writeError(w, http.StatusBadRequest, e)
+				return
+			}
+			t = updated
+		}
 		// Apply the "hide from global view" setting at creation time, if requested.
 		if req.OperatorRestricted {
 			if updated, e := s.tenants.SetOperatorRestricted(t.ID, true); e == nil {
@@ -363,24 +374,36 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		// Update mutable tenant settings. Today: operator-visibility (compliance).
+		// Update mutable tenant settings: operator-visibility (compliance) and/or
+		// data-residency region.
 		var req struct {
-			OperatorRestricted *bool `json:"operator_restricted"`
+			OperatorRestricted *bool   `json:"operator_restricted"`
+			Region             *string `json:"region"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if req.OperatorRestricted == nil {
+		if req.OperatorRestricted == nil && req.Region == nil {
 			writeError(w, http.StatusBadRequest, errors.New("no updatable field provided"))
 			return
 		}
-		t, err := s.tenants.SetOperatorRestricted(id, *req.OperatorRestricted)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
+		var t Tenant
+		var err error
+		if req.Region != nil {
+			if t, err = s.tenants.SetRegion(id, *req.Region); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logInfo("tenants", "region changed", map[string]any{"tenant_id": id, "region": *req.Region})
 		}
-		logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
+		if req.OperatorRestricted != nil {
+			if t, err = s.tenants.SetOperatorRestricted(id, *req.OperatorRestricted); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
+		}
 		writeJSON(w, http.StatusOK, t)
 	case http.MethodDelete:
 		t, ok := s.tenants.Get(id)

@@ -548,6 +548,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/orgs", s.handleOrgs)
 	mux.HandleFunc("/api/orgs/", s.handleOrgByID)
 	mux.HandleFunc("/api/regions", s.handleRegions)
+	mux.HandleFunc("/api/regions/topology", s.handleRegionTopology)
 	mux.HandleFunc("/api/bindings", s.handleBindings)
 	mux.HandleFunc("/api/bindings/", s.handleBindingByID)
 	mux.HandleFunc("/api/breakglass", s.handleBreakGlass)

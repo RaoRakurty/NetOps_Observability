@@ -357,11 +357,19 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
 export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string, name: string) => void } = {}) {
   const [tenants, err, reload, setErr] = useReload(() => api.listTenants());
   const [orgs] = useReload(() => api.listOrgs());
+  const [regions] = useReload(() => api.listRegions());
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const [org, setOrg] = useState("");
+  const [region, setRegion] = useState("");
   const [hideGlobal, setHideGlobal] = useState(false);
   const orgName = (id?: string) => (orgs ?? []).find((o) => o.id === (id || "global"))?.name || (id || "global");
+  const regionLabel = (id?: string) => id ? ((regions ?? []).find((r) => r.id === id)?.label || id) : "";
+  const orgRegion = (orgId?: string) => (orgs ?? []).find((o) => o.id === (orgId || "global"))?.home_region;
+  const changeTenantRegion = async (t: Tenant, value: string) => {
+    setErr(null);
+    try { await api.setTenantRegion(t.id, value); reload(); } catch (e) { setErr((e as Error).message); }
+  };
   // Type-to-confirm delete modal state.
   const [delTarget, setDelTarget] = useState<Tenant | null>(null);
   const [delTyped, setDelTyped] = useState("");
@@ -385,7 +393,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   const create = async () => {
     if (!name.trim()) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, org); setName(""); setNote(""); setOrg(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, org, region); setName(""); setNote(""); setOrg(""); setRegion(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
   const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
   const confirmDelete = async () => {
@@ -431,6 +439,13 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
               {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
           </label>
+          <label>
+            <span>Data region</span>
+            <select value={region} onChange={(e) => setRegion(e.target.value)}>
+              <option value="">Inherit org{org ? ` (${regionLabel(orgRegion(org))})` : ""}</option>
+              {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </label>
           <label style={{ flex: 2 }}>
             <span>Note</span>
             <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -453,6 +468,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                 <th>Tenant</th>
                 <th style={{ width: 130 }}>Type</th>
                 <th style={{ width: 150 }}>Organization</th>
+                <th style={{ width: 150 }}>Data region</th>
                 <th style={{ width: 190 }}>Global visibility</th>
                 <th>Note</th>
                 <th style={{ width: 140 }}>ID</th>
@@ -471,6 +487,21 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                       </span>
                     </td>
                     <td style={{ color: "var(--muted)", fontSize: 12 }}>{orgName(t.org_id)}</td>
+                    <td>
+                      {isParent ? (
+                        <span style={{ color: "var(--muted)", fontSize: 12 }}>{regionLabel(t.region || orgRegion(t.org_id))}</span>
+                      ) : (
+                        <select
+                          className="ds-mini-select"
+                          value={t.region || ""}
+                          onChange={(e) => changeTenantRegion(t, e.target.value)}
+                          title="Data-residency region (blank = inherit the organization's region)"
+                        >
+                          <option value="">Inherit ({regionLabel(orgRegion(t.org_id))})</option>
+                          {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                        </select>
+                      )}
+                    </td>
                     <td>
                       {isParent ? (
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
@@ -745,6 +776,87 @@ function OrgEditModal({ org, regions, onClose, onSaved }: { org: Org; regions: R
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ---- Regions (the control-plane → routing → data-plane topology) -----------
+//
+// A platform-level view of the SaaS region model: one global control plane
+// (orgs/identity/tenants), the routing layer (tenant→region mapping), and the
+// per-region data planes. Single-region today (every region maps to the local
+// stack); a region with a configured data plane shows as remote — the model is
+// ready for real regions without code changes.
+export function RegionsAdmin() {
+  const [topo, err] = useReload(() => api.regionTopology());
+  const cp = topo?.control_plane;
+  const rows = topo?.regions ?? [];
+  const active = rows.filter((r) => r.tenants > 0 || r.orgs > 0);
+  return (
+    <>
+      <AdminHead title="Regions" sub="Where each tenant's data lives. One global control plane routes tenants to a regional data plane by their assigned region." />
+      <ErrLine msg={err} />
+      <StatStrip>
+        <Stat label="Control plane" value="Global" />
+        <Stat label="Regions in use" value={topo ? active.length : <Skeleton w={20} h={20} />} tone="accent" />
+        <Stat label="Tenants" value={cp?.tenants ?? "—"} />
+        <Stat label="Organizations" value={cp?.orgs ?? "—"} />
+      </StatStrip>
+
+      <div className="card">
+        <div className="region-topo">
+          <div className="region-topo-cp">
+            <div className="region-topo-tag">Control plane · Global</div>
+            <div className="region-topo-sub">Orgs · Identity · RBAC · Tenants · Billing</div>
+          </div>
+          <div className="region-topo-arrow">routes by tenant → region ↓</div>
+          <div className="region-topo-planes">
+            {rows.map((r) => {
+              const used = r.tenants > 0 || r.orgs > 0;
+              return (
+                <div key={r.id} className={`region-plane${used ? " used" : ""}`}>
+                  <div className="region-plane-head">
+                    <b>{r.label}</b>
+                    <span className={`badge ${r.data_plane.local ? "" : "accent"}`}>{r.data_plane.local ? "Local stack" : "Dedicated"}</span>
+                  </div>
+                  <div className="region-plane-meta">{r.tenants} tenant{r.tenants === 1 ? "" : "s"} · {r.orgs} org{r.orgs === 1 ? "" : "s"}</div>
+                  <div className="region-plane-stack">ClickHouse · OpenSearch · Kafka · VictoriaMetrics</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ paddingTop: 8 }}>
+        <table className="ds-table" style={{ width: "100%" }}>
+          <thead>
+            <tr>
+              <th>Region</th>
+              <th style={{ width: 120 }}>Data plane</th>
+              <th style={{ width: 90 }}>Tenants</th>
+              <th style={{ width: 90 }}>Orgs</th>
+              <th>Endpoint</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td style={{ fontWeight: 600 }}>{r.label}</td>
+                <td><span className={`badge ${r.data_plane.local ? "" : "accent"}`}>{r.data_plane.local ? "Local" : "Dedicated"}</span></td>
+                <td style={{ color: "var(--muted)" }}>{r.tenants}</td>
+                <td style={{ color: "var(--muted)" }}>{r.orgs}</td>
+                <td className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>
+                  {r.data_plane.local ? "in-cluster" : (r.data_plane.clickhouse || "configured")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mini-meta" style={{ marginTop: 8 }}>
+          Single-region today: every region routes to the local stack. To stand up a real region, point its data plane at a regional deployment — no code change.
+        </p>
+      </div>
+    </>
   );
 }
 

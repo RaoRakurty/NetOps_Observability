@@ -27,6 +27,7 @@ import AuditLog from "./tabs/AuditLog";
 import AccessExplorer from "./tabs/AccessExplorer";
 import {
   IdentityAccess,
+  RegionsAdmin,
   AuthenticationAdmin,
   ApiAccessAdmin,
   IntegrationsAdmin,
@@ -192,6 +193,7 @@ export const NAV: NavSection[] = [
       // split into Global (platform-wide) and Tenants (per tenant, configured
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
+      { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,

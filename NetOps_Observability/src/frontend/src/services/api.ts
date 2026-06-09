@@ -930,8 +930,11 @@ export const api = {
   deleteRole: (id: string) => request<void>(`/api/roles/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   listTenants: () => request<Tenant[]>("/api/tenants"),
-  createTenant: (name: string, note?: string, operatorRestricted?: boolean, orgId?: string) =>
-    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note, operator_restricted: !!operatorRestricted, org_id: orgId || "" }) }),
+  createTenant: (name: string, note?: string, operatorRestricted?: boolean, orgId?: string, region?: string) =>
+    request<Tenant>("/api/tenants", { method: "POST", body: JSON.stringify({ name, note, operator_restricted: !!operatorRestricted, org_id: orgId || "", region: region || "" }) }),
+  setTenantRegion: (id: string, region: string) =>
+    request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ region }) }),
+  regionTopology: () => request<RegionTopologyResponse>("/api/regions/topology"),
   // Destructive: requires the exact tenant name echoed back (server-enforced) and
   // refuses a non-empty tenant unless force=true.
   deleteTenant: (id: string, confirm: string, force = false) =>
@@ -1177,9 +1180,13 @@ export type Tenant = {
   slug: string;
   note?: string;
   org_id?: string; // the organization this tenant belongs to (blank = Global)
+  region?: string; // data-residency region (blank = inherit org home_region)
   operator_restricted?: boolean; // compliance: operator may NOT view this tenant's telemetry
   created_at?: string;
 };
+export type DataPlane = { region: string; local: boolean; clickhouse?: string; opensearch?: string; victoria_metrics?: string; kafka?: string };
+export type RegionTopologyRow = { id: string; label: string; data_plane: DataPlane; tenants: number; orgs: number };
+export type RegionTopologyResponse = { control_plane: { orgs: number; tenants: number; users: number }; regions: RegionTopologyRow[] };
 export type Org = {
   id: string;
   name: string;
