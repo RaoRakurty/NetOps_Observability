@@ -403,6 +403,30 @@ export function captureSSORedirect(): string | null {
   return null;
 }
 
+// When a refresh is rejected because the server-side SESSION ended (idle /
+// absolute / revoked), the backend returns a machine code. We stash it so the
+// Login screen can explain WHY the user landed there ("signed out due to
+// inactivity"), then the normal clear-and-redirect flow takes over. We never
+// retry refresh on these — the session is gone, not the access token.
+const SESSION_END_KEY = "netops.sessionEnd";
+function setSessionEndCode(code: string) {
+  try { sessionStorage.setItem(SESSION_END_KEY, code); } catch { /* ignore */ }
+}
+export function takeSessionEndMessage(): string | null {
+  let code: string | null = null;
+  try {
+    code = sessionStorage.getItem(SESSION_END_KEY);
+    if (code) sessionStorage.removeItem(SESSION_END_KEY);
+  } catch { /* ignore */ }
+  if (!code) return null;
+  switch (code) {
+    case "SESSION_IDLE_TIMEOUT": return "You were signed out due to inactivity.";
+    case "SESSION_ABSOLUTE_TIMEOUT": return "Your session reached its time limit — please sign in again.";
+    case "SESSION_REVOKED": return "Your session was ended — please sign in again.";
+    default: return "Your session has expired — please sign in again.";
+  }
+}
+
 // Single-flight refresh: many requests can 401 at once; only one /refresh runs.
 let refreshInFlight: Promise<boolean> | null = null;
 async function doRefresh(rt: string): Promise<boolean> {
@@ -412,7 +436,16 @@ async function doRefresh(rt: string): Promise<boolean> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: rt }),
     });
-    if (!res.ok) return false;
+    if (!res.ok) {
+      // Surface a session-end reason (idle/absolute/revoked) for the Login screen.
+      try {
+        const err = await res.json();
+        if (err && typeof err.code === "string" && err.code.startsWith("SESSION_")) {
+          setSessionEndCode(err.code);
+        }
+      } catch { /* non-JSON error body — ignore */ }
+      return false;
+    }
     const data = await res.json();
     setToken(data.token);
     setRefresh(data.refresh_token);

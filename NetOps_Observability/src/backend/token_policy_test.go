@@ -8,9 +8,9 @@ import (
 
 func TestClampDuration(t *testing.T) {
 	cases := []struct {
-		name             string
+		name              string
 		d, min, max, want time.Duration
-		clamped          bool
+		clamped           bool
 	}{
 		{"in-range", time.Hour, time.Minute, 24 * time.Hour, time.Hour, false},
 		{"below-min", time.Second, time.Minute, 24 * time.Hour, time.Minute, true},
@@ -38,8 +38,8 @@ func TestAccessTokenTTLBounds(t *testing.T) {
 		t.Errorf("a 1s access TTL should clamp to %v, got %v", accessTTLMin, got)
 	}
 	t.Setenv("ACCESS_TOKEN_TTL", "")
-	if got := accessTokenTTL(); got != time.Hour {
-		t.Errorf("default access TTL should be 1h, got %v", got)
+	if got := accessTokenTTL(); got != 15*time.Minute {
+		t.Errorf("default access TTL should be 15m (short token + server-side sessions), got %v", got)
 	}
 	t.Setenv("ACCESS_TOKEN_TTL", "15m") // recommended
 	if got := accessTokenTTL(); got != 15*time.Minute {

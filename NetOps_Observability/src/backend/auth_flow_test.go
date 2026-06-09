@@ -16,6 +16,13 @@ import (
 )
 
 func newTestServer(t *testing.T) *httptest.Server {
+	srv, _ := newTestServerState(t)
+	return srv
+}
+
+// newTestServerState is newTestServer but also returns the underlying *server so
+// session/lifecycle tests can inspect and backdate state.
+func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	t.Helper()
 	dir := t.TempDir()
 	must := func(err error) {
@@ -39,7 +46,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	sv, err := newSavedStore(dir + "/saved.json")
 	must(err)
-	sc, err := newSNMPCredStore(dir + "/snmp.json", nil)
+	sc, err := newSNMPCredStore(dir+"/snmp.json", nil)
 	must(err)
 	au, err := newAuditStore(dir + "/audit.json")
 	must(err)
@@ -47,10 +54,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	must(err)
 	ss, err := newSecuritySettingsStore(dir + "/security_settings.json")
 	must(err)
+	sessStore, err := newSessionStore(dir + "/sessions.json")
+	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, orgs: os, bindings: bs, apiKeys: ks, refresh: rf,
 		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
-		securitySettings: ss, loginThrottle: newLoginThrottle(),
+		securitySettings: ss, loginThrottle: newLoginThrottle(), sessions: sessStore,
 		audit: au, startedAt: time.Now().UTC(),
 	}
 	must(us.SeedAdmin("admin", "password123"))
@@ -59,7 +68,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	s.routes(mux)
 	srv := httptest.NewServer(s.withAuth(s.withAudit(mux)))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, s
 }
 
 func do(t *testing.T, srv *httptest.Server, method, path, token string, body any) (int, []byte) {

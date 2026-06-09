@@ -49,6 +49,7 @@ type server struct {
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
 	loginThrottle    *loginThrottle // in-memory failed-login lockout (best-effort)
+	sessions         *sessionStore  // server-side session lifecycle (idle/absolute/revocation)
 	apiKeys          *apiKeyStore
 	refresh          *refreshStore
 	snmpCreds        *snmpCredStore
@@ -290,6 +291,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("security settings store: %v", err)
 	}
+	sessions, err := newSessionStore(envOr("SESSIONS_FILE", "/data/sessions.json"))
+	if err != nil {
+		log.Fatalf("session store: %v", err)
+	}
 	apiKeys, err := newAPIKeyStore(envOr("APIKEYS_FILE", "/data/apikeys.json"))
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
@@ -337,6 +342,7 @@ func newServer() *server {
 		bindings:         bindings,
 		securitySettings: securitySettings,
 		loginThrottle:    newLoginThrottle(),
+		sessions:         sessions,
 		apiKeys:          apiKeys,
 		refresh:          refresh,
 		snmpCreds:        snmpCreds,
@@ -901,6 +907,12 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+// writeJSONError is writeError plus a stable, machine-readable code the SPA can
+// branch on (e.g. SESSION_IDLE_TIMEOUT → clear tokens + redirect to login).
+func writeJSONError(w http.ResponseWriter, status int, msg, code string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
 // oidcProvider returns the current live SSO provider. It is swapped atomically

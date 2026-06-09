@@ -449,12 +449,27 @@ class Audit:
         else:
             self.rep.ok("Account lockout enforced", f"correct password refused after bad attempts ({st})")
 
-        # 8e. expiry / idle — document (not time-testable here).
+        # 8e. expiry — document (not time-testable here).
         self.rep.info("Password expiry not time-testable in a single run",
                       f"password_expire_enabled={original.get('password_expire_enabled')} / days={original.get('password_expire_days')}")
-        self.rep.warn("No idle / absolute web-session timeout beyond ACCESS_TOKEN_TTL",
-                      "the only session bound is the JWT access TTL (default 1h) + refresh rotation; "
-                      "there is no server-side idle-timeout for the web session.")
+
+        # 8f. session lifecycle — idle + absolute are now enforced server-side at the
+        #     refresh boundary (per-scope policy). We can't wall-clock idle in one run,
+        #     but we can verify the machinery is live: a short access token and the
+        #     scope's idle/absolute policy are present + enforced.
+        idle = base.get("idle_timeout_minutes")
+        absol = base.get("absolute_timeout_minutes")
+        self.rep.expect("Session idle/absolute policy present (per scope)",
+                        isinstance(idle, int) and idle > 0 and isinstance(absol, int) and absol > 0,
+                        ok_detail=f"idle={idle}m absolute={absol}m (configurable per Provider/Org/Tenant)",
+                        bad_detail=f"idle={idle} absolute={absol}")
+        # Short access token (the refresh-boundary idle signal).
+        fresh = self.login(self.admin_user, self.admin_pass)
+        exp = (fresh or {}).get("expires_in", 0)
+        self.rep.expect("Access token is short (≤1h) so idle is meaningful",
+                        0 < exp <= 3600, ok_detail=f"expires_in={exp}s", bad_detail=f"expires_in={exp}s")
+        self.rep.info("Idle/absolute enforced at /api/auth/refresh",
+                      "server-side sessions; wall-clock expiry covered by Go tests (TestSessionIdleAndAbsoluteAtRefresh)")
 
         # restore original policy
         self.admin("PUT", f"/api/security-settings?scope={scope}", original)

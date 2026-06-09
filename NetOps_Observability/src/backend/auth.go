@@ -54,7 +54,11 @@ func durEnv(key string, def time.Duration) time.Duration {
 // Token lifetimes are env-configurable but clamped to safe, standards-aligned
 // bounds — see token_policy.go.
 func accessTokenTTL() time.Duration {
-	return boundedDurEnv("ACCESS_TOKEN_TTL", time.Hour, accessTTLMin, accessTTLMax, accessTTLRecommended)
+	// Short access token (15 min): the access JWT is a stateless authz proof; the
+	// session lifecycle (idle/absolute/revocation) lives server-side and is enforced
+	// at /api/auth/refresh. A short TTL makes the refresh-boundary the activity
+	// signal (so idle timeout is meaningful) and tightens the revocation window.
+	return boundedDurEnv("ACCESS_TOKEN_TTL", 15*time.Minute, accessTTLMin, accessTTLMax, accessTTLRecommended)
 }
 func refreshTokenTTL() time.Duration {
 	return boundedDurEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour, refreshTTLMin, refreshTTLMax, refreshTTLRecommended)
@@ -187,15 +191,89 @@ func (s *server) lockoutPolicy(user User, found bool) (allowed, unlockSeconds in
 	return ss.LoginAttemptsAllowed, ss.UnlockTimeSeconds
 }
 
-// issueSession mints the access + refresh tokens, refreshes the console gate
-// cookie, and returns the standard login response. Shared by password login and
-// MFA-challenge completion (handleMFALogin).
+// sessionPolicy resolves the session lifecycle policy for an account's scope
+// (its tenant/org, else the provider scope) — so idle/absolute are configurable
+// per Provider / Organization / Tenant. Falls back to standard defaults when
+// Security Settings aren't wired (a minimal test server).
+func (s *server) sessionPolicy(tenant string) (idle, absolute time.Duration, enforceIdle, enforceAbsolute bool) {
+	idle, absolute, enforceIdle, enforceAbsolute = 30*time.Minute, 12*time.Hour, true, true
+	if s.securitySettings == nil {
+		return
+	}
+	scope := tenant
+	if scope == "" {
+		scope = "provider"
+	}
+	ss := s.securitySettings.Get(scope)
+	if ss.IdleTimeoutMinutes > 0 {
+		idle = time.Duration(ss.IdleTimeoutMinutes) * time.Minute
+	}
+	if ss.AbsoluteTimeoutMinutes > 0 {
+		absolute = time.Duration(ss.AbsoluteTimeoutMinutes) * time.Minute
+	}
+	return idle, absolute, ss.EnforceIdleTimeout, ss.EnforceAbsoluteTimeout
+}
+
+// recordSessionEvent emits a session lifecycle event to the structured log AND
+// the audit trail (SOC2 / SIEM-ready). event is one of SESSION_CREATED,
+// SESSION_REFRESHED, SESSION_IDLE_EXPIRED, SESSION_ABSOLUTE_EXPIRED, SESSION_REVOKED.
+func (s *server) recordSessionEvent(r *http.Request, event, userID, sessionID, tenant string, extra map[string]any) {
+	fields := map[string]any{"event": event, "user": userID, "session": sessionID}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	logInfo("session", event, fields)
+	if s.audit != nil {
+		decision := "allow"
+		if event == "SESSION_IDLE_EXPIRED" || event == "SESSION_ABSOLUTE_EXPIRED" || event == "SESSION_REVOKED" {
+			decision = "deny"
+		}
+		detail := map[string]any{"event": event, "session_id": sessionID}
+		for k, v := range extra {
+			detail[k] = v
+		}
+		s.audit.Record(AuditEvent{
+			Actor: userID, Tenant: tenant, Method: "SESSION", Path: "/session/" + event,
+			Decision: decision, Remote: clientIP(r).String(), Detail: detail,
+		})
+	}
+}
+
+// issueSession opens a server-side session, mints the access (carrying sid) +
+// refresh (bound to the session) tokens, refreshes the console gate cookie, and
+// returns the standard login response. Shared by password login and MFA-challenge
+// completion (handleMFALogin).
 func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
 	ttl := accessTokenTTL()
+	// Open the lifecycle session first (source of truth), snapshotting the scope's
+	// idle/absolute policy onto it.
+	var sid string
+	if s.sessions != nil {
+		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID)
+		if !enforceIdle {
+			idle = 0 // 0 = disabled at the Validate gate
+		}
+		if !enforceAbsolute {
+			absolute = 0
+		}
+		sess, evicted, err := s.sessions.Create(user.Username, clientIP(r).String(), r.UserAgent(), idle, absolute)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		sid = sess.ID
+		s.recordSessionEvent(r, "SESSION_CREATED", user.Username, sid, user.TenantID, map[string]any{
+			"idle_min": int(idle.Minutes()), "absolute_min": int(absolute.Minutes()),
+		})
+		for _, ev := range evicted { // concurrent-session cap evictions
+			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, ev, user.TenantID, map[string]any{"reason": "max_sessions"})
+		}
+	}
 	tok, err := signJWT(jwtClaims{
 		Sub:    user.Username,
 		Role:   user.Role,
 		Tenant: user.TenantID,
+		Sid:    sid,
 		Iat:    time.Now().Unix(),
 		Exp:    time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
@@ -203,7 +281,7 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	refresh, err := s.refresh.Issue(user.Username)
+	refresh, err := s.refresh.IssueForSession(user.Username, sid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -231,7 +309,27 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	newRefresh, username, err := s.refresh.Rotate(req.RefreshToken)
+	// Session lifecycle enforcement (idle + absolute) happens HERE, at the refresh
+	// boundary — the refresh is the activity signal. Validate BEFORE rotating so an
+	// idle/expired/revoked session can't mint a fresh token. Legacy/federated tokens
+	// (no session id) skip this and behave as before.
+	if sid, ok := s.refresh.SessionOf(req.RefreshToken); ok && sid != "" && s.sessions != nil {
+		sess, verr := s.sessions.Validate(sid, true, true)
+		if verr != nil {
+			code := sessionErrorCode(verr)
+			if code == "SESSION_IDLE_TIMEOUT" || code == "SESSION_ABSOLUTE_TIMEOUT" {
+				ev := "SESSION_IDLE_EXPIRED"
+				if code == "SESSION_ABSOLUTE_TIMEOUT" {
+					ev = "SESSION_ABSOLUTE_EXPIRED"
+				}
+				s.recordSessionEvent(r, ev, sess.UserID, sid, "", nil)
+			}
+			s.refresh.Revoke(req.RefreshToken) // drop the now-dead token
+			writeJSONError(w, http.StatusUnauthorized, verr.Error(), code)
+			return
+		}
+	}
+	newRefresh, username, sid, err := s.refresh.RotateSession(req.RefreshToken)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -241,9 +339,13 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
 		return
 	}
+	if sid != "" && s.sessions != nil {
+		s.sessions.Touch(sid) // record activity at the refresh boundary
+		s.recordSessionEvent(r, "SESSION_REFRESHED", user.Username, sid, user.TenantID, nil)
+	}
 	ttl := accessTokenTTL()
 	tok, err := signJWT(jwtClaims{
-		Sub: user.Username, Role: user.Role, Tenant: user.TenantID,
+		Sub: user.Username, Role: user.Role, Tenant: user.TenantID, Sid: sid,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
 	if err != nil {
@@ -308,6 +410,12 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.RefreshToken != "" {
+		// Revoke the server-side session too (not just the refresh token), so the
+		// logout is authoritative across the session's lifecycle.
+		if sid, ok := s.refresh.SessionOf(req.RefreshToken); ok && sid != "" && s.sessions != nil {
+			s.sessions.Revoke(sid)
+			s.recordSessionEvent(r, "SESSION_REVOKED", "", sid, "", map[string]any{"reason": "logout"})
+		}
 		s.refresh.Revoke(req.RefreshToken)
 	}
 	clearOSDCookie(w, r)
@@ -349,11 +457,11 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	tenants, allTenants := s.accessibleTenants(claims.Sub)
 	writeJSON(w, http.StatusOK, struct {
 		publicUser
-		PlatformAdmin    bool     `json:"platform_admin"`
-		OrgID            string   `json:"org_id"`
+		PlatformAdmin     bool     `json:"platform_admin"`
+		OrgID             string   `json:"org_id"`
 		AccessibleTenants []string `json:"accessible_tenants"`
-		AllTenants       bool     `json:"all_tenants"`
-		OrgAdminOf       []string `json:"org_admin_of"`
+		AllTenants        bool     `json:"all_tenants"`
+		OrgAdminOf        []string `json:"org_admin_of"`
 	}{toPublic(user), owner, s.principalOrg(claims), tenants, allTenants, s.orgAdminOrgs(claims.Sub)})
 }
 
@@ -441,6 +549,13 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err := s.users.ChangePassword(user.Username, req.NewPassword); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+	// Enterprise-safe: a password change revokes ALL of the user's sessions, so a
+	// stolen/old session can't survive a credential reset.
+	if s.sessions != nil {
+		if n := s.sessions.RevokeAllForUser(user.Username); n > 0 {
+			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID, map[string]any{"reason": "password_change", "count": n})
+		}
 	}
 	logInfo("auth", "password changed", map[string]any{"user": user.Username, "pre_auth": !authed})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

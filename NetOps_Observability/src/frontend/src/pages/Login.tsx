@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, AuthMethods } from "../services/api";
+import { api, AuthMethods, takeSessionEndMessage } from "../services/api";
 import { BRAND, BRAND_TAGLINE } from "../brand";
 import Icon from "../components/Icon";
 import ChangePasswordCard from "../components/ChangePasswordCard";
@@ -19,6 +19,8 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   );
   const [methods, setMethods] = useState<AuthMethods | null>(null);
   const [method, setMethod] = useState<Method>("local");
+  // Why the user landed here, if a server-side session ended (idle/absolute/revoked).
+  const [notice] = useState<string | null>(() => takeSessionEndMessage());
   // MFA challenge: set after a password succeeds for an MFA-enabled account.
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
@@ -119,6 +121,8 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       <form onSubmit={submit} className="card login-card">
         <h1 className="login-brand">{BRAND}</h1>
         <p className="login-sub">{BRAND_TAGLINE} · sign in to continue.</p>
+
+        {notice && <p className="login-msg" role="status" aria-live="polite" style={{ color: "var(--muted)" }}>{notice}</p>}
 
         <div className="login-form">
           {/* Method selector only appears when a directory provider is enabled. */}

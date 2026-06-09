@@ -122,6 +122,7 @@ type jwtClaims struct {
 	Sub    string   `json:"sub"`
 	Role   string   `json:"role"`
 	Tenant string   `json:"tenant,omitempty"` // tenant id the principal is bound to
+	Sid    string   `json:"sid,omitempty"`    // server-side session id (lifecycle source of truth)
 	Scopes []string `json:"scopes,omitempty"` // API-key scopes (empty for human sessions)
 	Iat    int64    `json:"iat"`
 	Nbf    int64    `json:"nbf,omitempty"` // not-before; enforced by verifyJWT (SR-024)

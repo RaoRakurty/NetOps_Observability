@@ -41,6 +41,13 @@ type SecuritySettings struct {
 	AccountValidityDays   int    `json:"account_validity_days"`
 	AccountInactivityDays int    `json:"account_inactivity_days"`
 	ConcurrentLogin       string `json:"concurrent_login"` // allow | deny
+	// Session lifecycle (per scope — Provider / Org / Tenant). Idle is operator-
+	// facing; absolute is a hidden standard default (kept out of the UI to avoid
+	// confusion). Enforced server-side at /api/auth/refresh.
+	IdleTimeoutMinutes     int  `json:"idle_timeout_minutes"`
+	AbsoluteTimeoutMinutes int  `json:"absolute_timeout_minutes"`
+	EnforceIdleTimeout     bool `json:"enforce_idle_timeout"`
+	EnforceAbsoluteTimeout bool `json:"enforce_absolute_timeout"`
 }
 
 func defaultSecuritySettings(scope string) SecuritySettings {
@@ -60,6 +67,13 @@ func defaultSecuritySettings(scope string) SecuritySettings {
 		AccountValidityDays:   180,
 		AccountInactivityDays: 90,
 		ConcurrentLogin:       "allow",
+		// Industry-aligned session defaults: idle 30 min (AWS Systems Manager idle
+		// range 1–60; PCI 8.1.8 ≤15), absolute 12 h (enterprise SaaS; AWS IAM
+		// Identity Center access-portal session default is 8 h). Both enforced.
+		IdleTimeoutMinutes:     30,
+		AbsoluteTimeoutMinutes: 720,
+		EnforceIdleTimeout:     true,
+		EnforceAbsoluteTimeout: true,
 	}
 }
 
@@ -130,6 +144,20 @@ func (s *securitySettingsStore) Set(scope string, in SecuritySettings) (Security
 	}
 	if in.ConcurrentLogin != "deny" {
 		in.ConcurrentLogin = "allow"
+	}
+	// Session lifetimes: clamp to sane minimums; a zero/blank value falls back to
+	// the standard default rather than disabling the control.
+	if in.IdleTimeoutMinutes <= 0 {
+		in.IdleTimeoutMinutes = 30
+	} else if in.IdleTimeoutMinutes < 5 {
+		in.IdleTimeoutMinutes = 5 // floor: avoid logging users out mid-action
+	}
+	if in.AbsoluteTimeoutMinutes <= 0 {
+		in.AbsoluteTimeoutMinutes = 720
+	}
+	// Absolute must be ≥ idle to be coherent.
+	if in.AbsoluteTimeoutMinutes < in.IdleTimeoutMinutes {
+		in.AbsoluteTimeoutMinutes = in.IdleTimeoutMinutes
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

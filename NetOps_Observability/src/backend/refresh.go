@@ -26,7 +26,8 @@ type refreshToken struct {
 	ID        string    `json:"id"`
 	Hash      string    `json:"hash"` // sha256 hex of the full secret
 	Username  string    `json:"username"`
-	Family    string    `json:"family"` // rotation lineage (reuse detection)
+	Family    string    `json:"family"`               // rotation lineage (reuse detection)
+	SessionID string    `json:"session_id,omitempty"` // server-side session this token belongs to
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Used      bool      `json:"used"`    // rotated away from
@@ -97,8 +98,9 @@ func (s *refreshStore) gcLocked(now time.Time) {
 	}
 }
 
-// issueLocked mints a token in the given family (empty = new family).
-func (s *refreshStore) issueLocked(username, family string) (string, error) {
+// issueLocked mints a token in the given family (empty = new family), bound to
+// the given server-side session id (empty for legacy/federated logins).
+func (s *refreshStore) issueLocked(username, family, sessionID string) (string, error) {
 	now := time.Now().UTC()
 	if family == "" {
 		family = randHex(8)
@@ -107,7 +109,7 @@ func (s *refreshStore) issueLocked(username, family string) (string, error) {
 	secret := id + "." + randHex(24)
 	sum := sha256.Sum256([]byte(secret))
 	s.toks[id] = refreshToken{
-		ID: id, Hash: hex.EncodeToString(sum[:]), Username: username, Family: family,
+		ID: id, Hash: hex.EncodeToString(sum[:]), Username: username, Family: family, SessionID: sessionID,
 		CreatedAt: now, ExpiresAt: now.Add(s.ttl),
 	}
 	if err := s.flushLocked(); err != nil {
@@ -129,12 +131,34 @@ func (s *refreshStore) SetTTL(ttl time.Duration) {
 	s.mu.Unlock()
 }
 
-// Issue creates a brand-new refresh token (and family) for a username.
+// Issue creates a brand-new refresh token (and family) for a username, with no
+// server-side session (legacy / federated logins).
 func (s *refreshStore) Issue(username string) (string, error) {
+	return s.IssueForSession(username, "")
+}
+
+// IssueForSession creates a brand-new refresh token (and family) bound to a
+// server-side session id.
+func (s *refreshStore) IssueForSession(username, sessionID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gcLocked(time.Now().UTC())
-	return s.issueLocked(username, "")
+	return s.issueLocked(username, "", sessionID)
+}
+
+// SessionOf returns the session id a refresh token belongs to, without rotating
+// it (used by logout). ok=false if the token is unknown/malformed.
+func (s *refreshStore) SessionOf(secret string) (string, bool) {
+	id, ok := parseSecret(secret)
+	if !ok {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.toks[id]; ok {
+		return t.SessionID, true
+	}
+	return "", false
 }
 
 func parseSecret(secret string) (string, bool) {
@@ -154,41 +178,50 @@ func (s *refreshStore) revokeFamilyLocked(family string) {
 	}
 }
 
-// Rotate validates a refresh token and swaps it for a fresh one. On replay of an
-// already-used/revoked token, the whole family is revoked and an error returned.
+// Rotate validates a refresh token and swaps it for a fresh one (3-return form
+// kept for the store's own tests). On replay of an already-used/revoked token,
+// the whole family is revoked and an error returned.
 func (s *refreshStore) Rotate(secret string) (newSecret, username string, err error) {
+	ns, u, _, e := s.RotateSession(secret)
+	return ns, u, e
+}
+
+// RotateSession is Rotate plus the rotated token's server-side session id, so the
+// refresh handler can enforce the session lifecycle. The replacement token keeps
+// the same session id (and family) as the one it rotates away from.
+func (s *refreshStore) RotateSession(secret string) (newSecret, username, sessionID string, err error) {
 	id, ok := parseSecret(secret)
 	if !ok {
-		return "", "", errors.New("malformed refresh token")
+		return "", "", "", errors.New("malformed refresh token")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.toks[id]
 	if !ok {
-		return "", "", errors.New("unknown refresh token")
+		return "", "", "", errors.New("unknown refresh token")
 	}
 	sum := sha256.Sum256([]byte(secret))
 	if hex.EncodeToString(sum[:]) != t.Hash {
-		return "", "", errors.New("invalid refresh token")
+		return "", "", "", errors.New("invalid refresh token")
 	}
 	now := time.Now().UTC()
 	if t.Revoked || t.Used {
 		// Replay of a rotated/killed token — treat as compromise.
 		s.revokeFamilyLocked(t.Family)
 		_ = s.flushLocked()
-		return "", "", errors.New("refresh token reuse detected; family revoked")
+		return "", "", "", errors.New("refresh token reuse detected; family revoked")
 	}
 	if now.After(t.ExpiresAt) {
-		return "", "", errors.New("refresh token expired")
+		return "", "", "", errors.New("refresh token expired")
 	}
 	t.Used = true
 	t.Revoked = true
 	s.toks[id] = t
-	ns, err := s.issueLocked(t.Username, t.Family)
+	ns, err := s.issueLocked(t.Username, t.Family, t.SessionID)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return ns, t.Username, nil
+	return ns, t.Username, t.SessionID, nil
 }
 
 // Revoke kills a single refresh token (logout). Unknown tokens are ignored.
