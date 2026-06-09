@@ -53,8 +53,8 @@ device-side config beyond an export target.
    Flows panel.
 5. **Geo IP** — GeoLite2 enrichment (vector or query-time) → country panels +
    dashboard-wide country filter.
-6. **Quality** (Monitoring) — composite over interface errors/discards/util +
-   tunnel QoE.
+6. ✅ **Quality** (Monitoring) — error/discard rates + saturation + tunnel QoE.
+   Done (`3448d80`).
 7. **IPsec** — wire tunnels into the Device Monitoring section.
 8. **Device Geomap** — GeoIP/site placement.
 9. **New Monitor / Dashboard List / Command Center** — UI compositions.
