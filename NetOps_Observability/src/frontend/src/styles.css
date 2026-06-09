@@ -2282,3 +2282,66 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   .conn-tile { transition: none !important; }
   .ds-modal, .ds-modal-scrim { animation: none !important; }
 }
+
+/* ============================================================================
+   Flows — NetFlow analytics dashboard (left section nav + filter bar + panels)
+   ========================================================================== */
+.flows-shell { display: flex; gap: 16px; align-items: flex-start; }
+.flows-nav {
+  flex: 0 0 196px; position: sticky; top: 8px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 8px;
+}
+.flows-nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border: none; background: transparent;
+  color: var(--fg-muted); font-size: 12.5px; font-weight: 500;
+  text-align: left; border-radius: var(--radius-sm); cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.flows-nav-item:hover { background: var(--surface-2); color: var(--fg); }
+.flows-nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.flows-nav-item svg { flex: 0 0 auto; opacity: .85; }
+
+.flows-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.flows-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+
+.flows-filterbar { display: flex; flex-direction: column; gap: 8px; }
+.flows-filter-fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.flows-filter-fields input {
+  width: 150px; padding: 6px 9px; font-size: 12.5px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--fg);
+}
+.flows-filter-fields input:focus { outline: none; border-color: var(--accent); }
+.flows-filter-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.flows-filter-controls select {
+  padding: 6px 9px; font-size: 12.5px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--fg);
+}
+.flows-active-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.flows-filterbar .btn-primary {
+  padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: var(--accent); color: #fff;
+}
+.flows-filterbar .btn-primary:hover { filter: brightness(1.06); }
+.flows-filterbar .btn-ghost {
+  padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: transparent; color: var(--fg-muted);
+}
+.flows-filterbar .btn-ghost:hover { color: var(--fg); border-color: var(--border-strong); }
+
+/* Compact segmented toggle (bar/table, uni/bi) */
+.seg-mini { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.seg-mini button {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; font-size: 12px; border: none; background: var(--surface);
+  color: var(--fg-muted); cursor: pointer; transition: background .12s ease, color .12s ease;
+}
+.seg-mini button + button { border-left: 1px solid var(--border); }
+.seg-mini button:hover { background: var(--surface-2); color: var(--fg); }
+.seg-mini button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }

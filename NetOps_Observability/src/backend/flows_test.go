@@ -208,6 +208,137 @@ func TestHandleFlowsByTypeBuildsSQL(t *testing.T) {
 	}
 }
 
+// isIPish allowlists IPv4/IPv6-literal characters only; anything that could
+// break out of a SQL string literal (quotes, backslash, spaces, letters g-z)
+// must be rejected.
+func TestIsIPish(t *testing.T) {
+	ok := []string{"10.1.0.1", "255.255.255.255", "::1", "fe80::1", "2001:db8::abcd"}
+	for _, s := range ok {
+		if !isIPish(s) {
+			t.Errorf("isIPish(%q) = false, want true", s)
+		}
+	}
+	bad := []string{"", "10.1.0.1'; DROP", "1.2.3.4 OR 1=1", "host\\", "x'", "8.8.8.8;", strings.Repeat("1", 46)}
+	for _, s := range bad {
+		if isIPish(s) {
+			t.Errorf("isIPish(%q) = true, want false", s)
+		}
+	}
+}
+
+// flowFilterClause builds an injection-safe AND-fragment from filter-bar params,
+// validating addresses (isIPish) and interface ids (integers); malformed input
+// is an error, never a silently-dropped or injected value.
+func TestFlowFilterClause(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/flows/topn?src=10.1.0.1&dst=10.2.0.2&device=10.0.0.9&in_if=10&out_if=20", nil)
+	clause, err := flowFilterClause(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{
+		"src_addr = '10.1.0.1'", "dst_addr = '10.2.0.2'",
+		"sampler_address = '10.0.0.9'", "in_if = 10", "out_if = 20",
+	} {
+		if !strings.Contains(clause, want) {
+			t.Errorf("clause missing %q: %q", want, clause)
+		}
+	}
+	// No filters -> empty fragment.
+	if c, err := flowFilterClause(httptest.NewRequest(http.MethodGet, "/api/flows/topn", nil)); err != nil || c != "" {
+		t.Errorf("no-filter clause = %q,%v want empty", c, err)
+	}
+	// Injection attempt in an address param is rejected.
+	if _, err := flowFilterClause(httptest.NewRequest(http.MethodGet, "/api/flows/topn?src=1'+OR+'1'='1", nil)); err == nil {
+		t.Error("expected error for malformed src filter")
+	}
+	// Non-numeric interface is rejected.
+	if _, err := flowFilterClause(httptest.NewRequest(http.MethodGet, "/api/flows/topn?in_if=abc", nil)); err == nil {
+		t.Error("expected error for non-numeric in_if")
+	}
+}
+
+// handleFlowsTopN: a valid dimension builds GROUP BY <expr> AS k with the limit,
+// applies the filter fragment, and drops zero rows for nonzero dims (ports).
+func TestHandleFlowsTopNBuildsSQL(t *testing.T) {
+	var gotSQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL = string(b)
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	r := req(http.MethodGet, "/api/flows/topn?by=dst_port&limit=12&device=10.0.0.9", "", superA())
+	w := httptest.NewRecorder()
+	s.handleFlowsTopN(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	for _, want := range []string{
+		"toString(dst_port) AS k",
+		"GROUP BY k",
+		"LIMIT 12",
+		"sampler_address = '10.0.0.9'",
+		"AND dst_port > 0", // nonzero noise filter
+		"FORMAT JSON",
+	} {
+		if !strings.Contains(gotSQL, want) {
+			t.Errorf("topn SQL missing %q\nSQL:\n%s", want, gotSQL)
+		}
+	}
+}
+
+// handleFlowsTopN rejects an unknown/forbidden dimension with 400 and never
+// reaches ClickHouse (the client cannot pick an arbitrary GROUP BY column).
+func TestHandleFlowsTopNRejectsBadDim(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	for _, by := range []string{"", "bogus", "bytes", "ts", "tenant_id"} {
+		r := req(http.MethodGet, "/api/flows/topn?by="+by, "", superA())
+		w := httptest.NewRecorder()
+		s.handleFlowsTopN(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("by=%q status = %d, want 400", by, w.Code)
+		}
+	}
+	if called {
+		t.Fatal("bad dimension must not reach ClickHouse")
+	}
+}
+
+// handleFlowsTopTalkers with direction=bi folds A↔B into one row by grouping on
+// the ordered address pair (least/greatest).
+func TestHandleFlowsTopTalkersBidirectional(t *testing.T) {
+	var gotSQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL = string(b)
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+
+	s := flowsTestServer(t)
+	r := req(http.MethodGet, "/api/flows/top?direction=bi", "", superA())
+	w := httptest.NewRecorder()
+	s.handleFlowsTopTalkers(w, r)
+
+	if !strings.Contains(gotSQL, "least(src_addr, dst_addr) AS src") ||
+		!strings.Contains(gotSQL, "greatest(src_addr, dst_addr) AS dst") {
+		t.Errorf("bidirectional SQL missing least/greatest folding:\n%s", gotSQL)
+	}
+}
+
 // A scoped principal with no visible devices short-circuits handleFlowsByType to
 // the empty ClickHouse envelope WITHOUT issuing any backend query.
 func TestHandleFlowsByTypeEmptyTenantShortCircuits(t *testing.T) {

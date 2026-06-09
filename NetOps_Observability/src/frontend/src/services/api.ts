@@ -300,6 +300,28 @@ export type ClickHouseResponse<T = Record<string, any>> = {
   rows?: number;
 };
 
+// NetFlow dashboard filter-bar selection. All optional; only set keys are sent.
+export type FlowFilters = {
+  src?: string; // initiator (source) IP
+  dst?: string; // responder (destination) IP
+  device?: string; // exporter / sampler IP
+  in_if?: string; // ingress interface (SNMP ifIndex)
+  out_if?: string; // egress interface
+};
+
+// flowQS serializes flow filters (and optional direction) into a query-string
+// suffix (leading "&"), skipping empty values. Returns "" when nothing is set.
+function flowQS(filters?: FlowFilters, direction = ""): string {
+  const p: string[] = [];
+  if (filters) {
+    for (const [k, v] of Object.entries(filters)) {
+      if (v) p.push(`${k}=${encodeURIComponent(v)}`);
+    }
+  }
+  if (direction) p.push(`direction=${encodeURIComponent(direction)}`);
+  return p.length ? `&${p.join("&")}` : "";
+}
+
 export type Finding = {
   ts: string;
   id: string;
@@ -766,18 +788,28 @@ export const api = {
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
 
   // Flows (ClickHouse). `type` filters by source family (netflow|ipfix|sflow);
-  // empty = all sources.
-  topTalkers: (sinceSeconds = 3600, limit = 20, type = "") =>
+  // empty = all sources. `filters` narrows by the dashboard filter bar
+  // (src/dst IP, exporter device IP, ingress/egress interface); `direction=bi`
+  // folds A↔B conversations into one row.
+  topTalkers: (sinceSeconds = 3600, limit = 20, type = "", filters?: FlowFilters, direction = "") =>
     request<ClickHouseResponse>(
-      `/api/flows/top?since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}`,
+      `/api/flows/top?since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters, direction)}`,
     ),
-  flowsByProto: (sinceSeconds = 3600, type = "") =>
-    request<ClickHouseResponse>(`/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}`),
+  // Generic top-N by a single allowlisted dimension (device | in_if | out_if |
+  // src_addr | dst_addr | src_as | dst_as | src_port | dst_port | proto).
+  flowsTopN: (by: string, sinceSeconds = 3600, limit = 20, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/topn?by=${by}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
+  flowsByProto: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
   flowsByType: (sinceSeconds = 3600) =>
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
-  flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "") =>
+  flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
-      `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}`,
+      `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   tunnels: (limit = 200, status?: string) => {
     const p = new URLSearchParams({ limit: String(limit) });

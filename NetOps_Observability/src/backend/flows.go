@@ -43,15 +43,89 @@ func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
 		writeEmptyClickHouse(w)
 		return
 	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// Bidirectional folding: a conversation A↔B is one row regardless of who
+	// initiated, by grouping on the ordered address pair (least/greatest).
+	srcExpr, dstExpr := "src_addr", "dst_addr"
+	if strings.ToLower(strings.TrimSpace(r.URL.Query().Get("direction"))) == "bi" {
+		srcExpr, dstExpr = "least(src_addr, dst_addr)", "greatest(src_addr, dst_addr)"
+	}
 	sql := `
-SELECT src_addr AS src,
-       dst_addr AS dst,
+SELECT ` + srcExpr + ` AS src,
+       ` + dstExpr + ` AS dst,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + `
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
  GROUP BY src, dst
+ ORDER BY bytes_total DESC
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+	proxyClickHouse(w, r, sql)
+}
+
+// flowTopDim describes one allowlisted top-N grouping dimension: the SQL
+// expression to GROUP BY (aliased `k`), and an optional column that must be
+// > 0 to drop noise rows (e.g. port 0 / AS 0 / interface 0). The client never
+// supplies SQL — only the map key (?by=), so this is injection-safe.
+type flowTopDim struct {
+	expr    string
+	nonzero string
+}
+
+var flowTopDims = map[string]flowTopDim{
+	"device":   {"sampler_address", ""},
+	"in_if":    {"toString(in_if)", "in_if"},
+	"out_if":   {"toString(out_if)", "out_if"},
+	"src_addr": {"src_addr", ""},
+	"dst_addr": {"dst_addr", ""},
+	"src_as":   {"toString(src_as)", "src_as"},
+	"dst_as":   {"toString(dst_as)", "dst_as"},
+	"src_port": {"toString(src_port)", "src_port"},
+	"dst_port": {"toString(dst_port)", "dst_port"},
+	"proto":    {"toString(proto)", ""},
+}
+
+// handleFlowsTopN is the generic top-N-by-dimension endpoint backing the NetFlow
+// dashboard's many "Top <thing>" panels (devices, interfaces, IPs, AS, ports,
+// protocols). One parametrized route (?by=) instead of a handler per panel keeps
+// the SQL server-side and the dimension set allowlisted. Returns rows of
+// {k, bytes_total, packets_total, flows} ordered by bytes desc.
+func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
+	dim, ok := flowTopDims[strings.ToLower(strings.TrimSpace(r.URL.Query().Get("by")))]
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("invalid 'by' dimension"))
+		return
+	}
+	limit := intQuery(r, "limit", 20, 1, 500)
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	nz := ""
+	if dim.nonzero != "" {
+		nz = " AND " + dim.nonzero + " > 0"
+	}
+	sql := `
+SELECT ` + dim.expr + ` AS k,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + nz + `
+ GROUP BY k
  ORDER BY bytes_total DESC
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
@@ -65,13 +139,18 @@ func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 		writeEmptyClickHouse(w)
 		return
 	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	sql := `
 SELECT proto,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + `
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
  GROUP BY proto
  ORDER BY bytes_total DESC
  FORMAT JSON`
@@ -111,12 +190,17 @@ func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
 		writeEmptyClickHouse(w)
 		return
 	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	sql := `
 SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` SECOND) AS bucket,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total
   FROM netops.flows
- WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + `
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND` + tenantClause + flowTypeClause(r) + filter + `
  GROUP BY bucket
  ORDER BY bucket
  FORMAT JSON`
@@ -172,6 +256,62 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)
+}
+
+// isIPish reports whether s looks like an IPv4/IPv6 literal — digits, hex
+// letters, dots and colons only. Used to allowlist address/device filter params
+// before they are interpolated into a ClickHouse string literal (quote-escaping
+// alone is not enough; ClickHouse honors backslash escapes — SR-011).
+func isIPish(s string) bool {
+	if s == "" || len(s) > 45 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// flowFilterClause builds an injection-safe AND-fragment from the optional
+// filter-bar params: src/dst address + exporter device (allowlisted via isIPish,
+// then quote-escaped) and ingress/egress interface ids (parsed as integers). A
+// malformed value is a 400 (returned error), never silently dropped.
+func flowFilterClause(r *http.Request) (string, error) {
+	q := r.URL.Query()
+	var conds []string
+	for _, f := range []struct{ param, col string }{
+		{"src", "src_addr"}, {"dst", "dst_addr"}, {"device", "sampler_address"},
+	} {
+		v := strings.TrimSpace(q.Get(f.param))
+		if v == "" {
+			continue
+		}
+		if !isIPish(v) {
+			return "", errors.New("invalid filter value for " + f.param)
+		}
+		conds = append(conds, f.col+" = '"+strings.ReplaceAll(v, "'", "''")+"'")
+	}
+	for _, f := range []struct{ param, col string }{
+		{"in_if", "in_if"}, {"out_if", "out_if"},
+	} {
+		v := strings.TrimSpace(q.Get(f.param))
+		if v == "" {
+			continue
+		}
+		n, err := parseIntStrict(v)
+		if err != nil || n < 0 {
+			return "", errors.New("invalid filter value for " + f.param)
+		}
+		conds = append(conds, f.col+" = "+intToString(n))
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " AND " + strings.Join(conds, " AND "), nil
 }
 
 // flowTypeClause restricts flow rows to a single source family when ?type= is
