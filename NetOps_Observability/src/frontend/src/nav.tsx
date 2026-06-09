@@ -24,6 +24,7 @@ import Settings from "./tabs/Settings";
 import SourceOfTruth from "./tabs/SourceOfTruth";
 import StackHealth from "./tabs/StackHealth";
 import AuditLog from "./tabs/AuditLog";
+import AccessExplorer from "./tabs/AccessExplorer";
 import {
   IdentityAccess,
   AuthenticationAdmin,
@@ -181,6 +182,7 @@ export const NAV: NavSection[] = [
       // split into Global (platform-wide) and Tenants (per tenant, configured
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
+      { id: "access-explorer", label: "Access Explorer", render: () => <AccessExplorer /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,

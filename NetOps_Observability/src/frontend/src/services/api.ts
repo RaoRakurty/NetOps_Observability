@@ -962,6 +962,10 @@ export const api = {
   // ---------- Accessible scopes (the top-bar Org|Region|Tenant selector) ----
   myScopes: () => request<{ scopes: ScopeDetail[]; all_tenants: boolean }>("/api/scopes"),
 
+  // ---------- Access Explorer (L3: "what can X access, and why?") ----------
+  explainAccess: (principal?: string) =>
+    request<AccessExplanation>(`/api/access/explain${principal ? `?principal=${encodeURIComponent(principal)}` : ""}`),
+
   // ---------- Break-glass (time-boxed, audited operator elevation) ----------
   listBreakGlass: () => request<RoleBinding[]>("/api/breakglass"),
   openBreakGlass: (tenantId: string, reason: string, durationMinutes = 60) =>
@@ -1187,6 +1191,9 @@ export type Org = {
 };
 export type Region = { id: string; label: string };
 export type ScopeDetail = { tenant_id: string; tenant_name: string; org_id: string; org_name: string; region: string };
+export type GrantReason = { role_id: string; scope_id: string; effect: string; granted_by?: string; reason?: string; break_glass?: boolean; expires_at?: string };
+export type TenantReach = { tenant_id: string; tenant_name: string; org_id: string; org_name: string; granted_by: GrantReason[] };
+export type AccessExplanation = { principal: string; all_tenants: boolean; org_admin_of: string[] | null; bindings: RoleBinding[] | null; reaches: TenantReach[] | null };
 export type RoleBinding = {
   id: string;
   principal_id: string;

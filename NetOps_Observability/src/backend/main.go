@@ -553,6 +553,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/breakglass", s.handleBreakGlass)
 	mux.HandleFunc("/api/breakglass/", s.handleBreakGlassByID)
 	mux.HandleFunc("/api/scopes", s.handleMyScopes)
+	mux.HandleFunc("/api/access/explain", s.handleAccessExplain)
 	mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/apikeys/", s.handleAPIKeyByID)
 	// SNMP credential profiles (v1/v2c/v3) — infrastructure-gated.
