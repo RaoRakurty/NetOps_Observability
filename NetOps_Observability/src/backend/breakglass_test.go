@@ -67,7 +67,7 @@ func TestBreakGlassUnhidesRestricted(t *testing.T) {
 // TestBreakGlassHTTP exercises the API: open → list → end, and the guards.
 func TestBreakGlassHTTP(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 	if st, _ := do(t, srv, "POST", "/api/tenants", admin, map[string]any{"name": "Acme", "operator_restricted": true}); st != 201 {
 		t.Fatal("create restricted tenant")
 	}
@@ -88,10 +88,10 @@ func TestBreakGlassHTTP(t *testing.T) {
 		t.Fatalf("expected 1 active session, got %s (err %v)", b, err)
 	}
 	// a non-owner cannot open break-glass
-	if st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{"username": "tu", "password": "password123", "role": "super-admin", "tenant_id": "acme"}); st != 201 {
+	if st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{"username": "tu", "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": "acme"}); st != 201 {
 		t.Fatalf("create tenant user: %d %s", st, b)
 	}
-	tu := login(t, srv, "tu", "password123").Token
+	tu := login(t, srv, "tu", "Passw0rd!2345").Token
 	if st, _ := do(t, srv, "POST", "/api/breakglass", tu, map[string]any{"tenant_id": "acme", "reason": "x"}); st != 403 {
 		t.Errorf("non-owner break-glass: got %d, want 403", st)
 	}

@@ -48,7 +48,7 @@ func TestSNMPProfileStoreSeedAndExtend(t *testing.T) {
 
 func TestSNMPProfilesEndpoint(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	st, b := do(t, srv, "GET", "/api/snmp/profiles", admin, nil)
 	if st != 200 {

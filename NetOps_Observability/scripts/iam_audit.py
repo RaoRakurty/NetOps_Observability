@@ -222,7 +222,7 @@ class Audit:
         self.orgs.append(self.org_a)
 
         # Org-owned user (tenant_id = org id) — must NOT be global.
-        st, _ = self.mk_user(f"{self.tag}_alice", "alice-pass-123", role="operator", tenant_id=self.org_a)
+        st, _ = self.mk_user(f"{self.tag}_alice", "Aud1tPass!2345", role="operator", tenant_id=self.org_a)
         self.rep.expect("Create org-scoped user (tenant_id = org id)", st == 201, bad_detail=f"got {st}")
         st, allusers = self.admin("GET", "/api/users")
         alice = _find(allusers, "username", f"{self.tag}_alice")
@@ -238,7 +238,7 @@ class Audit:
                              "org_id": self.org_a, "region": ""})
         if self.rep.expect("Create tenant inside org", st == 201 and isinstance(ten, dict), bad_detail=f"got {st}: {ten}"):
             self.tenants.append((ten["id"], ten["name"]))
-            st, _ = self.mk_user(f"{self.tag}_tom", "tom-pass-12345", role="read-only", tenant_id=ten["id"])
+            st, _ = self.mk_user(f"{self.tag}_tom", "Aud1tPass!2345", role="read-only", tenant_id=ten["id"])
             self.rep.expect("Create tenant-scoped user", st == 201, bad_detail=f"got {st}")
 
         # Cascade guard: an org that still owns tenants cannot be deleted.
@@ -256,10 +256,10 @@ class Audit:
             return
         self.org_b = orgb["id"]
         self.orgs.append(self.org_b)
-        self.mk_user(f"{self.tag}_a_admin", "aadmin-pass-1", role="admin", tenant_id=self.org_a)
-        self.mk_user(f"{self.tag}_b_bob", "bbob-pass-1234", role="operator", tenant_id=self.org_b)
+        self.mk_user(f"{self.tag}_a_admin", "Aud1tPass!2345", role="admin", tenant_id=self.org_a)
+        self.mk_user(f"{self.tag}_b_bob", "Aud1tPass!2345", role="operator", tenant_id=self.org_b)
 
-        lr = self.login(f"{self.tag}_a_admin", "aadmin-pass-1")
+        lr = self.login(f"{self.tag}_a_admin", "Aud1tPass!2345")
         if not self.rep.expect("Org-A admin can log in", lr is not None):
             return
         st, visible = self.api.call("GET", "/api/users", lr["token"])
@@ -278,15 +278,15 @@ class Audit:
     def phase_lifecycle(self):
         self.rep.section("5. Disable / Delete enforcement + token caching window")
         u = f"{self.tag}_victim"
-        self.mk_user(u, "victim-pass-123", role="read-only", tenant_id="")
-        pre = self.login(u, "victim-pass-123")
+        self.mk_user(u, "Aud1tPass!2345", role="read-only", tenant_id="")
+        pre = self.login(u, "Aud1tPass!2345")
         self.rep.expect("New user can log in", pre is not None)
         pre_tok = pre["token"] if pre else None
 
         # DISABLE → new login must be refused (regression target for the fix).
         st, _ = self.admin("PATCH", f"/api/users/{u}", {"status": "disabled"})
         self.rep.expect("Disable user (PATCH status=disabled)", st == 200, bad_detail=f"got {st}")
-        st, _ = self.api.call("POST", "/api/auth/login", body={"username": u, "password": "victim-pass-123"})
+        st, _ = self.api.call("POST", "/api/auth/login", body={"username": u, "password": "Aud1tPass!2345"})
         self.rep.expect("Disabled user CANNOT start a new session", st == 401,
                         bad_detail=f"got {st} — disabled account still logs in!")
         # Refresh must also be refused for the disabled account.
@@ -310,7 +310,7 @@ class Audit:
         if st == 204 and u in self.users:
             self.users.remove(u)
         self.rep.expect("Delete user", st == 204, bad_detail=f"got {st}")
-        st, _ = self.api.call("POST", "/api/auth/login", body={"username": u, "password": "victim-pass-123"})
+        st, _ = self.api.call("POST", "/api/auth/login", body={"username": u, "password": "Aud1tPass!2345"})
         self.rep.expect("Deleted user cannot log in", st == 401, bad_detail=f"got {st}")
         st, binds = self.admin("GET", "/api/bindings")
         dangling = [b for b in binds if isinstance(b, dict) and b.get("principal_id", "").lower() == u.lower()] if isinstance(binds, list) else []
@@ -321,7 +321,7 @@ class Audit:
     def phase_bindings(self):
         self.rep.section("6. Role bindings — grant / revoke")
         u = f"{self.tag}_granted"
-        self.mk_user(u, "granted-pass-1", role="read-only", tenant_id="")
+        self.mk_user(u, "Aud1tPass!2345", role="read-only", tenant_id="")
         scope = f"org:{self.org_a}"
         st, b = self.admin("POST", "/api/bindings",
                           {"principal_id": u, "role_id": "operator", "scope_id": scope, "effect": "allow"})

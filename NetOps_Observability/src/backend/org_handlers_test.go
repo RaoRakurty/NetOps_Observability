@@ -10,7 +10,7 @@ import (
 // create → delete guard → delete.
 func TestOrgHTTPLifecycle(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	// create
 	st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{
@@ -98,7 +98,7 @@ func TestOrgHTTPLifecycle(t *testing.T) {
 // and sees only its own org in the list.
 func TestOrgHTTPAuthz(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	// platform owner makes an org + a tenant in it + a tenant admin there.
 	if st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{"name": "Acme Corp"}); st != 201 {
@@ -108,11 +108,11 @@ func TestOrgHTTPAuthz(t *testing.T) {
 		t.Fatal("create tenant")
 	}
 	if st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
-		"username": "alice", "password": "password123", "role": "super-admin", "tenant_id": "acme-prod",
+		"username": "alice", "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": "acme-prod",
 	}); st != 201 {
 		t.Fatalf("create alice: %d %s", st, b)
 	}
-	alice := login(t, srv, "alice", "password123").Token
+	alice := login(t, srv, "alice", "Passw0rd!2345").Token
 
 	// alice cannot create or mutate orgs
 	if st, _ := do(t, srv, "POST", "/api/orgs", alice, map[string]any{"name": "evil"}); st != 403 {

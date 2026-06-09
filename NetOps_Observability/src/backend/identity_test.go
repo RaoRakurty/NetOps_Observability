@@ -62,7 +62,7 @@ func TestUserStoreAdminSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}
-	if _, err := us.CreateFull(User{Username: "root", Role: RoleSuperAdmin}, "password123"); err != nil {
+	if _, err := us.CreateFull(User{Username: "root", Role: RoleSuperAdmin}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("create super-admin: %v", err)
 	}
 	// The last super-admin can't be deleted or demoted.
@@ -73,7 +73,7 @@ func TestUserStoreAdminSafe(t *testing.T) {
 		t.Error("expected refusal demoting last super-admin")
 	}
 	// Add a second super-admin; now the first can be demoted.
-	if _, err := us.CreateFull(User{Username: "root2", Role: RoleSuperAdmin}, "password123"); err != nil {
+	if _, err := us.CreateFull(User{Username: "root2", Role: RoleSuperAdmin}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("create second super-admin: %v", err)
 	}
 	if _, err := us.Update("root", User{Role: RoleReadOnly}); err != nil {

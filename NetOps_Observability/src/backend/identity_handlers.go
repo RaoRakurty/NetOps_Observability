@@ -122,6 +122,17 @@ func (s *server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("unknown role"))
 			return
 		}
+		// Enforce the target scope's resolved password policy on admin-create — same
+		// rules the user's own change-password enforces, so an admin can't seed a
+		// weaker password than the policy allows. (Empty password = invited/passwordless
+		// account; CreateFull permits it and login simply never matches.)
+		if req.Password != "" {
+			rules := s.callerPasswordRules(jwtClaims{Sub: req.Username, Role: role, Tenant: req.TenantID})
+			if err := validatePasswordAgainstPolicy(req.Password, rules); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
 		u, err := s.users.CreateFull(User{
 			Username: req.Username, Role: role, Email: req.Email,
 			DisplayName: req.DisplayName, TenantID: req.TenantID, Status: req.Status,

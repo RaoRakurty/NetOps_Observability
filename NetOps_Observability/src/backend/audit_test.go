@@ -10,15 +10,15 @@ import (
 // admin sees only its own tenant's events.
 func TestAuditTrail(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token // platform owner (tenant "")
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token // platform owner (tenant "")
 
 	st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
-		"username": "alice", "password": "password123", "role": "super-admin", "tenant_id": "acme",
+		"username": "alice", "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": "acme",
 	})
 	if st != 201 {
 		t.Fatalf("create alice: %d %s", st, b)
 	}
-	alice := login(t, srv, "alice", "password123").Token
+	alice := login(t, srv, "alice", "Passw0rd!2345").Token
 
 	// A successful mutation by alice (recorded, tenant=acme).
 	if st, b := do(t, srv, "POST", "/api/saved", alice, map[string]any{

@@ -33,7 +33,7 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 	must(err)
 	rf, err := newRefreshStore(dir+"/refresh.json", time.Hour)
 	must(err)
-	must(us.SeedAdmin("admin", "password123"))
+	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s := &server{
 		users:     us,
 		roles:     rs,
@@ -54,7 +54,7 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 
 func adminToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
-	return login(t, srv, "admin", "password123").Token
+	return login(t, srv, "admin", "Passw0rd!2345").Token
 }
 
 // ---------------------------------------------------------------------------

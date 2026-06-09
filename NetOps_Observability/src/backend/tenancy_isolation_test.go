@@ -12,13 +12,13 @@ import (
 // roles). The cross-tenant platform owner still sees everything. This is the
 // regression guard for the reported leak (a tenant super-admin acting globally).
 func TestTenantIsolationHTTP(t *testing.T) {
-	srv := newTestServer(t) // seeds admin/password123 = platform owner (super-admin, global)
-	admin := login(t, srv, "admin", "password123").Token
+	srv := newTestServer(t) // seeds admin/Passw0rd!2345 = platform owner (super-admin, global)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	// Platform owner provisions two isolated tenants' admins.
 	mk := func(user, tenant string) {
 		st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
-			"username": user, "password": "password123", "role": "super-admin", "tenant_id": tenant,
+			"username": user, "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": tenant,
 		})
 		if st != 201 {
 			t.Fatalf("create %s: %d: %s", user, st, b)
@@ -27,7 +27,7 @@ func TestTenantIsolationHTTP(t *testing.T) {
 	mk("alice", "acme")
 	mk("bob", "globex")
 
-	alice := login(t, srv, "alice", "password123").Token
+	alice := login(t, srv, "alice", "Passw0rd!2345").Token
 
 	// 1) alice (tenant=acme super-admin) sees ONLY herself — not the platform
 	//    admin, not bob (globex).

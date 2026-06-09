@@ -29,13 +29,13 @@ func TestPgUsersStore(t *testing.T) {
 
 	// Seed two tenants' users (mixed case to prove tenant-id normalization), plus
 	// a platform user with no tenant.
-	if _, err := s.CreateFull(User{Username: "Alice", Role: RoleOperator, TenantID: "Acme"}, "password123"); err != nil {
+	if _, err := s.CreateFull(User{Username: "Alice", Role: RoleOperator, TenantID: "Acme"}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	if _, err := s.CreateFull(User{Username: "carol", Role: RoleReadOnly, TenantID: "globex"}, "password123"); err != nil {
+	if _, err := s.CreateFull(User{Username: "carol", Role: RoleReadOnly, TenantID: "globex"}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("create carol: %v", err)
 	}
-	if _, err := s.Create("root", "password123", RoleSuperAdmin); err != nil { // platform super-admin, no tenant
+	if _, err := s.Create("root", "Passw0rd!2345", RoleSuperAdmin); err != nil { // platform super-admin, no tenant
 		t.Fatalf("create root: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestPgUsersStore(t *testing.T) {
 	if u, ok := s.Get("ALICE"); !ok || normTenant(u.TenantID) != "acme" {
 		t.Errorf("Get(ALICE) = %+v ok=%v, want acme user found", u, ok)
 	}
-	if u, ok := s.Get("carol"); !ok || !verifyPassword("password123", u.PasswordHash) {
+	if u, ok := s.Get("carol"); !ok || !verifyPassword("Passw0rd!2345", u.PasswordHash) {
 		t.Errorf("Get(carol) should round-trip the password hash, got ok=%v", ok)
 	}
 	if _, ok := s.Get("nobody"); ok {
@@ -69,7 +69,7 @@ func TestPgUsersStore(t *testing.T) {
 	}
 
 	// ---- duplicate rejection (case-insensitive) ----
-	if _, err := s.CreateFull(User{Username: "alice", TenantID: "acme"}, "password123"); err == nil {
+	if _, err := s.CreateFull(User{Username: "alice", TenantID: "acme"}, "Passw0rd!2345"); err == nil {
 		t.Error("duplicate username (case-insensitive) must be rejected")
 	}
 
@@ -90,7 +90,7 @@ func TestPgUsersStore(t *testing.T) {
 		t.Error("deleting the last super-admin must be refused")
 	}
 	// With a second super-admin present, the first may be demoted.
-	if _, err := s.CreateFull(User{Username: "root2", Role: RoleSuperAdmin}, "password123"); err != nil {
+	if _, err := s.CreateFull(User{Username: "root2", Role: RoleSuperAdmin}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("create root2: %v", err)
 	}
 	if _, err := s.Update("root", User{Role: RoleReadOnly}); err != nil {
@@ -101,7 +101,7 @@ func TestPgUsersStore(t *testing.T) {
 	if err := s.ChangePassword("carol", "newpassword456"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
-	if u, _ := s.Get("carol"); !verifyPassword("newpassword456", u.PasswordHash) || verifyPassword("password123", u.PasswordHash) {
+	if u, _ := s.Get("carol"); !verifyPassword("newpassword456", u.PasswordHash) || verifyPassword("Passw0rd!2345", u.PasswordHash) {
 		t.Error("password change did not take effect")
 	}
 	if err := s.ChangePassword("carol", "short"); err == nil {
@@ -133,16 +133,16 @@ func TestPgUsersStoreCapAndFederated(t *testing.T) {
 	defer ps.db.close()
 	s := &pgUsersStore{db: ps.db, maxUsers: 2}
 
-	if _, err := s.Create("alice", "password123", RoleReadOnly); err != nil {
+	if _, err := s.Create("alice", "Passw0rd!2345", RoleReadOnly); err != nil {
 		t.Fatalf("1st create: %v", err)
 	}
-	if _, err := s.CreateFull(User{Username: "bob", Role: RoleReadOnly}, "password123"); err != nil {
+	if _, err := s.CreateFull(User{Username: "bob", Role: RoleReadOnly}, "Passw0rd!2345"); err != nil {
 		t.Fatalf("2nd create: %v", err)
 	}
-	if _, err := s.Create("carol", "password123", RoleReadOnly); err == nil {
+	if _, err := s.Create("carol", "Passw0rd!2345", RoleReadOnly); err == nil {
 		t.Error("Create past the cap must fail")
 	}
-	if _, err := s.CreateFull(User{Username: "dave", Role: RoleReadOnly}, "password123"); err == nil {
+	if _, err := s.CreateFull(User{Username: "dave", Role: RoleReadOnly}, "Passw0rd!2345"); err == nil {
 		t.Error("CreateFull past the cap must fail")
 	}
 

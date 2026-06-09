@@ -27,7 +27,7 @@ func seedOrgTenants(t *testing.T, s *server) {
 func TestReachMultiTenant(t *testing.T) {
 	s := newPBACTestServer(t)
 	seedOrgTenants(t, s)
-	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "password123"); err != nil {
+	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
 	s.backfillBindings() // gives sre its home binding at tenant:acme-prod
@@ -52,7 +52,7 @@ func TestReachMultiTenant(t *testing.T) {
 func TestOrgAdminReach(t *testing.T) {
 	s := newPBACTestServer(t)
 	seedOrgTenants(t, s)
-	if _, err := s.users.CreateFull(User{Username: "acme-boss", Role: "org-admin", TenantID: "acme-prod"}, "password123"); err != nil {
+	if _, err := s.users.CreateFull(User{Username: "acme-boss", Role: "org-admin", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.bindings.Add(RoleBinding{PrincipalID: "acme-boss", RoleID: "org-admin", ScopeID: scopeOrg("acme-corp"), Effect: EffectAllow}); err != nil {
@@ -77,7 +77,7 @@ func TestOrgAdminReach(t *testing.T) {
 func TestDenyWins(t *testing.T) {
 	s := newPBACTestServer(t)
 	seedOrgTenants(t, s)
-	if _, err := s.users.CreateFull(User{Username: "boss", Role: "org-admin", TenantID: "acme-prod"}, "password123"); err != nil {
+	if _, err := s.users.CreateFull(User{Username: "boss", Role: "org-admin", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.bindings.Add(RoleBinding{PrincipalID: "boss", RoleID: "org-admin", ScopeID: scopeOrg("acme-corp")}); err != nil {
@@ -99,7 +99,7 @@ func TestDenyWins(t *testing.T) {
 func TestSwitcherNonOwner(t *testing.T) {
 	s := newPBACTestServer(t)
 	seedOrgTenants(t, s)
-	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "password123"); err != nil {
+	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
 	s.backfillBindings()
@@ -130,7 +130,7 @@ func TestSwitcherNonOwner(t *testing.T) {
 // grant super-admin, platform scope, or into another org. The platform owner can.
 func TestBindingsAPINoEscalation(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	// platform owner builds an org + tenant + an org-admin user, and grants the
 	// org-admin its org binding.
@@ -141,7 +141,7 @@ func TestBindingsAPINoEscalation(t *testing.T) {
 		t.Fatal("create tenant")
 	}
 	if st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
-		"username": "boss", "password": "password123", "role": "org-admin", "tenant_id": "acme-prod",
+		"username": "boss", "password": "Passw0rd!2345", "role": "org-admin", "tenant_id": "acme-prod",
 	}); st != 201 {
 		t.Fatalf("create boss: %d %s", st, b)
 	}
@@ -152,12 +152,12 @@ func TestBindingsAPINoEscalation(t *testing.T) {
 	}
 	// a target user to receive grants
 	if st, _ := do(t, srv, "POST", "/api/users", admin, map[string]any{
-		"username": "alice", "password": "password123", "role": "operator", "tenant_id": "acme-prod",
+		"username": "alice", "password": "Passw0rd!2345", "role": "operator", "tenant_id": "acme-prod",
 	}); st != 201 {
 		t.Fatal("create alice")
 	}
 
-	boss := login(t, srv, "boss", "password123").Token
+	boss := login(t, srv, "boss", "Passw0rd!2345").Token
 
 	// org-admin grants operator within its org → allowed.
 	if st, b := do(t, srv, "POST", "/api/bindings", boss, map[string]any{
@@ -188,7 +188,7 @@ func TestBindingsAPINoEscalation(t *testing.T) {
 	}
 
 	// /api/me for alice now shows acme-prod accessible (home), not all.
-	alice := login(t, srv, "alice", "password123").Token
+	alice := login(t, srv, "alice", "Passw0rd!2345").Token
 	_, b := do(t, srv, "GET", "/api/auth/me", alice, nil)
 	var me struct {
 		AccessibleTenants []string `json:"accessible_tenants"`

@@ -35,12 +35,12 @@ func newPBACTestServer(t *testing.T) *server {
 // read bindings (Phase B) changes no decision.
 func TestBindingConformance(t *testing.T) {
 	s := newPBACTestServer(t)
-	if err := s.users.SeedAdmin("admin", "password123"); err != nil {
+	if err := s.users.SeedAdmin("admin", "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
 	// A spread of users across tenants/roles.
 	mk := func(name, role, tenant string) {
-		if _, err := s.users.CreateFull(User{Username: name, Role: role, TenantID: tenant}, "password123"); err != nil {
+		if _, err := s.users.CreateFull(User{Username: name, Role: role, TenantID: tenant}, "Passw0rd!2345"); err != nil {
 			t.Fatalf("create %s: %v", name, err)
 		}
 	}
@@ -74,7 +74,7 @@ func TestBindingConformance(t *testing.T) {
 // tenant changes (no stale binding left behind — exactly one per principal).
 func TestBindingSyncOnRoleChange(t *testing.T) {
 	s := newPBACTestServer(t)
-	u, err := s.users.CreateFull(User{Username: "alice", Role: "operator", TenantID: "acme"}, "password123")
+	u, err := s.users.CreateFull(User{Username: "alice", Role: "operator", TenantID: "acme"}, "Passw0rd!2345")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import "testing"
 func TestExplainAccess(t *testing.T) {
 	s := newPBACTestServer(t)
 	seedOrgTenants(t, s) // org acme-corp{acme-prod,acme-dev} + globex
-	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "password123"); err != nil {
+	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
 	s.backfillBindings()
@@ -44,7 +44,7 @@ func TestExplainAuthz(t *testing.T) {
 		{"alice", "operator", "acme-prod"},
 		{"carol", "operator", "globex"},
 	} {
-		if _, err := s.users.CreateFull(User{Username: u.name, Role: u.role, TenantID: u.tenant}, "password123"); err != nil {
+		if _, err := s.users.CreateFull(User{Username: u.name, Role: u.role, TenantID: u.tenant}, "Passw0rd!2345"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -13,16 +13,16 @@ import (
 // suites.
 func TestTenantMatrixIsolation(t *testing.T) {
 	srv := newTestServer(t)
-	admin := login(t, srv, "admin", "password123").Token // seeded platform owner
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token // seeded platform owner
 
 	mkUser := func(user, tenant string) string {
 		st, b := do(t, srv, "POST", "/api/users", admin, map[string]any{
-			"username": user, "password": "password123", "role": "super-admin", "tenant_id": tenant,
+			"username": user, "password": "Passw0rd!2345", "role": "super-admin", "tenant_id": tenant,
 		})
 		if st != 201 {
 			t.Fatalf("create %s: %d %s", user, st, b)
 		}
-		return login(t, srv, user, "password123").Token
+		return login(t, srv, user, "Passw0rd!2345").Token
 	}
 	alice := mkUser("alice", "acme")
 	bob := mkUser("bob", "globex")

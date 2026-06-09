@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"netops/backend/policy"
 )
 
 // clientIP derives the caller's source IP: the first hop in X-Forwarded-For if
@@ -191,27 +193,44 @@ func (s *server) lockoutPolicy(user User, found bool) (allowed, unlockSeconds in
 	return ss.LoginAttemptsAllowed, ss.UnlockTimeSeconds
 }
 
-// sessionPolicy resolves the session lifecycle policy for an account's scope
-// (its tenant/org, else the provider scope) — so idle/absolute are configurable
-// per Provider / Organization / Tenant. Falls back to standard defaults when
-// Security Settings aren't wired (a minimal test server).
-func (s *server) sessionPolicy(tenant string) (idle, absolute time.Duration, enforceIdle, enforceAbsolute bool) {
+// sessionPolicy resolves the session lifecycle policy for an account. The
+// per-scope Security Settings (Provider / Org / Tenant) provide the baseline; the
+// #24 policy engine then layers PER-ROLE refinement on top — but only an EXPLICIT
+// override (not the catalog default) applies, and only if it is STRICTER (shorter
+// window), so a tighter role policy can harden but never loosen the scope's. Falls
+// back to standard defaults when neither store is wired (a minimal test server).
+func (s *server) sessionPolicy(tenant, role string) (idle, absolute time.Duration, enforceIdle, enforceAbsolute bool) {
 	idle, absolute, enforceIdle, enforceAbsolute = 30*time.Minute, 12*time.Hour, true, true
-	if s.securitySettings == nil {
-		return
-	}
 	scope := tenant
 	if scope == "" {
 		scope = "provider"
 	}
-	ss := s.securitySettings.Get(scope)
-	if ss.IdleTimeoutMinutes > 0 {
-		idle = time.Duration(ss.IdleTimeoutMinutes) * time.Minute
+	if s.securitySettings != nil {
+		ss := s.securitySettings.Get(scope)
+		if ss.IdleTimeoutMinutes > 0 {
+			idle = time.Duration(ss.IdleTimeoutMinutes) * time.Minute
+		}
+		if ss.AbsoluteTimeoutMinutes > 0 {
+			absolute = time.Duration(ss.AbsoluteTimeoutMinutes) * time.Minute
+		}
+		enforceIdle, enforceAbsolute = ss.EnforceIdleTimeout, ss.EnforceAbsoluteTimeout
 	}
-	if ss.AbsoluteTimeoutMinutes > 0 {
-		absolute = time.Duration(ss.AbsoluteTimeoutMinutes) * time.Minute
+	// Per-role refinement (#24 engine, System→Tenant→Role→User). Durations are
+	// stored as whole seconds. Only an explicit override applies, stricter-wins.
+	if s.secPolicy != nil {
+		sub := policy.Subject{Tenant: tenant, Role: role}
+		if r, ok := s.secPolicy.ResolveSetting(sub, "session.idle_timeout"); ok && !r.FromDefault {
+			if d := time.Duration(r.Value.Num) * time.Second; d > 0 && d < idle {
+				idle = d
+			}
+		}
+		if r, ok := s.secPolicy.ResolveSetting(sub, "session.absolute_lifetime"); ok && !r.FromDefault {
+			if d := time.Duration(r.Value.Num) * time.Second; d > 0 && d < absolute {
+				absolute = d
+			}
+		}
 	}
-	return idle, absolute, ss.EnforceIdleTimeout, ss.EnforceAbsoluteTimeout
+	return idle, absolute, enforceIdle, enforceAbsolute
 }
 
 // recordSessionEvent emits a session lifecycle event to the structured log AND
@@ -247,7 +266,7 @@ func (s *server) mintSession(r *http.Request, user User) (token, refresh string,
 	ttl := accessTokenTTL()
 	var sid string
 	if s.sessions != nil {
-		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID)
+		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID, user.Role)
 		if !enforceIdle {
 			idle = 0 // 0 = disabled at the Validate gate
 		}
