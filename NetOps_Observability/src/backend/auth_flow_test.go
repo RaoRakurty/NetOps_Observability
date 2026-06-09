@@ -109,6 +109,35 @@ func TestLoginBadCredentials(t *testing.T) {
 	}
 }
 
+// A disabled account must be refused at the password front door — not just on
+// refresh/MFA/SSO. Regression for the gap where Lock/Unlock (status=disabled) did
+// not actually block sign-in.
+func TestLoginDisabledAccountRejected(t *testing.T) {
+	srv := newTestServer(t)
+	admin := login(t, srv, "admin", "password123")
+	if st, b := do(t, srv, "POST", "/api/users", admin.Token, map[string]string{
+		"username": "lockme", "password": "lockme-pass-1", "role": "read-only",
+	}); st != 201 {
+		t.Fatalf("create user: status %d: %s", st, b)
+	}
+	// Active → can sign in.
+	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "lockme", "password": "lockme-pass-1"}); st != 200 {
+		t.Fatalf("active user login: status %d, want 200", st)
+	}
+	// Disable, then the SAME credentials must be refused.
+	if st, b := do(t, srv, "PATCH", "/api/users/lockme", admin.Token, map[string]string{"status": "disabled"}); st != 200 {
+		t.Fatalf("disable user: status %d: %s", st, b)
+	}
+	if st, b := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "lockme", "password": "lockme-pass-1"}); st != 401 {
+		t.Errorf("disabled user login: status %d, want 401 (%s)", st, b)
+	}
+	// Wrong password on a disabled account still returns the generic error (no
+	// account-existence leak before the password is verified).
+	if st, _ := do(t, srv, "POST", "/api/auth/login", "", map[string]string{"username": "lockme", "password": "nope"}); st != 401 {
+		t.Errorf("disabled user wrong pw: status %d, want 401", st)
+	}
+}
+
 func TestMeAndUnauthenticated(t *testing.T) {
 	srv := newTestServer(t)
 	if st, _ := do(t, srv, "GET", "/api/users", "", nil); st != 401 {

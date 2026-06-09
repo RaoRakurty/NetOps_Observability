@@ -125,6 +125,15 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
+	// A disabled account cannot sign in — parity with the refresh / MFA / SSO /
+	// LDAP / TACACS paths, which all reject status=="disabled". Checked AFTER the
+	// password verifies, so an unauthenticated probe can't use it to enumerate
+	// accounts (a wrong password still returns the generic error above).
+	if user.Status == "disabled" {
+		logWarn("auth", "login refused: account disabled", map[string]any{"user": user.Username})
+		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
+		return
+	}
 	// SR-029: opportunistically upgrade a hash stored at a weaker iteration count
 	// to the current cost. Best-effort — never fail the login if rehash fails.
 	if passwordNeedsRehash(user.PasswordHash) {

@@ -54,7 +54,7 @@ const LEVEL_VAR: Record<string, string> = {
 
 // ---- Users -----------------------------------------------------------------
 
-const BLANK_USER = { username: "", email: "", display_name: "", password: "", role: "read-only", tenant_id: "" };
+const BLANK_USER = { username: "", email: "", display_name: "", password: "", role: "read-only", tenant_id: "", status: "active" };
 
 // Directory scope: just two — Global (the global tenant; tenant_id === "") or a
 // specific tenant. (Collapsed from the old three-way All/Global/tenant filter.)
@@ -253,6 +253,11 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
               <label><span>Role</span>
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   {roleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select></label>
+              <label><span>Status</span>
+                <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                  <option value="active">Active</option>
+                  <option value="disabled">Disabled — can't sign in</option>
                 </select></label>
               {/* Provider users are associated with nothing. Tenant users are fixed
                   to their tenant (no picker). Only the standalone directory picks one. */}
@@ -470,13 +475,14 @@ export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: str
 
 // ---- Tenants (multi-tenancy) ----------------------------------------------
 
-export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string, name: string) => void } = {}) {
+export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: string, name: string) => void; orgId?: string } = {}) {
   const [tenants, err, reload, setErr] = useReload(() => api.listTenants());
   const [orgs] = useReload(() => api.listOrgs());
   const [regions] = useReload(() => api.listRegions());
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
-  const [org, setOrg] = useState("");
+  // When embedded under an organization, the org is fixed to that org.
+  const [org, setOrg] = useState(orgId ?? "");
   const [region, setRegion] = useState("");
   const [hideGlobal, setHideGlobal] = useState(false);
   const [adding, setAdding] = useState(false); // create form hidden until clicked
@@ -508,9 +514,10 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   };
 
   const create = async () => {
-    if (!name.trim() || !org) return;
+    const useOrg = orgId || org;
+    if (!name.trim() || !useOrg) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, org, region); setName(""); setNote(""); setOrg(""); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, useOrg, region); setName(""); setNote(""); setOrg(orgId ?? ""); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
   const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
   const confirmDelete = async () => {
@@ -533,11 +540,13 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
     try { await api.setTenantOperatorRestricted(t.id, hide); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
-  const list = tenants ?? [];
+  const list = (tenants ?? []).filter((t) => !orgId || (t.org_id || "global") === orgId);
   return (
     <>
       <div className="admin-head-row">
-        <AdminHead title="Tenants" sub="Isolation boundaries within an organization. Each tenant is its own namespace — devices, dashboards, alerts and users are scoped to it." />
+        <AdminHead title="Tenants" sub={orgId
+          ? "Optional isolation units inside this organization — create one only when you need to split (prod/dev/region). Each tenant is its own namespace."
+          : "Isolation boundaries within an organization. Each tenant is its own namespace — devices, dashboards, alerts and users are scoped to it."} />
         {!adding && <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create tenant</button>}
       </div>
       {adding && (
@@ -549,13 +558,17 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
               <span>Tenant name <Req /></span>
               <input autoFocus placeholder="e.g. acme" value={name} onChange={(e) => setName(e.target.value)} />
             </label>
-            <label className="req-field">
-              <span>Organization <Req /></span>
-              <select value={org} onChange={(e) => { setOrg(e.target.value); setRegion(""); }}>
-                <option value="">Select organization…</option>
-                {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-              </select>
-            </label>
+            {orgId ? (
+              <label><span>Organization</span><div className="uf-fixed">{orgName(orgId)}</div></label>
+            ) : (
+              <label className="req-field">
+                <span>Organization <Req /></span>
+                <select value={org} onChange={(e) => { setOrg(e.target.value); setRegion(""); }}>
+                  <option value="">Select organization…</option>
+                  {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </label>
+            )}
             <label>
               <span>Region</span>
               <select value={region} onChange={(e) => setRegion(e.target.value)}>
@@ -567,8 +580,8 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
               <span>Note</span>
               <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
             </label>
-            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setOrg(""); setRegion(""); setNote(""); setHideGlobal(false); setErr(null); }}>Cancel</button>
-            <button className="dash-btn accent" disabled={!name.trim() || !org} onClick={create}>Create tenant</button>
+            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setOrg(orgId ?? ""); setRegion(""); setNote(""); setHideGlobal(false); setErr(null); }}>Cancel</button>
+            <button className="dash-btn accent" disabled={!name.trim() || !(orgId || org)} onClick={create}>Create tenant</button>
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
             <input type="checkbox" checked={hideGlobal} onChange={(e) => setHideGlobal(e.target.checked)} />
@@ -1022,7 +1035,7 @@ export function RegionsAdmin() {
 // ("" = Global, a tenant id = that tenant). Per-tenant ROLE definitions and the MFA
 // feature are backend follow-ups; surfaced here as a note / "coming soon".
 
-type IATab = "users" | "userroles" | "customroles" | "sso" | "security";
+type IATab = "users" | "userroles" | "customroles" | "sso" | "security" | "tenants";
 const IA_TABS: { id: IATab; label: string }[] = [
   { id: "users", label: "Users" },
   { id: "userroles", label: "User Roles" },
@@ -1033,6 +1046,10 @@ const IA_TABS: { id: IATab; label: string }[] = [
 // The Provider realm manages only its own users + scope-wide security. Roles
 // (built-in/custom) and external SSO role mappings are governed per-organization.
 const IA_TABS_PROVIDER = IA_TABS.filter((t) => t.id === "users" || t.id === "security");
+// An organization additionally owns its (optional) Tenants — isolation units it
+// creates only when it needs to split (prod/dev/region). Tenants live HERE, under
+// their org, not as a top-level peer.
+const IA_TABS_ORG: { id: IATab; label: string }[] = [...IA_TABS, { id: "tenants", label: "Tenants" }];
 
 // SecuritySettings — the scope-wide "User Global Settings": password, lockout and
 // session rules that apply to everyone in this scope (provider = the platform, or
@@ -1275,8 +1292,29 @@ function IAItems({ kind, id = "", name, tabs = IA_TABS }: {
       {cur === "customroles" && <RolesAdmin scopeTenant={roleScope} variant="custom" />}
       {cur === "sso" && <SsoRolesPanel />}
       {cur === "security" && <SecuritySettings scopeTenant={id} />}
+      {cur === "tenants" && <OrgTenants orgId={id} orgName={name || id} />}
     </>
   );
+}
+
+// OrgTenants — the (optional) Tenants tab inside an organization. Lists only this
+// org's tenants and drills into one to manage its users/roles/security — the same
+// IAItems, one level deeper. Tenants are created here, pre-bound to the org.
+function OrgTenants({ orgId, orgName }: { orgId: string; orgName: string }) {
+  const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
+  if (sel) {
+    return (
+      <>
+        <div className="ia-crumb">
+          <button className="dash-btn" onClick={() => setSel(null)}>← {orgName} tenants</button>
+          <span className="ia-crumb-name">{sel.name}</span>
+          <span className="mini-meta">tenant — configured independently</span>
+        </div>
+        <IAItems kind="tenant" id={sel.id} name={sel.name} />
+      </>
+    );
+  }
+  return <TenantsAdmin orgId={orgId} onManageTenant={(id, name) => setSel({ id, name })} />;
 }
 
 // SsoRolesPanel — external SSO/IdP group → role mappings live in Authentication
@@ -1294,7 +1332,7 @@ function SsoRolesPanel() {
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
-  const [section, setSection] = useState<"provider" | "orgs" | "tenants">("provider");
+  const [section, setSection] = useState<"provider" | "orgs">("provider");
   const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
 
   // A tenant admin governs only its own tenant — no Provider, no picker.
@@ -1309,13 +1347,13 @@ export function IdentityAccess() {
 
   return (
     <>
-      <AdminHead title="Identity & Access" sub="People, roles and security — for the Provider (platform), per organization, or per tenant." />
+      <AdminHead title="Identity & Access" sub="People, roles and security — for the Provider (platform) or per organization. Tenants are optional units inside an organization." />
       <div style={{ marginBottom: 12 }}>
         <Segmented
           ariaLabel="Identity scope"
           value={section}
           onChange={(v) => { setSection(v); setSel(null); }}
-          options={[{ value: "provider", label: "Provider" }, { value: "orgs", label: "Organizations" }, { value: "tenants", label: "Tenants" }]}
+          options={[{ value: "provider", label: "Provider" }, { value: "orgs", label: "Organizations" }]}
         />
       </div>
 
@@ -1327,27 +1365,12 @@ export function IdentityAccess() {
             <div className="ia-crumb">
               <button className="dash-btn" onClick={() => setSel(null)}>← Organizations</button>
               <span className="ia-crumb-name">{sel.name}</span>
-              <span className="mini-meta">users · roles · security</span>
+              <span className="mini-meta">users · roles · security · tenants</span>
             </div>
-            <IAItems kind="org" id={sel.id} name={sel.name} />
+            <IAItems kind="org" id={sel.id} name={sel.name} tabs={IA_TABS_ORG} />
           </>
         ) : (
           <OrgsAdmin onManageOrg={(id, name) => setSel({ id, name })} />
-        )
-      )}
-
-      {section === "tenants" && (
-        sel ? (
-          <>
-            <div className="ia-crumb">
-              <button className="dash-btn" onClick={() => setSel(null)}>← Tenants</button>
-              <span className="ia-crumb-name">{sel.name}</span>
-              <span className="mini-meta">configured independently</span>
-            </div>
-            <IAItems kind="tenant" id={sel.id} name={sel.name} />
-          </>
-        ) : (
-          <TenantsAdmin onManageTenant={(id, name) => setSel({ id, name })} />
         )
       )}
     </>
