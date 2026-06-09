@@ -156,7 +156,8 @@ export const NAV: NavSection[] = [
       { id: "devices", label: "Devices", render: () => <Devices /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
-      { id: "netflow", label: "Netflow", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
+      // Flows live in the Data zone (canonical netflow/sflow/telemetry explorer),
+      // not duplicated here.
       { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
       { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
@@ -256,8 +257,8 @@ export const NAV: NavSection[] = [
           { id: "rest", label: "REST API Reference" },
         ],
       },
-      { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
-      { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
+      // Notifications + Integrations live under Incident Response (their
+      // operational home), not duplicated here.
       { id: "audit", label: "Audit Log", render: () => <AuditLog /> },
     ],
   },
