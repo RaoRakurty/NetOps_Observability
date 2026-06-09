@@ -42,20 +42,25 @@ device-side config beyond an export target.
 | **Command Center** (Incident Response) | incidents + notify + chat integrations | — | now (compose) |
 
 ## Build order (telemetry/IPFIX first)
-1. **Threat Detection** — flow fan-out detection endpoint + board (pure IPFIX, no
-   new collection). ← starting here.
-2. **Device Health** (Flows) + **NetFlow per-interface** + **Traffic insights**
-   (Device Monitoring) — flows/SNMP already collected; wire panels.
-3. **TCP Flags** — IPFIX `tcpControlBits`: goflow2 export field → vector-router
+1. ✅ **Threat Detection** — flow fan-out endpoint (`/api/flows/fanout`) + board.
+   Done (`8965303`).
+2. ✅ **Events** (Monitoring) — unified syslog+traps+alerts timeline. Done
+   (`9f96523`).
+3. **Device Health** (Flows) + **NetFlow per-interface** + **Traffic insights**
+   (Device Monitoring) — flows/SNMP already collected; wire panels. ← next
+4. **TCP Flags** — IPFIX `tcpControlBits`: goflow2 export field → vector-router
    map → `netops.flows.tcp_flags` column (ALTER) → flags breakdown endpoint +
    Flows panel.
-4. **Geo IP** — GeoLite2 enrichment (vector or query-time) → country panels +
+5. **Geo IP** — GeoLite2 enrichment (vector or query-time) → country panels +
    dashboard-wide country filter.
-5. **Quality** + **Events** — composite over interface/tunnel/flow + logs/alerts.
-6. **IPsec** — wire tunnels into the Device Monitoring section.
-7. **Active-probe pipeline** — traceroute (Flow Trace/Network Path) + ICMP/HTTP
-   synthetics; the one genuinely new collector.
-8. **Vuln / Compliance** — external CVE feed + config-baseline pipeline (NetBox).
+6. **Quality** (Monitoring) — composite over interface errors/discards/util +
+   tunnel QoE.
+7. **IPsec** — wire tunnels into the Device Monitoring section.
+8. **Device Geomap** — GeoIP/site placement.
+9. **New Monitor / Dashboard List / Command Center** — UI compositions.
+10. **Active-probe pipeline** — traceroute (Flow Trace/Network Path) + ICMP/HTTP
+    synthetics; the one genuinely new collector.
+11. **Vuln / Compliance** — external CVE feed + config-baseline pipeline (NetBox).
 
 Each item ships independently; this doc tracks the program. See also
 [[device-monitoring-dashboards]].
