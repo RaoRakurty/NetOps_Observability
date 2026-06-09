@@ -640,6 +640,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 
 @media (max-width: 560px) { .uf-secgrid { grid-template-columns: 1fr; } }
 
+/* Clickable entity name in admin tables (drill-in) */
+.ia-linkname { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: var(--accent);
+  cursor: pointer; text-align: left; }
+.ia-linkname:hover { text-decoration: underline; }
+.ia-linkname:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); border-radius: 3px; }
+
 /* Security Settings — flat scope-wide form. */
 .ss-grid { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-end; }
 .ss-grid > label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
