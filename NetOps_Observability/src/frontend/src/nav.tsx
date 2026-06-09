@@ -8,6 +8,7 @@ import InterfacePerformance from "./pages/InterfacePerformance";
 import BgpOspf from "./pages/BgpOspf";
 import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
+import Events from "./pages/Events";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -45,7 +46,6 @@ import {
   DashboardList,
   NewMonitor,
   Quality,
-  Events,
   IncidentResponse,
   DeviceGeomap,
   FlowTrace,
@@ -122,7 +122,7 @@ export const NAV: NavSection[] = [
       { id: "new", label: "New Monitor", render: () => <NewMonitor /> },
       { id: "triggered", label: "Triggered", render: () => <Alerts /> },
       { id: "quality", label: "Quality", render: () => <Quality /> },
-      { id: "events", label: "Events", group: "Event Management", render: () => <Events /> },
+      { id: "events", label: "Events", group: "Event Management", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
     ],
