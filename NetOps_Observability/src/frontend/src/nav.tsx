@@ -44,6 +44,7 @@ import {
   Events,
   IncidentResponse,
   DeviceGeomap,
+  FlowTrace,
   VulnerabilityManagement,
   ThreatDetection,
   ComplianceMonitoring,
@@ -158,8 +159,9 @@ export const NAV: NavSection[] = [
       { id: "monitoring", label: "Device Monitoring", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
-      // Flows live in the Data zone (canonical netflow/sflow/telemetry explorer),
-      // not duplicated here.
+      // Flow Trace = network-path monitoring (Datadog "Network Path"): hop-by-hop
+      // traceroute between endpoints. Flows themselves live in the Data zone.
+      { id: "flowtrace", label: "Flow Trace", render: () => <FlowTrace /> },
       { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
       { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
