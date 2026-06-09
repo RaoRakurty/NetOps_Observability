@@ -10,12 +10,10 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, Role, Tenant, Org, Region, RoleBinding, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
+import { api, AdminUser, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
-import SecurityPolicy from "./SecurityPolicy";
-import MfaCard from "../components/MfaCard";
 import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
@@ -270,11 +268,17 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
 // in Identity & Access. Role DEFINITIONS are platform-wide today, so we surface a
 // note in that case rather than implying per-tenant role editing (a backend
 // follow-up). Global scope ("" / undefined) shows the normal editor.
-export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
+// variant: "builtin" = the standard User Roles (read-only), "custom" = Custom
+// User Roles (create/edit), "all" = both in one matrix (legacy).
+export function RolesAdmin({ scopeTenant, variant = "all" }: { scopeTenant?: string; variant?: "all" | "builtin" | "custom" } = {}) {
   const [data, err, reload, setErr] = useReload(() => api.listRoles());
   const modules = data?.modules ?? [];
-  const roles = data?.roles ?? [];
+  const allRoles = data?.roles ?? [];
+  const roles = variant === "builtin" ? allRoles.filter((r) => r.builtin)
+    : variant === "custom" ? allRoles.filter((r) => !r.builtin)
+    : allRoles;
   const tenantScoped = !!scopeTenant;
+  const canCreate = variant !== "builtin" && !tenantScoped;
 
   // Click a cell on a CUSTOM role to cycle its level; persists immediately.
   const cycle = async (role: Role, module: string) => {
@@ -295,16 +299,18 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
     try { await api.deleteRole(role.id!); reload(); } catch (e) { setErr((e as Error).message); }
   };
 
-  const builtin = roles.filter((r) => r.builtin).length;
+  const title = variant === "builtin" ? "User Roles" : variant === "custom" ? "Custom User Roles" : "Roles & Permissions";
+  const sub = variant === "builtin"
+    ? "The standard roles and what each can see and change. These are fixed."
+    : variant === "custom"
+    ? "Roles you define. Click a cell to set its access level."
+    : "Control what each role can see and change. Built-in roles are fixed; click a cell on a custom role to set its access.";
   return (
     <>
-      <AdminHead title="Roles & Permissions" sub="Control what each role can see and change. Built-in roles are fixed; click a cell on a custom role to set its access." />
-      <StatStrip>
-        <Stat label="Roles" value={data ? roles.length : <Skeleton w={26} h={22} />} />
-        <Stat label="Built-in" value={data ? builtin : "—"} />
-        <Stat label="Custom" value={data ? roles.length - builtin : "—"} tone="accent" />
-        <Stat label="Modules" value={data ? modules.length : "—"} />
-      </StatStrip>
+      <div className="admin-head-row">
+        <AdminHead title={title} sub={sub} />
+        {canCreate && <button className="dash-btn accent" onClick={addRole}>＋ New custom role</button>}
+      </div>
       {tenantScoped && (
         <div className="card" style={{ fontSize: 12, color: "var(--muted)", borderLeft: "3px solid var(--accent)" }}>
           These roles are shared across the platform and shown here for reference. Assign them to this tenant's
@@ -312,11 +318,10 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
         </div>
       )}
       <div className="card">
-        <div className="admin-card-head">
-          <h2>Permission matrix</h2>
-          {!tenantScoped && <button className="dash-btn accent" onClick={addRole}>+ New custom role</button>}
-        </div>
         <ErrLine msg={err} />
+        {roles.length === 0 ? (
+          <div className="empty">{variant === "custom" ? "No custom roles yet — create one to tailor access." : "No roles."}</div>
+        ) : (
         <table className="ds-table">
           <thead>
             <tr><th>Role</th>{modules.map((m) => <th key={m} style={{ textTransform: "capitalize" }}>{m}</th>)}<th></th></tr>
@@ -347,6 +352,7 @@ export function RolesAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </>
   );
@@ -893,20 +899,83 @@ export function RegionsAdmin() {
 // ("" = Global, a tenant id = that tenant). Per-tenant ROLE definitions and the MFA
 // feature are backend follow-ups; surfaced here as a note / "coming soon".
 
-type IATab = "users" | "roles" | "access" | "policy" | "mfa";
+type IATab = "users" | "userroles" | "customroles" | "sso" | "security";
 const IA_TABS: { id: IATab; label: string }[] = [
   { id: "users", label: "Users" },
-  { id: "roles", label: "Roles" },
-  { id: "access", label: "Access" },
-  { id: "policy", label: "Security Policy" },
-  { id: "mfa", label: "MFA" },
+  { id: "userroles", label: "User Roles" },
+  { id: "customroles", label: "Custom User Roles" },
+  { id: "sso", label: "External SSO Roles" },
+  { id: "security", label: "Security Settings" },
 ];
+
+// SecuritySettings — the scope-wide "User Global Settings": password, lockout and
+// session rules that apply to everyone in this scope (provider = the platform, or
+// a tenant). Per-user security (MFA, temp account, idle timeout) lives on the user.
+function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
+  const scope = scopeTenant || "provider";
+  const [s, setS] = useState<SecuritySettingsT | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [savedTick, setSavedTick] = useState(false);
+  useEffect(() => { setS(null); api.getSecuritySettings(scope).then(setS).catch((e) => setErr((e as Error).message)); }, [scope]);
+  const upd = (patch: Partial<SecuritySettingsT>) => setS((p) => (p ? { ...p, ...patch } : p));
+  const save = async () => {
+    if (!s) return; setErr(null); setBusy(true);
+    try { setS(await api.saveSecuritySettings(scope, s)); setSavedTick(true); setTimeout(() => setSavedTick(false), 1800); }
+    catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
+  };
+  if (!s) return <div className="card"><Skeleton w={220} h={20} /></div>;
+  const num = (k: keyof SecuritySettingsT) => (
+    <input type="number" value={s[k] as number} onChange={(e) => upd({ [k]: Number(e.target.value) } as Partial<SecuritySettingsT>)} style={{ width: 110 }} />
+  );
+  const tog = (k: keyof SecuritySettingsT, label: string) => (
+    <label className="ss-tog">
+      <input type="checkbox" checked={s[k] as boolean} onChange={(e) => upd({ [k]: e.target.checked } as Partial<SecuritySettingsT>)} />
+      {label}
+    </label>
+  );
+  return (
+    <>
+      <div className="admin-head-row">
+        <AdminHead title="Security Settings" sub="Password, lockout and session rules that apply to everyone in this scope. Per-person settings (2FA, temporary account) are on the user." />
+        <button className="dash-btn accent" disabled={busy} onClick={save}>{busy ? "Saving…" : savedTick ? "✓ Saved" : "Save settings"}</button>
+      </div>
+      <ErrLine msg={err} />
+      <div className="card">
+        <div className="admin-card-head"><h2>Password</h2></div>
+        <div className="ss-grid">
+          <label><span>Minimum length</span>{num("min_password_length")}</label>
+          <div className="ss-checks">
+            {tog("require_uppercase", "Uppercase")}{tog("require_lowercase", "Lowercase")}
+            {tog("require_number", "Number")}{tog("require_special", "Special character")}
+          </div>
+          <label><span>Expire password</span><div className="ss-inline">{tog("password_expire_enabled", "Enabled")}{s.password_expire_enabled && <>after {num("password_expire_days")} days</>}</div></label>
+          <div className="ss-checks">{tog("password_history", "Remember password history")}{tog("reset_on_first_login", "Reset on first login")}</div>
+        </div>
+      </div>
+      <div className="card">
+        <div className="admin-card-head"><h2>Lockout &amp; session</h2></div>
+        <div className="ss-grid">
+          <label><span>Login attempts allowed</span>{num("login_attempts_allowed")}</label>
+          <label><span>Unlock time (seconds)</span>{num("unlock_time_seconds")}</label>
+          <label><span>Account validity (days)</span>{num("account_validity_days")}</label>
+          <label><span>Account inactivity (days)</span>{num("account_inactivity_days")}</label>
+          <label><span>Concurrent login</span>
+            <select value={s.concurrent_login} onChange={(e) => upd({ concurrent_login: e.target.value })}>
+              <option value="allow">Allow</option><option value="deny">Deny</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </>
+  );
+}
 
 // BindingsAdmin — the Access screen (L2 governance, /admin/bindings): a
 // principal's role bindings (principal → role → scope). Grant a user access to a
 // tenant or org, deny, or revoke. The server enforces no-escalation (an org-admin
 // can only grant within its org, never super-admin / platform).
-function BindingsAdmin({ scopeTenant }: { scopeTenant?: string }) {
+export function BindingsAdmin({ scopeTenant }: { scopeTenant?: string }) {
   const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
   const [roles] = useReload(() => api.listRoles());
   const [tenants] = useReload(() => api.listTenants());
@@ -1013,21 +1082,8 @@ function BindingsAdmin({ scopeTenant }: { scopeTenant?: string }) {
   );
 }
 
-// MfaPanel — two-factor management. Enrollment is per account (your own 2FA);
-// admins reset a user's device from the Users tab.
-function MfaPanel() {
-  return (
-    <>
-      <MfaCard />
-      <div className="card" style={{ fontSize: 12, color: "var(--muted)" }}>
-        Two-factor is set up per person on their own account. To reset someone who lost their device, select them
-        in <b>Users</b> and choose <b>Reset MFA</b>. Accounts that sign in through an external provider manage it there.
-      </div>
-    </>
-  );
-}
-
-// IAItems renders the four panels for one scope ("" = Global, else a tenant id).
+// IAItems renders the per-scope identity panels ("" = Provider, else a tenant id):
+// Users · User Roles · Custom User Roles · External SSO Roles · Security Settings.
 function IAItems({ scopeTenant }: { scopeTenant: string }) {
   const [tab, setTab] = useState<IATab>("users");
   return (
@@ -1040,25 +1096,37 @@ function IAItems({ scopeTenant }: { scopeTenant: string }) {
         ))}
       </div>
       {tab === "users" && <UsersAdmin scopeTenant={scopeTenant} />}
-      {tab === "roles" && <RolesAdmin scopeTenant={scopeTenant || undefined} />}
-      {tab === "access" && <BindingsAdmin scopeTenant={scopeTenant} />}
-      {tab === "policy" && <SecurityPolicy scopeTenant={scopeTenant} />}
-      {tab === "mfa" && <MfaPanel />}
+      {tab === "userroles" && <RolesAdmin scopeTenant={scopeTenant || undefined} variant="builtin" />}
+      {tab === "customroles" && <RolesAdmin scopeTenant={scopeTenant || undefined} variant="custom" />}
+      {tab === "sso" && <SsoRolesPanel />}
+      {tab === "security" && <SecuritySettings scopeTenant={scopeTenant} />}
     </>
+  );
+}
+
+// SsoRolesPanel — external SSO/IdP group → role mappings live in Authentication
+// today; this surfaces the link until they're moved inline.
+function SsoRolesPanel() {
+  return (
+    <div className="card" style={{ color: "var(--muted)" }}>
+      External SSO role mappings (IdP group → role) are configured under
+      <b> Administration → Authentication</b> for each connected identity provider.
+      They'll move inline here next.
+    </div>
   );
 }
 
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
-  const [section, setSection] = useState<"global" | "orgs" | "tenants">("orgs");
+  const [section, setSection] = useState<"provider" | "orgs" | "tenants">("provider");
   const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
 
-  // A tenant admin governs only its own tenant — no Global, no picker.
+  // A tenant admin governs only its own tenant — no Provider, no picker.
   if (!platform) {
     return (
       <>
-        <AdminHead title="Identity & Access" sub="Users, roles and security policy for your tenant." />
+        <AdminHead title="Identity & Access" sub="Users, roles and security settings for your tenant." />
         <IAItems scopeTenant={user?.tenant_id || ""} />
       </>
     );
@@ -1066,17 +1134,17 @@ export function IdentityAccess() {
 
   return (
     <>
-      <AdminHead title="Identity & Access" sub="People, roles and security — platform-wide (Global), per organization, or per tenant." />
+      <AdminHead title="Identity & Access" sub="People, roles and security — for the Provider (platform), per organization, or per tenant." />
       <div style={{ marginBottom: 12 }}>
         <Segmented
           ariaLabel="Identity scope"
           value={section}
           onChange={(v) => { setSection(v); setSel(null); }}
-          options={[{ value: "orgs", label: "Organizations" }, { value: "global", label: "Global" }, { value: "tenants", label: "Tenants" }]}
+          options={[{ value: "provider", label: "Provider" }, { value: "orgs", label: "Organizations" }, { value: "tenants", label: "Tenants" }]}
         />
       </div>
 
-      {section === "global" && <IAItems scopeTenant="" />}
+      {section === "provider" && <IAItems scopeTenant="" />}
 
       {section === "orgs" && <OrgsAdmin />}
 

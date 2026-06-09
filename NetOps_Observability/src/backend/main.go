@@ -37,39 +37,40 @@ const version = "0.1.0-scaffold"
 // (discovery aggregator, collector pool, alert engine, notifier, user
 // store for auth, and the live-events WebSocket hub).
 type server struct {
-	startedAt      time.Time
-	discovery      *DiscoveryAggregator
-	collectors     *collectors.Pool
-	alerts         *alerts.Engine
-	notifier       *notify.Dispatcher
-	users          usersRepo
-	roles          *roleStore
-	tenants        *tenantStore
-	orgs           *orgStore
-	bindings       *bindingStore
-	apiKeys        *apiKeyStore
-	refresh        *refreshStore
-	snmpCreds      *snmpCredStore
-	sshHosts       *sshHostStore // #20/device-ssh: TOFU host-key store for the SSH gateway
-	snmpProfiles   *snmpProfileStore
-	saved          savedRepo
-	audit          auditRepo
-	notifyCfg      *notifyConfigStore
-	contactPoints  *contactPointStore
-	reports        *reportScheduler
-	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
-	incidents      incidentsRepo   // incident system of record (nil on file backend)
-	incMetrics     *incidentMetrics
-	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
-	providers      *integration.Registry // inbound provider translators (registry)
-	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
-	vault          *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv         *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	exportPolicy   *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter  *tenantRateLimiter    // per-tenant export rate limit
-	copilotLimiter *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
-	copilotCfg     *copilotConfigStore
-	netboxCfg      *netboxConfigStore // NetBox source-of-truth discovery config
+	startedAt        time.Time
+	discovery        *DiscoveryAggregator
+	collectors       *collectors.Pool
+	alerts           *alerts.Engine
+	notifier         *notify.Dispatcher
+	users            usersRepo
+	roles            *roleStore
+	tenants          *tenantStore
+	orgs             *orgStore
+	bindings         *bindingStore
+	securitySettings *securitySettingsStore
+	apiKeys          *apiKeyStore
+	refresh          *refreshStore
+	snmpCreds        *snmpCredStore
+	sshHosts         *sshHostStore // #20/device-ssh: TOFU host-key store for the SSH gateway
+	snmpProfiles     *snmpProfileStore
+	saved            savedRepo
+	audit            auditRepo
+	notifyCfg        *notifyConfigStore
+	contactPoints    *contactPointStore
+	reports          *reportScheduler
+	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
+	incidents        incidentsRepo   // incident system of record (nil on file backend)
+	incMetrics       *incidentMetrics
+	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
+	providers        *integration.Registry // inbound provider translators (registry)
+	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
+	vault            *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv           *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	exportPolicy     *exportPolicyStore    // runtime-tunable log-export limits
+	exportLimiter    *tenantRateLimiter    // per-tenant export rate limit
+	copilotLimiter   *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
+	copilotCfg       *copilotConfigStore
+	netboxCfg        *netboxConfigStore // NetBox source-of-truth discovery config
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -284,6 +285,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("binding store: %v", err)
 	}
+	securitySettings, err := newSecuritySettingsStore(envOr("SECURITY_SETTINGS_FILE", "/data/security_settings.json"))
+	if err != nil {
+		log.Fatalf("security settings store: %v", err)
+	}
 	apiKeys, err := newAPIKeyStore(envOr("APIKEYS_FILE", "/data/apikeys.json"))
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
@@ -319,25 +324,26 @@ func newServer() *server {
 	}
 
 	srv := &server{
-		startedAt:     time.Now().UTC(),
-		discovery:     d,
-		collectors:    pool,
-		alerts:        engine,
-		notifier:      notifier,
-		users:         users,
-		roles:         roles,
-		tenants:       tenants,
-		orgs:          orgs,
-		bindings:      bindings,
-		apiKeys:       apiKeys,
-		refresh:       refresh,
-		snmpCreds:     snmpCreds,
-		sshHosts:      newSSHHostStore(envOr("SSH_KNOWN_HOSTS_FILE", "/data/ssh_known_hosts.json")),
-		snmpProfiles:  snmpProfiles,
-		saved:         saved,
-		audit:         audit,
-		contactPoints: contactPoints,
-		hub:           NewHub(),
+		startedAt:        time.Now().UTC(),
+		discovery:        d,
+		collectors:       pool,
+		alerts:           engine,
+		notifier:         notifier,
+		users:            users,
+		roles:            roles,
+		tenants:          tenants,
+		orgs:             orgs,
+		bindings:         bindings,
+		securitySettings: securitySettings,
+		apiKeys:          apiKeys,
+		refresh:          refresh,
+		snmpCreds:        snmpCreds,
+		sshHosts:         newSSHHostStore(envOr("SSH_KNOWN_HOSTS_FILE", "/data/ssh_known_hosts.json")),
+		snmpProfiles:     snmpProfiles,
+		saved:            saved,
+		audit:            audit,
+		contactPoints:    contactPoints,
+		hub:              NewHub(),
 	}
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
@@ -554,6 +560,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/breakglass", s.handleBreakGlass)
 	mux.HandleFunc("/api/breakglass/", s.handleBreakGlassByID)
 	mux.HandleFunc("/api/scopes", s.handleMyScopes)
+	mux.HandleFunc("/api/security-settings", s.handleSecuritySettings)
 	mux.HandleFunc("/api/access/explain", s.handleAccessExplain)
 	mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/apikeys/", s.handleAPIKeyByID)

@@ -28,6 +28,7 @@ import AccessExplorer from "./tabs/AccessExplorer";
 import {
   IdentityAccess,
   RegionsAdmin,
+  BindingsAdmin,
   AuthenticationAdmin,
   ApiAccessAdmin,
   IntegrationsAdmin,
@@ -194,6 +195,7 @@ export const NAV: NavSection[] = [
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
+      { id: "access", label: "Access", render: () => <BindingsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
