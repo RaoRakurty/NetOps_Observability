@@ -63,7 +63,7 @@ const SCOPE_GLOBAL = "__global__";
 // UsersAdmin. When embedded in the Identity & Access page, `scopeTenant` locks the
 // directory to one scope and hides the internal selector: "" = Global, a tenant id
 // = that tenant. Standalone (prop undefined), it keeps its own Global/tenant picker.
-export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
+export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { scopeTenant?: string; scopeName?: string; scopeNoun?: string } = {}) {
   const { user } = useAuth();
   // A super-admin in the global tenant manages every tenant's users and can scope
   // the directory to Global (the global tenant) or a specific tenant — "go into a
@@ -93,7 +93,10 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
   // Provider users are associated with NOTHING (no org/tenant); tenant users are
   // fixed to their tenant. isProvider = the platform realm.
   const isProvider = scopeTenantId === "";
-  const scopeTenantName = tenantList.find((t) => t.id === scopeTenantId)?.name || scopeTenantId;
+  // scopeName lets a non-tenant scope (an organization) supply its display name —
+  // the directory is keyed by id either way, so org users get tenant_id = org id
+  // (strictly associated, never global) without needing a tenant record to exist.
+  const scopeTenantName = scopeName || tenantList.find((t) => t.id === scopeTenantId)?.name || scopeTenantId;
   const startAdd = () => { setErr(null); setForm({ ...BLANK_USER, tenant_id: scopeTenantId }); setAdding(true); };
   const closeAdd = () => { setAdding(false); setForm({ ...BLANK_USER }); };
   // The security settings that apply to every user created in this scope. Editable
@@ -255,9 +258,9 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
                   to their tenant (no picker). Only the standalone directory picks one. */}
               {!isProvider && (
                 locked ? (
-                  <label><span>Tenant</span><div className="uf-fixed">{scopeTenantName}</div></label>
+                  <label><span>{scopeNoun}</span><div className="uf-fixed">{scopeTenantName}</div></label>
                 ) : (
-                  <label><span>Tenant</span>
+                  <label><span>{scopeNoun}</span>
                     <select value={form.tenant_id} onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}>
                       <option value="">— tenant —</option>
                       {tenantList.filter((t) => t.id !== "global").map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -749,7 +752,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
   const [orgs, err, reload, setErr] = useReload(() => api.listOrgs());
   const [regions] = useReload(() => api.listRegions());
   const [tenants] = useReload(() => api.listTenants());
-  const [bindings] = useReload(() => api.listBindings());
+  const [users] = useReload(() => api.listUsers());
   const [name, setName] = useState("");
   const [region, setRegion] = useState("");
   const [sso, setSso] = useState("");
@@ -760,10 +763,10 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
   const regionLabel = (id: string) => (regions ?? []).find((r) => r.id === id)?.label || id;
   const tenantCount = (orgId: string) =>
     (tenants ?? []).filter((t) => (t.org_id || "global") === orgId).length;
-  // Org members = distinct people with an allow-binding on this org's scope.
-  const memberCount = (orgId: string) => new Set(
-    (bindings ?? []).filter((b) => b.scope_id === `org:${orgId}` && b.effect === "allow").map((b) => b.principal_id.toLowerCase())
-  ).size;
+  // Org members = accounts strictly associated with the org (tenant_id = org id),
+  // mirroring tenant-user logic — no tenant record required.
+  const memberCount = (orgId: string) =>
+    (users ?? []).filter((u) => u.tenant_id === orgId).length;
 
   const create = async () => {
     if (!name.trim()) return;
@@ -1247,188 +1250,17 @@ export function BindingsAdmin() {
   );
 }
 
-// OrgMembers — the org-owned Users panel (the "Users" tab when drilled into an
-// organization). An org's members ARE the people with an allow role-binding on
-// `org:<id>` — membership = a binding, so the proven tenant isolation is left
-// untouched (Path A). "＋ Add user" creates the person (an unassociated account)
-// and auto-grants them their role on this org in one step; an existing person can
-// also be added. Removing a member revokes the binding; the account itself stays.
-function OrgMembers({ orgId, orgName }: { orgId: string; orgName: string }) {
-  const scopeId = `org:${orgId}`;
-  const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
-  const [usersData] = useReload(() => api.listUsers());
-  const [roles] = useReload(() => api.listRoles());
-  const [adding, setAdding] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<"new" | "existing">("new");
-  const [form, setForm] = useState({ username: "", display_name: "", email: "", password: "", role: "read-only" });
-  const [existing, setExisting] = useState("");
-
-  const roleList = roles?.roles ?? [];
-  const allUsers = usersData ?? [];
-  const memberBindings = (bindings ?? []).filter((b) => b.scope_id === scopeId && b.effect === "allow");
-  const memberKeys = new Set(memberBindings.map((b) => b.principal_id.toLowerCase()));
-  const nonMembers = allUsers.filter((u) => !memberKeys.has(u.username.toLowerCase()));
-  const userOf = (name: string) => allUsers.find((u) => u.username.toLowerCase() === name.toLowerCase());
-
-  const open = () => {
-    setErr(null); setMode("new");
-    setForm({ username: "", display_name: "", email: "", password: "", role: "read-only" });
-    setExisting(""); setAdding(true);
-  };
-  const close = () => { setAdding(false); setErr(null); };
-
-  const submit = async () => {
-    setErr(null); setBusy(true);
-    try {
-      let principal: string;
-      if (mode === "new") {
-        // Org members are unassociated accounts (tenant_id ""); their reach comes
-        // from the org binding below, not a platform base role.
-        await api.createUser({
-          username: form.username.trim(), display_name: form.display_name.trim(),
-          email: form.email.trim(), password: form.password, role: "read-only", tenant_id: "",
-        });
-        principal = form.username.trim();
-      } else {
-        principal = existing;
-      }
-      await api.grantBinding({ principal_id: principal, role_id: form.role, scope_id: scopeId, effect: "allow" });
-      setAdding(false); reload();
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
-  };
-  const remove = async (b: RoleBinding) => {
-    if (!window.confirm(`Remove ${b.principal_id} from ${orgName}?\n\nTheir account is kept — only this organization's access is revoked.`)) return;
-    setErr(null);
-    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
-  };
-  const changeRole = async (b: RoleBinding, role: string) => {
-    if (role === b.role_id) return;
-    setErr(null);
-    try {
-      await api.grantBinding({ principal_id: b.principal_id, role_id: role, scope_id: scopeId, effect: "allow" });
-      await api.revokeBinding(b.id);
-      reload();
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
-  };
-
-  const canSubmit = mode === "new" ? !!form.username.trim() && !!form.password : !!existing;
-  return (
-    <>
-      <div className="admin-head-row">
-        <AdminHead title="Users" sub={`People with access to ${orgName}. Add a person and pick their role here — they're created and granted access in one step.`} />
-        <button className="dash-btn accent" onClick={open}>＋ Add user</button>
-      </div>
-      <StatStrip>
-        <Stat label="Members" value={bindings ? memberBindings.length : <Skeleton w={26} h={22} />} />
-      </StatStrip>
-      <ErrLine msg={err} />
-
-      {adding && (
-        <Modal
-          title={`Add user · ${orgName}`}
-          subtitle="Create a person and grant them a role on this organization, or add an existing person."
-          logo={<span className="conn-logo uf-logo"><Icon name="user" size={24} /></span>}
-          onClose={close}
-        >
-          <ErrLine msg={err} />
-          <div style={{ marginBottom: 14 }}>
-            <Segmented<"new" | "existing">
-              value={mode}
-              onChange={(v) => { setMode(v); setErr(null); }}
-              options={[{ value: "new", label: "New person" }, { value: "existing", label: "Existing person" }]}
-              ariaLabel="Add mode"
-            />
-          </div>
-          {mode === "new" ? (
-            <div className="uf-grid">
-              <label className="req-field"><span>Username <Req /></span>
-                <input autoFocus value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
-              <label><span>Display name</span>
-                <input value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} /></label>
-              <label><span>Email</span>
-                <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-              <label className="req-field"><span>Password <Req /></span>
-                <input type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
-            </div>
-          ) : (
-            <div className="grant-form">
-              <label className="req-field"><span>Person <Req /></span>
-                <select autoFocus value={existing} onChange={(e) => setExisting(e.target.value)}>
-                  <option value="">Select a person…</option>
-                  {nonMembers.map((u) => (
-                    <option key={u.username} value={u.username}>{u.display_name ? `${u.display_name} (${u.username})` : u.username}</option>
-                  ))}
-                </select>
-                {nonMembers.length === 0 && <span className="mini-meta">Everyone already has access to this organization.</span>}
-              </label>
-            </div>
-          )}
-          <div className="uf2-sec">Role</div>
-          <div className="uf-secgrid">
-            <label className="uf-field"><span>Role on {orgName}</span>
-              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                {roleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-            </label>
-          </div>
-          <div className="uf2-foot">
-            <RequiredLegend />
-            <div className="uf2-foot-btns">
-              <button className="dash-btn" onClick={close} disabled={busy}>Cancel</button>
-              <button className="dash-btn accent" disabled={!canSubmit || busy} onClick={submit}>{busy ? "Adding…" : "Add user"}</button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      <div className="card" style={{ paddingTop: 8 }}>
-        {memberBindings.length === 0 ? (
-          <div className="empty">No members yet. Use ＋ Add user to add the first person.</div>
-        ) : (
-          <table className="ds-table" style={{ width: "100%" }}>
-            <thead>
-              <tr>
-                <th>Person</th><th>Email</th><th style={{ width: 150 }}>Role</th><th style={{ width: 90 }}>Status</th><th style={{ width: 1 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {memberBindings.map((b) => {
-                const u = userOf(b.principal_id);
-                return (
-                  <tr key={b.id}>
-                    <td style={{ fontWeight: 600 }}>{u?.display_name || b.principal_id}</td>
-                    <td className="mono">{u?.email || "—"}</td>
-                    <td>
-                      <select className="inline-select" value={b.role_id} onChange={(e) => changeRole(b, e.target.value)}>
-                        {roleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                        {!roleList.find((r) => r.id === b.role_id) && <option value={b.role_id}>{b.role_id}</option>}
-                      </select>
-                    </td>
-                    <td><span className={`badge ${u?.status === "disabled" ? "warn" : "good"}`}>{u?.status || "active"}</span></td>
-                    <td style={{ textAlign: "right" }}><button className="dash-btn" onClick={() => remove(b)}>Remove</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </>
-  );
-}
-
-// IAItems renders the per-scope identity panels. `kind` selects the Users tab
-// implementation: provider/tenant use the account directory (UsersAdmin); an org
-// uses binding-backed membership (OrgMembers). `tabs` lets the Provider show a
-// slimmer set (roles + SSO mappings live per-organization, not at the Provider).
+// IAItems renders the per-scope identity panels. All scopes use the same account
+// directory (UsersAdmin), keyed by id — an organization is just another scope id,
+// so org users get tenant_id = org id (strictly associated, never global) using
+// the exact tenant logic, WITHOUT requiring a tenant record to exist. `tabs` lets
+// the Provider show a slimmer set (roles + SSO mappings live per-organization).
 function IAItems({ kind, id = "", name, tabs = IA_TABS }: {
   kind: "provider" | "tenant" | "org"; id?: string; name?: string; tabs?: { id: IATab; label: string }[];
 }) {
   const [tab, setTab] = useState<IATab>(tabs[0]?.id ?? "users");
   const cur = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "users");
-  const roleScope = kind === "provider" ? undefined : id;        // platform-wide role defs; scoped note when set
-  const secScope = kind === "org" ? `org:${id}` : id;            // distinct security-settings key per org
+  const roleScope = kind === "provider" ? undefined : id;  // platform-wide role defs; scoped note when set
   return (
     <>
       <div className="ia-tabs" role="tablist">
@@ -1438,11 +1270,11 @@ function IAItems({ kind, id = "", name, tabs = IA_TABS }: {
           </button>
         ))}
       </div>
-      {cur === "users" && (kind === "org" ? <OrgMembers orgId={id} orgName={name || id} /> : <UsersAdmin scopeTenant={id} />)}
+      {cur === "users" && <UsersAdmin scopeTenant={id} scopeName={kind === "org" ? name : undefined} scopeNoun={kind === "org" ? "Organization" : "Tenant"} />}
       {cur === "userroles" && <RolesAdmin scopeTenant={roleScope} variant="builtin" />}
       {cur === "customroles" && <RolesAdmin scopeTenant={roleScope} variant="custom" />}
       {cur === "sso" && <SsoRolesPanel />}
-      {cur === "security" && <SecuritySettings scopeTenant={secScope} />}
+      {cur === "security" && <SecuritySettings scopeTenant={id} />}
     </>
   );
 }
