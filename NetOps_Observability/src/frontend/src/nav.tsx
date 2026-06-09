@@ -4,7 +4,6 @@ import { SectionCtx } from "./context/shell";
 import Dashboard from "./pages/Dashboard";
 import Devices from "./pages/Devices";
 import Reports from "./pages/Reports";
-import SavedDashboards from "./pages/SavedDashboards";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
 import SnmpProfileManager from "./tabs/SnmpProfileManager";
@@ -36,6 +35,18 @@ import {
   NotificationsAdmin,
   GraphQLExplorer,
 } from "./tabs/admin";
+// Placeholder / stub pages for sections mapped in the IA but not yet feature-backed.
+import {
+  DashboardList,
+  NewMonitor,
+  Quality,
+  Events,
+  IncidentResponse,
+  DeviceGeomap,
+  VulnerabilityManagement,
+  ThreatDetection,
+  ComplianceMonitoring,
+} from "./pages/Placeholders";
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -63,65 +74,68 @@ export type NavSection = {
   platformOnly?: boolean; // visible only to the cross-tenant platform owner
 };
 
-// The information architecture. Labels/grouping follow the conventions shared
-// by leading observability tools — Zabbix 7, Splunk Observability and Grafana:
-//   Overview · Explore (ad-hoc query) · Dashboards (curated) · Alerts ·
-//   Infrastructure (fleet) · Topology · Reports, with Administration (settings
-//   + raw-tool escape hatches: Grafana/Prometheus/OpenSearch) pinned at the
-//   bottom. Order here is the sidebar order.
+// The information architecture. The product is organized into three zones that
+// the IconRail renders with thin-line dividers:
+//   Monitor    — Dashboards · Monitoring · Incident Response · Automation
+//   Infra      — Infrastructure (the device fleet) · Security
+//   Data       — Metrics · Flows · Logs (the raw telemetry planes)
+// with Correlix AI pinned to the foot and Governance (Explain · Stack ·
+// Administration) anchored beneath it. Order here is the canonical order; the
+// rail's GROUPS map sections into the zones above.
 export const NAV: NavSection[] = [
-  // Overview — the home landing. The modular panel board lives at the top;
-  // curated saved Dashboards are nested beneath it (expand in the sidebar).
+  // ── Monitor zone ──────────────────────────────────────────────────────────
+  // Dashboards — curated views + the dashboard catalog + scheduled Reports.
   {
-    id: "overview",
-    label: "Overview",
-    icon: "overview",
+    id: "dashboards",
+    label: "Dashboards",
+    icon: "dashboards",
     children: [
       { id: "board", label: "Overview", render: () => <Dashboard /> },
-      { id: "dashboards", label: "Dashboards", render: () => <SavedDashboards /> },
+      {
+        id: "list",
+        label: "Dashboard List",
+        render: () => <DashboardList />,
+        subItems: [
+          { id: "device-metric", label: "Device Metrics" },
+          { id: "interface-metric", label: "Interface Metrics" },
+          { id: "bgp-metric", label: "BGP Metrics" },
+          { id: "bandwidth", label: "Bandwidth Utilization" },
+          { id: "wan-circuit", label: "WAN Circuit Utilization" },
+        ],
+      },
+      { id: "reports", label: "Reports", render: () => <Reports /> },
     ],
   },
-  // Explore — ad-hoc, query-first work across the data types (Grafana
-  // "Explore" / the reference platform "Metrics Explorer"), kept distinct from Dashboards.
+  // Monitoring — monitor definitions, creation, triggered (live) state, quality,
+  // and Event Management (events · incidents · anomalies).
   {
-    id: "explore",
-    label: "Explore",
-    icon: "explore",
+    id: "monitoring",
+    label: "Monitoring",
+    icon: "monitoring",
     children: [
-      { id: "logs", label: "Logs", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
-      { id: "metrics", label: "Metrics", render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} /> },
-      { id: "flows", label: "Flows", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
-      { id: "saved", label: "Saved", render: () => <SavedSearches /> },
+      { id: "monitors", label: "Monitors", render: () => <Rules /> },
+      { id: "new", label: "New Monitor", render: () => <NewMonitor /> },
+      { id: "triggered", label: "Triggered", render: () => <Alerts /> },
+      { id: "quality", label: "Quality", render: () => <Quality /> },
+      { id: "events", label: "Events", group: "Event Management", render: () => <Events /> },
+      { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
+      { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
     ],
   },
-  // Alerts — active state vs rule definitions vs correlated incidents
-  // (Zabbix "Problems"/"Alerts", Splunk "Active"/"Detectors").
+  // Incident Response — coordinate response across chat/collaboration tools, and
+  // configure the notification + ITSM integrations that route incidents.
   {
-    id: "alerts",
-    label: "Alerts",
-    icon: "alerts",
+    id: "incident",
+    label: "Incident Response",
+    icon: "incident",
     children: [
-      { id: "active", label: "Active", render: () => <Alerts /> },
-      { id: "rules", label: "Rules", render: () => <Rules /> },
-      { id: "incidents", label: "Incidents", render: () => <Incidents /> },
-      { id: "anomalies", label: "Anomalies", render: () => <Findings /> },
+      { id: "overview", label: "Overview", render: () => <IncidentResponse /> },
+      { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
+      { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
     ],
   },
-  // Infrastructure — the device fleet + collection health (the reference platform
-  // "Infrastructure", Zabbix "Hosts"/"Data collection").
-  {
-    id: "infrastructure",
-    label: "Infrastructure",
-    icon: "infrastructure",
-    children: [
-      { id: "devices", label: "Devices", render: () => <Devices /> },
-      // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
-      { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
-      { id: "snmp", label: "SNMP Profile Manager", render: () => <SnmpProfileManager /> },
-    ],
-  },
-  // Automation — system-of-record + automation integrations that feed the
-  // platform. Platform-owner only (the NetBox config is platform infrastructure).
+  // Automation — system-of-record (Source of Truth) + automation integrations.
+  // Platform-owner only (the SoT config is platform infrastructure).
   {
     id: "automation",
     label: "Automation",
@@ -131,23 +145,58 @@ export const NAV: NavSection[] = [
       { id: "sot", label: "Source Of Truth", render: () => <SourceOfTruth /> },
     ],
   },
+  // ── Infrastructure zone ─────────────────────────────────────────────────────
+  // Infrastructure — the device fleet: devices, maps, netflow, tunnels, and the
+  // collection plumbing (collectors / SNMP profiles).
   {
-    id: "topology",
-    label: "Topology",
-    icon: "topology",
+    id: "infrastructure",
+    label: "Infrastructure",
+    icon: "infrastructure",
     children: [
-      { id: "map", label: "Map", render: () => <Topology /> },
+      { id: "devices", label: "Devices", render: () => <Devices /> },
+      { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
+      { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
+      { id: "netflow", label: "Netflow", render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },
+      // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
+      { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
+      { id: "snmp", label: "SNMP Profile Manager", render: () => <SnmpProfileManager /> },
     ],
   },
+  // Security — vulnerability, threat and compliance posture across the fleet.
   {
-    id: "reports",
-    label: "Reports",
-    icon: "reports",
-    render: () => <Reports />,
+    id: "security",
+    label: "Security",
+    icon: "shield",
+    children: [
+      { id: "vuln", label: "Vulnerability Management", render: () => <VulnerabilityManagement /> },
+      { id: "threat", label: "Threat Detection", render: () => <ThreatDetection /> },
+      { id: "compliance", label: "Compliance Monitoring", render: () => <ComplianceMonitoring /> },
+    ],
   },
-  // Explain (L3) — the access-reasoning layer: who can reach what, and WHY. Its
-  // own top-level section so it reads as a distinct layer, not buried in admin.
+  // ── Data zone (raw telemetry planes) ────────────────────────────────────────
+  {
+    id: "metrics",
+    label: "Metrics",
+    icon: "metrics",
+    render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} />,
+  },
+  {
+    id: "flows",
+    label: "Flows",
+    icon: "flows",
+    render: (c) => <Flows sinceSeconds={c.rangeMinutes * 60} />,
+  },
+  {
+    id: "logs",
+    label: "Logs",
+    icon: "logs",
+    children: [
+      { id: "logs", label: "Logs", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
+      { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
+    ],
+  },
+  // Explain (L3) — the access-reasoning layer: who can reach what, and WHY.
   {
     id: "explain",
     label: "Explain",
@@ -176,7 +225,7 @@ export const NAV: NavSection[] = [
   },
   {
     id: "copilot",
-    label: "Opsis Ai",
+    label: "Correlix AI",
     icon: "copilot",
     action: "copilot",
     footer: true,

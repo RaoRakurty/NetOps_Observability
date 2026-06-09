@@ -17,15 +17,18 @@ import MfaCard from "./MfaCard";
 // dark rail). Alerts (pink) and Copilot/ChatGPT (violet) are kept; the rest are
 // spread across the wheel: blue · cyan · green · teal · orange · amber · slate.
 const MOD_HUE: Record<string, string> = {
-  overview: "#3B82F6", // Pulse — vivid blue
-  explore: "#0EA5E9", // Explore/Metrics — vivid sky
-  alerts: "#EC4899", // Monitors/Alerts — pink (kept)
+  dashboards: "#3B82F6", // Dashboards — vivid blue
+  monitoring: "#EC4899", // Monitoring — pink (kept from Alerts)
+  incident: "#F97316", // Incident Response — vivid orange
+  automation: "#A855F7", // Automation — vivid purple
   infrastructure: "#22C55E", // Fleet — vivid leafy green
-  topology: "#D946EF", // Network — vivid fuchsia (distinct from sky/green)
-  reports: "#F97316", // Reports — vivid orange
-  explain: "#14B8A6", // Explain (access reasoning) — vivid teal
-  stack: "#EAB308", // Stack — vivid amber/gold
-  copilot: "#8B5CF6", // Copilot/ChatGPT — violet (kept)
+  security: "#EF4444", // Security — vivid red
+  metrics: "#0EA5E9", // Metrics — vivid sky
+  flows: "#14B8A6", // Flows — vivid teal
+  logs: "#EAB308", // Logs — vivid amber/gold
+  explain: "#D946EF", // Explain (access reasoning) — vivid fuchsia
+  stack: "#64748B", // Stack — slate (utility)
+  copilot: "#8B5CF6", // Correlix AI — violet (kept)
   admin: "#94A3B8", // Admin — slate (utility)
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
@@ -37,14 +40,14 @@ const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 // Three layers (the hybrid IA): Operations (monitor/operate) · Explain (access
 // reasoning) · and — anchored at the foot — Governance (Administration + Stack).
 const GROUPS: { label: string; ids: string[] }[] = [
-  { label: "Operations", ids: ["overview", "copilot", "alerts", "topology", "reports"] },
-  { label: "Infrastructure & Logs", ids: ["infrastructure", "automation", "explore"] },
-  { label: "Explain", ids: ["explain"] },
+  { label: "Monitor", ids: ["dashboards", "monitoring", "incident", "automation"] },
+  { label: "Infrastructure", ids: ["infrastructure", "security"] },
+  { label: "Data", ids: ["metrics", "flows", "logs"] },
 ];
-// Admin zone anchored at the foot (Datadog-style): Stack + Administration kept
-// together in one zone, above a thin-line-separated Support/Help zone, then the
-// account. Excluded from the top groups.
-const FOOT_ADMIN_IDS = ["stack", "admin"];
+// Governance/admin zone anchored at the foot (Datadog-style): Explain + Stack +
+// Administration kept together, above a thin-line-separated Support/Help zone,
+// then the account. Excluded from the top groups.
+const FOOT_ADMIN_IDS = ["explain", "stack", "admin"];
 
 type Props = {
   nav: NavSection[];

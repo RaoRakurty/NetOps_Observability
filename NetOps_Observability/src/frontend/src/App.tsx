@@ -49,7 +49,7 @@ export default function App() {
   const nav = useMemo(() => filteredNav(platformAdmin), [platformAdmin]);
 
   // Shell state — the single source of truth that unifies the sections.
-  const [hash, setHash] = useState<string>(() => location.hash || "#/overview");
+  const [hash, setHash] = useState<string>(() => location.hash || "#/dashboards/board");
   // Per-section time-range memory: each section restores the range it was last
   // viewed with (theme/timeprefs.ts). setRange persists under the active section.
   const sectionId = useMemo(() => resolveRoute(hash, nav).section.id, [hash, nav]);
@@ -84,7 +84,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onHash = () => setHash(location.hash || "#/overview");
+    const onHash = () => setHash(location.hash || "#/dashboards/board");
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);

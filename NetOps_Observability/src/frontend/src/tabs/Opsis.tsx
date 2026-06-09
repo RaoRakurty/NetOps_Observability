@@ -112,7 +112,7 @@ export default function Opsis() {
     return (
       <div className="op-chat" style={{ padding: 20 }}>
         <p style={{ color: "var(--muted)", fontSize: 13 }}>
-          Opsis Ai is turned off. Set <code>FEATURE_COPILOT=true</code> in{" "}
+          Correlix AI is turned off. Set <code>FEATURE_COPILOT=true</code> in{" "}
           <code>deployment/docker/.env</code> and restart the API.
         </p>
       </div>
@@ -229,7 +229,7 @@ export default function Opsis() {
           className="op-input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask Opsis Ai…  (⏎ to send, ⇧⏎ for newline)"
+          placeholder="Ask Correlix AI…  (⏎ to send, ⇧⏎ for newline)"
           rows={1}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }

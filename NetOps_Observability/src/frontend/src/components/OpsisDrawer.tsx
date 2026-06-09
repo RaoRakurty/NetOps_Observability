@@ -27,7 +27,7 @@ export default function OpsisDrawer() {
           <span className="op-head-brand">
             <span className="op-head-logo"><Icon name="copilot" size={16} /></span>
             <span className="op-head-text">
-              <span className="op-head-title">Opsis Ai</span>
+              <span className="op-head-title">Correlix AI</span>
               <span className="op-head-sub">Network assistant</span>
             </span>
           </span>

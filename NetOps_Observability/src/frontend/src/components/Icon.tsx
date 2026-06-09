@@ -111,6 +111,49 @@ const PATHS: Record<string, JSX.Element> = {
     </>
   ),
   logo: <path d="M2 12h4l3 8 4-16 3 8h6" />,
+  // Monitoring — a gauge/speedometer (active health watching).
+  monitoring: (
+    <>
+      <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+      <path d="M12 3a9 9 0 0 0-9 9 9 9 0 0 0 1.5 5" />
+      <path d="M12 3a9 9 0 0 1 9 9 9 9 0 0 1-1.5 5" />
+      <line x1="13.5" y1="10.5" x2="17" y2="7" />
+    </>
+  ),
+  // Incident Response — a siren/alert with response rays.
+  incident: (
+    <>
+      <path d="M7 18a5 5 0 0 1 10 0z" />
+      <line x1="5" y1="18" x2="19" y2="18" />
+      <line x1="12" y1="6" x2="12" y2="3" />
+      <line x1="6" y1="8" x2="4" y2="6" />
+      <line x1="18" y1="8" x2="20" y2="6" />
+    </>
+  ),
+  // Metrics — a line chart trend.
+  metrics: (
+    <>
+      <path d="M3 3v18h18" />
+      <path d="m6 15 4-5 3 3 5-7" />
+    </>
+  ),
+  // Flows — directional flow arrows (traffic movement).
+  flows: (
+    <>
+      <path d="M3 7h13l-3-3" />
+      <path d="M16 7l-3 3" />
+      <path d="M21 17H8l3 3" />
+      <path d="M8 17l3-3" />
+    </>
+  ),
+  // Logs — stacked log lines.
+  logs: (
+    <>
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="18" x2="14" y2="18" />
+    </>
+  ),
   // Security policy affordances.
   shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />,
   lock: (
