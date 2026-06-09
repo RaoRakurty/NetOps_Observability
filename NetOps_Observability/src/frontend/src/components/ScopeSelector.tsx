@@ -49,8 +49,14 @@ export default function ScopeSelector() {
   }, [scopes]);
 
   const current = scopes.find((s) => s.tenant_id === active);
-  // Nothing to switch between (single tenant, not an operator) → a static chip.
-  const switchable = allTenants || scopes.length > 1;
+  // The platform owner already has the cross-tenant Global view — a top-bar
+  // tenant switcher is the "view-as-tenant" pattern we deliberately removed, so
+  // it is NOT shown for them (they drill into a tenant from Administration →
+  // Tenants instead). The selector exists for MULTI-scope non-owner principals
+  // (SRE / consultant / org-admin) — the case it was actually built for.
+  if (allTenants) return null;
+  // Nothing to switch between (single tenant) → a static context chip.
+  const switchable = scopes.length > 1;
 
   const pick = (tenantId: string) => {
     setActiveScope(tenantId);

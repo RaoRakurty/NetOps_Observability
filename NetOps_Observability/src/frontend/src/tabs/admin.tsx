@@ -363,6 +363,7 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   const [org, setOrg] = useState("");
   const [region, setRegion] = useState("");
   const [hideGlobal, setHideGlobal] = useState(false);
+  const [adding, setAdding] = useState(false); // create form hidden until clicked
   const orgName = (id?: string) => (orgs ?? []).find((o) => o.id === (id || "global"))?.name || (id || "global");
   const regionLabel = (id?: string) => id ? ((regions ?? []).find((r) => r.id === id)?.label || id) : "";
   const orgRegion = (orgId?: string) => (orgs ?? []).find((o) => o.id === (orgId || "global"))?.home_region;
@@ -391,9 +392,9 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   };
 
   const create = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !org) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, org, region); setName(""); setNote(""); setOrg(""); setRegion(""); setHideGlobal(false); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, org, region); setName(""); setNote(""); setOrg(""); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
   const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
   const confirmDelete = async () => {
@@ -419,45 +420,48 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
   const list = tenants ?? [];
   return (
     <>
-      <AdminHead title="Tenants" sub="Logical isolation boundaries. The Parent Tenant owns the platform; Child Tenants are isolated namespaces — devices, dashboards, alerts and users are scoped to each." />
-      <StatStrip>
-        <Stat label="Tenants" value={tenants ? list.length : <Skeleton w={26} h={22} />} />
-        <Stat label="Parent" value={tenants ? list.filter((t) => t.id === "global").length : "—"} />
-        <Stat label="Child" value={tenants ? list.filter((t) => t.id !== "global").length : "—"} tone="accent" />
-      </StatStrip>
-      <div className="card">
-        <div className="admin-card-head"><h2>New child tenant</h2></div>
-        <ErrLine msg={err} />
-        <div className="admin-form">
-          <label className="req-field">
-            <span>Tenant name <Req /></span>
-            <input placeholder="e.g. acme" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            <span>Organization</span>
-            <select value={org} onChange={(e) => setOrg(e.target.value)}>
-              {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Data region</span>
-            <select value={region} onChange={(e) => setRegion(e.target.value)}>
-              <option value="">Inherit org{org ? ` (${regionLabel(orgRegion(org))})` : ""}</option>
-              {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-          </label>
-          <label style={{ flex: 2 }}>
-            <span>Note</span>
-            <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-          <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create tenant</button>
-        </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-          <input type="checkbox" checked={hideGlobal} onChange={(e) => setHideGlobal(e.target.checked)} />
-          Hide this tenant's data from the global view (data privacy — global/platform users won't see its logs, flows, findings or metrics)
-        </label>
-        <RequiredLegend />
+      <div className="admin-head-row">
+        <AdminHead title="Tenants" sub="Isolation boundaries within an organization. Each tenant is its own namespace — devices, dashboards, alerts and users are scoped to it." />
+        {!adding && <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create tenant</button>}
       </div>
+      {adding && (
+        <div className="card">
+          <div className="admin-card-head"><h2>New tenant</h2></div>
+          <ErrLine msg={err} />
+          <div className="admin-form">
+            <label className="req-field">
+              <span>Tenant name <Req /></span>
+              <input autoFocus placeholder="e.g. acme" value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label className="req-field">
+              <span>Organization <Req /></span>
+              <select value={org} onChange={(e) => { setOrg(e.target.value); setRegion(""); }}>
+                <option value="">Select organization…</option>
+                {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Region</span>
+              <select value={region} onChange={(e) => setRegion(e.target.value)}>
+                <option value="">{org ? `${regionLabel(orgRegion(org))} (org)` : "From organization"}</option>
+                {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+            </label>
+            <label style={{ flex: 2 }}>
+              <span>Note</span>
+              <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
+            </label>
+            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setOrg(""); setRegion(""); setNote(""); setHideGlobal(false); setErr(null); }}>Cancel</button>
+            <button className="dash-btn accent" disabled={!name.trim() || !org} onClick={create}>Create tenant</button>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+            <input type="checkbox" checked={hideGlobal} onChange={(e) => setHideGlobal(e.target.checked)} />
+            Hide this tenant's data from the global view (data privacy — global/platform users won't see its logs, flows, findings or metrics)
+          </label>
+          <RequiredLegend />
+        </div>
+      )}
+      {!adding && <ErrLine msg={err} />}
       <div className="card" style={{ paddingTop: 8 }}>
         {list.length === 0 ? (
           <div className="empty">No tenants yet.</div>
@@ -466,13 +470,13 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
             <thead>
               <tr>
                 <th>Tenant</th>
-                <th style={{ width: 130 }}>Type</th>
-                <th style={{ width: 150 }}>Organization</th>
-                <th style={{ width: 150 }}>Data region</th>
-                <th style={{ width: 190 }}>Global visibility</th>
+                <th>Type</th>
+                <th>Organization</th>
+                <th>Region</th>
+                <th>Global visibility</th>
                 <th>Note</th>
-                <th style={{ width: 140 }}>ID</th>
-                <th style={{ width: 1 }}></th>
+                <th>ID</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -495,9 +499,9 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                           className="ds-mini-select"
                           value={t.region || ""}
                           onChange={(e) => changeTenantRegion(t, e.target.value)}
-                          title="Data-residency region (blank = inherit the organization's region)"
+                          title="Data-residency region (blank = the organization's region)"
                         >
-                          <option value="">Inherit ({regionLabel(orgRegion(t.org_id))})</option>
+                          <option value="">{regionLabel(orgRegion(t.org_id))}</option>
                           {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
                         </select>
                       )}
@@ -505,13 +509,17 @@ export function TenantsAdmin({ onManageTenant }: { onManageTenant?: (id: string,
                     <td>
                       {isParent ? (
                         <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
-                      ) : t.operator_restricted ? (
-                        <button className="dash-btn" onClick={() => toggleGlobalVisibility(t)} title="Hidden from the global view — global users can't see this tenant's data. Click to make visible.">
-                          🔒 Hidden from global
-                        </button>
                       ) : (
-                        <button className="dash-btn" onClick={() => toggleGlobalVisibility(t)} title="Visible in the global view — click to hide this tenant's data from global/platform users (data privacy)">
-                          Visible in global
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!t.operator_restricted}
+                          className={`vis-toggle${t.operator_restricted ? "" : " on"}`}
+                          onClick={() => toggleGlobalVisibility(t)}
+                          title={t.operator_restricted ? "Hidden from the global view — click to make visible" : "Visible in the global view — click to hide (data privacy)"}
+                        >
+                          <span className="vis-knob" />
+                          <span className="vis-label">{t.operator_restricted ? "No" : "Yes"}</span>
                         </button>
                       )}
                     </td>
@@ -633,6 +641,7 @@ export function OrgsAdmin() {
   const [sso, setSso] = useState("");
   const [note, setNote] = useState("");
   const [edit, setEdit] = useState<Org | null>(null);
+  const [adding, setAdding] = useState(false); // create form is hidden until clicked
 
   const regionLabel = (id: string) => (regions ?? []).find((r) => r.id === id)?.label || id;
   const tenantCount = (orgId: string) =>
@@ -643,7 +652,7 @@ export function OrgsAdmin() {
     setErr(null);
     try {
       await api.createOrg(name.trim(), { homeRegion: region, ssoConnection: sso.trim(), note: note.trim() });
-      setName(""); setRegion(""); setSso(""); setNote(""); reload();
+      setName(""); setRegion(""); setSso(""); setNote(""); setAdding(false); reload();
     } catch (e) { setErr((e as Error).message); }
   };
   const remove = async (o: Org) => {
@@ -656,38 +665,44 @@ export function OrgsAdmin() {
   const list = orgs ?? [];
   return (
     <>
-      <AdminHead title="Organizations" sub="Top-level accounts. Each organization has a home data region and sign-in, inherited by the tenants inside it." />
+      <div className="admin-head-row">
+        <AdminHead title="Organizations" sub="Top-level accounts. Each organization has a home data region and sign-in, inherited by the tenants inside it." />
+        {!adding && <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create organization</button>}
+      </div>
       <StatStrip>
         <Stat label="Organizations" value={orgs ? list.length : <Skeleton w={26} h={22} />} />
-        <Stat label="Data regions in use" value={orgs ? new Set(list.map((o) => o.home_region)).size : "—"} tone="accent" />
       </StatStrip>
-      <div className="card">
-        <div className="admin-card-head"><h2>New organization</h2></div>
-        <ErrLine msg={err} />
-        <div className="admin-form">
-          <label className="req-field">
-            <span>Name <Req /></span>
-            <input placeholder="e.g. Acme Corp" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            <span>Data region</span>
-            <select value={region} onChange={(e) => setRegion(e.target.value)}>
-              <option value="">Default</option>
-              {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Sign-in connection</span>
-            <input placeholder="optional" value={sso} onChange={(e) => setSso(e.target.value)} />
-          </label>
-          <label style={{ flex: 2 }}>
-            <span>Note</span>
-            <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-          <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create organization</button>
+      {adding && (
+        <div className="card">
+          <div className="admin-card-head"><h2>New organization</h2></div>
+          <ErrLine msg={err} />
+          <div className="admin-form">
+            <label className="req-field">
+              <span>Name <Req /></span>
+              <input autoFocus placeholder="e.g. Acme Corp" value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label className="req-field">
+              <span>Region <Req /></span>
+              <select value={region} onChange={(e) => setRegion(e.target.value)}>
+                <option value="">Select region…</option>
+                {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Sign-in connection</span>
+              <input placeholder="optional" value={sso} onChange={(e) => setSso(e.target.value)} />
+            </label>
+            <label style={{ flex: 2 }}>
+              <span>Note</span>
+              <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
+            </label>
+            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setRegion(""); setSso(""); setNote(""); setErr(null); }}>Cancel</button>
+            <button className="dash-btn accent" disabled={!name.trim() || !region} onClick={create}>Create organization</button>
+          </div>
+          <RequiredLegend />
         </div>
-        <RequiredLegend />
-      </div>
+      )}
+      {!adding && <ErrLine msg={err} />}
       <div className="card" style={{ paddingTop: 8 }}>
         {list.length === 0 ? (
           <div className="empty">No organizations yet.</div>
@@ -708,7 +723,7 @@ export function OrgsAdmin() {
                 const isRoot = o.id === "global";
                 return (
                   <tr key={o.id}>
-                    <td style={{ fontWeight: 600 }}>{o.name}{isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Root</span>}</td>
+                    <td style={{ fontWeight: 600 }}>{o.name}{isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Parent Organization</span>}</td>
                     <td><span className="badge">{regionLabel(o.home_region)}</span></td>
                     <td style={{ color: "var(--muted)" }}>{tenantCount(o.id)}</td>
                     <td style={{ color: "var(--muted)", fontSize: 12 }}>{o.sso_connection || "Platform default"}</td>
@@ -1026,7 +1041,7 @@ function IAItems({ scopeTenant }: { scopeTenant: string }) {
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
-  const [section, setSection] = useState<"global" | "orgs" | "tenants">("global");
+  const [section, setSection] = useState<"global" | "orgs" | "tenants">("orgs");
   const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
 
   // A tenant admin governs only its own tenant — no Global, no picker.
@@ -1047,7 +1062,7 @@ export function IdentityAccess() {
           ariaLabel="Identity scope"
           value={section}
           onChange={(v) => { setSection(v); setSel(null); }}
-          options={[{ value: "global", label: "Global" }, { value: "orgs", label: "Organizations" }, { value: "tenants", label: "Tenants" }]}
+          options={[{ value: "orgs", label: "Organizations" }, { value: "global", label: "Global" }, { value: "tenants", label: "Tenants" }]}
         />
       </div>
 

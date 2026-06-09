@@ -192,8 +192,8 @@ export const NAV: NavSection[] = [
       // Identity & Access — consolidates Users · Roles · MFA · Security Policy,
       // split into Global (platform-wide) and Tenants (per tenant, configured
       // independently). The tenant registry + per-tenant drill-in live inside it.
-      { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
+      { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
