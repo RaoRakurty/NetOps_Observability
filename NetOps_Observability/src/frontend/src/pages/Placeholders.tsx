@@ -203,42 +203,6 @@ export function FlowTrace() {
   );
 }
 
-// BGP / OSPF Overview — routing-protocol session & adjacency health. Data-blocked
-// today: device_bgp_peer_state / device_ospf_nbr_state are referenced in alert
-// rules but emitted by no collector — needs a BGP4-MIB/OSPF-MIB SNMP collector.
-export function BgpOspfOverview() {
-  return (
-    <Stub
-      icon="topology"
-      title="BGP / OSPF Overview"
-      summary="Routing-protocol health: BGP session state, flaps, update rate and accepted prefixes, plus OSPF interface and neighbor adjacency state — confirming the control plane behind the data plane."
-      planned={[
-        "BGP — peer state, established transitions, update rate, accepted prefixes (BGP4-MIB)",
-        "OSPF — interface state and neighbor adjacency state (OSPF-MIB)",
-        "Device context — uptime + interface admin/oper status",
-        "Needs a new SNMP collector (collectors/routing.go) — currently no BGP/OSPF metrics are collected",
-      ]}
-    />
-  );
-}
-
-// Troubleshooting — collection-pipeline health (agents, SNMP, traps, NetFlow).
-export function Troubleshooting() {
-  return (
-    <Stub
-      icon="stack"
-      title="Troubleshooting"
-      summary="Health of the collection pipeline itself — collector availability, SNMP reachability and poll duration, and the NetFlow/trap ingest path — so you can tell 'no data' from 'all good'."
-      planned={[
-        "Fleet counts — devices monitored, flows/traps indexed, submitted metrics",
-        "Collectors — availability, CPU/memory, restarts (collector_* self-metrics)",
-        "SNMP — reachable/unreachable, check duration & interval by device",
-        "NetFlow — records received/flushed/stored, exporters, packet drop & sequence gaps",
-      ]}
-    />
-  );
-}
-
 export function DeviceGeomap() {
   return (
     <Stub
