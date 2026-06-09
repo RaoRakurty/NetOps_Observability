@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import Devices from "./pages/Devices";
 import DeviceMonitoring from "./pages/DeviceMonitoring";
 import InterfacePerformance from "./pages/InterfacePerformance";
+import BgpOspf from "./pages/BgpOspf";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -46,7 +47,6 @@ import {
   IncidentResponse,
   DeviceGeomap,
   FlowTrace,
-  BgpOspfOverview,
   Troubleshooting,
   VulnerabilityManagement,
   ThreatDetection,
@@ -165,7 +165,7 @@ export const NAV: NavSection[] = [
       // routing collector / pipeline-metric wiring.
       { id: "monitoring", label: "Device Monitoring", group: "Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "ifperf", label: "Interface Performance", group: "Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
-      { id: "bgpospf", label: "BGP / OSPF Overview", group: "Dashboards", render: () => <BgpOspfOverview /> },
+      { id: "bgpospf", label: "BGP / OSPF Overview", group: "Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
       { id: "troubleshooting", label: "Troubleshooting", group: "Dashboards", render: () => <Troubleshooting /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },

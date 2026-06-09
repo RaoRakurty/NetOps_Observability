@@ -45,6 +45,14 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_if_out_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 10}, Table: true},
 				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 2}, Table: true},  // hrProcessorLoad (HOST-RESOURCES-MIB)
 				{Name: "device_sensor_value", OID: []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4}, Table: true}, // entPhySensorValue (ENTITY-SENSOR-MIB)
+				// BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) + OSPF-MIB
+				// neighbor/interface state — standard routing MIBs, generic to all
+				// vendors. Powers the BGP/OSPF Overview board.
+				{Name: "device_bgp_peer_state", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 2}, Table: true},      // bgpPeerState
+				{Name: "device_bgp_fsm_transitions", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 15}, Table: true}, // bgpPeerFsmEstablishedTransitions
+				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true},      // bgpPeerInUpdates
+				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true},      // ospfNbrState
+				{Name: "device_ospf_if_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 12}, Table: true},       // ospfIfState
 			},
 		},
 		{
