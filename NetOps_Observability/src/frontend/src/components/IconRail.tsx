@@ -23,6 +23,7 @@ const MOD_HUE: Record<string, string> = {
   infrastructure: "#22C55E", // Fleet — vivid leafy green
   topology: "#D946EF", // Network — vivid fuchsia (distinct from sky/green)
   reports: "#F97316", // Reports — vivid orange
+  explain: "#14B8A6", // Explain (access reasoning) — vivid teal
   stack: "#EAB308", // Stack — vivid amber/gold
   copilot: "#8B5CF6", // Copilot/ChatGPT — violet (kept)
   admin: "#94A3B8", // Admin — slate (utility)
@@ -33,9 +34,12 @@ const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 // with the v1 sidebar and stays untouched). Sections render under their group's
 // label with a thin divider between groups. Any section not listed falls into a
 // trailing "More" group so nothing is ever dropped.
+// Three layers (the hybrid IA): Operations (monitor/operate) · Explain (access
+// reasoning) · and — anchored at the foot — Governance (Administration + Stack).
 const GROUPS: { label: string; ids: string[] }[] = [
-  { label: "Monitoring", ids: ["overview", "copilot", "alerts", "topology", "reports"] },
+  { label: "Operations", ids: ["overview", "copilot", "alerts", "topology", "reports"] },
   { label: "Infrastructure & Logs", ids: ["infrastructure", "automation", "explore"] },
+  { label: "Explain", ids: ["explain"] },
 ];
 // Admin zone anchored at the foot (Datadog-style): Stack + Administration kept
 // together in one zone, above a thin-line-separated Support/Help zone, then the

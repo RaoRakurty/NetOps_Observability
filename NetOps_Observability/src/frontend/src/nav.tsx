@@ -143,6 +143,16 @@ export const NAV: NavSection[] = [
     icon: "reports",
     render: () => <Reports />,
   },
+  // Explain (L3) — the access-reasoning layer: who can reach what, and WHY. Its
+  // own top-level section so it reads as a distinct layer, not buried in admin.
+  {
+    id: "explain",
+    label: "Explain",
+    icon: "analytics",
+    children: [
+      { id: "access", label: "Access Explorer", render: () => <AccessExplorer /> },
+    ],
+  },
   // Stack — the platform's OWN infra plumbing + raw-backend tools, grouped into
   // one section instead of being scattered in Administration. Platform-owner only
   // (tenant admins manage their tenant, never the stack); the backend enforces it
@@ -182,7 +192,6 @@ export const NAV: NavSection[] = [
       // split into Global (platform-wide) and Tenants (per tenant, configured
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
-      { id: "access-explorer", label: "Access Explorer", render: () => <AccessExplorer /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
