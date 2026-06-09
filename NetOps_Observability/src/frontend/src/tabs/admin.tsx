@@ -1014,11 +1014,11 @@ export function RegionsAdmin() {
   );
 }
 
-// ---- Identity & Access (Global vs Tenants, same items each) ----------------
+// ---- Identity & Access (Provider · Organizations · Tenants) ----------------
 //
-// One page that consolidates Users · Roles · Security Policy · MFA, split into a
-// Global section (platform-wide) and a Tenants section (per tenant, configured
-// independently). Each item is the existing admin panel, scoped via `scopeTenant`
+// One page that consolidates Users · Roles · Security Settings, split into a
+// Provider section (platform-wide), per-organization, and per-tenant scopes.
+// Each item is the existing admin panel, scoped via `scopeTenant`
 // ("" = Global, a tenant id = that tenant). Per-tenant ROLE definitions and the MFA
 // feature are backend follow-ups; surfaced here as a note / "coming soon".
 
@@ -2105,7 +2105,7 @@ export function AuthenticationAdmin() {
             {open === "local" && (
               <>
                 <p className="admin-sub">Local accounts are always available — even when an external IdP is down. They authenticate with username + password (PBKDF2) and issue JWT access tokens with rotating, single-use refresh tokens.</p>
-                <p className="mini-meta">Manage individual accounts under <strong>Administration → Users</strong>. Password complexity, lockout and session lifetimes are governed by <strong>Security Policy</strong>.</p>
+                <p className="mini-meta">Manage individual accounts under <strong>Identity &amp; Access → Users</strong>. Password complexity, lockout and session lifetimes are governed by the per-scope <strong>Security Settings</strong>.</p>
               </>
             )}
             {open === "sso" && <SsoAdminForm roleIds={fallbackRoles} embedded />}

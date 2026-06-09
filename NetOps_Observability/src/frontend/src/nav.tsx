@@ -190,7 +190,7 @@ export const NAV: NavSection[] = [
     footer: true,
     children: [
       { id: "settings", label: "Settings", render: () => <Settings /> },
-      // Identity & Access — consolidates Users · Roles · MFA · Security Policy,
+      // Identity & Access — consolidates Users · Roles · Security Settings,
       // split into Global (platform-wide) and Tenants (per tenant, configured
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
