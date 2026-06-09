@@ -58,8 +58,8 @@ func newOrgStore(path string) (*orgStore, error) {
 	}
 	if _, ok := s.orgs[OrgGlobal]; !ok {
 		s.orgs[OrgGlobal] = Org{
-			ID: OrgGlobal, Name: "Global", Slug: OrgGlobal,
-			Note:       "Root organization — owns the platform tenant & defaults.",
+			ID: OrgGlobal, Name: "Provider", Slug: OrgGlobal,
+			Note:       "The provider (platform-owner) realm — root of all organizations.",
 			HomeRegion: RegionDefault, CreatedAt: time.Now().UTC(),
 		}
 		if err := s.flushLocked(); err != nil {

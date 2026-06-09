@@ -58,8 +58,8 @@ func newTenantStore(path string) (*tenantStore, error) {
 	}
 	if _, ok := s.tenants[TenantGlobal]; !ok {
 		s.tenants[TenantGlobal] = Tenant{
-			ID: TenantGlobal, Name: "Global", Slug: TenantGlobal, OrgID: OrgGlobal,
-			Note:          "Root tenant — owns shared infrastructure & defaults.",
+			ID: TenantGlobal, Name: "Provider", Slug: TenantGlobal, OrgID: OrgGlobal,
+			Note:          "The provider (platform-owner) realm.",
 			IsolationMode: IsolationShared, CreatedAt: time.Now().UTC(),
 		}
 		if err := s.flushLocked(); err != nil {
