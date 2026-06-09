@@ -1,6 +1,7 @@
 # Device Monitoring dashboard suite — design & implementation plan
 
-Status: **proposed** (deep-research deliverable, 2026-06-09). Builds on the
+Status: **Phase 1+2 shipped** (2026-06-09, `d6c7f7b`); Phases 3-4 proposed.
+Builds on the
 already-shipped `pages/DeviceMonitoring.tsx` (Infrastructure → Device Monitoring)
 and the Flows rebuild (`tabs/Flows.tsx`).
 
