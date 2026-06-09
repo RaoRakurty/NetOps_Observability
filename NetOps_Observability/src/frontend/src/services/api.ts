@@ -77,6 +77,15 @@ export type NetboxConfig = {
   token?: string; // write-only
 };
 
+// Result of the device→NetBox write-through reconciler.
+export type NetboxSyncStatus = {
+  enabled: boolean;
+  last_run?: string;
+  last_error?: string;
+  created: number; // devices created in NetBox on the last run
+  present: number; // devices already in NetBox (left untouched)
+};
+
 // ---------- Platform stack health (platform-owner only) ----------
 
 export type StackComponent = {
@@ -739,6 +748,9 @@ export const api = {
     request<{ config: NetboxConfig }>("/api/automation/netbox"),
   saveNetboxConfig: (c: Partial<NetboxConfig>) =>
     request<{ config: NetboxConfig }>("/api/automation/netbox", { method: "PUT", body: JSON.stringify(c) }),
+  // Device → NetBox write-through (push discovered devices INTO NetBox as SoT).
+  netboxSyncStatus: () => request<NetboxSyncStatus>("/api/automation/netbox/sync"),
+  netboxSyncNow: () => request<NetboxSyncStatus>("/api/automation/netbox/sync", { method: "POST" }),
 
   // Dashboard tile data — same shape /api/events emits via
   // { type: "metric_update", data: <tile> }.

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, NetboxConfig } from "../services/api";
+import { api, NetboxConfig, NetboxSyncStatus } from "../services/api";
 import Icon from "../components/Icon";
 import Wizard, { WizardStep } from "../components/Wizard";
 
@@ -28,6 +28,8 @@ export default function SourceOfTruth() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [poll, setPoll] = useState<{ last_poll?: string; devices?: number; last_error?: string } | null>(null);
+  const [syncStat, setSyncStat] = useState<NetboxSyncStatus | null>(null);
+  const [pushing, setPushing] = useState(false);
   const [full, setFull] = useState(false);
   const [gateReady, setGateReady] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -56,6 +58,28 @@ export default function SourceOfTruth() {
       if (d.netbox) setPoll(d.netbox);
     } catch {
       /* discovery detail is platform-owner-only */
+    }
+    try {
+      setSyncStat(await api.netboxSyncStatus());
+    } catch {
+      /* platform-owner-only */
+    }
+  };
+
+  // Push discovered devices INTO NetBox (write-through reconcile). Distinct from
+  // "Sync devices" above, which polls the inventory INTO Infrastructure → Devices.
+  const pushToNetbox = async () => {
+    setPushing(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const s = await api.netboxSyncNow();
+      setSyncStat(s);
+      setMsg(`Pushed to NetBox: ${s.created} created, ${s.present} already present.`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPushing(false);
     }
   };
 
@@ -251,14 +275,26 @@ export default function SourceOfTruth() {
           >
             <Icon name="settings" size={14} /> {st.label === "Not set up" || st.label === "Bundled · off" ? "Set up" : "Manage"}
           </button>
-          <button className="btn" disabled={refreshing} onClick={refresh} title="Run discovery now">
+          <button className="btn" disabled={refreshing} onClick={refresh} title="Poll the inventory now (inventory → Infrastructure → Devices)">
             <Icon name="refresh" size={14} /> {refreshing ? "…" : "Sync devices"}
           </button>
+          {cfg?.enabled && (
+            <button className="btn" disabled={pushing} onClick={pushToNetbox} title="Push discovered devices INTO NetBox as the source of truth (runs automatically every 5 min)">
+              <Icon name="arrow-up-right" size={14} /> {pushing ? "…" : "Push to NetBox"}
+            </button>
+          )}
         </div>
         {poll && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-            Last sync: {poll.last_poll ? new Date(poll.last_poll).toLocaleString() : "—"} · {poll.devices ?? 0} device(s)
+            Inventory → Devices (poll): {poll.last_poll ? new Date(poll.last_poll).toLocaleString() : "—"} · {poll.devices ?? 0} device(s)
             {poll.last_error ? <span style={{ color: "#c0392b" }}> · error: {poll.last_error}</span> : null}
+          </div>
+        )}
+        {syncStat?.enabled && (
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+            Devices → NetBox (write-through): {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
+            {syncStat.last_run ? <> · {syncStat.created} created · {syncStat.present} already present</> : null}
+            {syncStat.last_error ? <span style={{ color: "#c0392b" }}> · error: {syncStat.last_error}</span> : null}
           </div>
         )}
         {msg && <p style={{ color: "var(--accent, #2e7d32)", margin: "8px 0 0" }}>{msg}</p>}
