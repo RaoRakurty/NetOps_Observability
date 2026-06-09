@@ -94,19 +94,35 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
   // fixed to their tenant. isProvider = the platform realm.
   const isProvider = scopeTenantId === "";
   const scopeTenantName = tenantList.find((t) => t.id === scopeTenantId)?.name || scopeTenantId;
-  const startAdd = () => { setForm({ ...BLANK_USER, tenant_id: scopeTenantId }); setAdding((v) => !v); };
-  // The security settings that will apply to a user created in this scope.
+  const startAdd = () => { setErr(null); setForm({ ...BLANK_USER, tenant_id: scopeTenantId }); setAdding(true); };
+  const closeAdd = () => { setAdding(false); setForm({ ...BLANK_USER }); };
+  // The security settings that apply to every user created in this scope. Editable
+  // right here in the Create-User dialog — `secBaseline` lets us persist them only
+  // when the operator actually changed something (they're scope-wide, not per-user).
+  const secScope = scopeTenantId || "provider";
   const [secSettings, setSecSettings] = useState<SecuritySettingsT | null>(null);
-  useEffect(() => { api.getSecuritySettings(scopeTenantId || "provider").then(setSecSettings).catch(() => setSecSettings(null)); }, [scopeTenantId]);
+  const [secBaseline, setSecBaseline] = useState("");
+  useEffect(() => {
+    api.getSecuritySettings(secScope)
+      .then((v) => { setSecSettings(v); setSecBaseline(JSON.stringify(v)); })
+      .catch(() => { setSecSettings(null); setSecBaseline(""); });
+  }, [secScope]);
+  const updSec = (patch: Partial<SecuritySettingsT>) =>
+    setSecSettings((p) => (p ? { ...p, ...patch } : p));
 
   const submit = async () => {
     setErr(null);
     try {
+      // Scope-wide policy is saved first (only if touched), then the account.
+      if (secSettings && JSON.stringify(secSettings) !== secBaseline) {
+        const saved = await api.saveSecuritySettings(secScope, secSettings);
+        setSecSettings(saved); setSecBaseline(JSON.stringify(saved));
+      }
       await api.createUser(form);
       setForm({ ...BLANK_USER });
       setAdding(false);
       reload();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
   };
   const changeRole = async (u: AdminUser, role: string) => {
     setErr(null);
@@ -207,13 +223,21 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
             <button className="dash-btn" disabled={!canUnlock || busy} onClick={unlock} title="Re-enable the selected users">Unlock</button>
             <button className="dash-btn" disabled={selCount === 0 || busy} onClick={resetMfa} title="Reset two-factor for the selected users (lost device recovery)">Reset MFA</button>
             <button className="dash-btn" disabled={selCount === 0 || busy} onClick={del} title="Delete the selected users">Delete</button>
-            <button className="dash-btn accent" onClick={startAdd}>{adding ? "Cancel" : "+ Add user"}</button>
+            <button className="dash-btn accent" onClick={startAdd}>＋ Add user</button>
           </div>
         </div>
         <ErrLine msg={err} />
         {adding && (
-          <div className="user-form">
-            <div className="uf-head">{isProvider ? "New Provider user" : `New user · ${scopeTenantName}`}</div>
+          <Modal
+            title={isProvider ? "New Provider user" : `New user · ${scopeTenantName}`}
+            subtitle={isProvider
+              ? "A platform-level account — not tied to any organization or tenant. Grant it access under Access."
+              : `An account scoped to ${scopeTenantName}.`}
+            logo={<span className="conn-logo uf-logo"><Icon name="user" size={24} /></span>}
+            onClose={closeAdd}
+          >
+            <ErrLine msg={err} />
+            <div className="uf2-sec">Account</div>
             <div className="uf-grid">
               <label className="req-field"><span>Username <Req /></span>
                 <input autoFocus value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
@@ -222,7 +246,7 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
               <label><span>Email</span>
                 <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
               <label className="req-field"><span>Password <Req /></span>
-                <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+                <input type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
               <label><span>Role</span>
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   {roleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -242,26 +266,66 @@ export function UsersAdmin({ scopeTenant }: { scopeTenant?: string } = {}) {
               )}
             </div>
 
-            {secSettings && (
-              <div className="uf-policy">
-                <div className="uf-policy-h">Security settings <span className="mini-meta">— apply to this {isProvider ? "Provider user" : "tenant's users"}</span></div>
-                <div className="uf-policy-row">
-                  <span>Min password length <b>{secSettings.min_password_length}</b></span>
-                  <span>Complexity <b>{[secSettings.require_uppercase && "A", secSettings.require_lowercase && "a", secSettings.require_number && "1", secSettings.require_special && "#"].filter(Boolean).join(" ") || "none"}</b></span>
-                  <span>Expiry <b>{secSettings.password_expire_enabled ? `${secSettings.password_expire_days}d` : "off"}</b></span>
-                  <span>Lockout <b>{secSettings.login_attempts_allowed} tries</b></span>
-                  <span>Sessions <b>{secSettings.concurrent_login === "deny" ? "single" : "concurrent"}</b></span>
-                </div>
-                <div className="mini-meta">Change these in the <b>Security Settings</b> tab for this scope.</div>
-              </div>
-            )}
+            {secSettings && (() => {
+              const ss = secSettings;
+              const tog = (k: keyof SecuritySettingsT, label: string) => (
+                <label className="uf-switch">
+                  <input type="checkbox" checked={!!ss[k]} onChange={(e) => updSec({ [k]: e.target.checked } as Partial<SecuritySettingsT>)} />
+                  <span className="uf-switch-track" aria-hidden /><span>{label}</span>
+                </label>
+              );
+              const num = (k: keyof SecuritySettingsT, w = 84) => (
+                <input className="uf-num" type="number" min={0} style={{ width: w }} value={ss[k] as number}
+                  onChange={(e) => updSec({ [k]: Number(e.target.value) } as Partial<SecuritySettingsT>)} />
+              );
+              return (
+                <>
+                  <div className="uf2-sec">
+                    Security settings
+                    <span className="mini-meta">applies to all {isProvider ? "Provider" : scopeTenantName} users</span>
+                  </div>
+                  <div className="uf-secgrid">
+                    <label className="uf-field"><span>Minimum password length</span>{num("min_password_length")}</label>
+                    <div className="uf-field uf-span"><span>Complexity</span>
+                      <div className="uf-switchrow">
+                        {tog("require_uppercase", "Uppercase")}{tog("require_lowercase", "Lowercase")}
+                        {tog("require_number", "Number")}{tog("require_special", "Special")}
+                      </div>
+                    </div>
+                    <div className="uf-field uf-span"><span>Account policy</span>
+                      <div className="uf-switchrow">
+                        {tog("reset_on_first_login", "Must change at first login")}
+                        {tog("password_history", "Remember password history")}
+                      </div>
+                    </div>
+                    <label className="uf-field"><span>Expire password</span>
+                      <div className="uf-inline">{tog("password_expire_enabled", "Enabled")}
+                        {ss.password_expire_enabled && <>after {num("password_expire_days", 64)} days</>}</div>
+                    </label>
+                    <label className="uf-field"><span>Lockout after</span>
+                      <div className="uf-inline">{num("login_attempts_allowed", 64)} tries, unlock in {num("unlock_time_seconds", 80)}s</div>
+                    </label>
+                    <div className="uf-field"><span>Sessions</span>
+                      <Segmented<"single" | "multi">
+                        value={ss.concurrent_login === "deny" ? "single" : "multi"}
+                        options={[{ value: "single", label: "Single" }, { value: "multi", label: "Concurrent" }]}
+                        onChange={(v) => updSec({ concurrent_login: v === "single" ? "deny" : "allow" })}
+                        ariaLabel="Concurrent sessions"
+                      />
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
-            <div className="uf-actions">
-              <button className="dash-btn" onClick={() => { setAdding(false); setForm({ ...BLANK_USER }); }}>Cancel</button>
-              <button className="dash-btn accent" disabled={!form.username.trim() || !form.password} onClick={submit}>Create user</button>
+            <div className="uf2-foot">
+              <RequiredLegend />
+              <div className="uf2-foot-btns">
+                <button className="dash-btn" onClick={closeAdd}>Cancel</button>
+                <button className="dash-btn accent" disabled={!form.username.trim() || !form.password} onClick={submit}>Create user</button>
+              </div>
             </div>
-            <RequiredLegend />
-          </div>
+          </Modal>
         )}
         <div className="ds-toolbar">
           <input className="ds-search" placeholder="Search users…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search users" />
@@ -1018,77 +1082,119 @@ function SecuritySettings({ scopeTenant }: { scopeTenant: string }) {
 // principal's role bindings (principal → role → scope). Grant a user access to a
 // tenant or org, deny, or revoke. The server enforces no-escalation (an org-admin
 // can only grant within its org, never super-admin / platform).
-export function BindingsAdmin({ scopeTenant }: { scopeTenant?: string }) {
+export function BindingsAdmin() {
   const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
   const [roles] = useReload(() => api.listRoles());
   const [tenants] = useReload(() => api.listTenants());
   const [orgs] = useReload(() => api.listOrgs());
+  const [users] = useReload(() => api.listUsers());
+  const [granting, setGranting] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [principal, setPrincipal] = useState("");
   const [roleId, setRoleId] = useState("operator");
-  const [scopeId, setScopeId] = useState(scopeTenant ? `tenant:${scopeTenant}` : "");
+  const [scopeId, setScopeId] = useState("");
   const [effect, setEffect] = useState("allow");
 
-  // Build the scope options: every tenant and org the admin can see.
-  const scopeOptions: { id: string; label: string }[] = [
-    ...(orgs ?? []).map((o) => ({ id: `org:${o.id}`, label: `Organization · ${o.name}` })),
-    ...(tenants ?? []).map((t) => ({ id: `tenant:${t.id}`, label: `Tenant · ${t.name}` })),
-  ];
+  // Scope is ORGANIZATIONS only — the Provider realm (global) is excluded (it has
+  // its own dedicated console) and tenants are hidden for now. So an operator
+  // grants a person access to an organization, then picks their role.
+  const scopeOptions = (orgs ?? [])
+    .filter((o) => o.id !== "global")
+    .map((o) => ({ id: `org:${o.id}`, label: o.name }));
+  const userList = (users ?? []).slice().sort((a, b) =>
+    (a.display_name || a.username).localeCompare(b.display_name || b.username));
 
+  const openGrant = () => {
+    setErr(null); setPrincipal(""); setRoleId("operator");
+    setScopeId(scopeOptions.length === 1 ? scopeOptions[0].id : ""); setEffect("allow");
+    setGranting(true);
+  };
   const grant = async () => {
-    if (!principal.trim() || !scopeId) return;
-    setErr(null);
+    if (!principal || !scopeId) return;
+    setErr(null); setBusy(true);
     try {
-      await api.grantBinding({ principal_id: principal.trim(), role_id: roleId, scope_id: scopeId, effect });
-      setPrincipal(""); reload();
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+      await api.grantBinding({ principal_id: principal, role_id: roleId, scope_id: scopeId, effect });
+      setGranting(false); reload();
+    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
   };
   const revoke = async (b: RoleBinding) => {
-    if (!window.confirm(`Revoke ${b.role_id} on ${b.scope_id} for ${b.principal_id}?`)) return;
+    if (!window.confirm(`Revoke ${b.role_id} on ${labelScope(b.scope_id)} for ${b.principal_id}?`)) return;
     setErr(null);
     try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
   };
 
   const list = bindings ?? [];
-  const scopeLabel = (id: string) => scopeOptions.find((o) => o.id === id)?.label || id;
+  // Friendly scope labels for the table (covers org / tenant / platform bindings).
+  function labelScope(id: string) {
+    if (id === "platform") return "Platform";
+    const [kind, rest] = id.split(":");
+    if (kind === "org") return (orgs ?? []).find((o) => o.id === rest)?.name || id;
+    if (kind === "tenant") return (tenants ?? []).find((t) => t.id === rest)?.name || id;
+    return id;
+  }
   return (
     <>
-      <AdminHead title="Access" sub="Who can do what, where. Grant a person access to a tenant or organization, then pick their role. Access can be time-boxed and revoked any time." />
+      <div className="admin-head-row">
+        <AdminHead title="Access" sub="Who can do what, where. Grant a person access to an organization, then pick their role. Access can be revoked any time." />
+        <button className="dash-btn accent" onClick={openGrant}>＋ Grant access</button>
+      </div>
       <StatStrip>
         <Stat label="Bindings" value={bindings ? list.length : <Skeleton w={26} h={22} />} />
         <Stat label="People with access" value={bindings ? new Set(list.map((b) => b.principal_id)).size : "—"} tone="accent" />
       </StatStrip>
-      <div className="card">
-        <div className="admin-card-head"><h2>Grant access</h2></div>
-        <ErrLine msg={err} />
-        <div className="admin-form">
-          <label className="req-field">
-            <span>Person <Req /></span>
-            <input placeholder="username" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
-          </label>
-          <label>
-            <span>Role</span>
-            <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-              {(roles?.roles ?? []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Scope</span>
-            <select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-              <option value="">Select…</option>
-              {scopeOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Effect</span>
-            <select value={effect} onChange={(e) => setEffect(e.target.value)}>
-              <option value="allow">Allow</option>
-              <option value="deny">Deny</option>
-            </select>
-          </label>
-          <button className="dash-btn accent" disabled={!principal.trim() || !scopeId} onClick={grant}>Grant</button>
-        </div>
-        <RequiredLegend />
-      </div>
+      <ErrLine msg={err} />
+
+      {granting && (
+        <Modal
+          title="Grant access"
+          subtitle="Give a person a role on an organization."
+          logo={<span className="conn-logo uf-logo"><Icon name="key" size={22} /></span>}
+          onClose={() => setGranting(false)}
+        >
+          <ErrLine msg={err} />
+          <div className="grant-form">
+            <label className="req-field"><span>Person <Req /></span>
+              <select autoFocus value={principal} onChange={(e) => setPrincipal(e.target.value)}>
+                <option value="">Select a person…</option>
+                {userList.map((u) => (
+                  <option key={u.username} value={u.username}>
+                    {u.display_name ? `${u.display_name} (${u.username})` : u.username}
+                  </option>
+                ))}
+              </select>
+              {userList.length === 0 && <span className="mini-meta">No users yet — create one under Provider → Users first.</span>}
+            </label>
+            <label className="req-field"><span>Organization <Req /></span>
+              <select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">Select an organization…</option>
+                {scopeOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+              {scopeOptions.length === 0 && <span className="mini-meta">No organizations yet — create one under Organizations first.</span>}
+            </label>
+            <label><span>Role</span>
+              <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+                {(roles?.roles ?? []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </label>
+            <div className="uf-field"><span>Effect</span>
+              <Segmented<"allow" | "deny">
+                value={effect as "allow" | "deny"}
+                options={[{ value: "allow", label: "Allow" }, { value: "deny", label: "Deny" }]}
+                onChange={(v) => setEffect(v)}
+                ariaLabel="Effect"
+              />
+            </div>
+          </div>
+          <div className="uf2-foot">
+            <RequiredLegend />
+            <div className="uf2-foot-btns">
+              <button className="dash-btn" onClick={() => setGranting(false)} disabled={busy}>Cancel</button>
+              <button className="dash-btn accent" disabled={!principal || !scopeId || busy} onClick={grant}>{busy ? "Granting…" : "Grant access"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       <div className="card" style={{ paddingTop: 8 }}>
         {list.length === 0 ? (
           <div className="empty">No access bindings yet.</div>
@@ -1109,7 +1215,7 @@ export function BindingsAdmin({ scopeTenant }: { scopeTenant?: string }) {
                 <tr key={b.id}>
                   <td style={{ fontWeight: 600 }}>{b.principal_id}</td>
                   <td><span className="badge">{b.role_id}</span></td>
-                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{scopeLabel(b.scope_id)}</td>
+                  <td style={{ color: "var(--muted)", fontSize: 12 }}>{labelScope(b.scope_id)}</td>
                   <td>{b.effect === "deny" ? <span className="badge" style={{ color: "var(--bad)" }}>Deny</span> : <span className="badge accent">Allow</span>}</td>
                   <td style={{ color: "var(--muted)", fontSize: 12 }}>{b.granted_by || "—"}</td>
                   <td style={{ textAlign: "right" }}>
