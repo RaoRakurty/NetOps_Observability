@@ -63,7 +63,7 @@ class Audit:
         st, v3 = self.api.call("POST", "/api/snmp/credentials", body={
             "name": f"{self.tag}_v3", "version": "v3", "security_name": "auditor",
             "security_level": "authPriv", "auth_protocol": "SHA", "auth_key": "audit-auth-secret-1",
-            "priv_protocol": "AES", "priv_key": "audit-priv-secret-1",
+            "priv_protocol": "AES128", "priv_key": "audit-priv-secret-1",
         })
         if st in (200, 201) and isinstance(v3, dict):
             v3id = v3.get("id")
