@@ -2368,3 +2368,19 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .dm-list li:last-child { border-bottom: none; }
 .dm-list li span { color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-list li strong { color: var(--fg); white-space: nowrap; }
+
+/* Board scope bar (Interface Performance) + generic board buttons */
+.dm-scopebar { padding: 10px 14px; }
+.dm-scope-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+.dm-scope-fields label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--fg-muted); font-weight: 600; }
+.dm-scope-fields select {
+  padding: 6px 9px; font-size: 12.5px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); min-width: 160px;
+}
+.dm-scope-fields select:disabled { opacity: 0.55; }
+.btn-ghost {
+  padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: transparent; color: var(--fg-muted);
+}
+.btn-ghost:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }

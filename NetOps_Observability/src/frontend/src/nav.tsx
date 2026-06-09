@@ -4,6 +4,7 @@ import { SectionCtx } from "./context/shell";
 import Dashboard from "./pages/Dashboard";
 import Devices from "./pages/Devices";
 import DeviceMonitoring from "./pages/DeviceMonitoring";
+import InterfacePerformance from "./pages/InterfacePerformance";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -45,6 +46,8 @@ import {
   IncidentResponse,
   DeviceGeomap,
   FlowTrace,
+  BgpOspfOverview,
+  Troubleshooting,
   VulnerabilityManagement,
   ThreatDetection,
   ComplianceMonitoring,
@@ -156,7 +159,14 @@ export const NAV: NavSection[] = [
     icon: "infrastructure",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
-      { id: "monitoring", label: "Device Monitoring", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
+      // Dashboards — the device-monitoring board suite (see
+      // docs/design/device-monitoring-dashboards.md). Device Monitoring + Interface
+      // Performance are live; BGP/OSPF + Troubleshooting are scaffolds pending a
+      // routing collector / pipeline-metric wiring.
+      { id: "monitoring", label: "Device Monitoring", group: "Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
+      { id: "ifperf", label: "Interface Performance", group: "Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
+      { id: "bgpospf", label: "BGP / OSPF Overview", group: "Dashboards", render: () => <BgpOspfOverview /> },
+      { id: "troubleshooting", label: "Troubleshooting", group: "Dashboards", render: () => <Troubleshooting /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
       // Flow Trace = network-path monitoring (Datadog "Network Path"): hop-by-hop
