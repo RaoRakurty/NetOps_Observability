@@ -926,6 +926,8 @@ export const api = {
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
   // Active-measurement path topology (traceroute).
   probePaths: () => request<ProbePath[]>("/api/probe/paths"),
+  // Device Geomap — sites (SoT intent) + per-site device health.
+  geomap: () => request<GeomapResponse>("/api/geomap"),
   flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
@@ -1773,6 +1775,16 @@ export type PromSeries = { metric: Record<string, string>; values: [number, stri
 // Active-measurement (traceroute) path topology — from /api/probe/paths.
 export type ProbeHop = { ttl: number; ip: string; rtt_ms: number; loss_pct: number };
 export type ProbePath = { dst: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
+// Device Geomap — NetBox DCIM sites (lat/lng intent data) joined with inventory health.
+export type GeoSite = {
+  name: string; slug: string; status?: string;
+  lat: number; lng: number; has_coords: boolean;
+  devices: number; up: number; down: number;
+};
+export type GeomapResponse = {
+  geo_enabled: boolean; reason?: string; error?: string;
+  sites?: GeoSite[]; placed?: number; unplaced?: number;
+};
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };

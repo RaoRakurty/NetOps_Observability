@@ -7,7 +7,7 @@ import {
   Group, Panel, MetricLine, MetricTop, MetricStat, BarPanel, EmptyHint, fmtBps, fmtPct, fmtBytes, fmtUptime, latest, seriesLabel, useMetricRange,
 } from "../components/board/panels";
 import { latSev, lossSev, coerce as coerceTunnel, fmtTunnelUptime } from "../tabs/Tunnels";
-import { Stub } from "./Placeholders";
+import { GeomapSection } from "./DeviceGeomap";
 
 // Device Monitoring — the network-device-fleet cockpit (the fleet master
 // board). Collapsible, tinted section groups built on the
@@ -378,12 +378,11 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
       </Group>
 
       <Group title="Geographic map" hue="#0EA5E9" defaultOpen={false}>
-        <Stub
-          icon="explore"
-          title="Device geomap"
-          summary="Devices plotted by site/region with live health overlays — shared with Infrastructure → Device Geomap."
-          planned={["Site/region placement from inventory metadata", "Reachability overlays per location"]}
-        />
+        <GeomapSection />
+        <p className="mini-meta" style={{ margin: 0 }}>
+          Sites and coordinates come from the Source of Truth (intent data, not GeoIP). Full map at{" "}
+          <a href="#/infrastructure/geomap" style={{ color: "var(--accent)", fontWeight: 600 }}>Device Geomap</a>.
+        </p>
       </Group>
     </div>
   );

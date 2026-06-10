@@ -1,64 +1,8 @@
-// Placeholder / stub pages for nav sections that are mapped in the information
-// architecture but not yet backed by a live feature. Each renders a consistent
-// "coming soon" card describing the intended capability so the nav is complete
-// and self-documenting. Replace a stub with a real page by swapping the import
-// in nav.tsx — the route/label stay the same.
-import { ReactNode } from "react";
+// Dashboard List — the curated directory of live boards. (This file once held
+// the IA's "coming soon" stub pages; every stub has graduated to a real page,
+// so only the directory remains. New IA slots get their own page files.)
 import Icon from "../components/Icon";
 import SavedDashboards from "./SavedDashboards";
-
-// Stub — a titled empty-state card with an icon, one-line summary and a short
-// list of the capabilities planned for the area. Purely presentational.
-export function Stub({
-  icon,
-  title,
-  summary,
-  planned,
-  children,
-}: {
-  icon: string;
-  title: string;
-  summary: string;
-  planned?: string[];
-  children?: ReactNode;
-}) {
-  return (
-    <div className="card" style={{ maxWidth: 760 }}>
-      <div className="empty-state" style={{ paddingBottom: 16 }}>
-        <div className="empty-state-icon" style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-          <Icon name={icon} size={40} />
-        </div>
-        <h2 style={{ marginBottom: 6 }}>{title}</h2>
-        <p style={{ color: "var(--muted)", maxWidth: 520, margin: "0 auto" }}>{summary}</p>
-        <span
-          className="ds-badge"
-          style={{
-            display: "inline-block",
-            marginTop: 12,
-            padding: "2px 10px",
-            borderRadius: 999,
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: "0.04em",
-            textTransform: "uppercase",
-            color: "var(--accent)",
-            background: "var(--accent-soft)",
-          }}
-        >
-          Planned
-        </span>
-      </div>
-      {planned && planned.length > 0 && (
-        <ul style={{ margin: "0 auto", maxWidth: 520, color: "var(--muted)", fontSize: 13, lineHeight: 1.9 }}>
-          {planned.map((p) => (
-            <li key={p}>{p}</li>
-          ))}
-        </ul>
-      )}
-      {children}
-    </div>
-  );
-}
 
 // ── Dashboards ────────────────────────────────────────────────────────────
 // Dashboard List (build-order #10) — a curated DIRECTORY of the live boards.
@@ -139,21 +83,5 @@ export function DashboardList() {
       </div>
       <SavedDashboards />
     </div>
-  );
-}
-
-// ── Infrastructure ───────────────────────────────────────────────────────────
-export function DeviceGeomap() {
-  return (
-    <Stub
-      icon="topology"
-      title="Device Geomap"
-      summary="A geographic map of the device fleet — sites and devices plotted by location with live health overlays."
-      planned={[
-        "Site/region placement from inventory metadata",
-        "Health + reachability overlays per location",
-        "Drill from a site into its devices and topology",
-      ]}
-    />
   );
 }

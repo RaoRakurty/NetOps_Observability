@@ -44,11 +44,8 @@ import {
   NotificationsAdmin,
   GraphQLExplorer,
 } from "./tabs/admin";
-// Placeholder / stub pages for sections mapped in the IA but not yet feature-backed.
-import {
-  DashboardList,
-  DeviceGeomap,
-} from "./pages/Placeholders";
+import { DashboardList } from "./pages/Placeholders";
+import DeviceGeomap from "./pages/DeviceGeomap";
 import VulnerabilityManagement from "./pages/VulnerabilityManagement";
 import ComplianceMonitoring from "./pages/ComplianceMonitoring";
 import NewMonitor from "./pages/NewMonitor";
