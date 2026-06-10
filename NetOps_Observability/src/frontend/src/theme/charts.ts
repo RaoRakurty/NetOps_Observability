@@ -31,24 +31,33 @@ export function paletteColor(i = 0): string {
   return CHART_PALETTE[((i % CHART_PALETTE.length) + CHART_PALETTE.length) % CHART_PALETTE.length];
 }
 
-// Base option fragment — spread first into any chart's `option`.
+// Base option fragment — spread first into any chart's `option`. Font sizes are
+// set explicitly (ECharts defaults to a small 12px) so axis ticks, legends and
+// tooltips stay legible on dense boards.
 export const chartBase = {
   backgroundColor: "transparent",
   color: CHART_PALETTE,
-  textStyle: { color: "#475467", fontFamily: "inherit" },
+  textStyle: { color: "#475467", fontFamily: "inherit", fontSize: 13 },
   tooltip: {
     backgroundColor: "#ffffff",
     borderColor: "#e4e7ec",
     borderWidth: 1,
-    textStyle: { color: "#1a2230" },
+    padding: [8, 12],
+    textStyle: { color: "#1a2230", fontSize: 13 },
+    // Richer hover: a crosshair that tracks both axes, plus a soft shadow card.
+    axisPointer: { type: "cross", lineStyle: { color: "rgba(17,24,39,0.28)", width: 1 }, crossStyle: { color: "rgba(17,24,39,0.28)" }, label: { backgroundColor: "#475467", fontSize: 12 } },
+    extraCssText: "box-shadow:0 8px 28px rgba(16,24,40,0.14); border-radius:8px;",
   },
-  legend: { textStyle: { color: AXIS }, inactiveColor: "#c2c8d0" },
+  legend: { textStyle: { color: AXIS, fontSize: 13 }, inactiveColor: "#c2c8d0", itemGap: 16, itemWidth: 16, itemHeight: 10 },
 };
 
-// Reusable axis styling for cartesian charts.
+// Reusable axis styling for cartesian charts. Larger tick labels + named-axis
+// styling so units/labels read clearly; hideOverlap avoids crowded ticks.
 export const axisStyle = {
   axisLine: { lineStyle: { color: AXIS } },
-  axisLabel: { color: AXIS },
+  axisLabel: { color: AXIS, fontSize: 13, hideOverlap: true, margin: 10 },
+  axisTick: { lineStyle: { color: AXIS } },
+  nameTextStyle: { color: AXIS, fontSize: 12, fontWeight: 600, padding: [0, 0, 0, 4] },
   splitLine: { lineStyle: { color: GRID } },
 };
 
