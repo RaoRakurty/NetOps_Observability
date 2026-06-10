@@ -1,4 +1,4 @@
-// Shared design-system primitives for the Datadog-style admin surfaces.
+// Shared design-system primitives for the dense admin surfaces.
 // Extracted from the Security Policy page so every Administration view shares
 // one dense, status-coded, accessible visual language instead of re-rolling it.
 // Plain CSS (ds-* classes in styles.css) — no new dependencies.

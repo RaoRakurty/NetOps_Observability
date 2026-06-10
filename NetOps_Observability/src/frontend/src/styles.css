@@ -282,7 +282,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .rail-main { display: flex; flex-direction: column; gap: 1px; padding: var(--sp-1) 8px; flex: 1; overflow-y: auto; overflow-x: visible; }
 
 /* Segregated nav groups — a small uppercase label + a thin hairline divider
-   between groups (Datadog-style). The first group has no top rule. */
+   between groups. The first group has no top rule. */
 .rail-group { display: flex; flex-direction: column; gap: 1px; }
 .rail-group + .rail-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--rail-border); }
 .rail-group-label {
@@ -300,7 +300,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .rail-brand-mark { color: var(--rail-accent); display: inline-flex; }
 .rail-brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: 0.01em; }
 
-/* Rail item — icon BEFORE label, horizontal, small font (Datadog-style). */
+/* Rail item — icon BEFORE label, horizontal, small font. */
 .rail-item {
   position: relative;
   display: flex; flex-direction: row; align-items: center; gap: 9px;
@@ -363,7 +363,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   top: auto; bottom: 10px; min-width: 248px; z-index: 80;
 }
 
-/* v2 type face + compact top bar (Datadog-zone density). Scoped to .shell-v2
+/* v2 type face + compact top bar (dense-cockpit type scale). Scoped to .shell-v2
    so the default (v1) shell is untouched. Geist reads elegant + legible at
    small sizes; the slightly negative tracking tightens it without crowding. */
 .shell-v2 {
@@ -2128,7 +2128,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 
 /* ===========================================================================
-   Shared admin design-system primitives (ds-*) — Datadog-style, reused across
+   Shared admin design-system primitives (ds-*) — dense, status-coded, reused across
    the Administration views (Users, Roles, Tenants, Auth, Integrations, …).
    =========================================================================== */
 .ds-stats { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }

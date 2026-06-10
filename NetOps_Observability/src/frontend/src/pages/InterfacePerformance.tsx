@@ -4,8 +4,8 @@ import {
   Group, MetricLine, MetricTop, BarPanel, fmtBps, fmtPct, fmtBytes, labelSelector, useMetricRange,
 } from "../components/board/panels";
 
-// Interface Performance — per-device / per-interface deep dive (Datadog
-// "Interface Performance" equivalent). Scoped by a device + interface picker;
+// Interface Performance — per-device / per-interface deep dive.
+// Scoped by a device + interface picker;
 // drillable from the Device Monitoring inventory row via
 // #/infrastructure/ifperf/<deviceId>. Every panel is backed by SNMP interface
 // metrics we already collect (device_if_* in VictoriaMetrics, labels device/index).

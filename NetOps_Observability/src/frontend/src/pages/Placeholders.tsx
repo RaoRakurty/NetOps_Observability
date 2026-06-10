@@ -180,7 +180,7 @@ export function Events() {
 // (Command Center graduated to pages/CommandCenter.tsx — build-order #11.)
 
 // ── Infrastructure ───────────────────────────────────────────────────────────
-// Flow Trace — our equivalent of Datadog "Network Path": host-level,
+// Flow Trace — network-path monitoring: host-level,
 // traceroute-based path monitoring that maps the hop-by-hop route from a source
 // to a destination and measures latency at every hop, so you can tell whether a
 // problem is internal, in the ISP, or due to misrouting. Two collection modes:
@@ -191,7 +191,7 @@ export function FlowTrace() {
     <Stub
       icon="flows"
       title="Flow Trace"
-      summary="Network-path monitoring (Datadog 'Network Path' equivalent): traceroute a source → destination and visualize the hop-by-hop route with per-hop latency, to pinpoint whether loss/latency is internal, in the ISP, or a misroute — including hops outside your network."
+      summary="Network-path monitoring: traceroute a source → destination and visualize the hop-by-hop route with per-hop latency, to pinpoint whether loss/latency is internal, in the ISP, or a misroute — including hops outside your network."
       planned={[
         "Scheduled tests — defined source → destination pairs probed continuously (TCP/UDP)",
         "Dynamic tests — paths auto-discovered from observed flow traffic",

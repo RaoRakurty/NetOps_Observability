@@ -44,7 +44,7 @@ const GROUPS: { label: string; ids: string[] }[] = [
   { label: "Infrastructure", ids: ["infrastructure", "security"] },
   { label: "Data", ids: ["metrics", "flows", "logs"] },
 ];
-// Governance/admin zone anchored at the foot (Datadog-style): Explain + Stack +
+// Governance/admin zone anchored at the foot: Explain + Stack +
 // Administration kept together, above a thin-line-separated Support/Help zone,
 // then the account. Excluded from the top groups.
 const FOOT_ADMIN_IDS = ["explain", "stack", "admin"];
@@ -178,7 +178,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         ))}
       </nav>
 
-      {/* Foot cluster (Datadog-style), thin-line separated zones:
+      {/* Foot cluster, thin-line separated zones:
           (5) admin zone = Stack + Administration · (6) Support/Help · account. */}
       <div className="rail-util">
         <div className="rail-foot-zone">{adminZone.map(railItem)}</div>

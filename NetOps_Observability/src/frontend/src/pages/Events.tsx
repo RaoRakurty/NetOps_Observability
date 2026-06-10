@@ -4,7 +4,7 @@ import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel, EmptyHint } from "../components/board/panels";
 
-// Events — a unified event stream (Datadog "Events" equivalent). Merges the
+// Events — a unified event stream. Merges the
 // signals we already collect into one time-sorted feed: syslog (OpenSearch),
 // SNMP traps (OpenSearch), and active alerts (the rules engine). No new
 // collection — it aggregates existing telemetry so operators have one timeline

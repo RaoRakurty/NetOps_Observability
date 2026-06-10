@@ -171,7 +171,7 @@ export const NAV: NavSection[] = [
       { id: "troubleshooting", label: "Troubleshooting", group: "Dashboards", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
-      // Flow Trace = network-path monitoring (Datadog "Network Path"): hop-by-hop
+      // Flow Trace = network-path monitoring: hop-by-hop
       // traceroute between endpoints. Flows themselves live in the Data zone.
       { id: "flowtrace", label: "Flow Trace", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
       { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },

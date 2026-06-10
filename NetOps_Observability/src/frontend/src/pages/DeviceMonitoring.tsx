@@ -9,8 +9,8 @@ import {
 import { latSev, lossSev, coerce as coerceTunnel, fmtTunnelUptime } from "../tabs/Tunnels";
 import { Stub } from "./Placeholders";
 
-// Device Monitoring — the network-device-fleet cockpit (Datadog "Network Device
-// Monitoring" master board). Collapsible, tinted section groups built on the
+// Device Monitoring — the network-device-fleet cockpit (the fleet master
+// board). Collapsible, tinted section groups built on the
 // shared board framework (components/board/panels). Every panel is wired to data
 // we collect (SNMP metrics in VictoriaMetrics, the device inventory, active
 // alerts); sections needing data we don't yet collect (NetPath, synthetics,

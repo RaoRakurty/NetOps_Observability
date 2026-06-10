@@ -5,7 +5,7 @@ import { Group, Panel, MetricTop } from "../components/board/panels";
 
 // NetworkPath (Flow Trace) — visualizes the active-measurement pipeline: the
 // hop-by-hop path from traceroute (/api/probe/paths) and the path SLA from STAMP
-// (probe_* metrics in VictoriaMetrics). Datadog "Network Path" equivalent. Both
+// (probe_* metrics in VictoriaMetrics). Hop-by-hop path measurement. Both
 // sources are opt-in (FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE) — when nothing
 // is configured the board explains how to turn them on rather than going blank.
 
