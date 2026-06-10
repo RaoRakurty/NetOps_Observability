@@ -41,6 +41,7 @@ type server struct {
 	discovery        *DiscoveryAggregator
 	collectors       *collectors.Pool
 	alerts           *alerts.Engine
+	userRules        *userRulesStore
 	notifier         *notify.Dispatcher
 	users            usersRepo
 	roles            *roleStore
@@ -256,6 +257,7 @@ func newServer() *server {
 	// auto-ticketing (the notifier) and the incident-projection worker.
 
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
+	userRules := newUserRulesStore(envOr("USER_RULES_FILE", "/data/user_rules.json"))
 
 	users, err := newUsersStore(envOr("USERS_FILE", "/data/users.json"))
 	if err != nil {
@@ -343,6 +345,7 @@ func newServer() *server {
 		discovery:        d,
 		collectors:       pool,
 		alerts:           engine,
+		userRules:        userRules,
 		notifier:         notifier,
 		users:            users,
 		roles:            roles,
@@ -428,6 +431,7 @@ func main() {
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
 	srv.alerts.Start(ctx)
+	srv.loadUserRules() // re-feed persisted operator-created monitors (rules_user.go)
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
 	// telemetry (#20 Phase 1). No-op unless TENANT_ENRICHMENT_DIR is set.
 	srv.startTenantEnrichment(ctx)
@@ -871,32 +875,6 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		active = filtered
 	}
 	writeJSON(w, http.StatusOK, active)
-}
-
-func (s *server) handleRules(w http.ResponseWriter, r *http.Request) {
-	// SR-004: alert rules are PLATFORM-GLOBAL (no TenantID) — they encode device
-	// names/thresholds/topology and fire across every tenant. So both reading and
-	// writing them is platform-owner-only, mirroring handleCollectors. (A future
-	// per-tenant rule model would relax the read gate; until then a scoped tenant
-	// must neither enumerate global rules nor inject one.)
-	if _, ok := s.requireCrossTenant(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.alerts.Rules())
-	case http.MethodPost:
-		var rule alerts.Rule
-		if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		s.alerts.AddRule(rule)
-		writeJSON(w, http.StatusCreated, rule)
-	default:
-		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
 }
 
 func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {

@@ -15,6 +15,18 @@ export default function Rules() {
     load();
   }, []);
 
+  const remove = async (name: string) => {
+    if (!window.confirm(`Delete monitor "${name}"? Its active alerts resolve on the next evaluation.`)) return;
+    setMsg(null);
+    try {
+      await api.deleteRule(name);
+      await load();
+      setMsg({ kind: "ok", text: `Deleted ${name}.` });
+    } catch (err) {
+      setMsg({ kind: "err", text: (err as Error).message });
+    }
+  };
+
   const valid = draft.name.trim() !== "" && draft.expr.trim() !== "";
 
   const submit = async (e: React.FormEvent) => {
@@ -115,6 +127,10 @@ export default function Rules() {
 
       <div className="card">
         <h2>Rules ({rules.length})</h2>
+        <p className="mini-meta" style={{ marginTop: -6 }}>
+          Built-in rules ship with the platform (rules file); custom monitors are yours — created here or via{" "}
+          <a href="#/monitoring/new" style={{ color: "var(--accent)", fontWeight: 600 }}>New Monitor</a> — and only those can be deleted.
+        </p>
         {rules.length === 0 ? (
           <div className="empty">No rules configured.</div>
         ) : (
@@ -122,22 +138,40 @@ export default function Rules() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Source</th>
                 <th>Severity</th>
                 <th>Expression</th>
                 <th>For</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {rules.map((r) => (
-                <tr key={r.name}>
-                  <td>{r.name}</td>
-                  <td>{r.severity}</td>
-                  <td>
-                    <code>{r.expr}</code>
-                  </td>
-                  <td>{r.for}s</td>
-                </tr>
-              ))}
+              {rules.map((r) => {
+                const custom = r.labels?.origin === "ui";
+                return (
+                  <tr key={r.name}>
+                    <td>{r.name}</td>
+                    <td><span className={`badge ${custom ? "accent-badge" : ""}`}>{custom ? "custom" : "built-in"}</span></td>
+                    <td>{r.severity}</td>
+                    <td>
+                      <code>{r.expr}</code>
+                    </td>
+                    <td>{r.for}s</td>
+                    <td>
+                      {custom && (
+                        <button
+                          className="btn-ghost"
+                          style={{ fontSize: 11, padding: "2px 8px", color: "var(--bad)" }}
+                          title="Delete this monitor"
+                          onClick={() => remove(r.name)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

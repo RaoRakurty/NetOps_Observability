@@ -43,7 +43,20 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
    inventory, not GeoIP (revisit with #14/NetBox intent data).
 
 ## D. Composition / UI
-9. ⬜ **New Monitor** — guided monitor creation over the rules engine.
+9. ✅ **New Monitor** — guided wizard (`pages/NewMonitor.tsx`): template gallery
+   (12 signals across Availability/Resources/Interfaces/Routing/Path-SLA, all
+   backed by collected metrics, + Custom PromQL) → condition (device-regex
+   scope, threshold, hold-for, severity) → review with **live instant-query
+   preview** ("would fire on N series right now"). Three engine-correctness
+   fixes shipped with it: (a) `Rule.For` JSON was decoded as *nanoseconds* —
+   now pinned to seconds-or-duration-string both directions; (b) `for` was
+   never enforced — Prometheus-style pending→firing gating added (condition
+   must hold continuously; flap resets the clock; tick-grained); (c) API-created
+   rules vanished on restart — now kv-persisted (`rules_user.go`, PG/file via
+   the store backend) and re-fed at boot, with validation (name/severity/size
+   caps, 409 on dup), `DELETE /api/rules?name=` for `origin=ui` rules only,
+   and source badges + delete in the Monitors table. Engine got `evalFn`/`now`
+   test seams + unit tests (for-gating, flap reset, JSON round-trip, remove).
 10. ⬜ **Dashboard List** — curate the named dashboards as links to the real
     boards (Device Metrics→Device Monitoring, Interface Metrics→Interface
     Performance, BGP Metrics→BGP/OSPF, …) + Bandwidth / WAN-circuit.

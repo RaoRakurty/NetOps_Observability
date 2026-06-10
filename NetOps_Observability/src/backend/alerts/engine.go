@@ -4,6 +4,7 @@ package alerts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,11 +30,57 @@ type Rule struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// Rule's JSON "for" is SECONDS (number) or a Go/Prometheus duration string
+// ("5m"). Without these methods encoding/json would treat the raw int64 as
+// NANOseconds — the API's `"for": 300` decoded as 300ns and re-encoded file
+// rules showed as 3e11 — so both directions are pinned to the documented unit.
+func (r Rule) MarshalJSON() ([]byte, error) {
+	type bare Rule // method-free alias to avoid marshal recursion
+	return json.Marshal(struct {
+		bare
+		For float64 `json:"for"`
+	}{bare(r), r.For.Seconds()})
+}
+
+func (r *Rule) UnmarshalJSON(b []byte) error {
+	type bare Rule
+	aux := struct {
+		*bare
+		For json.RawMessage `json:"for"`
+	}{bare: (*bare)(r)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if len(aux.For) == 0 || string(aux.For) == "null" {
+		r.For = 0
+		return nil
+	}
+	var secs float64
+	if err := json.Unmarshal(aux.For, &secs); err == nil {
+		if secs < 0 {
+			return fmt.Errorf("rule %q: negative 'for'", r.Name)
+		}
+		r.For = time.Duration(secs * float64(time.Second))
+		return nil
+	}
+	var ds string
+	if err := json.Unmarshal(aux.For, &ds); err == nil {
+		d, err := time.ParseDuration(ds)
+		if err != nil || d < 0 {
+			return fmt.Errorf("rule %q: invalid 'for' duration %q", r.Name, ds)
+		}
+		r.For = d
+		return nil
+	}
+	return fmt.Errorf("rule %q: 'for' must be seconds or a duration string", r.Name)
+}
+
 // Engine periodically evaluates every rule against the metric store.
 type Engine struct {
 	mu        sync.RWMutex
 	rules     []Rule
 	active    map[string]models.Alert
+	pending   map[string]time.Time // alert id → when its condition started holding
 	rulesFile string
 	notifier  *notify.Dispatcher
 	// OnFire, when set, is invoked once per NEWLY-firing alert (not on every tick).
@@ -42,14 +89,22 @@ type Engine struct {
 	OnFire   func(models.Alert)
 	healthy  bool
 	lastTick time.Time
+
+	// Seams for tests: the rule evaluator (an HTTP call to VictoriaMetrics in
+	// production) and the clock. Never nil — NewEngine sets the real ones.
+	evalFn func(Rule) ([]Sample, error)
+	now    func() time.Time
 }
 
 func NewEngine(rulesFile string, n *notify.Dispatcher) *Engine {
 	return &Engine{
 		rulesFile: rulesFile,
 		active:    make(map[string]models.Alert),
+		pending:   make(map[string]time.Time),
 		notifier:  n,
 		healthy:   true,
+		evalFn:    Evaluate,
+		now:       time.Now,
 	}
 }
 
@@ -58,6 +113,25 @@ func (e *Engine) AddRule(r Rule) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.rules = append(e.rules, r)
+}
+
+// RemoveRule deletes every rule with the given name (names are expected to be
+// unique) and reports whether anything was removed. Alerts the rule had active
+// resolve naturally on the next evaluation tick.
+func (e *Engine) RemoveRule(name string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	kept := e.rules[:0]
+	removed := false
+	for _, r := range e.rules {
+		if r.Name == name {
+			removed = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+	e.rules = kept
+	return removed
 }
 
 func (e *Engine) Rules() []Rule {
@@ -107,15 +181,22 @@ func (e *Engine) loop(ctx context.Context) {
 
 func (e *Engine) evaluateAll() {
 	rules := e.Rules()
-	now := time.Now().UTC()
+	now := e.now().UTC()
 
 	e.mu.RLock()
 	prev := e.active
+	prevPending := e.pending
 	e.mu.RUnlock()
 
+	// Prometheus-style `for` gating: a series that starts matching becomes
+	// PENDING; it is promoted to active (dispatched) only once the condition
+	// has held continuously for the rule's For. A series that stops matching
+	// drops out of pending, so an intermittent condition restarts its clock.
+	// Resolution is tick-grained (the engine evaluates every 30s).
 	next := make(map[string]models.Alert)
+	nextPending := make(map[string]time.Time)
 	for _, r := range rules {
-		samples, err := Evaluate(r)
+		samples, err := e.evalFn(r)
 		if err != nil || len(samples) == 0 {
 			continue
 		}
@@ -128,6 +209,14 @@ func (e *Engine) evaluateAll() {
 			id := r.Name
 			if fp := fingerprint(s.Labels); fp != "" {
 				id = r.Name + "|" + fp
+			}
+			heldSince, wasPending := prevPending[id]
+			if !wasPending {
+				heldSince = now
+			}
+			nextPending[id] = heldSince
+			if now.Sub(heldSince) < r.For {
+				continue // still pending — not active yet
 			}
 			firedAt := now
 			if p, ok := prev[id]; ok { // preserve the original fire time
@@ -149,6 +238,7 @@ func (e *Engine) evaluateAll() {
 	// series stopped firing), then dispatch only the newly-firing ones.
 	e.mu.Lock()
 	e.active = next
+	e.pending = nextPending
 	e.mu.Unlock()
 	for id, a := range next {
 		if _, existed := prev[id]; existed {

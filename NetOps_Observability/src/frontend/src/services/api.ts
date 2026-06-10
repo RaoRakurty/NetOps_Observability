@@ -762,6 +762,10 @@ export const api = {
   rules: () => request<Rule[]>("/api/rules"),
   addRule: (r: Rule) =>
     request<Rule>("/api/rules", { method: "POST", body: JSON.stringify(r) }),
+  // Only operator-created rules (labels.origin === "ui") are deletable; the
+  // built-in rules-file set 404s by design.
+  deleteRule: (name: string) =>
+    request<void>(`/api/rules?name=${encodeURIComponent(name)}`, { method: "DELETE" }),
   credentials: () => request<Record<string, boolean>>("/api/credentials"),
   refreshDiscovery: () =>
     request<{ status: string }>("/api/discovery/refresh", { method: "POST" }),
@@ -878,6 +882,10 @@ export const api = {
     });
     return request<PromRangeResponse>(`/api/metrics/query_range?${p.toString()}`);
   },
+  // Instant PromQL evaluation — the New Monitor wizard uses it to preview which
+  // series a condition would fire on right now.
+  metricsQuery: (query: string) =>
+    request<PromInstantResponse>(`/api/metrics/query?${new URLSearchParams({ query })}`),
 
   // Saved objects (searches / dashboards / reports) — Postgres-swappable
   // file-backed store on the API.
@@ -1678,5 +1686,13 @@ export type ProbePath = { dst: string; hops: ProbeHop[]; reached: boolean; chang
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };
+  error?: string;
+};
+
+// Instant query — one sample per matching series.
+export type PromInstantSeries = { metric: Record<string, string>; value: [number, string] };
+export type PromInstantResponse = {
+  status: string;
+  data?: { resultType: string; result: PromInstantSeries[] };
   error?: string;
 };

@@ -47,12 +47,12 @@ import {
 // Placeholder / stub pages for sections mapped in the IA but not yet feature-backed.
 import {
   DashboardList,
-  NewMonitor,
   IncidentResponse,
   DeviceGeomap,
   VulnerabilityManagement,
   ComplianceMonitoring,
 } from "./pages/Placeholders";
+import NewMonitor from "./pages/NewMonitor";
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {

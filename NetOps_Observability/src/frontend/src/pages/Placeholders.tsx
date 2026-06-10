@@ -114,21 +114,7 @@ export function DashboardList() {
 }
 
 // ── Monitoring ──────────────────────────────────────────────────────────────
-export function NewMonitor() {
-  return (
-    <Stub
-      icon="alerts"
-      title="New Monitor"
-      summary="Guided creation of a new monitor from a template — pick a signal, threshold or anomaly model, and notification targets."
-      planned={[
-        "Template gallery (the 16 built-in rule templates under Monitors)",
-        "Metric / log / anomaly monitor types",
-        "Threshold + rolling z-score conditions",
-        "Notification routing to your Incident Response channels",
-      ]}
-    />
-  );
-}
+// (New Monitor graduated to pages/NewMonitor.tsx — build-order #9.)
 
 export function Quality() {
   return (
