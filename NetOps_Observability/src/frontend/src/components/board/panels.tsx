@@ -75,11 +75,12 @@ export function seriesLabel(s: PromSeries, keys?: string[]): string {
 // connected yet". For a from-zero (no-telemetry) customer, the empty state should
 // teach what to turn on rather than show a dead "No data". Keyed by the data the
 // panel needs so the hint names the right onboarding step.
-export type DataKind = "metrics" | "flows" | "logs" | "generic";
+export type DataKind = "metrics" | "flows" | "logs" | "tunnels" | "generic";
 const EMPTY_HINTS: Record<DataKind, { msg: string; hint: string }> = {
   metrics: { msg: "No SNMP metrics in this window.", hint: "Enable SNMP (read-only v2c/v3) on your devices and confirm reachability — no agent required." },
   flows: { msg: "No flow records in this window.", hint: "Point NetFlow / IPFIX / sFlow export from your routers at the collector." },
   logs: { msg: "No events in this window.", hint: "Forward syslog and SNMP traps from your devices to the collector." },
+  tunnels: { msg: "No tunnels discovered.", hint: "Set ENABLE_TUNNEL_DISCOVERY=true — tunnel interfaces (IPsec / GRE / VTI) are found via standard IF-MIB & TUNNEL-MIB SNMP walks, no per-vendor setup." },
   generic: { msg: "No data in this window.", hint: "" },
 };
 export function EmptyHint({ kind = "metrics" }: { kind?: DataKind }) {

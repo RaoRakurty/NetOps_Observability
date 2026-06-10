@@ -15,7 +15,11 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
 3. ✅ **Device Health** (Flows board) — real interface health from SNMP counters.
 4. ✅ **Traffic insights** (Device Monitoring) — flow tiles (top talkers/exporters).
 5. ✅ **Per-interface flows** (Interface Performance) — flows by in_if/out_if.
-6. ⬜ **IPsec VPN tunnels** (Device Monitoring) — wire /api/tunnels.
+6. ✅ **IPsec VPN tunnels** (Device Monitoring) — wired: live `TunnelOverlay`
+   section (StatStrip + heat-tinted DataTable from `/api/tunnels`) replaces the
+   stub; `ENABLE_TUNNEL_DISCOVERY` now wired in compose (default on) so the
+   IF-MIB/TUNNEL-MIB collector actually runs; mock seed rows purged from
+   `netops.tunnels`; onboarding-aware `tunnels` empty-state kind added.
 
 ## C. IPFIX / pipeline builds (touch ingest + schema)
 7. ⬜ **TCP Flags** — goflow2 `tcpControlBits` → `netops.flows.tcp_flags` column

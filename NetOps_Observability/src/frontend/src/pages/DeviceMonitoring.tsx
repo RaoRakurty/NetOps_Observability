@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Device, Alert } from "../services/api";
+import { api, Device, Alert, Tunnel } from "../services/api";
 import { useShell } from "../context/shell";
 import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import {
-  Group, Panel, MetricLine, MetricTop, BarPanel, fmtBps, fmtPct, fmtBytes, fmtUptime, latest, seriesLabel, useMetricRange,
+  Group, Panel, MetricLine, MetricTop, BarPanel, EmptyHint, fmtBps, fmtPct, fmtBytes, fmtUptime, latest, seriesLabel, useMetricRange,
 } from "../components/board/panels";
+import { latSev, lossSev, coerce as coerceTunnel, fmtTunnelUptime } from "../tabs/Tunnels";
 import { Stub } from "./Placeholders";
 
 // Device Monitoring — the network-device-fleet cockpit (Datadog "Network Device
@@ -199,6 +200,82 @@ function FlowInsights({ since }: { since: number }) {
   );
 }
 
+// ── Tunnel overlay — current state per tunnel from netops.tunnels ────────────
+// Discovered by the tunnels collector (IF-MIB + TUNNEL-MIB SNMP walk, vendor-
+// neutral); this is the fleet summary — the full searchable view with QoE/jitter
+// heat lives at Infrastructure → Tunnels.
+function TunnelOverlay() {
+  const [rows, setRows] = useState<Tunnel[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await api.tunnels(200);
+        if (alive) { setRows((res?.data ?? []).map(coerceTunnel)); setErr(null); }
+      } catch (e) {
+        if (alive) setErr((e as Error).message);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const endpoint = (device: string, addr: string) => (
+    <span title={`${device || "—"}${addr ? ` · ${addr}` : ""}`}>
+      {device || "—"}
+      {addr && <span className="mini-meta" style={{ marginLeft: 6, fontFamily: "var(--font-mono, monospace)" }}>{addr}</span>}
+    </span>
+  );
+
+  const cols = useMemo<Column<Tunnel>[]>(() => [
+    { key: "type", header: "Type", width: 84, text: (t) => t.type ?? "", render: (t) => <span className="badge">{t.type || "—"}</span> },
+    { key: "local", header: "Local", sortable: true, text: (t) => `${t.local_device} ${t.local_addr}`, sortValue: (t) => t.local_device || "", render: (t) => endpoint(t.local_device, t.local_addr) },
+    { key: "remote", header: "Remote", sortable: true, text: (t) => `${t.remote_device} ${t.remote_addr}`, sortValue: (t) => t.remote_device || "", render: (t) => endpoint(t.remote_device, t.remote_addr) },
+    { key: "latency", header: "Latency", width: 92, align: "right", sortable: true, sortValue: (t) => t.latency_ms, sev: (t) => latSev(t.latency_ms), render: (t) => (t.latency_ms > 0 ? `${t.latency_ms.toFixed(1)} ms` : "—") },
+    { key: "loss", header: "Loss", width: 80, align: "right", sortable: true, sortValue: (t) => t.loss_pct, sev: (t) => lossSev(t.loss_pct), render: (t) => (t.loss_pct > 0 ? `${t.loss_pct.toFixed(2)} %` : "—") },
+    { key: "uptime", header: "Uptime", width: 88, align: "right", sortable: true, sortValue: (t) => t.uptime_s, render: (t) => fmtTunnelUptime(t.uptime_s) },
+    {
+      key: "status", header: "Status", width: 82, sortable: true, text: (t) => t.status ?? "", sortValue: (t) => t.status ?? "",
+      render: (t) => <span className={`badge ${t.status === "up" ? "good" : "bad"}`}>{t.status || "?"}</span>,
+    },
+  ], []);
+
+  const up = rows.filter((t) => t.status === "up").length;
+  const down = rows.length - up;
+  const ipsec = rows.filter((t) => t.type === "ipsec").length;
+  const gre = rows.filter((t) => t.type === "gre").length;
+
+  if (err) return <Panel title="Tunnels — current state"><div className="empty" style={{ color: "var(--bad)" }}>{err}</div></Panel>;
+  if (rows.length === 0) return <Panel title="Tunnels — current state"><EmptyHint kind="tunnels" /></Panel>;
+
+  return (
+    <>
+      <StatStrip>
+        <Stat label="Tunnels" value={rows.length} />
+        <Stat label="Up" value={up} tone="good" />
+        <Stat label="Down" value={down} tone={down > 0 ? "bad" : ""} />
+        <Stat label="IPsec / GRE" value={`${ipsec} / ${gre}`} />
+      </StatStrip>
+      <Panel
+        title="Tunnels — current state"
+        action={<a href="#/infrastructure/tunnels" style={{ color: "var(--accent)", fontWeight: 600, fontSize: 12 }}>Full tunnels view →</a>}
+      >
+        <DataTable<Tunnel>
+          rows={rows}
+          columns={cols}
+          rowKey={(t) => t.id}
+          height={Math.min(360, 44 + rows.length * 30)}
+          ariaLabel="Tunnels current state"
+          initialSort={{ key: "status", dir: "asc" }}
+        />
+      </Panel>
+    </>
+  );
+}
+
 // Fleet packet-mix union (sum across fleet), tagged by kind for the legend.
 function fleetPacketMix(dir: "in" | "out"): string {
   return [
@@ -280,13 +357,12 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
         />
       </Group>
 
-      <Group title="IPsec VPN tunnels" hue="#A855F7" defaultOpen={false}>
-        <Stub
-          icon="stack"
-          title="IPsec VPN tunnels (SNMP)"
-          summary="Tunnel auth/crypto failures and per-tunnel throughput from vendor IPsec SNMP OIDs. Overlay/tunnel telemetry currently lives in the Tunnels view."
-          planned={["IPsec auth & crypto failure counters (Cisco-style OIDs)", "Per-tunnel throughput", "Fold into the existing Tunnels overlay view"]}
-        />
+      <Group title="VPN & overlay tunnels" hue="#A855F7">
+        <TunnelOverlay />
+        <p className="mini-meta" style={{ margin: 0 }}>
+          Tunnel interfaces (IPsec / GRE / VTI) discovered via standard IF-MIB &amp; TUNNEL-MIB SNMP walks.
+          Latency / loss / QoE populate when an SD-WAN controller or active-probe source reports them.
+        </p>
       </Group>
 
       <Group title="Geographic map" hue="#0EA5E9" defaultOpen={false}>

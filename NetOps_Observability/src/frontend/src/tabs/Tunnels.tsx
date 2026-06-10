@@ -4,14 +4,15 @@ import DataTable, { Column, Sev } from "../components/DataTable";
 
 // Heat severity — lower is better for latency/jitter/loss, higher for QoE.
 // Maps onto the sacred ok/warn/crit ramp the DataTable tints cells with.
-const latSev = (ms: number): Sev => (ms < 50 ? "ok" : ms < 150 ? "warn" : "crit");
+// Exported (with coerce/fmtTunnelUptime) for the Device Monitoring tunnel section.
+export const latSev = (ms: number): Sev => (ms < 50 ? "ok" : ms < 150 ? "warn" : "crit");
 const jitSev = (ms: number): Sev => (ms < 30 ? "ok" : ms < 60 ? "warn" : "crit");
-const lossSev = (pct: number): Sev => (pct < 1 ? "ok" : pct < 3 ? "warn" : "crit");
+export const lossSev = (pct: number): Sev => (pct < 1 ? "ok" : pct < 3 ? "warn" : "crit");
 const qoeSev = (q: number): Sev => (q >= 8 ? "ok" : q >= 5 ? "warn" : "crit");
 
 // ClickHouse JSON returns UInt64 (uptime) as a string and Float32 as a number;
 // coerce every numeric field so arithmetic and formatting are safe.
-function coerce(t: Tunnel): Tunnel {
+export function coerce(t: Tunnel): Tunnel {
   return {
     ...t,
     latency_ms: Number(t.latency_ms) || 0,
@@ -22,7 +23,7 @@ function coerce(t: Tunnel): Tunnel {
   };
 }
 
-function fmtUptime(s: number): string {
+export function fmtTunnelUptime(s: number): string {
   if (s <= 0) return "—";
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
@@ -99,7 +100,7 @@ export default function Tunnels() {
       sortValue: (t) => t.qoe, sev: (t) => qoeSev(t.qoe),
       render: (t) => t.qoe.toFixed(1) },
     { key: "uptime", header: "Uptime", width: 92, align: "right", sortable: true,
-      sortValue: (t) => t.uptime_s, render: (t) => fmtUptime(t.uptime_s) },
+      sortValue: (t) => t.uptime_s, render: (t) => fmtTunnelUptime(t.uptime_s) },
     { key: "status", header: "Status", width: 86, sortable: true,
       text: (t) => t.status ?? "", sortValue: (t) => t.status ?? "",
       render: (t) => <span className={`badge ${t.status === "up" ? "good" : "bad"}`}>{t.status || "?"}</span> },

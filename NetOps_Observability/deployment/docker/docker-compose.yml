@@ -513,6 +513,9 @@ services:
       ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
+      # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
+      ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
       # SNMP trap receiver (UDP/162 → log bus → netops-snmptrap-* → Explore→Logs
       # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the
       # unprivileged 1162 in-container; the host 162/udp maps to it (see ports).
