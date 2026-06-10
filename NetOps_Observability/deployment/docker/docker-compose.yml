@@ -340,7 +340,9 @@ services:
     volumes:
       - ../../data/victoria:/victoria
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8428/health || exit 1"]
+      # 127.0.0.1, not localhost: busybox wget tries ::1 first and the server
+      # only listens on IPv4 → false "unhealthy" while the service is fine.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8428/health || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -418,7 +420,8 @@ services:
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      # 127.0.0.1, not localhost — same IPv6-loopback false-unhealthy gotcha.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 10

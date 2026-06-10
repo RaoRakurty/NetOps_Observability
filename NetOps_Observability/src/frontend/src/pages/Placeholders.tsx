@@ -142,68 +142,7 @@ export function DashboardList() {
   );
 }
 
-// ── Monitoring ──────────────────────────────────────────────────────────────
-// (New Monitor graduated to pages/NewMonitor.tsx — build-order #9.)
-
-export function Quality() {
-  return (
-    <Stub
-      icon="analytics"
-      title="Quality"
-      summary="Service- and link-quality scoring across the fleet — SLA attainment, QoE, and degradation trends."
-      planned={[
-        "Per-link / per-circuit quality (latency, jitter, loss, QoE)",
-        "SLA attainment and error-budget burn",
-        "Quality regressions surfaced as monitor candidates",
-      ]}
-    />
-  );
-}
-
-export function Events() {
-  return (
-    <Stub
-      icon="bell"
-      title="Events"
-      summary="A unified event stream — every change, deploy, alert transition and integration signal on one timeline, ready to correlate with metrics and logs."
-      planned={[
-        "Unified event feed across collectors, alerts and integrations",
-        "Faceted search + filtering (source, severity, tag)",
-        "Correlate events with metric/log spikes",
-        "Promote an event to an incident",
-      ]}
-    />
-  );
-}
-
-// ── Incident Response ────────────────────────────────────────────────────────
-// (Command Center graduated to pages/CommandCenter.tsx — build-order #11.)
-
 // ── Infrastructure ───────────────────────────────────────────────────────────
-// Flow Trace — network-path monitoring: host-level,
-// traceroute-based path monitoring that maps the hop-by-hop route from a source
-// to a destination and measures latency at every hop, so you can tell whether a
-// problem is internal, in the ISP, or due to misrouting. Two collection modes:
-// scheduled tests (defined source→destination pairs) and dynamic tests
-// (auto-discovered from observed flow traffic). Probes over TCP/UDP.
-export function FlowTrace() {
-  return (
-    <Stub
-      icon="flows"
-      title="Flow Trace"
-      summary="Network-path monitoring: traceroute a source → destination and visualize the hop-by-hop route with per-hop latency, to pinpoint whether loss/latency is internal, in the ISP, or a misroute — including hops outside your network."
-      planned={[
-        "Scheduled tests — defined source → destination pairs probed continuously (TCP/UDP)",
-        "Dynamic tests — paths auto-discovered from observed flow traffic",
-        "List view — source · destination · protocol · port · tags · avg reachability · avg RTT",
-        "Path view — hop-by-hop visualization showing where issues sit (internal vs ISP)",
-        "Detect & alert on path changes and added/dropped hops over time",
-        "Correlate the path with live flows, topology and device telemetry",
-      ]}
-    />
-  );
-}
-
 export function DeviceGeomap() {
   return (
     <Stub
@@ -214,25 +153,6 @@ export function DeviceGeomap() {
         "Site/region placement from inventory metadata",
         "Health + reachability overlays per location",
         "Drill from a site into its devices and topology",
-      ]}
-    />
-  );
-}
-
-// ── Security ─────────────────────────────────────────────────────────────────
-// (Vulnerability Management graduated to pages/VulnerabilityManagement.tsx —
-// build-order #13.)
-
-export function ThreatDetection() {
-  return (
-    <Stub
-      icon="shield"
-      title="Threat Detection"
-      summary="Detect suspicious network behavior from flows, logs and telemetry — anomalous traffic, scans, and policy violations."
-      planned={[
-        "Flow-based anomaly detection (exfiltration, scans, beaconing)",
-        "Log-based detections and signatures",
-        "Tie detections into the correlation + incident pipeline",
       ]}
     />
   );
