@@ -57,15 +57,90 @@ function Bars({ rows, total, colorOf }: { rows: { k: string; v: number }[]; tota
   );
 }
 
+type CatalogApp = { name: string; category: string };
+
+function AppPicker({ catalog, value, onChange }: {
+  catalog: CatalogApp[]; value: string[]; onChange: (apps: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  const groups = new Map<string, CatalogApp[]>();
+  for (const a of catalog) groups.set(a.category, [...(groups.get(a.category) ?? []), a]);
+  const sel = new Set(value.map((v) => v.toLowerCase()));
+  const catOn = (cat: string) => sel.has(cat.toLowerCase());
+  const appOn = (a: CatalogApp) => sel.has(a.name.toLowerCase()) || catOn(a.category);
+
+  const toggleCat = (cat: string, apps: CatalogApp[]) => {
+    const names = new Set(apps.map((a) => a.name.toLowerCase()));
+    // drop the category token + any of its individual apps, then re-add the token if it was off
+    const rest = value.filter((v) => v.toLowerCase() !== cat.toLowerCase() && !names.has(v.toLowerCase()));
+    onChange(catOn(cat) ? rest : [...rest, cat]);
+  };
+  const toggleApp = (a: CatalogApp, apps: CatalogApp[]) => {
+    if (catOn(a.category)) {
+      // category token covers it: expand the token into the other apps minus this one
+      const rest = value.filter((v) => v.toLowerCase() !== a.category.toLowerCase());
+      onChange([...rest, ...apps.filter((x) => x.name !== a.name).map((x) => x.name)]);
+    } else if (sel.has(a.name.toLowerCase())) {
+      onChange(value.filter((v) => v.toLowerCase() !== a.name.toLowerCase()));
+    } else {
+      onChange([...value, a.name]);
+    }
+  };
+
+  const summary = value.length === 0 ? "All applications"
+    : value.length <= 3 ? value.join(", ") : `${value.slice(0, 2).join(", ")} +${value.length - 2} more`;
+
+  return (
+    <div className="picker" ref={ref}>
+      <button type="button" className={`picker-btn ${open ? "open" : ""}`} onClick={() => setOpen(!open)}>
+        <span className={value.length ? "" : "muted"}>{summary}</span>
+        <span className="caret">▾</span>
+      </button>
+      {open && (
+        <div className="picker-panel">
+          <div className="picker-head">
+            <span className="muted">{value.length ? `${value.length} selected` : "blank = entire catalog"}</span>
+            <button type="button" className="picker-clear" onClick={() => onChange([])} disabled={!value.length}>Select all</button>
+          </div>
+          {[...groups.entries()].map(([cat, apps]) => (
+            <div className="picker-group" key={cat}>
+              <label className="picker-row head">
+                <input type="checkbox" checked={catOn(cat) || apps.every(appOn)} onChange={() => toggleCat(cat, apps)} />
+                <span className="picker-cat">{cat}</span>
+                <span className="muted">{apps.length}</span>
+              </label>
+              {apps.map((a) => (
+                <label className="picker-row" key={a.name}>
+                  <input type="checkbox" checked={appOn(a)} onChange={() => toggleApp(a, apps)} />
+                  <span className="mono">{a.name}</span>
+                </label>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [hist, setHist] = useState<number[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Config>>({});
-  const catRef = useRef<{ name: string; category: string }[]>([]);
+  const [catalog, setCatalog] = useState<CatalogApp[]>([]);
 
   useEffect(() => {
-    fetch("api/catalog").then((r) => r.json()).then((c) => { catRef.current = c; }).catch(() => {});
+    fetch("api/catalog").then((r) => r.json()).then(setCatalog).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -88,7 +163,7 @@ export default function App() {
     fetch("api/control", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, config: draft }) }).then((r) => r.json()).then(() => setDraft({}));
 
-  const catOf = (app: string) => catRef.current.find((c) => c.name === app)?.category ?? "";
+  const catOf = (app: string) => catalog.find((c) => c.name === app)?.category ?? "";
   const totalFlows = stats?.totals.flows ?? 0;
 
   return (
@@ -126,9 +201,9 @@ export default function App() {
               })}
             </div>
           </label>
-          <label className="fld">Apps / categories (comma; blank = all)
-            <input value={(cur("apps") as string[] ?? []).join(",")} placeholder="AI, Collaboration, Salesforce…"
-              onChange={(e) => setDraft({ ...draft, apps: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
+          <label className="fld">Applications
+            <AppPicker catalog={catalog} value={(cur("apps") as string[]) ?? []}
+              onChange={(apps) => setDraft({ ...draft, apps })} />
           </label>
           <div className="row2">
             <label className="fld">Flow rate (fps)
