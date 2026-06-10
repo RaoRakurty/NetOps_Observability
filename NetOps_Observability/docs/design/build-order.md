@@ -65,7 +65,15 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
     plus Flows/Network Path/Quality/Troubleshooting/Data Sources/Events/Threat.
     Stable card ids keep the nav sub-item deeplinks working; SavedDashboards
     catalog stays underneath.
-11. ⬜ **Command Center** (Incident Response) — incidents + notify + chat.
+11. ✅ **Command Center** (Incident Response) — live cockpit
+    (`pages/CommandCenter.tsx`, replaces the stub): pulse strip (unresolved /
+    critical / untriaged / being-worked / ticketed-to-ITSM), triage queue of
+    unresolved incidents (severity-accented DataTable, inline Ack/Resolve via
+    the incident lifecycle API, ITSM ticket links), "Triggered now" alert feed,
+    and response-channel readiness (Slack/PagerDuty/Email/SMS from
+    /api/credentials + ServiceNow/Jira from the ITSM status endpoints, each
+    fetched independently so one 403 can't blank the panel). Pure composition
+    over existing APIs — no backend change.
 
 ## E. New collector / external feeds (heaviest, last)
 12. ✅ **Active-probe pipeline** — STAMP sender+reflector (RFC 8762) + Paris traceroute (ICMP/TCP) + Network Path UI. Flow Trace & Path/synthetics stubs now real. — Flow Trace / Network Path + ICMP/HTTP

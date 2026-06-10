@@ -47,12 +47,12 @@ import {
 // Placeholder / stub pages for sections mapped in the IA but not yet feature-backed.
 import {
   DashboardList,
-  IncidentResponse,
   DeviceGeomap,
   VulnerabilityManagement,
   ComplianceMonitoring,
 } from "./pages/Placeholders";
 import NewMonitor from "./pages/NewMonitor";
+import CommandCenter from "./pages/CommandCenter";
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -135,7 +135,7 @@ export const NAV: NavSection[] = [
     label: "Incident Response",
     icon: "incident",
     children: [
-      { id: "overview", label: "Command Center", render: () => <IncidentResponse /> },
+      { id: "overview", label: "Command Center", render: () => <CommandCenter /> },
       { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
     ],

@@ -177,21 +177,7 @@ export function Events() {
 }
 
 // ── Incident Response ────────────────────────────────────────────────────────
-export function IncidentResponse() {
-  return (
-    <Stub
-      icon="incident"
-      title="Incident Response"
-      summary="Coordinate response across your chat and collaboration tools. Connect Microsoft Teams, Slack and Google Chat to route incident notifications and run response from where your team already works."
-      planned={[
-        "Microsoft Teams channel integration",
-        "Slack channel + action buttons (already available under Notifications)",
-        "Google Chat spaces",
-        "Bi-directional incident sync with ITSM (ServiceNow / Jira)",
-      ]}
-    />
-  );
-}
+// (Command Center graduated to pages/CommandCenter.tsx — build-order #11.)
 
 // ── Infrastructure ───────────────────────────────────────────────────────────
 // Flow Trace — our equivalent of Datadog "Network Path": host-level,
