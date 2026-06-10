@@ -621,3 +621,71 @@ groups:
           severity: critical
         annotations:
           summary: "Stack backend {{ $labels.job }} down"
+
+  # ===========================================================================
+  # STACK RESILIENCE — self-monitoring of the platform's own containers + host.
+  # Backed by cAdvisor (per-container) + node-exporter (host). These fire when
+  # auto-heal has NOT recovered a component (down / restart-loop / OOM) or when
+  # a resource is being exhausted — the "alert when no auto-heal" layer.
+  # ===========================================================================
+  - name: stack-resilience
+    rules:
+      - alert: ContainerDown
+        # cAdvisor stops reporting a container that has died/been removed.
+        expr: absent(container_last_seen{name=~"netops-.+"}) or (time() - container_last_seen{name=~"netops-.+"} > 120)
+        for: 2m
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.name }} is down (no cAdvisor data >2m)"
+          description: "Auto-heal did not bring it back — investigate."
+
+      - alert: ContainerRestartLoop
+        # Start time changing repeatedly = crash/restart looping.
+        expr: changes(container_start_time_seconds{name=~"netops-.+"}[15m]) > 3
+        for: 5m
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.name }} restart-looping ({{ $value }} restarts/15m)"
+
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total{name=~"netops-.+"}[10m]) > 0
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.name }} was OOM-killed — raise its mem_limit or fix the leak"
+
+      - alert: ContainerMemoryNearLimit
+        # Working set within 10% of the container's mem_limit → OOM risk / leak.
+        expr: container_memory_working_set_bytes{name=~"netops-.+"} / container_spec_memory_limit_bytes{name=~"netops-.+"} > 0.90 and container_spec_memory_limit_bytes{name=~"netops-.+"} > 0
+        for: 10m
+        labels: { severity: warning, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.name }} at {{ $value | humanizePercentage }} of its memory limit"
+
+      - alert: ContainerCPUSaturated
+        # Sustained near its CPU ceiling (quota/period = limit in cores).
+        expr: rate(container_cpu_usage_seconds_total{name=~"netops-.+"}[5m]) / on(name) group_left() (container_spec_cpu_quota{name=~"netops-.+"} / container_spec_cpu_period{name=~"netops-.+"}) > 0.90
+        for: 15m
+        labels: { severity: warning, layer: stack }
+        annotations:
+          summary: "Container {{ $labels.name }} CPU-saturated against its limit for 15m"
+
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.08
+        for: 5m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Host memory available {{ $value | humanizePercentage }} — OOM-killer risk"
+
+      - alert: HostDiskLow
+        expr: node_filesystem_avail_bytes{mountpoint="/host"} / node_filesystem_size_bytes{mountpoint="/host"} < 0.10
+        for: 5m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Host disk {{ $labels.mountpoint }} below 10% free — ingestion will read-only-lock"
+
+      - alert: HostCPULoadHigh
+        expr: node_load5 / count(count(node_cpu_seconds_total) by (cpu)) > 2
+        for: 10m
+        labels: { severity: warning, layer: host }
+        annotations:
+          summary: "Host 5m load {{ $value }}× core count — sustained overload"

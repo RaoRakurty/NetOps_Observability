@@ -16,6 +16,9 @@ api:
   address: 0.0.0.0:8686
 
 sources:
+  internal_metrics:
+    type: internal_metrics
+
   kafka_applogs:
     type: kafka
     bootstrap_servers: "redpanda:9092"
@@ -118,6 +121,11 @@ transforms:
       .tenant_seg = seg
 
 sinks:
+  prometheus_internal:
+    type: prometheus_exporter
+    inputs: [internal_metrics]
+    address: 0.0.0.0:9598
+
   # Application + container logs → OpenSearch
   opensearch_applogs:
     type: elasticsearch
