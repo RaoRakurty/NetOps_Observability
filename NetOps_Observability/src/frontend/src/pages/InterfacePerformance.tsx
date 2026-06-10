@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Device } from "../services/api";
 import {
-  Group, MetricLine, MetricTop, fmtBps, fmtPct, labelSelector, useMetricRange,
+  Group, MetricLine, MetricTop, BarPanel, fmtBps, fmtPct, fmtBytes, labelSelector, useMetricRange,
 } from "../components/board/panels";
-import { Stub } from "./Placeholders";
 
 // Interface Performance — per-device / per-interface deep dive (Datadog
 // "Interface Performance" equivalent). Scoped by a device + interface picker;
@@ -54,6 +53,9 @@ export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinut
   const sel = labelSelector({ device, index: iface });
   // Fleet-wide selector when no device chosen.
   const scopeNote = device ? (iface ? `${device} · if ${iface}` : device) : "all devices";
+  // Flow filters key on the exporter IP (sampler_address) — resolve the device's
+  // management address from inventory.
+  const deviceAddr = devices.find((d) => d.name === device)?.address || "";
 
   return (
     <div className="dm-board">
@@ -129,17 +131,49 @@ export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinut
         </div>
       </Group>
 
-      <Group title="NetFlow traffic" hue="#A855F7" defaultOpen={false}>
-        <Stub
-          icon="flows"
-          title="Per-interface flows"
-          summary="Flow-level talkers and conversations for this interface live in the dedicated Flows dashboard, which filters by device and ingress/egress interface and has the full breakdown."
-          planned={[
-            "Inline flow tiles filtered to this device + interface (in_if/out_if)",
-            "Deep-link this interface into the Flows board with the filter pre-set",
-          ]}
-        />
+      <Group title="NetFlow traffic" hue="#A855F7" defaultOpen={!!deviceAddr}>
+        {deviceAddr ? (
+          <InterfaceFlows addr={deviceAddr} iface={iface} since={m * 60} />
+        ) : (
+          <p className="mini-meta" style={{ margin: 0 }}>Pick a device above to see the flows traversing it (and an interface to scope to ingress/egress on that port).</p>
+        )}
       </Group>
+    </div>
+  );
+}
+
+// InterfaceFlows — top talkers traversing a device/interface, split by direction:
+// ingress (in_if) top sources, egress (out_if) top destinations. Filters key on
+// the exporter IP + ifIndex; when no interface is selected it scopes to the whole
+// device. Pure flow data (IPFIX/NetFlow), no new collection.
+function InterfaceFlows({ addr, iface, since }: { addr: string; iface: string; since: number }) {
+  const [ingress, setIngress] = useState<{ label: string; value: number }[]>([]);
+  const [egress, setEgress] = useState<{ label: string; value: number }[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      try {
+        const inF = { device: addr, ...(iface ? { in_if: iface } : {}) };
+        const outF = { device: addr, ...(iface ? { out_if: iface } : {}) };
+        const [a, b] = await Promise.all([
+          api.flowsTopN("src_addr", since, 10, "", inF),
+          api.flowsTopN("dst_addr", since, 10, "", outF),
+        ]);
+        if (!alive) return;
+        setIngress(((a?.data as any[]) ?? []).map((r) => ({ label: String(r.k), value: Number(r.bytes_total) })));
+        setEgress(((b?.data as any[]) ?? []).map((r) => ({ label: String(r.k), value: Number(r.bytes_total) })));
+        setErr(null);
+      } catch (e) { if (alive) setErr((e as Error).message); }
+    };
+    run();
+    const id = setInterval(run, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [addr, iface, since]);
+  return (
+    <div className="dm-grid">
+      <BarPanel title={`Top sources — ingress${iface ? ` (ifIndex ${iface})` : ""}`} rows={ingress} fmtX={fmtBytes} err={err} dataKind="flows" />
+      <BarPanel title={`Top destinations — egress${iface ? ` (ifIndex ${iface})` : ""}`} rows={egress} fmtX={fmtBytes} err={err} dataKind="flows" />
     </div>
   );
 }
