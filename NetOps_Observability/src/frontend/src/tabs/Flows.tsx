@@ -4,7 +4,6 @@ import { api, FlowFilters } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
-import { Stub } from "../pages/Placeholders";
 import { EmptyHint, MetricStat } from "../components/board/panels";
 import { StatStrip, Stat } from "../components/ui";
 
@@ -86,46 +85,23 @@ const SECTIONS: { id: string; label: string; icon: string }[] = [
 ];
 
 // ── Reusable Top-N panel (bar / table toggle) ────────────────────────────────
-function TopNPanel({
+// Split presentational/container: TopNView renders any {k, bytes, packets,
+// flows} rows (also used by the Geo IP section); TopNPanel adds the standard
+// flowsTopN fetch-and-refresh loop around it.
+function TopNView({
   title,
-  by,
-  q,
-  limit = 15,
+  rows,
+  err,
   fmtKey,
   keyHeader = "Name",
 }: {
   title: string;
-  by: string;
-  q: FlowQuery;
-  limit?: number;
+  rows: TopNRow[];
+  err: string | null;
   fmtKey?: (k: string) => string;
   keyHeader?: string;
 }) {
-  const [rows, setRows] = useState<TopNRow[]>([]);
   const [view, setView] = useState<"bar" | "table">("bar");
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const res = await api.flowsTopN(by, q.since, limit, q.ftype, q.filters);
-        if (!alive) return;
-        setRows((res?.data as TopNRow[]) ?? []);
-        setErr(null);
-      } catch (e) {
-        if (alive) setErr((e as Error).message);
-      }
-    };
-    load();
-    const id = setInterval(load, 30_000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [by, q.since, q.ftype, q.fkey, limit]);
-
   const label = (k: string) => (fmtKey ? fmtKey(k) : k);
 
   const cols = useMemo<Column<TopNRow>[]>(
@@ -201,6 +177,48 @@ function TopNPanel({
       )}
     </div>
   );
+}
+
+function TopNPanel({
+  title,
+  by,
+  q,
+  limit = 15,
+  fmtKey,
+  keyHeader = "Name",
+}: {
+  title: string;
+  by: string;
+  q: FlowQuery;
+  limit?: number;
+  fmtKey?: (k: string) => string;
+  keyHeader?: string;
+}) {
+  const [rows, setRows] = useState<TopNRow[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await api.flowsTopN(by, q.since, limit, q.ftype, q.filters);
+        if (!alive) return;
+        setRows((res?.data as TopNRow[]) ?? []);
+        setErr(null);
+      } catch (e) {
+        if (alive) setErr((e as Error).message);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [by, q.since, q.ftype, q.fkey, limit]);
+
+  return <TopNView title={title} rows={rows} err={err} fmtKey={fmtKey} keyHeader={keyHeader} />;
 }
 
 // ── Section: Flows (volume timeseries + source presence chips) ────────────────
@@ -420,6 +438,103 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
         />
       )}
     </div>
+  );
+}
+
+// ── Section: Geo IP — traffic by country via the server's GeoIP dictionary ────
+type GeoRow = { country: string; bytes_total: number; packets_total: number; flows: number };
+
+// ISO 3166-1 alpha-2 → display name + flag, all built into the browser
+// (Intl.DisplayNames + regional-indicator code points) — no dataset shipped.
+const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
+function countryLabel(code: string): string {
+  if (!/^[A-Z]{2}$/.test(code)) return code || "—";
+  const flag = String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+  let name = code;
+  try {
+    name = regionNames.of(code) ?? code;
+  } catch {
+    /* unknown/reserved code — show it raw */
+  }
+  return `${flag} ${name}`;
+}
+
+function GeoSection({ q }: { q: FlowQuery }) {
+  // null = first load in flight; "disabled" = dictionary not provisioned.
+  const [src, setSrc] = useState<GeoRow[] | null>(null);
+  const [dst, setDst] = useState<GeoRow[] | null>(null);
+  const [disabled, setDisabled] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const coerce = (rows: GeoRow[]) =>
+      rows.map((r) => ({ ...r, bytes_total: Number(r.bytes_total), packets_total: Number(r.packets_total), flows: Number(r.flows) }));
+    const load = async () => {
+      try {
+        const [s, d] = await Promise.all([
+          api.flowsGeo("src", q.since, q.ftype, q.filters),
+          api.flowsGeo("dst", q.since, q.ftype, q.filters),
+        ]);
+        if (!alive) return;
+        setDisabled(s?.geo_enabled === false);
+        setSrc(coerce((s?.data as GeoRow[]) ?? []));
+        setDst(coerce((d?.data as GeoRow[]) ?? []));
+        setErr(null);
+      } catch (e) {
+        if (alive) setErr((e as Error).message);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.since, q.ftype, q.fkey]);
+
+  if (disabled) {
+    return (
+      <div className="panel">
+        <div className="panel-tools"><h3>Geo IP</h3></div>
+        <div className="empty board-empty">
+          <div className="board-empty-msg">GeoIP enrichment isn't provisioned yet.</div>
+          <div className="board-empty-hint">
+            Licensing doesn't let the platform bundle GeoIP data, so bring your own (a few minutes, free):
+            download <b>GeoLite2 Country (CSV)</b> from MaxMind or <b>DB-IP Country Lite</b>, then run{" "}
+            <code>sudo python3 scripts/geoip-prepare.py &lt;download&gt;</code> on the host.
+            These panels light up on their next refresh — no restarts.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Country ranking excludes the unmatched bucket (country "") — in a private
+  // lab it dwarfs every real country — but its share is surfaced honestly.
+  const total = (src ?? []).reduce((n, r) => n + r.bytes_total, 0);
+  const publicBytes = (src ?? []).filter((r) => r.country !== "").reduce((n, r) => n + r.bytes_total, 0);
+  const srcCountries = (src ?? []).filter((r) => r.country !== "");
+  const dstCountries = (dst ?? []).filter((r) => r.country !== "");
+  const toTopN = (rows: GeoRow[]): TopNRow[] => rows.slice(0, 15).map((r) => ({ k: r.country, bytes_total: r.bytes_total, packets_total: r.packets_total, flows: r.flows }));
+
+  return (
+    <>
+      <StatStrip>
+        <Stat label="Public traffic share" value={total ? `${((100 * publicBytes) / total).toFixed(1)}%` : "—"} tone={total && !publicBytes ? "warn" : ""} />
+        <Stat label="Initiator countries" value={src ? fmtNum(srcCountries.length) : "—"} />
+        <Stat label="Responder countries" value={dst ? fmtNum(dstCountries.length) : "—"} />
+        <Stat label="Top initiator country" value={srcCountries.length ? countryLabel(srcCountries[0].country) : "—"} />
+      </StatStrip>
+      <div className="flows-grid">
+        <TopNView title="Top Initiator Countries" rows={toTopN(srcCountries)} err={err} keyHeader="Country" fmtKey={countryLabel} />
+        <TopNView title="Top Responder Countries" rows={toTopN(dstCountries)} err={err} keyHeader="Country" fmtKey={countryLabel} />
+      </div>
+      {total > 0 && publicBytes === 0 && (
+        <p className="mini-meta" style={{ margin: "8px 2px 0" }}>
+          All observed traffic is private/unrouted address space (RFC 1918 etc.), which has no geography —
+          expected in an internal lab. Countries appear when flows cross public addresses.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -675,18 +790,7 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
           <TopNPanel title="Top Destination Ports" by="dst_port" q={q} keyHeader="Destination port" fmtKey={(k) => (PORT_NAMES[k] ? `${k} (${PORT_NAMES[k]})` : k)} />
         )}
         {section === "protocols" && <ProtocolsSection q={q} />}
-        {section === "geo" && (
-          <Stub
-            icon="explore"
-            title="Geo IP"
-            summary="Top initiator and responder countries, from GeoIP-resolved flow endpoints."
-            planned={[
-              "MaxMind GeoLite2 country/ASN enrichment at ingest",
-              "Top Initiator / Responder Countries (map + table)",
-              "Filter the whole dashboard by country",
-            ]}
-          />
-        )}
+        {section === "geo" && <GeoSection q={q} />}
         {section === "flags" && <FlagsSection q={q} />}
         {section === "health" && <DeviceHealthSummary minutes={Math.max(1, Math.round(since / 60))} />}
       </div>

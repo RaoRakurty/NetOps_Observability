@@ -645,6 +645,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/fanout", s.handleFlowsFanout)
 	mux.HandleFunc("/api/probe/paths", s.handleProbePaths)
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
+	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)

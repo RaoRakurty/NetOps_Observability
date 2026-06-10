@@ -203,6 +203,71 @@ SELECT tcp_flags,
 	proxyClickHouse(w, r, sql)
 }
 
+// geoDictReady probes the geoip_country ip_trie dictionary with a single
+// dictGetOrDefault. The dictionary is created lazily at bootstrap even when the
+// operator hasn't supplied the CSV (licensing forbids bundling GeoIP data), so
+// existence says nothing — only a successful lookup proves it loads. The probe
+// is one in-memory trie hit per request (sub-ms once loaded); deliberately
+// stateless rather than cached so a freshly dropped CSV lights the panels up on
+// their next refresh with no staleness window.
+func (s *server) geoDictReady() bool {
+	base := envOr("CLICKHOUSE_URL", "")
+	if base == "" {
+		return false
+	}
+	return chExec(base, `SELECT dictGetOrDefault('netops.geoip_country', 'country', tuple(IPv6StringToNum('192.0.2.1')), '')`)
+}
+
+// handleFlowsGeo aggregates flow traffic by country of the initiator
+// (?dim=src, default) or responder (?dim=dst), resolved at query time through
+// the geoip_country dictionary. Addresses the dataset doesn't cover (RFC 1918,
+// CGNAT, unallocated) come back as country '' — kept in the result so the UI
+// can report the public-traffic share honestly instead of hiding it. When the
+// dictionary has no data yet the response is {"data":[],"geo_enabled":false}
+// and the UI renders onboarding guidance instead of an empty chart.
+func (s *server) handleFlowsGeo(w http.ResponseWriter, r *http.Request) {
+	col := "src_addr"
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("dim"))) {
+	case "", "src":
+	case "dst":
+		col = "dst_addr"
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("invalid 'dim' (want src|dst)"))
+		return
+	}
+	// Countries are bounded (~250), so the default limit returns the full
+	// distribution and the UI can compute exact share stats client-side.
+	limit := intQuery(r, "limit", 300, 1, 500)
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !s.geoDictReady() {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{}, "geo_enabled": false})
+		return
+	}
+	sql := `
+SELECT dictGetOrDefault('netops.geoip_country', 'country', tuple(IPv6StringToNum(` + col + `)), '') AS country,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
+   AND IPv6StringToNumOrNull(` + col + `) IS NOT NULL` + tenantClause + flowTypeClause(r) + filter + `
+ GROUP BY country
+ ORDER BY bytes_total DESC
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+	proxyClickHouse(w, r, sql)
+}
+
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)

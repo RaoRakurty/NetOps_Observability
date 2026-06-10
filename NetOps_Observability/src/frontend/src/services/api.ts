@@ -298,6 +298,9 @@ export type ClickHouseResponse<T = Record<string, any>> = {
   meta?: { name: string; type: string }[];
   data: T[];
   rows?: number;
+  // /api/flows/geo only: false when the GeoIP dictionary has no data yet
+  // (operator hasn't run scripts/geoip-prepare.py). Absent = enabled.
+  geo_enabled?: boolean;
 };
 
 // NetFlow dashboard filter-bar selection. All optional; only set keys are sent.
@@ -806,6 +809,15 @@ export const api = {
   flowsFanout: (sort: "hosts" | "ports" = "hosts", sinceSeconds = 3600, limit = 15, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/fanout?sort=${sort}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
+  // Traffic by country of the initiator (dim=src) or responder (dim=dst),
+  // resolved through the server's GeoIP dictionary. Rows: {country, bytes_total,
+  // packets_total, flows}; country "" = private/unmatched. The generous default
+  // limit returns the full country distribution (≤ ~250) so callers can compute
+  // exact shares. geo_enabled=false ⇒ dictionary not provisioned yet.
+  flowsGeo: (dim: "src" | "dst", sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/geo?dim=${dim}&since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
   // TCP traffic by tcp_flags combination (tcpControlBits bitmask); the UI
   // decodes bits to SYN/ACK/FIN/RST… names. Rows: {tcp_flags, bytes_total,

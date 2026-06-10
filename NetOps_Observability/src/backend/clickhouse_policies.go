@@ -38,6 +38,16 @@ func ensureCHRowPolicies() {
 		// clickhouse sink uses skip_unknown_fields, so the field starts landing
 		// as soon as the column exists — no ingest change needed on upgrade.
 		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS tcp_flags UInt16 DEFAULT 0 AFTER vlan_id",
+		// Build-order #8: query-time IP→country enrichment. Lazy ip_trie
+		// dictionary over the operator-supplied CSV (scripts/geoip-prepare.py);
+		// safe to create with the file absent — the Geo endpoints probe and
+		// degrade to an onboarding hint until it loads. Mirrors init.sql.
+		`CREATE DICTIONARY IF NOT EXISTS netops.geoip_country
+ (network String, country String)
+ PRIMARY KEY network
+ SOURCE(FILE(path '/var/lib/clickhouse/user_files/geoip/country.csv' format 'CSVWithNames'))
+ LAYOUT(IP_TRIE())
+ LIFETIME(MIN 3600 MAX 7200)`,
 		chRowPolicyDDL("flows"),
 		chRowPolicyDDL("findings"),
 		chRowPolicyDDL("tunnels"),

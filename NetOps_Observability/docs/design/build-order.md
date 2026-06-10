@@ -28,7 +28,19 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
    Flows "Flags" section: combo bar/table + SYN-only/RST heuristics computed
    over flag-bearing flows, honest note when exporters don't fill
    tcpControlBits (the lab's v9 exporters don't — verified in goflow2 JSON).
-8. ⬜ **Geo IP** — GeoLite2 enrichment → Flows Geo IP + Device Geomap.
+8. ✅ **Geo IP** — query-time enrichment via a ClickHouse `ip_trie` dictionary
+   (`netops.geoip_country`, lazy, hot-reloads on file mtime) over an
+   operator-supplied CSV — licensing forbids bundling GeoIP data, so
+   `scripts/geoip-prepare.py` (stdlib) converts a GeoLite2-Country zip or
+   DB-IP Lite CSV into `data/clickhouse/user_files/geoip/country.csv`.
+   Chosen over Vector-ingest mmdb so the stack runs without the file,
+   enrichment applies retroactively to stored flows, and no pipeline restart
+   is needed. `/api/flows/geo?dim=src|dst` (probe → `geo_enabled:false` +
+   onboarding UI when unprovisioned); Flows Geo section: initiator/responder
+   country panels (browser-native names+flags via Intl.DisplayNames),
+   public-traffic-share stat, honest private-only note. Device Geomap stays
+   stubbed — lab devices are RFC 1918, so a geomap needs site metadata from
+   inventory, not GeoIP (revisit with #14/NetBox intent data).
 
 ## D. Composition / UI
 9. ⬜ **New Monitor** — guided monitor creation over the rules engine.

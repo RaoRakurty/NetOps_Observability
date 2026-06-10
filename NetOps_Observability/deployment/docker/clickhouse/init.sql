@@ -57,6 +57,30 @@ SETTINGS index_granularity = 8192;
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
+-- Geo IP — query-time IP→country enrichment for the flow analytics.
+--
+-- An ip_trie dictionary over an operator-supplied CSV (network,country) at
+-- user_files/geoip/country.csv — produced by scripts/geoip-prepare.py from a
+-- GeoLite2 Country or DB-IP Lite download (licensing forbids bundling the
+-- data itself). Lazy-loaded: creating it with the file absent is fine; the
+-- Geo endpoints probe with dictGetOrDefault and degrade to an onboarding
+-- hint until the file appears. Query-time (vs ingest-time) enrichment works
+-- retroactively on stored flows and hot-reloads on file mtime (LIFETIME).
+-- The API bootstrap (ensureCHRowPolicies) also creates this, so existing
+-- deployments converge without manual SQL.
+-- ---------------------------------------------------------------------------
+
+CREATE DICTIONARY IF NOT EXISTS netops.geoip_country
+(
+    network String,
+    country String
+)
+PRIMARY KEY network
+SOURCE(FILE(path '/var/lib/clickhouse/user_files/geoip/country.csv' format 'CSVWithNames'))
+LAYOUT(IP_TRIE())
+LIFETIME(MIN 3600 MAX 7200);
+
+-- ---------------------------------------------------------------------------
 -- Overlay tunnels (IPsec / SD-WAN / GRE) between devices.
 --
 -- One row per collector poll of a tunnel. Populated from device telemetry —
