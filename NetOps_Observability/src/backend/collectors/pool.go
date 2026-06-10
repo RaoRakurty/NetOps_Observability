@@ -58,6 +58,7 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewTrapReceiver(targets))
 	p.register(NewSTAMPSender())
 	p.register(NewSTAMPReflector())
+	p.register(NewTraceroute())
 	return p
 }
 

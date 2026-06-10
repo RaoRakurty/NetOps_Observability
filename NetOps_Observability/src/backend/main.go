@@ -210,6 +210,9 @@ func newServer() *server {
 	// dormant by default (no targets / not enabled).
 	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")
 	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
+	// Path discovery (Paris-consistent traceroute, ICMP/TCP) — opt-in; traces
+	// TRACEROUTE_TARGETS. Needs CAP_NET_RAW for the raw socket.
+	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
 
 	notifier := notify.NewDispatcher()
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
@@ -609,6 +612,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/top", s.handleFlowsTopTalkers)
 	mux.HandleFunc("/api/flows/topn", s.handleFlowsTopN)
 	mux.HandleFunc("/api/flows/fanout", s.handleFlowsFanout)
+	mux.HandleFunc("/api/probe/paths", s.handleProbePaths)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
