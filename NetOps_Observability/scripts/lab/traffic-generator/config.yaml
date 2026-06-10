@@ -1,0 +1,25 @@
+# OTG-shaped declarative config (reference / future loader). The CLI flags map
+# onto these. A "flow" mirrors the Open Traffic Generator shape:
+#   flow: { tx (endpoints) , packet (headers) , rate , size , duration }
+# Today the app catalog (tgen/catalog.py) supplies the per-app packet headers
+# and byte/packet profiles; this file documents the run-level mix.
+
+collector: 10.70.245.122          # NMS goflow2
+mode: all                         # ipfix | netflow9 | sflow | packets | l7 | all
+workers: 2
+duration: 0                       # 0 = run forever
+
+telemetry:
+  fps: 1500                       # flows/sec (split across workers)
+  batch: 32                       # flows per datagram (sendmmsg-friendly)
+  ports: { ipfix: 4739, netflow9: 2055, sflow: 6343 }
+
+packets:                          # real L2-L4 frames (needs CAP_NET_RAW)
+  pps: 500
+
+l7:                               # real client sessions
+  rate: 5                         # sessions/sec
+
+# Mix: empty = entire catalog. Otherwise app or category names, e.g.
+#   apps: [AI, Collaboration, M365-Outlook, Salesforce, Workday, DNS]
+apps: []
