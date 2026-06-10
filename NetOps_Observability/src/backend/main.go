@@ -205,6 +205,11 @@ func newServer() *server {
 	// traps and forwards them onto the log bus (→ netops-snmptrap-*). Off by
 	// default; opt in with FEATURE_SNMP_TRAPS=true (see deployment compose).
 	pool.Enable("snmptrap", os.Getenv("FEATURE_SNMP_TRAPS") == "true")
+	// Active path measurement (STAMP / RFC 8762) — opt-in. The sender probes
+	// STAMP_TARGETS; the reflector responds to probes aimed at this host. Both
+	// dormant by default (no targets / not enabled).
+	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")
+	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
 
 	notifier := notify.NewDispatcher()
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created

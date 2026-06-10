@@ -56,6 +56,8 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewTunnels(targets))
 	p.register(NewSNMPMetrics(targets))
 	p.register(NewTrapReceiver(targets))
+	p.register(NewSTAMPSender())
+	p.register(NewSTAMPReflector())
 	return p
 }
 
