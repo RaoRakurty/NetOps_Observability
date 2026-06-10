@@ -245,6 +245,12 @@ services:
       # #20: device→tenant enrichment CSV exported by the api (read-only). Loaded
       # by the device_tenant enrichment table to stamp tenant_id onto telemetry.
       - ../../data/api/enrichment:/etc/vector/enrichment:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8686/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       redpanda: { condition: service_healthy }
     networks: [netops]
@@ -262,6 +268,15 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
     volumes:
       - ./vector-router/vector.yaml:/etc/vector/vector.yaml:ro
+    # Liveness: Vector's API /health (process-level). A WEDGED SINK keeps the
+    # API healthy, so this only catches a fully-hung process — the sink-wedge
+    # case (input advancing, output stale) is handled by pipeline-watchdog.sh.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8686/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       redpanda:    { condition: service_healthy }
       opensearch:  { condition: service_started }
