@@ -79,7 +79,20 @@ def main(argv=None) -> int:
     p.add_argument("--duration", type=int, default=0, help="seconds (0 = run forever)")
     p.add_argument("--list", action="store_true", help="list the app catalog and exit")
     p.add_argument("--port", type=int, default=0, help="override collector port")
+    p.add_argument("--serve", action="store_true",
+                   help="run the control API + dashboard (stats/start/stop) instead of a one-shot run")
+    p.add_argument("--api-port", type=int, default=int(os.getenv("TGEN_API_PORT", "8080")))
+    p.add_argument("--autostart", action="store_true", default=True,
+                   help="(serve mode) begin generating immediately")
+    p.add_argument("--no-autostart", dest="autostart", action="store_false")
     args = p.parse_args(argv)
+
+    if args.serve:
+        from .server import serve
+        overrides = {"fps": args.fps, "batch": args.batch, "workers": args.workers,
+                     "apps": [s.strip() for s in args.apps.split(",") if s.strip()]}
+        serve(args.collector, args.api_port, args.autostart, overrides)
+        return 0
 
     apps = by_names(args.apps.split(",")) if args.apps else CATALOG
     if args.list or not apps:

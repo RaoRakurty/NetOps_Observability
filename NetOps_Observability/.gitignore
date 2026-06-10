@@ -9,6 +9,9 @@ backups/
 src/frontend/dist/
 src/frontend/node_modules/
 src/frontend/tsconfig.tsbuildinfo
+scripts/lab/traffic-generator/webui/dist/
+scripts/lab/traffic-generator/webui/node_modules/
+scripts/lab/traffic-generator/webui/tsconfig.tsbuildinfo
 src/backend/api
 src/backend/*.test
 **/__pycache__/

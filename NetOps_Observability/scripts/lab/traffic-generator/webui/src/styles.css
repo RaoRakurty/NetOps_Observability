@@ -1,0 +1,63 @@
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --border: #e4e7ec; --fg: #1a2230;
+  --muted: #667085; --accent: #4f46e5; --accent-soft: #eef0fe;
+  font-family: Inter, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+.app { max-width: 1280px; margin: 0 auto; padding: 16px 20px 40px; }
+
+.hdr { display: flex; align-items: center; justify-content: space-between; padding: 6px 0 14px; }
+.brand { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+.brand .sub { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.status { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.collector { color: var(--muted); font-family: ui-monospace, monospace; }
+.pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.pill.on { background: #e8f7ee; color: #047857; }
+.pill.off { background: #f1f3f7; color: var(--muted); }
+.err { background: #fef2f2; color: #b42318; border: 1px solid #fecdca; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+
+.kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 14px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.kpi.accent { border-color: #c7cafe; background: linear-gradient(180deg, #fbfbff, #fff); }
+.kpi-v { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.kpi-l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.card.span2 { grid-column: 1 / -1; }
+.card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 700; }
+
+.fld { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+.fld input { width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--fg); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.chips { display: flex; gap: 6px; margin-top: 6px; }
+.chip { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--muted); }
+.chip.on { background: var(--accent-soft); }
+.actions { display: flex; gap: 8px; margin-top: 16px; }
+.btn { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.big { font-size: 38px; font-weight: 800; letter-spacing: -0.03em; }
+.big .unit { font-size: 16px; color: var(--muted); font-weight: 600; }
+.spark { display: block; margin: 8px 0; }
+.muted { color: var(--muted); font-size: 12px; }
+
+.bars { display: flex; flex-direction: column; gap: 7px; }
+.bar-row { display: grid; grid-template-columns: 64px 1fr 70px; align-items: center; gap: 8px; font-size: 12px; }
+.bar-k { font-weight: 600; text-transform: uppercase; font-size: 11px; color: var(--muted); }
+.bar-track { background: #f1f3f7; border-radius: 6px; height: 10px; overflow: hidden; }
+.bar-track.sm { height: 8px; }
+.bar-fill { height: 100%; border-radius: 6px; transition: width 0.4s ease; }
+.bar-v { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+table.apps { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.apps th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+table.apps td { padding: 7px 8px; border-bottom: 1px solid #f1f3f7; }
+table.apps td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, monospace; font-weight: 600; }
+.cat { background: var(--accent-soft); color: var(--accent); padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+
+@media (max-width: 860px) { .kpis { grid-template-columns: repeat(3, 1fr); } .grid { grid-template-columns: 1fr; } }

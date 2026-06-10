@@ -11,8 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY tgen/ /app/tgen/
 COPY config.yaml /app/config.yaml
+# Pre-built dashboard (deploy.sh runs `npm run build` before shipping).
+COPY webui/dist/ /app/webui/dist/
 
 ENV PYTHONUNBUFFERED=1
-# Defaults; override at `docker run`. IPFIX to the NMS collector forever.
+EXPOSE 8080
+# Defaults; override at `docker run`. Serve mode = control API + dashboard on
+# :8080, autostarts all three telemetry encoders at the NMS collector.
 ENTRYPOINT ["python", "-m", "tgen"]
-CMD ["--mode", "all", "--collector", "10.70.245.122", "--fps", "1500", "--workers", "2"]
+CMD ["--serve", "--collector", "10.70.245.122", "--fps", "1500", "--workers", "2"]

@@ -39,15 +39,36 @@ veth-based containerlab on a commodity VM (no PMD-bindable NICs):
 
 ```bash
 # build + run as a container on the lab host (10.70.245.120)
-./deploy.sh                         # builds image + runs against the NMS
+./deploy.sh        # serve mode: dashboard + control API on :8080, encoders autostarted
+MODE=ipfix FPS=4000 ./deploy.sh     # headless one-shot run (no dashboard)
 
 # or directly
+python3 -m tgen --serve --collector 10.70.245.122 --api-port 8080
 python3 -m tgen --collector 10.70.245.122 --mode ipfix --pps 5000 --duration 0
 python3 -m tgen --mode netflow9 --apps ai,m365,zoom --workers 4
 python3 -m tgen --mode packets --proto tcp,udp,icmp,quic   # real frames (needs CAP_NET_RAW)
 ```
 
 See `config.yaml` for the declarative stream mix.
+
+## Dashboard (serve mode)
+
+`--serve` runs a Supervisor that owns the generator workers plus an IXIA/
+Ostinato-style live dashboard (`webui/`, React; built to `webui/dist/`, which is
+gitignored — `deploy.sh` runs `npm run build` automatically when stale):
+
+- **Live counters** — flow/bit rates with sparkline, totals (flows/TX/RX/pkts),
+  per-protocol, per-encoder and top-25-application breakdowns.
+- **Live control** — start/stop, and reconfigure streams without restarting the
+  container: encoder set (ipfix/netflow9/sflow), app/category mix, fps, workers.
+- **HTTP API** (stdlib `http.server`, same origin as the UI):
+  `GET /api/stats` · `GET /api/config` · `GET /api/catalog` ·
+  `POST /api/control {"action": "start|stop|update", "config": {…}}`.
+
+Stats flow: each worker flushes per-app/per-proto counters ~1/s into a
+`multiprocessing.Manager` dict (`tgen/stats.py`); the API aggregates totals +
+rates on read. Serve mode drives the telemetry encoders; `packets`/`l7` modes
+stay one-shot CLI runs.
 
 ## Model lineage
 
