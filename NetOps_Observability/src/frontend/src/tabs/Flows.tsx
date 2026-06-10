@@ -5,7 +5,8 @@ import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/chart
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { Stub } from "../pages/Placeholders";
-import { EmptyHint } from "../components/board/panels";
+import { EmptyHint, MetricStat } from "../components/board/panels";
+import { StatStrip } from "../components/ui";
 
 // Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Modeled on the ElastiFlow
 // layout: a left in-page section nav, a global filter bar (src/dst IP, exporter
@@ -422,6 +423,30 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
   );
 }
 
+// ── Section: Device Health — compact health of the devices behind the flows ────
+// Deliberately a SUMMARY (no duplicate panels): full per-device / per-interface
+// health lives in Device Monitoring + Interface Performance, which this links to.
+function DeviceHealthSummary({ minutes }: { minutes: number }) {
+  return (
+    <>
+      <StatStrip>
+        <MetricStat label="Avg CPU (%)" query="avg(device_cpu_percent)" minutes={minutes} fmt={(n) => `${n.toFixed(0)}%`} tone={(n) => (n >= 85 ? "bad" : n >= 70 ? "warn" : "good")} />
+        <MetricStat label="Avg memory (%)" query="avg(device_mem_percent)" minutes={minutes} fmt={(n) => `${n.toFixed(0)}%`} tone={(n) => (n >= 85 ? "bad" : n >= 70 ? "warn" : "good")} />
+        <MetricStat label="Interfaces up" query="count(device_if_oper_status == 1) or vector(0)" minutes={minutes} fmt={(n) => `${n.toFixed(0)}`} tone={() => "good"} />
+        <MetricStat label="Ifaces with errors (5m)" query="count((rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m])) > 0) or vector(0)" minutes={minutes} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "bad" : "good")} />
+      </StatStrip>
+      <div className="panel">
+        <div className="panel-tools"><h3>Device health</h3></div>
+        <p className="mini-meta" style={{ margin: 0 }}>
+          Health of the devices behind these flows, at a glance. Full per-device CPU/memory/interface health lives in{" "}
+          <a href="#/infrastructure/monitoring" style={{ color: "var(--accent)", fontWeight: 600 }}>Device Monitoring</a> and{" "}
+          <a href="#/infrastructure/ifperf" style={{ color: "var(--accent)", fontWeight: 600 }}>Interface Performance</a>.
+        </p>
+      </div>
+    </>
+  );
+}
+
 // sinceSeconds is supplied by the shell's global time range; when omitted the
 // component manages its own range selector.
 export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) {
@@ -558,18 +583,7 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
             ]}
           />
         )}
-        {section === "health" && (
-          <Stub
-            icon="infrastructure"
-            title="Device Health"
-            summary="Per-interface bandwidth, errors and discards. These are SNMP interface counters (VictoriaMetrics), not flow records, so they're wired separately from the flow pipeline."
-            planned={[
-              "Interface Bandwidth (ingress/egress) from VictoriaMetrics",
-              "Interface Errors and Discards counters",
-              "Cross-link an interface here to its flows",
-            ]}
-          />
-        )}
+        {section === "health" && <DeviceHealthSummary minutes={Math.max(1, Math.round(since / 60))} />}
       </div>
     </div>
   );
