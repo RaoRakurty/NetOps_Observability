@@ -813,6 +813,8 @@ export const api = {
     ),
   flowsByType: (sinceSeconds = 3600) =>
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
+  // Active-measurement path topology (traceroute).
+  probePaths: () => request<ProbePath[]>("/api/probe/paths"),
   flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
@@ -1650,6 +1652,10 @@ export type ItsmConfigInput = {
 
 export type PromNamesResponse = { status: string; data: string[] };
 export type PromSeries = { metric: Record<string, string>; values: [number, string][] };
+
+// Active-measurement (traceroute) path topology — from /api/probe/paths.
+export type ProbeHop = { ttl: number; ip: string; rtt_ms: number; loss_pct: number };
+export type ProbePath = { dst: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };

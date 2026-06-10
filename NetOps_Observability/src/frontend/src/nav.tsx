@@ -11,6 +11,7 @@ import ThreatDetection from "./pages/ThreatDetection";
 import Events from "./pages/Events";
 import Quality from "./pages/Quality";
 import DataSources from "./pages/DataSources";
+import NetworkPath from "./pages/NetworkPath";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -49,7 +50,6 @@ import {
   NewMonitor,
   IncidentResponse,
   DeviceGeomap,
-  FlowTrace,
   VulnerabilityManagement,
   ComplianceMonitoring,
 } from "./pages/Placeholders";
@@ -173,7 +173,7 @@ export const NAV: NavSection[] = [
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
       // Flow Trace = network-path monitoring (Datadog "Network Path"): hop-by-hop
       // traceroute between endpoints. Flows themselves live in the Data zone.
-      { id: "flowtrace", label: "Flow Trace", render: () => <FlowTrace /> },
+      { id: "flowtrace", label: "Flow Trace", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
       { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
       { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },

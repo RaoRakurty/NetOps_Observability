@@ -30,7 +30,7 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
 11. ⬜ **Command Center** (Incident Response) — incidents + notify + chat.
 
 ## E. New collector / external feeds (heaviest, last)
-12. 🔄 **Active-probe pipeline** — STAMP sender+reflector (RFC 8762) ✅ shipped; traceroute + UI next. — Flow Trace / Network Path + ICMP/HTTP
+12. ✅ **Active-probe pipeline** — STAMP sender+reflector (RFC 8762) + Paris traceroute (ICMP/TCP) + Network Path UI. Flow Trace & Path/synthetics stubs now real. — Flow Trace / Network Path + ICMP/HTTP
     synthetics (new probe runner). Fills Flow Trace + Path & synthetics stubs.
 13. ⬜ **Vulnerability Management** — device OS (SNMP sysDescr) × CVE/PSIRT feed.
 14. ⬜ **Compliance Monitoring** — config baselines vs NetBox intent.
