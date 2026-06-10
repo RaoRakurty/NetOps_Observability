@@ -459,12 +459,33 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
       GF_SERVER_ROOT_URL: "http://localhost:8000/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-      # Anonymous read-only access so the app's embedded Grafana panels render
-      # without a login prompt (the iframe is same-origin under /grafana/).
-      # The admin account still logs in normally to build/edit dashboards.
+      # Seamless SSO — auth-proxy: the app's osd-gate authenticates the platform
+      # owner and nginx forwards their username as X-WEBAUTH-USER on /grafana, so
+      # Grafana auto-signs-in AS that user (no "not signed in" / no Grafana login
+      # screen). Grafana trusts the header only from nginx (it overwrites any
+      # client copy); whitelist left open on the internal bridge — set
+      # GF_AUTH_PROXY_WHITELIST to the nginx IP/CIDR in prod.
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
+      GF_AUTH_PROXY_HEADER_PROPERTY: "username"
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_SYNC_TTL: "60"
+      GF_AUTH_PROXY_HEADERS_ENCODED: "false"
+      GF_USERS_AUTO_ASSIGN_ORG: "true"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: "Admin"
+      # Anonymous kept as a fallback so embedded panels still render if a request
+      # ever arrives without the proxy header (auth-proxy takes precedence when
+      # the header is present, which nginx always sets for /grafana).
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
       GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      # Correlix white-label: hide the Grafana name/login chrome so the embedded
+      # console reads as part of the platform (visual re-skin is injected by nginx).
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       # Allow the dashboard to embed Grafana in an <iframe>. Without this
       # Grafana sends X-Frame-Options: deny and the UI shows "refused to
       # connect". Served same-origin under /grafana/ via nginx.

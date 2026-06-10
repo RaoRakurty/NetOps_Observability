@@ -854,7 +854,32 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Netbox-User", netboxRemoteUser())
+	// Grafana auto-login: forward the authenticated principal's username so the
+	// embedded Grafana (GF_AUTH_PROXY) signs the request in AS that user — no
+	// "not signed in" anonymous state, no separate Grafana login. nginx captures
+	// this and forwards it as X-WEBAUTH-USER on the /grafana proxy; the client's
+	// own copy is never trusted (set only after this platform-owner gate passes).
+	if u := sanitizeHeaderUser(claims.Sub); u != "" {
+		w.Header().Set("X-Grafana-User", u)
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// sanitizeHeaderUser keeps only characters valid in a username header value
+// (defense-in-depth against header injection — claims.Sub is already from a
+// verified JWT, but we never emit raw subject text into a response header).
+func sanitizeHeaderUser(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r == '-' || r == '_' || r == '.' || r == '@' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			out = append(out, r)
+		}
+	}
+	if len(out) > 190 {
+		out = out[:190]
+	}
+	return string(out)
 }
 
 // netboxRemoteUser is the NetBox username the embedded console auto-logs-in as.
