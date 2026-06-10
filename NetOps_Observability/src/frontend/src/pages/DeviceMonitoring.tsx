@@ -4,7 +4,7 @@ import { useShell } from "../context/shell";
 import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import {
-  Group, Panel, MetricLine, MetricTop, fmtBps, fmtPct, fmtUptime, latest, seriesLabel, useMetricRange,
+  Group, Panel, MetricLine, MetricTop, BarPanel, fmtBps, fmtPct, fmtBytes, fmtUptime, latest, seriesLabel, useMetricRange,
 } from "../components/board/panels";
 import { Stub } from "./Placeholders";
 
@@ -171,6 +171,34 @@ function UptimeList({ minutes }: { minutes: number }) {
   );
 }
 
+// ── Flow insights — fleet traffic from the flow records (NetFlow/IPFIX/sFlow) ──
+function FlowInsights({ since }: { since: number }) {
+  const [talkers, setTalkers] = useState<{ label: string; value: number }[]>([]);
+  const [exporters, setExporters] = useState<{ label: string; value: number }[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      try {
+        const [t, e] = await Promise.all([api.topTalkers(since, 10), api.flowsTopN("device", since, 10)]);
+        if (!alive) return;
+        setTalkers(((t?.data as any[]) ?? []).map((r) => ({ label: `${r.src} → ${r.dst}`, value: Number(r.bytes_total) })));
+        setExporters(((e?.data as any[]) ?? []).map((r) => ({ label: String(r.k), value: Number(r.bytes_total) })));
+        setErr(null);
+      } catch (ex) { if (alive) setErr((ex as Error).message); }
+    };
+    run();
+    const id = setInterval(run, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [since]);
+  return (
+    <div className="dm-grid">
+      <BarPanel title="Busiest talkers (bytes)" rows={talkers} fmtX={fmtBytes} err={err} dataKind="flows" />
+      <BarPanel title="Top flow exporters (bytes)" rows={exporters} fmtX={fmtBytes} err={err} dataKind="flows" />
+    </div>
+  );
+}
+
 // Fleet packet-mix union (sum across fleet), tagged by kind for the legend.
 function fleetPacketMix(dir: "in" | "out"): string {
   return [
@@ -236,13 +264,11 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
         </div>
       </Group>
 
-      <Group title="Traffic insights (NetFlow)" hue="#8B5CF6" defaultOpen={false}>
-        <Stub
-          icon="flows"
-          title="Traffic insights"
-          summary="Flow-derived traffic for the fleet lives in the dedicated Flows dashboard, which has the full filter bar and per-dimension breakdowns."
-          planned={["Embedded flow summary tiles (busiest talkers, top exporters)", "Deep-link each device into its flows"]}
-        />
+      <Group title="Traffic insights (NetFlow)" hue="#8B5CF6">
+        <FlowInsights since={m * 60} />
+        <p className="mini-meta" style={{ margin: 0 }}>
+          Fleet traffic from flow records. Full filtering and per-dimension breakdowns are in the <a href="#/flows" style={{ color: "var(--accent)", fontWeight: 600 }}>Flows</a> dashboard.
+        </p>
       </Group>
 
       <Group title="Network Path & synthetics" hue="#F97316" defaultOpen={false}>

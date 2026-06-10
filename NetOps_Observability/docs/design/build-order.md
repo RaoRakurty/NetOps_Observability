@@ -13,7 +13,7 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
 
 ## B. No-new-collection wires (data already in the stores)
 3. ✅ **Device Health** (Flows board) — real interface health from SNMP counters.
-4. ⬜ **Traffic insights** (Device Monitoring) — flow tiles (top talkers/exporters).
+4. ✅ **Traffic insights** (Device Monitoring) — flow tiles (top talkers/exporters).
 5. ⬜ **Per-interface flows** (Interface Performance) — flows by in_if/out_if.
 6. ⬜ **IPsec VPN tunnels** (Device Monitoring) — wire /api/tunnels.
 
