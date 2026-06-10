@@ -139,11 +139,13 @@ func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community strin
 	}
 }
 
-// truncateDescr keeps sysDescr short enough for the inventory's OS column.
+// truncateDescr keeps sysDescr short enough for the inventory's OS column
+// while preserving the version phrase Vulnerability Management parses out of
+// it — Cisco's verbose sysDescrs put "Version x.y" past the 120-char mark.
 func truncateDescr(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 120 {
-		return s[:120]
+	if len(s) > 200 {
+		return s[:200]
 	}
 	return s
 }

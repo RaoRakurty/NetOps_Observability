@@ -78,7 +78,24 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
 ## E. New collector / external feeds (heaviest, last)
 12. ✅ **Active-probe pipeline** — STAMP sender+reflector (RFC 8762) + Paris traceroute (ICMP/TCP) + Network Path UI. Flow Trace & Path/synthetics stubs now real. — Flow Trace / Network Path + ICMP/HTTP
     synthetics (new probe runner). Fills Flow Trace + Path & synthetics stubs.
-13. ⬜ **Vulnerability Management** — device OS (SNMP sysDescr) × CVE/PSIRT feed.
+13. ✅ **Vulnerability Management** — device OS × advisory feed, fully
+    agentless. `collectors/osinfo.go` parses OS product+version out of sysDescr
+    (vendor-gated regexes: IOS/IOS-XE/IOS-XR/NX-OS/ASA, JunOS, EOS, FortiOS,
+    PAN-OS, SR OS/TiMOS, VRP, RouterOS, Linux). Feed follows the Geo IP
+    operator-data pattern: `scripts/vuln-feed-prepare.py` (stdlib) boils NVD
+    2.0 yearly JSON (+ optional CISA KEV catalog for known-exploited flags)
+    down to network-OS rows (CPE part o/h, our vendors only) →
+    `data/vuln/advisories.csv` (atomic rename = reload signal); backend
+    `vulns.go` lazy-loads with mtime hot-reload, matches with an RPM-style
+    digit/letter token comparator (handles `15.2(4)E10`, `21.4R3-S4.9`,
+    `4.33.1F`; exact-match tolerates numeric build suffixes, rejects lettered
+    rebuilds) against NVD cpeMatch range bounds. `GET /api/vulns`
+    (tenant-scoped, `vuln_enabled:false` onboarding until provisioned) →
+    Security→Vulnerability Management board: exposure StatStrip
+    (assessed/affected/critical/KEV), severity-accented findings table with
+    NVD links, honest "coverage gaps" table (unassessed ≠ safe). sysDescr
+    inventory truncation 120→200 chars so version phrases survive. Unit tests:
+    ParseOS (16 sysDescr shapes), comparator, range/exact matching, CSV load.
 14. ⬜ **Compliance Monitoring** — config baselines vs NetBox intent.
 
 ---

@@ -516,6 +516,11 @@ services:
       # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
       # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
       ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
+      # #13 Vulnerability Management: operator-prepared advisory feed (run
+      # scripts/vuln-feed-prepare.py → data/vuln/, mounted read-only below).
+      # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until
+      # the file exists.
+      VULN_FEED_PATH: ${VULN_FEED_PATH:-/data/vuln/advisories.csv}
       # SNMP trap receiver (UDP/162 → log bus → netops-snmptrap-* → Explore→Logs
       # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the
       # unprivileged 1162 in-container; the host 162/udp maps to it (see ports).
@@ -682,6 +687,9 @@ services:
     volumes:
       - ../../src/config:/config:ro
       - ../../data/api:/data
+      # #13: operator-owned advisory feed, read-only — the service can read
+      # but never alter its own vulnerability data (nested over /data).
+      - ../../data/vuln:/data/vuln:ro
       # Shared dir for the sealing sidecar's Unix socket (empty/unused when the
       # 'seal' profile isn't up — the Vault stays dormant, see SEAL_PROVIDER).
       - ../../data/secrets-seal:/run/secrets-seal

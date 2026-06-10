@@ -220,20 +220,8 @@ export function DeviceGeomap() {
 }
 
 // ── Security ─────────────────────────────────────────────────────────────────
-export function VulnerabilityManagement() {
-  return (
-    <Stub
-      icon="shield"
-      title="Vulnerability Management"
-      summary="Track device-software vulnerabilities (CVEs) across the fleet, prioritized by exposure and severity."
-      planned={[
-        "OS/firmware version inventory per device",
-        "CVE matching against known advisories (PSIRT feeds)",
-        "Risk-prioritized remediation backlog",
-      ]}
-    />
-  );
-}
+// (Vulnerability Management graduated to pages/VulnerabilityManagement.tsx —
+// build-order #13.)
 
 export function ThreatDetection() {
   return (

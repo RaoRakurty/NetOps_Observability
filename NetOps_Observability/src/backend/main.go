@@ -75,6 +75,7 @@ type server struct {
 	copilotCfg       *copilotConfigStore
 	netboxCfg        *netboxConfigStore // NetBox source-of-truth discovery config
 	netboxSync       *netboxSyncer      // reconciles discovered devices INTO NetBox (write-through)
+	vulns            *vulnFeed          // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -364,6 +365,9 @@ func newServer() *server {
 		audit:            audit,
 		contactPoints:    contactPoints,
 		hub:              NewHub(),
+		// #13 Vulnerability Management: operator-prepared advisory feed
+		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
+		vulns: newVulnFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv")),
 	}
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
@@ -655,6 +659,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
+	mux.HandleFunc("/api/vulns", s.handleVulns) // #13: device OS × advisory feed
+
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
 	mux.HandleFunc("/api/saved", s.handleSaved)

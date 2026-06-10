@@ -499,6 +499,19 @@ def ensure_data_dirs(root: Path) -> None:
     except (PermissionError, OSError):
         pass  # not root; api will adopt it on first write where it can
 
+    # #13: vulnerability-feed dir. OPERATOR-owned (unlike the service dirs) —
+    # the operator writes it with scripts/vuln-feed-prepare.py and the api only
+    # reads it (mounted read-only). Under sudo, chown to the invoking user so
+    # the prepare script works without root afterwards.
+    vuln = root / "data" / "vuln"
+    vuln.mkdir(parents=True, exist_ok=True)
+    sudo_uid, sudo_gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if sudo_uid:
+        try:
+            os.chown(vuln, int(sudo_uid), int(sudo_gid or sudo_uid))
+        except (PermissionError, OSError, ValueError):
+            pass
+
     ok("data/ directories ready")
 
 

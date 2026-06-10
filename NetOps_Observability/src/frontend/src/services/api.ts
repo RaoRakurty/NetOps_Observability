@@ -356,6 +356,44 @@ export type Tunnel = {
   uptime_s: number;
 };
 
+// ---------- Vulnerability Management (#13) ----------
+
+export type VulnFinding = {
+  device_id: string;
+  device_name: string;
+  vendor: string;
+  product: string;
+  version: string;
+  cve: string;
+  severity: string; // critical | high | medium | low | ""
+  cvss: number;
+  kev: boolean; // CISA Known Exploited Vulnerabilities
+  published: string;
+  summary: string;
+};
+
+export type VulnUnassessed = {
+  device_id: string;
+  device_name: string;
+  vendor?: string;
+  reason: string;
+};
+
+export type VulnsResponse = {
+  vuln_enabled: boolean;
+  feed?: { entries: number; kev_entries: number; updated_at: string };
+  summary?: {
+    devices: number;
+    assessed: number;
+    affected: number;
+    findings: number;
+    critical: number;
+    kev: number;
+  };
+  findings?: VulnFinding[];
+  unassessed?: VulnUnassessed[];
+};
+
 // ---------- Copilot ----------
 
 export type CopilotMessage = { role: "user" | "assistant" | "system"; content: string };
@@ -852,6 +890,7 @@ export const api = {
     if (severity) p.set("severity", severity);
     return request<ClickHouseResponse<Finding>>(`/api/findings?${p}`);
   },
+  vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),
 
   // Copilot
   copilotChat: (messages: CopilotMessage[], system?: string) =>
