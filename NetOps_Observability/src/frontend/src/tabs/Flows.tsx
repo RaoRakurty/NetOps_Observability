@@ -5,6 +5,7 @@ import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/chart
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { Stub } from "../pages/Placeholders";
+import { EmptyHint } from "../components/board/panels";
 
 // Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Modeled on the ElastiFlow
 // layout: a left in-page section nav, a global filter bar (src/dst IP, exporter
@@ -153,7 +154,7 @@ function TopNPanel({
       {err ? (
         <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
       ) : rows.length === 0 ? (
-        <div className="empty">No flow data in this window.</div>
+        <EmptyHint kind="flows" />
       ) : view === "bar" ? (
         <ReactECharts
           style={{ height: Math.min(420, 36 + rows.length * 24) }}
@@ -253,7 +254,7 @@ function FlowsSection({ q }: { q: FlowQuery }) {
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : ts.length === 0 ? (
-          <div className="empty">No flow data yet.</div>
+          <EmptyHint kind="flows" />
         ) : (
           <ReactECharts
             style={{ height: 320 }}
@@ -343,7 +344,7 @@ function ConversationsSection({ q }: { q: FlowQuery }) {
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
         ) : rows.length === 0 ? (
-          <div className="empty">No flow data in this window.</div>
+          <EmptyHint kind="flows" />
         ) : (
           <DataTable<TalkerRow>
             rows={rows}
@@ -397,7 +398,7 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
       {err ? (
         <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
       ) : rows.length === 0 ? (
-        <div className="empty">No flow data in this window.</div>
+        <EmptyHint kind="flows" />
       ) : (
         <ReactECharts
           style={{ height: 300 }}

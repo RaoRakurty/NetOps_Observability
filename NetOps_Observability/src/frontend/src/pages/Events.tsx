@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
 import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
-import { Group, Panel } from "../components/board/panels";
+import { Group, Panel, EmptyHint } from "../components/board/panels";
 
 // Events — a unified event stream (Datadog "Events" equivalent). Merges the
 // signals we already collect into one time-sorted feed: syslog (OpenSearch),
@@ -120,7 +120,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
           {err ? (
             <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
           ) : filtered.length === 0 ? (
-            <div className="empty">No events in this window.</div>
+            <EmptyHint kind="logs" />
           ) : (
             <DataTable<Ev> rows={filtered} columns={cols} rowKey={(e) => `${e.ts}-${e.type}-${e.source}-${e.message.slice(0, 40)}`} height={520} ariaLabel="Event stream" initialSort={{ key: "ts", dir: "desc" }} />
           )}

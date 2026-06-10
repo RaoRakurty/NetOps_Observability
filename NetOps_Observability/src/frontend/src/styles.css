@@ -2384,3 +2384,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: transparent; color: var(--fg-muted);
 }
 .btn-ghost:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* Onboarding-aware empty state (board framework) */
+.board-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 26px 18px; }
+.board-empty-msg { color: var(--fg-muted); font-weight: 600; font-size: 13px; }
+.board-empty-hint { color: var(--fg-subtle); font-size: 12px; max-width: 420px; text-align: center; line-height: 1.5; font-style: normal; }
+.board-empty-link { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.board-empty-link:hover { text-decoration: underline; }

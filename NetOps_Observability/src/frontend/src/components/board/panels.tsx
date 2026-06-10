@@ -70,6 +70,29 @@ export function seriesLabel(s: PromSeries, keys?: string[]): string {
   return dev || idx || m.__name__ || "series";
 }
 
+// ── onboarding-aware empty state ──────────────────────────────────────────────
+// A board panel with no data is usually not "broken" — it's "nothing has been
+// connected yet". For a from-zero (no-telemetry) customer, the empty state should
+// teach what to turn on rather than show a dead "No data". Keyed by the data the
+// panel needs so the hint names the right onboarding step.
+export type DataKind = "metrics" | "flows" | "logs" | "generic";
+const EMPTY_HINTS: Record<DataKind, { msg: string; hint: string }> = {
+  metrics: { msg: "No SNMP metrics in this window.", hint: "Enable SNMP (read-only v2c/v3) on your devices and confirm reachability — no agent required." },
+  flows: { msg: "No flow records in this window.", hint: "Point NetFlow / IPFIX / sFlow export from your routers at the collector." },
+  logs: { msg: "No events in this window.", hint: "Forward syslog and SNMP traps from your devices to the collector." },
+  generic: { msg: "No data in this window.", hint: "" },
+};
+export function EmptyHint({ kind = "metrics" }: { kind?: DataKind }) {
+  const h = EMPTY_HINTS[kind];
+  return (
+    <div className="empty board-empty">
+      <div className="board-empty-msg">{h.msg}</div>
+      {h.hint && <div className="board-empty-hint">{h.hint}</div>}
+      <a className="board-empty-link" href="#/infrastructure/devices">Onboard devices →</a>
+    </div>
+  );
+}
+
 // ── layout ───────────────────────────────────────────────────────────────────
 export function Group({ title, hue, children, defaultOpen = true }: { title: string; hue: string; children: ReactNode; defaultOpen?: boolean }) {
   return (
@@ -128,8 +151,8 @@ export function useMetricRange(query: string, minutes: number, pointsPerWindow =
 }
 
 // ── MetricLine — timeseries ──────────────────────────────────────────────────
-export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKeys, stepped = false }: {
-  title: string; query: string; minutes: number; fmtY: (n: number) => string; height?: number; labelKeys?: string[]; stepped?: boolean;
+export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKeys, stepped = false, dataKind = "metrics" }: {
+  title: string; query: string; minutes: number; fmtY: (n: number) => string; height?: number; labelKeys?: string[]; stepped?: boolean; dataKind?: DataKind;
 }) {
   const { series, err } = useMetricRange(query, minutes);
   return (
@@ -137,7 +160,7 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
       {err ? (
         <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
       ) : series.length === 0 ? (
-        <div className="empty">No data in this window.</div>
+        <EmptyHint kind={dataKind} />
       ) : (
         <ReactECharts
           style={{ height }}
@@ -167,8 +190,8 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
 }
 
 // ── MetricTop — top-N horizontal bars (latest value per series) ───────────────
-export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys }: {
-  title: string; query: string; minutes: number; fmtX: (n: number) => string; limit?: number; labelKeys?: string[];
+export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys, dataKind = "metrics" }: {
+  title: string; query: string; minutes: number; fmtX: (n: number) => string; limit?: number; labelKeys?: string[]; dataKind?: DataKind;
 }) {
   const { series, err } = useMetricRange(query, minutes, 60);
   const rows = series
@@ -181,7 +204,7 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys }
       {err ? (
         <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
       ) : rows.length === 0 ? (
-        <div className="empty">No data in this window.</div>
+        <EmptyHint kind={dataKind} />
       ) : (
         <ReactECharts
           style={{ height: Math.min(360, 36 + rows.length * 26) }}
@@ -201,9 +224,9 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys }
 
 // ── BarPanel — horizontal bars from an arbitrary {label,value} list ───────────
 // For non-Prometheus data (flows/ClickHouse). Optional per-row tint via `danger`.
-export function BarPanel({ title, rows, fmtX, loading, err, danger }: {
+export function BarPanel({ title, rows, fmtX, loading, err, danger, dataKind = "flows" }: {
   title: string; rows: { label: string; value: number; danger?: boolean }[];
-  fmtX: (n: number) => string; loading?: boolean; err?: string | null; danger?: boolean;
+  fmtX: (n: number) => string; loading?: boolean; err?: string | null; danger?: boolean; dataKind?: DataKind;
 }) {
   return (
     <Panel title={title}>
@@ -212,7 +235,7 @@ export function BarPanel({ title, rows, fmtX, loading, err, danger }: {
       ) : loading && rows.length === 0 ? (
         <div className="empty">Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="empty">No flow data in this window.</div>
+        <EmptyHint kind={dataKind} />
       ) : (
         <ReactECharts
           style={{ height: Math.min(380, 36 + rows.length * 26) }}
