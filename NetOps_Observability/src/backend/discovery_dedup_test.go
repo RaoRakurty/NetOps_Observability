@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"netops/backend/models"
 )
@@ -116,5 +118,64 @@ func TestDeviceIdentities(t *testing.T) {
 	// No identities at all → empty (can't accidentally union).
 	if ids := deviceIdentities(models.Device{}); len(ids) != 0 {
 		t.Errorf("empty device should yield no identities, got %v", ids)
+	}
+}
+
+// fakeSource is a controllable DiscoverySource for reconciliation tests.
+type fakeSource struct {
+	name    string
+	devices []models.Device
+	err     error
+}
+
+func (f *fakeSource) Name() string                                  { return f.name }
+func (f *fakeSource) Interval() time.Duration                       { return time.Minute }
+func (f *fakeSource) Poll(context.Context) ([]models.Device, error) { return f.devices, f.err }
+
+// The direction-switch case: a source reports devices, then (switched to
+// write-only / disabled) returns nothing on a SUCCESSFUL poll → its records are
+// pruned, not left lingering as duplicates.
+func TestPollOncePrunesOnEmptySuccess(t *testing.T) {
+	a := NewDiscoveryAggregator()
+	src := &fakeSource{name: "netbox", devices: []models.Device{
+		{ID: "netbox-1", Name: "leaf1"}, {ID: "netbox-2", Name: "leaf2"},
+	}}
+	a.pollOnce(context.Background(), src)
+	if got := len(a.RawDevices()); got != 2 {
+		t.Fatalf("after first poll want 2 raw devices, got %d", got)
+	}
+	// Source now returns nothing (e.g. NetBox sync flipped read→write).
+	src.devices = nil
+	a.pollOnce(context.Background(), src)
+	if got := len(a.RawDevices()); got != 0 {
+		t.Fatalf("empty successful poll must prune the source's devices, got %d", got)
+	}
+}
+
+// A poll ERROR must NOT prune — a transient outage can't wipe the inventory.
+func TestPollOnceErrorRetains(t *testing.T) {
+	a := NewDiscoveryAggregator()
+	src := &fakeSource{name: "netbox", devices: []models.Device{{ID: "netbox-1", Name: "leaf1"}}}
+	a.pollOnce(context.Background(), src)
+	src.devices = nil
+	src.err = context.DeadlineExceeded // poll failed
+	a.pollOnce(context.Background(), src)
+	if got := len(a.RawDevices()); got != 1 {
+		t.Fatalf("poll error must retain prior devices, got %d", got)
+	}
+}
+
+// Pruning is source-scoped: one source going empty doesn't touch another
+// source's devices.
+func TestPollOncePruneIsSourceScoped(t *testing.T) {
+	a := NewDiscoveryAggregator()
+	a.pollOnce(context.Background(), &fakeSource{name: "static", devices: []models.Device{{ID: "static-1", Name: "core1"}}})
+	nb := &fakeSource{name: "netbox", devices: []models.Device{{ID: "netbox-1", Name: "leaf1"}}}
+	a.pollOnce(context.Background(), nb)
+	nb.devices = nil
+	a.pollOnce(context.Background(), nb) // netbox empties
+	devs := a.RawDevices()
+	if len(devs) != 1 || devs[0].ID != "static-1" {
+		t.Fatalf("static device must survive netbox pruning, got %+v", devs)
 	}
 }

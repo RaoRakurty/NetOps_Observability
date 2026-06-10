@@ -174,18 +174,32 @@ func (a *DiscoveryAggregator) pollLoop(ctx context.Context, src DiscoverySource)
 func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource) {
 	devices, err := src.Poll(ctx)
 	stat := sourceStats{LastPoll: time.Now().UTC(), Devices: len(devices)}
-	if err != nil {
-		stat.LastError = err.Error()
-		log.Printf("discovery source %s poll error: %v", src.Name(), err)
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err != nil {
+		// A transient poll failure must NOT prune the source's devices (an
+		// outage would wipe the inventory). Record the error and leave the
+		// cache as-is; reconciliation only happens on a successful poll.
+		stat.LastError = err.Error()
+		log.Printf("discovery source %s poll error: %v", src.Name(), err)
+		a.stats[src.Name()] = stat
+		return
+	}
 	a.stats[src.Name()] = stat
+	// Each registered source is an authoritative lister of its own devices, so
+	// its cache contents must equal what it reported THIS poll. Track the ids it
+	// returned, then drop any stale entry it still owns but no longer reports —
+	// a device removed upstream, or (the case that bit us) a source switched to
+	// write-only / disabled so it returns nothing. Without this, flipping the
+	// NetBox sync direction read→write at runtime would leave the old netbox-*
+	// records lingering as duplicates until a restart.
+	seen := make(map[string]bool, len(devices))
 	for _, d := range devices {
 		existing, ok := a.cache[d.ID]
 		if ok && existing.Source != src.Name() {
 			continue // higher-precedence source already won this id
 		}
+		seen[d.ID] = true
 		d.Source = src.Name()
 		d.LastSeen = time.Now().UTC()
 		if d.Vendor == "" {
@@ -194,6 +208,11 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 			}
 		}
 		a.cache[d.ID] = d
+	}
+	for id, d := range a.cache {
+		if d.Source == src.Name() && !seen[id] {
+			delete(a.cache, id)
+		}
 	}
 }
 
