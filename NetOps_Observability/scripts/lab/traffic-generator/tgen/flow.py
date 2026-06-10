@@ -7,8 +7,10 @@ so an app is defined once and rendered many ways.
 from __future__ import annotations
 
 import ipaddress
+import os
 import random
 import time
+import zlib
 from dataclasses import dataclass
 
 from .catalog import App, CLIENT_PREFIXES
@@ -16,6 +18,31 @@ from .catalog import App, CLIENT_PREFIXES
 PROTO_NUM = {"tcp": 6, "udp": 17, "icmp": 1}
 # Completed TCP conversation: FIN+SYN+PSH+ACK seen across the flow.
 TCP_FLAGS_FULL = 0x1B
+
+# Finite population: a real enterprise has hundreds of clients talking to a
+# handful of endpoints per SaaS, with repeat conversations — not a fresh IP per
+# flow. Unbounded randomization made (src,dst) cardinality ≈ flow count, which
+# renders "top talkers" meaningless and blows up GROUP BY src,dst downstream.
+CLIENT_POOL = int(os.getenv("TGEN_CLIENTS", "254"))
+SERVERS_PER_APP = int(os.getenv("TGEN_SERVERS_PER_APP", "6"))
+
+_POOLS: dict[tuple, list[str]] = {}
+
+
+def _pool(prefixes: tuple[str, ...], size: int, salt: str) -> list[str]:
+    """Deterministic host pool, identical across worker processes (stable seed)."""
+    key = (prefixes, size, salt)
+    hosts = _POOLS.get(key)
+    if hosts is None:
+        prnd = random.Random(zlib.crc32(repr(key).encode()))
+        hosts = [_host_in(prnd.choice(prefixes), prnd) for _ in range(max(size, 1))]
+        _POOLS[key] = hosts
+    return hosts
+
+
+def _pick_skewed(hosts: list[str], rnd: random.Random) -> str:
+    # quadratic skew toward the head of the pool → stable heavy hitters
+    return hosts[min(int(rnd.random() ** 2 * len(hosts)), len(hosts) - 1)]
 
 
 @dataclass
@@ -66,8 +93,8 @@ def _span(lo_hi: tuple[int, int], rnd: random.Random) -> int:
 def realize(app: App, rnd: random.Random, now_ms: int | None = None) -> Flow:
     now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     proto = PROTO_NUM["icmp"] if app.name == "ICMP-Ping" else PROTO_NUM[app.proto]
-    src = _host_in(rnd.choice(CLIENT_PREFIXES), rnd)
-    dst = _host_in(rnd.choice(app.dst_prefixes), rnd)
+    src = _pick_skewed(_pool(CLIENT_PREFIXES, CLIENT_POOL, "clients"), rnd)
+    dst = _pick_skewed(_pool(app.dst_prefixes, SERVERS_PER_APP, app.name), rnd)
     sport = rnd.randint(1024, 65535)
     dport = rnd.choice(app.dst_ports) if app.dst_ports != (0,) else 0
     dur = _span(app.dur_ms, rnd)
