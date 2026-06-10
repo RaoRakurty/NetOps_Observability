@@ -63,9 +63,9 @@ export default function App() {
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
-  // Shell-v2 (#24): the new slim icon-rail + hover-flyout nav, behind a flag so
-  // the current shell stays the default. `?shell=v2` enables it and is sticky;
-  // `?shell=v1` turns it back off — the runtime rollback.
+  // Shell-v2 (#24): the slim icon-rail + hover-flyout nav, navy header band, and
+  // compact cockpit type — now the DEFAULT. `?shell=v1` is a sticky opt-OUT
+  // (the runtime rollback); `?shell=v2` re-opts-in. Absent any choice, v2.
   const shellV2 = useMemo(() => {
     try {
       const q = new URLSearchParams(location.search).get("shell");
@@ -74,12 +74,12 @@ export default function App() {
         return true;
       }
       if (q === "v1") {
-        localStorage.removeItem("shellV2");
+        localStorage.setItem("shellV2", "0"); // sticky opt-out, survives reloads
         return false;
       }
-      return localStorage.getItem("shellV2") === "1";
+      return localStorage.getItem("shellV2") !== "0"; // default ON unless opted out
     } catch {
-      return false;
+      return true;
     }
   }, []);
 
