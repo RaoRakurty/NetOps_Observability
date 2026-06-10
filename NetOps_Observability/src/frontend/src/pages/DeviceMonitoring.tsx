@@ -4,7 +4,7 @@ import { useShell } from "../context/shell";
 import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import {
-  Group, Panel, MetricLine, MetricTop, BarPanel, EmptyHint, fmtBps, fmtPct, fmtBytes, fmtUptime, latest, seriesLabel, useMetricRange,
+  Group, Panel, MetricLine, MetricTop, MetricStat, BarPanel, EmptyHint, fmtBps, fmtPct, fmtBytes, fmtUptime, latest, seriesLabel, useMetricRange,
 } from "../components/board/panels";
 import { latSev, lossSev, coerce as coerceTunnel, fmtTunnelUptime } from "../tabs/Tunnels";
 import { Stub } from "./Placeholders";
@@ -349,12 +349,24 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
       </Group>
 
       <Group title="Network Path & synthetics" hue="#F97316" defaultOpen={false}>
-        <Stub
-          icon="topology"
-          title="Path & synthetic monitoring"
-          summary="Hop-by-hop path latency (Flow Trace / Network Path) and active ICMP/HTTP synthetic checks. Requires the active-probe pipeline (see Infrastructure → Flow Trace)."
-          planned={["NetPath status, active paths, check interval", "ICMP / HTTP response-time runners", "Synthetic test status"]}
-        />
+        <StatStrip>
+          <MetricStat label="Service checks up" query="sum(synthetic_up)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
+          <MetricStat label="Service checks configured" query="count(synthetic_up)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
+          <MetricStat label="Path targets (STAMP)" query="count(probe_rtt_ms)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
+          <MetricStat label="Worst path loss" query="max(probe_loss_pct)" minutes={m} fmt={(n) => `${n.toFixed(1)}%`} tone={(n) => (n >= 5 ? "bad" : n > 0 ? "warn" : "good")} />
+        </StatStrip>
+        <div className="dm-grid">
+          <MetricLine title="HTTP check — total time (ms)" query="synthetic_http_total_ms" minutes={m} fmtY={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="HTTP check — time to first byte (ms)" query="synthetic_http_ttfb_ms" minutes={m} fmtY={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="ICMP echo round-trip (ms)" query="synthetic_icmp_rtt_ms" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="TCP connect time (ms)" query="synthetic_tcp_connect_ms" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="Path round-trip by target (STAMP, ms)" query="probe_rtt_ms" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="Path loss by target (%)" query="probe_loss_pct" minutes={m} fmtY={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="synthetics" />
+        </div>
+        <p className="mini-meta" style={{ margin: 0 }}>
+          Service checks (HTTP / ICMP / TCP) from the synthetics runner; path SLA from the STAMP sender (RFC 8762).
+          Hop-by-hop paths live in <a href="#/infrastructure/flowtrace" style={{ color: "var(--accent)", fontWeight: 600 }}>Flow Trace</a>.
+        </p>
       </Group>
 
       <Group title="VPN & overlay tunnels" hue="#A855F7">

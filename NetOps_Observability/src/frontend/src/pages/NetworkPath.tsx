@@ -80,6 +80,21 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
           One-way delay (RFC 7679), loss (RFC 2680) and jitter/PDV (RFC 3393) from STAMP probes. Enable with <code>FEATURE_ACTIVE_PROBE=true</code> + <code>STAMP_TARGETS</code> (and a reflector via <code>FEATURE_STAMP_REFLECTOR</code>). These feed RFC-grade Path Health.
         </p>
       </Group>
+
+      <Group title="Service checks (synthetics)" hue="#8B5CF6">
+        <div className="dm-grid">
+          <MetricTop title="HTTP total time by target (ms)" query="synthetic_http_total_ms" minutes={m} fmtX={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricTop title="HTTP time to first byte (ms)" query="synthetic_http_ttfb_ms" minutes={m} fmtX={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricTop title="ICMP round-trip by target (ms)" query="synthetic_icmp_rtt_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricTop title="TCP connect by target (ms)" query="synthetic_tcp_connect_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricTop title="TLS certificate days to expiry" query="synthetic_http_cert_expiry_days" minutes={m} fmtX={(n) => `${n.toFixed(0)} d`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricTop title="Checks down now" query="1 - synthetic_up" minutes={m} fmtX={(n) => (n >= 1 ? "down" : "up")} labelKeys={["dst", "check"]} dataKind="synthetics" />
+        </div>
+        <p className="mini-meta" style={{ margin: 0 }}>
+          Active service checks — HTTP(S) with per-phase timings (DNS · connect · TLS · first byte), ICMP echo (RFC 792) and TCP connect.
+          Enable with <code>FEATURE_SYNTHETICS=true</code> + <code>SYNTHETIC_HTTP_TARGETS</code> / <code>SYNTHETIC_ICMP_TARGETS</code> / <code>SYNTHETIC_TCP_TARGETS</code>.
+        </p>
+      </Group>
     </div>
   );
 }

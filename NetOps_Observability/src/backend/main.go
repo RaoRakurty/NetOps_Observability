@@ -215,6 +215,10 @@ func newServer() *server {
 	// Path discovery (Paris-consistent traceroute, ICMP/TCP) — opt-in; traces
 	// TRACEROUTE_TARGETS. Needs CAP_NET_RAW for the raw socket.
 	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
+	// Service-level synthetic checks (HTTP/ICMP/TCP) — opt-in; probes the
+	// SYNTHETIC_*_TARGETS lists. HTTP/TCP need no privileges; ICMP falls back
+	// to raw only where CAP_NET_RAW exists (prober sidecar).
+	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
 
 	notifier := notify.NewDispatcher()
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
@@ -548,6 +552,7 @@ func runProber() {
 	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")
 	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
 	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
+	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
 	pool.Start(ctx)
 	log.Printf("netops-prober %s started (active measurement only)", version)
 

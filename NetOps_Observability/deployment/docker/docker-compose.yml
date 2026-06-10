@@ -470,6 +470,11 @@ services:
     # binary on :8080 needs none).
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    # Admit every gid to datagram-ICMP (echo only, this netns only) so the
+    # unprivileged synthetics ICMP check works without CAP_NET_RAW. Raw
+    # sockets stay impossible here — that's the prober sidecar's job.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
@@ -524,6 +529,16 @@ services:
       # Lazy + mtime hot-reload; /api/vulns answers vuln_enabled:false until
       # the file exists.
       VULN_FEED_PATH: ${VULN_FEED_PATH:-/data/vuln/advisories.csv}
+      # Service-level synthetic checks (HTTP/ICMP/TCP, collectors/synthetics.go).
+      # HTTP + TCP need no privileges so they can run right here in the API;
+      # ICMP works when the kernel's ping_group_range admits the container user
+      # (otherwise run the prober sidecar, which has NET_RAW). Dormant unless
+      # FEATURE_SYNTHETICS=true + at least one target list.
+      FEATURE_SYNTHETICS: ${FEATURE_SYNTHETICS:-false}
+      SYNTHETIC_HTTP_TARGETS: ${SYNTHETIC_HTTP_TARGETS:-}
+      SYNTHETIC_ICMP_TARGETS: ${SYNTHETIC_ICMP_TARGETS:-}
+      SYNTHETIC_TCP_TARGETS: ${SYNTHETIC_TCP_TARGETS:-}
+      SYNTHETIC_INTERVAL: ${SYNTHETIC_INTERVAL:-60s}
       # SNMP trap receiver (UDP/162 → log bus → netops-snmptrap-* → Explore→Logs
       # "SNMP traps"). DORMANT unless FEATURE_SNMP_TRAPS=true. Binds the
       # unprivileged 1162 in-container; the host 162/udp maps to it (see ports).
@@ -746,6 +761,13 @@ services:
       STAMP_TARGETS: ${STAMP_TARGETS:-}
       FEATURE_STAMP_REFLECTOR: ${FEATURE_STAMP_REFLECTOR:-false}
       STAMP_REFLECTOR_PORT: ${STAMP_REFLECTOR_PORT:-8620}
+      # Service-level synthetics (HTTP/ICMP/TCP). In the prober the ICMP check
+      # can use the raw-socket fallback (NET_RAW above).
+      FEATURE_SYNTHETICS: ${FEATURE_SYNTHETICS:-false}
+      SYNTHETIC_HTTP_TARGETS: ${SYNTHETIC_HTTP_TARGETS:-}
+      SYNTHETIC_ICMP_TARGETS: ${SYNTHETIC_ICMP_TARGETS:-}
+      SYNTHETIC_TCP_TARGETS: ${SYNTHETIC_TCP_TARGETS:-}
+      SYNTHETIC_INTERVAL: ${SYNTHETIC_INTERVAL:-60s}
     depends_on:
       redis: { condition: service_healthy }
     networks: [netops]
