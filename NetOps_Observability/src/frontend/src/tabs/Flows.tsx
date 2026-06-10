@@ -7,8 +7,8 @@ import Icon from "../components/Icon";
 import { EmptyHint, MetricStat } from "../components/board/panels";
 import { StatStrip, Stat } from "../components/ui";
 
-// Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Modeled on the ElastiFlow
-// layout: a left in-page section nav, a global filter bar (src/dst IP, exporter
+// Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Layout: a left
+// in-page section nav, a global filter bar (src/dst IP, exporter
 // device, ingress/egress interface) + a Unidirectional/Bidirectional toggle, and
 // per-section "Top N" panels. Every panel is backed by columns we actually
 // collect in netops.flows; sections needing data we don't yet have (Geo IP)

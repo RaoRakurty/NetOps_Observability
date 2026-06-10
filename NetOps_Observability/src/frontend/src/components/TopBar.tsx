@@ -37,7 +37,7 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // The search box and time picker drive every section through ShellContext.
 // The omni-search shows a live results dropdown (devices, alerts, saved
 // objects) backed by /api/search/global, plus a raw log-search handoff —
-// so it behaves like Splunk's global search, not just a log query.
+// so it behaves like a true global search, not just a log query.
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
   const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();

@@ -40,10 +40,10 @@
   --sev-ok:       #059669;  --sev-ok-bg:       rgba(5, 150, 105, 0.10);
 
   /* ----- Design tokens (Phase 0) — reference these instead of hardcoding ----- */
-  /* Type scale: dense but legible. Splunk/Zabbix run a 13–14px body in
+  /* Type scale: dense but legible. Dense NOC tools run a 13–14px body in
      their data tables, but lean on WEIGHT + CONTRAST (not size) for hierarchy,
-     and give headline numerals real presence. We bias one step larger than
-     the reference platform for comfort: 15px body floor, nothing primary below 13px, and big,
+     and give headline numerals real presence. We bias one step larger
+     for comfort: 15px body floor, nothing primary below 13px, and big,
      confident stat numerals so KPIs read across the room. */
   --fs-micro: 12px;   /* tiny chips, sort arrows — never body copy */
   --fs-meta:  13px;   /* secondary text, metadata, table headers */
