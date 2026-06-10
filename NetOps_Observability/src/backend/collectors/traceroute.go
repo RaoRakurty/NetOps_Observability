@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -62,6 +63,28 @@ func (r *pathRegistry) set(p PathResult) {
 	r.mu.Lock()
 	r.m[p.Dst] = p
 	r.mu.Unlock()
+	r.persist()
+}
+
+// persist publishes the full path set so a prober sidecar can share topology
+// with the API process (ADR 0001 — workers communicate via Redis). Primary:
+// Redis (TTL'd, self-expiring). Fallback: PROBE_PATHS_FILE on a shared volume.
+// No-op when neither is configured (collector runs in-process with the API).
+func (r *pathRegistry) persist() {
+	data, err := json.Marshal(r.All())
+	if err != nil {
+		return
+	}
+	if RedisAddr() != "" {
+		_ = redisSetEX(probePathsKey, string(data), 300)
+		return
+	}
+	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
+		tmp := path + ".tmp"
+		if os.WriteFile(tmp, data, 0o644) == nil { // #nosec G306 -- non-secret topology
+			_ = os.Rename(tmp, path)
+		}
+	}
 }
 
 func (r *pathRegistry) get(dst string) (PathResult, bool) {

@@ -409,6 +409,16 @@ func newServer() *server {
 }
 
 func main() {
+	// Prober mode: a minimal, least-privilege sidecar that runs ONLY the active
+	// measurement collectors (STAMP / traceroute) — the single component that
+	// needs CAP_NET_RAW. No HTTP API, no DB, no auth surface. It shares the
+	// traceroute path topology with the API via PROBE_PATHS_FILE on a shared
+	// volume; metrics flow independently to VictoriaMetrics. Keeps the main API
+	// container unprivileged.
+	if os.Getenv("PROBER_ONLY") == "true" {
+		runProber()
+		return
+	}
 	addr := envOr("LISTEN_ADDR", ":8080")
 	srv := newServer()
 
@@ -517,6 +527,27 @@ func main() {
 	_ = httpSrv.Shutdown(shutdownCtx)
 	cancel()
 	log.Println("goodbye")
+}
+
+// runProber runs the active-measurement sidecar: only the probe collectors,
+// nothing else. Targets come from env (STAMP_TARGETS / TRACEROUTE_TARGETS), so
+// no device inventory / DB is needed.
+func runProber() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pool := collectors.NewPool(nil)
+	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")
+	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
+	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
+	pool.Start(ctx)
+	log.Printf("netops-prober %s started (active measurement only)", version)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	log.Println("prober shutdown requested")
+	cancel()
 }
 
 // routes wires every HTTP handler onto the supplied mux.

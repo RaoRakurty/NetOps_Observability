@@ -696,6 +696,47 @@ services:
     networks: [netops]
     restart: *restart
 
+  # Network diagnostics prober (ADR 0001) — the ONLY service granted elevated
+  # network capabilities. Runs the active-measurement collectors (STAMP /
+  # traceroute) and nothing else (PROBER_ONLY: same image, no HTTP/DB/auth). It
+  # publishes traceroute topology to Redis (api reads it) and pushes metrics to
+  # VictoriaMetrics. Opt-in + dormant by default:
+  #   docker compose --profile prober up -d prober
+  # then set FEATURE_TRACEROUTE / FEATURE_ACTIVE_PROBE + targets. This keeps the
+  # API container unprivileged; the prober is the first member of the future
+  # network-diagnostics plane.
+  prober:
+    profiles: ["prober"]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.backend
+    mem_limit: ${PROBER_MEM_LIMIT:-128m}
+    # Least privilege: drop everything, add only the one capability raw sockets
+    # need. no-new-privileges blocks setuid escalation.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    environment:
+      PROBER_ONLY: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      VICTORIA_URL: "http://victoria:8428"
+      METRICS_URL: ${METRICS_URL:-http://victoria:8428}
+      # Active measurement — all OFF by default (ADR 0001: privileged features
+      # disabled by default). Enable + set targets to turn the plane on.
+      FEATURE_TRACEROUTE: ${FEATURE_TRACEROUTE:-false}
+      TRACEROUTE_TARGETS: ${TRACEROUTE_TARGETS:-}
+      TRACEROUTE_METHOD: ${TRACEROUTE_METHOD:-icmp}
+      TRACEROUTE_TCP_PORT: ${TRACEROUTE_TCP_PORT:-443}
+      FEATURE_ACTIVE_PROBE: ${FEATURE_ACTIVE_PROBE:-false}
+      STAMP_TARGETS: ${STAMP_TARGETS:-}
+      FEATURE_STAMP_REFLECTOR: ${FEATURE_STAMP_REFLECTOR:-false}
+      STAMP_REFLECTOR_PORT: ${STAMP_REFLECTOR_PORT:-8620}
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
   # Headless-Chromium PDF renderer for reports (optional). The Go API stays
   # stdlib-only; PDF generation lives here and is reached over HTTP. Opt-in:
   #   docker compose --profile pdf up -d gotenberg
