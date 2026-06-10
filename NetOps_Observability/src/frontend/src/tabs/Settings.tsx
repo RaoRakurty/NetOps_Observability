@@ -28,7 +28,7 @@ export default function Settings() {
             width: 34,
             height: 34,
             borderRadius: 8,
-            background: "var(--panel-2, #f4f4f8)",
+            background: "var(--surface-2)",
             display: "grid",
             placeItems: "center",
           }}

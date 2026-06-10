@@ -279,7 +279,7 @@ export default function SourceOfTruth() {
       {/* Toolbar: title · status · inline controls. No vendor name, no new tab. */}
       <div className="card sot-head">
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--panel-2, #f4f4f8)", display: "grid", placeItems: "center" }}>
+          <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--surface-2)", display: "grid", placeItems: "center" }}>
             <Icon name="directory" size={20} />
           </div>
           <div style={{ flex: 1, minWidth: 180 }}>

@@ -7,6 +7,7 @@ import { ReactNode, useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor } from "../../theme/charts";
+import { cssVar } from "../../theme/tokens";
 import Icon from "../Icon";
 import { Stat, StatTone } from "../ui";
 
@@ -249,7 +250,7 @@ export function BarPanel({ title, rows, fmtX, loading, err, danger, dataKind = "
             yAxis: { type: "category", inverse: true, data: rows.map((r) => r.label), ...axisStyle, splitLine: { show: false } },
             series: [{
               type: "bar", barMaxWidth: 16,
-              data: rows.map((r) => ({ value: r.value, itemStyle: { color: (danger || r.danger) ? "#EF4444" : paletteColor(0), borderRadius: [0, 3, 3, 0] } })),
+              data: rows.map((r) => ({ value: r.value, itemStyle: { color: (danger || r.danger) ? cssVar("--crit", "#ef4444") : paletteColor(0), borderRadius: [0, 3, 3, 0] } })),
             }],
           }}
         />

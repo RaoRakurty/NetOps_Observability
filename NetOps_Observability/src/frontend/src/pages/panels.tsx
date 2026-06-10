@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, Alert, MetricTile, PromRangeResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
+import { cssVar } from "../theme/tokens";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import { usePrefs } from "../theme/prefs";
 import { useShell } from "../context/shell";
@@ -402,7 +403,7 @@ function Donut({ rows, unit, onClick }: { rows: { name: string; value: number }[
       option={{
         ...chartBase,
         tooltip: { ...chartBase.tooltip, trigger: "item", formatter: `{b}: {c}${unit ? " " + unit : ""} ({d}%)` },
-        legend: { ...chartBase.legend, type: "scroll", orient: "vertical", right: 4, top: "center", itemWidth: 9, itemHeight: 9, textStyle: { color: "#667085", fontSize: 12 } },
+        legend: { ...chartBase.legend, type: "scroll", orient: "vertical", right: 4, top: "center", itemWidth: 9, itemHeight: 9, textStyle: { color: cssVar("--fg-muted", "#667085"), fontSize: 12 } },
         series: [{
           type: "pie", radius: ["52%", "76%"], center: ["38%", "50%"],
           avoidLabelOverlap: true, label: { show: false }, labelLine: { show: false },

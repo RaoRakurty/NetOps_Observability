@@ -163,7 +163,7 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
               fontSize: 12,
               borderRadius: 6,
               margin: "0 0 8px",
-              background: banner.kind === "error" ? "var(--bad)" : "var(--panel-2, #eef2ff)",
+              background: banner.kind === "error" ? "var(--bad)" : "var(--surface-2)",
               color: banner.kind === "error" ? "#fff" : "var(--text)",
             }}
           >

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, Device, Alert, Tunnel } from "../services/api";
 import { chartBase, hexToRgba } from "../theme/charts";
+import { cssVar } from "../theme/tokens";
 import { SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import VendorIcon from "../components/VendorIcon";
 import { brandDataUri, vendorKey } from "../components/vendorBrands";
@@ -39,10 +40,10 @@ const HEALTH_COLOR: Record<Health, string> = {
 };
 // Faint health wash for the node card fill — gives the map color at a glance
 // (the reference platform tints node cards by status rather than leaving them flat white).
-const HEALTH_TINT: Record<Health, string> = {
-  ok: "#f0fdf7",
-  warning: "#fffaf0",
-  critical: "#fef2f3",
+const HEALTH_TINT: Record<Health, () => string> = {
+  ok: () => cssVar("--sev-ok-bg", "rgba(5,150,105,0.10)"),
+  warning: () => cssVar("--sev-warning-bg", "rgba(217,119,6,0.12)"),
+  critical: () => cssVar("--sev-critical-bg", "rgba(225,29,72,0.10)"),
 };
 
 function roleOf(d: Device): string {
@@ -156,7 +157,7 @@ export default function Topology() {
             symbol: "roundRect",
             symbolSize: [134, 52],
             itemStyle: {
-              color: HEALTH_TINT[h],
+              color: HEALTH_TINT[h](),
               borderColor: color,
               borderWidth: 2.5,
               shadowBlur: 14,
@@ -172,8 +173,8 @@ export default function Topology() {
                 dot: { color, fontSize: 13, padding: [0, 2, 0, 0] },
                 g: { color, fontSize: 15, fontWeight: 700 },
                 vico: { height: 16, width: 16, backgroundColor: vico ? { image: vico } : undefined, padding: [0, 2, 0, 0] },
-                n: { color: "#1a2230", fontSize: 13, fontWeight: 700 },
-                m: { color: "#667085", fontSize: 11, padding: [4, 0, 0, 0] },
+                n: { color: cssVar("--fg", "#1a2230"), fontSize: 13, fontWeight: 700 },
+                m: { color: cssVar("--fg-muted", "#667085"), fontSize: 11, padding: [4, 0, 0, 0] },
               },
             },
             _device: d,

@@ -4,18 +4,22 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 
-  /* Clean light surfaces — soft grey page, crisp white panels. */
+  /* Clean light surfaces — soft grey page, crisp white panels.
+     RECONCILED (#45 graduation): the legacy names below are ALIASES of the
+     semantic token set (defined further down); themes redefine only the
+     semantic tokens (+ the canvas/interaction primaries) and both vocabularies
+     stay in lockstep. Components may keep using either name. */
   --bg: #f5f6f8;
-  --panel: #ffffff;
-  --panel-solid: #ffffff;
-  --panel-border: #e4e7ec;
+  --panel: var(--surface);
+  --panel-solid: var(--surface);
+  --panel-border: var(--border);
   --fg: #161d29;
-  --muted: #586173;             /* darker than before for crisper, prod-grade contrast */
+  --muted: var(--fg-muted);
   --accent: #4f46e5;            /* indigo */
   --hover: rgba(17, 24, 39, 0.05);
-  --good: #059669;
+  --good: var(--ok);
   --warn: #d97706;
-  --bad: #e11d48;
+  --bad: var(--crit);
 
   /* Glassmorphism — frosted translucent surfaces for the tile galleries + modals.
      Text stays on opaque --fg for 4.5:1 contrast; only the surface is translucent. */
@@ -147,21 +151,23 @@
    Severity (--ok/--warn/--crit) is SACRED: only ever health state, and it
    overrides any module hue. =========================================== */
 :root {
-  /* — surfaces (light baseline; elevation by lightness) — */
+  /* — surfaces (light baseline; elevation by lightness) —
+     Values adopt the approved Correlix light palette (former legacy values) so
+     reconciliation changes the architecture, not the art direction. */
   --surface:      #ffffff;
   --surface-2:    #f1f3f7;
   --overlay:      #ffffff;
-  --border:       #e3e7ef;
+  --border:       #e4e7ec;
   --border-strong:#cdd4e0;
 
   /* — neutral text ramp (tuned ≥4.5:1 body / ≥3:1 large on --surface) — */
-  --fg-muted:  #5a6478;
+  --fg-muted:  #586173;
   --fg-subtle: #8a93a6;
 
   /* — severity (sacred; --warn lives in the legacy block above and is reused) — */
-  --ok:   #1a7f37;
-  --crit: #cf222e;
-  --info: #0969da;
+  --ok:   #059669;
+  --crit: #e11d48;
+  --info: #2563eb;
   --ack:  #6639ba;
 
   /* — visualization ramp (color-blind-aware; series order) — */
@@ -1617,12 +1623,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 :root[data-theme="dark"] {
   color-scheme: dark;
 
+  /* Canvas + interaction primaries; surfaces/text-ramp/severity come from the
+     semantic block below (legacy --panel/--muted/--good/--bad are aliases). */
   --bg: #0e1320;
-  --panel: #161d2e;
-  --panel-solid: #161d2e;
-  --panel-border: #273149;
   --fg: #e7ebf3;
-  --muted: #9aa6bf;
   --hover: rgba(255, 255, 255, 0.06);
 
   /* Glass surfaces for the dark canvas — desaturated translucency, hairline edge. */
@@ -1663,31 +1667,31 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 :root[data-theme="dark"],
 :root[data-theme="oled"] {
   color-scheme: dark;
-  --surface:      #12161f;
-  --surface-2:    #181d28;
-  --overlay:      #1e2430;
-  --border:       #232a38;
-  --border-strong:#2e3850;
-  --fg-muted:  #9aa4b8;
+  /* Surfaces adopt the approved dark slate (former legacy --panel ramp). */
+  --surface:      #161d2e;
+  --surface-2:    #1b2336;
+  --overlay:      #1e2740;
+  --border:       #273149;
+  --border-strong:#324264;
+  --fg-muted:  #9aa6bf;
   --fg-subtle: #6b7488;
-  --ok:   #2ea043;
-  --crit: #f85149;
-  --info: #3b82f6;
+  --ok:   #10b981;
+  --crit: #f4506b;
+  --info: #60a5fa;
   --ack:  #8957e5;
   --viz-1:#4c8dff; --viz-2:#3fb6b2; --viz-3:#e2a03f;
   --viz-4:#c76fe0; --viz-5:#6fcf97; --viz-6:#f2785c;
 }
 :root[data-theme="oled"] {
-  /* true-black canvas; legacy v1 surfaces follow so both shells read OLED */
+  /* true-black canvas; legacy names alias the semantic surfaces below */
   --bg: #000000;
-  --panel: #0a0d12;       --panel-solid: #0a0d12;
-  --panel-border: #1b2230;
-  --fg: #e7ebf3;          --muted: #9aa6bf;
+  --fg: #e7ebf3;
   --hover: rgba(255, 255, 255, 0.05);
   --surface:   #0a0d12;
   --surface-2: #10141c;
   --overlay:   #161b25;
   --border:    #1b2230;
+  --border-strong: #252e40;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.55);
   --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.60);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.70);

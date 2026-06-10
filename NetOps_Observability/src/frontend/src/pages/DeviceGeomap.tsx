@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
+import { cssVar } from "../theme/tokens";
 import { registerMap } from "echarts/core";
 import { api, GeomapResponse, GeoSite } from "../services/api";
 import { StatStrip, Stat } from "../components/ui";
@@ -25,10 +26,10 @@ async function ensureWorldMap(): Promise<void> {
 }
 
 function siteTone(s: GeoSite): string {
-  if (s.devices === 0) return "var(--muted)";
-  if (s.down > 0 && s.up === 0) return "var(--bad, #dc2626)";
-  if (s.down > 0) return "var(--warnc, #d97706)";
-  return "var(--good, #059669)";
+  if (s.devices === 0) return cssVar("--fg-muted", "#586173");
+  if (s.down > 0 && s.up === 0) return cssVar("--crit", "#e11d48");
+  if (s.down > 0) return cssVar("--warn", "#d97706");
+  return cssVar("--ok", "#059669");
 }
 
 function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }) {
@@ -46,15 +47,15 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
       map: "world",
       roam: true,
       scaleLimit: { min: 1, max: 12 },
-      itemStyle: { areaColor: "var(--panel-2, #eef1f5)", borderColor: "var(--border, #d6dbe3)", borderWidth: 0.6 },
+      itemStyle: { areaColor: cssVar("--surface-2", "#eef1f5"), borderColor: cssVar("--border", "#d6dbe3"), borderWidth: 0.6 },
       emphasis: { disabled: true },
       select: { disabled: true },
     },
     tooltip: {
       trigger: "item",
-      backgroundColor: "#ffffff",
-      borderColor: "#e4e7ec",
-      textStyle: { color: "#1a2230", fontSize: 13 },
+      backgroundColor: cssVar("--overlay", "#ffffff"),
+      borderColor: cssVar("--border", "#e4e7ec"),
+      textStyle: { color: cssVar("--fg", "#1a2230"), fontSize: 13 },
       formatter: (p: { data?: { site?: GeoSite } }) => {
         const s = p.data?.site;
         if (!s) return "";
@@ -67,7 +68,7 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
         coordinateSystem: "geo",
         rippleEffect: { brushType: "stroke", scale: 2.6 },
         symbolSize: (val: number[]) => Math.min(34, 10 + Math.sqrt(val[2] || 1) * 5),
-        itemStyle: { color: "#4f46e5" },
+        itemStyle: { color: cssVar("--accent", "#4f46e5") },
         data: plotted.map((s) => ({
           name: s.name,
           value: [s.lng, s.lat, s.devices],
@@ -79,7 +80,7 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
           position: "right",
           formatter: (p: { data?: { site?: GeoSite } }) => p.data?.site?.name ?? "",
           fontSize: 11,
-          color: "var(--fg, #1a2230)",
+          color: cssVar("--fg", "#1a2230"),
         },
       },
     ],
@@ -151,7 +152,7 @@ export default function DeviceGeomap() {
     { key: "status", header: "Status", width: 90, render: (s) => s.status || "—" },
     {
       key: "coords", header: "Coordinates", width: 150,
-      render: (s) => (s.has_coords ? `${s.lat.toFixed(2)}, ${s.lng.toFixed(2)}` : <span style={{ color: "var(--warnc, #d97706)" }}>not set</span>),
+      render: (s) => (s.has_coords ? `${s.lat.toFixed(2)}, ${s.lng.toFixed(2)}` : <span style={{ color: "var(--warn, #d97706)" }}>not set</span>),
     },
     { key: "devices", header: "Devices", width: 80, sortable: true, sortValue: (s) => s.devices, render: (s) => s.devices },
     {

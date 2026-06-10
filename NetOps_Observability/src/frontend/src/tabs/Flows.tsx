@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, FlowFilters } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
+import { cssVar } from "../theme/tokens";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { EmptyHint, MetricStat } from "../components/board/panels";
@@ -429,8 +430,8 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
               {
                 type: "pie",
                 radius: ["50%", "72%"],
-                itemStyle: { borderColor: "#ffffff", borderWidth: 2 },
-                label: { color: "#475467" },
+                itemStyle: { borderColor: cssVar("--surface", "#ffffff"), borderWidth: 2 },
+                label: { color: cssVar("--fg-muted", "#475467") },
                 data: rows.map((p, i) => ({ name: name(p.proto), value: p.bytes_total, itemStyle: { color: paletteColor(i) } })),
               },
             ],
