@@ -394,6 +394,56 @@ export type VulnsResponse = {
   unassessed?: VulnUnassessed[];
 };
 
+// ---------- Compliance Monitoring (build-order #14) ----------
+
+export type ComplianceFinding = {
+  check: string;
+  title: string;
+  class: "drift" | "policy";
+  severity: "high" | "medium" | "low";
+  framework: string;
+  device_id: string;
+  device_name: string;
+  observed?: string;
+  intended?: string;
+  detail?: string;
+};
+
+export type ComplianceCheck = {
+  id: string;
+  title: string;
+  class: "drift" | "policy";
+  framework: string;
+  active: boolean;
+  reason?: string;
+  findings: number;
+};
+
+export type ComplianceGap = {
+  device_id: string;
+  device_name: string;
+  reason: string;
+};
+
+export type ComplianceResponse = {
+  compliance_enabled: boolean;
+  sot?: { configured: boolean };
+  summary?: {
+    devices: number;
+    affected: number;
+    compliant: number;
+    findings: number;
+    drift: number;
+    policy: number;
+    high: number;
+    checks_active: number;
+    checks_total: number;
+  };
+  checks?: ComplianceCheck[];
+  findings?: ComplianceFinding[];
+  gaps?: ComplianceGap[];
+};
+
 // ---------- Copilot ----------
 
 export type CopilotMessage = { role: "user" | "assistant" | "system"; content: string };
@@ -891,6 +941,7 @@ export const api = {
     return request<ClickHouseResponse<Finding>>(`/api/findings?${p}`);
   },
   vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),
+  compliance: (limit = 500) => request<ComplianceResponse>(`/api/compliance?limit=${limit}`),
 
   // Copilot
   copilotChat: (messages: CopilotMessage[], system?: string) =>

@@ -96,7 +96,27 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
     NVD links, honest "coverage gaps" table (unassessed ≠ safe). sysDescr
     inventory truncation 120→200 chars so version phrases survive. Unit tests:
     ParseOS (16 sysDescr shapes), comparator, range/exact matching, CSV load.
-14. ⬜ **Compliance Monitoring** — config baselines vs NetBox intent.
+14. ✅ **Compliance Monitoring** — intent drift + policy baselines, agentless
+    (no config pull yet — that's a later phase once a get-config collector
+    exists). Backend `compliance.go`: pairs NetBox records against
+    observed/operator records from the NEW `DiscoveryAggregator.RawDevices()`
+    pre-merge snapshot (matched mgmt-IP → serial → name, same identity chain
+    as the de-dup) and diffs declared fields — registration, name, mgmt IP,
+    serial, platform-vs-running-OS (vendor/digit-stripped token compare against
+    `ParseOS` product). Policy class: SNMPv1/v2c in use, weak SNMPv3
+    (noAuthNoPriv/MD5/DES), fleet OS-version consensus outlier (strict-majority
+    golden version per vendor+product, ≥3 devices), known-exploited CVE present
+    (reuses the #13 feed). Checks without their data source report INACTIVE
+    with the reason (SoT unconfigured / no credential profiles / no vuln feed)
+    — unrun ≠ compliant. Policy checks aggregate merged twin records (IP-less
+    NetBox record + IP-bearing static record) under one physical identity so a
+    monitored device isn't flagged "no credential" via its twin.
+    `GET /api/compliance` (tenant-scoped, `compliance_enabled:false`
+    onboarding) → Security→Compliance Monitoring board: posture StatStrip,
+    severity-accented findings table (observed vs intended), "what is being
+    checked" table w/ inactive reasons, coverage gaps. Unit tests: pairing
+    precedence + field gating, platform token, SNMP policy, consensus,
+    physical aggregation, end-to-end.
 
 ---
 Already shipped this run (context): BGP/OSPF Overview + collection, Troubleshooting,

@@ -659,7 +659,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
-	mux.HandleFunc("/api/vulns", s.handleVulns) // #13: device OS × advisory feed
+	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed
+	mux.HandleFunc("/api/compliance", s.handleCompliance) // #14: SoT drift + policy baselines
 
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…

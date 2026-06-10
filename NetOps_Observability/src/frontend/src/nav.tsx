@@ -48,9 +48,9 @@ import {
 import {
   DashboardList,
   DeviceGeomap,
-  ComplianceMonitoring,
 } from "./pages/Placeholders";
 import VulnerabilityManagement from "./pages/VulnerabilityManagement";
+import ComplianceMonitoring from "./pages/ComplianceMonitoring";
 import NewMonitor from "./pages/NewMonitor";
 import CommandCenter from "./pages/CommandCenter";
 

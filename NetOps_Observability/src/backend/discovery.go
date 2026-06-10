@@ -231,6 +231,20 @@ func (a *DiscoveryAggregator) Devices() []models.Device {
 	return out
 }
 
+// RawDevices returns the per-source records BEFORE cross-source merging — the
+// same physical device may appear once per source (netbox-…, static-…, manual).
+// Compliance drift detection needs both sides of a pair (NetBox intent vs the
+// observed/operator record) that Devices() folds into one.
+func (a *DiscoveryAggregator) RawDevices() []models.Device {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]models.Device, 0, len(a.cache))
+	for _, d := range a.cache {
+		out = append(out, d)
+	}
+	return out
+}
+
 // deviceKey is a device's stable cross-source identity: management IP, else
 // serial (from labels), else normalized name. Two records with the same key are
 // the same physical device regardless of which source reported them.

@@ -237,18 +237,3 @@ export function ThreatDetection() {
     />
   );
 }
-
-export function ComplianceMonitoring() {
-  return (
-    <Stub
-      icon="lock"
-      title="Compliance Monitoring"
-      summary="Continuously check device configuration against baselines and standards, and report drift."
-      planned={[
-        "Config baselines and golden templates",
-        "Drift detection against intended state (Source of Truth)",
-        "Framework reporting (CIS / PCI / internal policy)",
-      ]}
-    />
-  );
-}
