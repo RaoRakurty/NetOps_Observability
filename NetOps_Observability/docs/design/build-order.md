@@ -8,7 +8,7 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
 1. ✅ **Onboarding-aware empty states** — replace generic "No data" across the
    board framework with guided hints ("enable SNMP", "point NetFlow here",
    "forward syslog") + link to onboarding. So empty ≠ broken.
-2. ⬜ **Data Source Coverage view** — per device, which collection methods are
+2. ✅ **Data Source Coverage view** — per device, which collection methods are
    live & fresh (SNMP · flow · syslog · trap · gNMI). New Infrastructure leaf.
 
 ## B. No-new-collection wires (data already in the stores)

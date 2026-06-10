@@ -10,6 +10,7 @@ import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
 import Events from "./pages/Events";
 import Quality from "./pages/Quality";
+import DataSources from "./pages/DataSources";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
 import Collectors from "./tabs/Collectors";
@@ -159,6 +160,7 @@ export const NAV: NavSection[] = [
     icon: "infrastructure",
     children: [
       { id: "devices", label: "Devices", render: () => <Devices /> },
+      { id: "datasources", label: "Data Sources", render: () => <DataSources /> },
       // Dashboards — the device-monitoring board suite (see
       // docs/design/device-monitoring-dashboards.md). Device Monitoring + Interface
       // Performance are live; BGP/OSPF + Troubleshooting are scaffolds pending a
