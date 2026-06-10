@@ -22,8 +22,12 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
    `netops.tunnels`; onboarding-aware `tunnels` empty-state kind added.
 
 ## C. IPFIX / pipeline builds (touch ingest + schema)
-7. ⬜ **TCP Flags** — goflow2 `tcpControlBits` → `netops.flows.tcp_flags` column
-   → flags endpoint → Flows panel.
+7. ✅ **TCP Flags** — `tcp_flags UInt16` column (init.sql + self-healing ALTER in
+   `ensureCHRowPolicies` so live deployments converge), vector-router int
+   coercion, `/api/flows/flags` (combos by flows, proto=6, tenant/filter-aware),
+   Flows "Flags" section: combo bar/table + SYN-only/RST heuristics computed
+   over flag-bearing flows, honest note when exporters don't fill
+   tcpControlBits (the lab's v9 exporters don't — verified in goflow2 JSON).
 8. ⬜ **Geo IP** — GeoLite2 enrichment → Flows Geo IP + Device Geomap.
 
 ## D. Composition / UI

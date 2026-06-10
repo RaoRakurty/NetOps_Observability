@@ -807,6 +807,13 @@ export const api = {
     request<ClickHouseResponse>(
       `/api/flows/fanout?sort=${sort}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
+  // TCP traffic by tcp_flags combination (tcpControlBits bitmask); the UI
+  // decodes bits to SYN/ACK/FIN/RST… names. Rows: {tcp_flags, bytes_total,
+  // packets_total, flows}.
+  flowsFlags: (sinceSeconds = 3600, limit = 20, type = "", filters?: FlowFilters) =>
+    request<ClickHouseResponse>(
+      `/api/flows/flags?since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
+    ),
   flowsByProto: (sinceSeconds = 3600, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/by-proto?since=${sinceSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,

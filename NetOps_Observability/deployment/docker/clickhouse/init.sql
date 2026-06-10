@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS netops.flows
     dst_as          UInt32,
     sampling_rate   UInt32,
     vlan_id         UInt16,
+    tcp_flags       UInt16 DEFAULT 0,  -- tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS) via goflow2; 0 = none/not exported
     flow_type       LowCardinality(String) DEFAULT 'unknown',  -- netflow | ipfix | sflow
     tenant_id       LowCardinality(String) DEFAULT ''  -- #20: stamped at Vector ingest (device→tenant); '' = global
 )

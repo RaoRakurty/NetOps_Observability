@@ -169,6 +169,40 @@ SELECT src_addr AS k,
 	proxyClickHouse(w, r, sql)
 }
 
+// handleFlowsFlags breaks TCP traffic down by tcp_flags combination
+// (tcpControlBits, IPFIX IE6 — captured by goflow2 into the netops.flows
+// tcp_flags column). Returns one row per distinct flag combo with scaled
+// byte/packet/flow totals; the UI decodes the bitmask into SYN/ACK/FIN/RST…
+// names and derives scan/reset heuristics. proto=6 only — flags are
+// meaningless for non-TCP flows.
+func (s *server) handleFlowsFlags(w http.ResponseWriter, r *http.Request) {
+	limit := intQuery(r, "limit", 20, 1, 100)
+	since := durationQuery(r, "since", time.Hour)
+	tenantClause, empty := s.flowTenantClause(r)
+	if empty {
+		writeEmptyClickHouse(w)
+		return
+	}
+	filter, err := flowFilterClause(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	sql := `
+SELECT tcp_flags,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL ` + intToString(int(since.Seconds())) + ` SECOND
+   AND proto = 6` + tenantClause + flowTypeClause(r) + filter + `
+ GROUP BY tcp_flags
+ ORDER BY flows DESC
+ LIMIT ` + intToString(limit) + `
+ FORMAT JSON`
+	proxyClickHouse(w, r, sql)
+}
+
 func (s *server) handleFlowsByProto(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)

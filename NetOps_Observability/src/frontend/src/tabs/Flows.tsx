@@ -6,14 +6,14 @@ import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { Stub } from "../pages/Placeholders";
 import { EmptyHint, MetricStat } from "../components/board/panels";
-import { StatStrip } from "../components/ui";
+import { StatStrip, Stat } from "../components/ui";
 
 // Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Modeled on the ElastiFlow
 // layout: a left in-page section nav, a global filter bar (src/dst IP, exporter
 // device, ingress/egress interface) + a Unidirectional/Bidirectional toggle, and
 // per-section "Top N" panels. Every panel is backed by columns we actually
-// collect in netops.flows; sections needing data we don't yet have (Geo IP,
-// TCP Flags, interface error/discard counters) render a "Planned" stub.
+// collect in netops.flows; sections needing data we don't yet have (Geo IP)
+// render a "Planned" stub.
 
 const fmtNum = (n: number) => Number(n).toLocaleString();
 
@@ -423,6 +423,122 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
   );
 }
 
+// ── Section: TCP Flags — tcpControlBits combos + scan/reset heuristics ────────
+type FlagsRow = { tcp_flags: number; bytes_total: number; packets_total: number; flows: number };
+
+// tcpControlBits (RFC 9293): decode the bitmask into the conventional names,
+// handshake-first order so "SYN·ACK" reads naturally.
+const TCP_FLAG_BITS: [number, string][] = [
+  [2, "SYN"], [16, "ACK"], [1, "FIN"], [4, "RST"], [8, "PSH"], [32, "URG"], [64, "ECE"], [128, "CWR"],
+];
+function flagNames(mask: number): string {
+  if (!mask) return "none";
+  const parts = TCP_FLAG_BITS.filter(([b]) => mask & b).map(([, n]) => n);
+  return parts.length ? parts.join("·") : `0x${mask.toString(16)}`;
+}
+
+function FlagsSection({ q }: { q: FlowQuery }) {
+  const [rows, setRows] = useState<FlagsRow[]>([]);
+  const [view, setView] = useState<"bar" | "table">("bar");
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await api.flowsFlags(q.since, 20, q.ftype, q.filters);
+        if (!alive) return;
+        setRows(((res?.data as FlagsRow[]) ?? []).map((r) => ({
+          ...r, tcp_flags: Number(r.tcp_flags), bytes_total: Number(r.bytes_total),
+          packets_total: Number(r.packets_total), flows: Number(r.flows),
+        })));
+        setErr(null);
+      } catch (e) {
+        if (alive) setErr((e as Error).message);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.since, q.ftype, q.fkey]);
+
+  const total = rows.reduce((n, r) => n + r.flows, 0);
+  const flagged = rows.filter((r) => r.tcp_flags > 0).reduce((n, r) => n + r.flows, 0);
+  const synOnly = rows.filter((r) => r.tcp_flags === 2).reduce((n, r) => n + r.flows, 0);
+  const rst = rows.filter((r) => r.tcp_flags & 4).reduce((n, r) => n + r.flows, 0);
+  const pct = (n: number, of: number) => (of > 0 ? (100 * n) / of : 0);
+  // Heuristics are computed over flag-bearing flows only — a v5/v9 exporter that
+  // doesn't fill tcpControlBits would otherwise drown the signal in "none" rows.
+  const synPct = pct(synOnly, flagged);
+  const rstPct = pct(rst, flagged);
+
+  const cols = useMemo<Column<FlagsRow>[]>(() => [
+    { key: "flags", header: "Flags", width: "36%", sortable: true, text: (r) => flagNames(r.tcp_flags), sortValue: (r) => r.tcp_flags, render: (r) => flagNames(r.tcp_flags) },
+    { key: "flows", header: "Flows", align: "right", sortable: true, sortValue: (r) => r.flows, render: (r) => fmtNum(r.flows) },
+    { key: "packets", header: "Packets", align: "right", sortable: true, sortValue: (r) => r.packets_total, render: (r) => fmtNum(r.packets_total) },
+    { key: "bytes", header: "Bytes", align: "right", sortable: true, sortValue: (r) => r.bytes_total, render: (r) => fmtBytes(r.bytes_total) },
+  ], []);
+
+  return (
+    <>
+      <StatStrip>
+        <Stat label="TCP flows" value={fmtNum(total)} />
+        <Stat label="With flags reported" value={total ? `${pct(flagged, total).toFixed(0)}%` : "—"} tone={total && !flagged ? "warn" : ""} />
+        <Stat label="SYN-only (scan signal)" value={flagged ? `${synPct.toFixed(1)}%` : "—"} tone={synPct > 50 ? "bad" : synPct > 20 ? "warn" : ""} />
+        <Stat label="RST-bearing (resets)" value={flagged ? `${rstPct.toFixed(1)}%` : "—"} tone={rstPct > 30 ? "bad" : rstPct > 10 ? "warn" : ""} />
+      </StatStrip>
+      <div className="panel" style={{ minWidth: 0 }}>
+        <div className="panel-tools">
+          <h3>TCP flag combinations</h3>
+          <div className="seg-mini" role="group" aria-label="View">
+            <button className={view === "bar" ? "on" : ""} onClick={() => setView("bar")} title="Bar chart"><Icon name="metrics" size={13} /></button>
+            <button className={view === "table" ? "on" : ""} onClick={() => setView("table")} title="Table"><Icon name="logs" size={13} /></button>
+          </div>
+        </div>
+        {err ? (
+          <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
+        ) : rows.length === 0 ? (
+          <EmptyHint kind="flows" />
+        ) : view === "bar" ? (
+          <ReactECharts
+            style={{ height: Math.min(420, 36 + rows.length * 24) }}
+            option={{
+              ...chartBase,
+              grid: { left: 8, right: 64, top: 6, bottom: 6, containLabel: true },
+              tooltip: {
+                ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" },
+                formatter: (ps: any) => {
+                  const p = Array.isArray(ps) ? ps[0] : ps;
+                  return `${p.name}<br/><b>${fmtNum(p.value)} flows</b>`;
+                },
+              },
+              xAxis: { type: "value", ...axisStyle },
+              yAxis: { type: "category", inverse: true, data: rows.map((r) => flagNames(r.tcp_flags)), ...axisStyle, splitLine: { show: false } },
+              series: [{ type: "bar", data: rows.map((r) => r.flows), itemStyle: { color: paletteColor(0), borderRadius: [0, 3, 3, 0] }, barMaxWidth: 16 }],
+            }}
+          />
+        ) : (
+          <DataTable<FlagsRow>
+            rows={rows}
+            columns={cols}
+            rowKey={(r) => String(r.tcp_flags)}
+            height={Math.min(440, 40 + rows.length * 28)}
+            ariaLabel="TCP flag combinations"
+            initialSort={{ key: "flows", dir: "desc" }}
+          />
+        )}
+        {rows.length > 0 && !flagged && (
+          <p className="mini-meta" style={{ margin: "8px 2px 0" }}>
+            All TCP flows report empty flags — this exporter isn't filling tcpControlBits.
+            Enable TCP-flag export on the device (full IPFIX/NetFlow-v9 templates include it; sFlow carries it natively).
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
 // ── Section: Device Health — compact health of the devices behind the flows ────
 // Deliberately a SUMMARY (no duplicate panels): full per-device / per-interface
 // health lives in Device Monitoring + Interface Performance, which this links to.
@@ -571,18 +687,7 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
             ]}
           />
         )}
-        {section === "flags" && (
-          <Stub
-            icon="reports"
-            title="TCP Flags"
-            summary="Distribution of TCP control flags across flows — SYN/ACK/FIN/RST patterns useful for scan and reset detection."
-            planned={[
-              "Capture tcp_flags from goflow2 (NetFlow/IPFIX field)",
-              "Store a tcp_flags column in netops.flows",
-              "Top Flags panel + scan/reset heuristics",
-            ]}
-          />
-        )}
+        {section === "flags" && <FlagsSection q={q} />}
         {section === "health" && <DeviceHealthSummary minutes={Math.max(1, Math.round(since / 60))} />}
       </div>
     </div>

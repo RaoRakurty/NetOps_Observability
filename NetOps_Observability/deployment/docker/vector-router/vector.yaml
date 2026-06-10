@@ -97,6 +97,9 @@ transforms:
       } else {
         .proto = to_int(.proto) ?? 0
       }
+      # tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS): ClickHouse column is
+      # UInt16 — coerce like .proto so a string-typed value can't 400 the batch.
+      .tcp_flags = to_int(.tcp_flags) ?? 0
       # Preserve the flow protocol family (goflow2 `type`) so the UI can tell
       # NetFlow vs IPFIX vs sFlow apart — they otherwise share one schema.
       ft = to_string(.type) ?? ""

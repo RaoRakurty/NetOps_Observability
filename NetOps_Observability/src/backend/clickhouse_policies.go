@@ -9,11 +9,12 @@ import (
 )
 
 // clickhouse_policies.go — self-healing bootstrap for the #20 Phase 2
-// database-enforced tenant row policies. Runs on every API start so existing
-// deployments (where init.sql only ran on a fresh data dir) converge to the same
-// state as a fresh install, with NO manual SQL. Idempotent (IF NOT EXISTS / IF
-// EXISTS); best-effort + retried (ClickHouse may start after the API); never
-// fatal — the policies are a backstop under the app-layer tenant matcher.
+// database-enforced tenant row policies AND additive schema columns. Runs on
+// every API start so existing deployments (where init.sql only ran on a fresh
+// data dir) converge to the same state as a fresh install, with NO manual SQL.
+// Idempotent (IF NOT EXISTS / IF EXISTS); best-effort + retried (ClickHouse may
+// start after the API); never fatal — the policies are a backstop under the
+// app-layer tenant matcher, and a missing column only blanks its panel.
 //
 // It also DROPs the unused flows_hourly materialized view: with a row policy on
 // netops.flows, that MV would re-evaluate the policy on every INSERT (in the
@@ -33,6 +34,10 @@ func ensureCHRowPolicies() {
 	}
 	stmts := []string{
 		"DROP VIEW IF EXISTS netops.flows_hourly",
+		// Build-order #7: tcpControlBits (IPFIX IE6) from goflow2. Vector's
+		// clickhouse sink uses skip_unknown_fields, so the field starts landing
+		// as soon as the column exists — no ingest change needed on upgrade.
+		"ALTER TABLE netops.flows ADD COLUMN IF NOT EXISTS tcp_flags UInt16 DEFAULT 0 AFTER vlan_id",
 		chRowPolicyDDL("flows"),
 		chRowPolicyDDL("findings"),
 		chRowPolicyDDL("tunnels"),
