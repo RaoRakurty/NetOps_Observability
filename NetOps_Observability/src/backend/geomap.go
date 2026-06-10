@@ -63,61 +63,153 @@ type netboxSiteResp struct {
 	Results []netboxSite `json:"results"`
 }
 
-// geoSiteCache memoizes the NetBox site list briefly so a dashboard refresh
-// doesn't turn into a NetBox request per panel.
-type geoSiteCache struct {
-	mu    sync.Mutex
-	at    time.Time
-	sites []netboxSite
+// netboxDeviceSite is the slice of /api/dcim/devices/ used to resolve which
+// site each device belongs to — independent of the discovery read-back, so the
+// geomap places devices even in write-only sync mode (NetBox not polled as an
+// inventory source). Name/serial/primary IP let us match the live inventory by
+// the same identity tokens the dedup uses.
+type netboxDeviceSite struct {
+	Name      string `json:"name"`
+	Serial    string `json:"serial"`
+	PrimaryIP *struct {
+		Address string `json:"address"`
+	} `json:"primary_ip"`
+	Site *struct {
+		Slug string `json:"slug"`
+	} `json:"site"`
 }
 
-// fetchNetboxSites pages through /api/dcim/sites/ with the same hardening as
-// the device source (SR-023): token only to the configured host, pagination
-// pinned to that host, bounded error bodies.
-func fetchNetboxSites(ctx context.Context, client *http.Client, cfg netboxConfig) ([]netboxSite, error) {
+type netboxDeviceSiteResp struct {
+	Next    *string            `json:"next"`
+	Results []netboxDeviceSite `json:"results"`
+}
+
+// geoSiteCache memoizes the NetBox site list + device→site assignments briefly
+// so a dashboard refresh doesn't turn into a NetBox request per panel.
+type geoSiteCache struct {
+	mu     sync.Mutex
+	at     time.Time
+	sites  []netboxSite
+	assign map[string]string // device identity token → site slug
+}
+
+// netboxPaged GETs a paginated NetBox list endpoint with the device-source
+// hardening (SR-023): token only to the configured host, pagination pinned to
+// that host, bounded error bodies, hard page cap. `decode` is called per page
+// with the raw body and returns the upstream `next` URL.
+func netboxPaged(ctx context.Context, client *http.Client, cfg netboxConfig, path string, decode func([]byte) (string, error)) error {
 	nbURL := strings.TrimRight(cfg.URL, "/")
 	base, err := url.Parse(nbURL)
 	if err != nil || base.Host == "" {
-		return nil, fmt.Errorf("geomap: invalid NetBox URL %q: %w", nbURL, err)
+		return fmt.Errorf("geomap: invalid NetBox URL %q: %w", nbURL, err)
 	}
-	next := nbURL + "/api/dcim/sites/?limit=200"
-	var out []netboxSite
-	for next != "" && len(out) < 2000 {
+	next := nbURL + path
+	for pages := 0; next != "" && pages < 20; pages++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, next, nil)
 		if err != nil {
-			return out, err
+			return err
 		}
 		req.Header.Set("Authorization", "Token "+cfg.Token)
 		req.Header.Set("Accept", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
-			return out, err
+			return err
 		}
 		if resp.StatusCode >= 300 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			resp.Body.Close()
-			return out, fmt.Errorf("netbox sites %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			return fmt.Errorf("netbox %s %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
-		var page netboxSiteResp
-		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
-			return out, err
-		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
-		out = append(out, page.Results...)
+		if err != nil {
+			return err
+		}
+		upstreamNext, err := decode(body)
+		if err != nil {
+			return err
+		}
 		next = ""
-		if page.Next != nil && *page.Next != "" {
-			if nu, perr := url.Parse(*page.Next); perr == nil &&
+		if upstreamNext != "" {
+			if nu, perr := url.Parse(upstreamNext); perr == nil &&
 				(nu.Scheme == "http" || nu.Scheme == "https") && strings.EqualFold(nu.Host, base.Host) {
-				next = *page.Next
+				next = upstreamNext
 			}
 		}
 	}
-	return out, nil
+	return nil
 }
 
-// buildGeomap joins the site list with the visible inventory. Pure — unit-tested.
-func buildGeomap(sites []netboxSite, devices []models.Device, now time.Time) (rows []geoSite, unplaced int) {
+// fetchNetboxSites pages through /api/dcim/sites/.
+func fetchNetboxSites(ctx context.Context, client *http.Client, cfg netboxConfig) ([]netboxSite, error) {
+	var out []netboxSite
+	err := netboxPaged(ctx, client, cfg, "/api/dcim/sites/?limit=200", func(body []byte) (string, error) {
+		var page netboxSiteResp
+		if err := json.Unmarshal(body, &page); err != nil {
+			return "", err
+		}
+		out = append(out, page.Results...)
+		if page.Next != nil {
+			return *page.Next, nil
+		}
+		return "", nil
+	})
+	return out, err
+}
+
+// fetchNetboxDeviceSites returns device-identity-token → site-slug, so the
+// geomap can place inventory devices by their NetBox site assignment without
+// relying on the discovery read-back (works in write-only sync mode).
+func fetchNetboxDeviceSites(ctx context.Context, client *http.Client, cfg netboxConfig) (map[string]string, error) {
+	out := map[string]string{}
+	err := netboxPaged(ctx, client, cfg, "/api/dcim/devices/?limit=200", func(body []byte) (string, error) {
+		var page netboxDeviceSiteResp
+		if err := json.Unmarshal(body, &page); err != nil {
+			return "", err
+		}
+		for _, d := range page.Results {
+			if d.Site == nil || d.Site.Slug == "" {
+				continue
+			}
+			for _, tok := range netboxDeviceTokens(d) {
+				out[tok] = d.Site.Slug
+			}
+		}
+		if page.Next != nil {
+			return *page.Next, nil
+		}
+		return "", nil
+	})
+	return out, err
+}
+
+// netboxDeviceTokens mirrors deviceIdentities for a NetBox device record so the
+// assignment map keys match the live inventory's identity tokens.
+func netboxDeviceTokens(d netboxDeviceSite) []string {
+	var out []string
+	if d.PrimaryIP != nil {
+		addr := d.PrimaryIP.Address
+		if i := strings.Index(addr, "/"); i > 0 {
+			addr = addr[:i]
+		}
+		if addr = strings.TrimSpace(addr); addr != "" {
+			out = append(out, "ip:"+addr)
+		}
+	}
+	if sn := strings.TrimSpace(d.Serial); sn != "" {
+		out = append(out, "sn:"+strings.ToLower(sn))
+	}
+	if nm := strings.ToLower(strings.TrimSpace(d.Name)); nm != "" {
+		out = append(out, "name:"+nm)
+	}
+	return out
+}
+
+// buildGeomap joins the site list with the visible inventory. A device's site
+// is resolved from its inventory `site` label (present in read/both sync mode)
+// OR the NetBox device→site assignment map keyed by identity (so write-only
+// mode still places devices). Pure — unit-tested.
+func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]string, now time.Time) (rows []geoSite, unplaced int) {
 	bySlug := map[string]*geoSite{}
 	order := []string{}
 	for _, s := range sites {
@@ -136,6 +228,14 @@ func buildGeomap(sites []netboxSite, devices []models.Device, now time.Time) (ro
 	}
 	for _, d := range devices {
 		slug := d.Labels["site"]
+		if slug == "" && assign != nil {
+			for _, tok := range deviceIdentities(d) {
+				if s, ok := assign[tok]; ok {
+					slug = s
+					break
+				}
+			}
+		}
 		g := bySlug[slug]
 		if slug == "" || g == nil {
 			unplaced++
@@ -173,7 +273,12 @@ func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
 	s.geoSites.mu.Lock()
 	if time.Since(s.geoSites.at) > geoSiteCacheTTL {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		sites, err := fetchNetboxSites(ctx, &http.Client{Timeout: 10 * time.Second}, cfg)
+		client := &http.Client{Timeout: 10 * time.Second}
+		sites, err := fetchNetboxSites(ctx, client, cfg)
+		// Device→site assignments resolve placement in write-only mode (where
+		// NetBox isn't read back into the inventory). Best-effort: a failure
+		// here just falls back to inventory `site` labels.
+		assign, aerr := fetchNetboxDeviceSites(ctx, client, cfg)
 		cancel()
 		if err != nil && len(s.geoSites.sites) == 0 {
 			s.geoSites.mu.Unlock()
@@ -182,13 +287,17 @@ func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
 		}
 		if err == nil {
 			s.geoSites.sites, s.geoSites.at = sites, time.Now()
+			if aerr == nil {
+				s.geoSites.assign = assign
+			}
 		}
 	}
 	sites := s.geoSites.sites
+	assign := s.geoSites.assign
 	s.geoSites.mu.Unlock()
 
 	devices := visibleDevices(s.discovery.Devices(), claims)
-	rows, unplaced := buildGeomap(sites, devices, time.Now())
+	rows, unplaced := buildGeomap(sites, devices, assign, time.Now())
 	placed := 0
 	for _, g := range rows {
 		placed += g.Devices

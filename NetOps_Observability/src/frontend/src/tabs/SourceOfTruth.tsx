@@ -21,6 +21,38 @@ function sotStatus(c: NetboxConfig | null): Status {
 
 const labelStyle = { display: "block", fontSize: 12, color: "var(--muted)", margin: "10px 0 4px" } as const;
 
+// DirectionPicker controls how devices flow between the platform and the
+// inventory. Default "write" keeps it one-directional (platform → inventory),
+// so synced devices never reappear in Infrastructure → Devices as duplicates.
+const DIRECTIONS: { v: "write" | "read" | "both"; label: string; help: string }[] = [
+  { v: "write", label: "Devices → Inventory", help: "One-way: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. (Recommended)" },
+  { v: "read", label: "Inventory → Devices", help: "One-way: the inventory is the source of truth; its devices appear in Infrastructure. Discovery does not push anything up." },
+  { v: "both", label: "Two-way sync", help: "Read inventory devices in AND push discovered devices up. Records are de-duplicated by IP / serial / name." },
+];
+
+function DirectionPicker({ value, onChange }: { value: "write" | "read" | "both"; onChange: (v: "write" | "read" | "both") => void }) {
+  const cur = DIRECTIONS.find((d) => d.v === value) ?? DIRECTIONS[0];
+  return (
+    <div style={{ marginTop: 12 }}>
+      <label style={labelStyle}>Sync direction</label>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {DIRECTIONS.map((d) => (
+          <button
+            key={d.v}
+            className={`btn${d.v === value ? " btn-primary" : ""}`}
+            style={{ fontSize: 12 }}
+            onClick={() => onChange(d.v)}
+            type="button"
+          >
+            {d.label}
+          </button>
+        ))}
+      </div>
+      <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>{cur.help}</p>
+    </div>
+  );
+}
+
 export default function SourceOfTruth() {
   const [cfg, setCfg] = useState<NetboxConfig | null>(null);
   const [wizard, setWizard] = useState(false);
@@ -40,6 +72,7 @@ export default function SourceOfTruth() {
   const [urlV, setUrlV] = useState("");
   const [tokenV, setTokenV] = useState("");
   const [interval, setIntervalV] = useState(60);
+  const [direction, setDirection] = useState<"write" | "read" | "both">("write");
 
   const load = async () => {
     try {
@@ -49,6 +82,7 @@ export default function SourceOfTruth() {
       setEnabled(r.config.enabled);
       setUrlV(r.config.managed ? "" : r.config.url);
       setIntervalV(r.config.interval_sec || 60);
+      setDirection(r.config.direction || "write");
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -104,7 +138,7 @@ export default function SourceOfTruth() {
   const validURL = (u: string) => /^https?:\/\/.+/.test(u.trim());
 
   const save = async () => {
-    const payload: Partial<NetboxConfig> = { enabled, interval_sec: Number(interval) || 60 };
+    const payload: Partial<NetboxConfig> = { enabled, interval_sec: Number(interval) || 60, direction };
     if (mode === "external") {
       payload.url = urlV.trim();
       if (tokenV.trim()) payload.token = tokenV.trim();
@@ -153,6 +187,7 @@ export default function SourceOfTruth() {
         </label>
         <label style={labelStyle}>Poll interval (seconds)</label>
         <input className="input" style={{ width: 160 }} type="number" min={15} value={interval} onChange={(e) => setIntervalV(Number(e.target.value))} />
+        <DirectionPicker value={direction} onChange={setDirection} />
         <p style={{ marginTop: 14 }}>
           <button className="btn" onClick={() => setMode("external")}>
             Connect an external inventory instead →
@@ -219,6 +254,7 @@ export default function SourceOfTruth() {
           </label>
           <label style={labelStyle}>Poll interval (seconds)</label>
           <input className="input" style={{ width: 160 }} type="number" min={15} value={interval} onChange={(e) => setIntervalV(Number(e.target.value))} />
+          <DirectionPicker value={direction} onChange={setDirection} />
         </div>
       ),
     },

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -213,20 +214,69 @@ func (a *DiscoveryAggregator) RefreshNow() {
 func (a *DiscoveryAggregator) Devices() []models.Device {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	merged := make(map[string]models.Device, len(a.cache))
-	order := make([]string, 0, len(a.cache))
-	for _, d := range a.cache {
-		k := deviceKey(d)
-		if cur, ok := merged[k]; ok {
-			merged[k] = mergeDevices(cur, d)
-		} else {
-			merged[k] = d
-			order = append(order, k)
+	return dedupeDevices(a.cache)
+}
+
+// dedupeDevices collapses per-source records of the same physical device into
+// one. Cross-source identity is NOT a single key — a device seen by SNMP is
+// keyed by management IP, but its NetBox twin (synced create-only, so it carries
+// the name + serial but no primary IP) shares no IP. So records are unioned when
+// they agree on ANY stable identity (IP, serial, OR normalized name): the SNMP
+// record (ip + name) and the NetBox record (name + maybe serial) merge on name.
+// This is the same multi-identity matching the compliance pairing uses; doing it
+// here is what stops the Infrastructure inventory from showing each synced device
+// twice. Pure (operates on the passed map) so it is unit-testable.
+func dedupeDevices(cache map[string]models.Device) []models.Device {
+	// Stable iteration: sort the source-prefixed IDs so the merge result and
+	// ordering are deterministic regardless of Go's map iteration order.
+	ids := make([]string, 0, len(cache))
+	for id := range cache {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	// Union-find over record indices, linked by shared identity tokens.
+	parent := make([]int, len(ids))
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(i int) int {
+		for parent[i] != i {
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		}
+		return i
+	}
+	union := func(i, j int) { parent[find(i)] = find(j) }
+
+	// First record that claimed each identity token; subsequent claimants union.
+	seen := make(map[string]int, len(ids)*2)
+	for i, id := range ids {
+		for _, tok := range deviceIdentities(cache[id]) {
+			if j, ok := seen[tok]; ok {
+				union(i, j)
+			} else {
+				seen[tok] = i
+			}
 		}
 	}
-	out := make([]models.Device, 0, len(merged))
-	for _, k := range order {
-		out = append(out, merged[k])
+
+	// Fold each group (in first-seen order) into one merged device.
+	merged := make(map[int]models.Device, len(ids))
+	order := make([]int, 0, len(ids))
+	for i, id := range ids {
+		root := find(i)
+		if cur, ok := merged[root]; ok {
+			merged[root] = mergeDevices(cur, cache[id])
+		} else {
+			merged[root] = cache[id]
+			order = append(order, root)
+		}
+	}
+	out := make([]models.Device, 0, len(order))
+	for _, root := range order {
+		out = append(out, merged[root])
 	}
 	return out
 }
@@ -245,17 +295,24 @@ func (a *DiscoveryAggregator) RawDevices() []models.Device {
 	return out
 }
 
-// deviceKey is a device's stable cross-source identity: management IP, else
-// serial (from labels), else normalized name. Two records with the same key are
-// the same physical device regardless of which source reported them.
-func deviceKey(d models.Device) string {
+// deviceIdentities returns every stable identity token a record carries:
+// management IP, serial (from labels), and normalized name. Two records that
+// share ANY token are the same physical device — even if one (e.g. an SNMP
+// poll) has an IP the other (an IP-less synced NetBox record) lacks, they still
+// collapse via the shared name or serial. Empty/normalized-empty tokens are
+// dropped so a missing field can't accidentally union unrelated devices.
+func deviceIdentities(d models.Device) []string {
+	var out []string
 	if ip := strings.TrimSpace(d.Address); ip != "" {
-		return "ip:" + ip
+		out = append(out, "ip:"+ip)
 	}
 	if sn := strings.TrimSpace(d.Labels["serial"]); sn != "" {
-		return "sn:" + strings.ToLower(sn)
+		out = append(out, "sn:"+strings.ToLower(sn))
 	}
-	return "name:" + strings.ToLower(strings.TrimSpace(d.Name))
+	if nm := strings.ToLower(strings.TrimSpace(d.Name)); nm != "" {
+		out = append(out, "name:"+nm)
+	}
+	return out
 }
 
 // mergeDevices folds two records for the same physical device into one. The
@@ -562,6 +619,7 @@ func (n *NetboxSource) Interval() time.Duration {
 type netboxDevice struct {
 	ID        int    `json:"id"`
 	Name      string `json:"name"`
+	Serial    string `json:"serial"`
 	PrimaryIP *struct {
 		Address string `json:"address"`
 	} `json:"primary_ip"`
@@ -596,6 +654,12 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 	token := cfg.Token
 	if !cfg.Enabled || nbURL == "" || token == "" {
 		return nil, nil // unconfigured / disabled → no-op (not an error)
+	}
+	// Sync direction: in write-only mode (the default) NetBox is a downstream
+	// mirror, never a device source — so synced devices can't flow back into the
+	// inventory as duplicates. Only "read"/"both" poll devices.
+	if !netboxReadsDevices(cfg) {
+		return nil, nil
 	}
 
 	// SR-023: the API token rides in the Authorization header on EVERY request,
@@ -656,6 +720,11 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 			}
 			if d.Platform != nil {
 				dev.OS = d.Platform.Name
+			}
+			if sn := strings.TrimSpace(d.Serial); sn != "" {
+				// Carry the serial so a NetBox device with no primary IP still
+				// dedupes against its SNMP twin on the serial identity.
+				dev.Labels["serial"] = sn
 			}
 			if d.Site != nil {
 				dev.Labels["site"] = d.Site.Slug

@@ -23,6 +23,15 @@ type netboxConfig struct {
 	URL         string `json:"url"`
 	Token       string `json:"token,omitempty"`
 	IntervalSec int    `json:"interval_sec"` // poll cadence; 0 → default 60s
+	// Direction controls which way devices flow between the platform and NetBox:
+	//   "write" — devices → NetBox only (NetBox is a downstream documentation
+	//             mirror; it is NEVER read back as a device source, so synced
+	//             devices can't reappear in the inventory). DEFAULT.
+	//   "read"  — NetBox → platform only (NetBox is the authoritative intent
+	//             SoT; the reconciler does not push discovered devices up).
+	//   "both"  — bidirectional (read intent + reconcile discoveries up).
+	// Empty normalizes to "write" (see netboxDirection).
+	Direction string `json:"direction,omitempty"`
 	// Managed is derived (not persisted): true when the connection is the
 	// platform-bundled internal NetBox (auto-wired URL+token), so the UI needs no
 	// URL/token — just an enable toggle.
@@ -75,11 +84,11 @@ func (s *netboxConfigStore) effective() netboxConfig {
 		return *c // UI-configured external instance
 	}
 	if internal := strings.TrimRight(os.Getenv("NETBOX_INTERNAL_URL"), "/"); internal != "" {
-		enabled, interval := true, 0
-		if c != nil { // stored enable/interval override for the managed connector
-			enabled, interval = c.Enabled, c.IntervalSec
+		enabled, interval, direction := true, 0, ""
+		if c != nil { // stored enable/interval/direction override for the managed connector
+			enabled, interval, direction = c.Enabled, c.IntervalSec, c.Direction
 		}
-		return netboxConfig{Enabled: enabled, URL: internal, Token: os.Getenv("NETBOX_TOKEN"), IntervalSec: interval, Managed: true}
+		return netboxConfig{Enabled: enabled, URL: internal, Token: os.Getenv("NETBOX_TOKEN"), IntervalSec: interval, Managed: true, Direction: direction}
 	}
 	if tok := os.Getenv("NETBOX_TOKEN"); tok != "" && os.Getenv("NETBOX_URL") != "" {
 		return netboxConfig{Enabled: true, URL: os.Getenv("NETBOX_URL"), Token: tok}
@@ -92,7 +101,8 @@ func (s *netboxConfigStore) effective() netboxConfig {
 
 func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	in.URL = strings.TrimRight(strings.TrimSpace(in.URL), "/")
-	in.Managed = false // never persisted; derived in effective()
+	in.Managed = false                 // never persisted; derived in effective()
+	in.Direction = netboxDirection(in) // normalize ("" → "write")
 	if in.URL != "" {
 		u, err := url.Parse(in.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -132,11 +142,40 @@ type publicNetboxConfig struct {
 	URL         string `json:"url"`
 	IntervalSec int    `json:"interval_sec"`
 	TokenSet    bool   `json:"token_set"`
-	Managed     bool   `json:"managed"` // bundled internal NetBox (no URL/token needed)
+	Managed     bool   `json:"managed"`   // bundled internal NetBox (no URL/token needed)
+	Direction   string `json:"direction"` // "write" | "read" | "both" (normalized)
 }
 
 func (c netboxConfig) public() publicNetboxConfig {
-	return publicNetboxConfig{Enabled: c.Enabled, URL: c.URL, IntervalSec: c.IntervalSec, TokenSet: c.Token != "", Managed: c.Managed}
+	return publicNetboxConfig{Enabled: c.Enabled, URL: c.URL, IntervalSec: c.IntervalSec, TokenSet: c.Token != "", Managed: c.Managed, Direction: netboxDirection(c)}
+}
+
+// netboxDirection normalizes the configured sync direction. The default is
+// "write": devices flow up to NetBox only, and NetBox is never read back as a
+// device source — so a synced device cannot reappear in the inventory as a
+// duplicate. Operators who run NetBox as the authoritative intent SoT set
+// "read" (or "both" for bidirectional).
+func netboxDirection(c netboxConfig) string {
+	switch strings.ToLower(strings.TrimSpace(c.Direction)) {
+	case "read":
+		return "read"
+	case "both":
+		return "both"
+	default:
+		return "write"
+	}
+}
+
+// netboxReadsDevices reports whether NetBox should be polled as a device source
+// (read or both). netboxWritesDevices reports whether discovered devices should
+// be reconciled up into NetBox (write or both).
+func netboxReadsDevices(c netboxConfig) bool {
+	d := netboxDirection(c)
+	return d == "read" || d == "both"
+}
+func netboxWritesDevices(c netboxConfig) bool {
+	d := netboxDirection(c)
+	return d == "write" || d == "both"
 }
 
 // handleNetboxConfig serves GET/PUT /api/automation/netbox (platform-owner only).

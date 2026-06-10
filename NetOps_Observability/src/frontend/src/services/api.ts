@@ -75,6 +75,9 @@ export type NetboxConfig = {
   token_set: boolean;
   managed: boolean; // bundled internal NetBox — URL/token auto-wired
   token?: string; // write-only
+  // Sync direction: "write" = devices → NetBox only (default; NetBox never read
+  // back, no duplicates), "read" = NetBox → platform (intent SoT), "both".
+  direction?: "write" | "read" | "both";
 };
 
 // Result of the device→NetBox write-through reconciler.

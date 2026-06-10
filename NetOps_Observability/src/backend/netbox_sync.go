@@ -110,6 +110,12 @@ func (s *netboxSyncer) SyncOnce(ctx context.Context) (netboxSyncStatus, error) {
 	if !cfg.Enabled || base == "" || cfg.Token == "" {
 		return s.Status(), nil // disabled/unconfigured → no-op
 	}
+	// Sync direction: only push discovered devices up when writes are enabled
+	// (write/both). In read-only mode NetBox is authoritative and we never
+	// create records from discovery.
+	if !netboxWritesDevices(cfg) {
+		return s.Status(), nil
+	}
 	if bu, err := url.Parse(base); err != nil || bu.Host == "" {
 		s.setErr(fmt.Sprintf("invalid NetBox URL %q", base))
 		return s.Status(), fmt.Errorf("invalid netbox url")

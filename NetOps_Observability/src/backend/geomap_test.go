@@ -25,7 +25,7 @@ func TestBuildGeomap(t *testing.T) {
 		{ID: "d", Labels: map[string]string{}, LastSeen: now},                                       // unplaced
 		{ID: "e", Labels: map[string]string{"site": "ghost"}, LastSeen: now},                        // site absent from SoT
 	}
-	rows, unplaced := buildGeomap(sites, devices, now)
+	rows, unplaced := buildGeomap(sites, devices, nil, now)
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 site rows, got %d: %+v", len(rows), rows)
 	}
@@ -49,8 +49,28 @@ func TestBuildGeomap(t *testing.T) {
 }
 
 func TestBuildGeomapEmpty(t *testing.T) {
-	rows, unplaced := buildGeomap(nil, nil, time.Now())
+	rows, unplaced := buildGeomap(nil, nil, nil, time.Now())
 	if len(rows) != 0 || unplaced != 0 {
 		t.Fatalf("expected empty result, got %v / %d", rows, unplaced)
+	}
+}
+
+// Write-only sync mode: inventory devices carry NO `site` label (NetBox isn't
+// read back), so placement comes from the NetBox device→site assignment map
+// keyed by identity token.
+func TestBuildGeomapWriteOnlyAssignment(t *testing.T) {
+	now := time.Now()
+	f := func(v float64) *float64 { return &v }
+	sites := []netboxSite{{Name: "Dallas", Slug: "dallas", Latitude: f(32.78), Longitude: f(-96.80)}}
+	devices := []models.Device{
+		{ID: "snmp-leaf1", Name: "leaf1", Address: "10.70.0.1", LastSeen: now}, // no site label
+	}
+	assign := map[string]string{"ip:10.70.0.1": "dallas"} // from NetBox device assignment
+	rows, unplaced := buildGeomap(sites, devices, assign, now)
+	if len(rows) != 1 || rows[0].Devices != 1 || rows[0].Up != 1 {
+		t.Fatalf("assignment-based placement failed: %+v", rows)
+	}
+	if unplaced != 0 {
+		t.Errorf("device should be placed via assignment, unplaced=%d", unplaced)
 	}
 }
