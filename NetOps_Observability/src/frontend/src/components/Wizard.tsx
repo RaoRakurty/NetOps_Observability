@@ -66,7 +66,7 @@ export default function Wizard({
           return (
             <li key={s.id} style={stepItem}>
               <span style={stepCircle(state)}>{state === "done" ? "✓" : idx + 1}</span>
-              <span style={{ fontSize: 12, fontWeight: idx === i ? 700 : 500, color: idx === i ? "var(--text)" : "var(--muted)" }}>
+              <span style={{ fontSize: 12, fontWeight: idx === i ? 700 : 500, color: idx === i ? "var(--fg)" : "var(--muted)" }}>
                 {s.title}
               </span>
               {idx < steps.length - 1 && <span style={stepBar(idx < i)} />}
