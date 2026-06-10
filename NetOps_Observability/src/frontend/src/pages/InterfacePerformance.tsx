@@ -131,31 +131,33 @@ export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinut
         </div>
       </Group>
 
-      <Group title="NetFlow traffic" hue="#A855F7" defaultOpen={!!deviceAddr}>
-        {deviceAddr ? (
-          <InterfaceFlows addr={deviceAddr} iface={iface} since={m * 60} />
-        ) : (
-          <p className="mini-meta" style={{ margin: 0 }}>Pick a device above to see the flows traversing it (and an interface to scope to ingress/egress on that port).</p>
-        )}
+      <Group title="NetFlow traffic" hue="#A855F7" defaultOpen>
+        <InterfaceFlows addr={deviceAddr} device={device} iface={iface} since={m * 60} />
       </Group>
     </div>
   );
 }
 
-// InterfaceFlows — top talkers traversing a device/interface, split by direction:
-// ingress (in_if) top sources, egress (out_if) top destinations. Filters key on
-// the exporter IP + ifIndex; when no interface is selected it scopes to the whole
-// device. Pure flow data (IPFIX/NetFlow), no new collection.
-function InterfaceFlows({ addr, iface, since }: { addr: string; iface: string; since: number }) {
+// InterfaceFlows — top talkers split by direction: ingress (in_if) top sources,
+// egress (out_if) top destinations. Filters key on the exporter IP + ifIndex.
+// When NO device is selected (addr=""), it scopes fleet-wide so the section is
+// useful by default instead of blank. Pure flow data (IPFIX/NetFlow), no new
+// collection. Only devices that actually EXPORT flow records appear — so a
+// selected non-exporting device gets an honest note, not the generic
+// "turn on NetFlow" onboarding hint (flows ARE arriving, just not from it).
+function InterfaceFlows({ addr, device, iface, since }: { addr: string; device: string; iface: string; since: number }) {
   const [ingress, setIngress] = useState<{ label: string; value: number }[]>([]);
   const [egress, setEgress] = useState<{ label: string; value: number }[]>([]);
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     const run = async () => {
       try {
-        const inF = { device: addr, ...(iface ? { in_if: iface } : {}) };
-        const outF = { device: addr, ...(iface ? { out_if: iface } : {}) };
+        // Omit the device key entirely when no device is chosen → fleet-wide.
+        const dev = addr ? { device: addr } : {};
+        const inF = { ...dev, ...(iface ? { in_if: iface } : {}) };
+        const outF = { ...dev, ...(iface ? { out_if: iface } : {}) };
         const [a, b] = await Promise.all([
           api.flowsTopN("src_addr", since, 10, "", inF),
           api.flowsTopN("dst_addr", since, 10, "", outF),
@@ -165,16 +167,37 @@ function InterfaceFlows({ addr, iface, since }: { addr: string; iface: string; s
         setEgress(((b?.data as any[]) ?? []).map((r) => ({ label: String(r.k), value: Number(r.bytes_total) })));
         setErr(null);
       } catch (e) { if (alive) setErr((e as Error).message); }
+      finally { if (alive) setLoading(false); }
     };
+    setLoading(true);
     run();
     const id = setInterval(run, 30_000);
     return () => { alive = false; clearInterval(id); };
   }, [addr, iface, since]);
+
+  const scope = addr ? "" : " (fleet-wide)";
+  // A selected device with no flow records is almost always a non-exporter,
+  // not a broken pipeline — say so honestly instead of the onboarding hint.
+  const deviceHasNoFlows = !!addr && !loading && !err && ingress.length === 0 && egress.length === 0;
   return (
-    <div className="dm-grid">
-      <BarPanel title={`Top sources — ingress${iface ? ` (ifIndex ${iface})` : ""}`} rows={ingress} fmtX={fmtBytes} err={err} dataKind="flows" />
-      <BarPanel title={`Top destinations — egress${iface ? ` (ifIndex ${iface})` : ""}`} rows={egress} fmtX={fmtBytes} err={err} dataKind="flows" />
-    </div>
+    <>
+      <div className="dm-grid">
+        <BarPanel title={`Top sources — ingress${scope}${iface ? ` (ifIndex ${iface})` : ""}`} rows={ingress} fmtX={fmtBytes} loading={loading} err={err} dataKind="flows" />
+        <BarPanel title={`Top destinations — egress${scope}${iface ? ` (ifIndex ${iface})` : ""}`} rows={egress} fmtX={fmtBytes} loading={loading} err={err} dataKind="flows" />
+      </div>
+      {deviceHasNoFlows ? (
+        <p className="mini-meta" style={{ margin: 0 }}>
+          <b>{device}</b> isn’t exporting flow records (NetFlow/IPFIX/sFlow) in this window — only devices configured to
+          export flows appear here. Configure flow export on the device, or clear the device filter to see fleet-wide traffic.
+        </p>
+      ) : (
+        <p className="mini-meta" style={{ margin: 0 }}>
+          {addr
+            ? `Flows with ${device} as the exporter. Pick an interface above to scope to ingress/egress on that port.`
+            : "Fleet-wide top talkers across all exporters. Select a device to scope to the flows it exports."}
+        </p>
+      )}
+    </>
   );
 }
 
