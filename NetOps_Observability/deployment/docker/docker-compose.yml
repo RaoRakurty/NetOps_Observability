@@ -483,6 +483,9 @@ services:
       # console reads as part of the platform (visual re-skin is injected by nginx).
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
+      # Correlix is a light-canvas product — make Grafana light by default so the
+      # embed matches (nginx then tints the canvas to the Correlix grey + indigo).
+      GF_USERS_DEFAULT_THEME: "light"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
