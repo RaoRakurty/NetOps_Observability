@@ -57,9 +57,14 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
    caps, 409 on dup), `DELETE /api/rules?name=` for `origin=ui` rules only,
    and source badges + delete in the Monitors table. Engine got `evalFn`/`now`
    test seams + unit tests (for-gating, flap reset, JSON round-trip, remove).
-10. ⬜ **Dashboard List** — curate the named dashboards as links to the real
-    boards (Device Metrics→Device Monitoring, Interface Metrics→Interface
-    Performance, BGP Metrics→BGP/OSPF, …) + Bandwidth / WAN-circuit.
+10. ✅ **Dashboard List** — "Planned" cards → live directory of every real
+    board, grouped (Network monitoring / Traffic & paths / Health & ops).
+    Device Metrics→Device Monitoring, Interface Metrics→Interface Performance,
+    BGP→BGP/OSPF, Bandwidth→Device Monitoring throughput, WAN Circuit→Tunnels
+    (overlay circuits — no circuit metadata model yet, so the honest target),
+    plus Flows/Network Path/Quality/Troubleshooting/Data Sources/Events/Threat.
+    Stable card ids keep the nav sub-item deeplinks working; SavedDashboards
+    catalog stays underneath.
 11. ⬜ **Command Center** (Incident Response) — incidents + notify + chat.
 
 ## E. New collector / external feeds (heaviest, last)
