@@ -516,7 +516,10 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     # CH auto-sizes its server memory to the cgroup limit, so mem_limit is enough.
-    mem_limit: ${CLICKHOUSE_MEM_LIMIT:-2560m}
+    # Re-tuned 2560m→4g (host had ~8.7Gi headroom): high-fps flow ingest (lab
+    # traffic generator, ~16M rows/h) made Top-talkers/Fanout GROUP BYs exceed
+    # the old cap (MEMORY_LIMIT_EXCEEDED → empty panels).
+    mem_limit: ${CLICKHOUSE_MEM_LIMIT:-4g}
     cpus: ${CLICKHOUSE_CPU_LIMIT:-3}
     environment:
       CLICKHOUSE_DB: netops
@@ -531,6 +534,8 @@ services:
       - ./clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro
       # Native Prometheus endpoint on :9363 for stack self-monitoring.
       - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      # Spill heavy GROUP BY/ORDER BY to disk instead of OOMing the lab memory cap.
+      - ./clickhouse/query-spill.xml:/etc/clickhouse-server/users.d/query-spill.xml:ro
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     healthcheck:
