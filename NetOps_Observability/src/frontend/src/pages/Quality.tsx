@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Tunnel } from "../services/api";
 import { StatStrip, Stat } from "../components/ui";
-import { Group, Panel, MetricTop, MetricStat } from "../components/board/panels";
+import { Group, Panel, MetricTop, MetricStat, BarPanel } from "../components/board/panels";
 
 // Quality — service- and link-quality scoring across the fleet. Distinct from the
 // raw error/discard counts on Device Monitoring: this board is about RATES and
@@ -25,6 +25,23 @@ const utilCount = (thr: number) =>
 
 const num = (v: unknown) => Number(v) || 0;
 
+// ── Path Health composite (docs/design/metrics-standards.md) ──────────────────
+// 40% loss + 30% latency + 20% jitter + 10% route stability. Each component
+// scored 0–100 against ITU-T G.1010 / MEF-aligned thresholds, then weighted.
+const lerp = (x: number, good: number, bad: number) => {
+  if (good < bad) return x <= good ? 100 : x >= bad ? 0 : 100 * (1 - (x - good) / (bad - good));
+  return x >= good ? 100 : x <= bad ? 0 : 100 * ((x - bad) / (good - bad));
+};
+const scoreLoss = (pct: number) => lerp(pct, 0, 3);
+const scoreLatency = (ms: number) => lerp(ms, 50, 300);
+const scoreJitter = (ms: number) => lerp(ms, 10, 60);
+const scoreStability = (uptimeS: number) => lerp(uptimeS, 3600, 300); // good=≥1h, bad=≤5m
+export function pathHealth(lossPct: number, latencyMs: number, jitterMs: number, uptimeS: number): number {
+  const h = 0.4 * scoreLoss(lossPct) + 0.3 * scoreLatency(latencyMs) + 0.2 * scoreJitter(jitterMs) + 0.1 * scoreStability(uptimeS);
+  return Math.max(0, Math.min(100, h));
+};
+const healthTone = (h: number) => (h >= 80 ? "good" : h >= 60 ? "warn" : "bad");
+
 // ── Overlay / tunnel quality (from /api/tunnels) ──────────────────────────────
 function TunnelQuality() {
   const [rows, setRows] = useState<Tunnel[]>([]);
@@ -45,8 +62,19 @@ function TunnelQuality() {
     const qoes = rows.map((t) => num(t.qoe)).filter((q) => q > 0);
     const avgQoe = qoes.length ? qoes.reduce((a, b) => a + b, 0) / qoes.length : 0;
     const worstLoss = rows.reduce((m, t) => Math.max(m, num(t.loss_pct)), 0);
-    return { total: rows.length, up, avgQoe, worstLoss };
+    const healths = rows.map((t) => pathHealth(num(t.loss_pct), num(t.latency_ms), num(t.jitter_ms), num(t.uptime_s)));
+    const avgHealth = healths.length ? healths.reduce((a, b) => a + b, 0) / healths.length : 0;
+    return { total: rows.length, up, avgQoe, worstLoss, avgHealth };
   }, [rows]);
+
+  const healthRows = useMemo(
+    () => rows
+      .map((t) => ({ label: `${t.local_device || t.id} → ${t.remote_device || "—"}`, value: pathHealth(num(t.loss_pct), num(t.latency_ms), num(t.jitter_ms), num(t.uptime_s)) }))
+      .sort((a, b) => a.value - b.value)
+      .slice(0, 12)
+      .map((r) => ({ ...r, danger: r.value < 60 })),
+    [rows],
+  );
 
   const worst = useMemo(
     () => [...rows].filter((t) => num(t.qoe) > 0).sort((a, b) => num(a.qoe) - num(b.qoe)).slice(0, 8),
@@ -59,9 +87,11 @@ function TunnelQuality() {
       <StatStrip>
         <Stat label="Tunnels" value={stats.total} />
         <Stat label="Up" value={stats.up} tone={stats.total > 0 && stats.up === stats.total ? "good" : stats.up < stats.total ? "warn" : ""} />
+        <Stat label="Avg Path Health" value={stats.total ? Math.round(stats.avgHealth) : "—"} tone={stats.total ? healthTone(stats.avgHealth) : ""} />
         <Stat label="Avg QoE" value={stats.total ? stats.avgQoe.toFixed(1) : "—"} tone={stats.total ? qoeTone(stats.avgQoe) : ""} />
         <Stat label="Worst loss" value={stats.total ? `${stats.worstLoss.toFixed(1)}%` : "—"} tone={stats.worstLoss >= 3 ? "bad" : stats.worstLoss >= 1 ? "warn" : "good"} />
       </StatStrip>
+      <BarPanel title="Path Health by tunnel (0–100 · 40% loss / 30% latency / 20% jitter / 10% stability)" rows={healthRows} fmtX={(n) => `${n.toFixed(0)}`} err={err} dataKind="generic" />
       <Panel title="Lowest-QoE overlay tunnels">
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
