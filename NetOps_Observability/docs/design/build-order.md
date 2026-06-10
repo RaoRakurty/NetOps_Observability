@@ -76,8 +76,7 @@ placeholders so a "no-telemetry-yet" enterprise isn't staring at blank boards.
     over existing APIs — no backend change.
 
 ## E. New collector / external feeds (heaviest, last)
-12. ✅ **Active-probe pipeline** — STAMP sender+reflector (RFC 8762) + Paris traceroute (ICMP/TCP) + Network Path UI. Flow Trace & Path/synthetics stubs now real. — Flow Trace / Network Path + ICMP/HTTP
-    synthetics (new probe runner). Fills Flow Trace + Path & synthetics stubs.
+12. ✅ **Active-probe pipeline** — STAMP sender+reflector (RFC 8762) + Paris traceroute (ICMP/TCP) + Network Path UI. Flow Trace & Path/synthetics stubs now real. ✅ **Synthetics half** (2026-06-10, `collectors/synthetics.go`, `FEATURE_SYNTHETICS`): service-level HTTP(S)/ICMP/TCP checks — HTTP per-phase timings via `net/http/httptrace` (DNS/connect/TLS/TTFB/total + status + cert-expiry, TLS never skipped), ICMP RFC 792 echo (unprivileged datagram socket / raw fallback), TCP connect-time. `synthetic_*` → VM; DeviceMonitoring "Network Path & synthetics" + Flow Trace "Service checks" panels. Verified live.
 13. ✅ **Vulnerability Management** — device OS × advisory feed, fully
     agentless. `collectors/osinfo.go` parses OS product+version out of sysDescr
     (vendor-gated regexes: IOS/IOS-XE/IOS-XR/NX-OS/ASA, JunOS, EOS, FortiOS,
