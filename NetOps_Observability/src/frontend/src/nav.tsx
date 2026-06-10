@@ -158,26 +158,29 @@ export const NAV: NavSection[] = [
     id: "infrastructure",
     label: "Infrastructure",
     icon: "infrastructure",
+    // Two-layer hierarchy: every leaf sits under a named group (the flyout
+    // renders the group label as a sub-header), ordered by how an operator
+    // works — what do I have → how is it doing → where is it → how does
+    // traffic get there → how is it collected.
     children: [
-      { id: "devices", label: "Devices", render: () => <Devices /> },
-      { id: "datasources", label: "Data Sources", render: () => <DataSources /> },
+      { id: "devices", label: "Devices", group: "Inventory", render: () => <Devices /> },
+      { id: "datasources", label: "Data Sources", group: "Inventory", render: () => <DataSources /> },
       // Dashboards — the device-monitoring board suite (see
-      // docs/design/device-monitoring-dashboards.md). Device Monitoring + Interface
-      // Performance are live; BGP/OSPF + Troubleshooting are scaffolds pending a
-      // routing collector / pipeline-metric wiring.
+      // docs/design/device-monitoring-dashboards.md).
       { id: "monitoring", label: "Device Monitoring", group: "Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "ifperf", label: "Interface Performance", group: "Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
       { id: "bgpospf", label: "BGP / OSPF Overview", group: "Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
       { id: "troubleshooting", label: "Troubleshooting", group: "Dashboards", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
-      // Flow Trace = network-path monitoring: hop-by-hop
-      // traceroute between endpoints. Flows themselves live in the Data zone.
-      { id: "flowtrace", label: "Flow Trace", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
-      { id: "tunnels", label: "Tunnels", render: () => <Tunnels /> },
+      // Paths & overlays — how traffic actually traverses the network:
+      // hop-by-hop active paths (Flow Trace) and overlay circuits (Tunnels).
+      { id: "flowtrace", label: "Flow Trace", group: "Paths & Overlays", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
+      { id: "tunnels", label: "Tunnels", group: "Paths & Overlays", render: () => <Tunnels /> },
+      // Collection — the plumbing that feeds everything above.
       // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
-      { id: "collectors", label: "Collectors", platformOnly: true, render: () => <Collectors /> },
-      { id: "snmp", label: "SNMP Profile Manager", render: () => <SnmpProfileManager /> },
+      { id: "collectors", label: "Collectors", group: "Collection", platformOnly: true, render: () => <Collectors /> },
+      { id: "snmp", label: "SNMP Profile Manager", group: "Collection", render: () => <SnmpProfileManager /> },
     ],
   },
   // Security — vulnerability, threat and compliance posture across the fleet.

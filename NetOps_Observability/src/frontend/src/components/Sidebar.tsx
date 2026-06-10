@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { NavLeaf, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { BRAND } from "../brand";
@@ -73,7 +73,25 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
             </span>
           )}
         </button>
-        {open && <div className="nav-children">{s.children!.map((leaf) => leafItem(s, leaf))}</div>}
+        {open && (
+          <div className="nav-children">
+            {(() => {
+              // Two-layer hierarchy: introduce each run of grouped leaves with
+              // its group label (same convention as the rail flyout).
+              let lastGroup: string | undefined;
+              return s.children!.map((leaf) => {
+                const header = leaf.group && leaf.group !== lastGroup ? leaf.group : null;
+                lastGroup = leaf.group;
+                return (
+                  <Fragment key={leaf.id}>
+                    {header && <div className="nav-sub-group">{header}</div>}
+                    {leafItem(s, leaf)}
+                  </Fragment>
+                );
+              });
+            })()}
+          </div>
+        )}
       </div>
     );
   };

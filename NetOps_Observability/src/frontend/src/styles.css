@@ -864,6 +864,11 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 .nav-sub:hover { background: var(--rail-hover); color: var(--rail-fg); }
 .nav-sub.active { background: var(--rail-active-bg); border-color: transparent; color: var(--rail-active-fg); }
+/* group label inside an expanded section's leaf list (two-layer hierarchy) */
+.nav-sub-group {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--rail-fg-muted, var(--muted)); padding: 8px 10px 2px; margin-top: 2px;
+}
 
 /* ----- Main content ----- */
 .main { grid-area: main; overflow: auto; background: var(--bg); display: flex; flex-direction: column; }
@@ -876,13 +881,23 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .crumb-section { font-weight: 600; }
 .crumb-sep { color: var(--muted); }
 .crumb-leaf { color: var(--muted); }
-.subnav { display: flex; gap: 4px; margin-top: 10px; }
+.subnav { display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
 .subnav button {
   background: transparent; border: 0; border-bottom: 2px solid transparent;
   color: var(--muted); padding: 8px 10px; cursor: pointer; font-size: var(--fs-sm);
 }
 .subnav button:hover { color: var(--fg); }
 .subnav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* Two-layer hierarchy: a run of grouped leaves is introduced by its group
+   label — a small uppercase tag with a leading hairline so the bar reads as
+   "Inventory | … · Dashboards | …" instead of one flat tab row. */
+.subnav-cell { display: inline-flex; align-items: center; }
+.subnav-group {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); opacity: .85; padding: 0 8px 0 14px; margin-left: 6px;
+  border-left: 1px solid var(--border); white-space: nowrap;
+}
+.subnav .subnav-cell:first-child .subnav-group { border-left: 0; margin-left: 0; padding-left: 0; }
 
 .page { padding: var(--sp-2) var(--sp-4) var(--sp-4); max-width: 1640px; width: 100%; }
 .content { padding: var(--sp-3) var(--sp-4); max-width: 1440px; margin: 0 auto; width: 100%; }
