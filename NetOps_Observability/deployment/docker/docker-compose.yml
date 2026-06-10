@@ -47,6 +47,7 @@ services:
   postgres:
     image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${POSTGRES_CPU_LIMIT:-2}
     environment:
       POSTGRES_USER: ${DB_USER:?DB_USER required}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
@@ -91,6 +92,7 @@ services:
     image: quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
     profiles: ["sso"]
     mem_limit: ${KEYCLOAK_MEM_LIMIT:-1g}
+    cpus: ${KEYCLOAK_CPU_LIMIT:-2}
     command: ["start", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
@@ -117,6 +119,7 @@ services:
   redpanda:
     image: redpandadata/redpanda:v24.2.4@sha256:9b91885f3add2d9033724fad39f9dda3b0adda8084edcb57aa08d21f2868b6b6
     mem_limit: ${REDPANDA_MEM_LIMIT:-1g}
+    cpus: ${REDPANDA_CPU_LIMIT:-2}
     # YAML folded-string form so docker compose shell-splits the flags.
     # The previous list form treated each "--flag value" pair as one
     # argv, which redpanda's CLI rejected on startup → restart loop.
@@ -155,6 +158,8 @@ services:
   # forwards to vector-aggregator's syslog source.
   syslog-ng:
     image: balabit/syslog-ng:4.7.1@sha256:d37d9895256fa840bc8e70077a6c74afa27015e27703c3fbb89d5ae3cb956dd9
+    mem_limit: ${SYSLOGNG_MEM_LIMIT:-256m}
+    cpus: ${SYSLOGNG_CPU_LIMIT:-1}
     logging: *deflog
     command: ["-F", "-e"]
     volumes:
@@ -176,6 +181,8 @@ services:
   # SNMP, emits InfluxDB line protocol over TCP to vector-aggregator.
   telegraf:
     image: telegraf:1.31-alpine@sha256:bf274ea9fbf49a62ed19478ea0badb0f040ee9db09725a94175fa5ffecd8b7ab
+    mem_limit: ${TELEGRAF_MEM_LIMIT:-512m}
+    cpus: ${TELEGRAF_CPU_LIMIT:-1}
     logging: *deflog
     command: ["--config", "/etc/telegraf/telegraf.conf"]
     volumes:
@@ -190,6 +197,8 @@ services:
   # (lab defaults below; override in .env). Config: ./gnmic/gnmic.yaml.
   gnmic:
     image: ghcr.io/openconfig/gnmic:0.46.0@sha256:9538f93a9a85e996d0ad5f7c523835e874557be84b8d279c2a51d2f092b24c7e
+    mem_limit: ${GNMIC_MEM_LIMIT:-512m}
+    cpus: ${GNMIC_CPU_LIMIT:-1}
     command: ["subscribe", "--config", "/app/gnmic.yaml"]
     environment:
       # SC-009: these are the bundled containerlab fabric's DEVICE login passwords
@@ -210,6 +219,8 @@ services:
   # picks them up via docker_logs.
   goflow2:
     image: netsampler/goflow2:v2.2.1@sha256:bc7aafd6d724cd0a21b17b3c67f22d514c431021c3531914d964bef8cdd79dbb
+    mem_limit: ${GOFLOW2_MEM_LIMIT:-512m}
+    cpus: ${GOFLOW2_CPU_LIMIT:-1}
     logging: *deflog
     command:
       - "-listen"
@@ -237,6 +248,7 @@ services:
   vector-aggregator:
     image: timberio/vector:0.40.0-alpine@sha256:7a81fdd62e056321055a9e4bdec4073d752ecf68f4c192e676b85001721523c2
     mem_limit: ${VECTOR_MEM_LIMIT:-512m}
+    cpus: ${VECTOR_CPU_LIMIT:-2}
     logging: *deflog
     command: ["--config", "/etc/vector/vector.yaml"]
     volumes:
@@ -260,6 +272,7 @@ services:
   vector-router:
     image: timberio/vector:0.40.0-alpine@sha256:7a81fdd62e056321055a9e4bdec4073d752ecf68f4c192e676b85001721523c2
     mem_limit: ${VECTOR_MEM_LIMIT:-512m}
+    cpus: ${VECTOR_CPU_LIMIT:-2}
     logging: *deflog
     command: ["--config", "/etc/vector/vector.yaml"]
     environment:
@@ -295,6 +308,7 @@ services:
     # well under the limit (rest is page cache). Sized for a 15 GiB host; bump
     # OS_MEM_LIMIT/OPENSEARCH_HEAP in .env when the host grows.
     mem_limit: ${OS_MEM_LIMIT:-3g}
+    cpus: ${OS_CPU_LIMIT:-3}
     environment:
       cluster.name: netops-search
       node.name: opensearch
@@ -339,6 +353,7 @@ services:
     # OSD_MEM_LIMIT. To run leaner, comment this service out and use the in-app
     # Logs view + Grafana instead.
     mem_limit: ${OSD_MEM_LIMIT:-768m}
+    cpus: ${OSD_CPU_LIMIT:-2}
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
       DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
@@ -355,6 +370,7 @@ services:
   victoria:
     image: victoriametrics/victoria-metrics:v1.101.0@sha256:91d0456cc064e195869175074ced2a6849d72531613b320492698e5fe935d10a
     mem_limit: ${VICTORIA_MEM_LIMIT:-1536m}
+    cpus: ${VICTORIA_CPU_LIMIT:-2}
     command:
       - "--retentionPeriod=${VICTORIA_RETENTION:-30d}"
       - "--storageDataPath=/victoria"
@@ -373,6 +389,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
     mem_limit: ${PROMETHEUS_MEM_LIMIT:-512m}
+    cpus: ${PROMETHEUS_CPU_LIMIT:-1.5}
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -388,6 +405,7 @@ services:
   grafana:
     image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
     mem_limit: ${GRAFANA_MEM_LIMIT:-512m}
+    cpus: ${GRAFANA_CPU_LIMIT:-1.5}
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
@@ -427,6 +445,7 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     # CH auto-sizes its server memory to the cgroup limit, so mem_limit is enough.
     mem_limit: ${CLICKHOUSE_MEM_LIMIT:-2560m}
+    cpus: ${CLICKHOUSE_CPU_LIMIT:-3}
     environment:
       CLICKHOUSE_DB: netops
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
@@ -462,6 +481,7 @@ services:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.correlation
     mem_limit: ${CORRELATION_MEM_LIMIT:-768m}
+    cpus: ${CORRELATION_CPU_LIMIT:-2}
     environment:
       KAFKA_BOOTSTRAP: "redpanda:9092"
       OPENSEARCH_URL: "http://opensearch:9200"
@@ -500,6 +520,7 @@ services:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
     mem_limit: ${API_MEM_LIMIT:-512m}
+    cpus: ${API_CPU_LIMIT:-2}
     environment:
       LISTEN_ADDR: ":8080"
       DB_HOST: postgres
@@ -805,6 +826,7 @@ services:
       - --chromium-disable-javascript=true
       - --api-timeout=30s
     mem_limit: ${GOTENBERG_MEM_LIMIT:-768m}
+    cpus: ${GOTENBERG_CPU_LIMIT:-3}
     networks: [netops]
     restart: *restart
 
@@ -895,6 +917,7 @@ services:
     image: netboxcommunity/netbox:v4.1-3.0.2@sha256:d1260201d775b3f1d0b19e425bd19facc1e907e7153a8247d04d996037969e53
     profiles: ["netbox"]
     mem_limit: ${NETBOX_MEM_LIMIT:-1g}
+    cpus: ${NETBOX_CPU_LIMIT:-2}
     depends_on:
       netbox-postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
