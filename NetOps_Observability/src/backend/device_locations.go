@@ -28,9 +28,10 @@ import (
 
 // DeviceLocation is one operator-placed device.
 type DeviceLocation struct {
-	Token     string    `json:"token"`          // primary identity token at save time
-	Device    string    `json:"device"`         // display name (editor convenience, not identity)
-	Site      string    `json:"site,omitempty"` // free-form label; devices sharing it form one map bubble
+	Token     string    `json:"token"`             // primary identity token at save time
+	Aliases   []string  `json:"aliases,omitempty"` // every identity token at save time — drift cleanup
+	Device    string    `json:"device"`            // display name (editor convenience, not identity)
+	Site      string    `json:"site,omitempty"`    // free-form label; devices sharing it form one map bubble
 	Lat       float64   `json:"lat"`
 	Lng       float64   `json:"lng"`
 	UpdatedBy string    `json:"updated_by,omitempty"`
@@ -53,7 +54,7 @@ func (l DeviceLocation) validate() error {
 type deviceLocationStore struct {
 	mu    sync.RWMutex
 	path  string
-	items map[string]DeviceLocation // primary token → location
+	items map[string]DeviceLocation // EVERY identity token (alias) → its record
 }
 
 func newDeviceLocationStore(path string) (*deviceLocationStore, error) {
@@ -78,13 +79,22 @@ func (s *deviceLocationStore) load() error {
 	}
 	for _, l := range list {
 		s.items[l.Token] = l
+		for _, a := range l.Aliases {
+			s.items[a] = l
+		}
 	}
 	return nil
 }
 
 func (s *deviceLocationStore) flushLocked() error {
+	// items is multi-keyed by alias — collapse to one row per record (Token).
+	seen := map[string]bool{}
 	list := make([]DeviceLocation, 0, len(s.items))
 	for _, l := range s.items {
+		if seen[l.Token] {
+			continue
+		}
+		seen[l.Token] = true
 		list = append(list, l)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Token < list[j].Token })
@@ -107,9 +117,10 @@ func (s *deviceLocationStore) Lookup(tokens []string) (DeviceLocation, bool) {
 	return DeviceLocation{}, false
 }
 
-// Upsert stores the annotation under the device's primary token, replacing any
-// entry reachable through the other tokens (so re-saving after a device's
-// primary identity changed doesn't leave a stale duplicate behind).
+// Upsert stores the annotation under EVERY identity token, replacing any
+// record reachable through any of them — including all of that record's own
+// aliases, so a device whose primary identity drifted between saves (new mgmt
+// IP, same serial/name) can't leave a stale ghost behind.
 func (s *deviceLocationStore) Upsert(tokens []string, l DeviceLocation) error {
 	if err := l.validate(); err != nil {
 		return err
@@ -119,26 +130,39 @@ func (s *deviceLocationStore) Upsert(tokens []string, l DeviceLocation) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.deleteReachableLocked(tokens)
+	l.Token = tokens[0]
+	l.Aliases = append([]string(nil), tokens...)
+	l.UpdatedAt = time.Now().UTC()
 	for _, t := range tokens {
+		s.items[t] = l
+	}
+	return s.flushLocked()
+}
+
+// deleteReachableLocked removes every record reachable via any given token,
+// under all of that record's aliases.
+func (s *deviceLocationStore) deleteReachableLocked(tokens []string) bool {
+	found := false
+	for _, t := range tokens {
+		old, ok := s.items[t]
+		if !ok {
+			continue
+		}
+		found = true
+		delete(s.items, old.Token)
+		for _, a := range old.Aliases {
+			delete(s.items, a)
+		}
 		delete(s.items, t)
 	}
-	l.Token = tokens[0]
-	l.UpdatedAt = time.Now().UTC()
-	s.items[l.Token] = l
-	return s.flushLocked()
+	return found
 }
 
 func (s *deviceLocationStore) Delete(tokens []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	found := false
-	for _, t := range tokens {
-		if _, ok := s.items[t]; ok {
-			delete(s.items, t)
-			found = true
-		}
-	}
-	if !found {
+	if !s.deleteReachableLocked(tokens) {
 		return errors.New("no location set for this device")
 	}
 	return s.flushLocked()

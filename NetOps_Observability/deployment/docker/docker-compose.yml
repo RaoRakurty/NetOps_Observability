@@ -416,7 +416,7 @@ services:
   # the resource-exhaustion / restart-loop alerts work without per-service
   # instrumentation. Read-only host mounts.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: gcr.io/cadvisor/cadvisor:v0.49.1@sha256:524779a2661c9ea1b4b87d47fedfc56c3aed182511fcdac031f345a1fd229461
     mem_limit: ${CADVISOR_MEM_LIMIT:-256m}
     cpus: ${CADVISOR_CPU_LIMIT:-1}
     command: ["--housekeeping_interval=15s", "--docker_only=true", "--store_container_labels=false"]
@@ -438,7 +438,7 @@ services:
 
   # node-exporter — host CPU/memory/disk/load/filesystem metrics.
   node-exporter:
-    image: prom/node-exporter:v1.8.2
+    image: prom/node-exporter:v1.8.2@sha256:065914c03336590ebed517e7df38520f0efb44465fde4123c3f6b7328f5a9396
     mem_limit: ${NODE_EXPORTER_MEM_LIMIT:-128m}
     cpus: ${NODE_EXPORTER_CPU_LIMIT:-0.5}
     command:
