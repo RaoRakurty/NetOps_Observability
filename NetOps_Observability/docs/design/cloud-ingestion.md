@@ -153,6 +153,34 @@ correlation engine scores against — supersedes the bare `segment` notion):
 netops/carrier/cloud_provider/app team maps directly from the seam where causality
 localizes); `visibility` keeps the coverage honesty rule enforceable per seam.
 
+**Topology variation lives in the instance, never in the type (owner direction,
+2026-06-11):** a dual-homed DX has the same ownership semantics as a single-homed
+one — the five types stay five. What varies is fault/impact semantics, modeled as
+**redundancy groups**:
+
+```jsonc
+{
+  "seam_id": "dallas-dx-group",
+  "seam_type": "DX",
+  "redundancy_model": "single | active_active | active_standby | hybrid_fallback",
+  "members": [
+    {"member_id": "dx-equinix-da1", "role": "primary",   "circuit": "..."},
+    {"member_id": "dx-equinix-da6", "role": "secondary", "circuit": "..."},
+    {"member_id": "vpn-fallback",   "role": "fallback",  "seam_type": "VPN"}  // cross-type member
+  ]
+}
+```
+
+Consequences: correlation runs at **two levels** (member-level fault localization
++ group-level impact — "circuit-1 down, group held" ⇒ verdict *redundancy-loss /
+capacity-risk*, a different incident than an outage); signatures write against
+**roles, not designs** (`primary`, `fallback`) with optional topology guards
+(`applies_when: redundancy_model != single`); a fallback member of a different
+type inherits the WORSE visibility class while carrying traffic (coverage labels
+must degrade during failover or the health score lies exactly when it matters);
+the bootstrap engine (§4.1) suggests groupings (two DX circuits in one
+VRF/route-table, a VPN whose routes shadow DX prefixes → "members of one group?").
+
 ### 4.1 Seam bootstrap engine — P1, required (owner, 2026-06-11)
 
 An empty seam inventory makes the grounding gate ground against nothing

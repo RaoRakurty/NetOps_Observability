@@ -1,0 +1,231 @@
+"""Hypothesis scoring — pipeline stage [6]+[7] of Correlation Engine v2.
+
+Evaluates the signature catalog over an evidence set (the signals attached to
+one correlation object) and returns a ranked, explainable hypothesis list with
+the object-level outcome. Pure and deterministic: no IO, no wall-clock — same
+evidence + same catalog ⇒ same ranking (replay contract).
+
+Scoring model (#67 §4.5):
+    coverage        = satisfied required clauses / total required
+                      (+0.1 bonus capped, from optional clauses)
+    graph_support   = mean weight of edges connecting the satisfying episodes —
+                      **1.0 until the graph builder (stage [5]) lands**; the
+                      hook is the parameter, declared not hidden
+    contradiction   = a discriminator's 'absent' clause matched evidence →
+                      score ×0.2 AND the else_prefer competitor is force-listed
+    confidence_rank = coverage × graph_support × direction_agreement(=1.0 v0)
+    verdict tier    = verdicts.assess(satisfying signals, required_modalities)
+                      — rank and verdict stay ORTHOGONAL (sacred invariant)
+
+Object outcome: rank-1 below the confidence floor ⇒ ``undetermined`` with
+``evidence_missing`` derived mechanically from the nearest template's
+unsatisfied clauses — no forced root cause, ever.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from catalog import Catalog, Clause, Template
+from signals import Signal
+from verdicts import Verdict as GateVerdict
+from verdicts import VerdictTier, assess
+
+# Config-hash members (P4 replay-driven calibration re-fits; never tuned silently).
+CONTRADICTION_PENALTY = 0.2
+OPTIONAL_BONUS_PER_CLAUSE = 0.05
+OPTIONAL_BONUS_CAP = 0.1
+CONFIDENCE_FLOOR = 0.3   # rank-1 below this ⇒ object outcome 'undetermined'
+TOP_K = 4
+
+
+def clause_matches(clause: Clause, sig: Signal) -> bool:
+    """Total predicate: signal vs one clause. Role constraints need topology
+    context the scorer doesn't have yet — a role-constrained clause matches on
+    the other fields and the gap is declared in the score's notes (honest,
+    not silently strict or silently lax)."""
+    if sig.kind not in clause.kinds():
+        return False
+    if clause.entity_type is not None and sig.entity_type is not clause.entity_type:
+        return False
+    if clause.min_deviation is not None and abs(sig.deviation) < clause.min_deviation:
+        return False
+    return True
+
+
+def _satisfying(clause: Clause, evidence: tuple[Signal, ...]) -> tuple[Signal, ...]:
+    return tuple(s for s in evidence if clause_matches(clause, s))
+
+
+@dataclass(frozen=True)
+class HypothesisScore:
+    """One template's evaluation — every number traceable to named clauses.
+    Renders into corr_objects.hypotheses and the corr_evidence log."""
+
+    template_id: str
+    title: str
+    coverage: float
+    confidence_rank: float
+    contradicted: bool
+    verdict_gate: GateVerdict
+    satisfied: tuple[str, ...]            # clause kinds that matched
+    missing: tuple[str, ...]              # required clause kinds that did not
+    contradictions: tuple[str, ...]       # discriminator kinds found in evidence
+    forced_competitors: tuple[str, ...]   # else_prefer ids that must be shown
+    notes: tuple[str, ...]
+    owner: str
+    first_steps: tuple[str, ...]
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.template_id,
+            "title": self.title,
+            "coverage": round(self.coverage, 4),
+            "confidence": round(self.confidence_rank, 4),
+            "contradicted": self.contradicted,
+            "satisfied": list(self.satisfied),
+            "missing": list(self.missing),
+            "contradictions": list(self.contradictions),
+            "forced_competitors": list(self.forced_competitors),
+            "notes": list(self.notes),
+            "verdict": {
+                "owner": self.owner,
+                "first_steps": list(self.first_steps),
+                **self.verdict_gate.to_dict(),
+            },
+        }
+
+
+def score_template(
+    template: Template,
+    evidence: tuple[Signal, ...],
+    graph_support: float = 1.0,
+    direction_agreement: float = 1.0,
+) -> HypothesisScore:
+    satisfied: list[str] = []
+    missing: list[str] = []
+    notes: list[str] = []
+    matched_signals: list[Signal] = []
+
+    required = [c for c in template.requires if not c.optional]
+    optional = [c for c in template.requires if c.optional]
+
+    for clause in required:
+        hits = _satisfying(clause, evidence)
+        if hits:
+            satisfied.append(clause.kind)
+            matched_signals.extend(hits)
+            if clause.role is not None:
+                notes.append(f"role '{clause.role}' unverified (topology context pending stage [5])")
+        else:
+            missing.append(clause.kind)
+
+    bonus = 0.0
+    for clause in optional:
+        hits = _satisfying(clause, evidence)
+        if hits:
+            satisfied.append(clause.kind)
+            matched_signals.extend(hits)
+            bonus = min(OPTIONAL_BONUS_CAP, bonus + OPTIONAL_BONUS_PER_CLAUSE)
+
+    coverage = (len(required) - len(missing)) / len(required) if required else 0.0
+    coverage = min(1.0, coverage + bonus)
+
+    contradictions: list[str] = []
+    forced: list[str] = []
+    for disc in template.discriminators:
+        if _satisfying(disc.absent, evidence):
+            contradictions.append(disc.absent.kind)
+            forced.append(disc.else_prefer)
+
+    confidence = coverage * graph_support * direction_agreement
+    if contradictions:
+        confidence *= CONTRADICTION_PENALTY
+
+    gate = assess(
+        matched_signals,
+        required_modalities=frozenset(template.required_modalities) or None,
+    )
+
+    return HypothesisScore(
+        template_id=template.id,
+        title=template.title,
+        coverage=coverage,
+        confidence_rank=confidence,
+        contradicted=bool(contradictions),
+        verdict_gate=gate,
+        satisfied=tuple(satisfied),
+        missing=tuple(missing),
+        contradictions=tuple(contradictions),
+        forced_competitors=tuple(forced),
+        notes=tuple(notes),
+        owner=template.verdict.owner,
+        first_steps=template.verdict.first_steps,
+    )
+
+
+@dataclass(frozen=True)
+class RankingResult:
+    """Object-level outcome: ranked top-K (+ forced competitors always shown)
+    and the headline. ``undetermined`` is a first-class result — affected-path
+    confirmation and cause confirmation are independent statements."""
+
+    top_hypothesis: str                   # template id or 'undetermined'
+    verdict_tier: VerdictTier
+    hypotheses: tuple[HypothesisScore, ...]
+    evidence_missing: tuple[str, ...]     # what would confirm (mechanical, not prose)
+    catalog_version: str
+
+    def to_dict(self) -> dict:
+        return {
+            "top_hypothesis": self.top_hypothesis,
+            "verdict_tier": self.verdict_tier.value,
+            "hypotheses": [h.to_dict() for h in self.hypotheses],
+            "evidence_missing": list(self.evidence_missing),
+            "catalog_version": self.catalog_version,
+        }
+
+
+def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> RankingResult:
+    """Score every enabled template; rank by confidence with deterministic
+    tie-break (template id) so equal scores never flap between runs."""
+    ev = tuple(evidence)
+    scores = [score_template(t, ev) for t in catalog.enabled_templates()]
+    scores.sort(key=lambda s: (-s.confidence_rank, s.template_id))
+
+    # Forced competitors must appear in the visible set even if low-ranked
+    # (competing hypotheses by construction — §4.5).
+    visible: list[HypothesisScore] = scores[:TOP_K]
+    visible_ids = {s.template_id for s in visible}
+    forced_ids = {fid for s in visible for fid in s.forced_competitors}
+    for s in scores[TOP_K:]:
+        if s.template_id in forced_ids and s.template_id not in visible_ids:
+            visible.append(s)
+            visible_ids.add(s.template_id)
+
+    if not scores or scores[0].confidence_rank < CONFIDENCE_FLOOR:
+        # No forced root cause. evidence_missing = the unsatisfied required
+        # clauses of the NEAREST templates (best coverage first) — "what would
+        # confirm", derived from data.
+        nearest = sorted(scores, key=lambda s: (-s.coverage, s.template_id))[:2]
+        missing = tuple(dict.fromkeys(
+            f"{s.template_id}: needs {m}" for s in nearest for m in s.missing
+        ))
+        return RankingResult(
+            top_hypothesis="undetermined",
+            verdict_tier=VerdictTier.UNDETERMINED,
+            hypotheses=tuple(visible),
+            evidence_missing=missing,
+            catalog_version=catalog.version_hash(),
+        )
+
+    top = scores[0]
+    return RankingResult(
+        top_hypothesis=top.template_id,
+        verdict_tier=top.verdict_gate.tier,   # rank ≠ verdict: tier comes from the gate
+        hypotheses=tuple(visible),
+        evidence_missing=tuple(
+            f"{top.template_id}: needs {m}" for m in top.missing
+        ) if top.verdict_gate.tier is not VerdictTier.CONFIRMED else (),
+        catalog_version=catalog.version_hash(),
+    )

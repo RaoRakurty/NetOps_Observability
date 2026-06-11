@@ -1,0 +1,9 @@
+{
+  "name": "One weak sub-threshold probe signal: NO forced root cause",
+  "signals": [
+    {"kind": "probe_latency_departure", "entity_type": "segment", "entity_id": "dallas->aws-use1",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe", "deviation": 2.0}
+  ],
+  "expect": {"top": "undetermined", "tier": "undetermined"}
+}

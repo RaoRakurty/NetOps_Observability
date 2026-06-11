@@ -1,0 +1,12 @@
+{
+  "name": "BGP path change + observed path change from a vantage point",
+  "signals": [
+    {"kind": "bgp_path_change", "entity_type": "device", "entity_id": "dallas-edge",
+     "observer_id": "bgp-collector", "observer_type": "platform", "modality": "control_plane"},
+    {"kind": "path_change", "entity_type": "segment", "entity_id": "dallas->aws-use1",
+     "observer_id": "probe-agent-dallas", "observer_type": "vantage_agent",
+     "modality": "active_probe"}
+  ],
+  "expect": {"top": "sig.ent.wan-edge.routing-instability", "tier": "confirmed",
+             "owner": "netops"}
+}

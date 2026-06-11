@@ -1,0 +1,12 @@
+{
+  "name": "All tunnel evidence through ONE controller instance: fate-shared, capped at suspected",
+  "signals": [
+    {"kind": "tunnel_degraded", "entity_type": "path", "entity_id": "tun-dallas-aws",
+     "observer_id": "edge-dallas", "observer_type": "device", "modality": "control_plane",
+     "collection_path": "via_controller:vmanage-1"},
+    {"kind": "synthetic_http_fail", "entity_type": "path", "entity_id": "tun-dallas-aws",
+     "observer_id": "edge-austin", "observer_type": "device", "modality": "active_probe",
+     "collection_path": "via_controller:vmanage-1"}
+  ],
+  "expect": {"top": "sig.ent.wan-edge.tunnel-mtu-blackhole", "tier": "suspected"}
+}
