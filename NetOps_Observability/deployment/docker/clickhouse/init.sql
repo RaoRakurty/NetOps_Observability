@@ -153,6 +153,128 @@ TTL toDateTime(ts) + INTERVAL 30 DAY;
 -- at startup (ensureCHRowPolicies) so existing deployments self-heal.
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- Correlation Engine v2 (#67) — FROZEN schema (build step ①, 2026-06-11).
+-- docs/design/correlation-engine.md §2 is the authoritative spec; this DDL is
+-- mirrored in src/backend/corr_schema.go (self-healing for live deployments)
+-- and guarded by src/backend/corr_schema_test.go. Append-only by design:
+-- never UPDATE/DELETE these rows; new state = new (correlation_id, version).
+-- NO materialized view may read these tables (row policies break MV inserts —
+-- see the flows_hourly note above).
+-- ---------------------------------------------------------------------------
+
+-- 2.1 Normalized signal spine (shared with the #53/#69 unified event feed).
+CREATE TABLE IF NOT EXISTS netops.corr_signals
+(
+    tenant_id      LowCardinality(String) DEFAULT '',  -- '' = platform/global
+    signal_id      UUID,                     -- deterministic: UUIDv5(source, native_id, ts)
+    ts             DateTime64(3),            -- event time (source clock)
+    ingest_ts      DateTime64(3) DEFAULT now64(3),
+    source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
+                         'topology'=5,'syslog'=6,'sot_drift'=7),
+    kind           LowCardinality(String),   -- e.g. probe_loss, if_errors, bgp_peer_down
+    observer_id    LowCardinality(String) DEFAULT '',  -- WHO measured it (independence gate)
+    entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
+                         'site'=5,'service'=6,'prefix'=7),
+    entity_id      String,
+    entity_tokens  Array(String),
+    site           LowCardinality(String) DEFAULT '',
+    path_id        LowCardinality(Nullable(String)),
+    service_id     Nullable(String),         -- NULLABLE from day one (catalog fills at P2)
+    severity       Enum8('info'=0,'warn'=1,'high'=2,'crit'=3),
+    metric_name    LowCardinality(String) DEFAULT '',
+    value          Float64 DEFAULT 0,
+    baseline       Float64 DEFAULT 0,
+    deviation      Float64 DEFAULT 0,
+    attrs          String DEFAULT '{}'       -- JSON, bounded 4 KiB, schema-checked per kind
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
+ORDER BY (tenant_id, ts, source, entity_type, entity_id)
+TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192;
+
+-- 2.2 Correlation objects — versioned, append-only snapshots. No TTL: objects
+-- are queryable forever (replay contract).
+CREATE TABLE IF NOT EXISTS netops.corr_objects
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    correlation_id   UUID,
+    version          UInt32,                 -- monotonic per object
+    state            Enum8('open'=1,'closed'=2,'merged'=3),
+    window_start     DateTime64(3),
+    window_end       DateTime64(3),
+    trigger_signal   UUID,
+    top_hypothesis   String,                 -- template id, or 'undetermined'
+    top_confidence   Float32,                -- heuristic rank, NOT probability
+    verdict_tier     Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
+    hypotheses       String,                 -- JSON ranked top-K incl. modality/observer coverage
+    evidence_missing String DEFAULT '[]',    -- JSON: what would confirm (undetermined honesty)
+    affected         String,                 -- JSON: {devices[],interfaces[],sites[],paths[],services[]}
+    signal_count     UInt32,
+    node_count       UInt16,
+    engine_version   LowCardinality(String), -- semver + config hash → replay contract
+    topology_version LowCardinality(String),
+    catalog_version  LowCardinality(String), -- signature-catalog version scored against
+    merged_into      Nullable(UUID),
+    created_at       DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(window_start))
+ORDER BY (tenant_id, correlation_id, version);
+
+-- "latest snapshot per object" convenience view (plain view: row policies on the
+-- base table evaluate in the reader's context — safe, unlike an MV).
+CREATE VIEW IF NOT EXISTS netops.corr_objects_latest AS
+SELECT * FROM netops.corr_objects
+ORDER BY tenant_id, correlation_id, version DESC
+LIMIT 1 BY tenant_id, correlation_id;
+
+-- 2.3 Graph edges. The owner's grounded-edges hard constraint is enforced by the
+-- CHECK constraint, not by non-Nullability alone: ClickHouse silently coerces an
+-- inserted NULL to the column default ('') via input_format_null_as_default, so
+-- only the CHECK actually rejects an ungrounded edge at the database layer
+-- (verified live at freeze time).
+CREATE TABLE IF NOT EXISTS netops.corr_edges
+(
+    tenant_id       LowCardinality(String) DEFAULT '',
+    correlation_id  UUID,
+    version         UInt32,
+    from_node       String,                  -- episode key: entity_type:entity_id:kind
+    to_node         String,
+    grounding_kind  Enum8('seam'=1,'topo'=2),
+    grounding_ref   String,                  -- seam_id or topology node id
+    weight          Float32,
+    w_temporal      Float32,
+    w_topo          Float32,
+    w_reinforce     Float32,
+    direction_conf  Float32,                 -- 0 = undirected co-occurrence
+    direction_basis LowCardinality(String),  -- onset_order|topo_updown|layer_prior|mixed
+    created_at      DateTime64(3) DEFAULT now64(3),
+    CONSTRAINT grounding_ref_nonempty CHECK grounding_ref != ''
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(created_at))
+ORDER BY (tenant_id, correlation_id, version, from_node, to_node);
+
+-- 2.3 Evidence log — human-readable "why" per edge/hypothesis, written in the
+-- same batch as the snapshot.
+CREATE TABLE IF NOT EXISTS netops.corr_evidence
+(
+    tenant_id       LowCardinality(String) DEFAULT '',
+    correlation_id  UUID,
+    version         UInt32,
+    subject_kind    Enum8('edge'=1,'hypothesis'=2),
+    subject_id      String,
+    signal_id       UUID,
+    role            Enum8('supports'=1,'contradicts'=2,'discriminates'=3),
+    note            String,
+    created_at      DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(created_at))
+ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id);
+
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_flows ON netops.flows
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
@@ -160,5 +282,17 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_findings ON netops.findings
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_tunnels ON netops.tunnels
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals ON netops.corr_signals
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_objects ON netops.corr_objects
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_edges ON netops.corr_edges
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_evidence ON netops.corr_evidence
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;

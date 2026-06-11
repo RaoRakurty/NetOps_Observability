@@ -78,7 +78,19 @@ graphs embed the version they scored against (§8 staleness).
 
 ---
 
-## 2. Canonical objects and storage design
+## 2. Canonical objects and storage design — **FROZEN (build step ①, 2026-06-11)**
+
+> The DDL below is the build artifact: mirrored verbatim in
+> `deployment/docker/clickhouse/init.sql` (fresh installs) +
+> `src/backend/corr_schema.go` (self-healing on live deployments) +
+> `src/backend/migrations/0009_correlation_engine.sql` (PG), and guarded by the
+> freeze contract test `src/backend/corr_schema_test.go`. House conventions applied
+> at freeze: partitions lead with `tenant_id` (at-rest separation, #20 Phase 3);
+> edges/evidence gained `created_at` (the draft's `toYYYYMM(now())` partition was
+> non-deterministic); templates PK is `(tenant_id, id)` so a tenant can shadow a
+> built-in signature id; `corr_objects` carries `verdict_tier` + `evidence_missing`
+> (pre-freeze amendments). NO materialized view may ever read these tables (row
+> policies error MV inserts — the flows_hourly lesson).
 
 ### 2.1 Normalized signal (the spine — shared with #53's event feed)
 
@@ -111,7 +123,7 @@ CREATE TABLE corr_signals (
     deviation      Float64,                         -- z-score (signed)
     attrs          String                           -- JSON, bounded 4 KiB, schema-checked per kind
 ) ENGINE = MergeTree
-PARTITION BY toYYYYMMDD(ts)
+PARTITION BY (tenant_id, toYYYYMMDD(ts))      -- house rule: tenant leads (#20 P3)
 ORDER BY (tenant_id, ts, source, entity_type, entity_id)
 TTL toDateTime(ts) + INTERVAL 30 DAY;
 ```
@@ -138,9 +150,13 @@ CREATE TABLE corr_objects (
     window_start     DateTime64(3),
     window_end       DateTime64(3),                 -- advances while open
     trigger_signal   UUID,                          -- first episode that opened the object
-    top_hypothesis   String,                        -- template id, e.g. 'sig.wan_congestion'
+    top_hypothesis   String,                        -- template id, or 'undetermined'
     top_confidence   Float32,                       -- 0..1 heuristic rank (NOT probability)
-    hypotheses       String,                        -- JSON: ranked top-K [{id, confidence, coverage, contradicted}]
+    verdict_tier     Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
+                                                    -- rank ≠ verdict invariant (§4.5)
+    hypotheses       String,                        -- JSON: ranked top-K [{id, confidence, coverage,
+                                                    --   modality_coverage, observer_coverage, contradicted}]
+    evidence_missing String,                        -- JSON: what would confirm (undetermined honesty)
     affected         String,                        -- JSON: {devices[], interfaces[], sites[], paths[], services[]}
     signal_count     UInt32,
     node_count       UInt16,
@@ -152,7 +168,7 @@ CREATE TABLE corr_objects (
     merged_into      Nullable(UUID),
     created_at       DateTime64(3)
 ) ENGINE = MergeTree
-PARTITION BY toYYYYMM(window_start)
+PARTITION BY (tenant_id, toYYYYMM(window_start))  -- no TTL: queryable forever (replay)
 ORDER BY (tenant_id, correlation_id, version);
 -- "latest" = argMax(version) view:
 CREATE VIEW corr_objects_latest AS
@@ -177,9 +193,11 @@ CREATE TABLE corr_edges (
     w_topo          Float32,
     w_reinforce     Float32,
     direction_conf  Float32,                        -- 0 = undirected co-occurrence
-    direction_basis String                          -- 'onset_order'|'topo_updown'|'layer_prior'|'mixed'
+    direction_basis LowCardinality(String),         -- 'onset_order'|'topo_updown'|'layer_prior'|'mixed'
+    created_at      DateTime64(3)                   -- freeze fix: draft's toYYYYMM(now())
+                                                    -- partition was non-deterministic
 ) ENGINE = MergeTree
-PARTITION BY toYYYYMM(now())
+PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, from_node, to_node);
 
 CREATE TABLE corr_evidence (
@@ -190,8 +208,10 @@ CREATE TABLE corr_evidence (
     subject_id      String,                         -- edge key or template id
     signal_id       UUID,
     role            Enum8('supports'=1,'contradicts'=2,'discriminates'=3),
-    note            String                          -- human-readable "why": rendered in UI evidence log
+    note            String,                         -- human-readable "why": rendered in UI evidence log
+    created_at      DateTime64(3)
 ) ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id);
 ```
 
@@ -216,11 +236,13 @@ CREATE TABLE corr_active (
     incident_id     TEXT                             -- link once promoted to an incident
 );
 CREATE TABLE corr_hypothesis_templates (             -- the failure-signature catalog, AS DATA
-    id              TEXT PRIMARY KEY,                -- 'sig.wan_congestion'
-    tenant_id       TEXT NOT NULL DEFAULT '',        -- '' = built-in/platform; tenants may add their own
+    tenant_id       TEXT NOT NULL DEFAULT '',        -- '' = built-in/platform set
+    id              TEXT NOT NULL,                   -- 'sig.wan_congestion'
     version         INT NOT NULL,
     enabled         BOOLEAN NOT NULL DEFAULT true,
-    spec            JSONB NOT NULL                   -- declarative predicate, §4.5
+    spec            JSONB NOT NULL,                  -- declarative predicate, §4.5
+    PRIMARY KEY (tenant_id, id)                      -- freeze fix: tenant can SHADOW a
+                                                     -- built-in signature id with its own
 );
 ```
 
