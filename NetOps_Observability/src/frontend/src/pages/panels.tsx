@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import { api, Alert, MetricTile, PromRangeResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
+import { api, Alert, MetricTile, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
@@ -280,6 +280,121 @@ function fmtBps(v: number): string {
   return `${n.toFixed(n < 10 && i > 0 ? 2 : 0)} ${u[i]}`;
 }
 
+// ---- WAN interfaces — continuous live telemetry ------------------------------
+// Identifies WAN/edge ports by device-name pattern (no ifName label exists in
+// the SNMP metric set, so device identity is the reliable selector; the
+// pattern is editable + persisted). Polls every 10s: aggregate in/out bps
+// trend plus a per-interface live table (throughput, utilization vs ifSpeed,
+// error rate, oper status).
+const WAN_PATTERN_KEY = "netops.overview.wanPattern";
+
+function WanInterfaces() {
+  const [pattern, setPattern] = useState<string>(() => localStorage.getItem(WAN_PATTERN_KEY) || "wan|edge|dmz|gw");
+  const [draft, setDraft] = useState(pattern);
+  const sel = `{device=~"(?i).*(${pattern}).*"}`;
+
+  const data = usePolled(async () => {
+    const [s0, e0, st0] = nowWindow(1800, 30);
+    const [trIn, trOut, inb, outb, speed, errs, oper] = await Promise.all([
+      api.metricsQueryRange(`sum(rate(device_if_in_octets${sel}[2m]))*8`, s0, e0, st0).catch(() => undefined),
+      api.metricsQueryRange(`sum(rate(device_if_out_octets${sel}[2m]))*8`, s0, e0, st0).catch(() => undefined),
+      api.metricsQuery(`rate(device_if_in_octets${sel}[2m])*8`).catch(() => undefined),
+      api.metricsQuery(`rate(device_if_out_octets${sel}[2m])*8`).catch(() => undefined),
+      api.metricsQuery(`device_if_speed${sel}`).catch(() => undefined),
+      api.metricsQuery(`rate(device_if_in_errors${sel}[5m]) + rate(device_if_out_errors${sel}[5m]) + rate(device_if_in_discards${sel}[5m]) + rate(device_if_out_discards${sel}[5m])`).catch(() => undefined),
+      api.metricsQuery(`device_if_oper_status${sel}`).catch(() => undefined),
+    ]);
+    return { trIn, trOut, inb, outb, speed, errs, oper };
+  }, 10000);
+
+  const key = (m: Record<string, string>) => `${m.device}#${m.index}`;
+  const idx = (r?: PromInstantResponse) => {
+    const out: Record<string, number> = {};
+    for (const x of r?.data?.result ?? []) out[key(x.metric)] = Number(x.value?.[1]);
+    return out;
+  };
+  const inB = idx(data?.inb), outB = idx(data?.outb), spd = idx(data?.speed), erR = idx(data?.errs), opS = idx(data?.oper);
+  type Row = { k: string; device: string; ifx: string; inb: number; outb: number; util: number; errs: number; up: boolean };
+  const rows: Row[] = (data?.inb?.data?.result ?? []).map((x) => {
+    const k = key(x.metric);
+    const speedBps = (spd[k] || 0) * 1e6; // device_if_speed is ifHighSpeed (Mbps)
+    const maxBps = Math.max(inB[k] || 0, outB[k] || 0);
+    return {
+      k, device: x.metric.device, ifx: x.metric.index,
+      inb: inB[k] || 0, outb: outB[k] || 0,
+      util: speedBps > 0 ? (maxBps / speedBps) * 100 : 0,
+      errs: erR[k] || 0,
+      up: (opS[k] ?? 1) === 1,
+    };
+  }).sort((a, b) => b.util - a.util || (b.inb + b.outb) - (a.inb + a.outb)).slice(0, 8);
+
+  const toSeries = (r?: PromRangeResponse) => (r?.data?.result?.[0]?.values ?? []).map((v) => [v[0] * 1000, Number(v[1])]);
+  const inS = toSeries(data?.trIn), outS = toSeries(data?.trOut);
+  const totIn = rows.reduce((a, r) => a + r.inb, 0), totOut = rows.reduce((a, r) => a + r.outb, 0);
+  const down = rows.filter((r) => !r.up).length;
+  const worst = rows.length ? Math.max(...rows.map((r) => r.util)) : 0;
+
+  const applyPattern = () => {
+    const v = draft.trim() || "wan";
+    setPattern(v); localStorage.setItem(WAN_PATTERN_KEY, v);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span className="badge good" title="Polling every 10 seconds">● LIVE · 10s</span>
+        <span className="mini-meta">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+          <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyPattern()}
+            title="WAN device pattern (regex on device name)" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
+          <button className="dash-btn" style={{ padding: "3px 8px", fontSize: 12 }} onClick={applyPattern}>Apply</button>
+        </span>
+      </div>
+      {inS.length === 0 && rows.length === 0 ? (
+        <Empty msg={`No interfaces match device pattern “${pattern}” — adjust it (regex, e.g. wan|edge|dmz).`} />
+      ) : (
+        <>
+          <ReactECharts
+            style={{ height: 150 }}
+            option={{
+              ...chartBase,
+              grid: { left: 60, right: 10, top: 8, bottom: 20 },
+              tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtBps(v) },
+              legend: { show: false },
+              xAxis: { type: "time", ...axisStyle },
+              yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBps(v) } },
+              series: [
+                { name: "In", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(0), width: 2 }, itemStyle: { color: paletteColor(0) }, areaStyle: { color: areaGradient(0) }, data: inS },
+                { name: "Out", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(2), width: 2 }, itemStyle: { color: paletteColor(2) }, data: outS },
+              ],
+            }}
+          />
+          <table className="mini-table">
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.k}>
+                  <td><span className="dot" style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: r.up ? "var(--good)" : "var(--bad)", marginRight: 6 }} />
+                    <span className="mono">{r.device}</span> <span className="mini-meta">if{r.ifx}</span></td>
+                  <td style={{ textAlign: "right" }} className="mono">↓ {fmtBps(r.inb)}</td>
+                  <td style={{ textAlign: "right" }} className="mono">↑ {fmtBps(r.outb)}</td>
+                  <td style={{ width: 110 }}>
+                    <div className="bar-track" style={{ background: "var(--surface-2)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+                      <div style={{ width: `${Math.min(100, r.util)}%`, height: "100%", borderRadius: 4,
+                        background: r.util >= 90 ? "var(--bad)" : r.util >= 70 ? "var(--warn)" : "var(--accent)" }} />
+                    </div>
+                  </td>
+                  <td style={{ textAlign: "right", width: 70 }} className={r.util >= 90 ? "mono" : "mini-meta mono"}>{r.util.toFixed(1)}%</td>
+                  <td style={{ textAlign: "right", width: 80 }} className="mini-meta mono" title="errors+discards per second">{r.errs > 0.005 ? `${r.errs.toFixed(2)}/s` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TopHosts() {
   const { navigate } = useShell();
   const res = usePolled(() => api.topTalkers(3600, 8), 30000);
@@ -511,6 +626,7 @@ export const PANELS: Record<string, PanelDef> = {
   "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_mem_percent or (100 * device_mem_used_bytes / (device_mem_used_bytes + device_mem_free_bytes)) or (100 * (device_mem_total_kb - device_mem_available_kb) / device_mem_total_kb))" />, drill: "explore/metrics" },
   "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(device_storage_used) / sum(device_storage_size)" />, drill: "explore/metrics" },
   "gauge-network": { type: "gauge-network", title: "Bandwidth utilization", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(rate(device_if_in_octets[5m]) * 8) / sum(device_if_speed * 1000000)" />, drill: "explore/metrics" },
+  "wan-interfaces": { type: "wan-interfaces", title: "WAN interfaces — live", defaultSpan: 8, category: "Traffic", render: () => <WanInterfaces />, drill: "infrastructure/ifperf" },
   "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity />, drill: "alerts/active" },
   "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts />, drill: "alerts/active" },
   incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents />, drill: "alerts/incidents" },
@@ -527,7 +643,7 @@ export const PANEL_CATEGORIES: { category: PanelCategory; types: string[] }[] = 
   { category: "Health & KPIs", types: ["kpis", "site-availability", "stack-performance"] },
   { category: "Resources", types: ["gauge-cpu", "gauge-mem", "gauge-storage", "gauge-network"] },
   { category: "Alerts", types: ["alerts-severity", "active-alerts", "incidents"] },
-  { category: "Traffic", types: ["traffic", "top-hosts", "flows-proto", "tunnels-health"] },
+  { category: "Traffic", types: ["wan-interfaces", "traffic", "top-hosts", "flows-proto", "tunnels-health"] },
   { category: "Inventory", types: ["devices-vendor"] },
   { category: "Topology", types: ["topology"] },
 ];

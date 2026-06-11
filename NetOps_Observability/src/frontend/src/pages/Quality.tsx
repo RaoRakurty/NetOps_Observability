@@ -20,8 +20,8 @@ const discRate = `topk(10, (rate(device_if_in_discards[5m]) + rate(device_if_out
 
 // Count of interfaces at/above a utilization threshold in either direction.
 const utilCount = (thr: number) =>
-  `count((rate(device_if_in_octets[5m]) * 8 * 100 / device_if_speed >= ${thr}) ` +
-  `or (rate(device_if_out_octets[5m]) * 8 * 100 / device_if_speed >= ${thr})) or vector(0)`;
+  `count((rate(device_if_in_octets[5m]) * 8 * 100 / (device_if_speed * 1000000) >= ${thr}) ` +
+  `or (rate(device_if_out_octets[5m]) * 8 * 100 / (device_if_speed * 1000000) >= ${thr})) or vector(0)`;
 
 const num = (v: unknown) => Number(v) || 0;
 
@@ -140,8 +140,8 @@ export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricStat label="Interfaces ≥ 60% util" query={utilCount(60)} minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "warn" : "good")} />
         </StatStrip>
         <div className="dm-grid">
-          <MetricTop title="Saturation risk — inbound peak (util %)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / device_if_speed)" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "index"]} />
-          <MetricTop title="Saturation risk — outbound peak (util %)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / device_if_speed)" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "index"]} />
+          <MetricTop title="Saturation risk — inbound peak (util %)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "index"]} />
+          <MetricTop title="Saturation risk — outbound peak (util %)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "index"]} />
         </div>
       </Group>
 

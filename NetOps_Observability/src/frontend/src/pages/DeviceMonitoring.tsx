@@ -329,8 +329,8 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
       <Group title="Throughput & line speed" hue="#14B8A6">
         <div className="dm-grid">
           <MetricLine title="Device aggregate throughput (bps)" query="sum by (device) (rate(device_if_in_octets[5m]) * 8 + rate(device_if_out_octets[5m]) * 8)" minutes={m} fmtY={fmtBps} labelKeys={["device"]} />
-          <MetricTop title="Highest inbound utilization (%)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / device_if_speed)" minutes={m} fmtX={fmtPct} labelKeys={["device", "index"]} />
-          <MetricTop title="Highest outbound utilization (%)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / device_if_speed)" minutes={m} fmtX={fmtPct} labelKeys={["device", "index"]} />
+          <MetricTop title="Highest inbound utilization (%)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={fmtPct} labelKeys={["device", "index"]} />
+          <MetricTop title="Highest outbound utilization (%)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={fmtPct} labelKeys={["device", "index"]} />
         </div>
       </Group>
 

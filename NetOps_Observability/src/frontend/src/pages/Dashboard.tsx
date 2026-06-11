@@ -26,7 +26,7 @@ type Item = { key: string; type: string; span: number };
 // Bumped to v4: denser, fuller default board (more panels, smaller spans) so
 // the Overview reads like a packed NOC wall rather than a sparse page. Older
 // custom layouts are superseded once on upgrade.
-const LS_KEY = "netops.overview.layout.v4";
+const LS_KEY = "netops.overview.layout.v5"; // v5: + live WAN-interfaces panel
 
 // A rich, dense default in NOC reading order: top-line KPIs, then what's wrong
 // right now (severity), resource gauges, a traffic row, an inventory/health row,
@@ -38,6 +38,7 @@ const DEFAULT_LAYOUT: Item[] = [
   { key: "d-mem", type: "gauge-mem", span: 3 },
   { key: "d-sto", type: "gauge-storage", span: 3 },
   { key: "d-net", type: "gauge-network", span: 3 },
+  { key: "d-wan", type: "wan-interfaces", span: 8 },
   { key: "d-traffic", type: "traffic", span: 8 },
   { key: "d-tophosts", type: "top-hosts", span: 4 },
   { key: "d-proto", type: "flows-proto", span: 4 },
