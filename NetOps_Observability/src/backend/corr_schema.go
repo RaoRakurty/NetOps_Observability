@@ -8,7 +8,13 @@ package main
 //
 // Freeze invariants (guarded by corr_schema_test.go):
 //   - every table is tenant-partitioned (tenant_id leads the PARTITION BY)
-//   - corr_signals carries observer_id (evidence-independence gate, §4.5)
+//   - corr_signals carries the MANDATORY observer block (observer_id/type/
+//     location/trust_domain, collection_path, modality_class,
+//     source_clock_quality) with CHECK observer_id != '' — the evidence-
+//     independence gate (§4.5) and fate-sharing analysis depend on it
+//   - corr_signals_archive mirrors corr_signals + archiving provenance, NO TTL:
+//     replay re-runs over signals, so every persisted object's full window
+//     slice is archived forever while the hot spine keeps a 30-day TTL
 //   - corr_objects carries catalog_version (replay contract, research C6)
 //     and verdict_tier + evidence_missing (pre-freeze amendments)
 //   - corr_edges grounding_ref carries a CHECK nonempty constraint — non-Nullable
@@ -18,17 +24,25 @@ package main
 //   - NO materialized view reads these tables (row policies break MV inserts)
 
 func corrSchemaDDL() []string {
-	return []string{
-		`CREATE TABLE IF NOT EXISTS netops.corr_signals
-(
-    tenant_id      LowCardinality(String) DEFAULT '',
+	// Shared column block: corr_signals (hot spine, 30 d TTL) and
+	// corr_signals_archive (replay input, no TTL) must stay structurally
+	// identical — replay reads archive ∪ hot deduped by signal_id.
+	const signalColumns = `    tenant_id      LowCardinality(String) DEFAULT '',
     signal_id      UUID,
     ts             DateTime64(3),
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7),
     kind           LowCardinality(String),
-    observer_id    LowCardinality(String) DEFAULT '',
+    observer_id    LowCardinality(String),
+    observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
+                         'flow_exporter'=4,'platform'=5),
+    observer_location     LowCardinality(String) DEFAULT '',
+    observer_trust_domain LowCardinality(String) DEFAULT '',
+    collection_path       LowCardinality(String) DEFAULT 'direct',
+    modality_class Enum8('active_probe'=1,'passive_flow'=2,
+                         'control_plane'=3,'device_telemetry'=4),
+    source_clock_quality LowCardinality(String) DEFAULT 'unknown',
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7),
     entity_id      String,
@@ -41,12 +55,33 @@ func corrSchemaDDL() []string {
     value          Float64 DEFAULT 0,
     baseline       Float64 DEFAULT 0,
     deviation      Float64 DEFAULT 0,
-    attrs          String DEFAULT '{}'
+    attrs          String DEFAULT '{}'`
+
+	return []string{
+		`CREATE TABLE IF NOT EXISTS netops.corr_signals
+(
+` + signalColumns + `,
+    CONSTRAINT observer_required CHECK observer_id != ''
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, source, entity_type, entity_id)
 TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192`,
+
+		// Replay input archive: the FULL window slice of every persisted object
+		// (not just attached signals — candidate-pool decisions depend on
+		// non-attached episodes). Written at pipeline stage [8]; never TTLed.
+		`CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
+(
+` + signalColumns + `,
+    archived_for   UUID,
+    archived_at    DateTime64(3) DEFAULT now64(3),
+    CONSTRAINT observer_required CHECK observer_id != ''
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(ts))
+ORDER BY (tenant_id, ts, signal_id)
 SETTINGS index_granularity = 8192`,
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_objects
@@ -120,6 +155,7 @@ PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
 
 		chRowPolicyDDL("corr_signals"),
+		chRowPolicyDDL("corr_signals_archive"),
 		chRowPolicyDDL("corr_objects"),
 		chRowPolicyDDL("corr_edges"),
 		chRowPolicyDDL("corr_evidence"),

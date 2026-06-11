@@ -164,6 +164,9 @@ TTL toDateTime(ts) + INTERVAL 30 DAY;
 -- ---------------------------------------------------------------------------
 
 -- 2.1 Normalized signal spine (shared with the #53/#69 unified event feed).
+-- The OBSERVER BLOCK is mandatory (owner review): confirmation depends on observer
+-- independence, so observation provenance is non-optional — the normalizer
+-- dead-letters records it cannot stamp; CHECK observer_id != '' backstops here.
 CREATE TABLE IF NOT EXISTS netops.corr_signals
 (
     tenant_id      LowCardinality(String) DEFAULT '',  -- '' = platform/global
@@ -173,7 +176,16 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7),
     kind           LowCardinality(String),   -- e.g. probe_loss, if_errors, bgp_peer_down
-    observer_id    LowCardinality(String) DEFAULT '',  -- WHO measured it (independence gate)
+    observer_id    LowCardinality(String),   -- WHO measured it (independence gate)
+    observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
+                         'flow_exporter'=4,'platform'=5),
+    observer_location     LowCardinality(String) DEFAULT '',  -- site / cloud region
+    observer_trust_domain LowCardinality(String) DEFAULT '',  -- enterprise|cloud_tenant|platform
+    collection_path       LowCardinality(String) DEFAULT 'direct', -- fate-sharing analysis:
+                                              -- direct|via_controller|via_cloud_api|via_aggregator
+    modality_class Enum8('active_probe'=1,'passive_flow'=2,
+                         'control_plane'=3,'device_telemetry'=4),  -- C4 verdict gate
+    source_clock_quality LowCardinality(String) DEFAULT 'unknown', -- ntp|ptp|free_running|unknown
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7),
     entity_id      String,
@@ -186,12 +198,60 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals
     value          Float64 DEFAULT 0,
     baseline       Float64 DEFAULT 0,
     deviation      Float64 DEFAULT 0,
-    attrs          String DEFAULT '{}'       -- JSON, bounded 4 KiB, schema-checked per kind
+    attrs          String DEFAULT '{}',      -- JSON, bounded 4 KiB, schema-checked per kind
+    CONSTRAINT observer_required CHECK observer_id != ''
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, source, entity_type, entity_id)
 TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192;
+
+-- 2.1b Replay input archive (owner review — closes the replay/TTL gap): the FULL
+-- window slice of every persisted object, written at pipeline stage [8] with the
+-- snapshot. Whole window, not just attached signals — candidate-pool decisions
+-- depend on non-attached episodes, so a participating-only archive would break
+-- bit-perfect replay. NO TTL: objects are re-runnable forever; non-participating
+-- hot-spine signals age out at 30 days (the honest, stated guarantee). Columns
+-- mirror corr_signals exactly + archiving provenance.
+CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
+(
+    tenant_id      LowCardinality(String) DEFAULT '',
+    signal_id      UUID,
+    ts             DateTime64(3),
+    ingest_ts      DateTime64(3) DEFAULT now64(3),
+    source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
+                         'topology'=5,'syslog'=6,'sot_drift'=7),
+    kind           LowCardinality(String),
+    observer_id    LowCardinality(String),
+    observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
+                         'flow_exporter'=4,'platform'=5),
+    observer_location     LowCardinality(String) DEFAULT '',
+    observer_trust_domain LowCardinality(String) DEFAULT '',
+    collection_path       LowCardinality(String) DEFAULT 'direct',
+    modality_class Enum8('active_probe'=1,'passive_flow'=2,
+                         'control_plane'=3,'device_telemetry'=4),
+    source_clock_quality LowCardinality(String) DEFAULT 'unknown',
+    entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
+                         'site'=5,'service'=6,'prefix'=7),
+    entity_id      String,
+    entity_tokens  Array(String),
+    site           LowCardinality(String) DEFAULT '',
+    path_id        LowCardinality(Nullable(String)),
+    service_id     Nullable(String),
+    severity       Enum8('info'=0,'warn'=1,'high'=2,'crit'=3),
+    metric_name    LowCardinality(String) DEFAULT '',
+    value          Float64 DEFAULT 0,
+    baseline       Float64 DEFAULT 0,
+    deviation      Float64 DEFAULT 0,
+    attrs          String DEFAULT '{}',
+    archived_for   UUID,                     -- correlation_id whose window slice this is
+    archived_at    DateTime64(3) DEFAULT now64(3),
+    CONSTRAINT observer_required CHECK observer_id != ''
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(ts))
+ORDER BY (tenant_id, ts, signal_id)
 SETTINGS index_granularity = 8192;
 
 -- 2.2 Correlation objects — versioned, append-only snapshots. No TTL: objects
@@ -285,6 +345,9 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_tunnels ON netops.tunnels
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals ON netops.corr_signals
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals_archive ON netops.corr_signals_archive
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_objects ON netops.corr_objects

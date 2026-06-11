@@ -46,10 +46,10 @@ strength" / "evidence coverage", never "probability the cause is X".
                                        ▼ (Vector http_server,          │ (tenant-scoped proxy,
                               snmptrap pattern)                        │  same backend_client TLS)
  syslog-ng ─┐                          │                               │
- goflow2 ───┤→ Vector agg → Redpanda ──┼── netops.flows ──┐    ┌───────┴───────┐
- telegraf ──┘                          └── netops.events ─┤    │  Correlation  │
- prober (STAMP/ICMP/HTTP) → netops.metrics ───────────────┼──▶ │  Engine v2    │
- gNMI ────────────────────→ netops.metrics ───────────────┘    │  (Python,     │
+ goflow2 ───┤→ Vector agg → Redpanda ──┼── rp.telemetry.flows ─┐  ┌────┴──────────┐
+ telegraf ──┘                          └── rp.platform.events ─┤  │  Correlation  │
+ prober (STAMP/ICMP/HTTP) → rp.telemetry.metrics ──────────────┼─▶│  Engine v2    │
+ gNMI ────────────────────→ rp.telemetry.metrics ──────────────┘  │  (Python,     │
                                                                │  src/correlation)
                                                                └───┬───────┬───┘
                                                  ClickHouse ◀──────┘       └──────▶ Postgres
@@ -58,11 +58,22 @@ strength" / "evidence coverage", never "probability the cause is X".
                                                   append-only, replay)             hypothesis templates)
 ```
 
+**Topic naming (owner review, 2026-06-11):** bus topics and storage tables must
+not share names — `netops.flows` is a ClickHouse table, so the Kafka topic cannot
+also be `netops.flows`. Canonical scheme: **`rp.telemetry.*`** (flows, metrics,
+logs) for raw telemetry transit, **`rp.platform.*`** (events, events.dlq) for
+platform-generated events. Storage keeps its names: ClickHouse `netops.flows` +
+`corr_*`, VictoriaMetrics raw metrics, OpenSearch raw logs, Postgres
+`corr_active`/templates. The currently-live Vector topics (`netops.flows`,
+`netops.metrics`, `netops.syslog`, `netops.snmptrap`) are **legacy names — renamed
+to the `rp.*` scheme at engine-P1 wiring** (one coordinated vector.yaml/router
+change; the engine subscribes to `rp.*` names only, never the legacy ones).
+
 Component responsibilities:
 
 | Component | Responsibility |
 |---|---|
-| **Vector / Redpanda** (exists) | Transport. No correlation logic. New topic `netops.events` for alert-state transitions + topology/discovery/SoT-drift events pushed by the Go API via the existing Vector `http_server` pattern (same as snmptrap :8688). |
+| **Vector / Redpanda** (exists) | Transport. No correlation logic. New topic `rp.platform.events` for alert-state transitions + topology/discovery/SoT-drift events pushed by the Go API via the existing Vector `http_server` pattern (same as snmptrap :8688). |
 | **Normalizer** (new, in engine) | Every consumed record → one `Signal` in the canonical schema (§2.1). Stamps tenant via the existing `device_tenant.csv` enrichment. Assigns event-time, source watermark. |
 | **Episode detector** (evolves existing z-score) | Turns continuous metric streams into bounded **anomaly episodes** (onset/clear with CUSUM-style hysteresis, §4.1). Discrete signals (alerts, topology changes) pass through as point episodes. |
 | **Window manager** (new) | Sliding co-occurrence windows 30 s / 5 m / 1 h per tenant; watermark + allowed-lateness; storm-mode degradation (§8). |
@@ -71,10 +82,14 @@ Component responsibilities:
 | **Persistence** (new) | Versioned snapshots to ClickHouse (append-only), active-state registry to Postgres (RLS). Idempotent writes keyed (correlation_id, version). |
 | **Go API** | Public query surface `/api/correlations*` (authz, tenant scoping — engine itself trusts nothing, Go re-checks); pushes alert/topology events onto the bus; WebSocket hub emits object updates to the UI. |
 
-Topology input: the engine pulls the topology graph + path/segment inventory from the
-Go API on an interval (same `backend_client` mTLS seam in reverse — engine→API GET,
-already how it reads enrichment). Each pull is versioned (`topology_version` = hash);
-graphs embed the version they scored against (§8 staleness).
+Topology input — **two triggers, not one** (owner review 2026-06-11): the engine
+pulls the topology graph + seam inventory from the Go API on an interval (same
+`backend_client` mTLS seam in reverse) as the *safety net*, AND consumes
+`topology_delta` / `sot_drift` events on `rp.platform.events` as the *immediate
+invalidation trigger* — a delta event refreshes the cached topology/seam model at
+once instead of scoring against a stale graph until the next pull. Each refresh is
+versioned (`topology_version` = hash); graphs embed the version they scored against
+(§8 staleness rules unchanged: the admission gate never relaxes).
 
 ---
 
@@ -105,10 +120,21 @@ CREATE TABLE corr_signals (
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7),
     kind           LowCardinality(String),          -- e.g. probe_loss, if_errors, bgp_peer_down
-    observer_id    LowCardinality(String),          -- WHO measured it: the device itself
-                                                    -- (snmp/gnmi/syslog), vantage-agent id,
-                                                    -- cloud API account, flow exporter —
-                                                    -- evidence-independence gate (§4.5)
+    -- Observer block (MANDATORY, owner review 2026-06-11) — confirmation depends on
+    -- observer independence, so observation provenance is non-optional:
+    observer_id    LowCardinality(String),          -- WHO measured it (CHECK != '')
+    observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
+                         'flow_exporter'=4,'platform'=5),
+    observer_location     LowCardinality(String),   -- site / cloud region of the observer
+    observer_trust_domain LowCardinality(String),   -- enterprise|cloud_tenant|platform
+    collection_path       LowCardinality(String),   -- direct|via_controller|via_cloud_api|
+                                                    -- via_aggregator — fate-sharing analysis:
+                                                    -- two signals via the same SD-WAN
+                                                    -- controller are NOT independent
+    modality_class Enum8('active_probe'=1,'passive_flow'=2,
+                         'control_plane'=3,'device_telemetry'=4),  -- C4 gate, explicit
+    source_clock_quality LowCardinality(String),    -- ntp|ptp|free_running|unknown —
+                                                    -- widens onset uncertainty (§4.1)
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7),
     entity_id      String,                          -- canonical id within type
@@ -136,6 +162,36 @@ Notes:
   episodes + discrete events), not the firehose — bounded by design.
 - This table IS the #53 unified event feed's backing store; the Events Explorer reads
   it directly. One spine, two consumers.
+- **Observer block is mandatory**: the normalizer dead-letters any record it cannot
+  stamp with `observer_id`/`modality_class` — guessed provenance would silently
+  corrupt the independence gate. `CHECK observer_id != ''` backstops at the DB.
+
+**Replay retention (owner review 2026-06-11 — closes the hidden replay gap):**
+`corr_objects` has no TTL, but replay re-runs the engine over `corr_signals[window]`
+— which has a 30-day TTL. Without a fix, "replayable forever" would silently become
+"replayable for 30 days". Tiered retention:
+
+| Data | Retention | Why |
+|---|---|---|
+| `corr_objects` / `corr_edges` / `corr_evidence` | **no TTL** | the verdict + its explanation, forever |
+| `corr_signals_archive` — full window slice of every persisted object | **no TTL** | replay input, forever; written at stage [8] alongside the snapshot (the *whole* window, not just attached signals — candidate-pool decisions depend on non-attached episodes too, so a participating-only archive would break bit-perfect replay) |
+| `corr_signals` (hot spine) | 30 days | event feed + recent correlation |
+| raw firehose (flows/VM/OS) | normal store retention | not replay input |
+
+Replay guarantee, stated honestly in product copy: **objects are re-runnable
+forever; signals outside any object's window age out at 30 days.** Reads dedup
+archive ∪ hot by `signal_id` (deterministic ids make this exact).
+
+```sql
+-- Same columns as corr_signals, plus provenance of the archiving snapshot; no TTL.
+CREATE TABLE corr_signals_archive (
+    /* …all corr_signals columns… */
+    archived_for   UUID,                            -- correlation_id whose window slice this is
+    archived_at    DateTime64(3)
+) ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(ts))
+ORDER BY (tenant_id, ts, signal_id);
+```
 
 ### 2.2 Correlation object (versioned snapshots)
 
@@ -246,38 +302,69 @@ CREATE TABLE corr_hypothesis_templates (             -- the failure-signature ca
 );
 ```
 
-Postgres is the **small, transactional, mutable** side (claiming, ack, close timers —
-`FOR UPDATE SKIP LOCKED`, the same pattern as the report queue). ClickHouse is the
-**large, append-only, replayable** side. Neither duplicates the other's job.
+**Store ownership is strict** (owner review 2026-06-11 — binding, not stylistic):
+
+| ClickHouse owns | Postgres owns |
+|---|---|
+| append-only signal spine (`corr_signals` + archive) | active-object lifecycle (`corr_active`) |
+| versioned object snapshots (`corr_objects`) | ack / close / merge state (ops actions) |
+| edge + evidence history | catalog/templates + catalog version |
+| replay input windows | user/tenant template overrides |
+| analytics & rollups | RLS-protected operational state |
+
+Postgres must never become the evidence/event warehouse; ClickHouse must never
+become the authoritative lifecycle system. Lifecycle truth lives in PG (claiming,
+ack, close timers — `FOR UPDATE SKIP LOCKED`, the report-queue pattern); history
+truth lives in CH. Neither duplicates the other's job, and any feature that needs
+both reads each for its own half.
 
 ---
 
 ## 3. Streaming pipeline
 
+Eight stages (canonical form, owner 2026-06-11):
+
 ```
-Redpanda (netops.flows | netops.metrics | netops.events | netops.syslog)
+Redpanda (rp.telemetry.flows | rp.telemetry.metrics | rp.telemetry.logs | rp.platform.events)
    │  aiokafka consumer group "correlation-v2" (manual commit, §8 crash recovery)
    ▼
-[1] Normalize  → Signal (deterministic signal_id, tenant stamp, event-time)
+[1] Normalize → canonical Signal
+   │   tenant_id · observer_id/type/location/trust_domain · collection_path ·
+   │   modality_class · source_clock_quality · deterministic signal_id (UUIDv5) ·
+   │   event-time. Signals missing mandatory observer fields → dead-letter, never guessed.
    ▼
-[2] Episode detection  → metric streams: CUSUM onset/clear; discrete events: point episodes
-   ▼          (only episodes proceed; sub-threshold samples just update baselines)
-[3] Window manager  → per-tenant sliding windows 30s/5m/1h, watermark = min(source watermarks) − lateness
+[2] Episode detection
+   │   CUSUM onset/clear with onset_uncertainty; discrete events = point episodes;
+   │   per-source timing budget (clock quality + sampling interval widen uncertainty).
    ▼
-[4] Object router  → episode joins an OPEN object if it scores ≥ ATTACH_FLOOR against
-   │                 the object's graph (temporal×topo, §4.2); else if severity ≥ open
-   │                 threshold, opens a NEW object; else parked in candidate pool
-   ▼                 (candidate pool re-evaluated each window slide; merge check §8)
-[5] Graph update  → add node, recompute affected edges only (incremental, not full rebuild)
+[3] Event-time window manager
+   │   per-tenant sliding 30s/5m/1h; watermark = min(source watermarks) − lateness;
+   │   storm-mode degradation declared in snapshots (§8).
    ▼
-[6] Hypothesis re-score  → evaluate templates whose trigger-kinds intersect the new node
+[4] Grounding gate  (HARD constraint — before any weighting)
+   │   pair admits an edge ONLY with seam or explicit topology grounding;
+   │   else → topology_gap_hint (counted, surfaced, feeds seam bootstrap);
+   │   an ungrounded causal edge is never created, under any condition.
    ▼
-[7] Persist  → if material change (Δtop-hypothesis, Δstate, new node, ≥N new edges):
-   │           snapshot version++ → CH batch (object + edges + evidence) + PG registry update
+[5] Graph builder
+   │   bounded seam-scoped subgraph; incremental edge recompute; object router
+   │   (ATTACH_FLOOR join / open / candidate pool); graph density budget +
+   │   candidate-root-cause budget tracked as product metrics (research C3).
    ▼
-[8] Emit  → Go API webhook → WebSocket hub topic "correlations" → UI live update;
-            optional alert-engine feedback (an object reaching confidence ≥ T can raise
-            a meta-alert "correlated incident", which dedups its member alerts)
+[6] Hypothesis scorer
+   │   versioned signature catalog (templates as data); discriminators vs
+   │   look-alikes force-evaluate competitors; top-K always maintained.
+   ▼
+[7] Verdict tiering
+   │   confidence_rank = heuristic rank (never probability);
+   │   suspected vs confirmed from modality_coverage × observer independence;
+   │   undetermined + evidence_missing when floors unmet. Rank ≠ verdict.
+   ▼
+[8] Persist + emit
+       material change → snapshot version++ : CH batch (corr_objects + corr_edges +
+       corr_evidence + corr_signals_archive of the window slice) + PG corr_active;
+       then Go API webhook → WS topic "correlations" → UI; optional meta-alert
+       ("correlated incident") dedups member alerts.
 ```
 
 Windows are **event-time** with per-source watermarks; late signals within the
@@ -520,7 +607,7 @@ closed / merged) — powers the front page's live "Top Active Issues".
    upstream ✓ + layer prior (L2/util → path) ✓ → **E1→E2, direction_conf 0.9**.
    Version 2 persisted: `sig.wan_congestion` coverage 2/2 required (util + probe loss),
    no contradictions yet → confidence_rank 0.66, rank 1.
-3. `09:44:40` Teams latency SLO alert (netops.events) → **E3** on service `teams`
+3. `09:44:40` Teams latency SLO alert (rp.platform.events) → **E3** on service `teams`
    (attached via path overlap; service_id present because attribution Phase 2 — in
    Phase 1 the same signal arrives entity_type=path). Edges E2→E3 (onset+topo+layer).
    `09:45:55` VPN degradation alert → **E4**, same pattern. Version 3–4.
@@ -544,7 +631,7 @@ closed / merged) — powers the front page's live "Top Active Issues".
   correlate across tenants**. Platform/global ('') correlates only infra-stack signals
   (strict-tenancy model).
 - Engine validates every consumed record against per-kind schemas (malformed →
-  dead-letter topic `netops.events.dlq` + counter, never a crash).
+  dead-letter topic `rp.platform.events.dlq` + counter, never a crash).
 - Go API is the only public surface; it enforces authz/RLS exactly as for findings
   today. OperatorRestricted tenants: their correlation objects are hidden from the
   platform operator on every endpoint (same enforcement point as flows/findings).

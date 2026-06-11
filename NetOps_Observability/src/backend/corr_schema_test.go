@@ -34,7 +34,7 @@ func TestCorrSchemaIdempotent(t *testing.T) {
 func TestCorrSchemaTenantPartitioned(t *testing.T) {
 	// House rule (#20 Phase 3): tenant_id leads every PARTITION BY for at-rest
 	// per-tenant separation.
-	for _, table := range []string{"corr_signals", "corr_objects", "corr_edges", "corr_evidence"} {
+	for _, table := range []string{"corr_signals", "corr_signals_archive", "corr_objects", "corr_edges", "corr_evidence"} {
 		s := corrStmt(t, table)
 		if !strings.Contains(s, "PARTITION BY (tenant_id,") {
 			t.Errorf("%s: PARTITION BY must lead with tenant_id", table)
@@ -49,7 +49,7 @@ func TestCorrSchemaTenantPartitioned(t *testing.T) {
 
 func TestCorrSchemaRowPoliciesCoverAllTables(t *testing.T) {
 	all := strings.Join(corrSchemaDDL(), "\n")
-	for _, table := range []string{"corr_signals", "corr_objects", "corr_edges", "corr_evidence"} {
+	for _, table := range []string{"corr_signals", "corr_signals_archive", "corr_objects", "corr_edges", "corr_evidence"} {
 		if !strings.Contains(all, "tenant_iso_"+table) {
 			t.Errorf("missing row policy for %s", table)
 		}
@@ -57,10 +57,60 @@ func TestCorrSchemaRowPoliciesCoverAllTables(t *testing.T) {
 }
 
 func TestCorrSignalsIndependenceGate(t *testing.T) {
-	// Pre-freeze amendment (owner): observer_id powers the evidence-independence
-	// gate — confirmed verdicts need >=2 modality classes from >=2 observers.
-	if !strings.Contains(corrStmt(t, "corr_signals"), "observer_id") {
-		t.Fatal("corr_signals: observer_id missing (evidence-independence gate)")
+	// Owner review 2026-06-11: the observer block is MANDATORY on every signal —
+	// confirmation depends on observer independence (>=2 modality classes from
+	// >=2 observers), and fate-sharing analysis needs the collection path (two
+	// signals via the same SD-WAN controller are not independent).
+	for _, table := range []string{"corr_signals", "corr_signals_archive"} {
+		s := corrStmt(t, table)
+		for _, col := range []string{
+			"observer_id", "observer_type", "observer_location",
+			"observer_trust_domain", "collection_path", "modality_class",
+			"source_clock_quality",
+		} {
+			if !strings.Contains(s, col) {
+				t.Errorf("%s: observer-block column %s missing", table, col)
+			}
+		}
+		if !strings.Contains(s, "CONSTRAINT observer_required CHECK observer_id != ''") {
+			t.Errorf("%s: CHECK observer_id != '' missing (observer block is mandatory)", table)
+		}
+	}
+}
+
+func TestCorrReplayRetentionTiering(t *testing.T) {
+	// Owner review 2026-06-11 (replay gap): corr_objects are forever, but replay
+	// re-runs over signals — so every persisted object's FULL window slice is
+	// archived without TTL, while the hot spine keeps its 30-day TTL.
+	hot := corrStmt(t, "corr_signals")
+	if !strings.Contains(hot, "TTL toDateTime(ts) + INTERVAL 30 DAY") {
+		t.Error("corr_signals: hot spine must keep its 30-day TTL")
+	}
+	arch := corrStmt(t, "corr_signals_archive")
+	if strings.Contains(arch, "TTL ") {
+		t.Error("corr_signals_archive: must have NO TTL (replay input, forever)")
+	}
+	for _, col := range []string{"archived_for", "archived_at"} {
+		if !strings.Contains(arch, col) {
+			t.Errorf("corr_signals_archive: %s missing (archiving provenance)", col)
+		}
+	}
+	// Structural identity: every signal column must exist in the archive too,
+	// or replay reads (archive ∪ hot) would diverge.
+	for _, line := range strings.Split(hot, "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "CREATE") || strings.HasPrefix(l, "(") ||
+			strings.HasPrefix(l, ")") || strings.HasPrefix(l, "--") ||
+			strings.HasPrefix(l, "ENGINE") || strings.HasPrefix(l, "PARTITION") ||
+			strings.HasPrefix(l, "ORDER") || strings.HasPrefix(l, "TTL") ||
+			strings.HasPrefix(l, "SETTINGS") || strings.HasPrefix(l, "CONSTRAINT") ||
+			strings.HasPrefix(l, "'") {
+			continue
+		}
+		col := strings.Fields(l)[0]
+		if !strings.Contains(arch, col) {
+			t.Errorf("corr_signals_archive: column %q missing (must mirror corr_signals)", col)
+		}
 	}
 }
 
