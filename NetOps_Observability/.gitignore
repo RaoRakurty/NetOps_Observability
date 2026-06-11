@@ -28,3 +28,6 @@ scripts/stack-watchdog.log
 .DS_Store
 *.swp
 *~
+
+# Lab-local compose overrides (site config — never product defaults)
+deployment/docker/docker-compose.override.yml
