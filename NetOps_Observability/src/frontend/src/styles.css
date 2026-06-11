@@ -2421,3 +2421,5 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .panel-zoom-btn:hover { color: var(--accent); background: var(--hover); }
 .ds-modal.ds-modal-wide { width: min(1400px, 94vw); max-width: 94vw; }
 .panel-zoom-body { min-width: 0; }
+/* Overview zoom: stretch fixed-height ECharts panels inside the deep-look modal. */
+.panel-zoom-body .echarts-for-react { height: min(62vh, 720px) !important; }

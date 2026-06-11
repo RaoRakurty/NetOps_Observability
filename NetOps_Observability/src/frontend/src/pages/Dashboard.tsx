@@ -1,7 +1,20 @@
 import { useState } from "react";
-import { PANELS, PANEL_CATEGORIES, PanelDef } from "./panels";
+import { PANELS, PANEL_CATEGORIES, PanelCategory, PanelDef } from "./panels";
 import { useShell } from "../context/shell";
 import Icon from "../components/Icon";
+import { Group, PanelZoom } from "../components/board/panels";
+import { Modal } from "../components/ui";
+
+// Board-section hues (content-safe; severity bands avoided) — gives Overview
+// the same collapsible, hue-tinted Group chrome as the Device Monitoring suite.
+const CATEGORY_HUE: Record<PanelCategory, string> = {
+  "Health & KPIs": "#2d6be0",
+  Alerts: "#ec4899",
+  Resources: "#0ea5e9",
+  Traffic: "#14b8a6",
+  Inventory: "#8b5cf6",
+  Topology: "#5b8db8",
+};
 
 // Operations Overview — a modular, Zabbix-style board. The layout is a
 // list of panels the user composes themselves: add from the panel library,
@@ -62,6 +75,7 @@ export default function Dashboard() {
   const { navigate } = useShell();
   const [items, setItems] = useState<Item[]>(loadLayout);
   const [picking, setPicking] = useState(false);
+  const [zoom, setZoom] = useState<Item | null>(null);
 
   const persist = (next: Item[]) => {
     setItems(next);
@@ -126,41 +140,56 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="ov-grid">
-        {items.length === 0 && (
-          <div className="panel col-12 panel-empty">
-            No panels — click “+ Add panel” to build your overview.
-          </div>
-        )}
-        {items.map((item) => {
-          const def = PANELS[item.type];
-          if (!def) return null;
-          return (
-            <div className={`panel col-${item.span}`} key={item.key}>
-              <div className="panel-tools">
-                <h3
-                  className={def.drill ? "panel-title-link" : undefined}
-                  onClick={def.drill ? () => navigate(def.drill!) : undefined}
-                  style={def.drill ? { cursor: "pointer" } : undefined}
-                  title={def.drill ? "Open detail view" : undefined}
-                >
-                  {def.title}
-                  {def.drill && <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />}
-                </h3>
-                <div className="panel-tools-btns">
-                  <button onClick={() => resize(item.key)} title="Resize" aria-label="Resize panel">
-                    <Icon name="maximize" size={13} />
-                  </button>
-                  <button onClick={() => remove(item.key)} title="Remove" aria-label="Remove panel">
-                    <Icon name="close" size={13} />
-                  </button>
-                </div>
-              </div>
-              {def.render()}
+      {items.length === 0 && (
+        <div className="panel panel-empty">
+          No panels — click “+ Add panel” to build your overview.
+        </div>
+      )}
+      {PANEL_CATEGORIES.map(({ category }) => {
+        const inCat = items.filter((i) => PANELS[i.type]?.category === category);
+        if (inCat.length === 0) return null;
+        return (
+          <Group key={category} title={category} hue={CATEGORY_HUE[category] ?? "#818cf8"}>
+            <div className="ov-grid">
+              {inCat.map((item) => {
+                const def = PANELS[item.type];
+                return (
+                  <div className={`panel col-${item.span}`} key={item.key}>
+                    <div className="panel-tools">
+                      <h3
+                        className={def.drill ? "panel-title-link" : undefined}
+                        onClick={def.drill ? () => navigate(def.drill!) : undefined}
+                        style={def.drill ? { cursor: "pointer" } : undefined}
+                        title={def.drill ? "Open detail view" : undefined}
+                      >
+                        {def.title}
+                        {def.drill && <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />}
+                      </h3>
+                      <div className="panel-tools-btns">
+                        <button onClick={() => setZoom(item)} title="Enlarge" aria-label="Enlarge panel">⤢</button>
+                        <button onClick={() => resize(item.key)} title="Resize" aria-label="Resize panel">
+                          <Icon name="maximize" size={13} />
+                        </button>
+                        <button onClick={() => remove(item.key)} title="Remove" aria-label="Remove panel">
+                          <Icon name="close" size={13} />
+                        </button>
+                      </div>
+                    </div>
+                    {def.render()}
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
-      </div>
+          </Group>
+        );
+      })}
+      {zoom && PANELS[zoom.type] && (
+        <Modal title={PANELS[zoom.type].title} wide onClose={() => setZoom(null)}>
+          <PanelZoom.Provider value={true}>
+            <div className="panel-zoom-body">{PANELS[zoom.type].render()}</div>
+          </PanelZoom.Provider>
+        </Modal>
+      )}
     </div>
   );
 }
