@@ -269,6 +269,32 @@ onset/cadence budget (C2), graph-discipline product metrics (C3), seam bootstrap
 schema fix and C4's verdict tiering are **pre-build inputs to #67**; the rest are
 requirements on P1–P4 phases already planned.
 
+**Ratified (owner, 2026-06-11): §6 is binding architecture, not research notes.**
+Five pre-freeze additions came with the ratification, applied to the design docs in
+the same review:
+
+1. **Evidence independence (extends C4)** — `observer_id` on every signal; a
+   `confirmed` verdict needs ≥2 modality classes from **≥2 independent observers**
+   (two technically-different measurements depending on the same failed observer
+   never corroborate each other) — correlation-engine.md §2.1/§4.5.
+2. **Seam bootstrap pulled into P1 (extends C5)** — the engine's differentiator
+   depends on populated seams; four minimum auto-suggest rules (traceroute ASN
+   transition, BGP provider metadata, flow ingress/egress boundary, SD-WAN tunnel
+   endpoints) — cloud-ingestion.md §4.1.
+3. **`undetermined` as a first-class RCA outcome** — no forced root cause; objects
+   carry a mechanical `evidence_missing` list ("affected path confirmed, root cause
+   not confirmed; missing: cloud-side probe, BGP state") — correlation-engine.md §4.5.
+4. **Rank/verdict orthogonality named an invariant** — rank-1 can be `suspected`;
+   no layer may collapse ranking into verdict.
+5. **P4 renamed "Replay-driven calibration"** — labeled fixtures in → fitted caps,
+   floors, dwell cycles, modality/independence thresholds out; **no quantitative
+   accuracy claims until P4 completes**.
+
+Agreed build priority (owner): ① correlation-object schema freeze w/ catalog_version
+② episode model w/ onset uncertainty ③ modality coverage + evidence independence
+④ signature catalog v0 + CI fixtures ⑤ seam bootstrap engine ⑥ replay runner
+⑦ one killer cross-seam RCA demo (LAN → SD-WAN → underlay → cloud/POP).
+
 ---
 
 ## 7. Sources

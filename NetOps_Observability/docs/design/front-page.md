@@ -304,7 +304,9 @@ data not code.
 
 ## 9. Build order (P1, follow-along granularity)
 
-1. `corr_signals` + engine P1 land first (#67 — separate lane, same milestone).
+1. `corr_signals` + engine P1 land first (#67 — separate lane, same milestone),
+   **including the seam bootstrap engine** (cloud-ingestion.md §4.1): the grounding
+   inventory is a P1 deliverable, not a follow-up.
 2. `svc_flow_rollup_1m` + heuristic MV + `/api/flows/services` (no UI yet).
 3. `/api/health/score` (global+site+device) + unit tests for every normalization
    curve (§4.1 table is the test spec).

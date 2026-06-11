@@ -153,11 +153,35 @@ correlation engine scores against — supersedes the bare `segment` notion):
 netops/carrier/cloud_provider/app team maps directly from the seam where causality
 localizes); `visibility` keeps the coverage honesty rule enforceable per seam.
 
+### 4.1 Seam bootstrap engine — P1, required (owner, 2026-06-11)
+
+An empty seam inventory makes the grounding gate ground against nothing
+(`rca-market-research.md` C5: dependence on hand-authored seams is the model's
+existential risk). The inventory therefore must not wait for the engine or for
+manual entry: **P1 ships a bootstrap engine** that auto-suggests seam instances
+from telemetry we already collect — suggest → owner confirms/edits → active.
+Minimum P1 rules:
+
+| Source signal (exists today) | Suggested seam |
+|---|---|
+| traceroute hop crossing an ASN transition | underlay/provider seam (DX vs DIA candidate, split by path stability + provider metadata) |
+| BGP neighbor / provider metadata on edge devices | carrier/cloud seam (DX/ER) |
+| flow ingress/egress boundary (private↔public crossing at an exporter edge interface) | LAN/WAN seam |
+| SD-WAN tunnel endpoints (tunnel discovery) | SDWAN seam (overlay + each underlay it rides) |
+
+Suggestions carry provenance (which rule, which evidence) and a suggestion
+confidence; rejected suggestions are remembered and never re-raised; confirmed
+seams enter the inventory with `visibility` defaulted honestly (DIA = partial at
+best). Runs in the topology/discovery plane and shares its UI surface with #67's
+topology-gap hints — they are one workflow (unmodeled co-occurrence → "define a
+seam?" → pre-filled bootstrap suggestion).
+
 ## 5. Phasing
 
 - **CI-P1** (with correlation-engine P1): NVA syslog tier (works today, document
   runbook) + collector skeleton = vantage-point agent with STAMP/ICMP/HTTP +
-  outbound mTLS registration to per-tenant ingest URL.
+  outbound mTLS registration to per-tenant ingest URL + **seam bootstrap engine**
+  (§4.1 — required input to #67 P1 grounding).
 - **CI-P2**: T1 API pollers (AWS first: TGW/VGW/DX + VPC Flow Logs seam slice from
   Kinesis/S3; then Azure ER/VPN GW/NSG; GCP later) + Layer-1 policy engine +
   normalization into flows/corr_signals.

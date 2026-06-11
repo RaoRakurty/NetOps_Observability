@@ -1,6 +1,6 @@
 # Correlation Engine v2 — Persistent Causal Correlation Objects
 
-Status: **DESIGN — awaiting sign-off** · Owner: correlation service (`src/correlation/`)
+Status: **APPROVED — binding architecture (owner sign-off 2026-06-11, incl. 5 pre-freeze amendments)** · Owner: correlation service (`src/correlation/`)
 Related: `docs/design/front-page.md` (consumer), failure-signature catalog (rule base,
 user-authored), tracker #53 (unified event feed — shares the normalized-signal spine),
 memory `netops-frontpage-rca-direction`.
@@ -93,6 +93,10 @@ CREATE TABLE corr_signals (
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7),
     kind           LowCardinality(String),          -- e.g. probe_loss, if_errors, bgp_peer_down
+    observer_id    LowCardinality(String),          -- WHO measured it: the device itself
+                                                    -- (snmp/gnmi/syslog), vantage-agent id,
+                                                    -- cloud API account, flow exporter —
+                                                    -- evidence-independence gate (§4.5)
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7),
     entity_id      String,                          -- canonical id within type
@@ -415,6 +419,31 @@ as `confirmed` only with ≥ 2 classes, else `suspected` — regardless of
 confidence_rank. This generalizes `w_reinforce` from a score bonus into a verdict
 gate; templates' `requires` clauses choose *which* modalities matter per fault class.
 
+**Evidence independence (owner, pre-freeze 2026-06-11):** modality diversity alone
+is not corroboration — two measurements that are operationally dependent on the same
+failed observer must never confirm each other (a device's own `if_down` plus loss on
+a probe *launched from that same device* share the observer's fate). Every signal
+carries `observer_id` (§2.1): the entity that produced the measurement — the device
+itself for SNMP/gNMI/syslog, a vantage-agent id, a cloud API account, a flow
+exporter. `confirmed` requires ≥ 2 modality classes from **≥ 2 distinct observers**;
+hypotheses expose `observer_coverage` alongside `modality_coverage`, and templates
+may declare stricter per-fault-class independence (e.g. tunnel verdicts require
+evidence from both tunnel ends).
+
+**`undetermined` is a first-class outcome (owner, pre-freeze 2026-06-11):** an
+object whose best hypothesis fails the coverage/confidence floors is NOT assigned a
+forced root cause. `top_hypothesis = 'undetermined'`, and the object carries
+`evidence_missing` — derived mechanically from the nearest templates' unsatisfied
+`requires` clauses plus blind/partial seam visibility: *"affected path confirmed;
+root cause not confirmed. Missing: no cloud-side probe, no DX BGP state, no underlay
+loss source."* Impact confirmation and cause confirmation are independent
+statements; declaring the second absent is what builds NOC trust.
+
+**Invariant — ranking and verdict are orthogonal, kept sacred:** rank-1 ≠ confirmed.
+A hypothesis can lead the ranking and remain `suspected` (or the whole object
+`undetermined`). The API returns both fields; the UI renders both; no layer may
+collapse them into one.
+
 Built-in starter set ships with the engine (wan_congestion, routing_instability,
 physical_degradation, dns_impairment, cloud_region_degradation, tunnel_mtu_blackhole);
 the user-authored catalog replaces/extends these — same schema, hot-reloaded from PG,
@@ -520,14 +549,22 @@ closed / merged) — powers the front page's live "Top Active Issues".
 - **P1 (with front-page Phase 1):** normalizer + `corr_signals` (this IS #53's spine) +
   episode detection + 5 m window + graph builder + built-in template set + CH/PG
   persistence + `/api/correlations*` + WS emit. Infra-only (service_id null).
-  Existing `/findings` API kept, backed by episodes (compat view).
+  Existing `/findings` API kept, backed by episodes (compat view). **Seam inventory
+  is a P1 dependency, not later** — populated by the seam bootstrap engine
+  (cloud-ingestion.md §4.1); the grounding gate's differentiator is worthless
+  against an empty inventory.
 - **P2 (with service catalog):** service dimension joins the graph (attribution
   stream); path/segment entities from probe placement; hypothesis templates gain
   service-scoped clauses.
 - **P3:** user's failure-signature catalog loaded as templates (the differentiator
   moment); per-signature lab replay fixtures; meta-alert dedup feedback loop.
-- **P4:** weight calibration from labeled history; cross-domain (cloud-log) signals
-  as new sources — schema already admits them (`source` enum extension).
+- **P4 — Replay-driven calibration (named milestone, owner):** input = labeled
+  incident fixtures (lab scenarios + replayed production objects); output = fitted
+  node caps, EDGE/ATTACH floors, τ constants, dwell cycles, modality/independence
+  thresholds. **Until P4 completes, accuracy claims are qualitative only** — product
+  copy cites replayability and evidence coverage, never accuracy numbers. Also P4:
+  cross-domain (cloud-log) signals as new sources — schema already admits them
+  (`source` enum extension).
 
 Out of scope here: UI views (front-page doc), cloud-log collectors (own lane),
 ML-learned causal discovery (post-calibration research, only on top of the
