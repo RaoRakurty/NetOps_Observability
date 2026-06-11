@@ -42,9 +42,9 @@ ssh_ "echo $LAB_PASS | sudo -S docker rm -f $NAME 2>/dev/null || true"
 # Default = serve mode: control API + dashboard on :${API_PORT:-8080}, autostarted
 # encoders. Set MODE=<ipfix|netflow9|sflow|packets|l7|all> for a headless one-shot run.
 if [ -n "${MODE:-}" ]; then
-  RUN_ARGS="--mode $MODE --collector $COLLECTOR --fps ${FPS:-1500} --workers ${WORKERS:-2}"
+  RUN_ARGS="--mode $MODE --collector $COLLECTOR --fps ${FPS:-200} --workers ${WORKERS:-2}"
 else
-  RUN_ARGS="--serve --api-port ${API_PORT:-8080} --collector $COLLECTOR --fps ${FPS:-1500} --workers ${WORKERS:-2}"
+  RUN_ARGS="--serve --api-port ${API_PORT:-8080} --collector $COLLECTOR --fps ${FPS:-200} --workers ${WORKERS:-2}"
 fi
 ssh_ "echo $LAB_PASS | sudo -S docker run -d --name $NAME --network host --cap-add NET_RAW \
       --restart unless-stopped tgen:latest $RUN_ARGS ${EXTRA_ARGS:-} ${*:-}"

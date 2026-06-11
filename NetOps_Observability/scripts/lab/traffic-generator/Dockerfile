@@ -19,4 +19,4 @@ EXPOSE 8080
 # Defaults; override at `docker run`. Serve mode = control API + dashboard on
 # :8080, autostarts all three telemetry encoders at the NMS collector.
 ENTRYPOINT ["python", "-m", "tgen"]
-CMD ["--serve", "--collector", "10.70.245.122", "--fps", "1500", "--workers", "2"]
+CMD ["--serve", "--collector", "10.70.245.122", "--fps", "200", "--workers", "2"]

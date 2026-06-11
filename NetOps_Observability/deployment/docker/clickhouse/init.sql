@@ -44,7 +44,7 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, sampler_address, src_addr, dst_addr)
 -- ts is DateTime64(3); TTL expressions must be Date/DateTime, so cast it.
-TTL toDateTime(ts) + INTERVAL 30 DAY
+TTL toDateTime(ts) + INTERVAL 7 DAY
 SETTINGS index_granularity = 8192;
 
 -- ---------------------------------------------------------------------------
