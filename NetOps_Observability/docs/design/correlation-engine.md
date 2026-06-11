@@ -142,6 +142,9 @@ CREATE TABLE corr_objects (
     node_count       UInt16,
     engine_version   LowCardinality(String),        -- semver + config hash → replay contract
     topology_version LowCardinality(String),
+    catalog_version  LowCardinality(String),        -- signature-catalog version scored against
+                                                    -- (rca-market-research.md C6: replay after a
+                                                    -- catalog edit must not silently diverge)
     merged_into      Nullable(UUID),
     created_at       DateTime64(3)
 ) ENGINE = MergeTree
@@ -401,6 +404,16 @@ confidence_rank = coverage × graph_support × direction_agreement
 Top-K (default 4) kept **always** — ranked list, never a single answer. Rank flips
 require min-dwell 2 evaluation cycles (no flapping headline). Every satisfied/violated
 clause writes a `corr_evidence` row with role `supports`/`contradicts`/`discriminates`.
+
+**Verdict tiering — corroboration gate (rca-market-research.md C4):** every modality
+class has a documented blind spot (probes ≠ app-traffic fate; SNMP/flows blind to
+gray failures — verified; control plane blind to silent data-plane drops), so **no
+single modality class confirms a data-plane verdict**. Each hypothesis score carries
+`modality_coverage` = distinct modality classes among its satisfying episodes
+(active probe / passive flow / control plane / device telemetry); a verdict renders
+as `confirmed` only with ≥ 2 classes, else `suspected` — regardless of
+confidence_rank. This generalizes `w_reinforce` from a score bonus into a verdict
+gate; templates' `requires` clauses choose *which* modalities matter per fault class.
 
 Built-in starter set ships with the engine (wan_congestion, routing_instability,
 physical_degradation, dns_impairment, cloud_region_degradation, tunnel_mtu_blackhole);

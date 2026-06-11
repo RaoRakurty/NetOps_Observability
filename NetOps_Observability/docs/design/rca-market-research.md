@@ -246,7 +246,32 @@ non-negotiable in implementation.
 
 ---
 
-## 6. Sources
+## 6. Architectural consequences (binding) — owner review 2026-06-11
+
+Findings converted into design constraints, risk controls, and measurable
+requirements. Verdicts: **V** validated · **P** partially supported · **R** refined
+(owner's proposal adjusted by the evidence).
+
+| # | Observation | Verdict | Binding consequence |
+|---|---|---|---|
+| C1 | Structure beats generic causal discovery | **V** (strongest-supported claim: §3.1 ✅×3, NetBouncer ✅, Davis ✅, Flock ✅) | Grounding gate = **invariant, not design choice**: CI rejects engine configs that can admit ungrounded edges; no future "discovery mode" learning edges from data — ML re-weights grounded edges only. Caveat kept honest: the evidence proves *structure must be given*; it does NOT validate our particular vocabulary (seams/signatures) — that validation burden falls on replay fixtures. The topology-gap-hint loop is the **only** sanctioned observation→structure path; its hint volume (`corr_ungrounded_cooccur_total`) and time-to-resolution are tracked quality metrics. |
+| C2 | Causal context > detector sophistication; episodes/onset first-class | **V** (NSigma 0.98→0.15 on 60 s timing error ✅; precise-failure-time impractical ✅) | Detector investment redirects to **onset/clear estimation quality**, not anomaly-catalog breadth. Corollary: **sampling cadence is an RCA-quality input** — 60 s SNMP polling ⇒ ±30 s+ onset uncertainty, the same order as the error that collapsed NSigma. Per-source onset-uncertainty budgets; direction inference anchors ordering on fast sources (probes/gNMI/events), wide-interval SNMP onsets correctly refuse to order (#67 §4.3 overlap rule). `direction_basis` distribution = quality metric (drift toward layer-prior-only = measurable degradation). Episode-objects-as-remedy is our inference ➤, unbenchmarked — name it. |
+| C3 | Completeness paradox: bigger graphs hurt | **P** (✅2-1 + size-scaling ✅3-0 + Davis's bounded window ◻) | Graph discipline = **product metrics, not engine internals**: per-object node count, edge density, candidate-root-cause count (nodes w/o inbound directed edge), time-to-stable-rank-1 — exposed and alertable. **Hypothesis-led retention**: nodes contributing to no template clause and below weight floor age out before cap-forced eviction. Replay fixtures assert bounds ("graph ≤ N, rank-1 stable ≤ T"). Constants (cap 200, floors 0.15/0.30) are uncalibrated guesses — P4 calibration must fit them; declared as such. |
+| C4 | Probe-only evidence can't confirm data-plane verdicts | **R** — evidence supports *corroboration*, not a probe demotion hierarchy | Every modality has a documented blind class: probes ≠ app-traffic fate ◻; SNMP/NetFlow blind to gray failures ✅(3-0) — the verified converse; control plane blind to silent data-plane drops ◻; flows carry ECMP path uncertainty ◻. Therefore the symmetric rule: **no single modality class confirms a data-plane verdict** (and device-telemetry-only cannot confirm *absence* of fault). Verdict tiering: `suspected` = single modality, `confirmed` = ≥2 independent modality classes (active probe / passive flow / control plane / device telemetry) — IODA's corroboration pattern ◻, generalizing `w_reinforce` from score nudge to verdict gate. `modality_coverage` on every hypothesis score; signature templates choose *which* modalities per fault class. The ≥2 threshold is our choice, not corpus-derived. |
+| C5 | Ownership-transition seams as first-class causal objects | **P** — gap real but **absence-based** (22 sources ≠ the market); no contrary evidence found | Nearest competitor named honestly: **ThousandEyes** — path localization ✅ + Internet Insights provider attribution ✅ *is* operational ownership attribution, but fleet-derived, SaaS-only, no per-seam owner/visibility object, no enterprise bracket. Dynatrace's cloud-entity graph ◻ erodes the cloud interior, not the carrier middle mile. Unproven: 5-type taxonomy sufficiency; CLOUD_BACKBONE's motivating claim (not in corpus); **customer willingness to populate a seam inventory** — the model's real existential risk. Consequence: **seam-inventory bootstrapping is a required capability** (auto-suggest seams from traceroute path boundaries, BGP AS transitions, flow boundary crossings — same machinery as topology-gap hints). An empty inventory makes the grounding gate ground against nothing. |
+| C6 | Deterministic replay as core capability + benchmark foundation | **V** — but all three supporting claims (no benchmark ◻, synthetic non-transfer ◻, inflated F1s ◻) are **unverified**; support = consistency across 3 independent sources | Replay graduates from debugging feature to: CI gate (golden incidents), sales artifact ("prove it on last month's outage"), calibration substrate (P4 weight fitting needs replayable labeled history), and candidate open-benchmark seed (anonymized fixtures — the SREBench gap ◻). **Contract gap found in this review: #67 snapshots pin `engine_version` + `topology_version` but NOT the signature-catalog version** — replay after a catalog edit silently diverges. `corr_objects` gains `catalog_version`; required fix before engine P1 freezes the schema. |
+| C7 | Signature catalog: feature → required architectural component | **V** — incumbents implicitly embed hidden signature libraries: Watchdog's closed 4-cause vocabulary ◻, Davis's bounded problem patterns ◻, Selector's load-bearing "rules" ✅, NetBouncer's domain-knowledge regularizer ✅ (the strongest verified analogue); ~75 % of failures recurring ◻ | The catalog is a **CI-tested versioned artifact**: schema validation, discriminator-cycle lint, **coverage report** (signal kinds no signature consumes = rule-base blind spots), per-signature replay fixtures gating catalog merges, `catalog_version` pinned in snapshots (C6). Engine stays coherent on the built-in starter set alone. Generalization risk named: one practitioner's catalog may not transfer across tenants (Watchdog's narrowness ◻ suggests vendors avoided this deliberately); per-tenant template override (already in PG schema) is the designated mitigation. |
+
+Cross-cutting completeness note: §4/§5 mapped findings to *existing* decisions; this
+section adds what the mapping missed — the corroboration verdict tier (C4), the
+onset/cadence budget (C2), graph-discipline product metrics (C3), seam bootstrapping
+(C5), the `catalog_version` replay gap (C6), and catalog-as-CI-artifact (C7). C6's
+schema fix and C4's verdict tiering are **pre-build inputs to #67**; the rest are
+requirements on P1–P4 phases already planned.
+
+---
+
+## 7. Sources
 
 Quality tags from the corpus; **✅ n claims confirmed** = adversarially verified claims from that source.
 
