@@ -34,6 +34,30 @@ to the tenant's unique ingest URL — tenant identity established at first entry
 the customer's cloud, never inferred downstream. This activates the parked
 ingest-isolation model C.
 
+### 1.1 HARD CONSTRAINT — the collector is not a platform (owner, 2026-06-11)
+
+The collector is, permanently:
+- a **deterministic telemetry forwarder** (normalize, stamp, ship — same input ⇒ same output),
+- a **probe executor** (runs exactly the probe assignments the platform pushes),
+- a **filter engine** (applies the §2 ingestion policy it is *given*, versioned).
+
+It is **never**:
+- ❌ a correlation engine (no episode detection, no edges, no windows),
+- ❌ an analytics engine (no aggregation beyond bounded batching/compression),
+- ❌ a decision maker (no local alerting, no adaptive sampling it invents, no
+  policy it didn't receive from the platform).
+
+Rationale: scale and maintainability. N collectors × M versions in customer clouds
+we don't control — any intelligence pushed to the edge becomes an unmaintainable,
+unupgradable fleet of divergent behaviors and an audit nightmare (which collector
+decided what, on which policy?). All judgment lives in the platform; the collector's
+entire contract is: *given policy P and assignments A, emit telemetry T,
+deterministically*. Corollaries: collector config is 100% platform-pushed and
+versioned (policy hash echoed in every batch header, so the platform can prove
+which policy produced which data); collector upgrades change *capabilities*, never
+*judgment*; a collector that cannot reach the platform buffers (bounded ring, drop
+oldest counted+declared) — it never starts deciding locally.
+
 ## 2. Flow scope — the 3-tier hierarchical ingestion model (owner's design)
 
 Never full-VPC by default. An **ingestion policy engine** in the collector (and in

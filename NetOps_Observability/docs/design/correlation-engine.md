@@ -163,6 +163,8 @@ CREATE TABLE corr_edges (
     version         UInt32,                         -- edges written per snapshot version
     from_node       String,                         -- episode key: entity_type:entity_id:kind
     to_node         String,
+    grounding_kind  Enum8('seam'=1,'topo'=2),       -- REQUIRED: no ungrounded edges (§4.2)
+    grounding_ref   String,                         -- seam_id or topology node id
     weight          Float32,                        -- combined w (§4.2)
     w_temporal      Float32,
     w_topo          Float32,
@@ -274,7 +276,25 @@ The current per-(device,metric) rolling window stays, but crossings now open an
 
 ### 4.2 Edge weight — temporal × topological × reinforcement
 
-For episodes A, B (onset times tA ≤ tB):
+**Edge admission precondition (HARD CONSTRAINT, owner 2026-06-11):**
+> **No correlation edge exists without a seam context or explicit topology
+> grounding.** Every causal link must attach to a canonical seam
+> (DX/VPN/SDWAN/DIA/CLOUD_BACKBONE) **or** a topology node (site, cloud region,
+> device, gateway) that relates both endpoints.
+
+Before any weight is computed, the pair (A,B) must **resolve a grounding**; the
+grounding is stored on the edge (`grounding_kind` + `grounding_ref`, §2.3 — NOT
+NULL by construction). Pairs that fail resolution never become edges *regardless of
+temporal alignment*: they are counted (`corr_ungrounded_cooccur_total` metric +
+sampled log) and surfaced as **topology-gap hints** ("recurring co-occurrence with
+no modeled relation — define a seam or topology link?"), excluded from graphs,
+hypothesis scoring, and object attachment. This is the structural guard against
+degeneration into ungrounded statistical correlation ("AI mush"): temporal
+proximity alone can never manufacture causality, and any future learned/ML scoring
+(P4 calibration) inherits the same admission gate — it may re-weight grounded
+edges, never create ungrounded ones.
+
+For admissible episodes A, B (onset times tA ≤ tB):
 
 ```
 w_temporal(A,B) = exp(−(tB − tA) / τ)          τ = 60 s (30s window) / 300 s (5m) / 1800 s (1h)
@@ -284,9 +304,9 @@ w_topo(A,B)     = max over relation:
                     L2/L3 adjacent device     0.65
                     same path (segment overlap = Jaccard of segment sets, scaled 0.3–0.8)
                     same site                 0.40
-                    same ASN / provider       0.30
-                    no known relation         0.05   (never exactly 0 — unknown ≠ unrelated,
-                                                      but ATTACH_FLOOR usually excludes these)
+                    same ASN / provider       0.30   (weakest ADMISSIBLE grounding —
+                                                      provider/ASN is a topology entity;
+                                                      ungrounded pairs never reach here, §4.2)
 w_reinforce     = 1 + 0.25 × (distinct source types on {A,B} − 1)
                   (flow + probe + alert agreeing is worth more than three alerts)
 
@@ -474,7 +494,7 @@ closed / merged) — powers the front page's live "Top Active Issues".
 | **Late / out-of-order signals** | Event-time windows + per-source watermark; lateness ≤ 120 s → retroactive insert + re-score; later → evidence row flagged `late`, object NOT rewritten (append-only honesty). |
 | **Clock skew across sources** | Per-source skew estimate (ingest_ts − ts EWMA) widens that source's onset uncertainty; direction inference refuses onset-order votes when uncertainty intervals overlap — degrades to undirected, never guesses. |
 | **Alert storm / signal flood** | Bounded per-tenant queues; storm mode at threshold: collapse episodes by entity prefix, coarsen to the 5 m window only, log `storm_mode` in every snapshot produced under it (scores are marked degraded). Backpressure to Kafka (pause/resume), never OOM. |
-| **Topology stale/unavailable** | Snapshots embed `topology_version`; staleness > 2 pull intervals → w_topo capped at 0.4 + evidence note; engine keeps running on temporal+reinforcement (degraded, declared). |
+| **Topology stale/unavailable** | Snapshots embed `topology_version`; staleness > 2 pull intervals → grounding still resolves against the **last-known** topology/seam inventory with w_topo capped at 0.4 + evidence note (stale grounding is declared, never silent). Pairs that cannot ground even against the stale snapshot are **deferred to the candidate pool** until topology refreshes (and counted) — the §4.2 admission gate never relaxes; the engine never falls back to ungrounded temporal correlation. |
 | **Engine crash / restart** | Manual offset commit AFTER snapshot persist; on boot: reload open objects from PG + latest CH snapshots, resume from committed offsets. Versioned idempotent writes ⇒ at-least-once delivery is safe (duplicate snapshot = same (id,version) content, deduped at read by version). |
 | **Hypothesis flapping** | Min-dwell 2 cycles before rank-1 flip; full ranked history preserved in version timeline (a flip is itself diagnostic signal). |
 | **Cardinality explosion** | Node cap 200/object with logged evictions; candidate pool TTL = window span; per-tenant open-object cap (default 50, breach raises a platform alert — that's an incident in itself). |
