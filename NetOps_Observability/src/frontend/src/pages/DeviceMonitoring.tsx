@@ -310,9 +310,9 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
       <Group title="Device resources — CPU & memory" hue="#F59E0B">
         <div className="dm-grid">
           <MetricLine title="Average CPU utilization (%)" query="avg(device_cpu_percent)" minutes={m} fmtY={fmtPct} />
-          <MetricLine title="Average memory utilization (%)" query="avg(device_mem_percent)" minutes={m} fmtY={fmtPct} />
+          <MetricLine title="Average memory utilization (%)" query="avg(device_mem_percent or (100 * device_mem_used_bytes / (device_mem_used_bytes + device_mem_free_bytes)) or (100 * (device_mem_total_kb - device_mem_available_kb) / device_mem_total_kb))" minutes={m} fmtY={fmtPct} />
           <MetricTop title="Devices with highest CPU (%)" query="device_cpu_percent" minutes={m} fmtX={fmtPct} labelKeys={["device"]} />
-          <MetricTop title="Devices with highest memory (%)" query="device_mem_percent" minutes={m} fmtX={fmtPct} labelKeys={["device"]} />
+          <MetricTop title="Devices with highest memory (%)" query="(device_mem_percent or (100 * device_mem_used_bytes / (device_mem_used_bytes + device_mem_free_bytes)) or (100 * (device_mem_total_kb - device_mem_available_kb) / device_mem_total_kb))" minutes={m} fmtX={fmtPct} labelKeys={["device"]} />
         </div>
       </Group>
 
@@ -352,16 +352,16 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
         <StatStrip>
           <MetricStat label="Service checks up" query="sum(synthetic_up)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
           <MetricStat label="Service checks configured" query="count(synthetic_up)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
-          <MetricStat label="Path targets (STAMP)" query="count(probe_rtt_ms)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
-          <MetricStat label="Worst path loss" query="max(probe_loss_pct)" minutes={m} fmt={(n) => `${n.toFixed(1)}%`} tone={(n) => (n >= 5 ? "bad" : n > 0 ? "warn" : "good")} />
+          <MetricStat label="Path targets (active probes)" query="count(probe_rtt_ms or synthetic_icmp_rtt_ms)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
+          <MetricStat label="Worst path loss" query="max(probe_loss_pct or synthetic_icmp_loss_pct)" minutes={m} fmt={(n) => `${n.toFixed(1)}%`} tone={(n) => (n >= 5 ? "bad" : n > 0 ? "warn" : "good")} />
         </StatStrip>
         <div className="dm-grid">
           <MetricLine title="HTTP check — total time (ms)" query="synthetic_http_total_ms" minutes={m} fmtY={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
           <MetricLine title="HTTP check — time to first byte (ms)" query="synthetic_http_ttfb_ms" minutes={m} fmtY={(n) => `${n.toFixed(0)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
           <MetricLine title="ICMP echo round-trip (ms)" query="synthetic_icmp_rtt_ms" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
           <MetricLine title="TCP connect time (ms)" query="synthetic_tcp_connect_ms" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
-          <MetricLine title="Path round-trip by target (STAMP, ms)" query="probe_rtt_ms" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
-          <MetricLine title="Path loss by target (%)" query="probe_loss_pct" minutes={m} fmtY={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="Path round-trip by target (ms)" query="(probe_rtt_ms or synthetic_icmp_rtt_ms)" minutes={m} fmtY={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="synthetics" />
+          <MetricLine title="Path loss by target (%)" query="(probe_loss_pct or synthetic_icmp_loss_pct)" minutes={m} fmtY={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="synthetics" />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}>
           Service checks (HTTP / ICMP / TCP) from the synthetics runner; path SLA from the STAMP sender (RFC 8762).

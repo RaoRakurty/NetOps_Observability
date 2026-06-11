@@ -12,12 +12,13 @@ export type StatTone = "" | "accent" | "good" | "warn" | "bad";
 // Handles the scrim, the branded header (logo + title + subtitle + close), and
 // the modal a11y contract: focus moves in on open and is restored on close,
 // Escape and scrim-click dismiss, and background scroll is locked while open.
-export function Modal({ title, subtitle, logo, onClose, children }: {
+export function Modal({ title, subtitle, logo, onClose, children, wide }: {
   title: string;
   subtitle?: string;
   logo?: ReactNode;
   onClose: () => void;
   children: ReactNode;
+  wide?: boolean; // near-full-viewport variant (panel zoom / deep-look views)
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -34,7 +35,7 @@ export function Modal({ title, subtitle, logo, onClose, children }: {
   }, [onClose]);
   return (
     <div className="ds-modal-scrim" onClick={onClose}>
-      <div className="ds-modal" role="dialog" aria-modal="true" aria-label={title} ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+      <div className={`ds-modal${wide ? " ds-modal-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="ds-modal-head">
           {logo}
           <div className="ds-modal-title">

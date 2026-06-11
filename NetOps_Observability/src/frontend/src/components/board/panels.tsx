@@ -3,13 +3,13 @@
 // Panels are query-string based: callers compose PromQL from the current scope
 // and pass the final query, keeping these primitives simple and reusable. See
 // docs/design/device-monitoring-dashboards.md.
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, createContext, useContext, useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor } from "../../theme/charts";
 import { cssVar } from "../../theme/tokens";
 import Icon from "../Icon";
-import { Stat, StatTone } from "../ui";
+import { Modal, Stat, StatTone } from "../ui";
 
 // ── formatters ───────────────────────────────────────────────────────────────
 export const fmtNum = (n: number) => Number(n).toLocaleString();
@@ -109,14 +109,34 @@ export function Group({ title, hue, children, defaultOpen = true }: { title: str
   );
 }
 
+// Zoom context: charts rendered inside the deep-look modal pick a taller
+// height so the expanded view is genuinely more readable, not just wider.
+export const PanelZoom = createContext(false);
+
+// Render-prop helper: yields the chart height, swapping to a tall variant when
+// rendered inside the Panel zoom modal (context re-evaluates under the provider).
+function Zoomable({ base, children }: { base: number; children: (h: number) => ReactNode }) {
+  const zoomed = useContext(PanelZoom);
+  return <>{children(zoomed ? Math.max(440, Math.round(window.innerHeight * 0.62)) : base)}</>;
+}
+
 export function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  const [zoom, setZoom] = useState(false);
   return (
     <div className="panel" style={{ minWidth: 0 }}>
       <div className="panel-tools">
-        <h3>{title}</h3>
+        <h3 className="panel-zoomable" title="Click to enlarge" onClick={() => setZoom(true)}>{title}</h3>
         {action}
+        <button className="panel-zoom-btn" aria-label={`Enlarge ${title}`} title="Enlarge" onClick={() => setZoom(true)}>⤢</button>
       </div>
       {children}
+      {zoom && (
+        <Modal title={title} wide onClose={() => setZoom(false)}>
+          <PanelZoom.Provider value={true}>
+            <div className="panel-zoom-body">{children}</div>
+          </PanelZoom.Provider>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -165,8 +185,9 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
       ) : series.length === 0 ? (
         <EmptyHint kind={dataKind} />
       ) : (
+        <Zoomable base={height}>{(h) => (
         <ReactECharts
-          style={{ height }}
+          style={{ height: h }}
           option={{
             ...chartBase,
             tooltip: { ...chartBase.tooltip, trigger: "axis" },
@@ -187,6 +208,7 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
             })),
           }}
         />
+        )}</Zoomable>
       )}
     </Panel>
   );
@@ -209,8 +231,9 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys, 
       ) : rows.length === 0 ? (
         <EmptyHint kind={dataKind} />
       ) : (
+        <Zoomable base={360}>{(h) => (
         <ReactECharts
-          style={{ height: Math.min(360, 36 + rows.length * 26) }}
+          style={{ height: Math.min(h, 36 + rows.length * 26) }}
           option={{
             ...chartBase,
             grid: { left: 8, right: 70, top: 6, bottom: 6, containLabel: true },
@@ -220,6 +243,7 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys, 
             series: [{ type: "bar", data: rows.map((r) => r.value), itemStyle: { color: paletteColor(0), borderRadius: [0, 3, 3, 0] }, barMaxWidth: 16 }],
           }}
         />
+        )}</Zoomable>
       )}
     </Panel>
   );
@@ -240,8 +264,9 @@ export function BarPanel({ title, rows, fmtX, loading, err, danger, dataKind = "
       ) : rows.length === 0 ? (
         <EmptyHint kind={dataKind} />
       ) : (
+        <Zoomable base={380}>{(h) => (
         <ReactECharts
-          style={{ height: Math.min(380, 36 + rows.length * 26) }}
+          style={{ height: Math.min(h, 36 + rows.length * 26) }}
           option={{
             ...chartBase,
             grid: { left: 8, right: 76, top: 6, bottom: 6, containLabel: true },
@@ -254,6 +279,7 @@ export function BarPanel({ title, rows, fmtX, loading, err, danger, dataKind = "
             }],
           }}
         />
+        )}</Zoomable>
       )}
     </Panel>
   );

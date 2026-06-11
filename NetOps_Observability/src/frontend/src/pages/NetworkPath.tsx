@@ -71,10 +71,10 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
 
       <Group title="Path SLA (STAMP / RFC 8762)" hue="#14B8A6">
         <div className="dm-grid">
-          <MetricTop title="Round-trip delay by target (ms)" query="probe_rtt_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
+          <MetricTop title="Round-trip delay by target (ms)" query="(probe_rtt_ms or synthetic_icmp_rtt_ms)" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
           <MetricTop title="One-way delay by target (ms)" query="probe_owd_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
           <MetricTop title="Jitter / PDV by target (ms)" query="probe_pdv_ms" minutes={m} fmtX={(n) => `${n.toFixed(1)} ms`} labelKeys={["dst"]} dataKind="generic" />
-          <MetricTop title="Packet loss by target (%)" query="probe_loss_pct" minutes={m} fmtX={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="generic" />
+          <MetricTop title="Packet loss by target (%)" query="(probe_loss_pct or synthetic_icmp_loss_pct)" minutes={m} fmtX={(n) => `${n.toFixed(1)}%`} labelKeys={["dst"]} dataKind="generic" />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}>
           One-way delay (RFC 7679), loss (RFC 2680) and jitter/PDV (RFC 3393) from STAMP probes. Enable with <code>FEATURE_ACTIVE_PROBE=true</code> + <code>STAMP_TARGETS</code> (and a reflector via <code>FEATURE_STAMP_REFLECTOR</code>). These feed RFC-grade Path Health.

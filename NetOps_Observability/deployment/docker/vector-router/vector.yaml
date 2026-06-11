@@ -120,6 +120,15 @@ transforms:
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
 
+  # OS gets a 1-in-50 SAMPLE of flows — ClickHouse is the canonical flow store.
+  # An unsampled mirror at generator/production fps wrote ~4 GB/day into one
+  # index, hit the disk flood-stage watermark, and turned EVERY log index
+  # read-only (2026-06-10 outage: syslog/traps/applogs all stopped).
+  flows_os_sample:
+    type: sample
+    inputs: [flows_decoded]
+    rate: 50
+
 sinks:
   prometheus_internal:
     type: prometheus_exporter
@@ -165,7 +174,7 @@ sinks:
   # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
     type: elasticsearch
-    inputs: [flows_decoded]
+    inputs: [flows_os_sample]
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:

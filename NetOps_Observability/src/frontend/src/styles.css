@@ -2410,3 +2410,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .board-empty-hint { color: var(--fg-subtle); font-size: 12px; max-width: 420px; text-align: center; line-height: 1.5; font-style: normal; }
 .board-empty-link { margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--accent); }
 .board-empty-link:hover { text-decoration: underline; }
+
+/* ── Panel deep-look zoom (board graphs click-to-enlarge) ──────────────────── */
+.panel-zoomable { cursor: zoom-in; }
+.panel-zoomable:hover { color: var(--accent); }
+.panel-zoom-btn {
+  margin-left: auto; border: none; background: none; color: var(--muted);
+  font-size: 14px; line-height: 1; cursor: zoom-in; padding: 2px 4px; border-radius: var(--r-1);
+}
+.panel-zoom-btn:hover { color: var(--accent); background: var(--hover); }
+.ds-modal.ds-modal-wide { width: min(1400px, 94vw); max-width: 94vw; }
+.panel-zoom-body { min-width: 0; }
