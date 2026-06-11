@@ -30,12 +30,25 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Deque, Dict, Iterable
 
 import httpx
 from aiokafka import AIOKafkaConsumer
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+from episodes import EpisodeDetector, EpisodeEvent
+from signals import (
+    DeadLetter,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -121,6 +134,88 @@ class Series:
 
 
 SERIES: Dict[tuple[str, str], Series] = {}
+
+# ---------------------------------------------------------------------------
+# Correlation Engine v2 — build ②: episode model (stages [1]+[2] of the
+# canonical pipeline). Episodes are written to netops.corr_signals (the frozen
+# spine); the legacy z-score→findings path above stays untouched (compat,
+# §9 P1). Default-on; CORR_SIGNALS_ENABLED=false disables spine writes only.
+# ---------------------------------------------------------------------------
+
+CORR_SIGNALS_ENABLED = os.environ.get("CORR_SIGNALS_ENABLED", "true").lower() != "false"
+DETECTOR = EpisodeDetector()
+DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
+
+
+def _severity_for(peak_z: float) -> Severity:
+    if peak_z >= 8:
+        return Severity.CRIT
+    if peak_z >= 5:
+        return Severity.HIGH
+    return Severity.WARN
+
+
+def episode_signal(ev: EpisodeEvent, observer: Observer) -> Signal:
+    """EpisodeEvent → canonical Signal row (deterministic identity: the episode
+    is identified by its onset, so onset+clear rows share native_id lineage)."""
+    tenant_id, entity_id, metric = ev.key
+    onset_ms = int(ev.onset_ts.timestamp() * 1000)
+    attrs = {
+        "phase": ev.phase,
+        "onset_uncertainty_s": round(ev.onset_uncertainty_s, 3),
+        "peak_deviation": round(ev.peak_deviation, 4),
+        "integral": round(ev.integral, 2),
+    }
+    if ev.clear_ts is not None:
+        attrs["clear_ts"] = ev.clear_ts.isoformat()
+    return Signal(
+        tenant_id=tenant_id,
+        ts=ev.onset_ts if ev.phase == "onset" else (ev.clear_ts or ev.onset_ts),
+        source=Source.METRIC,
+        kind="metric_anomaly" if ev.phase == "onset" else "metric_anomaly_clear",
+        observer=observer,
+        modality_class=ModalityClass.DEVICE_TELEMETRY,
+        entity_type=EntityType.DEVICE,
+        entity_id=entity_id,
+        severity=_severity_for(ev.peak_deviation),
+        native_id=f"{tenant_id}|{entity_id}|{metric}|{ev.phase}|{onset_ms}",
+        metric_name=metric,
+        value=ev.value,
+        baseline=ev.baseline,
+        deviation=ev.deviation,
+        attrs=attrs,
+    )
+
+
+async def feed_episode_detector(device: str, metric: str, value: float) -> None:
+    """Stage [1]+[2]: normalize provenance, run CUSUM, persist episode events."""
+    global DEADLETTER_COUNT
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = tenant_for(device)
+    # Event time: the bus records carry no trustworthy source timestamp yet
+    # (telegraf batches); ingest time with clock_quality=unknown widens the
+    # onset budget accordingly — honest, not optimistic. P1 wiring threads
+    # real source timestamps through rp.telemetry.* and tightens this.
+    now = datetime.now(timezone.utc)
+    ev = DETECTOR.observe(tenant, device, metric, now, value, clock_quality="unknown")
+    if ev is None:
+        return
+    try:
+        observer = Observer(
+            observer_id=device,
+            observer_type=ObserverType.DEVICE,
+            collection_path="via_aggregator",   # telegraf polled it off the device
+            clock_quality="unknown",
+        )
+        row = episode_signal(ev, observer).to_ch_row()
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        log.warning("dead-letter (provenance): %s", exc)
+        return
+    await ch.insert("netops.corr_signals", [row])
+    log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
+             ev.key[2], ev.peak_deviation, ev.onset_uncertainty_s)
 
 
 def score(device: str, metric: str, value: float) -> float | None:
@@ -233,6 +328,10 @@ async def handle_metric(ev: dict) -> None:
             break
     if value is None:
         return
+    # Engine v2 stage [1]+[2]: every sample feeds the episode detector (CUSUM
+    # needs the full stream, not just crossings). Independent of the legacy
+    # finding emission below.
+    await feed_episode_detector(device, name, value)
     z = score(device, name, value)
     if z is None:
         return
@@ -346,7 +445,14 @@ class Finding(BaseModel):
 
 @app.get("/healthz")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "engine_v2": {
+            "corr_signals_enabled": CORR_SIGNALS_ENABLED,
+            "open_episodes": DETECTOR.open_episodes(),
+            "deadletter_count": DEADLETTER_COUNT,
+        },
+    }
 
 
 @app.get("/findings", response_model=list[Finding])

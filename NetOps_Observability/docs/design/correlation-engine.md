@@ -382,9 +382,14 @@ The current per-(device,metric) rolling window stays, but crossings now open an
 **episode** with hysteresis instead of emitting isolated findings:
 
 - onset: CUSUM accumulator over signed deviation crosses `h` (default 4σ cumulative)
-  → `onset_ts` recorded **with uncertainty ±half the metric's sampling interval**.
-  Onset is what matters for causal ordering — NOT the alert's firing time (alert
-  evaluation delay would systematically lie about order).
+  → `onset_ts` = the crossing side's **run start**, recorded **with uncertainty
+  ±(one sampling interval + clock-quality budget)**. One full interval, not half
+  (amended at build ②, empirically): the run-start estimator can include up to one
+  noise sample as prefix — a noise sample that opened the accumulator just before
+  the real change — so ±half-interval put the true onset outside the stated band
+  in testing. Each CUSUM side tracks its own run start (alternating noise
+  ping-pongs between sides). Onset is what matters for causal ordering — NOT the
+  alert's firing time (alert evaluation delay would systematically lie about order).
 - clear: deviation back inside 1σ for `clear_hold` (default 3 intervals).
 - episode carries: peak deviation, integral (area = magnitude×duration), onset
   uncertainty. Discrete signals (BGP peer down, alert fired, SoT drift, config
