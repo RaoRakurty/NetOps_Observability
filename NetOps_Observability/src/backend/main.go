@@ -60,6 +60,7 @@ type server struct {
 	audit            auditRepo
 	notifyCfg        *notifyConfigStore
 	contactPoints    *contactPointStore
+	deviceLocations  *deviceLocationStore
 	reports          *reportScheduler
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
@@ -341,6 +342,10 @@ func newServer() *server {
 		log.Fatalf("snmp profile store: %v", err)
 	}
 
+	deviceLocations, err := newDeviceLocationStore(envOr("DEVICE_LOCATIONS_FILE", "/data/device_locations.json"))
+	if err != nil {
+		log.Fatalf("device locations store: %v", err)
+	}
 	contactPoints, err := newContactPointStore(envOr("CONTACT_POINTS_FILE", "/data/contact_points.json"))
 	if err != nil {
 		log.Fatalf("contact point store: %v", err)
@@ -369,6 +374,7 @@ func newServer() *server {
 		saved:            saved,
 		audit:            audit,
 		contactPoints:    contactPoints,
+		deviceLocations:  deviceLocations,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -817,6 +823,16 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 	// dormant unless FEATURE_DEVICE_SSH). Delegate before the id parse below.
 	if strings.HasSuffix(r.URL.Path, "/ssh") {
 		s.handleDeviceSSH(w, r)
+		return
+	}
+	// Location annotation layer: /api/devices/locations (editor list) and
+	// /api/devices/{id}/location (per-device get/set/clear).
+	if r.URL.Path == "/api/devices/locations" {
+		s.handleDeviceLocations(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/location") {
+		s.handleDeviceLocation(w, r)
 		return
 	}
 	id := r.URL.Path[len("/api/devices/"):]

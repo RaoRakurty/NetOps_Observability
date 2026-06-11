@@ -206,10 +206,13 @@ func netboxDeviceTokens(d netboxDeviceSite) []string {
 }
 
 // buildGeomap joins the site list with the visible inventory. A device's site
-// is resolved from its inventory `site` label (present in read/both sync mode)
-// OR the NetBox device→site assignment map keyed by identity (so write-only
-// mode still places devices). Pure — unit-tested.
-func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]string, now time.Time) (rows []geoSite, unplaced int) {
+// is resolved with clear intent precedence: the SoT placement — its inventory
+// `site` label (read/both sync mode) OR the NetBox device→site assignment map
+// (write-only mode) — wins; otherwise an operator location annotation
+// (`lookup`, the device_locations layer) places it, with devices sharing a
+// site label folding into one bubble. Pure — unit-tested.
+func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]string,
+	lookup func([]string) (DeviceLocation, bool), now time.Time) (rows []geoSite, unplaced int) {
 	bySlug := map[string]*geoSite{}
 	order := []string{}
 	for _, s := range sites {
@@ -226,27 +229,48 @@ func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]
 		bySlug[s.Slug] = g
 		order = append(order, s.Slug)
 	}
-	for _, d := range devices {
-		slug := d.Labels["site"]
-		if slug == "" && assign != nil {
-			for _, tok := range deviceIdentities(d) {
-				if s, ok := assign[tok]; ok {
-					slug = s
-					break
-				}
-			}
-		}
-		g := bySlug[slug]
-		if slug == "" || g == nil {
-			unplaced++
-			continue
-		}
+	count := func(g *geoSite, d models.Device) {
 		g.Devices++
 		if now.Sub(d.LastSeen) < geoFreshWindow {
 			g.Up++
 		} else {
 			g.Down++
 		}
+	}
+	for _, d := range devices {
+		toks := deviceIdentities(d)
+		slug := d.Labels["site"]
+		if slug == "" && assign != nil {
+			for _, tok := range toks {
+				if s, ok := assign[tok]; ok {
+					slug = s
+					break
+				}
+			}
+		}
+		if g := bySlug[slug]; slug != "" && g != nil {
+			count(g, d)
+			continue
+		}
+		// No SoT placement — fall back to the operator annotation layer.
+		if lookup != nil {
+			if l, ok := lookup(toks); ok {
+				name := l.Site
+				if name == "" {
+					name = d.Name
+				}
+				key := "loc:" + strings.ToLower(name)
+				g := bySlug[key]
+				if g == nil {
+					g = &geoSite{Name: name, Slug: key, Status: "manual", Lat: l.Lat, Lng: l.Lng, HasCoords: true}
+					bySlug[key] = g
+					order = append(order, key)
+				}
+				count(g, d)
+				continue
+			}
+		}
+		unplaced++
 	}
 	for _, slug := range order {
 		rows = append(rows, *bySlug[slug])
@@ -265,13 +289,16 @@ func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.netboxCfg.effective()
-	if !cfg.Enabled || cfg.URL == "" || cfg.Token == "" {
+	sotEnabled := cfg.Enabled && cfg.URL != "" && cfg.Token != ""
+	// The map renders from EITHER intent source: SoT sites and/or the operator
+	// location annotations. Onboarding empty-state only when neither exists.
+	if !sotEnabled && s.deviceLocations.Empty() {
 		writeJSON(w, http.StatusOK, map[string]any{"geo_enabled": false, "reason": "sot"})
 		return
 	}
 
 	s.geoSites.mu.Lock()
-	if time.Since(s.geoSites.at) > geoSiteCacheTTL {
+	if sotEnabled && time.Since(s.geoSites.at) > geoSiteCacheTTL {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		client := &http.Client{Timeout: 10 * time.Second}
 		sites, err := fetchNetboxSites(ctx, client, cfg)
@@ -297,7 +324,7 @@ func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
 	s.geoSites.mu.Unlock()
 
 	devices := visibleDevices(s.discovery.Devices(), claims)
-	rows, unplaced := buildGeomap(sites, devices, assign, time.Now())
+	rows, unplaced := buildGeomap(sites, devices, assign, s.deviceLocations.Lookup, time.Now())
 	placed := 0
 	for _, g := range rows {
 		placed += g.Devices

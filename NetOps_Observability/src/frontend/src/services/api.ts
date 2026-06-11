@@ -931,6 +931,14 @@ export const api = {
   probePaths: () => request<ProbePath[]>("/api/probe/paths"),
   // Device Geomap — sites (SoT intent) + per-site device health.
   geomap: () => request<GeomapResponse>("/api/geomap"),
+  deviceLocations: () => request<{ devices: DeviceLocationRow[] }>("/api/devices/locations"),
+  deviceLocation: (id: string) =>
+    request<{ set: boolean; sot_site?: string; location?: { site?: string; lat: number; lng: number } }>(
+      `/api/devices/${encodeURIComponent(id)}/location`),
+  setDeviceLocation: (id: string, body: { site: string; lat: number; lng: number }) =>
+    request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/location`, { method: "PUT", body: JSON.stringify(body) }),
+  clearDeviceLocation: (id: string) =>
+    request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/location`, { method: "DELETE" }),
   flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
@@ -1779,6 +1787,11 @@ export type PromSeries = { metric: Record<string, string>; values: [number, stri
 export type ProbeHop = { ttl: number; ip: string; rtt_ms: number; loss_pct: number };
 export type ProbePath = { dst: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
 // Device Geomap — NetBox DCIM sites (lat/lng intent data) joined with inventory health.
+export type DeviceLocationRow = {
+  id: string; name: string; vendor?: string; site?: string;
+  lat?: number; lng?: number; source: "sot" | "manual" | "none";
+};
+
 export type GeoSite = {
   name: string; slug: string; status?: string;
   lat: number; lng: number; has_coords: boolean;

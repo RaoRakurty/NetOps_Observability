@@ -2423,3 +2423,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .panel-zoom-body { min-width: 0; }
 /* Overview zoom: stretch fixed-height ECharts panels inside the deep-look modal. */
 .panel-zoom-body .echarts-for-react { height: min(62vh, 720px) !important; }
+
+/* ── Geomap location editor ─────────────────────────────────────────────────── */
+table.loc-editor { width: 100%; border-collapse: collapse; font-size: var(--fs-meta); }
+table.loc-editor th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+table.loc-editor td { padding: 5px 8px; border-bottom: 1px solid var(--surface-2); }
+table.loc-editor input { width: 100%; min-width: 90px; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--r-1); background: var(--surface); color: var(--fg); font-size: var(--fs-meta); }
+table.loc-editor input:focus { outline: none; border-color: var(--accent); }

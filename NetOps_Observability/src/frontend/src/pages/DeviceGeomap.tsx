@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { cssVar } from "../theme/tokens";
 import { registerMap } from "echarts/core";
-import { api, GeomapResponse, GeoSite } from "../services/api";
-import { StatStrip, Stat } from "../components/ui";
+import { api, DeviceLocationRow, GeomapResponse, GeoSite } from "../services/api";
+import { StatStrip, Stat, Segmented } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 
@@ -128,9 +128,104 @@ export function GeomapSection() {
   return <MapPanel sites={data.sites ?? []} height={320} />;
 }
 
+// LocationsEditor — Infrastructure → Maps → "Set locations": every visible
+// device with where its placement comes from. SoT-placed rows are read-only
+// (coordinates are managed on the site in the Source of Truth and win by
+// precedence); everything else takes a free-form site label + lat/lng that
+// lands in the operator annotation layer and shows on the map immediately.
+function LocationsEditor({ onChanged }: { onChanged: () => void }) {
+  const [rows, setRows] = useState<DeviceLocationRow[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Record<string, { site: string; lat: string; lng: string }>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setRows((await api.deviceLocations()).devices); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const dv = (r: DeviceLocationRow) =>
+    draft[r.id] ?? { site: r.site ?? "", lat: r.lat != null && r.source === "manual" ? String(r.lat) : "", lng: r.lng != null && r.source === "manual" ? String(r.lng) : "" };
+  const edit = (r: DeviceLocationRow, patch: Partial<{ site: string; lat: string; lng: string }>) =>
+    setDraft({ ...draft, [r.id]: { ...dv(r), ...patch } });
+
+  const save = async (r: DeviceLocationRow) => {
+    const d = dv(r);
+    const lat = parseFloat(d.lat), lng = parseFloat(d.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) { setErr(`${r.name}: latitude and longitude are required (decimal WGS 84)`); return; }
+    setBusy(r.id);
+    try {
+      await api.setDeviceLocation(r.id, { site: d.site.trim(), lat, lng });
+      const next = { ...draft }; delete next[r.id]; setDraft(next);
+      setErr(null); await load(); onChanged();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+  const clear = async (r: DeviceLocationRow) => {
+    setBusy(r.id);
+    try { await api.clearDeviceLocation(r.id); setErr(null); await load(); onChanged(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>Device locations</h3>
+      <p className="mini-meta">
+        Devices placed by the Source of Truth inherit their site's coordinates (set them on the site under
+        Automation → Source of Truth). For everything else, type a site label + decimal latitude/longitude —
+        devices sharing a label fold into one map bubble. Unplaced devices are listed first.
+      </p>
+      {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
+      <table className="loc-editor">
+        <thead><tr><th>Device</th><th>Placement</th><th>Site label</th><th>Latitude</th><th>Longitude</th><th /></tr></thead>
+        <tbody>
+          {rows.map((r) => {
+            const d = dv(r);
+            const sot = r.source === "sot";
+            return (
+              <tr key={r.id}>
+                <td className="mono">{r.name}</td>
+                <td>
+                  {sot ? <span className="cat">Source of Truth · {r.site}</span>
+                    : r.source === "manual" ? <span className="cat">manual</span>
+                    : <span style={{ color: "var(--warn)" }}>not set</span>}
+                </td>
+                {sot ? (
+                  <td colSpan={3} className="mini-meta">coordinates come from the site in the Source of Truth</td>
+                ) : (
+                  <>
+                    <td><input value={d.site} placeholder="e.g. Dallas-Branch" onChange={(e) => edit(r, { site: e.target.value })} /></td>
+                    <td><input value={d.lat} placeholder="32.78" inputMode="decimal" onChange={(e) => edit(r, { lat: e.target.value })} /></td>
+                    <td><input value={d.lng} placeholder="-96.80" inputMode="decimal" onChange={(e) => edit(r, { lng: e.target.value })} /></td>
+                  </>
+                )}
+                <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                  {!sot && (
+                    <>
+                      <button className="dash-btn accent" disabled={busy === r.id} onClick={() => save(r)}>Save</button>
+                      {r.source === "manual" && (
+                        <button className="dash-btn" style={{ marginLeft: 6 }} disabled={busy === r.id} onClick={() => clear(r)}>Clear</button>
+                      )}
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && !err && <tr><td colSpan={6} className="mini-meta">No devices visible.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function DeviceGeomap() {
   const [data, setData] = useState<GeomapResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [view, setView] = useState<"map" | "locations">("map");
+  const [bump, setBump] = useState(0); // re-fetch signal after a location edit
 
   useEffect(() => {
     let alive = true;
@@ -141,7 +236,7 @@ export default function DeviceGeomap() {
     load();
     const t = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(t); };
-  }, []);
+  }, [bump]);
 
   const sites = data?.sites ?? [];
   const up = sites.reduce((a, s) => a + s.up, 0);
@@ -177,17 +272,28 @@ export default function DeviceGeomap() {
           <h2 style={{ marginBottom: 6 }}>Device Geomap</h2>
           <p style={{ color: "var(--muted)", maxWidth: 540, margin: "0 auto" }}>
             {data.reason === "sot"
-              ? "The geomap places devices from Source-of-Truth intent data (sites with latitude/longitude). Connect the Source of Truth under Automation → Source of Truth to enable it."
+              ? "The geomap places devices from intent data: Source-of-Truth sites with latitude/longitude, or locations you set per device right here. GeoIP is never used."
               : `Could not read sites from the Source of Truth${data.error ? `: ${data.error}` : ""}.`}
           </p>
-          <a className="board-empty-link" style={{ display: "inline-block", marginTop: 12 }} href="#/automation/sot">Open Source of Truth →</a>
+          <div style={{ marginTop: 12, display: "flex", gap: 14, justifyContent: "center" }}>
+            <button className="dash-btn accent" onClick={() => setView("locations")}>Set device locations</button>
+            <a className="board-empty-link" href="#/automation/sot">Open Source of Truth →</a>
+          </div>
         </div>
+        {view === "locations" && <div style={{ marginTop: 14 }}><LocationsEditor onChanged={() => setBump((b) => b + 1)} /></div>}
       </div>
     );
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Segmented value={view} ariaLabel="Geomap view"
+        options={[{ value: "map", label: "Map" }, { value: "locations", label: "Set locations" }]}
+        onChange={setView} />
+      {view === "locations" ? (
+        <LocationsEditor onChanged={() => setBump((b) => b + 1)} />
+      ) : (
+      <>
       <StatStrip>
         <Stat label="Sites" value={sites.length} />
         <Stat label="Sites on map" value={sites.filter((s) => s.has_coords).length} />
@@ -211,6 +317,8 @@ export default function DeviceGeomap() {
           </p>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }
