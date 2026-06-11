@@ -299,6 +299,17 @@ All constants live in engine config, are part of the **config hash** in
 `engine_version`, and get re-fit later from labeled history (Phase-4 calibration) —
 deterministic first, learned second.
 
+**Seam-relative correlation (owner spec, 2026-06-11):** `path`/`segment` entities
+are instances of the five **canonical ownership-transition seams**
+(`cloud-ingestion.md` §4: DX, VPN, SDWAN, DIA, CLOUD_BACKBONE). Correlation is
+computed *relative to seams*: episodes on opposite sides of a seam crossing get the
+seam itself as the candidate boundary node, and a seam's `control_plane_owner`
+(enterprise/isp/cloud/sdwan_controller) feeds the hypothesis verdict's `owner` field
+directly — causality localizing *at* a seam is what makes "open carrier ticket" vs
+"our edge" assignable. A seam's `visibility` (full/partial/blind) caps the
+direction confidence claimable across it (blind seams never get onset-order votes
+from inferred interior state, only from bracketing probes).
+
 ### 4.3 Causal direction inference
 
 Directed edge A→B claimed only when at least two of three agree (else edge stays

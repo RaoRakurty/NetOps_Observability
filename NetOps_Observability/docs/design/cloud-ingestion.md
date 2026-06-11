@@ -88,16 +88,46 @@ Normalization: cloud flows → the existing flow schema (+ `cloud_provider`,
 the existing syslog pipeline untouched. DX/ER BGP state from T1 APIs is the cloud
 side of the `bgp_path_change` discriminator several failure signatures depend on.
 
-## 4. Seam inventory (segment model — first-class crossing kinds)
+## 4. Canonical seam inventory (owner-specified, 2026-06-11 — FINAL)
 
-Pending owner trim (question outstanding); until then ALL four are modeled:
-1. **DX/ER private peering at colo** (Equinix cage — the leased-line middle mile)
-2. **IPsec site-to-site over internet underlay**
-3. **SD-WAN cloud gateways / on-ramps** (NVA in VPC)
-4. **SaaS direct via local internet breakout (DIA)** — never touches the DC path
+**The design insight (owner):** we are not modeling network paths — we are modeling
+**ownership transitions in packet-forwarding responsibility**. Each seam is a
+boundary where control-plane authority, forwarding behavior, and observability
+boundaries change; **all correlation is computed relative to these seams.** Five
+canonical seam types, chosen because each is a distinct control plane, failure
+domain, observability blind spot, and correlation behavior:
 
-Each crossing kind = a `segment` entity with its own probe pair (site-side ↔
-cloud-side where T2 deployed) so differential measurement brackets it.
+| # | `seam_type` | Character | Why first-class | Correlation signature | Probe strategy |
+|---|---|---|---|---|---|
+| 1 | `DX` (DX/ER/MPLS colo) | **Deterministic backbone seam** — physically provisioned, BGP-controlled, colo-mediated | Cleanest causal-inference boundary; highest business criticality; strongest this-vs-cloud-vs-ISP separation | BGP state changes; latency-baseline departures on a normally flat path | Bidirectional STAMP (on-prem ↔ cloud PoP), latency baseline tracking |
+| 2 | `VPN` (IPsec/GRE/SSL) | **Noisy fallback seam** — encapsulation hides the real underlay; ISP behavior leaks into the enterprise view | MTU/fragmentation artifacts dominate; underlay invisible through the tunnel | Jitter spikes, tunnel flaps, asymmetric loss | Synthetic ICMP + HTTP from BOTH ends; tunnel health as a first-class metric |
+| 3 | `SDWAN` (fabric cloud on-ramp) | **Policy-driven opaque routing seam** — controller-driven dynamic path selection over multiple simultaneous underlays | "Best path" logic invisible to observability tools — detecting bad steering, per-transport brownouts, control-plane misbehavior is a differentiator | Per-transport divergence (one underlay brownouts while policy keeps steering into it) | Multi-path probing (simulate path-selection outcomes); per-overlay correlation tagging |
+| 4 | `DIA` (direct breakout → SaaS) | **Visibility cliff seam** — enterprise control ends completely; branch → ISP → SaaS | No internal telemetry beyond the edge; dominates user-experience complaints; heavily ISP-dependent | DNS degradation, regional SaaS latency shifts, ISP congestion signatures | Branch + cloud synthetic pairs (critical); SaaS endpoint probing from multiple vantage points |
+| 5 | `CLOUD_BACKBONE` (inter-region / cross-AZ) | **Invisible cloud failure domain** — missing in most models; modern outages frequently live here | Region↔region routing, backbone congestion, cross-AZ dependencies, hidden provider control-plane issues | Multi-region divergence with clean enterprise-side telemetry | Cloud vantage agents only; multi-region synthetic RTT meshes (cross-cloud = future) |
+
+**Explicitly NOT seam types** (demoted to roles within seams):
+- Cloud NVA / firewalls → **signal sources inside** seams (T0 syslog feeds whatever seam the NVA sits on)
+- NAT gateways / LBs → **seam instrumentation**, not seam types
+- TGW / VGW / VPN gateways → **control-plane attributes** of seam 1 or 2
+- Service mesh / app flows → Layer 3 (service-scoped ingestion), never the seam model
+
+**Unified seam object** (platform schema; each seam instance is an entity the
+correlation engine scores against — supersedes the bare `segment` notion):
+
+```jsonc
+{
+  "seam_id": "dallas-dx-equinix-use1",
+  "seam_type": "DX | VPN | SDWAN | DIA | CLOUD_BACKBONE",
+  "endpoints": { "on_prem": "...", "cloud": "...", "provider": "aws|azure|gcp|internet" },
+  "control_plane_owner": "enterprise | isp | cloud | sdwan_controller",
+  "visibility": "full | partial | blind",      // honest, drives coverage labels
+  "probe_strategy": ["stamp", "icmp", "http_synthetic"]
+}
+```
+
+`control_plane_owner` is what makes hypothesis verdicts assignable (owner =
+netops/carrier/cloud_provider/app team maps directly from the seam where causality
+localizes); `visibility` keeps the coverage honesty rule enforceable per seam.
 
 ## 5. Phasing
 
