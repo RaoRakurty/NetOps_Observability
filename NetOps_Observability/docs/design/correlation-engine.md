@@ -658,6 +658,27 @@ closed / merged) — powers the front page's live "Top Active Issues".
 | **False merges** | Merge requires entity-overlap ≥ 40% AND window overlap AND combined graph diameter ≤ 6 — three independent brakes; merges are versioned and visible, never silent. |
 | **Replay drift** | `engine_version` = code semver + config hash; replay compares stored vs recomputed and reports diff — CI gains a golden-incident replay test (lab-generated scenarios as fixtures). |
 
+> **Build note (⑥, 2026-06-12, `engine.py`/`replay.py`):** shipped as a pure
+> deterministic core (`run_window`: signals × catalog × seam views → snapshots)
+> + persistence loop + replay runner. Two contract decisions recorded here:
+> (1) **snapshots embed their grounding context** — the seam views the gate
+> grounded against (plus `topology_version` = their content hash) are stored
+> inside the `corr_objects.hypotheses` JSON under `grounding_context`, so
+> replay rehydrates the context from the snapshot and NEVER grounds against
+> live state: objects stay re-runnable bit-for-bit forever even as the seam
+> inventory evolves, and inventory drift can't masquerade as engine drift.
+> (2) **pins are compared, never substituted** — replay cannot time-travel
+> code, so an engine/catalog pin mismatch is itself a reported finding,
+> distinct from structural drift (drift on matching pins = determinism bug,
+> CI-grade). Rehydrated signals keep their stored `signal_id` verbatim
+> (identity round-trip). v0 direction claims need both available votes
+> (onset order + layer prior) while the topology up/down vote abstains until
+> the graph-topology feed lands; the engine consumes ACTIVE seams from the
+> Go API's enrichment export (`seams.json`, the device_tenant.csv plane).
+> Golden fixture: `fixtures/golden-dallas-window.json` (the §6 Dallas scenario,
+> incl. an ungrounded bystander that must stay excluded), CI-gated by
+> `test_replay.py`.
+
 ## 9. Phasing (aligns with the front-page MVP cut)
 
 - **P1 (with front-page Phase 1):** normalizer + `corr_signals` (this IS #53's spine) +

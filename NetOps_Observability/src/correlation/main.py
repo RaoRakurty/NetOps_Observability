@@ -38,7 +38,10 @@ from aiokafka import AIOKafkaConsumer
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from catalog import builtin_catalog
+from engine import EngineConfig, ObjectSnapshot, SeamView, run_window
 from episodes import EpisodeDetector, EpisodeEvent
+from replay import replay_object
 from signals import (
     DeadLetter,
     EntityType,
@@ -146,6 +149,161 @@ CORR_SIGNALS_ENABLED = os.environ.get("CORR_SIGNALS_ENABLED", "true").lower() !=
 DETECTOR = EpisodeDetector()
 DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
 
+# ---------------------------------------------------------------------------
+# Correlation Engine v2 — build ⑥: object persistence + replay (stages [3]–[8]).
+# The deterministic core lives in engine.py (pure); this block owns the IO:
+# an in-memory evidence window, the seam grounding context (exported by the Go
+# API into the shared enrichment dir — same plane as device_tenant.csv), the
+# periodic evaluation loop that persists versioned snapshots + the archive
+# slice (replay-forever guarantee), and the /replay surface.
+# ---------------------------------------------------------------------------
+
+CORR_ENGINE_ENABLED = os.environ.get("CORR_ENGINE_ENABLED", "true").lower() != "false"
+CORR_ENGINE_INTERVAL_S = float(os.environ.get("CORR_ENGINE_INTERVAL_S", "30"))
+CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
+SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
+
+ENGINE_CFG = EngineConfig()
+CATALOG = builtin_catalog()
+
+# Evidence window: every canonical Signal written to the spine also lands here
+# (bounded by event-time age, pruned each cycle — §9 queues bounded).
+WINDOW_BUFFER: Deque[Signal] = deque(maxlen=50_000)
+
+# Open-object registry: correlation_id → persistence state. CH stays append-
+# only; this is the engine's working memory (PG corr_active wiring follows
+# with the ops lifecycle build).
+OPEN_OBJECTS: Dict[str, dict] = {}
+LAST_GAP_HINTS = 0
+
+_seam_cache: tuple[SeamView, ...] = ()
+_seam_mtime: float = -1.0
+
+
+def seam_inventory() -> tuple[SeamView, ...]:
+    """Active seam inventory for the grounding gate, exported by the Go API
+    (suggest→confirm→active happens there; only ACTIVE instances ground).
+    mtime-cached like tenant_for; absent file = empty inventory (the gate then
+    admits only explicit-topology edges — honest, never relaxed)."""
+    global _seam_cache, _seam_mtime
+    try:
+        mt = os.path.getmtime(SEAM_ENRICHMENT_FILE)
+    except OSError:
+        return _seam_cache
+    if mt != _seam_mtime:
+        _seam_mtime = mt
+        try:
+            with open(SEAM_ENRICHMENT_FILE) as f:
+                raw = json.load(f)
+            _seam_cache = tuple(SeamView.from_dict(d) for d in raw)
+        except (OSError, ValueError, KeyError) as exc:
+            log.warning("seam inventory unreadable (%s); keeping previous view", exc)
+    return _seam_cache
+
+
+def buffer_signal(sig: Signal) -> None:
+    WINDOW_BUFFER.append(sig)
+
+
+def _prune_buffer(now: datetime) -> None:
+    horizon = now.timestamp() - ENGINE_CFG.window_s
+    while WINDOW_BUFFER and WINDOW_BUFFER[0].ts.timestamp() < horizon:
+        WINDOW_BUFFER.popleft()
+
+
+async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
+                            window: list[Signal]) -> None:
+    assert ch is not None
+    await ch.insert("netops.corr_objects", [snap.to_object_row(version, state)])
+    edge_rows = snap.to_edge_rows(version)
+    if edge_rows:
+        await ch.insert("netops.corr_edges", edge_rows)
+    ev_rows = snap.to_evidence_rows(version)
+    if ev_rows:
+        await ch.insert("netops.corr_evidence", ev_rows)
+    # Stage [8] archive: the WHOLE tenant window, not just attached signals —
+    # candidate-pool decisions depend on non-attached episodes, so a
+    # participating-only archive would break bit-perfect replay. Replay dedups
+    # across versions by signal id.
+    archive_rows = []
+    for s in window:
+        row = s.to_ch_row()
+        row["archived_for"] = snap.correlation_id
+        archive_rows.append(row)
+    if archive_rows:
+        await ch.insert("netops.corr_signals_archive", archive_rows)
+    log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
+             snap.correlation_id[:8], version, state, snap.ranking.top_hypothesis,
+             snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
+
+
+async def engine_cycle() -> None:
+    """One evaluation: prune window, partition by tenant, run the pure core,
+    persist version increments, close quiesced objects."""
+    global LAST_GAP_HINTS
+    if ch is None:
+        return
+    now = datetime.now(timezone.utc)
+    _prune_buffer(now)
+    by_tenant: Dict[str, list[Signal]] = {}
+    for s in WINDOW_BUFFER:
+        by_tenant.setdefault(s.tenant_id, []).append(s)
+
+    seen_this_cycle: set[str] = set()
+    gap_hints = 0
+    for tenant in sorted(by_tenant):
+        window = by_tenant[tenant]
+        seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
+        try:
+            snapshots = run_window(window, CATALOG, seams, ENGINE_CFG)
+        except ValueError as exc:
+            log.error("engine window rejected: %s", exc)
+            continue
+        for snap in snapshots:
+            gap_hints += snap.gap_hints
+            seen_this_cycle.add(snap.correlation_id)
+            reg = OPEN_OBJECTS.get(snap.correlation_id)
+            chash = snap.content_hash()
+            if reg is None:
+                OPEN_OBJECTS[snap.correlation_id] = {
+                    "version": 1, "hash": chash, "last_seen": now, "snapshot": snap,
+                }
+                await _persist_snapshot(snap, 1, "open", window)
+            elif reg["hash"] != chash:
+                reg["version"] += 1
+                reg["hash"] = chash
+                reg["last_seen"] = now
+                reg["snapshot"] = snap
+                await _persist_snapshot(snap, reg["version"], "open", window)
+            else:
+                reg["last_seen"] = now
+
+    # Quiesce: an object whose component no longer materializes (episodes aged
+    # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
+    for cid in list(OPEN_OBJECTS):
+        reg = OPEN_OBJECTS[cid]
+        if cid in seen_this_cycle:
+            continue
+        if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
+            reg["version"] += 1
+            await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
+            del OPEN_OBJECTS[cid]
+    LAST_GAP_HINTS = gap_hints
+
+
+async def engine_loop() -> None:
+    if not (CORR_SIGNALS_ENABLED and CORR_ENGINE_ENABLED):
+        log.info("engine v2 object loop disabled")
+        return
+    log.info("engine v2 object loop: interval=%.0fs window=%.0fs quiesce=%.0fs",
+             CORR_ENGINE_INTERVAL_S, ENGINE_CFG.window_s, CORR_QUIESCE_S)
+    while True:
+        try:
+            await engine_cycle()
+        except Exception:                                  # noqa: BLE001
+            log.exception("engine cycle failed (observable, §10; loop continues)")
+        await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
+
 
 def _severity_for(peak_z: float) -> Severity:
     if peak_z >= 8:
@@ -208,12 +366,15 @@ async def feed_episode_detector(device: str, metric: str, value: float) -> None:
             collection_path="via_aggregator",   # telegraf polled it off the device
             clock_quality="unknown",
         )
-        row = episode_signal(ev, observer).to_ch_row()
+        sig = episode_signal(ev, observer)
+        row = sig.to_ch_row()
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
         log.warning("dead-letter (provenance): %s", exc)
         return
     await ch.insert("netops.corr_signals", [row])
+    # Build ⑥: every spine signal also feeds the engine's evidence window.
+    buffer_signal(sig)
     log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
              ev.key[2], ev.peak_deviation, ev.onset_uncertainty_s)
 
@@ -284,21 +445,34 @@ ch: CH | None = None
 
 
 async def consume() -> None:
-    consumer = AIOKafkaConsumer(
-        *TOPICS,
-        bootstrap_servers=KAFKA_BOOTSTRAP,
-        group_id="netops-correlation",
-        auto_offset_reset="latest",
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")) if v else None,
-        enable_auto_commit=True,
-    )
-    await consumer.start()
-    log.info("consuming topics=%s bootstrap=%s", TOPICS, KAFKA_BOOTSTRAP)
-    try:
-        async for msg in consumer:
-            await handle(msg.topic, msg.value)
-    finally:
-        await consumer.stop()
+    """Supervised consumer: a poison batch / codec error / broker hiccup is
+    logged and retried with backoff, NEVER a silent task death (§10 — the
+    pre-build-⑥ consumer died unobserved on a snappy-compressed batch and
+    starved the whole engine; this loop is the guarantee that can't recur)."""
+    backoff = 1.0
+    while True:
+        consumer = AIOKafkaConsumer(
+            *TOPICS,
+            bootstrap_servers=KAFKA_BOOTSTRAP,
+            group_id="netops-correlation",
+            auto_offset_reset="latest",
+            value_deserializer=lambda v: json.loads(v.decode("utf-8")) if v else None,
+            enable_auto_commit=True,
+        )
+        try:
+            await consumer.start()
+            log.info("consuming topics=%s bootstrap=%s", TOPICS, KAFKA_BOOTSTRAP)
+            backoff = 1.0
+            async for msg in consumer:
+                await handle(msg.topic, msg.value)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                                  # noqa: BLE001
+            log.exception("consumer failed; restarting in %.0fs", backoff)
+        finally:
+            await consumer.stop()
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 60.0)
 
 
 async def handle(topic: str, event: dict | None) -> None:
@@ -416,15 +590,17 @@ async def emit(**kwargs) -> None:
 async def lifespan(_app: FastAPI):
     global ch
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
-    task = asyncio.create_task(consume())
+    tasks = [asyncio.create_task(consume()), asyncio.create_task(engine_loop())]
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await ch.close()
 
 
@@ -451,8 +627,27 @@ async def health() -> dict:
             "corr_signals_enabled": CORR_SIGNALS_ENABLED,
             "open_episodes": DETECTOR.open_episodes(),
             "deadletter_count": DEADLETTER_COUNT,
+            "engine_enabled": CORR_ENGINE_ENABLED,
+            "open_objects": len(OPEN_OBJECTS),
+            "window_signals": len(WINDOW_BUFFER),
+            "seam_inventory": len(seam_inventory()),
+            "topology_gap_hints": LAST_GAP_HINTS,
         },
     }
+
+
+@app.get("/correlations/{correlation_id}/replay")
+async def correlation_replay(correlation_id: str, version: int | None = None) -> dict:
+    """Re-run the engine over the object's archived window and report drift
+    (design §5: internal surface; the Go API fronts it with authz)."""
+    assert ch is not None
+    try:
+        report = await replay_object(ch, correlation_id, version)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return report.to_dict()
 
 
 @app.get("/findings", response_model=list[Finding])

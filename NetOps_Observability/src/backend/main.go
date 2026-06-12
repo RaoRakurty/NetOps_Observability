@@ -461,6 +461,9 @@ func main() {
 	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
+	// Export active seams to the enrichment dir for the correlation engine's
+	// grounding gate (#67 build ⑥).
+	srv.startSeamEnrichment(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process

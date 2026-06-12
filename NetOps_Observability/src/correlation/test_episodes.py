@@ -3,6 +3,7 @@
 owner's pre-freeze amendments; a behavior change here is a design change."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -27,14 +28,14 @@ from signals import (
 T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def obs(**kw) -> Observer:
-    base = dict(observer_id="leaf1", observer_type=ObserverType.DEVICE)
+def obs(**kw: Any) -> Observer:
+    base: dict[str, Any] = dict(observer_id="leaf1", observer_type=ObserverType.DEVICE)
     base.update(kw)
     return Observer(**base)
 
 
-def sig(**kw) -> Signal:
-    base = dict(
+def sig(**kw: Any) -> Signal:
+    base: dict[str, Any] = dict(
         tenant_id="", ts=T0, source=Source.METRIC, kind="metric_anomaly",
         observer=obs(), modality_class=ModalityClass.DEVICE_TELEMETRY,
         entity_type=EntityType.DEVICE, entity_id="leaf1",
@@ -249,6 +250,5 @@ def test_series_isolated_per_tenant_entity_metric():
 
 
 def test_default_interval_before_observation():
-    det = EpisodeDetector()
     st_interval = DEFAULT_INTERVAL_S
     assert st_interval == 60.0  # documented default; config-hash member

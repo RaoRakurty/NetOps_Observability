@@ -116,6 +116,9 @@ class Signal:
     baseline: float = 0.0
     deviation: float = 0.0
     attrs: dict = field(default_factory=dict)
+    # Set ONLY by from_ch_row: a rehydrated signal keeps its stored identity
+    # verbatim, so replay compares the same ids the snapshot was built from.
+    stored_signal_id: str | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -127,7 +130,10 @@ class Signal:
 
     @property
     def signal_id(self) -> uuid.UUID:
-        """Deterministic: same (source, native_id, event time) ⇒ same id."""
+        """Deterministic: same (source, native_id, event time) ⇒ same id.
+        Rehydrated signals return their stored id (identity round-trip)."""
+        if self.stored_signal_id:
+            return uuid.UUID(self.stored_signal_id)
         ts_ms = int(self.ts.timestamp() * 1000)
         return uuid.uuid5(SIGNAL_NS, f"{self.source.value}|{self.native_id}|{ts_ms}")
 
@@ -163,6 +169,52 @@ class Signal:
             "deviation": self.deviation,
             "attrs": attrs_json,
         }
+
+
+    @classmethod
+    def from_ch_row(cls, row: dict) -> "Signal":
+        """Inverse of to_ch_row — rehydrates a Signal from a corr_signals /
+        corr_signals_archive row (the replay input). Round-trip invariant:
+        Signal.from_ch_row(s.to_ch_row()).to_ch_row() == s.to_ch_row(), so a
+        replay consumes byte-identical evidence."""
+        attrs_raw = row.get("attrs") or "{}"
+        attrs = json.loads(attrs_raw) if isinstance(attrs_raw, str) else dict(attrs_raw)
+        return cls(
+            tenant_id=str(row.get("tenant_id", "")),
+            ts=_parse_ch_dt(str(row["ts"])),
+            source=Source(str(row["source"])),
+            kind=str(row["kind"]),
+            observer=Observer(
+                observer_id=str(row["observer_id"]),
+                observer_type=ObserverType(str(row["observer_type"])),
+                location=str(row.get("observer_location", "")),
+                trust_domain=str(row.get("observer_trust_domain", "")),
+                collection_path=str(row.get("collection_path", "direct")),
+                clock_quality=str(row.get("source_clock_quality", "unknown")),
+            ),
+            modality_class=ModalityClass(str(row["modality_class"])),
+            entity_type=EntityType(str(row["entity_type"])),
+            entity_id=str(row["entity_id"]),
+            severity=Severity(str(row["severity"])),
+            native_id="rehydrated",   # identity comes from stored_signal_id
+            entity_tokens=tuple(row.get("entity_tokens") or ()),
+            site=str(row.get("site", "")),
+            path_id=row.get("path_id") or None,
+            service_id=row.get("service_id") or None,
+            metric_name=str(row.get("metric_name", "")),
+            value=float(row.get("value", 0.0)),
+            baseline=float(row.get("baseline", 0.0)),
+            deviation=float(row.get("deviation", 0.0)),
+            attrs=attrs,
+            stored_signal_id=str(row["signal_id"]),
+        )
+
+
+def _parse_ch_dt(s: str) -> datetime:
+    """Parse a ClickHouse DateTime64(3) string back to tz-aware UTC."""
+    s = s.strip().replace("T", " ")
+    fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in s else "%Y-%m-%d %H:%M:%S"
+    return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
 
 
 def _ch_dt(dt: datetime) -> str:

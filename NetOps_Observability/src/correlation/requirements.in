@@ -11,6 +11,11 @@ fastapi==0.133.1
 starlette==1.0.1
 uvicorn[standard]==0.30.6
 aiokafka==0.11.0
+# Snappy codec for aiokafka: the flows topic arrives snappy-compressed and the
+# missing codec KILLED the consumer at first fetch (UnsupportedCodecError —
+# found at #67 build ⑥; this was the engine-starvation root cause). cramjam
+# ships pure wheels (no native libsnappy), hence preferred over python-snappy.
+cramjam==2.8.4
 httpx==0.27.2
 pydantic==2.9.2
 asyncpg==0.29.0

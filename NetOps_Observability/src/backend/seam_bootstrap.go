@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -154,6 +155,65 @@ func (s *server) runSeamBootstrapOnce(ctx context.Context) {
 		}
 	}
 	log.Printf("seam-bootstrap: cycle done candidates=%d new_seams=%d new_groups=%d", len(suggestions), inserted, groupsInserted)
+}
+
+// ── seam export (engine grounding context) ────────────────────────────────────
+
+// startSeamEnrichment exports the ACTIVE seam inventory to the shared
+// enrichment dir (the device_tenant.csv plane) so the correlation engine's
+// grounding gate has its context without a new auth surface. Suggested/
+// rejected/retired rows never export — only owner-activated seams ground.
+func (s *server) startSeamEnrichment(ctx context.Context) {
+	dir := os.Getenv("TENANT_ENRICHMENT_DIR")
+	if dir == "" || s.seams == nil {
+		return
+	}
+	write := func() {
+		active, err := s.seams.List(ctx, "", true, "active", "")
+		if err != nil {
+			log.Printf("seam-enrichment: list: %v", err)
+			return
+		}
+		type seamExport struct {
+			SeamID            string            `json:"seam_id"`
+			TenantID          string            `json:"tenant_id"`
+			SeamType          string            `json:"seam_type"`
+			Endpoints         map[string]string `json:"endpoints"`
+			Visibility        string            `json:"visibility"`
+			ControlPlaneOwner string            `json:"control_plane_owner"`
+		}
+		out := make([]seamExport, 0, len(active))
+		for _, sm := range active {
+			out = append(out, seamExport{
+				SeamID: sm.SeamID, TenantID: sm.TenantID, SeamType: sm.SeamType,
+				Endpoints: sm.Endpoints, Visibility: sm.Visibility,
+				ControlPlaneOwner: sm.ControlPlaneOwner,
+			})
+		}
+		data, err := json.Marshal(out)
+		if err != nil {
+			log.Printf("seam-enrichment: marshal: %v", err)
+			return
+		}
+		if err := writeFileAtomic(filepath.Join(dir, "seams.json"), data, 0o644); err != nil {
+			log.Printf("seam-enrichment: write: %v", err)
+			return
+		}
+		log.Printf("seam-enrichment: exported %d active seam(s)", len(out))
+	}
+	go func() {
+		write()
+		t := time.NewTicker(60 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				write()
+			}
+		}
+	}()
 }
 
 // ── R1: traceroute ownership boundary ─────────────────────────────────────────
