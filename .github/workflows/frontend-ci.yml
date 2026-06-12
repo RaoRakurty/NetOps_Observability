@@ -60,3 +60,19 @@ jobs:
           cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
       - name: npm audit (high+)
         run: npm audit --audit-level=high
+
+  metric-contract:
+    name: panel↔metric contract (blocking)
+    runs-on: ubuntu-latest
+    # Foundation guard (Tier 1): every metric a dashboard panel queries must be
+    # produced by a collector. Fails on a NEW orphan (a panel wired to a metric
+    # nothing emits) — the silent-empty-panel regression. Known gaps are tracked
+    # in the script's TRACKED_GAPS and do not fail; only untracked orphans do.
+    # Stdlib-only Python, no deps. Reads both frontend PromQL and backend profiles.
+    defaults:
+      run:
+        working-directory: NetOps_Observability
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: audit
+        run: python3 scripts/audit_metric_contract.py
