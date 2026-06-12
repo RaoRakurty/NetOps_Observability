@@ -80,6 +80,37 @@ case "$code" in
   *) problems+=("dashboard $APP_URL: HTTP ${code:-no-response}") ;;
 esac
 
+# Disk watermark — the cause of the silent log-ingest outage: OpenSearch sets
+# EVERY index read-only at its 95% flood stage, and ingestion stops with no
+# error. Warn well before that; auto-prune reclaimable Docker build cache (the
+# usual filler on a dev/build host) when it crosses the higher mark.
+disk_pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
+if [ -n "$disk_pct" ] && [ "$disk_pct" -ge "${DISK_WARN_PCT:-85}" ]; then
+  if [ "$disk_pct" -ge "${DISK_PRUNE_PCT:-90}" ]; then
+    docker builder prune -f >/dev/null 2>&1 || true
+    disk_pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
+  fi
+  [ "$disk_pct" -ge "${DISK_WARN_PCT:-85}" ] &&
+    problems+=("disk ${disk_pct}% (warn ${DISK_WARN_PCT:-85}%; OpenSearch flood-stage read-only at 95%)")
+fi
+
+# Ingestion liveness — a pipeline that stops silently is invisible until someone
+# looks at an empty dashboard. Container logs (applogs) flow continuously, so
+# zero docs in the recent window means the log bus stalled (disk block, dead
+# Vector/Kafka consumer). Counts via the opensearch container (not host-exposed).
+os_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+  --filter "label=com.docker.compose.service=opensearch" 2>/dev/null)
+if [ -n "$os_cid" ]; then
+  stale_min="${INGEST_STALE_MIN:-15}"
+  cnt=$(docker exec "$os_cid" curl -s -m 5 \
+    "http://localhost:9200/netops-applogs-*/_count" -H 'Content-Type: application/json' \
+    -d "{\"query\":{\"range\":{\"timestamp\":{\"gte\":\"now-${stale_min}m\"}}}}" 2>/dev/null |
+    grep -oE '"count":[0-9]+' | grep -oE '[0-9]+')
+  if [ -n "$cnt" ] && [ "$cnt" -eq 0 ]; then
+    problems+=("log ingest stalled: 0 applogs in last ${stale_min}m (Vector/disk/consumer?)")
+  fi
+fi
+
 prev=$(cat "$STATE_FILE" 2>/dev/null || echo up)
 nsvc=$(echo "$EXPECTED_SERVICES" | wc -w | tr -d ' ')
 
