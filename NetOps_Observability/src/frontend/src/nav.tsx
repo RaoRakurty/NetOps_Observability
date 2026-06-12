@@ -9,6 +9,7 @@ import BgpOspf from "./pages/BgpOspf";
 import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
 import Events from "./pages/Events";
+import Correlations from "./tabs/Correlations";
 import Quality from "./pages/Quality";
 import DataSources from "./pages/DataSources";
 import NetworkPath from "./pages/NetworkPath";
@@ -123,6 +124,7 @@ export const NAV: NavSection[] = [
       { id: "events", label: "Events", group: "Event Management", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
+      { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
     ],
   },
   // Incident Response — coordinate response across chat/collaboration tools, and

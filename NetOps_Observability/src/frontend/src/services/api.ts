@@ -328,6 +328,49 @@ function flowQS(filters?: FlowFilters, direction = ""): string {
   return p.length ? `&${p.join("&")}` : "";
 }
 
+export type CorrObject = {
+  correlation_id: string;
+  version: number;
+  state: string;
+  window_start: string;
+  window_end: string;
+  trigger_signal?: string;
+  top_hypothesis: string;
+  top_confidence: number;
+  verdict_tier: string;
+  hypotheses?: string;        // ranking + embedded grounding context (JSON)
+  evidence_missing: string;   // JSON array of named shortfalls
+  affected: string;           // JSON {devices, paths, interfaces, ...}
+  signal_count: number;
+  node_count: number;
+  engine_version: string;
+  topology_version?: string;
+  catalog_version: string;
+  created_at: string;
+};
+
+export type CorrEdge = {
+  from_node: string;
+  to_node: string;
+  grounding_kind: string;
+  grounding_ref: string;
+  weight: number;
+  w_temporal: number;
+  w_topo: number;
+  w_reinforce: number;
+  direction_conf: number;
+  direction_basis: string;
+};
+
+export type CorrReplay = {
+  correlation_id: string;
+  stored_version: number;
+  engine_pin_match: boolean;
+  catalog_pin_match: boolean;
+  clean: boolean;
+  differences: string[];
+};
+
 export type Finding = {
   ts: string;
   id: string;
@@ -953,6 +996,17 @@ export const api = {
     if (severity) p.set("severity", severity);
     return request<ClickHouseResponse<Finding>>(`/api/findings?${p}`);
   },
+  // Correlation Engine v2 objects (read-only inspector).
+  correlations: (limit = 100, sinceSeconds = 86400, state?: string, tier?: string) => {
+    const p = new URLSearchParams({ limit: String(limit), since: `${sinceSeconds}s` });
+    if (state) p.set("state", state);
+    if (tier) p.set("tier", tier);
+    return request<ClickHouseResponse<CorrObject>>(`/api/correlations?${p}`);
+  },
+  correlationDetail: (id: string) =>
+    request<{ object: CorrObject; edges: CorrEdge[] }>(`/api/correlations/${encodeURIComponent(id)}`),
+  correlationReplay: (id: string) =>
+    request<CorrReplay>(`/api/correlations/${encodeURIComponent(id)}/replay`),
   vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),
   compliance: (limit = 500) => request<ComplianceResponse>(`/api/compliance?limit=${limit}`),
 

@@ -689,6 +689,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
 	// Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
 	// correlation engine pulls ?state=active as its grounding targets.
+	// Correlation Engine v2 objects — read-only inspector + replay proxy (#67).
+	mux.HandleFunc("/api/correlations", s.handleCorrelations)
+	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
