@@ -73,10 +73,10 @@ Tests present: `src/backend/{jwt,users,password}_test.go`,
   permitted when it serves a foundational capability the stdlib can't, is
   offline-buildable, pinned, and reviewed. Everything else stays stdlib.
 - `data/` and `deployment/docker/.env` are gitignored (generated at install).
-  ⚠️ **`.env` is currently tracked in git despite being in `.gitignore`** — it
-  was committed before being ignored, so it carries secrets in history. Flag
-  this rather than committing further changes to it; consider
-  `git rm --cached deployment/docker/.env`.
+  History audit (2026-06-12): `.env` was briefly tracked (until `6c02200`,
+  2026-06-07) but **only ever as a secret-free placeholder comment** — no
+  credential has ever been committed (verified across all history + gitleaks
+  full-history scan). No rotation or history rewrite needed on its account.
 - Security defaults are scaffold-grade: OpenSearch security plugin disabled,
   copilot off unless `FEATURE_COPILOT=true` + `COPILOT_API_KEY`, SNMP discovery
   defaults to `10.0.0.0/8` (narrow before pointing at a real network).
