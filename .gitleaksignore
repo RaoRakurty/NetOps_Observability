@@ -12,3 +12,9 @@ fcef72db33ed9a4d19d0e02fb0bdc46b1e7d1ac2:NetOps_Observability/src/backend/netbox
 # account (lifecycle module). Deliberately fake, never a live secret.
 c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.py:generic-api-key:289
 c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.py:generic-api-key:313
+#
+# snmp_creds_vault_test.go — false positive: "auth-secret-123"/"priv-secret-456"
+# are synthetic fixtures in the vault round-trip unit test (the test asserts
+# they do NOT appear in the encrypted file). Flagged by gitleaks 8.30.1's
+# generic-api-key rule; never live credentials.
+d1901eec32335027f08f5dbd384b806d494deba5:NetOps_Observability/src/backend/snmp_creds_vault_test.go:generic-api-key:30
