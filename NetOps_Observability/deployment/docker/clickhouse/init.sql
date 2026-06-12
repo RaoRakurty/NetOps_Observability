@@ -245,8 +245,9 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
     baseline       Float64 DEFAULT 0,
     deviation      Float64 DEFAULT 0,
     attrs          String DEFAULT '{}',
-    archived_for   UUID,                     -- correlation_id whose window slice this is
-    archived_at    DateTime64(3) DEFAULT now64(3),
+    archived_for     UUID,                   -- correlation_id whose window slice this is
+    archived_version UInt32 DEFAULT 0,        -- object version this slice belongs to (0 = legacy pre-fix rows)
+    archived_at      DateTime64(3) DEFAULT now64(3),
     CONSTRAINT observer_required CHECK observer_id != ''
 )
 ENGINE = MergeTree

@@ -153,3 +153,53 @@ def test_drift_report_serializes():
     r.note("example")
     d = r.to_dict()
     assert d["clean"] is False and d["differences"] == ["example"]
+
+
+# ── version-scoped slice selection (basic-testing fix 2026-06-12) ─────────────
+
+
+def test_select_slice_prefers_exact_version():
+    from replay import _select_slice
+    rows = [
+        {"archived_version": 1, "signal_id": "a"},
+        {"archived_version": 1, "signal_id": "b"},
+        {"archived_version": 2, "signal_id": "b"},
+        {"archived_version": 2, "signal_id": "c"},
+    ]
+    got = _select_slice(rows, 2)
+    assert {r["signal_id"] for r in got} == {"b", "c"}
+
+
+def test_select_slice_closed_version_falls_back_to_newest_slice():
+    # A closed version persists no slice of its own; its evidence is the last
+    # open version's window.
+    from replay import _select_slice
+    rows = [
+        {"archived_version": 1, "signal_id": "a"},
+        {"archived_version": 2, "signal_id": "b"},
+    ]
+    got = _select_slice(rows, 3)
+    assert [r["signal_id"] for r in got] == ["b"]
+
+
+def test_select_slice_legacy_rows_collapse_to_union():
+    # Pre-fix rows have archived_version 0 — the documented fallback is the
+    # historical union behavior (deduped downstream by replay()).
+    from replay import _select_slice
+    rows = [
+        {"signal_id": "a"},                     # column absent entirely (oldest)
+        {"archived_version": 0, "signal_id": "b"},
+    ]
+    got = _select_slice(rows, 4)
+    assert {r["signal_id"] for r in got} == {"a", "b"}
+
+
+def test_replay_dedupes_duplicate_signal_ids_in_window():
+    # At-least-once delivery wrote the same signal twice into a legacy slice;
+    # replay must not double-count it.
+    signals, seams, _ = load_golden()
+    snap = run_window(signals, builtin_catalog(), seams)[0]
+    stored, window = persist_and_rehydrate(snap, signals)
+    dup_window = list(window) + [window[0]]
+    report = replay(stored, dup_window)
+    assert report.clean, report.differences

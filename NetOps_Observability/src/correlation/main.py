@@ -166,6 +166,12 @@ CATALOG = builtin_catalog()
 # Evidence window: every canonical Signal written to the spine also lands here
 # (bounded by event-time age, pruned each cycle — §9 queues bounded).
 WINDOW_BUFFER: Deque[Signal] = deque(maxlen=50_000)
+# Kafka delivery is at-least-once (auto-commit ~5s): a consumer restart
+# re-delivers recent messages, and a duplicated signal_id in the window
+# inflates snapshots and churns versions (found by basic testing — stored
+# signal_count 14 vs 10 unique). The buffer therefore dedupes by signal id;
+# the set is pruned alongside the buffer so memory stays bounded.
+_BUFFERED_IDS: set[str] = set()
 
 # Open-object registry: correlation_id → persistence state. CH stays append-
 # only; this is the engine's working memory (PG corr_active wiring follows
@@ -199,12 +205,17 @@ def seam_inventory() -> tuple[SeamView, ...]:
 
 
 def buffer_signal(sig: Signal) -> None:
+    sid = str(sig.signal_id)
+    if sid in _BUFFERED_IDS:
+        return  # at-least-once redelivery — the window already holds it
+    _BUFFERED_IDS.add(sid)
     WINDOW_BUFFER.append(sig)
 
 
 def _prune_buffer(now: datetime) -> None:
     horizon = now.timestamp() - ENGINE_CFG.window_s
     while WINDOW_BUFFER and WINDOW_BUFFER[0].ts.timestamp() < horizon:
+        _BUFFERED_IDS.discard(str(WINDOW_BUFFER[0].signal_id))
         WINDOW_BUFFER.popleft()
 
 
@@ -220,12 +231,14 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         await ch.insert("netops.corr_evidence", ev_rows)
     # Stage [8] archive: the WHOLE tenant window, not just attached signals —
     # candidate-pool decisions depend on non-attached episodes, so a
-    # participating-only archive would break bit-perfect replay. Replay dedups
-    # across versions by signal id.
+    # participating-only archive would break bit-perfect replay. Slices are
+    # version-scoped (basic-testing fix): replay re-runs exactly the window
+    # THIS version was computed from, not the union of every version's window.
     archive_rows = []
     for s in window:
         row = s.to_ch_row()
         row["archived_for"] = snap.correlation_id
+        row["archived_version"] = version
         archive_rows.append(row)
     if archive_rows:
         await ch.insert("netops.corr_signals_archive", archive_rows)

@@ -194,8 +194,26 @@ async def replay_object(ch, correlation_id: str, version: int | None = None) -> 
          WHERE archived_for = '{_uuid(correlation_id)}'
          ORDER BY ts, signal_id FORMAT JSON""")  # nosec B608 -- id UUID-validated
     stored = StoredObject.from_rows(obj, edge_rows)
-    window = [Signal.from_ch_row(r) for r in archive_rows]
+    window = [Signal.from_ch_row(r) for r in _select_slice(archive_rows, stored.version)]
     return replay(stored, window)
+
+
+def _select_slice(archive_rows: list[dict], version: int) -> list[dict]:
+    """Pick the version-scoped window slice (basic-testing fix): exactly the
+    rows persisted with this version. A closed version persists no slice, so
+    fall back to the newest slice at or below it (its evidence by definition);
+    legacy rows (archived_version 0, pre-fix) all collapse into that fallback —
+    the historical union behavior, kept deliberately so old objects stay
+    replayable rather than erroring."""
+    by_ver: dict[int, list[dict]] = {}
+    for r in archive_rows:
+        by_ver.setdefault(int(r.get("archived_version") or 0), []).append(r)
+    if version in by_ver:
+        return by_ver[version]
+    eligible = [v for v in by_ver if v <= version]
+    if not eligible:
+        return archive_rows
+    return by_ver[max(eligible)]
 
 
 def _uuid(v: str) -> str:

@@ -75,14 +75,23 @@ SETTINGS index_granularity = 8192`,
 		`CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
 (
 ` + signalColumns + `,
-    archived_for   UUID,
-    archived_at    DateTime64(3) DEFAULT now64(3),
+    archived_for     UUID,
+    archived_version UInt32 DEFAULT 0,
+    archived_at      DateTime64(3) DEFAULT now64(3),
     CONSTRAINT observer_required CHECK observer_id != ''
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(ts))
 ORDER BY (tenant_id, ts, signal_id)
 SETTINGS index_granularity = 8192`,
+
+		// Replay correctness (#67 basic-testing fix 2026-06-12): slices must be
+		// version-scoped — replaying version N over the UNION of every version's
+		// window reports spurious drift whenever the window changed shape between
+		// persists. 0 = legacy pre-fix rows (replay falls back to the deduped
+		// union for those, documented). Idempotent self-heal for live tables.
+		`ALTER TABLE netops.corr_signals_archive
+    ADD COLUMN IF NOT EXISTS archived_version UInt32 DEFAULT 0 AFTER archived_for`,
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_objects
 (
