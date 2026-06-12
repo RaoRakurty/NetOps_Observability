@@ -204,6 +204,19 @@ best). Runs in the topology/discovery plane and shares its UI surface with #67's
 topology-gap hints — they are one workflow (unmodeled co-occurrence → "define a
 seam?" → pre-filled bootstrap suggestion).
 
+> **Build note (#67 build ⑤, 2026-06-12, `seam_bootstrap.go`):** shipped as a
+> Go-backend periodic engine (Postgres inventory `seams`/`seam_groups`,
+> migration 0010; REST `/api/seams*`; suggest→confirm→active state machine;
+> rejection memory + idempotency via one partial-unique `suggestion_key`
+> index). Rule-1 v0 detects the traceroute **private→public ownership
+> transition** rather than a literal ASN transition — per-hop ASN needs an
+> external ASN dataset we don't bundle; the DX-vs-DIA split uses destination
+> address class + path stability until an ASN enrichment source lands
+> (contract unchanged). Group inference is live (≥2 DX at one edge →
+> active_active; VPN shadowing DX → hybrid_fallback; ≥2 tunnels on one device
+> → SD-WAN overlay group). The correlation engine consumes
+> `GET /api/seams?state=active`.
+
 ## 5. Phasing
 
 - **CI-P1** (with correlation-engine P1): NVA syslog tier (works today, document

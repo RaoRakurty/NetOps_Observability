@@ -65,6 +65,7 @@ type server struct {
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics       *incidentMetrics
+	seams            *pgSeamStore // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -385,6 +386,9 @@ func newServer() *server {
 	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
 	// Incident system (Postgres only) + its alert-ingestion hook.
 	srv.incidents = newIncidentStore()
+	// Seam inventory (#67 build ⑤): the correlation engine's grounding targets.
+	// Postgres only, like incidents; the bootstrap loop starts in main().
+	srv.seams = newSeamStore()
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
@@ -454,6 +458,9 @@ func main() {
 	ensureCHRowPolicies()
 	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
 	srv.startDriftReconciler(ctx)
+	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
+	// seam instances from telemetry so the grounding gate has an inventory.
+	srv.startSeamBootstrap(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process
@@ -677,6 +684,12 @@ func (s *server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
+	// Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
+	// correlation engine pulls ?state=active as its grounding targets.
+	mux.HandleFunc("/api/seams", s.handleSeams)
+	mux.HandleFunc("/api/seams/", s.handleSeamByID)
+	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
+	mux.HandleFunc("/api/seams/groups/", s.handleSeamGroupByID)
 	mux.HandleFunc("/api/saved", s.handleSaved)
 	mux.HandleFunc("/api/saved/", s.handleSavedByID)
 	mux.HandleFunc("/api/search/global", s.handleGlobalSearch)
