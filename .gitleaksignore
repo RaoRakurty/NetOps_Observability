@@ -2,9 +2,9 @@
 # git history, pinned by exact fingerprint (commit:path:rule:line) so the scan
 # stays blocking for everything else. Justify every line.
 #
-# netbox_sync.go — false positive: `token` here is a function PARAMETER being
-# passed to s.ensure(ctx, base, token, "dcim/manufacturers", ...); the rule
-# matched the identifier adjacent to a quoted string. No secret material.
+# netbox_sync.go — false positive: the flagged line passes a variable named
+# after the credential concept into s.ensure() next to a quoted API path; the
+# rule matched identifier-adjacent-to-string. No secret material.
 fcef72db33ed9a4d19d0e02fb0bdc46b1e7d1ac2:NetOps_Observability/src/backend/netbox_sync.go:generic-api-key:148
 #
 # iam_audit.py — false positives: "victim-pass-123" is the synthetic test
@@ -18,3 +18,9 @@ c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.
 # they do NOT appear in the encrypted file). Flagged by gitleaks 8.30.1's
 # generic-api-key rule; never live credentials.
 d1901eec32335027f08f5dbd384b806d494deba5:NetOps_Observability/src/backend/snmp_creds_vault_test.go:generic-api-key:30
+#
+# this file itself, as first committed — false positive: the original triage
+# comment for the netbox_sync finding quoted the matching code verbatim, so
+# the rule fired on the comment. Reworded since; the historical commit is
+# immutable, hence its own fingerprint.
+05ff3a049c625feea97e4fb3ae6abbde0e7c2406:.gitleaksignore:generic-api-key:6
