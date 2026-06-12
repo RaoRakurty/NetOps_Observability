@@ -96,21 +96,21 @@ func (s *server) runSeamBootstrapOnce(ctx context.Context) {
 		suggestions = append(suggestions, ruleTracerouteBoundary(paths)...)
 	}
 
-	peers, err := seamFetchBGPPeers()
+	peers, err := seamFetchBGPPeers(ctx)
 	if err != nil {
 		log.Printf("seam-bootstrap: bgp source unavailable: %v", err)
 	} else {
 		suggestions = append(suggestions, ruleBGPPeers(peers, devices)...)
 	}
 
-	flowRows, err := seamFetchFlowBoundaries()
+	flowRows, err := seamFetchFlowBoundaries(ctx)
 	if err != nil {
 		log.Printf("seam-bootstrap: flow source unavailable: %v", err)
 	} else {
 		suggestions = append(suggestions, ruleFlowBoundary(flowRows)...)
 	}
 
-	tunnels, err := seamFetchTunnels()
+	tunnels, err := seamFetchTunnels(ctx)
 	if err != nil {
 		log.Printf("seam-bootstrap: tunnel source unavailable: %v", err)
 	} else {
@@ -591,10 +591,16 @@ func seamFetchProbePaths() ([]collectors.PathResult, error) {
 
 // seamFetchBGPPeers reads the current BGP peer table from VictoriaMetrics
 // (SNMP BGP4-MIB walk: device_bgp_peer_state{device, index=<peer ip>}).
-func seamFetchBGPPeers() ([]seamBGPPeer, error) {
+func seamFetchBGPPeers(ctx context.Context) ([]seamBGPPeer, error) {
 	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
 	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape("device_bgp_peer_state")
-	resp, err := backendHTTPClient(10 * time.Second).Get(endpoint)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := backendHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +691,7 @@ func seamPrivateIPSQL(col string) string {
 // WAN-side interface) over the last 24 h. The WAN side is out_if for egress
 // crossings and in_if for ingress ones, so both directions attribute to the
 // same physical boundary interface.
-func seamFetchFlowBoundaries() ([]seamFlowBoundary, error) {
+func seamFetchFlowBoundaries(ctx context.Context) ([]seamFlowBoundary, error) {
 	srcPriv := seamPrivateIPSQL("src_addr")
 	dstPriv := seamPrivateIPSQL("dst_addr")
 	sql := `
@@ -701,7 +707,7 @@ HAVING crossing >= 50
  ORDER BY crossing DESC
  LIMIT 200
 FORMAT JSON`
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	var rows []seamFlowBoundary
 	if err := seamCHQueryJSON(ctx, sql, &rows); err != nil {
@@ -711,7 +717,7 @@ FORMAT JSON`
 }
 
 // seamFetchTunnels returns the latest netops.tunnels row per tunnel id.
-func seamFetchTunnels() ([]seamTunnel, error) {
+func seamFetchTunnels(ctx context.Context) ([]seamTunnel, error) {
 	sql := `
 SELECT id, type, local_device, local_addr, remote_addr, status, tenant_id
   FROM netops.tunnels
@@ -719,7 +725,7 @@ SELECT id, type, local_device, local_addr, remote_addr, status, tenant_id
  LIMIT 1 BY id
  LIMIT 500
 FORMAT JSON`
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	var rows []seamTunnel
 	if err := seamCHQueryJSON(ctx, sql, &rows); err != nil {
