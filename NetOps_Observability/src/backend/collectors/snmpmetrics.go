@@ -87,6 +87,12 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		vendor := vendorLabel(ent, entOK)
 
 		var lines []string
+		// ifIndex→ifName map, walked lazily once per device the first time an
+		// interface metric is emitted. Without it interface counters are labelled
+		// by bare ifIndex — which a NOC operator can't map to a physical port
+		// (Gi0/1 / ge-0/0/1 / Ethernet1 / ethernet-1/1) and which renumbers on a
+		// reboot or line-card change. The name is the operator-facing identity.
+		var ifNames map[string]string
 		for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 			for _, m := range prof.Metrics {
 				if m.Table {
@@ -94,9 +100,24 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 					if err != nil {
 						continue
 					}
+					isIface := strings.HasPrefix(m.Name, "device_if_")
+					if isIface && ifNames == nil {
+						ifNames = ifNameMap(dctx, addr, creds)
+					}
 					for idx, v := range rows {
-						lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,index=%q} %d %d",
-							m.Name, tg.ID, vendor, idx, valueInt(v), now))
+						if isIface {
+							// Keep index for series stability; add ifName for humans.
+							name := ifNames[idx]
+							if name == "" {
+								name = "ifIndex " + idx // honest: device named no port
+							}
+							lines = append(lines, fmt.Sprintf(
+								"%s{device=%q,vendor=%q,index=%q,ifName=%q} %d %d",
+								m.Name, tg.ID, vendor, idx, name, valueInt(v), now))
+						} else {
+							lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,index=%q} %d %d",
+								m.Name, tg.ID, vendor, idx, valueInt(v), now))
+						}
 					}
 				} else {
 					v, err := snmpGet(dctx, addr, creds, append(append([]int(nil), m.OID...), 0))
@@ -145,6 +166,40 @@ func vendorLabel(enterprise int, ok bool) string {
 		return v
 	}
 	return "unknown"
+}
+
+// IF-MIB columns for interface-name translation. ifName is the short,
+// operator-facing port name (Gi0/1, ge-0/0/1, Ethernet1, ethernet-1/1);
+// ifDescr is the fallback for platforms that leave ifName blank.
+var (
+	ifNameOID  = []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 1} // IF-MIB::ifName
+	ifDescrOID = []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 2}     // IF-MIB::ifDescr
+)
+
+// ifNameMap walks ifName keyed by ifIndex, filling any blank from ifDescr, so
+// interface metrics carry the physical port a NOC operator actually reads.
+// Best-effort: an unreachable/blank table yields an empty map and the caller
+// falls back to "ifIndex N" rather than dropping the metric.
+func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]string {
+	out := map[string]string{}
+	if rows, err := snmpWalkColumn(ctx, addr, creds, ifNameOID); err == nil {
+		for idx, v := range rows {
+			if s := strings.TrimSpace(string(v.raw)); s != "" {
+				out[idx] = s
+			}
+		}
+	}
+	if descr, err := snmpWalkColumn(ctx, addr, creds, ifDescrOID); err == nil {
+		for idx, v := range descr {
+			if _, ok := out[idx]; ok {
+				continue
+			}
+			if s := strings.TrimSpace(string(v.raw)); s != "" {
+				out[idx] = s
+			}
+		}
+	}
+	return out
 }
 
 // valueInt coerces an SNMP value to an integer for metric emission. Counters,
