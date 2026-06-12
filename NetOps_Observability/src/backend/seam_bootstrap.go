@@ -90,7 +90,7 @@ func (s *server) runSeamBootstrapOnce(ctx context.Context) {
 	devices := s.discovery.Devices()
 	var suggestions []Seam
 
-	paths, err := seamFetchProbePaths()
+	paths, err := seamFetchProbePaths(ctx)
 	if err != nil {
 		log.Printf("seam-bootstrap: traceroute source unavailable: %v", err)
 	} else {
@@ -626,9 +626,9 @@ func ruleRedundancyGroups(inventory []Seam) []SeamGroup {
 
 // seamFetchProbePaths reads the traceroute path store the same way
 // handleProbePaths serves it: Redis (sidecar prober) → shared file → in-process.
-func seamFetchProbePaths() ([]collectors.PathResult, error) {
+func seamFetchProbePaths(ctx context.Context) ([]collectors.PathResult, error) {
 	if collectors.RedisAddr() != "" {
-		if raw, err := collectors.FetchProbePaths(); err == nil && raw != "" {
+		if raw, err := collectors.FetchProbePaths(ctx); err == nil && raw != "" {
 			var out []collectors.PathResult
 			if err := json.Unmarshal([]byte(raw), &out); err != nil {
 				return nil, fmt.Errorf("redis paths decode: %w", err)

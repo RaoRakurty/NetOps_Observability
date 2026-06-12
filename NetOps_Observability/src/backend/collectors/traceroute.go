@@ -76,7 +76,9 @@ func (r *pathRegistry) persist() {
 		return
 	}
 	if RedisAddr() != "" {
-		_ = redisSetEX(probePathsKey, string(data), 300)
+		// Background persistence with the dialer's own 3s timeout — the
+		// registry has no request context to inherit.
+		_ = redisSetEX(context.Background(), probePathsKey, string(data), 300)
 		return
 	}
 	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
@@ -284,8 +286,10 @@ func msSince(t0 time.Time) float64 { return float64(time.Since(t0).Microseconds(
 // RST (= reached, matched by ack == seq+1). Raw sockets need CAP_NET_RAW.
 
 // localSourceIPv4 returns the source IPv4 the kernel would use to reach dst.
-func localSourceIPv4(dst net.IP) net.IP {
-	c, err := net.Dial("udp", net.JoinHostPort(dst.String(), "33434"))
+func localSourceIPv4(ctx context.Context, dst net.IP) net.IP {
+	// A connected UDP socket sends nothing; it only resolves the route.
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "udp", net.JoinHostPort(dst.String(), "33434"))
 	if err != nil {
 		return nil
 	}
@@ -375,7 +379,7 @@ type tcpEvent struct {
 }
 
 func traceTCP(ctx context.Context, dst string, dstIP net.IP, cfg traceConfig) (PathResult, error) {
-	src := localSourceIPv4(dstIP)
+	src := localSourceIPv4(ctx, dstIP)
 	if src == nil {
 		return PathResult{}, fmt.Errorf("traceroute tcp: no source IPv4 for %s", dst)
 	}
@@ -384,7 +388,8 @@ func traceTCP(ctx context.Context, dst string, dstIP net.IP, cfg traceConfig) (P
 		return PathResult{}, err
 	}
 	defer icmpConn.Close()
-	tcpConn, err := net.ListenPacket("ip4:tcp", "0.0.0.0")
+	var lc net.ListenConfig
+	tcpConn, err := lc.ListenPacket(ctx, "ip4:tcp", "0.0.0.0")
 	if err != nil {
 		return PathResult{}, err
 	}

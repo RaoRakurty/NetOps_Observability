@@ -89,7 +89,7 @@ func encodeReflectedPacket(rSeq uint32, t3, t2 uint64, sSeq uint32, t1 uint64, t
 
 // reflected holds the timestamps a sender needs from a reflected packet.
 type reflected struct {
-	senderSeq uint32
+	senderSeq  uint32
 	t1, t2, t3 uint64
 }
 
@@ -145,7 +145,8 @@ func (r *stampReflector) Status() Status {
 }
 
 func (r *stampReflector) Run(ctx context.Context) error {
-	pc, err := net.ListenPacket("udp", r.addr)
+	var lc net.ListenConfig
+	pc, err := lc.ListenPacket(ctx, "udp", r.addr)
 	if err != nil {
 		r.setErr(err)
 		return err

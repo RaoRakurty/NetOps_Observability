@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -200,19 +201,19 @@ func TestSessionStoreUnit(t *testing.T) {
 	}
 	// Idle.
 	ss.byID[sess.ID] = withTimes(ss.byID[sess.ID], time.Now().Add(-31*time.Minute), time.Time{})
-	if _, err := ss.Validate(sess.ID, true, true); err != errSessionIdle {
+	if _, err := ss.Validate(sess.ID, true, true); !errors.Is(err, errSessionIdle) {
 		t.Errorf("idle validate: %v, want errSessionIdle", err)
 	}
 	// Absolute (new session; backdate creation).
 	s2, _, _ := ss.Create("u2", "", "", 30*time.Minute, 12*time.Hour)
 	ss.byID[s2.ID] = withTimes(ss.byID[s2.ID], time.Now(), time.Now().Add(-13*time.Hour))
-	if _, err := ss.Validate(s2.ID, true, true); err != errSessionAbsolute {
+	if _, err := ss.Validate(s2.ID, true, true); !errors.Is(err, errSessionAbsolute) {
 		t.Errorf("absolute validate: %v, want errSessionAbsolute", err)
 	}
 	// Revoke.
 	s3, _, _ := ss.Create("u3", "", "", time.Minute, time.Hour)
 	ss.Revoke(s3.ID)
-	if _, err := ss.Validate(s3.ID, true, true); err != errSessionRevoked {
+	if _, err := ss.Validate(s3.ID, true, true); !errors.Is(err, errSessionRevoked) {
 		t.Errorf("revoked validate: %v, want errSessionRevoked", err)
 	}
 	// RevokeAllForUser.

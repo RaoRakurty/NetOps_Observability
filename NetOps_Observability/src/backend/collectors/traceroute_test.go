@@ -12,7 +12,7 @@ import (
 // (quoted IP header + first 8 bytes of the original ICMP).
 func TestQuotedEchoIDSeq(t *testing.T) {
 	iphdr := make([]byte, 20)
-	iphdr[0] = 0x45 // IPv4, IHL=5 (20 bytes)
+	iphdr[0] = 0x45                                     // IPv4, IHL=5 (20 bytes)
 	inner := []byte{8, 0, 0, 0, 0x12, 0x34, 0x00, 0x05} // echo: id=0x1234, seq=5
 	data := append(iphdr, inner...)
 
@@ -40,7 +40,8 @@ func TestPathSignatureChange(t *testing.T) {
 	if pathSignature(a) == pathSignature(b) {
 		t.Fatal("different paths must have different signatures")
 	}
-	if pathSignature(a) != pathSignature(a) {
+	s1, s2 := pathSignature(a), pathSignature(a)
+	if s1 != s2 {
 		t.Fatal("same path must have stable signature")
 	}
 }

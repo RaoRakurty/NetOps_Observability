@@ -16,11 +16,11 @@ import (
 // prober runs as a sidecar it shares topology via PROBE_PATHS_FILE (a shared
 // volume) — serve that file if present; otherwise serve the in-process store
 // (collector running inside the API). Authenticated (the /api mux is withAuth).
-func (s *server) handleProbePaths(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleProbePaths(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	// Primary: Redis (sidecar prober publishes here — ADR 0001).
 	if collectors.RedisAddr() != "" {
-		if s, err := collectors.FetchProbePaths(); err == nil && s != "" {
+		if s, err := collectors.FetchProbePaths(r.Context()); err == nil && s != "" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(s))
 			return

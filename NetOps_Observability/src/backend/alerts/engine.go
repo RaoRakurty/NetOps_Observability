@@ -323,15 +323,15 @@ func (e *Engine) Health() map[string]any {
 
 // LoadRules parses a minimal subset of the Prometheus rules-file format:
 //
-//   groups:
-//     - name: foo
-//       rules:
-//         - alert: HighCPU
-//           expr: cpu_usage > 90
-//           for: 5m
-//           labels: { severity: warning }
-//           annotations:
-//             summary: "..."
+//	groups:
+//	  - name: foo
+//	    rules:
+//	      - alert: HighCPU
+//	        expr: cpu_usage > 90
+//	        for: 5m
+//	        labels: { severity: warning }
+//	        annotations:
+//	          summary: "..."
 //
 // Implementation is a hand-rolled scanner so the package stays stdlib-only.
 // Swap for `gopkg.in/yaml.v3` once we need fuller YAML semantics.
@@ -379,6 +379,22 @@ func parseRulesYAML(s string) ([]Rule, error) {
 		case cur != nil && strings.HasPrefix(trim, "for:"):
 			if d, err := time.ParseDuration(strings.TrimSpace(strings.TrimPrefix(trim, "for:"))); err == nil {
 				cur.For = d
+			}
+		case cur != nil && strings.HasPrefix(trim, "labels:"):
+			// Inline flow map: `labels: { severity: critical, layer: stack }`.
+			// Block-style labels keep flowing through the `severity:` case below.
+			rest := strings.TrimSpace(strings.TrimPrefix(trim, "labels:"))
+			if strings.HasPrefix(rest, "{") && strings.HasSuffix(rest, "}") {
+				if cur.Labels == nil {
+					cur.Labels = map[string]string{}
+				}
+				for _, kv := range strings.Split(rest[1:len(rest)-1], ",") {
+					k, v, ok := strings.Cut(kv, ":")
+					if !ok {
+						continue
+					}
+					cur.Labels[strings.TrimSpace(k)] = unquote(strings.TrimSpace(v))
+				}
 			}
 		case cur != nil && strings.HasPrefix(trim, "severity:"):
 			if cur.Labels == nil {

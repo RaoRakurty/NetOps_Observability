@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"bufio"
+	"context"
 	"net"
 	"testing"
 )
@@ -43,7 +44,7 @@ func TestFetchProbePathsRESP(t *testing.T) {
 	t.Setenv("REDIS_HOST", host)
 	t.Setenv("REDIS_PORT", port)
 
-	got, err := FetchProbePaths()
+	got, err := FetchProbePaths(context.Background())
 	if err != nil {
 		t.Fatalf("FetchProbePaths: %v", err)
 	}

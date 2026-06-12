@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -27,12 +28,13 @@ func RedisAddr() string {
 	return net.JoinHostPort(host, os.Getenv("REDIS_PORT"))
 }
 
-func redisDial() (net.Conn, error) {
+func redisDial(ctx context.Context) (net.Conn, error) {
 	addr := RedisAddr()
 	if addr == "" {
 		return nil, fmt.Errorf("redis not configured")
 	}
-	c, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	d := net.Dialer{Timeout: 3 * time.Second}
+	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +118,8 @@ func readFull(r *bufio.Reader, buf []byte) (int, error) {
 
 // redisSetEX writes key=val with a TTL (seconds) so stale data self-expires if a
 // prober dies.
-func redisSetEX(key, val string, ttlSec int) error {
-	c, err := redisDial()
+func redisSetEX(ctx context.Context, key, val string, ttlSec int) error {
+	c, err := redisDial(ctx)
 	if err != nil {
 		return err
 	}
@@ -128,8 +130,8 @@ func redisSetEX(key, val string, ttlSec int) error {
 
 // FetchProbePaths reads the shared traceroute topology JSON published by the
 // prober. Returns ("", nil) when the key is absent.
-func FetchProbePaths() (string, error) {
-	c, err := redisDial()
+func FetchProbePaths(ctx context.Context) (string, error) {
+	c, err := redisDial(ctx)
 	if err != nil {
 		return "", err
 	}
