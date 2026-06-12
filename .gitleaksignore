@@ -1,0 +1,14 @@
+# gitleaks fingerprint triage (SC-007). Each entry is one REVIEWED finding in
+# git history, pinned by exact fingerprint (commit:path:rule:line) so the scan
+# stays blocking for everything else. Justify every line.
+#
+# netbox_sync.go — false positive: `token` here is a function PARAMETER being
+# passed to s.ensure(ctx, base, token, "dcim/manufacturers", ...); the rule
+# matched the identifier adjacent to a quoted string. No secret material.
+fcef72db33ed9a4d19d0e02fb0bdc46b1e7d1ac2:NetOps_Observability/src/backend/netbox_sync.go:generic-api-key:148
+#
+# iam_audit.py — false positives: "victim-pass-123" is the synthetic test
+# credential the IAM audit harness uses to create-and-attack its own victim
+# account (lifecycle module). Deliberately fake, never a live secret.
+c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.py:generic-api-key:289
+c8038969561f70012514b8ae08f3806379c48ec7:NetOps_Observability/scripts/iam_audit.py:generic-api-key:313

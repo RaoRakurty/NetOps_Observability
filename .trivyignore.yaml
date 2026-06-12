@@ -11,3 +11,11 @@ misconfigurations:
   - id: DS-0002
     paths:
       - "NetOps_Observability/deployment/docker/swtpm-sidecar/Dockerfile"
+  # DS-0002 — also excepted for the LAB traffic generator (tgen). It is a lab
+  # tool deployed on the lab host (not part of the product stack) whose
+  # raw-packet mode crafts packets on raw sockets — root/CAP_NET_RAW by
+  # design. Pinning a non-root user would break the deployed generator for a
+  # scanner checkbox on a non-shipped image.
+  - id: DS-0002
+    paths:
+      - "NetOps_Observability/scripts/lab/traffic-generator/Dockerfile"
