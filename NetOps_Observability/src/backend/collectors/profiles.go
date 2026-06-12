@@ -41,8 +41,25 @@ func builtinProfiles() []SNMPProfile {
 			Metrics: []SNMPMetric{
 				{Name: "device_sysuptime", OID: []int{1, 3, 6, 1, 2, 1, 1, 3}},                           // sysUpTime
 				{Name: "device_if_oper_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 8}, Table: true},   // ifOperStatus
+				{Name: "device_if_admin_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 7}, Table: true},  // ifAdminStatus
 				{Name: "device_if_in_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 6}, Table: true}, // ifHCInOctets
 				{Name: "device_if_out_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 10}, Table: true},
+				// ifHighSpeed (Mbps) — denominator for the utilization panels;
+				// without it inbound/outbound utilization % is empty.
+				{Name: "device_if_speed", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 15}, Table: true},
+				// Error/discard counters — the "interfaces with most errors" and
+				// the four error/discard graphs read these.
+				{Name: "device_if_in_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 14}, Table: true},    // ifInErrors
+				{Name: "device_if_out_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 20}, Table: true},   // ifOutErrors
+				{Name: "device_if_in_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 13}, Table: true},  // ifInDiscards
+				{Name: "device_if_out_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 19}, Table: true}, // ifOutDiscards
+				// HC packet-mix counters (ifXTable) — the unicast/multicast/broadcast panels.
+				{Name: "device_if_in_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 7}, Table: true},
+				{Name: "device_if_in_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 8}, Table: true},
+				{Name: "device_if_in_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 9}, Table: true},
+				{Name: "device_if_out_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 11}, Table: true},
+				{Name: "device_if_out_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 12}, Table: true},
+				{Name: "device_if_out_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 13}, Table: true},
 				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 2}, Table: true},  // hrProcessorLoad (HOST-RESOURCES-MIB)
 				{Name: "device_sensor_value", OID: []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4}, Table: true}, // entPhySensorValue (ENTITY-SENSOR-MIB)
 				// BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) + OSPF-MIB

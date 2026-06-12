@@ -89,28 +89,28 @@ export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinut
 
       <Group title="All interfaces — leaders" hue="#0EA5E9">
         <div className="dm-grid">
-          <MetricTop title="Interfaces by inbound throughput" query={`topk(10, rate(device_if_in_octets${devSel}[5m]) * 8)`} minutes={m} fmtX={fmtBps} labelKeys={["device", "index"]} />
-          <MetricTop title="Interfaces by outbound throughput" query={`topk(10, rate(device_if_out_octets${devSel}[5m]) * 8)`} minutes={m} fmtX={fmtBps} labelKeys={["device", "index"]} />
+          <MetricTop title="Interfaces by inbound throughput" query={`topk(10, rate(device_if_in_octets${devSel}[5m]) * 8)`} minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interfaces by outbound throughput" query={`topk(10, rate(device_if_out_octets${devSel}[5m]) * 8)`} minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 
       <Group title="Top flapping interfaces" hue="#EAB308">
-        <MetricTop title="Interface state changes (24h)" query={`topk(15, changes(device_if_oper_status${devSel}[24h]))`} minutes={m} fmtX={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} />
+        <MetricTop title="Interface state changes (24h)" query={`topk(15, changes(device_if_oper_status${devSel}[24h]))`} minutes={m} fmtX={(n) => `${n.toFixed(0)}`} labelKeys={["device", "ifName"]} />
       </Group>
 
       <Group title="Throughput & utilization" hue="#22C55E">
         <div className="dm-grid">
-          <MetricLine title="Throughput — inbound (bits/s)" query={`rate(device_if_in_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "index"]} />
-          <MetricLine title="Throughput — outbound (bits/s)" query={`rate(device_if_out_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "index"]} />
-          <MetricLine title="Inbound utilization (%)" query={`rate(device_if_in_octets${sel}[5m]) * 8 * 100 / (device_if_speed${sel} * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "index"]} />
-          <MetricLine title="Outbound utilization (%)" query={`rate(device_if_out_octets${sel}[5m]) * 8 * 100 / (device_if_speed${sel} * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "index"]} />
+          <MetricLine title="Throughput — inbound (bits/s)" query={`rate(device_if_in_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Throughput — outbound (bits/s)" query={`rate(device_if_out_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Inbound utilization (%)" query={`rate(device_if_in_octets${sel}[5m]) * 8 * 100 / (device_if_speed${sel} * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Outbound utilization (%)" query={`rate(device_if_out_octets${sel}[5m]) * 8 * 100 / (device_if_speed${sel} * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 
       <Group title="Errors & discards" hue="#EF4444">
         <div className="dm-grid">
-          <MetricTop title="Interfaces with most errors" query={`topk(10, rate(device_if_in_errors${devSel}[5m]) + rate(device_if_out_errors${devSel}[5m]))`} minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "index"]} />
-          <MetricTop title="Interfaces with most discards" query={`topk(10, rate(device_if_in_discards${devSel}[5m]) + rate(device_if_out_discards${devSel}[5m]))`} minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "index"]} />
+          <MetricTop title="Interfaces with most errors" query={`topk(10, rate(device_if_in_errors${devSel}[5m]) + rate(device_if_out_errors${devSel}[5m]))`} minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interfaces with most discards" query={`topk(10, rate(device_if_in_discards${devSel}[5m]) + rate(device_if_out_discards${devSel}[5m]))`} minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "ifName"]} />
           <MetricLine title="Errors — inbound vs outbound (/s)" query={`label_replace(sum(rate(device_if_in_errors${sel}[5m])),"dir","inbound","","") or label_replace(sum(rate(device_if_out_errors${sel}[5m])),"dir","outbound","","")`} minutes={m} fmtY={(n) => `${n.toFixed(2)}/s`} labelKeys={["dir"]} />
           <MetricLine title="Discards — inbound vs outbound (/s)" query={`label_replace(sum(rate(device_if_in_discards${sel}[5m])),"dir","inbound","","") or label_replace(sum(rate(device_if_out_discards${sel}[5m])),"dir","outbound","","")`} minutes={m} fmtY={(n) => `${n.toFixed(2)}/s`} labelKeys={["dir"]} />
         </div>
@@ -126,8 +126,8 @@ export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinut
       <Group title="Oper & admin status" hue="#F59E0B">
         <OperAdminLegend />
         <div className="dm-grid">
-          <MetricLine title="ifOperStatus over time" query={`device_if_oper_status${sel}`} minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
-          <MetricLine title="ifAdminStatus over time" query={`device_if_admin_status${sel}`} minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
+          <MetricLine title="ifOperStatus over time" query={`device_if_oper_status${sel}`} minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "ifName"]} stepped />
+          <MetricLine title="ifAdminStatus over time" query={`device_if_admin_status${sel}`} minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "ifName"]} stepped />
         </div>
       </Group>
 
