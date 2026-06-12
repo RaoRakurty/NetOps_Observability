@@ -54,10 +54,14 @@ type synTarget struct {
 }
 
 // synResult is one check's measurement, flattened to exposition lines.
+// rttMs/lossPct mirror the headline numbers structurally so the probe-event
+// bus lane (#67 build ⑦) doesn't have to parse exposition text.
 type synResult struct {
-	target synTarget
-	up     bool
-	lines  []string
+	target  synTarget
+	up      bool
+	rttMs   float64
+	lossPct float64
+	lines   []string
 }
 
 type synthetics struct {
@@ -157,8 +161,11 @@ func (s *synthetics) tick(ctx context.Context) {
 	wg.Wait()
 
 	now := time.Now().UnixMilli()
+	prober := proberID()
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	up := 0
 	var lines []string
+	var events []ProbeEvent
 	for _, r := range results {
 		if r.target.dst == "" {
 			continue
@@ -166,6 +173,14 @@ func (s *synthetics) tick(ctx context.Context) {
 		if r.up {
 			up++
 		}
+		loss := r.lossPct
+		if !r.up && loss == 0 {
+			loss = 100 // check failed outright: the path observation is full loss
+		}
+		events = append(events, ProbeEvent{
+			Kind: r.target.check, Prober: prober, Target: r.target.dst,
+			OK: r.up, RTTms: r.rttMs, LossPct: loss, TS: ts,
+		})
 		lines = append(lines, fmt.Sprintf(`synthetic_up{dst=%q,check=%q} %d %d`, r.target.dst, r.target.check, b2i(r.up), now))
 		for _, l := range r.lines {
 			lines = append(lines, l+fmt.Sprintf(" %d", now))
@@ -174,6 +189,7 @@ func (s *synthetics) tick(ctx context.Context) {
 	if len(lines) > 0 {
 		emitMetrics(ctx, strings.Join(lines, "\n"))
 	}
+	forwardProbeEvents(ctx, events)
 	s.mu.Lock()
 	s.status.LastTick = time.Now().UTC()
 	s.status.Targets = len(targets)
@@ -237,6 +253,7 @@ func (s *synthetics) checkHTTP(ctx context.Context, tgt synTarget) synResult {
 	total := float64(time.Since(start)) / float64(time.Millisecond)
 
 	res.up = resp.StatusCode >= 200 && resp.StatusCode < 400
+	res.rttMs = total
 	q := func(name string, v float64) string {
 		return fmt.Sprintf(`%s{dst=%q,check="http"} %.3f`, name, tgt.dst, v)
 	}
@@ -268,6 +285,7 @@ func (s *synthetics) checkTCP(ctx context.Context, tgt synTarget) synResult {
 	connectMs := float64(time.Since(start)) / float64(time.Millisecond)
 	_ = conn.Close()
 	res.up = true
+	res.rttMs = connectMs
 	res.lines = append(res.lines,
 		fmt.Sprintf(`synthetic_tcp_connect_ms{dst=%q,check="tcp"} %.3f`, tgt.dst, connectMs))
 	return res
@@ -361,6 +379,8 @@ func (s *synthetics) checkICMP(ctx context.Context, tgt synTarget) synResult {
 	if len(rtts) > 0 {
 		mean /= float64(len(rtts))
 	}
+	res.rttMs = mean
+	res.lossPct = loss
 	res.lines = append(res.lines,
 		fmt.Sprintf(`synthetic_icmp_rtt_ms{dst=%q,check="icmp"} %.3f`, tgt.dst, mean),
 		fmt.Sprintf(`synthetic_icmp_loss_pct{dst=%q,check="icmp"} %.2f`, tgt.dst, loss),

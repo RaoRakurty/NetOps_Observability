@@ -40,17 +40,14 @@ from pydantic import BaseModel
 
 from catalog import builtin_catalog
 from engine import EngineConfig, ObjectSnapshot, SeamView, run_window
-from episodes import EpisodeDetector, EpisodeEvent
+from episodes import EpisodeDetector
+from producers import episode_signal, probe_signals, syslog_control_signal
 from replay import replay_object
 from signals import (
     DeadLetter,
-    EntityType,
-    ModalityClass,
     Observer,
     ObserverType,
-    Severity,
     Signal,
-    Source,
 )
 
 # ---------------------------------------------------------------------------
@@ -63,7 +60,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes"]
 
 # Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
 # tenant_id onto each finding so it carries the same tenant discriminator as the
@@ -305,46 +302,6 @@ async def engine_loop() -> None:
         await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
 
 
-def _severity_for(peak_z: float) -> Severity:
-    if peak_z >= 8:
-        return Severity.CRIT
-    if peak_z >= 5:
-        return Severity.HIGH
-    return Severity.WARN
-
-
-def episode_signal(ev: EpisodeEvent, observer: Observer) -> Signal:
-    """EpisodeEvent → canonical Signal row (deterministic identity: the episode
-    is identified by its onset, so onset+clear rows share native_id lineage)."""
-    tenant_id, entity_id, metric = ev.key
-    onset_ms = int(ev.onset_ts.timestamp() * 1000)
-    attrs = {
-        "phase": ev.phase,
-        "onset_uncertainty_s": round(ev.onset_uncertainty_s, 3),
-        "peak_deviation": round(ev.peak_deviation, 4),
-        "integral": round(ev.integral, 2),
-    }
-    if ev.clear_ts is not None:
-        attrs["clear_ts"] = ev.clear_ts.isoformat()
-    return Signal(
-        tenant_id=tenant_id,
-        ts=ev.onset_ts if ev.phase == "onset" else (ev.clear_ts or ev.onset_ts),
-        source=Source.METRIC,
-        kind="metric_anomaly" if ev.phase == "onset" else "metric_anomaly_clear",
-        observer=observer,
-        modality_class=ModalityClass.DEVICE_TELEMETRY,
-        entity_type=EntityType.DEVICE,
-        entity_id=entity_id,
-        severity=_severity_for(ev.peak_deviation),
-        native_id=f"{tenant_id}|{entity_id}|{metric}|{ev.phase}|{onset_ms}",
-        metric_name=metric,
-        value=ev.value,
-        baseline=ev.baseline,
-        deviation=ev.deviation,
-        attrs=attrs,
-    )
-
-
 async def feed_episode_detector(device: str, metric: str, value: float) -> None:
     """Stage [1]+[2]: normalize provenance, run CUSUM, persist episode events."""
     global DEADLETTER_COUNT
@@ -485,6 +442,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_syslog(event)
     elif topic == "netops.flows":
         await handle_flow(event)
+    elif topic == "netops.probes":
+        await handle_probe(event)
 
 
 async def handle_metric(ev: dict) -> None:
@@ -529,7 +488,49 @@ SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
 
 
+async def handle_probe(ev: dict) -> None:
+    """Active-measurement events (STAMP / ICMP / TCP / HTTP) from the Go
+    collectors via netops.probes → active_probe signals on the spine
+    (#67 build ⑦). The probe path is the evidence class device telemetry
+    cannot supply — gray failures are invisible to counters."""
+    global DEADLETTER_COUNT
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    host = str(ev.get("target") or "")
+    tenant = str(ev.get("tenant_id") or "") or tenant_for(host)
+    now = datetime.now(timezone.utc)
+    try:
+        sigs = probe_signals(ev, DETECTOR, tenant, now)
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        log.warning("dead-letter (probe): %s", exc)
+        return
+    for sig in sigs:
+        await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+        buffer_signal(sig)
+        log.info("probe signal %s: %s sev=%s value=%.1f",
+                 sig.kind, sig.entity_id, sig.severity.value, sig.value)
+
+
 async def handle_syslog(ev: dict) -> None:
+    # Control-plane extraction first (#67 build ⑦): adjacency / link-state
+    # events become control_plane signals on the spine regardless of burst
+    # behavior — one BGP-down is evidence even when nothing else is on fire.
+    global DEADLETTER_COUNT
+    if CORR_SIGNALS_ENABLED and ch is not None:
+        cp_tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("hostname") or ""))
+        try:
+            cp_sig = syslog_control_signal(ev, cp_tenant, datetime.now(timezone.utc))
+        except DeadLetter as exc:
+            DEADLETTER_COUNT += 1
+            log.warning("dead-letter (syslog): %s", exc)
+            cp_sig = None
+        if cp_sig is not None:
+            await ch.insert("netops.corr_signals", [cp_sig.to_ch_row()])
+            buffer_signal(cp_sig)
+            log.info("control-plane signal %s: %s %s",
+                     cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
+
     host = str(ev.get("hostname") or "unknown")
     sev  = str(ev.get("severity") or "info").lower()
     weight = SEVERITY_WEIGHT.get(sev, 0)

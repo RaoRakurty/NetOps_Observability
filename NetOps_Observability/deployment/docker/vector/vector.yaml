@@ -64,6 +64,15 @@ sources:
     decoding:
       codec: json
 
+  # Active-measurement probe events (#67 build ⑦). The STAMP sender and the
+  # synthetics runner POST each observation here so the correlation engine
+  # receives active_probe-modality evidence over the bus (→ netops.probes).
+  probe_in:
+    type: http_server
+    address: 0.0.0.0:8689
+    decoding:
+      codec: json
+
   # Vector's own internal metrics. Exposed at /metrics on port 9598
   # so Prometheus can scrape it (added as a target in prometheus.yml).
   internal_metrics:
@@ -203,6 +212,23 @@ transforms:
         }
       }
 
+  # Probe events: stamp the tenant when the target matches a device identity.
+  # Most probe targets are external hosts → "" (global/platform); the
+  # correlation service re-resolves against the same table either way.
+  probe_normalized:
+    type: remap
+    inputs: [probe_in]
+    source: |
+      .signal = "probe"
+      tgt = string(.target) ?? ""
+      .tenant_id = ""
+      if tgt != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": tgt }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+
 # ----------------------------------------------------------------------------
 # SINKS — Redpanda topics, one per signal.
 # ----------------------------------------------------------------------------
@@ -237,6 +263,14 @@ sinks:
     inputs: [snmptrap_normalized]
     bootstrap_servers: "redpanda:9092"
     topic: "netops.snmptrap"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_probes:
+    type: kafka
+    inputs: [probe_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.probes"
     encoding: { codec: json }
     compression: snappy
 

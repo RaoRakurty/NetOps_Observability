@@ -248,16 +248,31 @@ func stampTargets() []string {
 func (s *stampSender) probeAll(ctx context.Context) {
 	targets := stampTargets()
 	now := time.Now().UnixMilli()
+	prober := proberID()
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	reachable := 0
 	var lines []string
+	var events []ProbeEvent
 	for _, tgt := range targets {
 		res, err := probeSTAMP(ctx, tgt, s.packets)
 		if err != nil {
+			// Resolve/dial failure is still a real observation of the path:
+			// forward it as full loss so the engine sees the outage, even
+			// though there is no sample to render as a gauge.
+			events = append(events, ProbeEvent{
+				Kind: "stamp", Prober: prober, Target: tgt,
+				OK: false, LossPct: 100, TS: ts,
+			})
 			continue
 		}
 		if res.recv > 0 {
 			reachable++
 		}
+		events = append(events, ProbeEvent{
+			Kind: "stamp", Prober: prober, Target: tgt,
+			OK: res.recv > 0, RTTms: res.rttMs, JitterMs: res.pdvMs,
+			LossPct: res.lossPct, TS: ts,
+		})
 		lines = append(lines,
 			fmt.Sprintf(`probe_rtt_ms{dst=%q,probe="stamp"} %.3f %d`, tgt, res.rttMs, now),
 			fmt.Sprintf(`probe_owd_ms{dst=%q,probe="stamp"} %.3f %d`, tgt, res.owdMs, now),
@@ -270,6 +285,7 @@ func (s *stampSender) probeAll(ctx context.Context) {
 	if len(lines) > 0 {
 		emitMetrics(ctx, strings.Join(lines, "\n"))
 	}
+	forwardProbeEvents(ctx, events)
 	s.mu.Lock()
 	s.status.LastTick = time.Now().UTC()
 	s.status.Targets = len(targets)

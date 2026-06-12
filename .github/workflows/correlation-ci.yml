@@ -46,7 +46,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: pytest
-        run: python -m pytest test_anomaly.py -v
+        # The WHOLE suite: this is also the signature-catalog fixture gate
+        # (#67 build ④ — every signature needs a passing positive fixture) and
+        # the golden-replay gate (build ⑥). Single-file runs would silently
+        # skip both.
+        run: python -m pytest -v
 
   lint:
     name: ruff · bandit · mypy · pip-audit (blocking)

@@ -1,0 +1,284 @@
+"""Signal producers — bus events → canonical Signals (#67 build ⑦).
+
+Pure event→Signal construction for the two evidence lanes the demo build adds
+to the spine:
+
+  * probe events (netops.probes, POSTed by the Go STAMP sender / synthetics
+    runner via Vector) → active_probe signals with vantage-agent observer
+    provenance: discrete probe_loss observations + CUSUM episodes on RTT.
+  * syslog control-plane events (BGP/OSPF adjacency changes, link state
+    changes) → control_plane signals with device observer provenance.
+
+Both lanes carry event time from the source record (probe sender clock /
+RFC5424 timestamp), not ingest time — clock_quality stays "unknown" until the
+rp.* wiring threads calibrated source clocks, so the onset budget is widened
+honestly rather than assumed away.
+
+Everything here is deterministic given (event, detector state): no wall-clock
+reads, no IO. main.py owns tenancy resolution, persistence and buffering.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
+
+from episodes import EpisodeDetector, EpisodeEvent
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
+
+# Loss at/above this (percent) is a discrete probe_loss signal each cycle.
+PROBE_LOSS_PCT = 5.0
+
+
+def severity_for(peak_z: float) -> Severity:
+    if peak_z >= 8:
+        return Severity.CRIT
+    if peak_z >= 5:
+        return Severity.HIGH
+    return Severity.WARN
+
+
+def episode_signal(
+    ev: EpisodeEvent,
+    observer: Observer,
+    *,
+    source: Source = Source.METRIC,
+    modality: ModalityClass = ModalityClass.DEVICE_TELEMETRY,
+    entity_type: EntityType = EntityType.DEVICE,
+    kind_prefix: str = "metric_anomaly",
+    entity_tokens: tuple[str, ...] = (),
+    path_id: str | None = None,
+) -> Signal:
+    """EpisodeEvent → canonical Signal row (deterministic identity: the episode
+    is identified by its onset, so onset+clear rows share native_id lineage).
+    Provenance is parameterized so probe-path episodes carry active_probe /
+    vantage-agent provenance instead of device telemetry (#67 build ⑦)."""
+    tenant_id, entity_id, metric = ev.key
+    onset_ms = int(ev.onset_ts.timestamp() * 1000)
+    attrs = {
+        "phase": ev.phase,
+        "onset_uncertainty_s": round(ev.onset_uncertainty_s, 3),
+        "peak_deviation": round(ev.peak_deviation, 4),
+        "integral": round(ev.integral, 2),
+    }
+    if ev.clear_ts is not None:
+        attrs["clear_ts"] = ev.clear_ts.isoformat()
+    return Signal(
+        tenant_id=tenant_id,
+        ts=ev.onset_ts if ev.phase == "onset" else (ev.clear_ts or ev.onset_ts),
+        source=source,
+        kind=kind_prefix if ev.phase == "onset" else f"{kind_prefix}_clear",
+        observer=observer,
+        modality_class=modality,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        severity=severity_for(ev.peak_deviation),
+        native_id=f"{tenant_id}|{entity_id}|{metric}|{ev.phase}|{onset_ms}",
+        entity_tokens=entity_tokens,
+        path_id=path_id,
+        metric_name=metric,
+        value=ev.value,
+        baseline=ev.baseline,
+        deviation=ev.deviation,
+        attrs=attrs,
+    )
+
+_FRACTION_RE = re.compile(r"(\.\d{6})\d+")  # >µs precision → truncate for fromisoformat
+
+
+def parse_event_ts(raw: object) -> datetime | None:
+    """RFC3339/ISO event time → tz-aware UTC; None when absent/malformed
+    (the caller substitutes ingest time — honest fallback, never a guess)."""
+    if not raw:
+        return None
+    s = _FRACTION_RE.sub(r"\1", str(raw).strip().replace("Z", "+00:00"))
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# ── probe events (netops.probes) ──────────────────────────────────────────────
+
+
+def probe_host(target: str) -> str:
+    """Bare host out of a probe target (host[:port] or URL) — the grounding
+    token that can intersect a seam endpoint / probe binding."""
+    t = target
+    if "://" in t:
+        t = t.split("://", 1)[1]
+    t = t.split("/", 1)[0]
+    if t.count(":") == 1:  # host:port (IPv6 literals have ≥2 colons)
+        t = t.split(":", 1)[0]
+    return t
+
+
+def _loss_severity(loss: float) -> Severity:
+    if loss >= 75:
+        return Severity.CRIT
+    if loss >= 25:
+        return Severity.HIGH
+    return Severity.WARN
+
+
+def probe_signals(
+    ev: dict, detector: EpisodeDetector, tenant: str, ingest_ts: datetime,
+) -> list[Signal]:
+    """One probe event → 0..2 signals: a discrete probe_loss observation when
+    loss crosses the floor, and an RTT episode onset/clear from the CUSUM
+    detector when reachable. May raise DeadLetter (caller counts + parks)."""
+    kind = str(ev.get("kind") or "")
+    prober = str(ev.get("prober") or "")
+    target = str(ev.get("target") or "")
+    if not kind or not prober or not target:
+        return []
+    host = probe_host(target)
+    ts = parse_event_ts(ev.get("ts")) or ingest_ts
+    entity = f"{prober}->{host}"
+    observer = Observer(
+        observer_id=prober,
+        observer_type=ObserverType.VANTAGE_AGENT,
+        collection_path="direct",
+        clock_quality="unknown",
+    )
+    rtt = float(ev.get("rtt_ms") or 0.0)
+    loss = float(ev.get("loss_pct") or 0.0)
+    ok = bool(ev.get("ok"))
+    if not ok and loss <= 0.0:
+        loss = 100.0
+
+    out: list[Signal] = []
+    if loss >= PROBE_LOSS_PCT:
+        ts_ms = int(ts.timestamp() * 1000)
+        out.append(Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.PROBE,
+            kind="probe_loss",
+            observer=observer,
+            modality_class=ModalityClass.ACTIVE_PROBE,
+            entity_type=EntityType.PATH,
+            entity_id=entity,
+            severity=_loss_severity(loss),
+            native_id=f"{prober}|{host}|{kind}|loss|{ts_ms}",
+            entity_tokens=(prober, host),
+            path_id=entity,
+            metric_name=f"probe_loss_pct[{kind}]",
+            value=loss,
+            attrs={"probe_kind": kind, "target": target},
+        ))
+    if ok and rtt > 0.0:
+        ep = detector.observe(
+            tenant, entity, f"probe_rtt_ms[{kind}]", ts, rtt, clock_quality="unknown",
+        )
+        if ep is not None:
+            out.append(episode_signal(
+                ep, observer,
+                source=Source.PROBE,
+                modality=ModalityClass.ACTIVE_PROBE,
+                entity_type=EntityType.PATH,
+                kind_prefix="probe_rtt_anomaly",
+                entity_tokens=(prober, host),
+                path_id=entity,
+            ))
+    return out
+
+
+# ── syslog control-plane events (netops.syslog) ───────────────────────────────
+#
+# Real-world shapes these patterns are built from (lab cEOS + Cisco-style):
+#   "%BGP-5-ADJCHANGE: peer 10.0.0.1 (AS 65001) old state Established event
+#    RecvNotify new state Idle"                                   (EOS)
+#   "%BGP-5-ADJCHANGE: neighbor 10.0.0.1 Down Interface flap"     (IOS)
+#   "%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on Ethernet1 from FULL to DOWN"
+#   "%LINK-3-UPDOWN: Interface Ethernet1, changed state to down"
+#   "%LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet1, changed
+#    state to down"
+# The RFC5424 tag (%FAC-SEV-MNEMONIC) arrives in .appname via the Vector
+# syslog source; the text after the colon arrives in .message.
+
+_IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+_IF_RE = re.compile(r"[Ii]nterface\s+([A-Za-z][\w/.\-]*)")
+_DOWN_RE = re.compile(r"\b(?:down|idle|backward|failed)\b", re.IGNORECASE)
+_UP_RE = re.compile(r"\b(?:up|established|full)\b", re.IGNORECASE)
+
+
+def _state_of(msg: str) -> str:
+    """down beats up: 'old state Established new state Idle' is a down."""
+    if _DOWN_RE.search(msg):
+        return "down"
+    if _UP_RE.search(msg):
+        return "up"
+    return "unknown"
+
+
+def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
+    """Adjacency / link-state syslog → one control_plane Signal; None for
+    everything that is not a recognized control-plane event. May raise
+    DeadLetter on malformed provenance."""
+    host = str(ev.get("hostname") or "")
+    if not host or host == "unknown":
+        return None
+    tag = str(ev.get("appname") or "").upper()
+    msg = str(ev.get("message") or "")
+    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts_ms = int(ts.timestamp() * 1000)
+    observer = Observer(
+        observer_id=host,
+        observer_type=ObserverType.DEVICE,
+        collection_path="direct",   # the device itself emitted the event
+        clock_quality="unknown",
+    )
+
+    if "ADJCHANGE" in tag or "ADJCHG" in tag:
+        proto = "bgp" if "BGP" in tag else "ospf" if "OSPF" in tag else "routing"
+        peer_m = _IP_RE.search(msg)
+        peer = peer_m.group(1) if peer_m else ""
+        state = _state_of(msg)
+        tokens = (host, peer) if peer else (host,)
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind=f"{proto}_adjacency_change",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE,
+            entity_id=host,
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{host}|{proto}_adj|{peer or '?'}|{state}|{ts_ms}",
+            entity_tokens=tokens,
+            metric_name=f"{proto}_adjacency",
+            attrs={"peer": peer, "state": state, "tag": tag},
+        )
+
+    if ("LINK" in tag or "LINEPROTO" in tag) and "UPDOWN" in tag:
+        if_m = _IF_RE.search(msg)
+        ifname = if_m.group(1) if if_m else "unknown"
+        state = _state_of(msg)
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="link_state_change",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.INTERFACE,
+            entity_id=f"{host}:{ifname}",
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{host}|link|{ifname}|{state}|{ts_ms}",
+            entity_tokens=(host, ifname),
+            metric_name="link_state",
+            attrs={"interface": ifname, "state": state, "tag": tag},
+        )
+
+    return None
