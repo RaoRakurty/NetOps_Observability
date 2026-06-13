@@ -52,11 +52,12 @@ targets:
     subscriptions: [oc-interfaces]
 
 subscriptions:
-  # OpenConfig interface counters + oper status (Arista).
+  # OpenConfig interface counters + oper/admin status (Arista).
   oc-interfaces:
     paths:
       - "/interfaces/interface/state/counters"
       - "/interfaces/interface/state/oper-status"
+      - "/interfaces/interface/state/admin-status"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
@@ -66,6 +67,7 @@ subscriptions:
     paths:
       - "/interface[name=*]/statistics"
       - "/interface[name=*]/oper-state"
+      - "/interface[name=*]/admin-state"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
@@ -81,8 +83,165 @@ subscriptions:
     sample-interval: 30s
 
 outputs:
+  # Raw lane — gNMI paths verbatim under the gnmi_ prefix. Debug surface,
+  # gNMI-liveness source for the backend health monitor, and the comparison
+  # lane for parity checks before an ownership flip. Never queried by panels.
   victoria:
     type: prometheus_write
     url: http://victoria:8428/api/v1/write
     metric-prefix: gnmi
     interval: 15s
+
+  # Canonical lane — THE normalization layer (single-contract principle:
+  # whatever the transport, SNMP and gNMI must emit the same output).
+  # Pipeline: rename mapped paths to canonical device_* names → status enums
+  # to IF-MIB numerics → vendor/transport tags → identity tags renamed to the
+  # canonical label set → OWNERSHIP GATE → fail-closed cleanup.
+  #
+  # Ownership rule (collision safety): a (device, family) pair is served by
+  # exactly ONE transport. gNMI coverage is currently a strict SUBSET of SNMP
+  # on interfaces (no VLANs/loopbacks/subifs, no speed/admin parity proven),
+  # so interface/cpu/temp families stay SNMP-owned and are withheld here by
+  # the ownership gate. Memory on Nokia SRL has NO SNMP source at all — gNMI
+  # owns it from day one. To flip a family to gNMI: prove parity against the
+  # raw lane, remove it from the ownership-gate delete list, and withdraw it
+  # from the SNMP profile for the affected devices in the same change.
+  victoria-canonical:
+    type: prometheus_write
+    url: http://victoria:8428/api/v1/write
+    interval: 15s
+    event-processors:
+      - canon-names
+      - canon-status-enums
+      - canon-convert
+      - vendor-nokia
+      - vendor-arista
+      - transport-tag
+      - canon-tags
+      - ownership-gate
+      - drop-unmapped
+      - drop-internal-tags
+
+processors:
+  # [1] Path → canonical name. Full mapping table for both vendors; anchored
+  # regexes, replace rewrites the entire value name. Unmapped paths keep their
+  # raw shape and are removed by drop-unmapped (fail-closed: a new subscription
+  # can never leak into the canonical namespace unmapped).
+  canon-names:
+    event-strings:
+      value-names: [".*"]
+      transforms:
+        # --- Arista / OpenConfig: /interfaces/interface/state/... ---
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-octets$", new: "device_if_in_octets"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-octets$", new: "device_if_out_octets"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-errors$", new: "device_if_in_errors"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-errors$", new: "device_if_out_errors"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-discards$", new: "device_if_in_discards"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-discards$", new: "device_if_out_discards"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-unicast-pkts$", new: "device_if_in_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-multicast-pkts$", new: "device_if_in_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/in-broadcast-pkts$", new: "device_if_in_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-unicast-pkts$", new: "device_if_out_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-multicast-pkts$", new: "device_if_out_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/counters/out-broadcast-pkts$", new: "device_if_out_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/oper-status$", new: "device_if_oper_status"}
+        - replace: {apply-on: name, old: ".*interfaces/interface/state/admin-status$", new: "device_if_admin_status"}
+        # --- Nokia SR Linux native: /interface[name=*]/statistics/... ---
+        - replace: {apply-on: name, old: ".*interface/statistics/in-octets$", new: "device_if_in_octets"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-octets$", new: "device_if_out_octets"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-error-packets$", new: "device_if_in_errors"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-error-packets$", new: "device_if_out_errors"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-discarded-packets$", new: "device_if_in_discards"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-discarded-packets$", new: "device_if_out_discards"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-unicast-packets$", new: "device_if_in_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-multicast-packets$", new: "device_if_in_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/in-broadcast-packets$", new: "device_if_in_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-unicast-packets$", new: "device_if_out_ucast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-multicast-packets$", new: "device_if_out_mcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/statistics/out-broadcast-packets$", new: "device_if_out_bcast_pkts"}
+        - replace: {apply-on: name, old: ".*interface/oper-state$", new: "device_if_oper_status"}
+        - replace: {apply-on: name, old: ".*interface/admin-state$", new: "device_if_admin_status"}
+        # --- Nokia SR Linux control plane ---
+        - replace: {apply-on: name, old: ".*cpu/total/instant$", new: "device_cpu_percent"}
+        - replace: {apply-on: name, old: ".*memory/utilization$", new: "device_mem_percent"}
+        - replace: {apply-on: name, old: ".*temperature/instant$", new: "device_temp_celsius"}
+
+  # [2] Status enums → IF-MIB numerics (ifOperStatus/ifAdminStatus values;
+  # OpenConfig enums are modeled on the same list). Anchored — no substring
+  # hazards (LOWER_LAYER_DOWN vs DOWN). Lowercase set = Nokia SRL.
+  canon-status-enums:
+    event-strings:
+      value-names: ["^device_if_oper_status$", "^device_if_admin_status$"]
+      transforms:
+        - replace: {apply-on: value, old: "^UP$", new: "1"}
+        - replace: {apply-on: value, old: "^DOWN$", new: "2"}
+        - replace: {apply-on: value, old: "^TESTING$", new: "3"}
+        - replace: {apply-on: value, old: "^UNKNOWN$", new: "4"}
+        - replace: {apply-on: value, old: "^DORMANT$", new: "5"}
+        - replace: {apply-on: value, old: "^NOT_PRESENT$", new: "6"}
+        - replace: {apply-on: value, old: "^LOWER_LAYER_DOWN$", new: "7"}
+        - replace: {apply-on: value, old: "^up$", new: "1"}
+        - replace: {apply-on: value, old: "^down$", new: "2"}
+        - replace: {apply-on: value, old: "^testing$", new: "3"}
+        # Nokia SR Linux admin-state spells the enable/disable enum out; map it
+        # onto ifAdminStatus up(1)/down(2) so admin status is numeric like oper.
+        - replace: {apply-on: value, old: "^enable$", new: "1"}
+        - replace: {apply-on: value, old: "^disable$", new: "2"}
+
+  # [3] Canonical values are integers (matches the SNMP emitter's valueInt).
+  canon-convert:
+    event-convert:
+      value-names: ["^device_.*$"]
+      type: int
+
+  # [4] Vendor label, keyed on which subscription produced the event.
+  vendor-nokia:
+    event-add-tag:
+      tags: ["^srl-(interfaces|cpu)$"]
+      add: {vendor: nokia}
+  vendor-arista:
+    event-add-tag:
+      tags: ["^oc-interfaces$"]
+      add: {vendor: arista}
+
+  # [5] Transport label — series provenance for watchdog freshness checks and
+  # correlation observer independence. SNMP series carry no transport label
+  # (legacy default) until the first overlapping ownership flip.
+  transport-tag:
+    event-add-tag:
+      value-names: ["."]
+      add: {transport: gnmi}
+
+  # [6] Identity tags → canonical label names (device, ifName).
+  canon-tags:
+    event-strings:
+      tag-names: ["^interface_name$", "^source$"]
+      transforms:
+        - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
+        - replace: {apply-on: name, old: "^source$", new: "device"}
+
+  # [7] OWNERSHIP GATE — families listed here are mapped and ready but still
+  # SNMP-owned; deleting them prevents double-producing the same canonical
+  # series from two transports. Flip = remove from this list + withdraw the
+  # family from the SNMP profile for the affected devices (one change).
+  # Currently gNMI-owned: device_mem_percent (no SNMP source on Nokia SRL).
+  ownership-gate:
+    event-delete:
+      value-names:
+        - "^device_if_.*$"
+        - "^device_cpu_percent$"
+        - "^device_temp_celsius$"
+
+  # [8] Fail-closed: canonical names contain no '/' or '-'; anything still
+  # path-shaped was never mapped and must not reach the canonical namespace.
+  drop-unmapped:
+    event-delete:
+      value-names: ["/", "-"]
+
+  # [9] Internal plumbing tags stay out of the canonical label set. gnmic names
+  # the subscription tag with a hyphen (subscription-name); control_slot/cpu_index
+  # are SR-Linux path keys with no SNMP-contract equivalent — drop all three so
+  # the canonical label set is exactly {device, vendor, ifName, transport}.
+  drop-internal-tags:
+    event-delete:
+      tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$"]
