@@ -12,73 +12,76 @@ username: admin
 encoding: json_ietf
 skip-verify: true
 log: true
-
 targets:
   # ---- Nokia SR Linux (TLS, self-signed -> skip-verify) ----
   172.40.40.11:57400:
     name: spine1
     password: ${SRL_GNMI_PASS}
-    subscriptions: [srl-interfaces, srl-cpu]
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp]
   172.40.40.12:57400:
     name: spine2
     password: ${SRL_GNMI_PASS}
-    subscriptions: [srl-interfaces, srl-cpu]
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp]
 
   # ---- Arista cEOS (plaintext gNMI :6030) ----
   172.40.40.21:6030:
     name: leaf1
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces]
+    subscriptions: [oc-interfaces, oc-bgp]
   172.40.40.22:6030:
     name: leaf2
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces]
+    subscriptions: [oc-interfaces, oc-bgp]
   172.40.40.23:6030:
     name: leaf3
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces]
+    subscriptions: [oc-interfaces, oc-bgp]
   172.40.40.24:6030:
     name: leaf4
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces]
+    subscriptions: [oc-interfaces, oc-bgp]
   172.40.40.32:6030:
     name: wan-r2
     password: ${EOS_GNMI_PASS}
     insecure: true
-    subscriptions: [oc-interfaces]
+    subscriptions: [oc-interfaces, oc-bgp]
 
 subscriptions:
-  # OpenConfig interface counters + oper/admin status + BGP neighbor session-state
-  # (Arista). BGP rides in THIS subscription as an extra path rather than its own
-  # named subscription: cEOS reliably streams BGP when it shares the interface
-  # target's single subscribe stream, but drops it as a second concurrent
-  # subscription on the leaf targets (verified on the lab — wan-r2 happened to
-  # work standalone, the 4 leaves did not; bundling fixes all of them). Same
-  # 30s sample cadence, so co-locating costs nothing. Revisit if BGP later needs
-  # a distinct cadence/on-change (would need the cEOS multi-stream issue solved).
+  # OpenConfig interface counters + oper/admin status (Arista).
   oc-interfaces:
     paths:
       - "/interfaces/interface/state/counters"
       - "/interfaces/interface/state/oper-status"
       - "/interfaces/interface/state/admin-status"
-      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
 
-  # Nokia SR Linux native interface statistics + BGP neighbor session-state.
-  # BGP co-located here for symmetry with the Arista lane (SRL streams it fine as
-  # a separate subscription too, but one stream per target keeps both vendors
-  # uniform). Same 30s sample cadence.
+  # Nokia SR Linux native interface statistics.
   srl-interfaces:
     paths:
       - "/interface[name=*]/statistics"
       - "/interface[name=*]/oper-state"
       - "/interface[name=*]/admin-state"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
+  # BGP neighbor session-state — CONTROL PLANE, gNMI-owned (its own subscription).
+  # Canonical lane applies canon-override-ts so cEOS's stale established-session
+  # timestamps don't get rejected by VictoriaMetrics (see outputs + issue file).
+  oc-bgp:
+    paths:
+      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+  srl-bgp:
+    paths:
       - "/network-instance[name=default]/protocols/bgp/neighbor[peer-address=*]/session-state"
     mode: stream
     stream-mode: sample
@@ -128,6 +131,7 @@ outputs:
     url: http://victoria:8428/api/v1/write
     interval: 15s
     event-processors:
+      - canon-override-ts
       - canon-names
       - canon-status-enums
       - canon-bgp-enums
@@ -141,6 +145,18 @@ outputs:
       - drop-internal-tags
 
 processors:
+  # [0] Override sample timestamp with collection time. cEOS stamps a STABLE
+  # established BGP session's sampled response with the session's last-transition
+  # time (hours old on a steady fabric) instead of the sample time; VictoriaMetrics
+  # silently rejects those as stale, so cEOS leaf BGP vanished while spine/wan-r2
+  # (fresh timestamps) landed. For sampled STATE we want "is it established NOW",
+  # so collection-time is correct; true event-time lives in the event plane, not
+  # here. Applies to ALL canonical series (harmless for already-fresh ones).
+  # (Root cause: ceos-bgp-gnmi-issue.md.)
+  canon-override-ts:
+    event-override-ts:
+      precision: ns
+
   # [1] Path → canonical name. Full mapping table for both vendors; anchored
   # regexes, replace rewrites the entire value name. Unmapped paths keep their
   # raw shape and are removed by drop-unmapped (fail-closed: a new subscription

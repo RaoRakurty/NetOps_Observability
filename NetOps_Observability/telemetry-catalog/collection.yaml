@@ -96,15 +96,24 @@ rows:
     mode: stream
     stream_mode: sample
     interval: 30s
-    fidelity_status: degraded
+    requires: {output_processor: event-override-ts}
+    fidelity_status: live_validated
     last_validated: "2026-06-13"
+    fixture: fixtures/arista_ceos_4.36_bgp_leaf_established_once.jsonl
     issue_ref: "ceos-bgp-gnmi-issue.md"
     notes: >-
-      Established session-state NOT delivered under the persistent multi-target
-      container subscription on cEOS leaf targets. Works standalone, for
-      transitional (ACTIVE) peers, and via GET. Ruled out: wire, concurrency,
-      buffer, mode, bundling. ROOT CAUSE OPEN (suspected cEOS lazy OpenConfig
-      streaming of static state). Do NOT advertise cEOS leaf BGP as supported.
+      RESOLVED. cEOS stamps a STABLE established session's sampled response with
+      the session's last-transition time (hours old on a steady fabric), not the
+      sample time; VictoriaMetrics silently rejects those as stale, so cEOS leaf
+      BGP vanished while spine/wan-r2 (fresh timestamps) landed. Confirmed via
+      gNMIc /metrics (gnmic RECEIVED 7 msgs/leaf) + the bgpdiag file output
+      (events emit device_bgp_peer_state:6 correctly with 137-min-old timestamps).
+      FIX: canon-override-ts (event-override-ts) on the canonical prometheus_write
+      output stamps collection time. All 4 leaves now live_validated (2 peers each,
+      established=6). REQUIRES the output_processor above — without it, cEOS static
+      state is dropped. Foundation lesson: validate to the STORE, not the collector
+      output — a path that streams + normalizes can still be silently dropped by
+      timestamp semantics at TSDB ingest.
 
   # ===================== Phase 3 placeholder note =====================
   # P1-P5 research rows (OSPF/ISIS/BFD/MPLS/LDP/IPsec/QoS/SD-WAN/firewall) import
