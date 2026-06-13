@@ -1,0 +1,112 @@
+# Collection catalog — HOW each (vendor, platform, version, signal-family) is
+# collected, and — the load-bearing field — its VALIDATED FIDELITY.
+#
+# fidelity_status ladder (the product truth, NOT vendor docs):
+#   doc_claimed     - a reference says the path/OID exists; UNTESTED here.
+#   lab_validated   - replaying a captured fixture through normalize.py yields the
+#                     correct canonical output in CI.
+#   live_validated  - confirmed flowing end-to-end on the live lab.
+#   degraded        - works in some conditions but fails in others (must carry issue_ref).
+#   failed          - claimed by docs but proven NOT to work (must carry issue_ref).
+#
+# Rule: only lab_validated / live_validated rows may be advertised as "supported".
+# doc_claimed rows are candidates. The cEOS-leaf BGP row below is why this matters.
+version: 1
+
+rows:
+  # ===================== Phase 1: validated signal families =====================
+
+  # ---- interfaces: oper-status (Arista cEOS, OpenConfig) ----
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_if_oper_status
+    method: gnmi
+    origin: openconfig
+    path: "/interfaces/interface/state/oper-status"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: live_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/arista_ceos_4.36_if_operstatus_oc_once.jsonl
+    cost: {series_per_device: "~ports", writes_per_min: "2x ports", device_cpu: low}
+    notes: "UPPERCASE enum (UP/DOWN); interface_name tag -> ifName."
+
+  # ---- memory: Nokia SR Linux (native, gNMI-owned) ----
+  - vendor: nokia
+    platform: srlinux
+    os_version: ">=23.0"
+    signal_family: device_mem_percent
+    method: gnmi
+    origin: native
+    path: "/platform/control[slot=A]/memory"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: live_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/nokia_srl_24.10_memory_native_once.jsonl
+    cost: {series_per_device: 1, writes_per_min: 2, device_cpu: low}
+    notes: "memory/utilization leaf is a genuine 0-100 percent (verified). free/physical/reserved leaves dropped as unmapped."
+
+  # ---- BGP peer-state: Nokia SR Linux (native) ----
+  - vendor: nokia
+    platform: srlinux
+    os_version: ">=23.0"
+    signal_family: device_bgp_peer_state
+    method: gnmi
+    origin: native
+    path: "/network-instance[name=default]/protocols/bgp/neighbor[peer-address=*]/session-state"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: live_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/nokia_srl_24.10_bgp_native_once.jsonl
+    cost: {series_per_device: "~peers", writes_per_min: "2x peers", device_cpu: low}
+    notes: "lowercase enum (established/active); neighbor_peer-address -> peer. SRL streams established baseline reliably."
+
+  # ---- BGP peer-state: Arista cEOS (OpenConfig) — edge router OK ----
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_bgp_peer_state
+    method: gnmi
+    origin: openconfig
+    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: live_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/arista_ceos_4.36_bgp_oc_once.jsonl
+    cost: {series_per_device: "~peers", writes_per_min: "2x peers", device_cpu: low}
+    notes: "UPPERCASE enum (ESTABLISHED/ACTIVE); neighbor_neighbor-address -> peer. Validated on wan-r2 (edge)."
+
+  # ---- BGP peer-state: Arista cEOS LEAF targets — DEGRADED (the cautionary row) ----
+  - vendor: arista
+    platform: ceos
+    os_version: "4.36.*"
+    signal_family: device_bgp_peer_state
+    method: gnmi
+    origin: openconfig
+    deployment: persistent_multi_target
+    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: degraded
+    last_validated: "2026-06-13"
+    issue_ref: "ceos-bgp-gnmi-issue.md"
+    notes: >-
+      Established session-state NOT delivered under the persistent multi-target
+      container subscription on cEOS leaf targets. Works standalone, for
+      transitional (ACTIVE) peers, and via GET. Ruled out: wire, concurrency,
+      buffer, mode, bundling. ROOT CAUSE OPEN (suspected cEOS lazy OpenConfig
+      streaming of static state). Do NOT advertise cEOS leaf BGP as supported.
+
+  # ===================== Phase 3 placeholder note =====================
+  # P1-P5 research rows (OSPF/ISIS/BFD/MPLS/LDP/IPsec/QoS/SD-WAN/firewall) import
+  # here with fidelity_status: doc_claimed and a source ref, then get promoted
+  # vendor-by-vendor as fixtures validate them. None are added yet (Phase 3).

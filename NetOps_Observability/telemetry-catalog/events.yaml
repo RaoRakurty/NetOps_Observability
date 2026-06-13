@@ -1,0 +1,18 @@
+# Event / parser catalog — Phase 2 (NOT YET POPULATED).
+#
+# The metric catalog (normalization.yaml) covers state/counters/gauges. Half of
+# network root-cause lives in EVENTS (syslog, traps, NOTIFICATION reasons,
+# BGP/OSPF adjchange). This catalog will map per-vendor log/trap grammars into a
+# canonical event schema that shares the SAME identity model (identity.yaml) as
+# the metrics, so an event and a metric about the same BGP peer / interface
+# correlate on (device, vrf, peer) / (device, ifName).
+#
+# Canonical event schema (target):
+#   event_type, device, ifName?, vrf?, peer?, severity, reason_code?,
+#   afi?, raw_ts, ingest_ts, observer, message
+#
+# Phase 2 seed families (from the correlation engine's existing syslog parsing
+# + research pass P5): bgp_adjacency_change, ospf_adjacency_change,
+# link_state_change, plus the firewall fw_event schema (PAN CSV / FortiOS kv).
+version: 1
+families: {}   # populated in Phase 2

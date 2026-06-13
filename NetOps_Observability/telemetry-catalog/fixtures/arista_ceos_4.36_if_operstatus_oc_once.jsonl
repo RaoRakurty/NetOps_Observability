@@ -1,0 +1,4 @@
+{"name": "default-1781379465", "timestamp": 1781356028045664889, "tags": {"interface_name": "Ethernet1", "source": "172.40.40.21:6030", "subscription-name": "default-1781379465"}, "values": {"/interfaces/interface/state/oper-status": "UP"}}
+{"name": "default-1781379465", "timestamp": 1781356028045084491, "tags": {"interface_name": "Ethernet2", "source": "172.40.40.21:6030", "subscription-name": "default-1781379465"}, "values": {"/interfaces/interface/state/oper-status": "UP"}}
+{"name": "default-1781379465", "timestamp": 1781356028047280153, "tags": {"interface_name": "Ethernet3", "source": "172.40.40.21:6030", "subscription-name": "default-1781379465"}, "values": {"/interfaces/interface/state/oper-status": "UP"}}
+{"name": "default-1781379465", "timestamp": 1781356028047970201, "tags": {"interface_name": "Management0", "source": "172.40.40.21:6030", "subscription-name": "default-1781379465"}, "values": {"/interfaces/interface/state/oper-status": "UP"}}

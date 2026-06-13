@@ -73,6 +73,22 @@ Owner per family = SNMP vs gNMI-on-change vs controller-API. Mode = sample vs
   - Path SLA → `GET /device/app-route/sla-class|statistics` → `device_sdwan_path_{loss,latency,jitter}`.
   - Fabric → `GET /device/control/connections`, `GET /device/omp/peers` → `device_sdwan_control_conn_state`.
 
+### Firewall / NGFW (P5 — two planes; metric + event)
+**Metric plane (canonical `device_fw_*`):**
+- **FortiGate** (FORTINET-FORTIGATE-MIB, ent 12356.101) — best-grounded:
+  - `device_fw_sessions` = `fgSysSesCount` (…101.4.1.8); setup rate `fgSysSesRate1`; CPU `fgSysCpuUsage`, mem `fgSysMemUsage`. **Session-util % is DERIVED** (count vs platform max), not a single OID.
+  - `device_fw_ha_state` = per-VDOM role `fgVdEntHaState` (…101.3.2.1.1.4: primary/master(1), secondary/backup(2), standalone(3)); mode `fgHaSystemMode`; sync `fgHaStatsSyncStatus`.
+  - `device_fw_tunnel_state` = per-tunnel `fgVpnTunEntStatus` (…101.12.2.2.1.20: down1/up2) + aggregate `fgVpnTunnelUpCount`.
+  - `device_fw_policy_denies` = per-policy `fgFwPolPktCount`/`ByteCount`.
+- **Juniper SRX** — chassis-cluster failover delivered as an **SNMP TRAP** (not pollable) carrying prev/current state + reason → ideal `device_fw_ha_state` transition. SPU-Monitoring MIB for flow sessions. ⚠️ **REFUTED: `jnxJsFlowSofSummary` is NOT the session OID** — do not use.
+- **Check Point** — HA `haState` (.1.3.6.1.4.1.2620.1.5.6, known defect: reads "Active" on all members); deny/drop via `fwDropPckts`/`fwReject*`. ⚠️ **REFUTED: `fwNumConn`/`fwConnsRate`/`haWorkMode`/`haClusterXLFailover`** — do not use as-cited.
+- **OPEN (unverified):** Cisco ASA/FTD (CISCO-UNIFIED-FIREWALL-MIB/cfwConnectionStat), Palo Alto SNMP (PAN-COMMON-MIB panSession*), Versa, and the "device vs management-plane which-is-canonical" question.
+
+**Event plane (normalized `fw_event` schema — syslog→Vector→OpenSearch, NOT metric store):**
+- **Palo Alto PAN-OS** — comma-separated CSV by type (TRAFFIC/THREAT/URL/WILDFIRE/SYSTEM/CONFIG); positional field maps → action, src/dst ip+port, proto, app, rule, zones, user, bytes, session-id. Well-grounded.
+- **FortiOS** — `key=value` (default) + CEF; Traffic/Event/UTM-Security split (AV/WebFilter/IPS/DLP/AppCtrl/WAF/DNS/anomaly). Well-grounded.
+- Canonical fw-event fields: action(allow/deny/drop/reset), src/dst, proto, app-id, rule, zone, user, threat/signature/category, bytes, session-id, duration.
+
 ---
 
 ## B. PENDING — needs re-run (rate-limited; NOT yet verified)

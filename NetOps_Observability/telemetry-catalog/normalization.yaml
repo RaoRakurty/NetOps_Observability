@@ -1,0 +1,94 @@
+# Normalization catalog — raw telemetry → canonical single-contract.
+#
+# This is the SOURCE OF TRUTH for how any transport's raw signal becomes a
+# canonical `device_*` series. It is DATA; normalize.py applies it and
+# test_conformance.py proves it against real captured fixtures. The gnmic YAML
+# processor chain is a *derived runtime applier* that must agree with this file
+# (checked by the contract audit) — normalization logic lives here + in tested
+# code, NOT buried in collector config.
+#
+# Each family declares: how to recognize its raw paths (match), its kind/unit,
+# the enum mapping (canonical int <- raw token, case-insensitive), the canonical
+# label set, the OWNER transport (collision safety — one transport per
+# (device,family)), and the dedup key.
+version: 1
+
+families:
+  # ---- Interfaces (SNMP-owned; gNMI is a gated subset) -------------------
+  device_if_oper_status:
+    match:
+      - ".*interfaces/interface/state/oper-status$"   # Arista OpenConfig
+      - ".*interface/oper-state$"                      # Nokia SRL native
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, ifName, transport]
+    enum:               # IF-MIB ifOperStatus numbering
+      "1": [up]
+      "2": [down]
+      "3": [testing]
+      "4": [unknown]
+      "5": [dormant]
+      "6": [not_present, "not-present"]
+      "7": [lower_layer_down, "lower-layer-down"]
+    owner:
+      transport: snmp
+      reason: "SNMP IF-MIB has the broadest device support for interface state; gNMI interface coverage is a strict subset and is withheld by the ownership gate until per-device parity is proven."
+    dedup_key: [device, ifName]
+
+  device_if_admin_status:
+    match:
+      - ".*interfaces/interface/state/admin-status$"
+      - ".*interface/admin-state$"
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, ifName, transport]
+    enum:               # IF-MIB ifAdminStatus (Nokia spells enable/disable)
+      "1": [up, enable]
+      "2": [down, disable]
+      "3": [testing]
+    owner:
+      transport: snmp
+      reason: "Mirror of oper-status ownership."
+    dedup_key: [device, ifName]
+
+  # ---- Resources (Nokia SRL memory: gNMI-owned, no SNMP source) ----------
+  device_mem_percent:
+    match:
+      - ".*memory/utilization$"
+    kind: gauge
+    unit: percent
+    labels: [device, vendor, transport]
+    owner:
+      transport: gnmi
+      reason: "Nokia SR Linux exposes NO SNMP memory source; gNMI owns it from day one. (Juniper DOES have an SNMP source for the same canonical name — so ownership is per-device, not per-name.)"
+    dedup_key: [device]
+
+  # ---- BGP control plane (gNMI-owned, on-change-preferred) ---------------
+  device_bgp_peer_state:
+    match:
+      - ".*bgp/neighbors/neighbor/state/session-state$"   # Arista OpenConfig
+      - ".*bgp/neighbor/session-state$"                    # Nokia SRL native
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, peer, vrf, transport]
+    enum:               # BGP4-MIB bgpPeerState numbering (alert: state < 6 = not-established)
+      "1": [idle]
+      "2": [connect]
+      "3": [active]
+      "4": [opensent, "open-sent"]
+      "5": [openconfirm, "open-confirm"]
+      "6": [established]
+    owner:
+      transport: gnmi
+      reason: "BGP4-MIB is IPv4-only AND weakly implemented on cEOS/SRL (device_bgp_peer_state has zero SNMP series on this fabric). gNMI owns BGP state; SNMP bgpPeerState kept only as a fallback for agentless/older gear."
+    dedup_key: [device, vrf, peer]
+
+# Plumbing tag names that must never reach a canonical label set (dropped after
+# reconciliation). gnmic names some with hyphens (invalid Prometheus labels).
+drop_tags:
+  - "subscription-name"
+  - "subscription_name"
+  - "control_slot"
+  - "cpu_index"
+  - "protocol_identifier"
+  - "protocol_name"
