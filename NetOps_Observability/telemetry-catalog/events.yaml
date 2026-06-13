@@ -86,3 +86,74 @@ families:
     severity: {down: high, up: warn}
     correlates_with: device_if_oper_status
     join_on: [device, ifName]
+
+  # ---- LLDP neighbor change (L2 topology integrity; multi-vendor) ---------
+  # The cleanest "neighbor vanished" root-cause: a port whose LLDP peer drops is
+  # a cabling/link/peer-down signal that cross-checks the IS-IS/BGP adjacencies.
+  lldp_neighbor_change:
+    # Arista cEOS: appname "%LLDP-5-NEIGHBOR_NEW" / "%LLDP-5-NEIGHBOR_REMOVED".
+    # Nokia SRL: appname nil; message carries "remotePeerAdded/remotePeerRemoved".
+    # Matcher spans appname+message (see parse_event), so one family is bi-vendor.
+    match_tag: "(LLDP.*NEIGHBOR|remotePeer(Added|Removed))"
+    grammars:
+      # Arista: "LLDP neighbor with chassisId .. and portId .. added on interface Ethernet2"
+      # Nokia : "LLDP remote peer removed on interface ethernet-1/1: System leaf1 .."
+      #   ([\w/.\-] stops at the ':' so both forms yield the local ifName).
+      - vendor: generic
+        ifname_re: '\bon interface\s+([A-Za-z][\w/.\-]*)'
+    # added/new = neighbor present (up); removed/deleted/aged = neighbor lost (down).
+    state: {down: '\b(?:removed|deleted|aged)\b', up: '\b(?:added|new)\b'}
+    entity: {type: interface, key_from: [hostname, ifname_re]}
+    labels: {device: hostname, ifName: ifname_re}
+    severity: {down: high, up: warn}
+    correlates_with: device_if_oper_status   # interface-scoped; a future device_lldp_frame_in is the more precise pair
+    join_on: [device, ifName]
+
+  # ---- STP topology change (L2 forwarding-state events) -------------------
+  # A port leaving/entering the spanning tree, or a forwarding-state transition —
+  # the L2 control-plane analogue of an adjacency change.
+  stp_topology_change:
+    # Arista cEOS: "%SPANTREE-6-INTERFACE_DEL/ADD/STATE". (SRL fabric is routed/
+    # EVPN — no STP events; add an SRL xstp eventType here if STP appears on SRL.)
+    match_tag: "(SPANTREE)"
+    grammars:
+      # "Interface Ethernet3 has been removed from instance MST0"
+      # "Interface Ethernet3 instance MST0 moving from discarding to learning"
+      - vendor: arista
+        ifname_re: '\bInterface\s+([A-Za-z][\w/.\-]*)'
+    # Prefer the transition TARGET (token after 'to'); fall back to message scan.
+    # forwarding/learning/added = up-ward; removed/discarding/blocking = down.
+    target_state_re: '\bto\s+(\w+)'
+    state: {down: '\b(?:removed|discarding|blocking)\b', up: '\b(?:forwarding|learning|added)\b'}
+    entity: {type: interface, key_from: [hostname, ifname_re]}
+    labels: {device: hostname, ifName: ifname_re}
+    severity: {down: high, up: warn}
+    correlates_with: device_if_oper_status
+    join_on: [device, ifName]
+
+  # ---- IS-IS adjacency change (the IGP flap the METRIC plane cannot see) ---
+  # The sampled/on-change metric misses an adjacency loss because SR Linux DELETES
+  # the adjacency on neighbor-down (down = path absence, masked by TSDB lookback).
+  # This event IS the authoritative flap record — it joins device_isis_adj_state
+  # on (device, isis_neighbor). (Why the SRL event plane had to be wired.)
+  isis_adjacency_change:
+    # Nokia SRL: appname nil; message "isis|..|EV|isisAdjacencyChange|W: ... the
+    #   level-2 IS-IS adjacency with system 0100.0000.0011, using interface
+    #   ethernet-1/1.0, moved to state DOWN." Cisco IOS: "%CLNS-5-ADJCHANGE".
+    match_tag: "(isisAdjacencyChange|ISIS.*ADJ|CLNS.*ADJCHANGE)"
+    grammars:
+      # SRL: system-id after 'system', local interface after 'using interface'.
+      - vendor: nokia
+        peer_re: '\bsystem\s+([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})'
+        ifname_re: '\busing interface\s+([A-Za-z][\w/.\-]*)'
+      # generic fallback: first system-id-shaped token.
+      - vendor: generic
+        peer_re: '\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\b'
+    # target after 'to state'; UP = up, DOWN/INIT/FAILED = down.
+    target_state_re: '\bto state\s+(\w+)'
+    state: {down: '\b(?:down|init|failed)\b', up: '\bup\b'}
+    entity: {type: device, key_from: hostname}
+    labels: {device: hostname, isis_neighbor: peer_re, ifName: ifname_re}
+    severity: {down: high, up: warn}
+    correlates_with: device_isis_adj_state
+    join_on: [device, isis_neighbor]

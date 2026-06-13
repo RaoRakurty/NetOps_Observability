@@ -69,9 +69,14 @@ def parse_event(ev: dict, cat: EventCatalog | None = None) -> dict | None:
         return None
     tag = str(ev.get("appname") or "")
     msg = str(ev.get("message") or "")
+    # Cisco/Arista carry the family token in appname (%FAC-SEV-MNEMONIC); Nokia SR
+    # Linux leaves appname nil ('-') and carries its structured eventType
+    # (isisAdjacencyChange, remotePeerRemoved, ...) in the message. Match across
+    # both so one grammar set is multi-vendor.
+    matchtext = tag + " " + msg
 
     for fname, fam in cat.families.items():
-        if not cat._tag_re[fname].search(tag):
+        if not cat._tag_re[fname].search(matchtext):
             continue
 
         # try each vendor grammar in order; first whose required regexes hit wins
