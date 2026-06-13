@@ -20,8 +20,8 @@ const discRate = `topk(10, (rate(device_if_in_discards[5m]) + rate(device_if_out
 
 // Count of interfaces at/above a utilization threshold in either direction.
 const utilCount = (thr: number) =>
-  `count((rate(device_if_in_octets[5m]) * 8 * 100 / (device_if_speed * 1000000) >= ${thr}) ` +
-  `or (rate(device_if_out_octets[5m]) * 8 * 100 / (device_if_speed * 1000000) >= ${thr})) or vector(0)`;
+  `count((rate(device_if_in_octets[5m]) * 8 * 100 / ((device_if_speed > 0) * 1000000) >= ${thr}) ` +
+  `or (rate(device_if_out_octets[5m]) * 8 * 100 / ((device_if_speed > 0) * 1000000) >= ${thr})) or vector(0)`;
 
 const num = (v: unknown) => Number(v) || 0;
 
@@ -126,8 +126,8 @@ export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricStat label="With discards (5m)" query="count((rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m])) > 0) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "warn" : "good")} />
         </StatStrip>
         <div className="dm-grid">
-          <MetricTop title="Worst error rate (errors / 1k packets)" query={errRate} minutes={m} fmtX={(n) => n.toFixed(2)} labelKeys={["device", "index"]} />
-          <MetricTop title="Worst discard rate (discards / 1k packets)" query={discRate} minutes={m} fmtX={(n) => n.toFixed(2)} labelKeys={["device", "index"]} />
+          <MetricTop title="Worst error rate (errors / 1k packets)" query={errRate} minutes={m} fmtX={(n) => n.toFixed(2)} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Worst discard rate (discards / 1k packets)" query={discRate} minutes={m} fmtX={(n) => n.toFixed(2)} labelKeys={["device", "ifName"]} />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}>
           Error/discard <em>rate</em> normalizes by traffic — a busy link with a few errors is healthier than a quiet link dropping a high fraction. Per 1,000 packets.
@@ -140,8 +140,8 @@ export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricStat label="Interfaces ≥ 60% util" query={utilCount(60)} minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "warn" : "good")} />
         </StatStrip>
         <div className="dm-grid">
-          <MetricTop title="Saturation risk — inbound peak (util %)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "index"]} />
-          <MetricTop title="Saturation risk — outbound peak (util %)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "index"]} />
+          <MetricTop title="Saturation risk — inbound peak (util %)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / ((device_if_speed > 0) * 1000000))" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Saturation risk — outbound peak (util %)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / ((device_if_speed > 0) * 1000000))" minutes={m} fmtX={(n) => `${n.toFixed(0)}%`} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 

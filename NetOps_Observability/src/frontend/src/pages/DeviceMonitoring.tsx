@@ -318,19 +318,19 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
 
       <Group title="Interfaces" hue="#0EA5E9">
         <div className="dm-grid">
-          <MetricTop title="Busiest interfaces — inbound (bps)" query="topk(10, rate(device_if_in_octets[5m]) * 8)" minutes={m} fmtX={fmtBps} labelKeys={["device", "index"]} />
-          <MetricTop title="Busiest interfaces — outbound (bps)" query="topk(10, rate(device_if_out_octets[5m]) * 8)" minutes={m} fmtX={fmtBps} labelKeys={["device", "index"]} />
-          <MetricTop title="Interfaces with most errors (/s)" query="topk(10, rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m]))" minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "index"]} />
-          <MetricTop title="Interfaces with most discards (/s)" query="topk(10, rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m]))" minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "index"]} />
-          <MetricTop title="Interface flaps (24h)" query="topk(10, changes(device_if_oper_status[24h]))" minutes={m} fmtX={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} />
+          <MetricTop title="Busiest interfaces — inbound (bps)" query="topk(10, rate(device_if_in_octets[5m]) * 8)" minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Busiest interfaces — outbound (bps)" query="topk(10, rate(device_if_out_octets[5m]) * 8)" minutes={m} fmtX={fmtBps} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interfaces with most errors (/s)" query="topk(10, rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m]))" minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interfaces with most discards (/s)" query="topk(10, rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m]))" minutes={m} fmtX={(n) => `${n.toFixed(2)}/s`} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Interface flaps (24h)" query="topk(10, changes(device_if_oper_status[24h]))" minutes={m} fmtX={(n) => `${n.toFixed(0)}`} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 
       <Group title="Throughput & line speed" hue="#14B8A6">
         <div className="dm-grid">
           <MetricLine title="Device aggregate throughput (bps)" query="sum by (device) (rate(device_if_in_octets[5m]) * 8 + rate(device_if_out_octets[5m]) * 8)" minutes={m} fmtY={fmtBps} labelKeys={["device"]} />
-          <MetricTop title="Highest inbound utilization (%)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={fmtPct} labelKeys={["device", "index"]} />
-          <MetricTop title="Highest outbound utilization (%)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / (device_if_speed * 1000000))" minutes={m} fmtX={fmtPct} labelKeys={["device", "index"]} />
+          <MetricTop title="Highest inbound utilization (%)" query="topk(10, rate(device_if_in_octets[5m]) * 8 * 100 / ((device_if_speed > 0) * 1000000))" minutes={m} fmtX={fmtPct} labelKeys={["device", "ifName"]} />
+          <MetricTop title="Highest outbound utilization (%)" query="topk(10, rate(device_if_out_octets[5m]) * 8 * 100 / ((device_if_speed > 0) * 1000000))" minutes={m} fmtX={fmtPct} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 

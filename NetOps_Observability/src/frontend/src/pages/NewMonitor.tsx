@@ -38,7 +38,7 @@ const TEMPLATES: Template[] = [
   // Interfaces
   { id: "iferr", category: "Interfaces", title: "Interface errors", desc: "Input + output error rate above a threshold.", expr: `rate(device_if_in_errors{S}[5m]) + rate(device_if_out_errors{S}[5m]) > {T}`, threshold: 1, unit: "errs/s", forSec: 300, severity: "warning", nameHint: "InterfaceErrors" },
   { id: "ifdisc", category: "Interfaces", title: "Interface discards", desc: "Packet discard rate above a threshold (congestion signal).", expr: `rate(device_if_in_discards{S}[5m]) + rate(device_if_out_discards{S}[5m]) > {T}`, threshold: 1, unit: "pkts/s", forSec: 300, severity: "warning", nameHint: "InterfaceDiscards" },
-  { id: "ifutil", category: "Interfaces", title: "Interface utilization", desc: "Inbound bandwidth as a share of line speed.", expr: `rate(device_if_in_octets{S}[5m]) * 8 * 100 / (device_if_speed{S} * 1000000) > {T}`, threshold: 90, unit: "%", forSec: 300, severity: "warning", nameHint: "InterfaceUtilization" },
+  { id: "ifutil", category: "Interfaces", title: "Interface utilization", desc: "Inbound bandwidth as a share of line speed.", expr: `rate(device_if_in_octets{S}[5m]) * 8 * 100 / ((device_if_speed{S} > 0) * 1000000) > {T}`, threshold: 90, unit: "%", forSec: 300, severity: "warning", nameHint: "InterfaceUtilization" },
   // Routing
   { id: "bgp", category: "Routing", title: "BGP peer down", desc: "A BGP session left Established (state < 6).", expr: `device_bgp_peer_state{S} < 6`, forSec: 120, severity: "critical", nameHint: "BGPPeerDown" },
   { id: "ospf", category: "Routing", title: "OSPF neighbor down", desc: "An OSPF adjacency left Full (state < 8).", expr: `device_ospf_nbr_state{S} < 8`, forSec: 120, severity: "critical", nameHint: "OSPFNeighborDown" },

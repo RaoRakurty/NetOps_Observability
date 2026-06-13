@@ -102,8 +102,8 @@ export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinut
         <div className="dm-grid">
           <MetricLine title="Throughput — inbound (bits/s)" query={`rate(device_if_in_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
           <MetricLine title="Throughput — outbound (bits/s)" query={`rate(device_if_out_octets${sel}[5m]) * 8`} minutes={m} fmtY={fmtBps} labelKeys={["device", "ifName"]} />
-          <MetricLine title="Inbound utilization (%)" query={`rate(device_if_in_octets${sel}[5m]) * 8 * 100 / (device_if_speed${sel} * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
-          <MetricLine title="Outbound utilization (%)" query={`rate(device_if_out_octets${sel}[5m]) * 8 * 100 / (device_if_speed${sel} * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Inbound utilization (%)" query={`rate(device_if_in_octets${sel}[5m]) * 8 * 100 / ((device_if_speed${sel} > 0) * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
+          <MetricLine title="Outbound utilization (%)" query={`rate(device_if_out_octets${sel}[5m]) * 8 * 100 / ((device_if_speed${sel} > 0) * 1000000)`} minutes={m} fmtY={fmtPct} labelKeys={["device", "ifName"]} />
         </div>
       </Group>
 
