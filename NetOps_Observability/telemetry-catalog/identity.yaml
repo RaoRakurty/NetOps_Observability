@@ -13,10 +13,13 @@ entities:
     aliases: [source, hostname, system-name, system_name]
     reconcile: "gNMI target name / SNMP sysName. mgmt-IP and serial are secondary identities (see NetBox dedup IP->serial->name)."
 
+    # gnmic tag names vary by where the interface key sits in the path:
+    #   interface_name (OC interface list), interface_interface-name (SRL native
+    #   isis/.../interface[interface-name=*]).
   interface:
     canonical_key: ifName
     secondary_keys: [ifIndex]
-    aliases: [interface_name, "interface_name", name]
+    aliases: [interface_name, "interface_name", "interface_interface-name", name]
     reconcile: "ifName is the stable human key. ifIndex kept for joinability but is NOT a cross-epoch key (RFC 2863: reassigned on agent re-init)."
 
   vrf:
@@ -29,6 +32,17 @@ entities:
     parent: device
     aliases: ["neighbor_neighbor-address", "neighbor_peer-address", neighbor_address, peer_address]
     reconcile: "BGP neighbor remote address. (device, vrf, peer) is the unique session identity."
+
+  isis_neighbor:
+    canonical_key: isis_neighbor
+    parent: device
+    aliases: ["adjacency_neighbor-system-id", neighbor_system_id, isis_adj_neighbor]
+    reconcile: "IS-IS neighbor system-id (e.g. 0100.0000.0011). The (device, isis_neighbor) pair is the unique adjacency identity."
+
+  isis_level:
+    canonical_key: isis_level
+    aliases: ["adjacency_adjacency-level", isis_adj_level, level]
+    reconcile: "IS-IS level (L1/L2) — a path list-key, becomes a label."
 
   lsp:
     canonical_key: lsp

@@ -122,6 +122,66 @@ rows:
   # to lab_validated requires a captured fixture (Phase 4, vendor-by-vendor). No
   # fixture/issue_ref required at doc_claimed. source_ref cites the grounding.
 
+  # --- BGP FSM established-transitions (flap counter) — PROMOTED: live on the lab ---
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_bgp_fsm_transitions
+    method: gnmi
+    origin: openconfig
+    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    requires: {output_processor: event-override-ts}   # same cEOS stale-ts class as peer-state
+    fidelity_status: lab_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/arista_ceos_4.36_bgp_fsm_transitions_oc_once.jsonl
+    source_ref: "BGP4-MIB bgpPeerFsmEstablishedTransitions; OpenConfig bgp (coverage-reference §A)"
+    cost: {series_per_device: "~peers", device_cpu: low}
+    notes: "Captured live on leaf1 (established-transitions=1). Fixture-replay validated. Pairs with device_bgp_peer_state to count flaps between samples."
+
+  # --- BGP per-AFI prefixes received (fixes the v4-only blind spot) ---
+  # LIVE-CAPTURE CORRECTED THE SPEC: OpenConfig uses a COMBINED afi-safi-name key
+  # (IPV4_UNICAST / IPV6_UNICAST), not separate afi+safi like the SNMP BGP4V2-MIB
+  # the spec was derived from. Kept doc_claimed pending the normalization update to
+  # split/carry afi-safi-name — a concrete example of live capture correcting docs.
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_bgp_pfx_in
+    method: gnmi
+    origin: openconfig
+    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: doc_claimed
+    source_ref: "BGP4V2-MIB bgp4V2PrefixInPrefixes (BGP4-MIB is v4-only); OpenConfig afi-safi (coverage-reference §A)"
+    cost: {series_per_device: "~peers x afis", device_cpu: low}
+    live_capture:
+      status: pending
+      blocked_on: "spec/normalization mismatch — OpenConfig combines afi+safi into one afi-safi-name key (IPV4_UNICAST); needs an afi-safi split step before promotion. Data IS live on leaf1 (IPV4_UNICAST + IPV6_UNICAST seen)."
+      how: "gnmic subscribe afi-safi prefixes path; add afi-safi-name split to normalize.py; then capture fixture + promote"
+
+  # --- IS-IS adjacency state (the IGP on the clos fabric) — LIVE on SRL ---
+  - vendor: nokia
+    platform: srlinux
+    os_version: ">=23.0"
+    signal_family: device_isis_adj_state
+    method: gnmi
+    origin: native
+    path: "/network-instance[name=default]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/state"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: lab_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/nokia_srl_24.10_isis_adj_native_once.jsonl
+    source_ref: "ISIS-MIB isisISAdjState (RFC 4444); SRL native isis adjacency (coverage-reference §A)"
+    cost: {series_per_device: "~adjacencies", device_cpu: low}
+    notes: "Captured live on spine1 (4 L2 adjacencies, state=up, fresh timestamps — SRL has no cEOS stale-ts issue). The clos fabric's IGP. Adjacency exposes down-reason / up-down-transitions / neighbor-hostname for the event catalog."
+
   # --- OSPF neighbor state (resolves the events.yaml forward-ref) ---
   - vendor: arista
     platform: ceos
@@ -136,6 +196,10 @@ rows:
     fidelity_status: doc_claimed
     source_ref: "OSPF-MIB ospfNbrState; OpenConfig ospfv2 (coverage-reference §A)"
     cost: {series_per_device: "~adjacencies", device_cpu: low}
+    live_capture:
+      status: pending
+      blocked_on: "wan-r2 has OSPF configured (log-adjacency-changes) but no confirmed active adjacency to capture a neighbor-state from. SRL spines expose ospf — candidate."
+      how: "establish an OSPF adjacency in the lab, then gnmic subscribe the neighbor adjacency-state path + capture fixture"
 
   # --- MPLS LSP state (SP/DC service plane) ---
   - vendor: nokia
@@ -150,6 +214,10 @@ rows:
     fidelity_status: doc_claimed
     source_ref: "RFC 3812 MPLS-TE-STD-MIB mplsTunnelOperStatus (coverage-reference §A)"
     cost: {series_per_device: "~lsps", device_cpu: low}
+    live_capture:
+      status: pending
+      blocked_on: "clos lab does NOT run MPLS — SRL spine1 has no 'mpls' protocol element (offers bgp/bgp-evpn/bgp-vpn/ospf/isis/stp/pim). Needs an SP-style lab with MPLS/RSVP/LDP."
+      how: "on an MPLS-running device, gnmic subscribe the LSP oper-state path + capture fixture"
 
   # --- LDP session state ---
   - vendor: nokia
@@ -164,34 +232,7 @@ rows:
     fidelity_status: doc_claimed
     source_ref: "RFC 3815 MPLS-LDP-STD-MIB (coverage-reference §A)"
     cost: {series_per_device: "~ldp-peers", device_cpu: low}
-
-  # --- BGP FSM established-transitions (flap counter) ---
-  - vendor: arista
-    platform: ceos
-    os_version: ">=4.30"
-    signal_family: device_bgp_fsm_transitions
-    method: gnmi
-    origin: openconfig
-    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
-    mode: stream
-    stream_mode: sample
-    interval: 30s
-    requires: {output_processor: event-override-ts}   # same cEOS stale-ts class as peer-state
-    fidelity_status: doc_claimed
-    source_ref: "BGP4-MIB bgpPeerFsmEstablishedTransitions; OpenConfig bgp (coverage-reference §A)"
-    cost: {series_per_device: "~peers", device_cpu: low}
-
-  # --- BGP per-AFI prefixes received (fixes the v4-only blind spot) ---
-  - vendor: arista
-    platform: ceos
-    os_version: ">=4.30"
-    signal_family: device_bgp_pfx_in
-    method: gnmi
-    origin: openconfig
-    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
-    mode: stream
-    stream_mode: sample
-    interval: 30s
-    fidelity_status: doc_claimed
-    source_ref: "BGP4V2-MIB bgp4V2PrefixInPrefixes (BGP4-MIB is v4-only); OpenConfig afi-safi (coverage-reference §A)"
-    cost: {series_per_device: "~peers x afis", device_cpu: low}
+    live_capture:
+      status: pending
+      blocked_on: "no LDP in the clos lab (no MPLS). Needs an SP lab running LDP."
+      how: "snmpwalk mplsLdpSessionState on an LDP-running device + capture .snmprec-style fixture"

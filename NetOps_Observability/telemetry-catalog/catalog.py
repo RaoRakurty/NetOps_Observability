@@ -17,6 +17,7 @@ FIDELITY_LADDER = ["doc_claimed", "lab_validated", "live_validated", "degraded",
 ADVERTISABLE = {"lab_validated", "live_validated"}          # may be called "supported"
 NEEDS_FIXTURE = {"lab_validated", "live_validated"}          # must point at a fixture
 NEEDS_ISSUE = {"degraded", "failed"}                         # must carry an issue_ref
+NEEDS_LIVE_CAPTURE = {"doc_claimed"}                         # must carry a live_capture plan
 
 
 def _load(name):
@@ -71,6 +72,14 @@ def check() -> list[str]:
                 problems.append(f"{tag}: fixture '{fx}' not found")
         if fs in NEEDS_ISSUE and not row.get("issue_ref"):
             problems.append(f"{tag}: fidelity '{fs}' requires an issue_ref")
+        # doc_claimed rows MUST carry a live_capture plan so the deferred
+        # validation is never silently forgotten — the explicit "validate later".
+        if fs in NEEDS_LIVE_CAPTURE:
+            lc = row.get("live_capture") or {}
+            if lc.get("status") != "pending":
+                problems.append(f"{tag}: doc_claimed requires live_capture.status: pending")
+            if not lc.get("blocked_on"):
+                problems.append(f"{tag}: doc_claimed requires live_capture.blocked_on (why not validated yet)")
 
     # --- event catalog: correlation invariant (events must join metrics) ---
     events = _load("events.yaml").get("families") or {}
@@ -120,6 +129,13 @@ def main() -> int:
         print(f"  event→metric forward-refs (Phase-3 metrics pending):")
         for f in FORWARD_REFS:
             print(f"    · {f}")
+    # Live-capture backlog — the explicit "validate later" queue.
+    pending = [r for r in coll if r.get("fidelity_status") == "doc_claimed"]
+    if pending:
+        print(f"\n  LIVE-CAPTURE BACKLOG ({len(pending)} doc_claimed → validate later):")
+        for r in pending:
+            print(f"    ☐ {r['vendor']}/{r['platform']} {r['signal_family']}"
+                  f" — blocked: {(r.get('live_capture') or {}).get('blocked_on','?')}")
     if problems:
         print(f"\n✗ {len(problems)} invariant violations:")
         for p in problems:

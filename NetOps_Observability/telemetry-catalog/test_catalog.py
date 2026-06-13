@@ -77,6 +77,22 @@ def test_srl_memory_is_gauge(cat):
     assert all(s["name"] == "device_mem_percent" for s in series)
 
 
+def test_srl_isis_adjacency_up_maps_to_3(cat):
+    series = _one("fixtures/nokia_srl_24.10_isis_adj_native_once.jsonl", "nokia", cat)
+    assert series and series[0]["name"] == "device_isis_adj_state"
+    assert series[0]["value"] == 3, "IS-IS 'up' must map to isisISAdjState 3"
+    lbl = series[0]["labels"]
+    assert lbl["isis_neighbor"] == "0100.0000.0011"
+    assert lbl["ifName"] == "ethernet-1/1.0", "interface_interface-name must reconcile to ifName"
+    assert lbl["isis_level"] == "L2"
+
+
+def test_ceos_bgp_fsm_transitions_is_counter(cat):
+    series = _one("fixtures/arista_ceos_4.36_bgp_fsm_transitions_oc_once.jsonl", "arista", cat)
+    assert series and series[0]["name"] == "device_bgp_fsm_transitions"
+    assert series[0]["value"] == 1.0 and series[0]["labels"]["peer"] == "10.0.0.1"
+
+
 def test_unknown_enum_token_is_dropped_not_emitted(cat):
     ev = {"tags": {"source": "x:6030"},
           "values": {"/interfaces/interface/state/oper-status": "BOGUS_STATE"}}

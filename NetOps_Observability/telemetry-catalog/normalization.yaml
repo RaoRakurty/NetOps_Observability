@@ -109,6 +109,23 @@ families:
     owner: {transport: gnmi, reason: "Adjacency flaps are root-cause events; on-change preferred. SNMP OSPF-MIB is the fallback."}
     dedup_key: [device, vrf, peer]
 
+  # IS-IS adjacency state (the IGP running on the clos fabric — live on SRL).
+  device_isis_adj_state:
+    match:
+      - ".*isis/instance/interface/adjacency/state$"    # Nokia SRL native
+      - ".*isis/interfaces/interface/levels/level/adjacencies/adjacency/state/adjacency-state$"  # OpenConfig
+      - ".*isisISAdjState$"                              # ISIS-MIB (RFC 4444)
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, isis_neighbor, ifName, isis_level, transport]
+    enum:                # ISIS-MIB isisISAdjState
+      "1": [down]
+      "2": [initializing, init]
+      "3": [up]
+      "4": [failed]
+    owner: {transport: gnmi, reason: "IGP adjacency flaps are root-cause events; on-change preferred. SRL streams fresh-timestamped adjacency state. ISIS-MIB is the fallback."}
+    dedup_key: [device, isis_neighbor]
+
   # MPLS TE / LSP operational state (RFC 3812 mplsTunnelOperStatus).
   device_mpls_lsp_state:
     match:
