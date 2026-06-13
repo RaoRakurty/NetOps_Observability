@@ -188,6 +188,32 @@ transforms:
       }
       .vendor = vendor
 
+      # FortiOS parser. FortiGate's "default" log format is space-separated
+      # key="value" pairs and carries NO clean RFC hostname — Vector keys it to
+      # the source IP, so the real device id lives in devname= inside the body.
+      # Parse the kv pairs (quoted-value aware), set the canonical device from
+      # devname, surface type/subtype as appname, lift the FortiOS severity, and
+      # re-attribute tenant on the real name. Parsed fields go under .fgt to avoid
+      # OpenSearch dynamic-mapping collisions with other log types.
+      if vendor == "fortinet" {
+        kv, kverr = parse_key_value(msg)
+        if kverr == null {
+          .fgt = kv
+          dn = string(kv.devname) ?? ""
+          if dn != "" {
+            .hostname = dn
+            .host = dn
+            trows = find_enrichment_table_records("device_tenant", { "identity": dn }) ?? []
+            if length(trows) > 0 { .tenant_id = to_string(trows[0].tenant_id) ?? "" }
+          }
+          t  = string(kv.type) ?? ""
+          st = string(kv.subtype) ?? ""
+          if t != "" && st != "" { .appname = t + "/" + st } else if t != "" { .appname = t }
+          lvl = string(kv.level) ?? ""
+          if lvl != "" { .severity = lvl }
+        }
+      }
+
   # SNMP traps — the receiver already decoded the PDU into structured fields
   # (trap_oid, trap_name, severity, varbinds, snmp_version, device/host). Here we
   # just stamp the tenant the same way syslog does: match the device id (or the
