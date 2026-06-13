@@ -17,11 +17,11 @@ targets:
   172.40.40.11:57400:
     name: spine1
     password: ${SRL_GNMI_PASS}
-    subscriptions: [srl-interfaces, srl-cpu, srl-bgp]
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
   172.40.40.12:57400:
     name: spine2
     password: ${SRL_GNMI_PASS}
-    subscriptions: [srl-interfaces, srl-cpu, srl-bgp]
+    subscriptions: [srl-interfaces, srl-cpu, srl-bgp, srl-isis]
 
   # ---- Arista cEOS (plaintext gNMI :6030) ----
   172.40.40.21:6030:
@@ -87,6 +87,15 @@ subscriptions:
     stream-mode: sample
     sample-interval: 30s
 
+  # IS-IS adjacency state — the fabric IGP (SRL native; cEOS leaves are pure-L3
+  # BGP, no IS-IS). Adjacency flaps are root-cause events.
+  srl-isis:
+    paths:
+      - "/network-instance[name=default]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/state"
+    mode: stream
+    stream-mode: sample
+    sample-interval: 30s
+
   # Nokia SR Linux control-plane health: CPU, memory, temperature.
   srl-cpu:
     paths:
@@ -135,6 +144,7 @@ outputs:
       - canon-names
       - canon-status-enums
       - canon-bgp-enums
+      - canon-isis-enums
       - canon-convert
       - vendor-nokia
       - vendor-arista
@@ -205,6 +215,8 @@ processors:
         # the two never cross-match.
         - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/session-state$", new: "device_bgp_peer_state"}
         - replace: {apply-on: name, old: ".*bgp/neighbor/session-state$", new: "device_bgp_peer_state"}
+        # --- IS-IS adjacency state (IGP, SRL native) ---
+        - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/state$", new: "device_isis_adj_state"}
 
   # [2] Status enums → IF-MIB numerics (ifOperStatus/ifAdminStatus values;
   # OpenConfig enums are modeled on the same list). Anchored — no substring
@@ -249,6 +261,17 @@ processors:
         - replace: {apply-on: value, old: "^openconfirm$", new: "5"}
         - replace: {apply-on: value, old: "^established$", new: "6"}
 
+  # [2c] IS-IS adjacency-state enum → ISIS-MIB isisISAdjState numerics
+  # (down1/init2/up3/failed4). SRL emits lowercase up/down.
+  canon-isis-enums:
+    event-strings:
+      value-names: ["^device_isis_adj_state$"]
+      transforms:
+        - replace: {apply-on: value, old: "^down$", new: "1"}
+        - replace: {apply-on: value, old: "^init.*$", new: "2"}
+        - replace: {apply-on: value, old: "^up$", new: "3"}
+        - replace: {apply-on: value, old: "^failed$", new: "4"}
+
   # [3] Canonical values are integers (matches the SNMP emitter's valueInt).
   canon-convert:
     event-convert:
@@ -258,7 +281,7 @@ processors:
   # [4] Vendor label, keyed on which subscription produced the event.
   vendor-nokia:
     event-add-tag:
-      tags: ["^srl-(interfaces|cpu|bgp)$"]
+      tags: ["^srl-(interfaces|cpu|bgp|isis)$"]
       add: {vendor: nokia}
   vendor-arista:
     event-add-tag:
@@ -279,13 +302,17 @@ processors:
   # invalid Prometheus labels.
   canon-tags:
     event-strings:
-      tag-names: ["^interface_name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$"]
+      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$"]
       transforms:
         - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
+        - replace: {apply-on: name, old: "^interface_interface-name$", new: "ifName"}
         - replace: {apply-on: name, old: "^source$", new: "device"}
         - replace: {apply-on: name, old: "^neighbor_neighbor-address$", new: "peer"}
         - replace: {apply-on: name, old: "^neighbor_peer-address$", new: "peer"}
         - replace: {apply-on: name, old: "^network-instance_name$", new: "vrf"}
+        # IS-IS adjacency identity
+        - replace: {apply-on: name, old: "^adjacency_neighbor-system-id$", new: "isis_neighbor"}
+        - replace: {apply-on: name, old: "^adjacency_adjacency-level$", new: "isis_level"}
 
   # [7] OWNERSHIP GATE — families listed here are mapped and ready but still
   # SNMP-owned; deleting them prevents double-producing the same canonical
@@ -313,4 +340,4 @@ processors:
   # transport} for interfaces/resources, + {peer, vrf} for BGP.
   drop-internal-tags:
     event-delete:
-      tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$", "^protocol_identifier$", "^protocol_name$"]
+      tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$", "^protocol_identifier$", "^protocol_name$", "^instance_name$"]

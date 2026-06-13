@@ -179,9 +179,9 @@ families:
       - ".*bgp4V2PrefixInPrefixes$"                                  # BGP4V2-MIB
     kind: gauge
     unit: count
-    labels: [device, vendor, peer, vrf, afi, safi, transport]
+    labels: [device, vendor, peer, vrf, afi_safi, transport]
     owner: {transport: gnmi, reason: "Per-AFI prefix counts; BGP4-MIB cannot represent v6/VPNv4, BGP4V2-MIB or gNMI required."}
-    dedup_key: [device, vrf, peer, afi, safi]
+    dedup_key: [device, vrf, peer, afi_safi]
 
 # Plumbing tag names that must never reach a canonical label set (dropped after
 # reconciliation). gnmic names some with hyphens (invalid Prometheus labels).

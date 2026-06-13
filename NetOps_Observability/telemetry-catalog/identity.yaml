@@ -50,15 +50,15 @@ entities:
     aliases: [tunnel_name, lsp_name, "name"]
     reconcile: "MPLS TE LSP / tunnel name (mplsTunnelName / OC lsp name)."
 
-  afi:
-    canonical_key: afi
-    aliases: [address_family, afi_name]
-    reconcile: "BGP Address Family Identifier (ipv4/ipv6/l2vpn) — a path list-key, becomes a label so one mapping covers all families."
-
-  safi:
-    canonical_key: safi
-    aliases: [subsequent_afi, safi_name]
-    reconcile: "BGP Subsequent AFI (unicast/vpn/evpn). (afi,safi) distinguishes the v4-only BGP4-MIB blind spot from multi-AFI BGP4V2/gNMI."
+  afi_safi:
+    canonical_key: afi_safi
+    aliases: ["afi-safi_afi-safi-name", afi_safi_name, address_family]
+    reconcile: >-
+      BGP address family, the OpenConfig COMBINED afi-safi-name (IPV4_UNICAST /
+      IPV6_UNICAST / L2VPN_EVPN). Live capture corrected the original spec, which
+      (from the SNMP BGP4V2-MIB) assumed separate afi+safi. One label matches the
+      device model; SNMP BGP4V2 composes afi_safi from its numeric AFI/SAFI at
+      collection time. Carries the multi-AFI coverage that BGP4-MIB (v4-only) lacks.
 
   # ---- declared now, populated in later phases (Phase 3+) ----
   circuit:        {canonical_key: circuit,  reconcile: "operator circuit-id / ifAlias / SD-WAN TLOC color (Phase 3+)"}

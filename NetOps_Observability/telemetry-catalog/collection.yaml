@@ -156,13 +156,12 @@ rows:
     mode: stream
     stream_mode: sample
     interval: 30s
-    fidelity_status: doc_claimed
+    fidelity_status: lab_validated
+    last_validated: "2026-06-13"
+    fixture: fixtures/arista_ceos_4.36_bgp_pfx_in_oc_once.jsonl
     source_ref: "BGP4V2-MIB bgp4V2PrefixInPrefixes (BGP4-MIB is v4-only); OpenConfig afi-safi (coverage-reference §A)"
     cost: {series_per_device: "~peers x afis", device_cpu: low}
-    live_capture:
-      status: pending
-      blocked_on: "spec/normalization mismatch — OpenConfig combines afi+safi into one afi-safi-name key (IPV4_UNICAST); needs an afi-safi split step before promotion. Data IS live on leaf1 (IPV4_UNICAST + IPV6_UNICAST seen)."
-      how: "gnmic subscribe afi-safi prefixes path; add afi-safi-name split to normalize.py; then capture fixture + promote"
+    notes: "Live on leaf1 (IPV4_UNICAST + IPV6_UNICAST). Spec corrected after live capture: canonical label = afi_safi (OpenConfig combined key) not separate afi+safi. The multi-AFI coverage BGP4-MIB (v4-only) cannot provide."
 
   # --- IS-IS adjacency state (the IGP on the clos fabric) — LIVE on SRL ---
   - vendor: nokia
@@ -175,7 +174,7 @@ rows:
     mode: stream
     stream_mode: sample
     interval: 30s
-    fidelity_status: lab_validated
+    fidelity_status: live_validated
     last_validated: "2026-06-13"
     fixture: fixtures/nokia_srl_24.10_isis_adj_native_once.jsonl
     source_ref: "ISIS-MIB isisISAdjState (RFC 4444); SRL native isis adjacency (coverage-reference §A)"
