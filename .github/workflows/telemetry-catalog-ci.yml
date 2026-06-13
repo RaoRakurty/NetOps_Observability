@@ -1,0 +1,46 @@
+name: telemetry-catalog-ci
+
+# CI gate for the Telemetry Catalog (telemetry-catalog/). All BLOCKING:
+#   - catalog invariants (fidelity ladder, owner-transport collisions, fixtures
+#     exist, os_version present, issue_ref on degraded/failed)
+#   - conformance harness: replay captured gNMI fixtures through the code-owned
+#     normalization engine and assert the canonical contract
+#   - pytest: the above plus explicit canonical anchors
+# This is the regression guard that keeps "validated fidelity = product truth"
+# honest — a normalization change that breaks a validated family fails the merge.
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/telemetry-catalog/**'
+      - '.github/workflows/telemetry-catalog-ci.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telemetry-catalog-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/telemetry-catalog
+
+jobs:
+  catalog:
+    name: invariants · conformance · pytest (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.10'
+      - name: install deps
+        run: pip install pyyaml==6.0.3 pytest==9.0.3
+      - name: catalog invariants
+        run: python3 catalog.py
+      - name: conformance harness (fixture replay)
+        run: python3 conformance.py
+      - name: pytest
+        run: python3 -m pytest -q
