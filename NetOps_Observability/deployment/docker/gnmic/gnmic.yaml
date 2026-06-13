@@ -83,23 +83,31 @@ subscriptions:
       - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
       - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
     mode: stream
-    stream-mode: sample
-    sample-interval: 30s
+    # on-change: emit the instant a session flaps. sample@30s ALIASED short flaps —
+    # a leaf-spine bounce tore down + reformed a session inside one sample window,
+    # invisibly. heartbeat refreshes stable state so VictoriaMetrics never marks it
+    # stale (canon-override-ts keeps heartbeat timestamps fresh for cEOS).
+    stream-mode: on-change
+    heartbeat-interval: 30s
   srl-bgp:
     paths:
       - "/network-instance[name=default]/protocols/bgp/neighbor[peer-address=*]/session-state"
     mode: stream
-    stream-mode: sample
-    sample-interval: 30s
+    stream-mode: on-change
+    heartbeat-interval: 30s
 
-  # IS-IS adjacency state — the fabric IGP (SRL native; cEOS leaves are pure-L3
-  # BGP, no IS-IS). Adjacency flaps are root-cause events.
+  # IS-IS adjacency state — the fabric IGP. Leaf<->spine DOES run IS-IS (L2 P2P);
+  # we collect adjacency state from the SRL spine side, which sees every fabric
+  # adjacency (4 per spine, one per leaf). Adjacency flaps are root-cause events,
+  # so on-change (not sample): a leaf-spine bounce flapped all adjacencies inside
+  # one 30s window and the sampler missed it entirely (proven 2026-06-13 — the
+  # SRL "last transition" timestamps showed the flap the metric never recorded).
   srl-isis:
     paths:
       - "/network-instance[name=default]/protocols/isis/instance[name=*]/interface[interface-name=*]/adjacency[neighbor-system-id=*]/state"
     mode: stream
-    stream-mode: sample
-    sample-interval: 30s
+    stream-mode: on-change
+    heartbeat-interval: 30s
 
   # Nokia SR Linux control-plane health: CPU, memory, temperature.
   srl-cpu:
