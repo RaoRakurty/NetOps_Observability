@@ -115,7 +115,83 @@ rows:
       output — a path that streams + normalizes can still be silently dropped by
       timestamp semantics at TSDB ingest.
 
-  # ===================== Phase 3 placeholder note =====================
-  # P1-P5 research rows (OSPF/ISIS/BFD/MPLS/LDP/IPsec/QoS/SD-WAN/firewall) import
-  # here with fidelity_status: doc_claimed and a source ref, then get promoted
-  # vendor-by-vendor as fixtures validate them. None are added yet (Phase 3).
+  # ===================== Phase 3: doc_claimed candidate rows =====================
+  # Imported from the P1-P5 research (telemetry-coverage-reference §A — verified
+  # against primary standards). fidelity_status: doc_claimed = the path/OID EXISTS
+  # per a reference but is UNVALIDATED here. NOT advertised as supported. Promotion
+  # to lab_validated requires a captured fixture (Phase 4, vendor-by-vendor). No
+  # fixture/issue_ref required at doc_claimed. source_ref cites the grounding.
+
+  # --- OSPF neighbor state (resolves the events.yaml forward-ref) ---
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_ospf_nbr_state
+    method: gnmi
+    origin: openconfig
+    path: "/network-instances/network-instance/protocols/protocol/ospfv2/areas/area/interfaces/interface/neighbors/neighbor/state"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: doc_claimed
+    source_ref: "OSPF-MIB ospfNbrState; OpenConfig ospfv2 (coverage-reference §A)"
+    cost: {series_per_device: "~adjacencies", device_cpu: low}
+
+  # --- MPLS LSP state (SP/DC service plane) ---
+  - vendor: nokia
+    platform: srlinux
+    os_version: ">=23.0"
+    signal_family: device_mpls_lsp_state
+    method: gnmi
+    origin: native
+    path: "/network-instance/protocols/mpls/lsp/state"
+    mode: stream
+    stream_mode: on_change
+    fidelity_status: doc_claimed
+    source_ref: "RFC 3812 MPLS-TE-STD-MIB mplsTunnelOperStatus (coverage-reference §A)"
+    cost: {series_per_device: "~lsps", device_cpu: low}
+
+  # --- LDP session state ---
+  - vendor: nokia
+    platform: srlinux
+    os_version: ">=23.0"
+    signal_family: device_ldp_session_state
+    method: snmp
+    origin: standard_mib
+    path: "1.3.6.1.2.1.10.166.4.1.2.4.1.x (mplsLdpSessionState)"
+    mode: poll
+    interval: 60s
+    fidelity_status: doc_claimed
+    source_ref: "RFC 3815 MPLS-LDP-STD-MIB (coverage-reference §A)"
+    cost: {series_per_device: "~ldp-peers", device_cpu: low}
+
+  # --- BGP FSM established-transitions (flap counter) ---
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_bgp_fsm_transitions
+    method: gnmi
+    origin: openconfig
+    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    requires: {output_processor: event-override-ts}   # same cEOS stale-ts class as peer-state
+    fidelity_status: doc_claimed
+    source_ref: "BGP4-MIB bgpPeerFsmEstablishedTransitions; OpenConfig bgp (coverage-reference §A)"
+    cost: {series_per_device: "~peers", device_cpu: low}
+
+  # --- BGP per-AFI prefixes received (fixes the v4-only blind spot) ---
+  - vendor: arista
+    platform: ceos
+    os_version: ">=4.30"
+    signal_family: device_bgp_pfx_in
+    method: gnmi
+    origin: openconfig
+    path: "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
+    mode: stream
+    stream_mode: sample
+    interval: 30s
+    fidelity_status: doc_claimed
+    source_ref: "BGP4V2-MIB bgp4V2PrefixInPrefixes (BGP4-MIB is v4-only); OpenConfig afi-safi (coverage-reference §A)"
+    cost: {series_per_device: "~peers x afis", device_cpu: low}

@@ -83,6 +83,89 @@ families:
       reason: "BGP4-MIB is IPv4-only AND weakly implemented on cEOS/SRL (device_bgp_peer_state has zero SNMP series on this fabric). gNMI owns BGP state; SNMP bgpPeerState kept only as a fallback for agentless/older gear."
     dedup_key: [device, vrf, peer]
 
+  # ===================== Phase 3 candidate families =====================
+  # Canonical SPECS derived from verified standards (telemetry-coverage-reference
+  # §A). The mapping is authoritative; whether a given vendor/platform actually
+  # streams it is tracked separately in collection.yaml as fidelity_status:
+  # doc_claimed (NOT validated) until a fixture proves it.
+
+  # OSPF neighbor adjacency state (resolves the events.yaml forward-ref).
+  device_ospf_nbr_state:
+    match:
+      - ".*ospf/.*neighbor.*/state/adjacency-state$"   # OpenConfig
+      - ".*ospfNbrState$"                               # OSPF-MIB (SNMP)
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, peer, vrf, transport]
+    enum:                # OSPF-MIB ospfNbrState (alert: < 8 = not full)
+      "1": [down]
+      "2": [attempt]
+      "3": [init]
+      "4": [two_way, twoway, "two-way"]
+      "5": [exchange_start, exchangestart, "exchange-start"]
+      "6": [exchange]
+      "7": [loading]
+      "8": [full]
+    owner: {transport: gnmi, reason: "Adjacency flaps are root-cause events; on-change preferred. SNMP OSPF-MIB is the fallback."}
+    dedup_key: [device, vrf, peer]
+
+  # MPLS TE / LSP operational state (RFC 3812 mplsTunnelOperStatus).
+  device_mpls_lsp_state:
+    match:
+      - ".*mpls.*lsp.*/state/oper-status$"             # OpenConfig-ish
+      - ".*mplsTunnelOperStatus$"                      # MPLS-TE-STD-MIB
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, lsp, transport]
+    enum:                # mplsTunnelOperStatus (same numbering as ifOperStatus)
+      "1": [up]
+      "2": [down]
+      "3": [testing]
+      "4": [unknown]
+      "5": [dormant]
+      "6": [not_present, "not-present"]
+      "7": [lower_layer_down, "lower-layer-down"]
+    owner: {transport: gnmi, reason: "LSP up/down is a service-plane root-cause event; on-change preferred. MPLS-TE-STD-MIB fallback."}
+    dedup_key: [device, lsp]
+
+  # LDP session state (RFC 3815 mplsLdpSessionState).
+  device_ldp_session_state:
+    match:
+      - ".*mplsLdpSessionState$"
+    kind: state_enum
+    unit: enum
+    labels: [device, vendor, peer, transport]
+    enum:                # mplsLdpSessionState
+      "1": [nonexistent]
+      "2": [initialized]
+      "3": [openrec]
+      "4": [opensent]
+      "5": [operational]
+    owner: {transport: snmp, reason: "MPLS-LDP-STD-MIB is the standard source; gNMI LDP path coverage is vendor-uneven (validate before flipping)."}
+    dedup_key: [device, peer]
+
+  # BGP FSM established-transition counter (flap counter; BGP4-MIB / BGP4V2-MIB).
+  device_bgp_fsm_transitions:
+    match:
+      - ".*bgp/neighbors/neighbor/state/established-transitions$"   # OpenConfig
+      - ".*bgpPeerFsmEstablishedTransitions$"                        # BGP4-MIB
+    kind: counter
+    unit: count
+    labels: [device, vendor, peer, vrf, transport]
+    owner: {transport: gnmi, reason: "Pairs with device_bgp_peer_state; counts flaps between samples."}
+    dedup_key: [device, vrf, peer]
+
+  # BGP prefixes received per AFI/SAFI (BGP4V2-MIB — fixes the v4-only blind spot).
+  device_bgp_pfx_in:
+    match:
+      - ".*bgp/neighbors/neighbor/.*/state/prefixes/received$"      # OpenConfig per-AFI
+      - ".*bgp4V2PrefixInPrefixes$"                                  # BGP4V2-MIB
+    kind: gauge
+    unit: count
+    labels: [device, vendor, peer, vrf, afi, safi, transport]
+    owner: {transport: gnmi, reason: "Per-AFI prefix counts; BGP4-MIB cannot represent v6/VPNv4, BGP4V2-MIB or gNMI required."}
+    dedup_key: [device, vrf, peer, afi, safi]
+
 # Plumbing tag names that must never reach a canonical label set (dropped after
 # reconciliation). gnmic names some with hyphens (invalid Prometheus labels).
 drop_tags:

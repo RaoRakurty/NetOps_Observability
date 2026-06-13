@@ -30,6 +30,22 @@ entities:
     aliases: ["neighbor_neighbor-address", "neighbor_peer-address", neighbor_address, peer_address]
     reconcile: "BGP neighbor remote address. (device, vrf, peer) is the unique session identity."
 
+  lsp:
+    canonical_key: lsp
+    parent: device
+    aliases: [tunnel_name, lsp_name, "name"]
+    reconcile: "MPLS TE LSP / tunnel name (mplsTunnelName / OC lsp name)."
+
+  afi:
+    canonical_key: afi
+    aliases: [address_family, afi_name]
+    reconcile: "BGP Address Family Identifier (ipv4/ipv6/l2vpn) — a path list-key, becomes a label so one mapping covers all families."
+
+  safi:
+    canonical_key: safi
+    aliases: [subsequent_afi, safi_name]
+    reconcile: "BGP Subsequent AFI (unicast/vpn/evpn). (afi,safi) distinguishes the v4-only BGP4-MIB blind spot from multi-AFI BGP4V2/gNMI."
+
   # ---- declared now, populated in later phases (Phase 3+) ----
   circuit:        {canonical_key: circuit,  reconcile: "operator circuit-id / ifAlias / SD-WAN TLOC color (Phase 3+)"}
   tunnel:         {canonical_key: tunnel,   reconcile: "IPsec/GRE/overlay tunnel id; endpoints src/dst (Phase 3+)"}
