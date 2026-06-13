@@ -24,6 +24,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 FRONTEND = os.path.join(ROOT, "src", "frontend", "src")
 BACKEND = os.path.join(ROOT, "src", "backend")
+GNMIC_YAML = os.path.join(ROOT, "deployment", "docker", "gnmic", "gnmic.yaml")
+
+# Canonical families gNMI is allowed to emit even though NO SNMP collector emits
+# them — i.e. gNMI is the sole owner because the device has no SNMP source. Each
+# entry MUST carry a reason (the ownership ledger for the gNMI side, mirroring
+# the gnmic.yaml ownership-gate comment).
+GNMI_OWNED: dict[str, str] = {
+    "device_mem_percent": "Nokia SR Linux has no SNMP memory source; gNMI owns it "
+                          "(also emitted by SNMP for Juniper — subset-safe either way)",
+}
 
 # PromQL functions / keywords that look like identifiers but are never metrics.
 PROMQL_KEYWORDS = {
@@ -77,6 +87,77 @@ def emitted_metrics() -> set[str]:
     return names
 
 
+def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
+    """Parse the gnmic canonical-lane normalization (deployment/docker/gnmic.yaml).
+
+    The gNMI lane rewrites device paths to canonical `device_*` names (canon-names
+    `new:` targets), then the ownership-gate DELETES the families that stay
+    SNMP-owned. What survives is the set of canonical names gNMI actually writes
+    to VictoriaMetrics. The single-contract invariant: a gNMI-emitted canonical
+    name must ALSO be emitted by the SNMP collectors (same contract, two
+    transports) — unless it is a documented GNMI_OWNED family (no SNMP source).
+
+    Returns (gnmi_emitted_set, problems). A non-empty problems list fails CI.
+    This is the gNMI half of the contract guard — without it the gnmic processor
+    chain has zero automated coverage and can silently mis-normalize.
+    """
+    problems: list[str] = []
+    if not os.path.exists(GNMIC_YAML):
+        return set(), [f"gnmic.yaml not found at {GNMIC_YAML}"]
+    txt = open(GNMIC_YAML).read()
+
+    # canon-names is the only processor whose `new:` targets are device_* names
+    # (canon-status-enums → "1".."7", canon-tags → "ifName"/"device"). So every
+    # `new: "device_..."` in the file is a canonical-lane target.
+    targets = set(re.findall(r'new:\s*"(device_[a-z0-9_]+)"', txt))
+    if not targets:
+        problems.append("canon-names: no `device_*` rewrite targets found — "
+                        "chain broken or file moved?")
+
+    # Well-formedness: canonical names carry no '/' or '-' (those are path-shaped
+    # and would be dropped by drop-unmapped). Anchored snake_case only.
+    name_ok = re.compile(r"^device_[a-z0-9_]+$")
+    for t in sorted(targets):
+        if not name_ok.match(t):
+            problems.append(f"canon-names target malformed (not ^device_[a-z0-9_]+$): {t}")
+
+    # ownership-gate: the value-names delete-list (anchored regexes). Extract the
+    # block between `ownership-gate:` and the next 2-space-indented processor key.
+    gate_block = ""
+    m = re.search(r"^  ownership-gate:\n(.*?)(?=^  [a-z])", txt, re.S | re.M)
+    if m:
+        gate_block = m.group(1)
+    gate_patterns = re.findall(r'-\s*"([^"]+)"', gate_block)
+    if not gate_patterns:
+        problems.append("ownership-gate: no value-names delete patterns parsed — "
+                        "gate may be empty (every family would double-produce).")
+    gate_res = [re.compile(p) for p in gate_patterns]
+
+    def gated(name: str) -> bool:
+        return any(rx.search(name) for rx in gate_res)
+
+    # Stale-gate guard: every gate pattern must match at least one canon-names
+    # target. A pattern matching nothing is dead config (a renamed family left a
+    # ghost entry) and silently weakens the collision guard.
+    for p, rx in zip(gate_patterns, gate_res):
+        if not any(rx.search(t) for t in targets):
+            problems.append(f"ownership-gate pattern matches no canon-names target "
+                            f"(stale/dead gate entry): {p}")
+
+    # What gNMI actually emits = mapped targets minus gated ones.
+    gnmi_emitted = {t for t in targets if not gated(t)}
+
+    # Single-contract invariant: gNMI-emitted names ⊆ SNMP-emitted names, modulo
+    # documented gNMI-owned families.
+    for name in sorted(gnmi_emitted):
+        if name not in snmp_emitted and name not in GNMI_OWNED:
+            problems.append(
+                f"gNMI emits canonical `{name}` that NO SNMP collector emits and "
+                f"it is not a documented GNMI_OWNED family — single-contract "
+                f"divergence (add an SNMP source, gate it, or add GNMI_OWNED entry).")
+    return gnmi_emitted, problems
+
+
 def referenced_metrics() -> dict[str, set[str]]:
     """metric_name -> set of files referencing it, extracted from PromQL query
     strings in the frontend. A metric is an identifier immediately followed by
@@ -124,6 +205,10 @@ def waived(metric: str) -> bool:
 
 def main() -> int:
     emitted = emitted_metrics()
+    gnmi_emitted, gnmi_problems = gnmi_canonical_lane(emitted)
+    # The gNMI canonical lane is a producer too: a panel querying a gNMI-owned
+    # family (e.g. device_mem_percent) is NOT an orphan.
+    emitted = emitted | gnmi_emitted
     refs = referenced_metrics()
     missing = {m: files for m, files in sorted(refs.items())
                if m not in emitted and not waived(m)}
@@ -132,9 +217,16 @@ def main() -> int:
 
     print("panel↔metric contract audit")
     print(f"  metrics emitted by collectors : {len(emitted)}")
+    print(f"  gNMI canonical-lane emits     : {len(gnmi_emitted)} ({', '.join(sorted(gnmi_emitted)) or 'none'})")
     print(f"  metrics referenced by panels  : {len(refs)}")
     print(f"  tracked gaps (known, on the board): {len(tracked)}")
+    print(f"  gNMI-lane contract problems       : {len(gnmi_problems)}")
     print(f"  UNTRACKED orphans (regressions)   : {len(untracked)}")
+
+    if gnmi_problems:
+        print("\n✗ gNMI CANONICAL-LANE CONTRACT PROBLEMS (single-contract guard):")
+        for p in gnmi_problems:
+            print(f"  ✗ {p}")
 
     if tracked:
         print("\nKNOWN GAPS (panel empty, work item open):")
@@ -149,7 +241,11 @@ def main() -> int:
         print("\nFix: add the OID to a collector profile, add a TRACKED_GAPS entry "
               "with a work item, or a justified WAIVERS entry.")
         return 1
-    print("\n  ✓ contract clean — no untracked orphans")
+    if gnmi_problems:
+        print("\nFix the gNMI canonical-lane contract problems above "
+              "(deployment/docker/gnmic/gnmic.yaml).")
+        return 1
+    print("\n  ✓ contract clean — no untracked orphans, gNMI lane consistent")
     return 0
 
 
