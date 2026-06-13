@@ -157,3 +157,38 @@ families:
     severity: {down: high, up: warn}
     correlates_with: device_isis_adj_state
     join_on: [device, isis_neighbor]
+
+  # ---- Firewall (NGFW) event plane — FortiOS, the reusable firewall pattern ----
+  # FortiOS logs are key="value"; the Vector FortiOS parser normalizes device=devname
+  # and surfaces type/subtype as appname. The same shape applies to Palo Alto (CSV) /
+  # Versa with their own grammars — see [[netops-firewall-onboarding-methodology]].
+
+  # Allowed/denied session (type="traffic").
+  fortios_traffic:
+    match_tag: 'type="traffic"'
+    grammars:
+      # "... srcintf=\"port3\" ... action=\"accept|deny|close|timeout\" ..."
+      - vendor: fortinet
+        ifname_re: 'srcintf="([^"]+)"'
+    target_state_re: 'action="(\w+)"'
+    state: {down: '\b(deny|drop|block|timeout|reset)\b', up: '\b(accept|start|close|allow)\b'}
+    entity: {type: device, key_from: hostname}
+    labels: {device: hostname, ifName: ifname_re}
+    severity: {down: warn, up: warn}        # sessions are routine; threats carry severity
+    correlates_with: device_session_count
+    join_on: [device]
+
+  # UTM / threat detection (type="utm": ips / virus / webfilter / app-control).
+  # ANY UTM hit is a security signal → high, whether blocked or passthrough(detected).
+  fortios_utm_threat:
+    match_tag: 'type="utm"'
+    grammars:
+      - vendor: fortinet
+        ifname_re: 'srcintf="([^"]+)"'
+    target_state_re: 'action="(\w+)"'
+    state: {down: '\b(block|blocked|dropped|reset|deny|quarantine)\b', up: '\b(pass|passthrough|allow|detected|monitor)\b'}
+    entity: {type: device, key_from: hostname}
+    labels: {device: hostname, ifName: ifname_re}
+    severity: {down: high, up: high}
+    correlates_with: device_session_count
+    join_on: [device]

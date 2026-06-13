@@ -183,6 +183,19 @@ families:
     owner: {transport: gnmi, reason: "Per-AFI prefix counts; BGP4-MIB cannot represent v6/VPNv4, BGP4V2-MIB or gNMI required."}
     dedup_key: [device, vrf, peer, afi_safi]
 
+  # Firewall active-session count (the headline NGFW load/health gauge; the metric
+  # the FortiOS/PAN/Versa traffic+threat EVENT families correlate against).
+  device_session_count:
+    match:
+      - ".*fgSysSesCount$"                # FORTINET-FORTIGATE-MIB
+      - ".*panSessionActive$"             # PAN-COMMON-MIB
+      - ".*cfwConnectionStatCount$"       # CISCO-UNIFIED-FIREWALL-MIB
+    kind: gauge
+    unit: count
+    labels: [device, vendor, transport]
+    owner: {transport: snmp, reason: "Total active sessions through the firewall — the NGFW load/health signal. Vendor firewall MIB via SNMP (live on dmz-fw)."}
+    dedup_key: [device]
+
 # Plumbing tag names that must never reach a canonical label set (dropped after
 # reconciliation). gnmic names some with hyphens (invalid Prometheus labels).
 drop_tags:
