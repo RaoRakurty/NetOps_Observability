@@ -52,22 +52,34 @@ targets:
     subscriptions: [oc-interfaces]
 
 subscriptions:
-  # OpenConfig interface counters + oper/admin status (Arista).
+  # OpenConfig interface counters + oper/admin status + BGP neighbor session-state
+  # (Arista). BGP rides in THIS subscription as an extra path rather than its own
+  # named subscription: cEOS reliably streams BGP when it shares the interface
+  # target's single subscribe stream, but drops it as a second concurrent
+  # subscription on the leaf targets (verified on the lab — wan-r2 happened to
+  # work standalone, the 4 leaves did not; bundling fixes all of them). Same
+  # 30s sample cadence, so co-locating costs nothing. Revisit if BGP later needs
+  # a distinct cadence/on-change (would need the cEOS multi-stream issue solved).
   oc-interfaces:
     paths:
       - "/interfaces/interface/state/counters"
       - "/interfaces/interface/state/oper-status"
       - "/interfaces/interface/state/admin-status"
+      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
 
-  # Nokia SR Linux native interface statistics.
+  # Nokia SR Linux native interface statistics + BGP neighbor session-state.
+  # BGP co-located here for symmetry with the Arista lane (SRL streams it fine as
+  # a separate subscription too, but one stream per target keeps both vendors
+  # uniform). Same 30s sample cadence.
   srl-interfaces:
     paths:
       - "/interface[name=*]/statistics"
       - "/interface[name=*]/oper-state"
       - "/interface[name=*]/admin-state"
+      - "/network-instance[name=default]/protocols/bgp/neighbor[peer-address=*]/session-state"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
@@ -82,6 +94,11 @@ subscriptions:
     stream-mode: sample
     sample-interval: 30s
 
+# gNMI is the OWNER of BGP state (SNMP BGP4-MIB is IPv4-only and barely
+# implemented on cEOS/SRL — device_bgp_peer_state has zero SNMP series on this
+# fabric). The SNMP profile keeps bgpPeerState only as a fallback for
+# agentless/older gear. BGP session-state is carried in the interface
+# subscriptions above (see the oc-interfaces comment for why).
 outputs:
   # Raw lane — gNMI paths verbatim under the gnmi_ prefix. Debug surface,
   # gNMI-liveness source for the backend health monitor, and the comparison
@@ -113,6 +130,7 @@ outputs:
     event-processors:
       - canon-names
       - canon-status-enums
+      - canon-bgp-enums
       - canon-convert
       - vendor-nokia
       - vendor-arista
@@ -165,6 +183,12 @@ processors:
         - replace: {apply-on: name, old: ".*cpu/total/instant$", new: "device_cpu_percent"}
         - replace: {apply-on: name, old: ".*memory/utilization$", new: "device_mem_percent"}
         - replace: {apply-on: name, old: ".*temperature/instant$", new: "device_temp_celsius"}
+        # --- BGP neighbor session-state (control plane, both vendors) ---
+        # cEOS OpenConfig ends .../neighbors/neighbor/state/session-state;
+        # SRL native ends .../neighbor/session-state (no /state/). Anchored so
+        # the two never cross-match.
+        - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/session-state$", new: "device_bgp_peer_state"}
+        - replace: {apply-on: name, old: ".*bgp/neighbor/session-state$", new: "device_bgp_peer_state"}
 
   # [2] Status enums → IF-MIB numerics (ifOperStatus/ifAdminStatus values;
   # OpenConfig enums are modeled on the same list). Anchored — no substring
@@ -188,6 +212,27 @@ processors:
         - replace: {apply-on: value, old: "^enable$", new: "1"}
         - replace: {apply-on: value, old: "^disable$", new: "2"}
 
+  # [2b] BGP session-state enum → BGP4-MIB bgpPeerState numerics so the canonical
+  # value matches the SNMP contract (alert template reads device_bgp_peer_state
+  # < 6, i.e. anything below established). OpenConfig (cEOS, UPPERCASE) and SRL
+  # native (lowercase) share the same six-state list; anchored.
+  canon-bgp-enums:
+    event-strings:
+      value-names: ["^device_bgp_peer_state$"]
+      transforms:
+        - replace: {apply-on: value, old: "^IDLE$", new: "1"}
+        - replace: {apply-on: value, old: "^CONNECT$", new: "2"}
+        - replace: {apply-on: value, old: "^ACTIVE$", new: "3"}
+        - replace: {apply-on: value, old: "^OPENSENT$", new: "4"}
+        - replace: {apply-on: value, old: "^OPENCONFIRM$", new: "5"}
+        - replace: {apply-on: value, old: "^ESTABLISHED$", new: "6"}
+        - replace: {apply-on: value, old: "^idle$", new: "1"}
+        - replace: {apply-on: value, old: "^connect$", new: "2"}
+        - replace: {apply-on: value, old: "^active$", new: "3"}
+        - replace: {apply-on: value, old: "^opensent$", new: "4"}
+        - replace: {apply-on: value, old: "^openconfirm$", new: "5"}
+        - replace: {apply-on: value, old: "^established$", new: "6"}
+
   # [3] Canonical values are integers (matches the SNMP emitter's valueInt).
   canon-convert:
     event-convert:
@@ -197,11 +242,11 @@ processors:
   # [4] Vendor label, keyed on which subscription produced the event.
   vendor-nokia:
     event-add-tag:
-      tags: ["^srl-(interfaces|cpu)$"]
+      tags: ["^srl-(interfaces|cpu|bgp)$"]
       add: {vendor: nokia}
   vendor-arista:
     event-add-tag:
-      tags: ["^oc-interfaces$"]
+      tags: ["^oc-(interfaces|bgp)$"]
       add: {vendor: arista}
 
   # [5] Transport label — series provenance for watchdog freshness checks and
@@ -212,13 +257,19 @@ processors:
       value-names: ["."]
       add: {transport: gnmi}
 
-  # [6] Identity tags → canonical label names (device, ifName).
+  # [6] Identity tags → canonical label names (device, ifName, peer, vrf). BGP
+  # adds peer (cEOS neighbor_neighbor-address / SRL neighbor_peer-address) and
+  # vrf (network-instance_name) — also strips the hyphenated raw names, which are
+  # invalid Prometheus labels.
   canon-tags:
     event-strings:
-      tag-names: ["^interface_name$", "^source$"]
+      tag-names: ["^interface_name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$"]
       transforms:
         - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
         - replace: {apply-on: name, old: "^source$", new: "device"}
+        - replace: {apply-on: name, old: "^neighbor_neighbor-address$", new: "peer"}
+        - replace: {apply-on: name, old: "^neighbor_peer-address$", new: "peer"}
+        - replace: {apply-on: name, old: "^network-instance_name$", new: "vrf"}
 
   # [7] OWNERSHIP GATE — families listed here are mapped and ready but still
   # SNMP-owned; deleting them prevents double-producing the same canonical
@@ -240,8 +291,10 @@ processors:
 
   # [9] Internal plumbing tags stay out of the canonical label set. gnmic names
   # the subscription tag with a hyphen (subscription-name); control_slot/cpu_index
-  # are SR-Linux path keys with no SNMP-contract equivalent — drop all three so
-  # the canonical label set is exactly {device, vendor, ifName, transport}.
+  # are SR-Linux path keys; protocol_identifier/protocol_name are the BGP
+  # OpenConfig protocol-list keys (always BGP here) — none have an SNMP-contract
+  # equivalent, so drop them. Canonical label set = {device, vendor, ifName,
+  # transport} for interfaces/resources, + {peer, vrf} for BGP.
   drop-internal-tags:
     event-delete:
-      tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$"]
+      tag-names: ["^subscription[-_]name$", "^control_slot$", "^cpu_index$", "^protocol_identifier$", "^protocol_name$"]
