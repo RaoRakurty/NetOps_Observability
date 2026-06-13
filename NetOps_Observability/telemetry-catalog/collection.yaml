@@ -134,12 +134,12 @@ rows:
     stream_mode: sample
     interval: 30s
     requires: {output_processor: event-override-ts}   # same cEOS stale-ts class as peer-state
-    fidelity_status: lab_validated
+    fidelity_status: live_validated
     last_validated: "2026-06-13"
     fixture: fixtures/arista_ceos_4.36_bgp_fsm_transitions_oc_once.jsonl
     source_ref: "BGP4-MIB bgpPeerFsmEstablishedTransitions; OpenConfig bgp (coverage-reference §A)"
     cost: {series_per_device: "~peers", device_cpu: low}
-    notes: "Captured live on leaf1 (established-transitions=1). Fixture-replay validated. Pairs with device_bgp_peer_state to count flaps between samples."
+    notes: "Added to the live oc-bgp subscription + canon-names. LIVE: 9 series in VM (cEOS leaves + wan-r2), established-transitions=1, clean {device,peer,vendor,vrf} labels, no stale-ts rejection. Pairs with device_bgp_peer_state to count flaps between samples."
 
   # --- BGP per-AFI prefixes received (fixes the v4-only blind spot) ---
   # LIVE-CAPTURE CORRECTED THE SPEC: OpenConfig uses a COMBINED afi-safi-name key
@@ -156,12 +156,12 @@ rows:
     mode: stream
     stream_mode: sample
     interval: 30s
-    fidelity_status: lab_validated
+    fidelity_status: live_validated
     last_validated: "2026-06-13"
     fixture: fixtures/arista_ceos_4.36_bgp_pfx_in_oc_once.jsonl
     source_ref: "BGP4V2-MIB bgp4V2PrefixInPrefixes (BGP4-MIB is v4-only); OpenConfig afi-safi (coverage-reference §A)"
     cost: {series_per_device: "~peers x afis", device_cpu: low}
-    notes: "Live on leaf1 (IPV4_UNICAST + IPV6_UNICAST). Spec corrected after live capture: canonical label = afi_safi (OpenConfig combined key) not separate afi+safi. The multi-AFI coverage BGP4-MIB (v4-only) cannot provide."
+    notes: "Added to the live oc-bgp subscription + canon-names + afi_safi label rename. LIVE: 27 series in VM across IPV4_UNICAST/IPV6_UNICAST/L2VPN_EVPN (EVPN=12 prefixes on leaves). Spec corrected after live capture: canonical label = afi_safi (OpenConfig combined key) not separate afi+safi. The multi-AFI coverage BGP4-MIB (v4-only) cannot provide."
 
   # --- IS-IS adjacency state (the IGP on the clos fabric) — LIVE on SRL ---
   - vendor: nokia

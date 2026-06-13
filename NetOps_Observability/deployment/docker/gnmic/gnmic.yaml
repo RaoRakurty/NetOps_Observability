@@ -77,6 +77,11 @@ subscriptions:
   oc-bgp:
     paths:
       - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/session-state"
+      # Flap counter (established-transitions) + per-AFI prefixes received —
+      # both gNMI-owned (BGP4-MIB is v4-only / barely on cEOS). Same cEOS
+      # stale-ts class as session-state; canon-override-ts handles it.
+      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/state/established-transitions"
+      - "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received"
     mode: stream
     stream-mode: sample
     sample-interval: 30s
@@ -215,6 +220,10 @@ processors:
         # the two never cross-match.
         - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/session-state$", new: "device_bgp_peer_state"}
         - replace: {apply-on: name, old: ".*bgp/neighbor/session-state$", new: "device_bgp_peer_state"}
+        # BGP flap counter + per-AFI prefixes received (cEOS OpenConfig). Anchored
+        # so established-transitions never cross-matches session-state above.
+        - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/state/established-transitions$", new: "device_bgp_fsm_transitions"}
+        - replace: {apply-on: name, old: ".*bgp/neighbors/neighbor/afi-safis/afi-safi/state/prefixes/received$", new: "device_bgp_pfx_in"}
         # --- IS-IS adjacency state (IGP, SRL native) ---
         - replace: {apply-on: name, old: ".*isis/instance/interface/adjacency/state$", new: "device_isis_adj_state"}
 
@@ -302,7 +311,7 @@ processors:
   # invalid Prometheus labels.
   canon-tags:
     event-strings:
-      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$"]
+      tag-names: ["^interface_name$", "^interface_interface-name$", "^source$", "^neighbor_neighbor-address$", "^neighbor_peer-address$", "^network-instance_name$", "^adjacency_neighbor-system-id$", "^adjacency_adjacency-level$", "^afi-safi_afi-safi-name$"]
       transforms:
         - replace: {apply-on: name, old: "^interface_name$", new: "ifName"}
         - replace: {apply-on: name, old: "^interface_interface-name$", new: "ifName"}
@@ -310,6 +319,10 @@ processors:
         - replace: {apply-on: name, old: "^neighbor_neighbor-address$", new: "peer"}
         - replace: {apply-on: name, old: "^neighbor_peer-address$", new: "peer"}
         - replace: {apply-on: name, old: "^network-instance_name$", new: "vrf"}
+        # BGP per-AFI prefix counts carry the OpenConfig combined afi-safi key
+        # (IPV4_UNICAST/IPV6_UNICAST/L2VPN_EVPN) — hyphenated raw name is an
+        # invalid Prom label; rename to the canonical afi_safi.
+        - replace: {apply-on: name, old: "^afi-safi_afi-safi-name$", new: "afi_safi"}
         # IS-IS adjacency identity
         - replace: {apply-on: name, old: "^adjacency_neighbor-system-id$", new: "isis_neighbor"}
         - replace: {apply-on: name, old: "^adjacency_adjacency-level$", new: "isis_level"}
