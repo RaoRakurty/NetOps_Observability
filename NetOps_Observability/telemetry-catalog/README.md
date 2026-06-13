@@ -49,9 +49,18 @@ the regression guard that keeps the catalog honest.
 ## Phasing
 
 - **Phase 1 (done)** — schema + harness + 3 validated families: interfaces (oper/admin status), BGP peer-state, memory.
-- **Phase 2** — event/parser catalog (BGP/OSPF adjchange, link-state, firewall fw_event).
+- **Phase 2 (done)** — event/parser catalog (`events.yaml` + `parse_events.py`): BGP/OSPF adjchange + link-state syslog grammars → canonical event schema, sharing the identity model. Each event family declares `correlates_with` + `join_on` so events ⨝ metrics on the same identity (a BGP adjchange event joins `device_bgp_peer_state` on `(device, peer)`). It is the authoritative spec for the correlation engine's `src/correlation/producers.py`. Firewall fw_event schema (PAN/FortiOS) lands with Phase 3.
 - **Phase 3** — import P1–P5 research rows as `doc_claimed` candidates (OSPF/ISIS/BFD/MPLS/LDP/IPsec/QoS/SD-WAN/firewall).
 - **Phase 4** — validate vendor-by-vendor; promote rows to `lab_validated`.
+
+### Event catalog tooling
+```bash
+python3 -m pytest test_events.py -q   # grammar parsing + the correlation invariant
+```
+`catalog.py` also validates the event catalog: every event family must declare a
+`join_on` of canonical identity keys it actually produces. An event whose paired
+metric is a not-yet-built Phase-3 family is printed as a tracked forward-reference,
+not a failure.
 
 ## Relationship to the runtime
 

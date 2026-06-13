@@ -23,11 +23,17 @@ def _load(name):
     return yaml.safe_load(open(os.path.join(HERE, name)))
 
 
+# Event→metric correlation forward-references: an event whose paired metric is a
+# Phase-3 family not yet built. Printed (so they're visible) but not a failure.
+FORWARD_REFS: list[str] = []
+
+
 def check() -> list[str]:
     norm = _load("normalization.yaml")
     coll = _load("collection.yaml")
     ident = _load("identity.yaml")
     problems: list[str] = []
+    FORWARD_REFS.clear()
 
     families = norm["families"]
     canonical_keys = {e["canonical_key"] for e in ident["entities"].values()}
@@ -66,6 +72,27 @@ def check() -> list[str]:
         if fs in NEEDS_ISSUE and not row.get("issue_ref"):
             problems.append(f"{tag}: fidelity '{fs}' requires an issue_ref")
 
+    # --- event catalog: correlation invariant (events must join metrics) ---
+    events = _load("events.yaml").get("families") or {}
+    metric_label_space = set()
+    for fam in families.values():
+        metric_label_space.update(fam.get("labels", []))
+    for ename, efam in events.items():
+        join = efam.get("join_on", [])
+        if not join:
+            problems.append(f"events: family '{ename}' has no join_on (cannot correlate to a metric)")
+        produced = set(efam.get("labels", {}).keys())
+        for k in join:
+            if k not in produced:
+                problems.append(f"events: '{ename}' join_on '{k}' is not a label the parser produces")
+            if k not in metric_label_space:
+                problems.append(f"events: '{ename}' join_on '{k}' is not a canonical identity key used by any metric family")
+        cw = efam.get("correlates_with")
+        if cw and cw not in families:
+            # correlates_with may point at a Phase-3 metric not yet in
+            # normalization.yaml — a forward-reference, tracked (printed) not failed.
+            FORWARD_REFS.append(f"{ename} → {cw} (Phase-3 metric, not yet built)")
+
     # --- ownership collision: a (vendor, platform, family) advertised on two
     #     different transports is a double-production hazard ---
     owners: dict[tuple, set] = {}
@@ -89,6 +116,10 @@ def main() -> int:
     print(f"  collection rows : {len(coll)}")
     print(f"  by fidelity     : {dict(by_fid)}")
     print(f"  advertisable    : {sum(by_fid[f] for f in ADVERTISABLE)} (lab/live validated)")
+    if FORWARD_REFS:
+        print(f"  event→metric forward-refs (Phase-3 metrics pending):")
+        for f in FORWARD_REFS:
+            print(f"    · {f}")
     if problems:
         print(f"\n✗ {len(problems)} invariant violations:")
         for p in problems:
