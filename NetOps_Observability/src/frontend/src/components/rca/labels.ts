@@ -18,6 +18,7 @@ export const C = {
   // severity — mid-tone, theme-neutral (legible on white AND dark)
   crit: "#E11D48",        // critical / contradicts / malformed
   warn: "#D97706",        // warning / caution / needed-to-confirm / control-plane / seam
+  caution: "#B45309",     // softer burnt-amber for inline warnings (calm caution, not alarm; AA on white)
   ok: "#16A34A",          // healthy / linked / supports
   info: "#2563EB",        // info / device-telemetry / present-not-linked
   flow: "#0D9488",        // flows (teal)

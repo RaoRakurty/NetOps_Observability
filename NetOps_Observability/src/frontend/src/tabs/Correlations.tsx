@@ -5,7 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { entityLabel, signatureName, signatureNocTitle, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "../components/rca/labels";
+import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -182,10 +182,11 @@ export default function Correlations() {
   const select = (o: CorrObject) => {
     setSel(o.correlation_id);
     if (ws.enabled) {
+      // Generic chrome title — the precise NOC cause title ("Possible path
+      // slowdown") lives once, in the card below, where the dominant evidence
+      // plane is known. Avoids a contradictory second title in the drawer header.
       ws.openInspector(<CorrelationDetail id={o.correlation_id} />, {
-        title: o.top_hypothesis === "undetermined"
-          ? "Possible network issue"
-          : signatureNocTitle(o.top_hypothesis),
+        title: "Root cause analysis",
         subtitle: o.verdict_tier === "confirmed" ? "Confirmed" : "Not confirmed",
       });
     }

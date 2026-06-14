@@ -202,6 +202,13 @@ export default function RcaSummary({
 
   // Status line (item 1): "Not confirmed · Confidence: Low".
   const confidenceWord = confirmed ? "High" : quality === "candidate" ? "Medium" : "Low";
+  // Object state — never say "resolved" (it implies the incident is closed). Only
+  // say "Cleared" when a signal actually cleared; otherwise plain Open / inactive.
+  const cleared = useMemo(
+    () => timeline.signals.some((s) => s.clear_ts && s.clear_ts.length > 0) || (c.recovery ?? 0) > 0,
+    [timeline.signals, c.recovery],
+  );
+  const stateWord = state === "open" ? "Open" : cleared ? "Cleared" : "No longer active";
 
   // ---- the plain-English RCA summary — NOC language, answers "what did we see"
   // + "is it confirmed / why not" (items 1 & 12) ------------------------------
@@ -220,8 +227,8 @@ export default function RcaSummary({
   }, [dominant, confirmed, crossPlane, missingPlanes, c.attached_by_modality]);
 
   const card: React.CSSProperties = {
-    border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "12px 14px",
-    background: "var(--panel,#11151c)", display: "flex", flexDirection: "column", gap: 12,
+    border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "10px 14px",
+    background: "var(--panel,#11151c)", display: "flex", flexDirection: "column", gap: 9,
     minWidth: 0, maxWidth: "100%", overflow: "hidden",
   };
   const title: React.CSSProperties = { fontWeight: 600, fontSize: 12 };
@@ -280,7 +287,7 @@ export default function RcaSummary({
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -4 }}>
         <span style={{ ...strongBadge(confirmed ? C.ok : C.faint) }}>{confirmed ? "CONFIRMED" : "NOT CONFIRMED"}</span>
         <span style={{ fontSize: 13, color: confidenceTone, fontWeight: 700 }}>Confidence: {confidenceWord}</span>
-        {state === "closed" && <span style={{ ...muted, fontSize: 12.5 }}>· resolved</span>}
+        <span style={{ ...muted, fontSize: 12.5 }}>· State: {stateWord}</span>
       </div>
 
       {/* the precise plain-English story — primary readable text */}
@@ -288,18 +295,18 @@ export default function RcaSummary({
 
       {/* why suspected / why not confirmed — makes the verdict trustable */}
       {timeline.verdict_tier === "suspected" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, borderLeft: `3px solid ${C.warn}`, paddingLeft: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, borderLeft: `3px solid ${C.caution}`, paddingLeft: 8 }}>
           {timeline.top_hypothesis !== "undetermined" && (
-            <div><b style={{ color: C.warn }}>Why suspected:</b> the signs match a <b>{nocTitle.replace(/^Possible /, "")}</b> using {attachedPlaneLabels.length ? attachedPlaneLabels.join(" + ") : "the available"} evidence.</div>
+            <div><b style={{ color: C.caution }}>Why suspected:</b> the signs match a <b>{nocTitle.replace(/^Possible /, "")}</b> using {attachedPlaneLabels.length ? attachedPlaneLabels.join(" + ") : "the available"} evidence.</div>
           )}
-          <div><b style={{ color: C.warn }}>Why not confirmed:</b> {whyNotConfirmed}</div>
+          <div><b style={{ color: C.caution }}>Why not confirmed:</b> {whyNotConfirmed}</div>
         </div>
       )}
       {probeOnly && (
-        <div style={{ fontSize: 12.5, color: C.warn }}>⚠ Only active checks changed. This is not enough to confirm root cause.</div>
+        <div style={{ fontSize: 12.5, color: C.caution, fontWeight: 600 }}>⚠ Only active checks changed. This is not enough to confirm root cause.</div>
       )}
       {probe.lowOnly && (
-        <div style={{ fontSize: 12.5, color: C.warn }}>
+        <div style={{ fontSize: 12.5, color: C.caution, fontWeight: 600 }}>
           ⚠ These are internal/test checks. They are useful for troubleshooting, but they cannot confirm a customer-impacting issue.
         </div>
       )}
@@ -371,7 +378,7 @@ export default function RcaSummary({
             // "Needed to confirm" is informational (blue), not alarm (orange):
             // an absent plane is a corroboration opportunity, not a fault.
             let tone: string = C.faint, badge = "Not observed", used = false;
-            if (att > 0 && lowAuthProbe) { tone = C.warn; badge = "Weak evidence only"; used = true; }
+            if (att > 0 && lowAuthProbe) { tone = C.caution; badge = "Weak evidence only"; used = true; }
             else if (att > 0) { tone = C.ok; badge = "Used"; used = true; }
             else if (total > 0) { tone = C.info; badge = "Seen, not related"; }
             else if (requiredModalities.has(key)) { tone = C.info; badge = "Needed to confirm"; }
@@ -386,14 +393,20 @@ export default function RcaSummary({
                   {isMain && <span style={{ ...softBadge(C.ok), fontSize: 10, fontWeight: 700 }}>Main evidence</span>}
                 </div>
                 <div style={{ ...muted, fontSize: 11, marginTop: 2 }}>{modalityHelp(key)}</div>
-                <div style={{ fontSize: 13.5, marginTop: 3 }}>
-                  {total > 0
-                    ? <><span style={muted}>Seen </span><b>{total}</b><span style={muted}> · Used </span><b style={{ color: tone }}>{att}</b></>
-                    : <span style={muted}>Seen 0</span>}
+                <div style={{ fontSize: 13, marginTop: 3 }}>
+                  {total === 0
+                    ? <span style={muted}>Seen 0</span>
+                    : (lowAuthProbe
+                      ? <>
+                          <span style={muted}>Seen </span><b>{total}</b>
+                          <span style={muted}> · Used as weak evidence </span><b style={{ color: tone }}>{att}</b>
+                          {debugExcludedHere && <><span style={muted}> · Test checks ignored </span><b style={{ color: C.faint }}>{probe.debugExcluded}</b></>}
+                        </>
+                      : <><span style={muted}>Seen </span><b>{total}</b><span style={muted}> · Used </span><b style={{ color: tone }}>{att}</b></>)}
                 </div>
                 <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
                   <span style={softBadge(tone)}>{badge}</span>
-                  {debugExcludedHere && <span style={softBadge(C.faint)}>Test check ignored</span>}
+                  {debugExcludedHere && !lowAuthProbe && <span style={softBadge(C.faint)}>Test check ignored</span>}
                 </div>
               </div>
             );
