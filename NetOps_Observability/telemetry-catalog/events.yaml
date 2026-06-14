@@ -192,3 +192,36 @@ families:
     severity: {down: high, up: high}
     correlates_with: device_session_count
     join_on: [device]
+
+  # ---- Palo Alto NGFW (PAN-OS CSV syslog) — same firewall methodology as FortiOS,
+  # different grammar. PAN logs are positional CSV: "...,<serial>,TYPE,SUBTYPE,...".
+  # The SUBTYPE token is positionally fixed right after TYPE, so we anchor on
+  # ",TRAFFIC,(subtype)," / ",THREAT,(subtype)," — robust without full CSV column
+  # mapping (that lives in the Vector pan parser). doc_claimed (PAN-OS log ref). ----
+
+  # Allowed/denied session (type TRAFFIC; subtype start/end = allowed, drop/deny = blocked).
+  pan_traffic:
+    match_tag: ',TRAFFIC,'
+    grammars:
+      - vendor: paloalto   # no positional regex extraction here — device from hostname
+    target_state_re: ',TRAFFIC,(\w+),'
+    state: {down: '\b(deny|drop)\b', up: '\b(start|end|allow)\b'}
+    entity: {type: device, key_from: hostname}
+    labels: {device: hostname}
+    severity: {down: warn, up: warn}
+    correlates_with: device_session_count
+    join_on: [device]
+
+  # Threat detection (type THREAT: vulnerability/virus/spyware/url/wildfire/...).
+  # ANY threat log is a security signal → high (blocked or alerted).
+  pan_threat:
+    match_tag: ',THREAT,'
+    grammars:
+      - vendor: paloalto
+    target_state_re: ',THREAT,(\w+),'
+    state: {down: '\b(reset|drop|block|deny|sinkhole)\b', up: '\b(alert|allow|detected)\b'}
+    entity: {type: device, key_from: hostname}
+    labels: {device: hostname}
+    severity: {down: high, up: high}
+    correlates_with: device_session_count
+    join_on: [device]

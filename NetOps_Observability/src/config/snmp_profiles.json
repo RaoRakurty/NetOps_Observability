@@ -96,5 +96,16 @@
       { "name": "device_mem_available_kb", "oid": "1.3.6.1.4.1.6527.3.1.2.1.1.10" },
       { "name": "device_temp_celsius",     "oid": "1.3.6.1.4.1.6527.3.1.2.2.1.8.1.18", "table": true }
     ]
+  },
+  {
+    "_comment": "Palo Alto NGFW — PAN-COMMON-MIB panSession/panSys (enterprise 25461). doc_claimed FROM THE MIB — NOT yet validated against a live PAN or snmpsim (no PAN in the lab). Mgmt-plane CPU/mem come from the generic HOST-RESOURCES profile (PAN implements hrProcessorLoad); these are the firewall-specific layer, mirroring the fortinet profile. panSessionActive .3 / Max .2 / Utilization% .1 under panSession 25461.2.1.2.3; panSysHAState under panSys 25461.2.1.2.1.11. VERIFY OIDs against PAN-OS before advertising (snmpwalk or snmpsim).",
+    "name": "palo_alto",
+    "enterprise": 25461,
+    "metrics": [
+      { "name": "device_session_count",        "oid": "1.3.6.1.4.1.25461.2.1.2.3.3" },
+      { "name": "device_session_max",          "oid": "1.3.6.1.4.1.25461.2.1.2.3.2" },
+      { "name": "device_session_util_percent", "oid": "1.3.6.1.4.1.25461.2.1.2.3.1" },
+      { "name": "device_ha_state",             "oid": "1.3.6.1.4.1.25461.2.1.2.1.11" }
+    ]
   }
 ]
