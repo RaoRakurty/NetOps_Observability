@@ -32,7 +32,7 @@ func corrSchemaDDL() []string {
     ts             DateTime64(3),
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
-                         'topology'=5,'syslog'=6,'sot_drift'=7),
+                         'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
