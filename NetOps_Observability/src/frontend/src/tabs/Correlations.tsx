@@ -32,11 +32,23 @@ function parseJSON<T>(raw: string | undefined, fallback: T): T {
 }
 
 // Triage helpers for the left table — rank suspected rows by how openable they are.
+// This MUST stay a conservative lower bound on the Inspector's own quality grade
+// (RcaSummary), so the list never claims a higher grade than the detail view:
+//   - "strong"    ⊆ Inspector strong  — confirmed implies grounded + ≥2 modality ×
+//                   ≥2 observer (the engine's confirm gate), so it always lands
+//                   strong in the Inspector too.
+//   - "candidate" ⊆ Inspector {candidate, strong} — ≥2 planes ⇒ ≥2 modalities and
+//                   not probe-only, matching the Inspector's cross-plane bar. Without
+//                   plane_count≥2 a single-plane suspected row read "candidate" here
+//                   while the Inspector narrated "weak/noisy" — the contradiction
+//                   this guard removes.
+// Under-claiming (list "weak", Inspector "candidate") is fine; over-claiming is not.
 type Qual = "strong" | "candidate" | "weak";
 function qualityOf(o: CorrObject): Qual {
   const grounded = (o.grounding ?? "none") !== "none";
+  const planes = Number(o.plane_count ?? 0);
   if (o.verdict_tier === "confirmed") return "strong";
-  if (o.verdict_tier === "suspected" && grounded && !o.low_authority) return "candidate";
+  if (o.verdict_tier === "suspected" && grounded && !o.low_authority && planes >= 2) return "candidate";
   return "weak";
 }
 // mid-tone hues, readable on the light canvas AND dark theme
