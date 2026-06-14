@@ -147,6 +147,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 				}
 			}
 		}
+		// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
+		// without ENTITY-MIB yield nothing.
+		lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
 		cancel()
 		samples += len(lines)
 		if len(lines) > 0 {
