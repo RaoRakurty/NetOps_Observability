@@ -128,3 +128,18 @@ treat as final until re-run + verified:
 Each family flips under the existing ownership-gate discipline (one transport per
 (device,family); prove parity vs raw lane before flipping). Extend
 `audit_metric_contract.py` to cover gNMI emissions (critical-review HIGH finding).
+
+## D. SHIPPED 2026-06-14 — L1/inventory baseline-gap closures
+
+Closing the documented SNMP baseline gaps (see netops-snmp-baseline-audit). All
+additive to the generic profile; ownership-gate unchanged.
+
+| Metric | OID / MIB | Status | Notes |
+|--------|-----------|--------|-------|
+| `device_if_fcs_errors` | dot3StatsFCSErrors, EtherLike-MIB RFC 3635 | correct, **not lab-exercised** | cEOS/SRL/FortiGate containers don't implement EtherLike-MIB; works on real gear. On the RCA bus (L1 fault discriminator). |
+| `ifAlias` label | ifXTable .18, RFC 2863 | ✅ **live-validated** | operator circuit ID on every interface series + MetricEvent; 21 ifs (`to-dmz-fw`, `DCI-to-spine2`) flowing to correlation as a grounding token. |
+| `device_if_last_change` | ifTable .9 | correct, not lab-exercised | flap timestamp; VM-only (step-on-flap, not a CUSUM level). |
+| `device_entity_info` | ENTITY-MIB entPhysical* RFC 6933 | ✅ **live-validated** | FRU serial/model/class info series (VM-only metadata); 17 FRUs, real Cisco/Arista serials. Gotcha: entPhysicalClass is INTEGER (valueInt-decode, not raw byte). |
+
+Audit CI greened: `device_bgp_pfx_in` + `device_isis_adj_state` documented as
+GNMI_OWNED. Telegraf retired (legacy compose profile; Go collector owns SNMP).
