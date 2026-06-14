@@ -1,0 +1,13 @@
+{
+  "name": "BGP adjacency change (syslog) + device resource anomaly (SNMP), independent witnesses: BGP peer flap confirmed",
+  "comment": "P3 seed = the orphaned wan-r2:192.168.100.5 bgp_state_anomaly. Two independent planes (control_plane syslog vs device_telemetry SNMP) confirm.",
+  "signals": [
+    {"kind": "bgp_adjacency_change", "entity_type": "device", "entity_id": "wan-r2:192.168.100.5",
+     "observer_id": "syslog-wan-r2", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "device_resource_anomaly", "entity_type": "device", "entity_id": "wan-r2",
+     "observer_id": "snmp-wan-r2", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 4.0}
+  ],
+  "expect": {"top": "sig.ent.wan-edge.bgp-peer-flap", "tier": "confirmed", "owner": "netops"}
+}

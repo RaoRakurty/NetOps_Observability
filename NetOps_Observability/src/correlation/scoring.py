@@ -220,12 +220,20 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
         )
 
     top = scores[0]
+    # Signature-specific evidence_missing: when a template matched but the
+    # verdict can't confirm, the real gap is usually NOT an unsatisfied clause
+    # (coverage may be 1.0) but the verdict gate's shortfall — a missing second
+    # modality, a single observer, or a fate-shared pair. Surface both so the
+    # checklist is actionable per-object, never the old catalog-wide boilerplate.
+    top_missing: tuple[str, ...] = ()
+    if top.verdict_gate.tier is not VerdictTier.CONFIRMED:
+        clause_gaps = tuple(f"{top.template_id}: needs {m}" for m in top.missing)
+        gate_gaps = tuple(f"{top.template_id}: {r}" for r in top.verdict_gate.reasons)
+        top_missing = tuple(dict.fromkeys(clause_gaps + gate_gaps))
     return RankingResult(
         top_hypothesis=top.template_id,
         verdict_tier=top.verdict_gate.tier,   # rank ≠ verdict: tier comes from the gate
         hypotheses=tuple(visible),
-        evidence_missing=tuple(
-            f"{top.template_id}: needs {m}" for m in top.missing
-        ) if top.verdict_gate.tier is not VerdictTier.CONFIRMED else (),
+        evidence_missing=top_missing,
         catalog_version=catalog.version_hash(),
     )

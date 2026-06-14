@@ -320,6 +320,95 @@ BUILTIN_TEMPLATES: list[dict] = [
             ],
         },
     },
+    # -----------------------------------------------------------------------
+    # P3 signatures (2026-06-14) — authored from REAL observed lab objects, not
+    # theory. These use the engine's actual emitted vocabulary (probe_rtt_anomaly
+    # / probe_loss on path, bgp_adjacency_change / bgp_state_anomaly on device,
+    # link_state_change + if_metric_anomaly on interface), so live correlation
+    # objects finally match a signature instead of falling to the alphabetical
+    # evidence_missing tie-break. Seeds: object 60e00be9 (DIA seam), the orphaned
+    # wan-r2 BGP anomaly, and link+interface co-faults.
+    # -----------------------------------------------------------------------
+    {
+        "id": "sig.ent.middle-mile.dia-egress-latency",
+        "title": "ISP / DIA egress latency",
+        "domain": "ent.middle-mile",
+        "requires": [
+            # Multi-vantage RTT/loss to a shared target across the DIA seam. The
+            # ≥2-observer demand is enforced by the verdict gate, not the clause.
+            {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path"},
+            # The corroborating WAN egress interface witness that lifts a probe-
+            # only suspicion to a confirmable, second-modality verdict.
+            {"kind": "if_metric_anomaly", "entity_type": "interface", "optional": True},
+        ],
+        "required_modalities": ["active_probe"],
+        "discriminators": [
+            # Routing churn at the edge is a different fault — if BGP is moving,
+            # this isn't pure egress latency.
+            {"absent": {"kind": "bgp_adjacency_change|bgp_state_anomaly"}, "within_s": 600,
+             "else_prefer": "sig.ent.wan-edge.bgp-peer-flap"},
+        ],
+        "direction_expect": "path-egress -> service",
+        "verdict": {
+            "owner": "isp", "layer": "L3 (DIA / provider egress)",
+            "first_steps": [
+                "Compare the two vantage points to the same target across the DIA boundary — shared RTT/loss departure points at the ISP egress, not the host",
+                "Check the WAN egress interface for utilization/error counters in the same window",
+                "Open the ISP ticket with per-target RTT/loss deltas, timestamps, and the DIA seam id",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.wan-edge.bgp-peer-flap",
+        "title": "BGP peer flap",
+        "domain": "ent.wan-edge",
+        "requires": [
+            # Adjacency-change (syslog, control_plane) or BGP-MIB state anomaly
+            # (device_telemetry) — either witnesses the flap.
+            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device"},
+            # Optional downstream impact: host pressure, route-driven loss, or a
+            # co-incident link event.
+            {"kind": "device_resource_anomaly|probe_loss|link_state_change", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A flap with a concurrent link-down is really a link fault dragging
+            # the session — prefer the L1/L2 explanation.
+            {"absent": {"kind": "link_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "control-plane -> route -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L3 (routing)",
+            "first_steps": [
+                "Identify the peer and the flap trigger (hold-timer expiry, interface bounce, policy push, prefix withdrawal)",
+                "Check the peering interface/link state and the underlay for the same window",
+                "Dampen the session or pin the route if churn continues; escalate to the peer owner if the neighbor is external",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.access.local-link-fault",
+        "title": "Local link fault",
+        "domain": "ent.access",
+        "requires": [
+            # The L1/L2 state transition AND a same-interface counter anomaly —
+            # two planes on one port. (Same-interface co-location is the engine's
+            # grounding job; the scorer needs both kinds present.)
+            {"kind": "link_state_change", "entity_type": "interface"},
+            {"kind": "if_metric_anomaly", "entity_type": "interface"},
+        ],
+        "required_modalities": ["control_plane", "device_telemetry"],
+        "direction_expect": "interface(L1/L2) -> device -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L1/L2",
+            "first_steps": [
+                "Check interface counters (errors/discards/flap count) and the transceiver/cable on the affected port",
+                "Correlate the link-state syslog timestamp with the interface metric anomaly on the same interface",
+                "If the port is an uplink, verify the peer side and fail over to a redundant member if available",
+            ],
+        },
+    },
 ]
 
 

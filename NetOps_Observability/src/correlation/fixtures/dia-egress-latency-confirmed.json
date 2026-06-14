@@ -1,0 +1,16 @@
+{
+  "name": "Two vantage points see RTT/loss to one target across the DIA seam + WAN egress interface anomaly: ISP confirmed",
+  "comment": "P3 seed = live object 60e00be9 (DIA seam sm-..., owner isp). The optional WAN egress if anomaly supplies the independent second modality that lifts probe-only suspicion to confirmed.",
+  "signals": [
+    {"kind": "probe_rtt_anomaly", "entity_type": "path", "entity_id": "prober->aws-use1",
+     "observer_id": "probe-agent-prober", "observer_type": "vantage_agent",
+     "modality": "active_probe", "collection_path": "direct", "deviation": 6.0},
+    {"kind": "probe_rtt_anomaly", "entity_type": "path", "entity_id": "api->aws-use1",
+     "observer_id": "probe-agent-api", "observer_type": "vantage_agent",
+     "modality": "active_probe", "collection_path": "direct", "deviation": 5.4},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "wan-r2:Gi0/0",
+     "observer_id": "snmp-wan-r2", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 4.0}
+  ],
+  "expect": {"top": "sig.ent.middle-mile.dia-egress-latency", "tier": "confirmed", "owner": "isp"}
+}
