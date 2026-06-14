@@ -208,7 +208,7 @@ def probe_signals(
 
 _IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 _IF_RE = re.compile(r"[Ii]nterface\s+([A-Za-z][\w/.\-]*)")
-_DOWN_RE = re.compile(r"\b(?:down|idle|backward|failed)\b", re.IGNORECASE)
+_DOWN_RE = re.compile(r"\b(?:down|idle|init|backward|failed)\b", re.IGNORECASE)
 _UP_RE = re.compile(r"\b(?:up|established|full)\b", re.IGNORECASE)
 
 
@@ -238,6 +238,32 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         collection_path="direct",   # the device itself emitted the event
         clock_quality="unknown",
     )
+
+    # IS-IS adjacency — Nokia SR Linux emits "isisAdjacencyChange" in the message
+    # with a nil appname; Cisco IOS uses %CLNS-5-ADJCHANGE. Checked before the
+    # generic ADJCHANGE branch so CLNS isn't misfiled as "routing". Device-scoped,
+    # peer = the IS-IS system-id (the shared adjacency identity, mirrors the catalog).
+    if "ISISADJACENCYCHANGE" in msg.upper() or ("CLNS" in tag and "ADJ" in tag):
+        sysid_m = re.search(r"\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\b", msg)
+        peer = sysid_m.group(1) if sysid_m else ""
+        tgt_m = re.search(r"to state\s+(\w+)", msg, re.IGNORECASE)
+        state = _state_of(tgt_m.group(1)) if tgt_m else _state_of(msg)
+        tokens = (host, peer) if peer else (host,)
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="isis_adjacency_change",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE,
+            entity_id=host,
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{host}|isis_adj|{peer or '?'}|{state}|{ts_ms}",
+            entity_tokens=tokens,
+            metric_name="isis_adjacency",
+            attrs={"peer": peer, "state": state, "tag": tag or "isisAdjacencyChange"},
+        )
 
     if "ADJCHANGE" in tag or "ADJCHG" in tag:
         proto = "bgp" if "BGP" in tag else "ospf" if "OSPF" in tag else "routing"
@@ -278,6 +304,64 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             native_id=f"{host}|link|{ifname}|{state}|{ts_ms}",
             entity_tokens=(host, ifname),
             metric_name="link_state",
+            attrs={"interface": ifname, "state": state, "tag": tag},
+        )
+
+    # LLDP neighbor change — cEOS %LLDP-5-NEIGHBOR_NEW/REMOVED; SR Linux emits
+    # "remotePeerAdded/remotePeerRemoved" in the message with a nil appname.
+    # Interface-scoped: a vanished neighbor cross-checks the IS-IS/BGP adjacency.
+    if ("LLDP" in tag and "NEIGHBOR" in tag) or "REMOTEPEER" in msg.upper():
+        if_m = re.search(r"on interface\s+([A-Za-z][\w/.\-]*)", msg, re.IGNORECASE) or _IF_RE.search(msg)
+        ifname = if_m.group(1) if if_m else "unknown"
+        if re.search(r"\b(?:removed|deleted|aged)\b", msg, re.IGNORECASE):
+            state = "down"
+        elif re.search(r"\b(?:added|new)\b", msg, re.IGNORECASE):
+            state = "up"
+        else:
+            state = "unknown"
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="lldp_neighbor_change",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.INTERFACE,
+            entity_id=f"{host}:{ifname}",
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{host}|lldp|{ifname}|{state}|{ts_ms}",
+            entity_tokens=(host, ifname),
+            metric_name="lldp_neighbor",
+            attrs={"interface": ifname, "state": state, "tag": tag or "remotePeer"},
+        )
+
+    # STP topology change — cEOS %SPANTREE-6-INTERFACE_DEL/ADD/STATE. Interface-
+    # scoped; prefer the transition target ("...to learning/forwarding").
+    if "SPANTREE" in tag:
+        if_m = _IF_RE.search(msg)
+        ifname = if_m.group(1) if if_m else "unknown"
+        tgt_m = re.search(r"\bto\s+(forwarding|learning|discarding|blocking)\b", msg, re.IGNORECASE)
+        if tgt_m:
+            state = "up" if tgt_m.group(1).lower() in ("forwarding", "learning") else "down"
+        elif re.search(r"\b(?:removed|discarding|blocking)\b", msg, re.IGNORECASE):
+            state = "down"
+        elif re.search(r"\b(?:added|forwarding|learning)\b", msg, re.IGNORECASE):
+            state = "up"
+        else:
+            state = "unknown"
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="stp_topology_change",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.INTERFACE,
+            entity_id=f"{host}:{ifname}",
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{host}|stp|{ifname}|{state}|{ts_ms}",
+            entity_tokens=(host, ifname),
+            metric_name="stp_state",
             attrs={"interface": ifname, "state": state, "tag": tag},
         )
 

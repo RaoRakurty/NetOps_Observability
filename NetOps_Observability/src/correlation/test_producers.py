@@ -175,6 +175,82 @@ def test_lineproto_updown_interface_entity():
     assert s.severity is Severity.HIGH
 
 
+def test_isis_adjacency_change_srl_down():
+    s = syslog_control_signal(syslog_event(
+        "-",
+        "isis|8808|8853|00045|EV|isisAdjacencyChange|W: In network-instance default, "
+        "the level-2 IS-IS adjacency with system 0100.0000.0011, using interface "
+        "ethernet-1/1.0, moved to state DOWN.",
+        host="spine1",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "isis_adjacency_change"
+    assert s.entity_type is EntityType.DEVICE
+    assert s.entity_id == "spine1"
+    assert s.attrs["peer"] == "0100.0000.0011"
+    assert "0100.0000.0011" in s.entity_tokens
+    assert s.attrs["state"] == "down"
+    assert s.severity is Severity.HIGH
+
+
+def test_isis_adjacency_change_up_is_warn():
+    s = syslog_control_signal(syslog_event(
+        "-", "isis|EV|isisAdjacencyChange|W: ... system 0100.0000.0011 ... moved to state UP.",
+        host="spine1",
+    ), "", T0)
+    assert s is not None and s.kind == "isis_adjacency_change"
+    assert s.attrs["state"] == "up" and s.severity is Severity.WARN
+
+
+def test_lldp_neighbor_new_ceos_interface_entity():
+    s = syslog_control_signal(syslog_event(
+        "%LLDP-5-NEIGHBOR_NEW",
+        "LLDP neighbor with chassisId 0c00.842b.3c00 and portId aac1.ab21.c775 "
+        "added on interface Ethernet2",
+        host="wan-r2",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "lldp_neighbor_change"
+    assert s.entity_type is EntityType.INTERFACE
+    assert s.entity_id == "wan-r2:Ethernet2"
+    assert s.attrs["state"] == "up"
+    assert s.severity is Severity.WARN
+
+
+def test_lldp_neighbor_removed_srl_down():
+    s = syslog_control_signal(syslog_event(
+        "-",
+        "lldp|6876|6876|00043|EV|remotePeerRemoved|I: LLDP remote peer removed on "
+        "interface ethernet-1/1: System leaf1 with chassis ID 00:1C:73:AD:88:2A",
+        host="spine1",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "lldp_neighbor_change"
+    assert s.entity_id == "spine1:ethernet-1/1"
+    assert s.attrs["state"] == "down"
+    assert s.severity is Severity.HIGH
+
+
+def test_stp_interface_del_down():
+    s = syslog_control_signal(syslog_event(
+        "%SPANTREE-6-INTERFACE_DEL", "Interface Ethernet3 has been removed from instance MST0",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "stp_topology_change"
+    assert s.entity_id == "leaf1:Ethernet3"
+    assert s.attrs["state"] == "down"
+    assert s.severity is Severity.HIGH
+
+
+def test_stp_state_to_learning_up():
+    s = syslog_control_signal(syslog_event(
+        "%SPANTREE-6-INTERFACE_STATE",
+        "Interface Ethernet3 instance MST0 moving from discarding to learning",
+    ), "", T0)
+    assert s is not None and s.kind == "stp_topology_change"
+    assert s.attrs["state"] == "up" and s.severity is Severity.WARN
+
+
 def test_unrelated_syslog_yields_none():
     assert syslog_control_signal(syslog_event(
         "%SYS-6-EVENT_TRIGGERED", "Event handler LINK-FLAP was activated",
