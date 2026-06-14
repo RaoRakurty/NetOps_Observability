@@ -131,3 +131,35 @@ export function probeScopeLabel(s?: string): string {
 export function canConfirm(a?: string): boolean {
   return a === "high" || a === "medium";
 }
+
+// Display-name / entity-label layer (Operator View). Internal platform-service
+// names (clickhouse/redis/nginx/api/…) are replaced with friendly roles so the
+// product doesn't leak its own infrastructure; real device/path names pass
+// through. Raw entity ids stay available in Debug View.
+const INFRA_DISPLAY: Record<string, string> = {
+  clickhouse: "analytics store", redis: "cache", nginx: "edge gateway", api: "API service",
+  netbox: "source of truth", postgres: "app database", opensearch: "search store",
+  grafana: "dashboards", prometheus: "metrics store", victoriametrics: "metrics store",
+  vector: "ingest pipeline", loki: "log store", promtail: "log shipper",
+  correlation: "correlation engine", frontend: "web app", redpanda: "event bus",
+  prober: "synthetic prober",
+};
+function mapToken(t: string): string {
+  const base = t.split(":")[0].trim().toLowerCase();
+  return INFRA_DISPLAY[base] ?? t;
+}
+// Friendly entity label. "prober->clickhouse" → "synthetic prober → analytics store".
+export function entityLabel(raw: string): string {
+  if (!raw) return raw;
+  if (raw.includes("->")) return raw.split("->").map((s) => mapToken(s)).join(" → ");
+  return mapToken(raw);
+}
+
+// Verdict owner → who acts.
+export const OWNER_LABEL: Record<string, string> = {
+  netops: "NetOps", isp: "ISP / carrier", carrier: "Carrier", cloud_provider: "Cloud provider",
+  app_team: "App team", colo_provider: "Colo provider", sdwan_vendor: "SD-WAN vendor",
+};
+export function ownerLabel(o?: string): string {
+  return o ? (OWNER_LABEL[o] ?? o) : "";
+}

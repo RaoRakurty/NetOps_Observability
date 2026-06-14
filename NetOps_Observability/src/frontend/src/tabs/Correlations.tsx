@@ -5,7 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel } from "../components/rca/labels";
+import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -197,6 +197,11 @@ export function CorrelationDetail({ id }: { id: string }) {
   const ranking = hyp?.ranking ?? {};
   const ctx = hyp?.grounding_context ?? {};
   const selSig = selSignal ? timeline?.signals.find((s) => s.signal_id === selSignal) : undefined;
+  // Recommended next action = the matched signature's playbook (first_steps + owner).
+  const topHyp = (ranking.hypotheses ?? []).find((h: any) => h.id === obj.top_hypothesis)
+    ?? (obj.top_hypothesis !== "undetermined" ? (ranking.hypotheses ?? [])[0] : undefined);
+  const recommendedSteps: string[] = topHyp?.verdict?.first_steps ?? [];
+  const recommendedOwner: string = topHyp?.verdict?.owner ?? "";
   const muted: React.CSSProperties = { color: "#AEB9CC" };
   const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginBottom: 4 };
   const row = (k: string, v: React.ReactNode) => (
@@ -225,7 +230,8 @@ export function CorrelationDetail({ id }: { id: string }) {
           diagnostic coverage, human-readable missing-evidence checklist */}
       {timeline && (
         <RcaSummary timeline={timeline} seams={seams} view={view}
-          state={obj.state} version={obj.version} nodeCount={obj.node_count} />
+          state={obj.state} version={obj.version} nodeCount={obj.node_count}
+          recommendedSteps={recommendedSteps} owner={recommendedOwner} />
       )}
 
       {/* PRIMARY: the cross-plane cascade */}
@@ -256,7 +262,7 @@ export function CorrelationDetail({ id }: { id: string }) {
                 <span>{probeScopeLabel(selSig.probe_scope)} · <b style={{ color: PROBE_AUTHORITY_META[selSig.probe_authority]?.color }}>{probeAuthorityLabel(selSig.probe_authority)}</b>{selSig.classification_source ? <span style={muted}> ({selSig.classification_source})</span> : null}</span>
               </>
             )}
-            <span style={muted}>Entity</span><span style={mono}>{selSig.entity_id}</span>
+            <span style={muted}>Entity</span><span style={view === "debug" ? mono : undefined}>{view === "debug" ? selSig.entity_id : entityLabel(selSig.entity_id)}</span>
             <span style={muted}>Time</span>
             <span style={mono}>
               {selSig.ts.slice(11, 19)} UTC{timeline && ` (T+${Math.round((Date.parse(selSig.ts.replace(" ", "T") + "Z") - Date.parse(timeline.window_start.replace(" ", "T") + "Z")) / 1000)}s)`}

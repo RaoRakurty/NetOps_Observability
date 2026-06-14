@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
-import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel } from "./labels";
+import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -140,7 +140,10 @@ export default function RcaTimeline({
                 const isHi = highlight?.has(s.signal_id);
                 const isSel = selected === s.signal_id;
                 const dim = highlight && highlight.size > 0 && !isHi;
-                const sz = s.is_trigger ? 14 : 10;
+                // dot size scales with severity; trigger is largest.
+                const sevSz: Record<string, number> = { crit: 13, high: 11, warn: 9, info: 8 };
+                const sz = s.is_trigger ? 15 : (sevSz[s.severity] ?? 9);
+                const isDebugProbe = s.probe_authority === "debug_only";
                 return (
                   <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: "50%", transform: "translate(-50%,-50%)", opacity: dim ? 0.25 : 1 }}>
                     {/* uncertainty bar */}
@@ -157,8 +160,12 @@ export default function RcaTimeline({
                       title={`${s.kind} · ${s.entity_id}`}
                       style={{
                         position: "relative", width: sz, height: sz, borderRadius: s.is_trigger ? 3 : "50%",
+                        // filled = attached/linked; hollow = concurrent; debug = dashed + faint (excluded).
                         background: s.attached ? lane.color : "transparent",
-                        border: `2px solid ${role ? ROLE_COLOR[role] : lane.color}`,
+                        border: isDebugProbe
+                          ? `1.5px dashed ${C.faint}`
+                          : `2px solid ${role ? ROLE_COLOR[role] : lane.color}`,
+                        opacity: isDebugProbe ? 0.55 : 1,
                         boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "none"),
                         cursor: "pointer",
                       }}
@@ -201,7 +208,7 @@ export default function RcaTimeline({
           boxShadow: "0 4px 16px rgba(0,0,0,.4)",
         }}>
           <div style={{ fontWeight: 600 }}>{hover.kind} {hover.is_trigger ? "· TRIGGER" : ""}</div>
-          <div style={muted}>{hover.entity_id}</div>
+          <div style={muted}>{entityLabel(hover.entity_id)}</div>
           <div>{hover.modality_class} · {hover.source} · sev {hover.severity}</div>
           <div>onset {fmtAbs(toMs(hover.ts))} ±{(hover.onset_uncertainty_s > 0 ? hover.onset_uncertainty_s : (CLOCK_FLOOR_S[hover.clock_quality] ?? 1))}s ({hover.clock_quality})</div>
           {hover.metric_name && <div>{hover.metric_name} = {hover.value}{hover.deviation ? ` (${Number(hover.deviation).toFixed(1)}σ)` : ""}</div>}
