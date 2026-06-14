@@ -41,10 +41,11 @@ from pydantic import BaseModel
 from catalog import builtin_catalog
 from engine import EngineConfig, ObjectSnapshot, SeamView, run_window
 from episodes import EpisodeDetector
-from producers import episode_signal, probe_signals, syslog_control_signal
+from producers import episode_signal, parse_event_ts, probe_signals, syslog_control_signal
 from replay import replay_object
 from signals import (
     DeadLetter,
+    EntityType,
     Observer,
     ObserverType,
     Signal,
@@ -145,6 +146,22 @@ SERIES: Dict[tuple[str, str], Series] = {}
 CORR_SIGNALS_ENABLED = os.environ.get("CORR_SIGNALS_ENABLED", "true").lower() != "false"
 DETECTOR = EpisodeDetector()
 DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
+
+# Metric-lane observability counters (exposed via /healthz). The netops.metrics
+# lane was historically empty; these prove it is fed and where events are lost.
+METRICS_RECEIVED = 0           # consumed from netops.metrics
+METRICS_ACCEPTED = 0           # passed schema/identity/timestamp validation
+METRICS_DROPPED = 0            # rejected (missing identity/value, bad timestamp)
+DEVICE_TELEMETRY_SIGNALS = 0   # device_telemetry signals written to corr_signals
+TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
+TRAPS_NORMALIZED = 0           # classified into a control_plane signal
+TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
+
+# Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
+# stamp beyond this, or a stamp older than the correlation window, is dropped
+# (Layer-1F): event time must be trustworthy or the onset budget is a lie.
+METRIC_FUTURE_SKEW_S = 120.0
+METRIC_MAX_AGE_S = 3600.0
 
 # ---------------------------------------------------------------------------
 # Correlation Engine v2 — build ⑥: object persistence + replay (stages [3]–[8]).
@@ -315,34 +332,49 @@ async def engine_loop() -> None:
         await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
 
 
-async def feed_episode_detector(device: str, metric: str, value: float) -> None:
-    """Stage [1]+[2]: normalize provenance, run CUSUM, persist episode events."""
-    global DEADLETTER_COUNT
+async def feed_episode_detector(
+    tenant: str,
+    entity_id: str,
+    metric: str,
+    value: float,
+    event_ts: datetime,
+    *,
+    observer_id: str,
+    collection_path: str,
+    entity_type: EntityType,
+    kind_prefix: str,
+    entity_tokens: tuple[str, ...] = (),
+) -> None:
+    """Stage [1]+[2]: run CUSUM over the canonical (entity, metric) series and
+    persist episode signals. Identity is the canonical entity_id (device:ifName
+    for interfaces, device:peer for BGP) so per-interface/per-peer series do not
+    collide on a shared metric name. Provenance is threaded from the event."""
+    global DEADLETTER_COUNT, DEVICE_TELEMETRY_SIGNALS
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
-    tenant = tenant_for(device)
-    # Event time: the bus records carry no trustworthy source timestamp yet
-    # (telegraf batches); ingest time with clock_quality=unknown widens the
-    # onset budget accordingly — honest, not optimistic. P1 wiring threads
-    # real source timestamps through rp.telemetry.* and tightens this.
-    now = datetime.now(timezone.utc)
-    ev = DETECTOR.observe(tenant, device, metric, now, value, clock_quality="unknown")
+    ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown")
     if ev is None:
         return
     try:
         observer = Observer(
-            observer_id=device,
+            observer_id=observer_id,
             observer_type=ObserverType.DEVICE,
-            collection_path="via_aggregator",   # telegraf polled it off the device
+            collection_path=collection_path,
             clock_quality="unknown",
         )
-        sig = episode_signal(ev, observer)
+        sig = episode_signal(
+            ev, observer,
+            entity_type=entity_type,
+            kind_prefix=kind_prefix,
+            entity_tokens=entity_tokens,
+        )
         row = sig.to_ch_row()
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
         log.warning("dead-letter (provenance): %s", exc)
         return
     await ch.insert("netops.corr_signals", [row])
+    DEVICE_TELEMETRY_SIGNALS += 1
     # Build ⑥: every spine signal also feeds the engine's evidence window.
     buffer_signal(sig)
     log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
@@ -459,37 +491,101 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_probe(event)
 
 
+def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
+    """Resolve the canonical entity from a MetricEvent's signal_family + identity.
+    Returns (entity_id, entity_type, kind_prefix, entity_tokens) or None when the
+    required identity is missing (caller drops + counts). Per-interface/per-peer
+    entity_ids keep CUSUM series distinct on a shared metric name."""
+    device = str(ev.get("device") or "")
+    if not device:
+        return None
+    family = str(ev.get("signal_family") or "")
+    if family == "interface":
+        iface = str(ev.get("if_name") or ev.get("index") or "")
+        if not iface:
+            return None
+        return f"{device}:{iface}", EntityType.INTERFACE, "if_metric_anomaly", (device, iface)
+    if family == "bgp":
+        peer = str(ev.get("peer") or ev.get("index") or "")
+        if not peer:
+            return None
+        # BGP4-MIB has no VRF column; default network-instance is implicit.
+        return f"{device}:{peer}", EntityType.DEVICE, "bgp_state_anomaly", (device, peer)
+    if family == "device_resource":
+        return device, EntityType.DEVICE, "device_resource_anomaly", (device,)
+    return None
+
+
 async def handle_metric(ev: dict) -> None:
-    """Score numeric metric samples for anomalies."""
-    device = str(ev.get("hostname") or ev.get("agent_host") or "unknown")
-    name = str(ev.get("name") or ev.get("metric") or "")
-    if not name:
+    """Canonical MetricEvent (netops.metrics) → device_telemetry signal.
+
+    Wire contract with collectors/metric_events.go: device, metric, value,
+    signal_family, if_name/peer/index, collection_path, ts, vendor. Legacy
+    Telegraf-shaped events (hostname/name/first-numeric) are still tolerated for
+    back-compat but carry no canonical identity."""
+    global METRICS_RECEIVED, METRICS_ACCEPTED, METRICS_DROPPED
+    METRICS_RECEIVED += 1
+
+    metric = str(ev.get("metric") or ev.get("name") or "")
+    raw_value = ev.get("value")
+    if raw_value is None:
+        # Legacy fallback: first numeric field.
+        for k, v in ev.items():
+            if isinstance(v, (int, float)) and k not in {"timestamp", "time", "value"}:
+                raw_value = v
+                break
+    if not metric or not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
+        METRICS_DROPPED += 1
         return
-    # Find the first numeric field value.
-    value = None
-    for k, v in ev.items():
-        if isinstance(v, (int, float)) and k not in {"timestamp", "time"}:
-            value = float(v)
-            name = name or k
-            break
-    if value is None:
+    value = float(raw_value)
+
+    ident = metric_identity(ev)
+    if ident is None:
+        # No canonical identity → cannot ground a signal. Drop, don't guess.
+        METRICS_DROPPED += 1
         return
+    entity_id, entity_type, kind_prefix, tokens = ident
+
+    # Timestamp validation (Layer-1F): trust the event clock only within skew.
+    now = datetime.now(timezone.utc)
+    event_ts = parse_event_ts(ev.get("ts")) or now
+    age = (now - event_ts).total_seconds()
+    if age < -METRIC_FUTURE_SKEW_S or age > METRIC_MAX_AGE_S:
+        METRICS_DROPPED += 1
+        log.warning("metric dropped: timestamp out of bounds (age=%.0fs) %s/%s", age, entity_id, metric)
+        return
+
+    tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("device") or ""))
+    collection_path = str(ev.get("collection_path") or "snmp_poll")
+    METRICS_ACCEPTED += 1
+
     # Engine v2 stage [1]+[2]: every sample feeds the episode detector (CUSUM
-    # needs the full stream, not just crossings). Independent of the legacy
-    # finding emission below.
-    await feed_episode_detector(device, name, value)
-    z = score(device, name, value)
+    # needs the full stream, not just crossings) — the canonical corr_signals path.
+    await feed_episode_detector(
+        tenant, entity_id, metric, value, event_ts,
+        observer_id=str(ev.get("device") or ""),
+        collection_path=collection_path,
+        entity_type=entity_type,
+        kind_prefix=kind_prefix,
+        entity_tokens=tokens,
+    )
+
+    # Legacy rolling z-score finding (back-compat, netops.findings). Keyed on the
+    # canonical entity_id so per-interface/per-peer series don't collide on a
+    # shared metric name. Superseded by the episode detector above; kept until
+    # the findings surface retires.
+    z = score(entity_id, metric, value)
     if z is None:
         return
     await emit(
         kind="anomaly",
         severity="warning" if z < 5 else "critical",
-        device=device,
-        component=name,
-        summary=f"{name} on {device} z={z:.1f}",
-        description=f"Rolling z-score over last {WINDOW_SIZE} samples exceeded threshold.",
+        device=str(ev.get("device") or ""),
+        component=metric,
+        summary=f"{metric} on {entity_id} z={z:.1f}",
+        description="Rolling z-score over the baseline window exceeded threshold.",
         score=float(z),
-        labels={"metric": name, "device": device},
+        labels={"metric": metric, "entity": entity_id},
     )
 
 
@@ -646,6 +742,17 @@ async def health() -> dict:
             "window_signals": len(WINDOW_BUFFER),
             "seam_inventory": len(seam_inventory()),
             "topology_gap_hints": LAST_GAP_HINTS,
+        },
+        # Metric/trap lane observability — proves netops.metrics is fed and where
+        # events are accepted vs dropped (the lane was historically empty).
+        "ingest": {
+            "metrics_received": METRICS_RECEIVED,
+            "metrics_accepted": METRICS_ACCEPTED,
+            "metrics_dropped": METRICS_DROPPED,
+            "device_telemetry_signals": DEVICE_TELEMETRY_SIGNALS,
+            "traps_received": TRAPS_RECEIVED,
+            "traps_normalized": TRAPS_NORMALIZED,
+            "traps_dropped": TRAPS_DROPPED,
         },
     }
 
