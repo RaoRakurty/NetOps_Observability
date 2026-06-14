@@ -14,7 +14,7 @@ import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel } from "../c
 // grounded edges, the per-hypothesis evidence accounting (what's missing, not
 // just what matched), and a one-click deterministic replay with drift report.
 
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 13 };
 
 const TIER_CLASS: Record<string, string> = {
   confirmed: "sev-critical",   // strongest claim → strongest visual weight
@@ -96,7 +96,7 @@ export default function Correlations() {
   return (
     <div className="card">
       <h2>Correlations (engine v2 objects)</h2>
-      <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 0 }}>
+      <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 0 }}>
         Topology-grounded, replayable correlation objects. A verdict is only
         <b> confirmed</b> with independent evidence from ≥2 modality classes and ≥2 observers —
         everything weaker says exactly what evidence is missing.
@@ -197,10 +197,10 @@ export function CorrelationDetail({ id }: { id: string }) {
   const ranking = hyp?.ranking ?? {};
   const ctx = hyp?.grounding_context ?? {};
   const selSig = selSignal ? timeline?.signals.find((s) => s.signal_id === selSignal) : undefined;
-  const muted: React.CSSProperties = { color: "var(--muted)" };
-  const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 12, marginBottom: 4 };
+  const muted: React.CSSProperties = { color: "#AEB9CC" };
+  const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginBottom: 4 };
   const row = (k: string, v: React.ReactNode) => (
-    <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
+    <div style={{ display: "flex", gap: 8, fontSize: 13, padding: "2px 0" }}>
       <span style={{ ...muted, minWidth: 110 }}>{k}</span>
       <span style={{ wordBreak: "break-all" }}>{v}</span>
     </div>
@@ -212,7 +212,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 0 }}>
         {(["operator", "debug"] as const).map((v) => (
           <button key={v} onClick={() => setView(v)} style={{
-            fontSize: 11, padding: "2px 10px", cursor: "pointer", textTransform: "capitalize",
+            fontSize: 12.5, padding: "2px 10px", cursor: "pointer", textTransform: "capitalize",
             border: "1px solid var(--border,#2a2f3a)",
             borderRadius: v === "operator" ? "4px 0 0 4px" : "0 4px 4px 0",
             background: view === v ? "var(--accent,#4c8dff)" : "transparent",
@@ -239,7 +239,7 @@ export function CorrelationDetail({ id }: { id: string }) {
           <div style={{
             marginTop: 8, border: `1px solid ${STATUS_COLOR[selSig.link_status] ?? "#d29922"}55`,
             borderRadius: 6, padding: "8px 10px", background: "var(--panel,#11151c)",
-            display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px", fontSize: 12,
+            display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px", fontSize: 13,
           }}>
             <span style={muted}>Signal</span><span>{selSig.kind} <span style={muted}>({selSig.modality_class.replace(/_/g, " ")})</span></span>
             <span style={muted}>Status</span>
@@ -275,7 +275,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       {/* SECONDARY: seam-grounded causal graph */}
       <div>
         <div style={titleStyle}>Grounded causal graph ({edges.length} edge{edges.length === 1 ? "" : "s"})</div>
-        <div style={{ ...muted, fontSize: 11, marginBottom: 4 }}>
+        <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
           Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction.
         </div>
         <SeamGraph edges={edges} seams={seams} onSelectEdge={setSelEdge} />
@@ -321,7 +321,7 @@ export function CorrelationDetail({ id }: { id: string }) {
                 <div key={d} style={{ ...mono, ...muted }}>· {d}</div>
               ))}
               {!replay.engine_pin_match && (
-                <div style={{ fontSize: 12, ...muted }}>
+                <div style={{ fontSize: 13, ...muted }}>
                   Engine pin mismatch: the object was built by an older engine — expected evolution, not corruption.
                 </div>
               )}

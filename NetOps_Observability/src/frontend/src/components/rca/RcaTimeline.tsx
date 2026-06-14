@@ -110,12 +110,12 @@ export default function RcaTimeline({
     });
   }, [t0, span]);
 
-  const muted: React.CSSProperties = { color: "var(--muted)" };
+  const muted: React.CSSProperties = { color: C.muted };
 
   return (
     <div style={{ position: "relative", border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "8px 10px", overflow: "hidden" }}>
       {/* axis */}
-      <div style={{ position: "relative", height: 16, marginLeft: 132, fontSize: 10, ...muted }}>
+      <div style={{ position: "relative", height: 16, marginLeft: 132, fontSize: 11.5, ...muted }}>
         {ticks.map((tk, i) => (
           <span key={i} style={{ position: "absolute", left: `${tk.left}%`, transform: "translateX(-50%)" }}>{tk.label}</span>
         ))}
@@ -125,7 +125,7 @@ export default function RcaTimeline({
         if (lane.key === "_other" && sigs.length === 0) return null;
         return (
           <div key={lane.key} style={{ display: "flex", alignItems: "center", height: 40, borderTop: "1px solid var(--border,#23272f)" }}>
-            <div style={{ width: 124, flexShrink: 0, fontSize: 11 }}>
+            <div style={{ width: 124, flexShrink: 0, fontSize: 12 }}>
               <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: lane.color, marginRight: 6 }} />
               {lane.label}
               <span style={{ ...muted, marginLeft: 4 }}>{sigs.length}</span>
@@ -170,7 +170,7 @@ export default function RcaTimeline({
                       || lane.key === "control_plane" || lane.key === "device_telemetry") && !dim && left < 86 && (
                       <span style={{
                         position: "absolute", left: sz / 2 + 4, top: "50%", transform: "translateY(-50%)",
-                        whiteSpace: "nowrap", fontSize: 9, lineHeight: 1, pointerEvents: "none",
+                        whiteSpace: "nowrap", fontSize: 10.5, lineHeight: 1, pointerEvents: "none",
                         color: isSel ? "var(--accent,#4c8dff)" : lane.color, opacity: isSel ? 1 : 0.85,
                         fontWeight: s.is_trigger || isSel ? 700 : 400,
                       }}>{s.kind.replace(/_anomaly$/, "").replace(/_change$/, "")}</span>
@@ -184,7 +184,7 @@ export default function RcaTimeline({
       })}
 
       {/* legend */}
-      <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, flexWrap: "wrap", ...muted }}>
+      <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 11.5, flexWrap: "wrap", ...muted }}>
         <span><b style={{ color: "var(--fg,#e6edf3)" }}>◆</b> trigger</span>
         <span>● filled = attached · ○ hollow = concurrent, engine did not link</span>
         <span style={{ color: ROLE_COLOR.supports }}>ring: supports</span>
@@ -197,7 +197,7 @@ export default function RcaTimeline({
         <div style={{
           position: "absolute", right: 10, top: 6, zIndex: 5, maxWidth: 320,
           background: "var(--panel,#161b22)", border: "1px solid var(--border,#2a2f3a)",
-          borderRadius: 6, padding: "6px 8px", fontSize: 11, fontFamily: "ui-monospace,monospace",
+          borderRadius: 6, padding: "6px 8px", fontSize: 12, fontFamily: "ui-monospace,monospace",
           boxShadow: "0 4px 16px rgba(0,0,0,.4)",
         }}>
           <div style={{ fontWeight: 600 }}>{hover.kind} {hover.is_trigger ? "· TRIGGER" : ""}</div>

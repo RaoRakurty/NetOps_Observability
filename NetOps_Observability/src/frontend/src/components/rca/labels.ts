@@ -18,10 +18,10 @@ export const C = {
   flow: "#2DD4BF",        // flows (teal)
   discriminates: "#A78BFA", // discriminating evidence (violet)
   // calm surfaces (fallbacks; the app theme vars take precedence where set)
-  fg: "#E6EDF6",          // off-white, never #FFF
-  muted: "#8B97AD",       // secondary text (≥3:1 on slate)
-  faint: "#5A6473",       // tertiary / absent
-  line: "#2A3346",        // borders/dividers
+  fg: "#EEF3FA",          // off-white, never #FFF (brightened for legibility)
+  muted: "#AEB9CC",       // secondary text — brighter (~5.5:1 on slate, comfortable)
+  faint: "#7E8AA0",       // tertiary / absent — brighter
+  line: "#2E3850",        // borders/dividers
   bg: "#0E1320",          // deepest surface, never #000
   panel: "#151B2B",       // card surface
 } as const;

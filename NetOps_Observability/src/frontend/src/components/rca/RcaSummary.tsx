@@ -79,7 +79,7 @@ export default function RcaSummary({
 }) {
   const c = timeline.counts;
   const [showWhy, setShowWhy] = useState(false);
-  const muted: React.CSSProperties = { color: "var(--muted)" };
+  const muted: React.CSSProperties = { color: C.muted };
 
   const presentKinds = useMemo(() => {
     const s = new Set<string>();
@@ -178,7 +178,7 @@ export default function RcaSummary({
   };
   const title: React.CSSProperties = { fontWeight: 600, fontSize: 12 };
   const chip: React.CSSProperties = {
-    fontFamily: "ui-monospace, monospace", fontSize: 11, background: "var(--bg,#0d1117)",
+    fontFamily: "ui-monospace, monospace", fontSize: 12.5, background: "var(--bg,#0d1117)",
     padding: "1px 6px", borderRadius: 4, overflowWrap: "anywhere", minWidth: 0,
   };
 
@@ -200,17 +200,17 @@ export default function RcaSummary({
       </div>
 
       {/* the precise plain-English story */}
-      <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{narrative}</div>
+      <div style={{ fontSize: 14.5, lineHeight: 1.5 }}>{narrative}</div>
       {probeOnly && (
-        <div style={{ fontSize: 11.5, color: C.warn }}>⚠ Single-plane probe evidence only — not yet a cross-plane corroborated RCA.</div>
+        <div style={{ fontSize: 12.5, color: C.warn }}>⚠ Single-plane probe evidence only — not yet a cross-plane corroborated RCA.</div>
       )}
       {probe.lowOnly && (
-        <div style={{ fontSize: 11.5, color: C.warn }}>
+        <div style={{ fontSize: 12.5, color: C.warn }}>
           ⚠ Probe evidence is low-authority (self / internal / unclassified) — supports a suspicion but <b>cannot confirm</b> without an independent, non-fate-shared trusted modality.
         </div>
       )}
       {probe.debugExcluded > 0 && (
-        <div style={{ fontSize: 11, color: C.faint }}>
+        <div style={{ fontSize: 12.5, color: C.faint }}>
           {probe.debugExcluded} debug / lab probe{probe.debugExcluded === 1 ? "" : "s"} excluded from this verdict (shown in the timeline for context only).
         </div>
       )}
@@ -221,7 +221,7 @@ export default function RcaSummary({
           {[...timeline.edges].sort((a, b) => (a.grounding_kind === "seam" ? -1 : 1) - (b.grounding_kind === "seam" ? -1 : 1)).slice(0, 3).map((e, i) => {
             const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
             return (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, flexWrap: "wrap", minWidth: 0 }}>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, flexWrap: "wrap", minWidth: 0 }}>
                 <span style={chip}>{episodeEntity(e.from_node)}</span>
                 <span style={muted}>──</span>
                 <span style={{
@@ -261,7 +261,7 @@ export default function RcaSummary({
               <div key={key} style={{
                 border: `1px solid ${sev.color}66`, background: sev.bg, borderRadius: 6, padding: "6px 8px", minWidth: 0,
               }}>
-                <div style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: MODALITY_META[key].color, display: "inline-block" }} />
                   {modalityLabel(key)}
                 </div>
@@ -270,7 +270,7 @@ export default function RcaSummary({
                     ? <><b style={{ color: sev.color }}>{att}</b> <span style={muted}>linked / {total} in window</span></>
                     : <span style={muted}>0 signals</span>}
                 </div>
-                <div style={{ fontSize: 10.5, color: sev.color, marginTop: 1 }}>{statusText}</div>
+                <div style={{ fontSize: 11.5, color: sev.color, marginTop: 1 }}>{statusText}</div>
               </div>
             );
           })}
@@ -285,9 +285,9 @@ export default function RcaSummary({
           {/* actionable corroboration from absent planes (the common case) */}
           {corroborate.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <div style={{ ...muted, fontSize: 11 }}>Add corroborating evidence from another plane:</div>
+              <div style={{ ...muted, fontSize: 12.5 }}>Add corroborating evidence from another plane:</div>
               {corroborate.map((p) => (
-                <div key={p} style={{ fontSize: 11.5, padding: "1px 0" }}>
+                <div key={p} style={{ fontSize: 12.5, padding: "1px 0" }}>
                   ○ {PLANE_SUGGEST[p]} <span style={muted}>— {modalityLabel(p).toLowerCase()}</span>
                 </div>
               ))}
@@ -299,15 +299,15 @@ export default function RcaSummary({
             <div key={i} style={{ marginTop: 5 }}>
               <div style={{ fontSize: 12 }}>
                 Possible signature: <b>{signatureName(mi.signature)}</b>
-                <span style={{ ...muted, fontSize: 10, marginLeft: 6, fontFamily: "ui-monospace,monospace" }}>{mi.signature}</span>
+                <span style={{ ...muted, fontSize: 11.5, marginLeft: 6, fontFamily: "ui-monospace,monospace" }}>{mi.signature}</span>
               </div>
               {mi.needs.map((kind) => {
                 const present = presentKinds.has(kind);
                 const meta = kindMeta(kind);
                 return (
-                  <div key={kind} style={{ fontSize: 11.5, padding: "1px 0", color: present ? C.warn : "var(--fg,#e6edf3)" }}>
+                  <div key={kind} style={{ fontSize: 12.5, padding: "1px 0", color: present ? C.warn : "var(--fg,#e6edf3)" }}>
                     {present ? "⚠" : "○"} {kindLabel(kind)} <span style={muted}>— {modalityLabel(meta.modality).toLowerCase()}</span>
-                    {present && <span style={{ color: C.warn, fontSize: 10 }}> (present, did not qualify)</span>}
+                    {present && <span style={{ color: C.warn, fontSize: 11.5 }}> (present, did not qualify)</span>}
                   </div>
                 );
               })}
@@ -324,7 +324,7 @@ export default function RcaSummary({
         }}>{showWhy ? "Hide engine detail ▲" : "Why? (engine detail) ▼"}</button>
       )}
       {(view === "debug" || showWhy) && (
-        <div style={{ ...muted, fontSize: 11, borderTop: "1px solid var(--border,#2a2f3a)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ ...muted, fontSize: 12.5, borderTop: "1px solid var(--border,#2a2f3a)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           <div>
             {grounded
               ? `Engine grounded ${timeline.edges.length} causal edge${timeline.edges.length === 1 ? "" : "s"} across ${attachedModalities} plane${attachedModalities === 1 ? "" : "s"}; ${c.attached} of ${c.total} window signals linked into the graph.`
