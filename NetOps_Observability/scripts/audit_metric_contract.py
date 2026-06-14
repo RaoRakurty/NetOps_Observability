@@ -33,6 +33,11 @@ GNMIC_YAML = os.path.join(ROOT, "deployment", "docker", "gnmic", "gnmic.yaml")
 GNMI_OWNED: dict[str, str] = {
     "device_mem_percent": "Nokia SR Linux has no SNMP memory source; gNMI owns it "
                           "(also emitted by SNMP for Juniper — subset-safe either way)",
+    "device_bgp_pfx_in": "per-AFI accepted-prefix count; BGP4-MIB is IPv4-only and "
+                         "BGP4V2-MIB is draft (no usable SNMP source) — gNMI owns it "
+                         "(gnmic.yaml ownership gate; telemetry-coverage-reference.md).",
+    "device_isis_adj_state": "IS-IS adjacency on-change; no IS-IS MIB is collected — "
+                             "gNMI is the sole, priority source (gnmic.yaml ownership gate).",
 }
 
 # PromQL functions / keywords that look like identifiers but are never metrics.
