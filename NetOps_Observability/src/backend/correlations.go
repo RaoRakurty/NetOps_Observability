@@ -118,28 +118,46 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	// Filter in an inner query: aliasing toString(created_at) AS created_at in
 	// the same SELECT would shadow the column in WHERE (String vs DateTime →
 	// NO_COMMON_TYPE).
+	// Triage enrichment (left-table badges): edge count + grounding kinds from
+	// corr_edges, and the top hypothesis's verdict coverage (planes / owner /
+	// low-authority / debug-excluded) from the embedded hypotheses JSON. All
+	// read-only and derived from what the engine already persisted.
+	const hp = "o.hypotheses,'ranking','hypotheses',1,'verdict'"
 	sql := `
-SELECT toString(correlation_id)  AS correlation_id,
-       version,
-       state,
-       toString(window_start)    AS window_start,
-       toString(window_end)      AS window_end,
-       top_hypothesis,
-       top_confidence,
-       verdict_tier,
-       evidence_missing,
-       affected,
-       signal_count,
-       node_count,
-       engine_version,
-       catalog_version,
-       toString(created_at)      AS created_at
+SELECT toString(o.correlation_id)  AS correlation_id,
+       o.version                    AS version,
+       o.state                      AS state,
+       toString(o.window_start)     AS window_start,
+       toString(o.window_end)       AS window_end,
+       o.top_hypothesis             AS top_hypothesis,
+       o.top_confidence             AS top_confidence,
+       o.verdict_tier               AS verdict_tier,
+       o.evidence_missing           AS evidence_missing,
+       o.affected                   AS affected,
+       o.signal_count               AS signal_count,
+       o.node_count                 AS node_count,
+       o.engine_version             AS engine_version,
+       o.catalog_version            AS catalog_version,
+       toString(o.created_at)       AS created_at,
+       coalesce(e.edge_count, 0)    AS edge_count,
+       coalesce(e.grounding, 'none') AS grounding,
+       length(JSONExtract(` + hp + `,'modality_coverage','Array(String)'))           AS plane_count,
+       JSONExtractString(` + hp + `,'owner')                                          AS owner,
+       length(JSONExtract(` + hp + `,'excluded_debug_probes','Array(String)')) > 0    AS debug_excluded,
+       length(JSONExtract(` + hp + `,'low_authority_probe_scopes','Array(String)')) > 0 AS low_authority
   FROM (
        SELECT * FROM netops.corr_objects_latest
         WHERE ` + strings.Join(conds, " AND ") + `
         ORDER BY created_at DESC
         LIMIT ` + intToString(limit) + `
-  )
+  ) AS o
+  LEFT JOIN (
+       SELECT correlation_id, version, count() AS edge_count,
+              arrayStringConcat(arraySort(groupUniqArray(grounding_kind)), '+') AS grounding
+         FROM netops.corr_edges
+        GROUP BY correlation_id, version
+  ) AS e ON e.correlation_id = o.correlation_id AND e.version = o.version
+ ORDER BY o.created_at DESC
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)
 }

@@ -5,7 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel } from "../components/rca/labels";
+import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, signatureName, ownerLabel } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -31,12 +31,25 @@ function parseJSON<T>(raw: string | undefined, fallback: T): T {
   }
 }
 
-function affectedSummary(o: CorrObject): string {
-  const a = parseJSON<Record<string, string[]>>(o.affected, {});
-  return Object.entries(a)
-    .map(([k, v]) => `${v.length} ${k}`)
-    .join(" · ") || "—";
+// Triage helpers for the left table — rank suspected rows by how openable they are.
+type Qual = "strong" | "candidate" | "weak";
+function qualityOf(o: CorrObject): Qual {
+  const grounded = (o.grounding ?? "none") !== "none";
+  if (o.verdict_tier === "confirmed") return "strong";
+  if (o.verdict_tier === "suspected" && grounded && !o.low_authority) return "candidate";
+  return "weak";
 }
+const QUAL_TONE: Record<Qual, string> = { strong: "#FF5366", candidate: "#F2B705", weak: "#7E8AA0" };
+function pill(text: string, tone: string, filled = false): React.ReactNode {
+  return <span style={{
+    fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
+    whiteSpace: "nowrap",
+    color: filled ? "#0E1320" : tone, background: filled ? tone : tone + "22",
+    border: `1px solid ${tone}66`,
+  }}>{text}</span>;
+}
+const QUAL_RANK: Record<Qual, number> = { strong: 2, candidate: 1, weak: 0 };
+const GROUND_TONE: Record<string, string> = { seam: "#F2B705", "seam+topo": "#F2B705", topo: "#5B9DFF", none: "#7E8AA0" };
 
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
@@ -49,21 +62,28 @@ export default function Correlations() {
     { key: "created_at", header: "Updated", width: 160, sortable: true,
       sortValue: (o) => new Date(o.created_at + "Z").getTime() || 0,
       render: (o) => <span style={mono}>{new Date(o.created_at + "Z").toLocaleString()}</span> },
-    { key: "verdict_tier", header: "Verdict", width: 110, sortable: true, text: (o) => o.verdict_tier,
+    { key: "verdict_tier", header: "Verdict", width: 104, sortable: true, text: (o) => o.verdict_tier,
       render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{o.verdict_tier}</span> },
-    { key: "top_hypothesis", header: "Top hypothesis", width: 240, sortable: true, text: (o) => o.top_hypothesis,
-      render: (o) => <span style={mono} title={o.top_hypothesis}>{o.top_hypothesis}</span> },
-    { key: "top_confidence", header: "Rank", width: 64, align: "right", sortable: true,
-      sortValue: (o) => o.top_confidence,
-      render: (o) => (o.top_hypothesis === "undetermined" ? "—" : o.top_confidence.toFixed(2)) },
-    { key: "state", header: "State", width: 76, sortable: true, text: (o) => o.state,
-      render: (o) => <span className="badge">{o.state}</span> },
-    { key: "version", header: "v", width: 44, align: "right", sortable: true,
-      sortValue: (o) => o.version, render: (o) => `v${o.version}` },
-    { key: "shape", header: "Nodes / Edges? / Signals", width: 150, align: "right",
-      render: (o) => <span style={mono}>{o.node_count} n · {o.signal_count} sig</span> },
-    { key: "affected", header: "Affected", text: (o) => affectedSummary(o),
-      render: (o) => <span title={o.affected}>{affectedSummary(o)}</span> },
+    { key: "quality", header: "Quality", width: 90, sortable: true,
+      sortValue: (o) => QUAL_RANK[qualityOf(o)],
+      render: (o) => { const q = qualityOf(o); return pill(q, QUAL_TONE[q], q !== "weak"); } },
+    { key: "top_hypothesis", header: "Likely cause", width: 200, sortable: true, text: (o) => o.top_hypothesis,
+      render: (o) => o.top_hypothesis === "undetermined"
+        ? <span style={{ color: "#7E8AA0" }}>undetermined</span>
+        : <span title={o.top_hypothesis}>{signatureName(o.top_hypothesis)}</span> },
+    { key: "owner", header: "Owner", width: 96, sortable: true, text: (o) => o.owner ?? "",
+      render: (o) => o.owner ? <span style={{ fontSize: 12 }}>{ownerLabel(o.owner)}</span> : "—" },
+    { key: "grounding", header: "Grounding", width: 96, sortable: true, text: (o) => o.grounding ?? "none",
+      render: (o) => { const g = o.grounding ?? "none"; return pill(g, GROUND_TONE[g] ?? "#7E8AA0"); } },
+    { key: "planes", header: "Planes", width: 64, align: "right", sortable: true,
+      sortValue: (o) => Number(o.plane_count ?? 0),
+      render: (o) => <span style={mono}>{Number(o.plane_count ?? 0)}</span> },
+    { key: "authority", header: "Evidence", width: 100, sortable: true,
+      sortValue: (o) => (o.debug_excluded ? 0 : o.low_authority ? 1 : 2),
+      render: (o) => o.debug_excluded ? pill("debug-excl", "#7E8AA0")
+        : o.low_authority ? pill("low-auth", "#F2B705") : pill("trusted", "#35D6A4") },
+    { key: "shape", header: "N / E / Sig", width: 110, align: "right",
+      render: (o) => <span style={mono}>{o.node_count}n · {Number(o.edge_count ?? 0)}e · {o.signal_count}s</span> },
   ], []);
 
   useEffect(() => {

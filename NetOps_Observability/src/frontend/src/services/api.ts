@@ -347,6 +347,13 @@ export type CorrObject = {
   topology_version?: string;
   catalog_version: string;
   created_at: string;
+  // Triage enrichment (list endpoint) — for left-table badges.
+  edge_count?: number | string;
+  grounding?: string;          // "seam" | "topo" | "seam+topo" | "none"
+  plane_count?: number | string;
+  owner?: string;              // verdict owner (netops/isp/…)
+  debug_excluded?: number;     // 0/1
+  low_authority?: number;      // 0/1
 };
 
 export type CorrEdge = {
