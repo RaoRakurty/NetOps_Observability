@@ -235,6 +235,28 @@ SELECT version,
 		return
 	}
 
+	// 1b) Resolve the archive slice version. The object's `version` increments on
+	// every persist, but each window slice is archived under its own
+	// `archived_version` — the two are NOT 1:1 (the object can be a version ahead
+	// of its latest archived slice, and legacy rows carry version 0). Use the
+	// greatest archived_version for this object (≤ the requested object version),
+	// i.e. the most recent complete slice — never an empty exact-match.
+	avCond := ""
+	if version > 0 {
+		avCond = " AND archived_version <= " + intToString(version)
+	}
+	avSQL := `SELECT max(archived_version) AS av FROM netops.corr_signals_archive
+ WHERE archived_for = '` + id + `'` + avCond + ` FORMAT JSON`
+	avRows, err := s.chRows(r, avSQL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	archiveVer := "0"
+	if len(avRows) > 0 && avRows[0]["av"] != nil {
+		archiveVer = fmt.Sprintf("%v", avRows[0]["av"])
+	}
+
 	// 2) Full window slice (attached or not), ordered by event time = the cascade.
 	sigSQL := `
 SELECT toString(signal_id)  AS signal_id,
@@ -248,7 +270,7 @@ SELECT toString(signal_id)  AS signal_id,
        JSONExtractString(attrs, 'phase')              AS phase,
        JSONExtractString(attrs, 'clear_ts')           AS clear_ts
   FROM netops.corr_signals_archive
- WHERE archived_for = '` + id + `' AND toString(archived_version) = '` + ver + `'
+ WHERE archived_for = '` + id + `' AND toString(archived_version) = '` + archiveVer + `'
    AND ts >= '` + ws + `' AND ts <= '` + we + `'
  ORDER BY ts ASC, signal_id ASC
  FORMAT JSON`
