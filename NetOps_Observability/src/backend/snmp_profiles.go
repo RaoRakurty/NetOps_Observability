@@ -11,10 +11,11 @@ import (
 	"sync"
 )
 
-// catalogFS embeds the large vendor catalog (200+ profiles, generated/curated
-// from the open-source Datadog SNMP profiles, Apache-2.0, with attribution).
-// Kept as data (not Go literals) so the library can grow without code churn; the
-// file may be just "[]" until the catalog is populated.
+// catalogFS embeds an optional vendor profile catalog kept as data (not Go
+// literals) so the library can grow without code churn. Profiles here are
+// ORIGINAL — OID/metric definitions compiled from vendor + IETF RFC MIBs (OIDs
+// are MIB facts). The file is "[]" by default; the active profile library is the
+// hand-authored originals in snmp_profiles_seed.go. (No third-party catalog.)
 //
 //go:embed snmp_profiles_catalog.json
 var catalogFS embed.FS

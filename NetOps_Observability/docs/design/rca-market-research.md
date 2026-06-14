@@ -49,9 +49,9 @@ isolation, UX patterns, and exploitable gaps.
 - Operational fault-isolation method = overlaying control-plane route-change timelines with data-plane loss and L7 HTTP availability on one timeline (Microsoft AS8075 flap; Telstra/Quad9 hijack detected via per-prefix origin-AS monitors; first-hop-ASN allowlist alerts; DDoS-mitigation verification via BGP path) ◻ [thousandeyes.com/blog/4-real-bgp-troubleshooting-scenarios](https://www.thousandeyes.com/blog/4-real-bgp-troubleshooting-scenarios).
 - Claims "AI-driven RCA that pinpoints root cause and recommends next actions" with **zero algorithmic detail** — the public architecture story is marketing-level ◻ [platform page]. Passive flows (Traffic Insights) come only via on-prem Enterprise Agents and embedded Cisco-device integrations ◻.
 
-### 2.3 Datadog — Watchdog RCA (learned topology, narrow cause vocabulary)
+### 2.3 A leading observability vendor — Watchdog-style RCA (learned topology, narrow cause vocabulary)
 
-- Builds a **learned** topology/dependency map of apps + infra and uses it (not pure statistical correlation) to identify probable root cause ◻; separates "root cause" from "critical failure" (first sign of failure in the causal chain) — an internal causal-chain event model ◻ [datadoghq.com/blog/datadog-watchdog-automated-root-cause-analysis](https://www.datadoghq.com/blog/datadog-watchdog-automated-root-cause-analysis/).
+- Builds a **learned** topology/dependency map of apps + infra and uses it (not pure statistical correlation) to identify probable root cause ◻; separates "root cause" from "critical failure" (first sign of failure in the causal chain) — an internal causal-chain event model ◻ a leading observability vendor's learned-topology automated RCA.
 - The 2021/2022 root-cause vocabulary is a **small closed set**: faulty deployments, client traffic increases, AWS instance failures, disk exhaustion (CPU/memory listed as future) — not a general cross-domain network RCA engine ◻ [same source].
 - Documented failure mode: if required telemetry (traces/logs/profiles/infra metrics) is missing, no causal relationship can be established and **no root cause is produced** ◻; pairs RCA with a separate Impact Analysis layer (which services/users are affected) ◻ [same source].
 
@@ -309,7 +309,7 @@ Quality tags from the corpus; **✅ n claims confirmed** = adversarially verifie
 | [ThousandEyes platform page](https://www.thousandeyes.com/product/platform) | primary | undated (2026 footer) | **✅ 3 claims confirmed (3-0)** |
 | [ThousandEyes path-trace docs](https://docs.thousandeyes.com/product-documentation/internet-and-wan-monitoring/path-visualization/path-trace) | primary | undated | unverified |
 | [ThousandEyes 4 BGP scenarios](https://www.thousandeyes.com/blog/4-real-bgp-troubleshooting-scenarios) | blog | ~2021–2023 | unverified |
-| [Datadog Watchdog RCA blog](https://www.datadoghq.com/blog/datadog-watchdog-automated-root-cause-analysis/) | blog | 2021-01 (upd. 2022-04) | unverified |
+| A leading observability vendor — learned-topology automated RCA | blog | 2021-01 (upd. 2022-04) | unverified |
 | [Kentik UDR](https://www.kentik.com/blog/going-beyond-the-netflow-introducing-universal-data-records/) | primary | 2019-05-23 | unverified |
 | [Kentik unified data repository](https://www.kentik.com/blog/modernizing-data-analytics-with-a-unified-data-repository/) | blog | 2023-05-11 | unverified |
 | [Kentik data-platform needs](https://www.kentik.com/blog/understanding-data-platform-needs-to-support-network-observability/) | blog | 2023-02-15 | unverified |
