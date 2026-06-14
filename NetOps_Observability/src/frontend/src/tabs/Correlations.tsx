@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, CorrObject, CorrEdge, CorrReplay } from "../services/api";
+import { api, CorrObject, CorrEdge, CorrReplay, CorrTimeline, Seam } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
+import RcaTimeline from "../components/rca/RcaTimeline";
+import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -136,33 +138,53 @@ export default function Correlations() {
   );
 }
 
-// CorrelationDetail — one object: verdict + hypotheses accounting + grounded
-// edges + replay. Fetches the full detail (the list omits the hypotheses blob).
+// CorrelationDetail — the RCA Inspector. TIMELINE-PRIMARY: the cross-plane
+// cascade over time is the lead view (what happened first/next, which planes
+// agree, what contradicts, what the engine attached vs ignored, how certain the
+// timing is). The seam-grounded causal graph is secondary but honest (seams as
+// labeled boundary nodes with owner/visibility). Verdict + missing evidence are
+// prominent. Read-only: everything shown is engine-recorded.
 export function CorrelationDetail({ id }: { id: string }) {
   const [obj, setObj] = useState<CorrObject | null>(null);
   const [edges, setEdges] = useState<CorrEdge[]>([]);
+  const [timeline, setTimeline] = useState<CorrTimeline | null>(null);
+  const [seams, setSeams] = useState<Record<string, Seam>>({});
   const [replay, setReplay] = useState<CorrReplay | null>(null);
   const [replaying, setReplaying] = useState(false);
   const [err, setErr] = useState("");
+  const [selEdge, setSelEdge] = useState<CorrEdge | null>(null);
+  const [selSignal, setSelSignal] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    setObj(null); setEdges([]); setReplay(null); setErr("");
+    setObj(null); setEdges([]); setTimeline(null); setReplay(null); setErr("");
+    setSelEdge(null); setSelSignal(null);
     api.correlationDetail(id)
       .then((r) => { if (alive) { setObj(r.object); setEdges(r.edges ?? []); } })
       .catch((e) => { if (alive) setErr(String(e?.message ?? e)); });
+    api.correlationTimeline(id)
+      .then((t) => { if (alive) setTimeline(t); })
+      .catch(() => { /* timeline is best-effort; detail still renders */ });
+    // Seam metadata (owner/visibility) for the graph; 501 on the file backend.
+    api.seams("active")
+      .then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } })
+      .catch(() => { /* seam inventory optional — graph degrades to grounding_ref */ });
     return () => { alive = false; };
   }, [id]);
 
+  // Selecting a graph edge highlights the signals on the timeline whose entity
+  // matches either endpoint — the visual graph↔timeline link.
+  const highlight = useMemo(() => {
+    if (!selEdge || !timeline) return undefined;
+    const ents = new Set([episodeEntity(selEdge.from_node), episodeEntity(selEdge.to_node)]);
+    return new Set(timeline.signals.filter((s) => ents.has(s.entity_id)).map((s) => s.signal_id));
+  }, [selEdge, timeline]);
+
   const runReplay = async () => {
     setReplaying(true); setReplay(null);
-    try {
-      setReplay(await api.correlationReplay(id));
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
-    } finally {
-      setReplaying(false);
-    }
+    try { setReplay(await api.correlationReplay(id)); }
+    catch (e: any) { setErr(String(e?.message ?? e)); }
+    finally { setReplaying(false); }
   };
 
   if (err) return <div className="empty">{err}</div>;
@@ -172,47 +194,89 @@ export function CorrelationDetail({ id }: { id: string }) {
   const hyp = parseJSON<any>(obj.hypotheses, {});
   const ranking = hyp?.ranking ?? {};
   const ctx = hyp?.grounding_context ?? {};
+  const counts = timeline?.counts;
+  const selSig = selSignal ? timeline?.signals.find((s) => s.signal_id === selSignal) : undefined;
+  const muted: React.CSSProperties = { color: "var(--muted)" };
+  const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 12, marginBottom: 4 };
   const row = (k: string, v: React.ReactNode) => (
     <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
-      <span style={{ color: "var(--muted)", minWidth: 110 }}>{k}</span>
+      <span style={{ ...muted, minWidth: 110 }}>{k}</span>
       <span style={{ wordBreak: "break-all" }}>{v}</span>
     </div>
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
+      {/* verdict header */}
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <span className={`badge ${TIER_CLASS[obj.verdict_tier] ?? ""}`}>{obj.verdict_tier}</span>
         <span className="badge">{obj.state}</span>
         <span className="badge">v{obj.version}</span>
         <span style={mono}>{obj.top_hypothesis}</span>
         {obj.top_hypothesis !== "undetermined" && (
-          <span style={{ color: "var(--muted)", fontSize: 12 }}>rank {obj.top_confidence.toFixed(2)}</span>
+          <span style={{ ...muted, fontSize: 12 }}>rank {obj.top_confidence.toFixed(2)}</span>
         )}
       </div>
 
+      {/* at-a-glance counts: planes, attached vs ignored, contradictions */}
+      {counts && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
+          <span><b>{counts.total}</b> signals in window</span>
+          <span style={{ color: "#3fb950" }}><b>{counts.attached}</b> attached</span>
+          <span style={muted}><b>{counts.unattached}</b> concurrent · not linked</span>
+          {(counts.by_role?.contradicts ?? 0) > 0 &&
+            <span style={{ color: "#f85149" }}><b>{counts.by_role.contradicts}</b> contradicting</span>}
+          <span style={muted}>{Object.entries(counts.by_modality).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(" · ")}</span>
+        </div>
+      )}
+
+      {/* PRIMARY: the cross-plane cascade */}
       <div>
-        {row("Object", <span style={mono}>{obj.correlation_id}</span>)}
-        {row("Window", <span style={mono}>{obj.window_start} → {obj.window_end} UTC</span>)}
-        {row("Evidence", `${obj.signal_count} signals across ${obj.node_count} nodes`)}
-        {row("Pins", <span style={mono}>{obj.engine_version} · {obj.catalog_version} · {obj.topology_version}</span>)}
-        {row("Seams in context", String((ctx.seams ?? []).length))}
-        {ctx.topology_gap_hints > 0 &&
-          row("Gap hints", `${ctx.topology_gap_hints} ungrounded co-occurrences (excluded, queued for seam review)`)}
+        <div style={titleStyle}>Timeline — cross-plane cascade</div>
+        {timeline
+          ? <RcaTimeline timeline={timeline} selected={selSignal} onSelect={setSelSignal} highlight={highlight} />
+          : <div className="empty">Loading window slice…</div>}
+        {selSig && (
+          <div style={{ ...mono, fontSize: 11, marginTop: 6, ...muted }}>
+            {selSig.kind} · {selSig.entity_id} —{" "}
+            {selSig.attached
+              ? (selSig.evidence ?? []).map((e) => `${e.role} ${e.subject_kind} ${e.subject_id}`).join("; ")
+              : "concurrent in the window but the engine did not link it"}
+          </div>
+        )}
       </div>
 
+      {/* verdict honesty */}
       {missing.length > 0 && (
         <div>
-          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>What would change the verdict</div>
+          <div style={titleStyle}>What would change the verdict</div>
           {missing.map((m) => (
-            <div key={m} style={{ ...mono, color: "var(--muted)", padding: "1px 0" }}>· {m}</div>
+            <div key={m} style={{ ...mono, ...muted, padding: "1px 0" }}>· {m}</div>
           ))}
         </div>
       )}
 
+      {/* SECONDARY: seam-grounded causal graph */}
+      <div>
+        <div style={titleStyle}>Grounded causal graph ({edges.length} edge{edges.length === 1 ? "" : "s"})</div>
+        <div style={{ ...muted, fontSize: 11, marginBottom: 4 }}>
+          Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction.
+        </div>
+        <SeamGraph edges={edges} seams={seams} onSelectEdge={setSelEdge} />
+      </div>
+
+      {/* meta + pins */}
+      <div>
+        {row("Object", <span style={mono}>{obj.correlation_id}</span>)}
+        {row("Window", <span style={mono}>{obj.window_start} → {obj.window_end} UTC</span>)}
+        {row("Pins", <span style={mono}>{obj.engine_version} · {obj.catalog_version} · {obj.topology_version}</span>)}
+        {ctx.topology_gap_hints > 0 &&
+          row("Gap hints", `${ctx.topology_gap_hints} ungrounded co-occurrences (excluded, queued for seam review)`)}
+      </div>
+
       {(ranking.hypotheses ?? []).length > 0 && (
         <div>
-          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Competing hypotheses</div>
+          <div style={titleStyle}>Competing hypotheses</div>
           {(ranking.hypotheses as any[]).map((h) => (
             <div key={h.template_id} style={{ ...mono, padding: "1px 0" }}>
               {h.template_id} — rank {Number(h.confidence_rank ?? 0).toFixed(2)}, coverage {Number(h.coverage ?? 0).toFixed(2)}
@@ -220,21 +284,6 @@ export function CorrelationDetail({ id }: { id: string }) {
           ))}
         </div>
       )}
-
-      <div>
-        <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Grounded edges ({edges.length})</div>
-        {edges.length === 0 && <div className="empty">Singleton — opened on episode severity alone.</div>}
-        {edges.map((e, i) => (
-          <div key={i} style={{ ...mono, padding: "2px 0" }}>
-            {e.from_node} → {e.to_node}
-            <span style={{ color: "var(--muted)" }}>
-              {"  "}[{e.grounding_kind}:{e.grounding_ref}] w={Number(e.weight).toFixed(2)}
-              {Number(e.w_reinforce) > 1 ? " ×modality" : ""}
-              {e.direction_basis !== "none" ? ` dir:${e.direction_basis}` : " (direction unclaimed)"}
-            </span>
-          </div>
-        ))}
-      </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button className="btn" onClick={runReplay} disabled={replaying}>
@@ -251,10 +300,10 @@ export function CorrelationDetail({ id }: { id: string }) {
       {replay && !replay.clean && (
         <div>
           {replay.differences.map((d) => (
-            <div key={d} style={{ ...mono, color: "var(--muted)" }}>· {d}</div>
+            <div key={d} style={{ ...mono, ...muted }}>· {d}</div>
           ))}
           {!replay.engine_pin_match && (
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            <div style={{ fontSize: 12, ...muted }}>
               Engine pin mismatch: the object was built by an older engine — expected evolution, not corruption.
             </div>
           )}

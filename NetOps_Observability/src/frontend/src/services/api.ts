@@ -371,6 +371,77 @@ export type CorrReplay = {
   differences: string[];
 };
 
+// One evidence link: a signal's role w.r.t. an edge or hypothesis.
+export type CorrEvidence = {
+  signal_id: string;
+  subject_kind: string;   // edge | hypothesis
+  subject_id: string;
+  role: string;           // supports | contradicts | discriminates
+  note: string;
+};
+
+// One signal in an object's window slice (corr_signals_archive) enriched with
+// its evidence role(s). The timing fields (ts = onset, onset_uncertainty_s,
+// clock_quality) and attached flag drive the RCA timeline.
+export type CorrSignal = {
+  signal_id: string;
+  ts: string;
+  ingest_ts?: string;
+  source: string;
+  kind: string;
+  observer_type: string;
+  observer_id?: string;
+  collection_path: string;
+  modality_class: string;
+  clock_quality: string;
+  entity_type: string;
+  entity_id: string;
+  entity_tokens?: string[];
+  severity: string;
+  value: number;
+  baseline?: number;
+  deviation?: number;
+  metric_name: string;
+  attrs?: string;
+  onset_uncertainty_s: number;
+  phase: string;
+  clear_ts: string;
+  attached: boolean;
+  is_trigger: boolean;
+  evidence: CorrEvidence[] | null;
+};
+
+export type CorrTimeline = {
+  correlation_id: string;
+  version: number;
+  window_start: string;
+  window_end: string;
+  trigger_signal: string;
+  verdict_tier: string;
+  top_hypothesis: string;
+  top_confidence: number;
+  evidence_missing: string; // JSON array
+  signals: CorrSignal[];
+  evidence: CorrEvidence[];
+  counts: {
+    total: number;
+    attached: number;
+    unattached: number;
+    by_modality: Record<string, number>;
+    by_role: Record<string, number>;
+  };
+};
+
+// A grounding seam (ownership-transition boundary) — joins to edge grounding_ref.
+export type Seam = {
+  seam_id: string;
+  seam_type?: string;
+  state?: string;
+  endpoints?: Record<string, string>;
+  control_plane_owner: string;  // enterprise | isp | cloud | sdwan_controller
+  visibility: string;           // full | partial | blind
+};
+
 export type Finding = {
   ts: string;
   id: string;
@@ -1007,6 +1078,13 @@ export const api = {
     request<{ object: CorrObject; edges: CorrEdge[] }>(`/api/correlations/${encodeURIComponent(id)}`),
   correlationReplay: (id: string) =>
     request<CorrReplay>(`/api/correlations/${encodeURIComponent(id)}/replay`),
+  // Full window signal slice (attached + concurrent-unattached) for the RCA timeline.
+  correlationTimeline: (id: string) =>
+    request<CorrTimeline>(`/api/correlations/${encodeURIComponent(id)}/timeline`),
+  // Active grounding seams (owner/visibility) — joined to edge grounding_ref in
+  // the seam-aware graph. 501 on the file backend → caller degrades gracefully.
+  seams: (state = "active") =>
+    request<Seam[]>(`/api/seams?state=${encodeURIComponent(state)}`),
   vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),
   compliance: (limit = 500) => request<ComplianceResponse>(`/api/compliance?limit=${limit}`),
 
