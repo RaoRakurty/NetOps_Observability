@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
-import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel } from "./labels";
+import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -169,21 +169,22 @@ export default function RcaTimeline({
                           ? `1.5px dashed ${C.faint}`
                           : `${s.attached ? 2.5 : 2}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
                         opacity: isDebugProbe ? 0.5 : isRecovery ? 0.55 : 1,
-                        boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "none"),
+                        // thin panel-colored halo separates overlapping dots in dense lanes.
+                        boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "0 0 0 1px var(--panel)"),
                         cursor: "pointer",
                       }}
                     />
-                    {/* label — only meaningful events (trigger, crit, or the
-                        rarer control-plane / device lanes) so the probe lane
-                        stays uncluttered. Selecting a signal always labels it. */}
-                    {(s.is_trigger || isSel || s.severity === "crit"
-                      || lane.key === "control_plane" || lane.key === "device_telemetry") && !dim && left < 86 && (
+                    {/* label ONLY the trigger and the selected dot — dense lanes
+                        (e.g. 28 probes) overlap into mush if every dot is labelled.
+                        Everything else is revealed on hover. Clears are never labelled. */}
+                    {(isSel || s.is_trigger) && !dim && !s.kind.endsWith("_clear") && (
                       <span style={{
-                        position: "absolute", left: sz / 2 + 4, top: "50%", transform: "translateY(-50%)",
-                        whiteSpace: "nowrap", fontSize: 10.5, lineHeight: 1, pointerEvents: "none",
-                        color: isSel ? "var(--accent,#4c8dff)" : lane.color, opacity: isSel ? 1 : 0.85,
-                        fontWeight: s.is_trigger || isSel ? 700 : 400,
-                      }}>{s.kind.replace(/_anomaly$/, "").replace(/_change$/, "")}</span>
+                        position: "absolute", left: sz / 2 + 5, top: "50%", transform: "translateY(-50%)",
+                        whiteSpace: "nowrap", fontSize: 11, lineHeight: 1, pointerEvents: "none",
+                        padding: "1px 4px", borderRadius: 3, zIndex: 4,
+                        background: "var(--panel)", border: `1px solid ${isSel ? "var(--accent,#4c8dff)" : lane.color}`,
+                        color: "var(--fg)", fontWeight: 700,
+                      }}>{kindLabel(s.kind)}{s.is_trigger ? " · trigger" : ""}</span>
                     )}
                   </div>
                 );
