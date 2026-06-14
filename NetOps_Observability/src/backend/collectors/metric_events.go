@@ -139,27 +139,33 @@ func metricEventSink() string {
 // forwardMetricEvents POSTs the batch as newline-delimited JSON (one event per
 // line) to the bus ingest source. Best-effort: a failed POST is dropped (the VM
 // gauges remain the rendering source of truth; the bus lane is RCA evidence).
-func forwardMetricEvents(ctx context.Context, events []MetricEvent) {
+// Returns the number of events successfully sent — the caller folds it into the
+// collector_metric_events_* observability gauges (built vs sent → failed).
+func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 	sink := metricEventSink()
 	if sink == "" || len(events) == 0 {
-		return
+		return 0
 	}
 	body, err := encodeMetricNDJSON(events)
 	if err != nil {
-		return
+		return 0
 	}
 	// #nosec G704 -- sink is the operator-configured Vector bus source, not user input
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sink, bytes.NewReader(body))
 	if err != nil {
-		return
+		return 0
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return
+		return 0 // bus unreachable: collector keeps running; VM path unaffected
 	}
-	_ = resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return 0
+	}
+	return len(events)
 }
 
 // encodeMetricNDJSON serializes events as newline-delimited JSON. json.Encoder

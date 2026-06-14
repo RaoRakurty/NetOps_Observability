@@ -3,7 +3,11 @@ package collectors
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -119,6 +123,59 @@ func TestEncodeMetricNDJSON_OneObjectPerLine(t *testing.T) {
 	}
 	if n != 3 {
 		t.Errorf("expected 3 NDJSON lines, got %d", n)
+	}
+}
+
+// forwardMetricEvents returns the count actually accepted by the bus — the
+// numerator of the collector_metric_events_sent gauge.
+func TestForwardMetricEvents_SendCount(t *testing.T) {
+	var gotBody []byte
+	var gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("METRIC_EVENT_SINK_URL", srv.URL)
+
+	evs := make([]MetricEvent, 0, 3)
+	for _, m := range []string{"device_if_in_octets", "device_bgp_peer_state", "device_cpu_percent"} {
+		ev, _ := buildMetricEvent(m, "leaf1", "arista", "1", "Ethernet1", 3, 1_700_000_000_000)
+		evs = append(evs, ev)
+	}
+	if sent := forwardMetricEvents(context.Background(), evs); sent != 3 {
+		t.Errorf("expected 3 sent, got %d", sent)
+	}
+	if gotCT != "application/x-ndjson" {
+		t.Errorf("wrong content-type: %q", gotCT)
+	}
+	if n := bytes.Count(gotBody, []byte("\n")); n != 3 {
+		t.Errorf("expected 3 NDJSON lines on the wire, got %d", n)
+	}
+}
+
+// Layer-7A resilience: Vector unavailable must NOT crash the collector; the
+// send count is 0 (→ collector_metric_events_failed) and polling continues.
+func TestForwardMetricEvents_VectorUnavailable(t *testing.T) {
+	// An address that refuses/blackholes: closed port on loopback.
+	t.Setenv("METRIC_EVENT_SINK_URL", "http://127.0.0.1:1/")
+	ev, _ := buildMetricEvent("device_if_in_octets", "leaf1", "arista", "1", "Et1", 3, 1_700_000_000_000)
+	if sent := forwardMetricEvents(context.Background(), []MetricEvent{ev}); sent != 0 {
+		t.Errorf("unreachable sink should send 0, got %d", sent)
+	}
+}
+
+// A non-2xx bus response counts as not-sent (failed), not a crash.
+func TestForwardMetricEvents_RejectedBatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	t.Setenv("METRIC_EVENT_SINK_URL", srv.URL)
+	ev, _ := buildMetricEvent("device_cpu_percent", "leaf1", "arista", "", "", 3, 1_700_000_000_000)
+	if sent := forwardMetricEvents(context.Background(), []MetricEvent{ev}); sent != 0 {
+		t.Errorf("rejected batch should count 0 sent, got %d", sent)
 	}
 }
 

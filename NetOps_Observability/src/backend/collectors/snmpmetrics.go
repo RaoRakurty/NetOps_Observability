@@ -65,6 +65,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	now := start.UnixMilli()
 	reachable := 0
 	samples := 0
+	meBuilt, meSent := 0, 0 // metric-event lane observability (built vs sent)
 	var lastErr string
 
 	for _, tg := range targets {
@@ -148,7 +149,8 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		}
 		// Forward the RCA-filtered canonical subset to the correlation bus
 		// (best-effort, separate from the VM path above).
-		forwardMetricEvents(ctx, events)
+		meBuilt += len(events)
+		meSent += forwardMetricEvents(ctx, events)
 	}
 
 	emitMetrics(ctx, strings.Join([]string{
@@ -156,6 +158,12 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		fmt.Sprintf(`collector_targets{collector="snmpmetrics"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="snmpmetrics"} %d %d`, reachable, now),
 		fmt.Sprintf(`collector_samples{collector="snmpmetrics"} %d %d`, samples, now),
+		// Metric-event bus lane: built = passed the RCA filter, sent = POSTed to
+		// Vector ok; built-sent = failed/dropped (bus unreachable). Proves the
+		// netops.metrics producer is alive and where it loses events.
+		fmt.Sprintf(`collector_metric_events_built{collector="snmpmetrics"} %d %d`, meBuilt, now),
+		fmt.Sprintf(`collector_metric_events_sent{collector="snmpmetrics"} %d %d`, meSent, now),
+		fmt.Sprintf(`collector_metric_events_failed{collector="snmpmetrics"} %d %d`, meBuilt-meSent, now),
 	}, "\n"))
 
 	c.mu.Lock()
