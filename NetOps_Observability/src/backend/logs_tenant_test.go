@@ -113,6 +113,54 @@ func TestOSTenantFilterNoDevices(t *testing.T) {
 	}
 }
 
+// TestTenantIndexPattern_AllExcludesAppLogs is the regression guard for the
+// platform↔tenant boundary: an "all"/default search must NEVER touch the
+// platform's own app-log indices — for ANY caller, platform owner included (no
+// mixing stack internals into device logs). It must, however, still cover all
+// device-telemetry signals. If a future change reintroduces applogs into "all",
+// or drops a telemetry signal, this fails.
+func TestTenantIndexPattern_AllExcludesAppLogs(t *testing.T) {
+	for _, sig := range []string{"", "all"} {
+		for _, cross := range []bool{true, false} {
+			pat := tenantIndexPattern(sig, "acme", cross)
+			if containsSub(pat, "applogs") {
+				t.Errorf("tenantIndexPattern(%q, acme, cross=%v) LEAKED app logs into 'all': %q", sig, cross, pat)
+			}
+			for _, want := range []string{"netops-syslog", "netops-snmptrap", "netops-flows"} {
+				if !containsSub(pat, want) {
+					t.Errorf("tenantIndexPattern(%q, acme, cross=%v) missing device telemetry %q: %q", sig, cross, want, pat)
+				}
+			}
+		}
+	}
+	// A scoped "all" must never name another tenant's indices.
+	if pat := tenantIndexPattern("", "acme", false); containsSub(pat, "globex") {
+		t.Errorf("scoped 'all' leaked another tenant: %q", pat)
+	}
+}
+
+// TestAppLogPatternAllowed pins the defense-in-depth guardrail: a non-platform-
+// owner is denied ANY resolved index pattern that references the platform's
+// app-log indices, regardless of how the pattern was built — so a regression in
+// signal/index logic still cannot leak platform internals to a tenant.
+func TestAppLogPatternAllowed(t *testing.T) {
+	owner := jwtClaims{Sub: "root", Role: RoleSuperAdmin, Tenant: TenantGlobal}
+	tenantAdmin := jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme"} // tenant super-admin ≠ platform owner
+	operator := jwtClaims{Sub: "o", Role: RoleOperator, Tenant: "acme"}
+
+	if !appLogPatternAllowed("netops-applogs-*", owner) {
+		t.Error("platform owner must be allowed to read app-log indices")
+	}
+	for _, c := range []jwtClaims{tenantAdmin, operator} {
+		if appLogPatternAllowed("netops-applogs-untagged-*", c) {
+			t.Errorf("non-owner %s must be DENIED an app-log pattern (leak guard)", c.Sub)
+		}
+		if !appLogPatternAllowed("netops-syslog-acme-*,netops-syslog-untagged-*", c) {
+			t.Errorf("non-owner %s must be allowed device-telemetry patterns", c.Sub)
+		}
+	}
+}
+
 func containsSub(s, sub string) bool {
 	return len(sub) > 0 && len(s) >= len(sub) && (indexOf(s, sub) >= 0)
 }

@@ -374,6 +374,20 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	}
 	spec := s.exportSpecFor(claims, q.Get("query"), q.Get("from"), q.Get("to"), q.Get("signal"), format)
 
+	// App logs are platform-owner-only — the SAME boundary as the interactive search
+	// (logs.go). The export path previously relied solely on osTenantFilter excluding
+	// untagged applogs docs by device; per the zero-leak bar, gate explicitly AND
+	// guard the resolved index pattern (defense-in-depth, fail-closed) so a tenant can
+	// never export the platform's internal logs.
+	if sig := strings.ToLower(strings.TrimSpace(q.Get("signal"))); (sig == "applogs" || sig == "app") && !isPlatformOwner(claims) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		return
+	}
+	if !appLogPatternAllowed(tenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross), claims) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		return
+	}
+
 	// Decide sync vs async by the matched count (cheap _count), unless forced.
 	mode := strings.ToLower(q.Get("mode"))
 	count, _ := countLogs(r.Context(), spec, start, end)

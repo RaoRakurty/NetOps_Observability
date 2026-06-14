@@ -44,11 +44,15 @@ type Props = {
   // this view. When undefined the component works standalone.
   initialQuery?: string;
   rangeMinutes?: number;
+  // Device/alert pivots set this so the drawer opens scoped to the device's own
+  // syslog (signal=syslog + a host: field query), NOT a free-text all-signals
+  // search that would also surface internal app-logs mentioning the device.
+  initialSignal?: "" | "applogs" | "syslog" | "snmptrap" | "flows";
 };
 
-export default function Logs({ initialQuery, rangeMinutes }: Props = {}) {
+export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Props = {}) {
   const [query, setQuery] = useState(initialQuery ?? "*");
-  const [signal, setSignal] = useState<"" | "applogs" | "syslog" | "snmptrap" | "flows">("");
+  const [signal, setSignal] = useState<"" | "applogs" | "syslog" | "snmptrap" | "flows">(initialSignal ?? "");
   const [minutes, setMinutes] = useState(rangeMinutes ?? 15);
   const [size, setSize] = useState(200);
   const [hits, setHits] = useState<OSHit[]>([]);

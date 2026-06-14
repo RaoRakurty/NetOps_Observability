@@ -66,7 +66,7 @@ export default function Findings() {
           finding={f}
           onViewLogs={
             f.device
-              ? () => ws.openDrawer(<Logs initialQuery={f.device} rangeMinutes={60} />, { title: `Logs · ${f.device}` })
+              ? () => ws.openDrawer(<Logs initialQuery={`host:"${f.device}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${f.device}` })
               : undefined
           }
         />,

@@ -164,6 +164,16 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 
 	index := tenantIndexPattern(req.Signal, tenant, cross)
 
+	// Guardrail (defense-in-depth, zero-leak bar): app logs are the platform's own
+	// internals. Even if a future change to signal/index logic let an applogs index
+	// into a non-owner's resolved pattern, fail CLOSED here — the platform↔tenant
+	// boundary can never be silently reopened by a refactor. (Layered UNDER the
+	// explicit signal gate above and the per-doc osTenantFilter below.)
+	if !appLogPatternAllowed(index, claims) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		return
+	}
+
 	boolQuery := map[string]any{
 		"must": []any{
 			map[string]any{
@@ -302,7 +312,33 @@ func indexTenantSeg(tenant string) string {
 // osTenantFilter still narrows results — the populate-time fallback, mirroring the
 // ClickHouse row policy). Another tenant's indices are never named, so its docs
 // are unreachable even if the query filter is ever dropped.
+// appLogPatternAllowed is the defense-in-depth chokepoint for the platform↔tenant
+// boundary: a non-platform-owner may NEVER read the platform's app-log indices,
+// regardless of how the index pattern was built. Returns false (deny) when a
+// non-owner's resolved pattern references any applogs index. Used by both the
+// interactive search and the export path so the rule is enforced identically.
+func appLogPatternAllowed(index string, c jwtClaims) bool {
+	return isPlatformOwner(c) || !strings.Contains(index, "applogs")
+}
+
 func tenantIndexPattern(signal, tenant string, cross bool) string {
+	// Empty/"all" = DEVICE TELEMETRY only (syslog + SNMP traps + flows). App logs
+	// are the platform's own internal container/API logs — they must NEVER appear
+	// in an "all" search (not even for the platform owner, who would otherwise see
+	// stack internals mixed into device logs). App logs are reachable ONLY via an
+	// explicit signal="applogs", which is gated to the platform owner in the handler.
+	if s := strings.ToLower(strings.TrimSpace(signal)); s == "" || s == "all" {
+		bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows"}
+		parts := make([]string, 0, len(bases)*2)
+		for _, b := range bases {
+			if cross {
+				parts = append(parts, b+"-*")
+			} else {
+				parts = append(parts, b+"-"+indexTenantSeg(tenant)+"-*", b+"-untagged-*")
+			}
+		}
+		return strings.Join(parts, ",")
+	}
 	base := indexBase(signal)
 	if cross {
 		return base + "-*"

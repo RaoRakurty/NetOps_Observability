@@ -59,7 +59,7 @@ export default function Alerts() {
           alert={a}
           onViewLogs={
             a.device_id
-              ? () => ws.openDrawer(<Logs initialQuery={a.device_id} rangeMinutes={60} />, { title: `Logs · ${a.device_id}` })
+              ? () => ws.openDrawer(<Logs initialQuery={`host:"${a.device_id}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${a.device_id}` })
               : undefined
           }
         />,

@@ -102,7 +102,7 @@ export default function Devices() {
             {sshEnabled && <button className="btn" onClick={() => setTerm(d)}>Connect</button>}
             <button
               className="btn"
-              onClick={() => ws.openDrawer(<Logs initialQuery={d.name || d.id} rangeMinutes={60} />, { title: `Logs · ${d.id}` })}
+              onClick={() => ws.openDrawer(<Logs initialQuery={`host:"${d.name || d.id}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${d.id}` })}
             >
               View logs
             </button>
