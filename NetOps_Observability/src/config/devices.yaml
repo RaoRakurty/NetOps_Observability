@@ -54,14 +54,19 @@ devices:
     labels:
       site: clos-lab
       role: leaf
-  wan-r1:
-    address: 172.40.40.31
-    preferred_protocol: snmp
-    vendor: juniper
-    credential_ref: juniper-v2c
-    labels:
-      site: clos-lab
-      role: wan
+  # wan-r1 (juniper, 172.40.40.31) — REMOVED from the clos lab topology
+  # (containerlab node deleted 2026-06-10). Kept here, commented, as a record of
+  # intent for re-add; uncomment when the node is back in the topology. While
+  # absent it must NOT be in the active inventory or the collector polls a dead
+  # IP and the fidelity harness flags a false coverage gap.
+  # wan-r1:
+  #   address: 172.40.40.31
+  #   preferred_protocol: snmp
+  #   vendor: juniper
+  #   credential_ref: juniper-v2c
+  #   labels:
+  #     site: clos-lab
+  #     role: wan
   wan-r2:
     address: 172.40.40.32
     preferred_protocol: snmp

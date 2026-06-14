@@ -290,7 +290,9 @@ def fnum(s) -> float:
 
 def hop_a_liveness(ep: dict) -> None:
     hop("Hop A — ingest liveness (collectors up)")
-    for svc, name in (("telegraf (SNMP poller)", f"{PROJECT}-telegraf-1"),
+    # The Go collector (in the api container) is the SNMP metric owner — NOT
+    # Telegraf (retired). gnmic is the gNMI subscriber; victoria is the TSDB.
+    for svc, name in (("api (Go SNMP collector)", f"{PROJECT}-api-1"),
                       ("gnmic (gNMI sub)", f"{PROJECT}-gnmic-1"),
                       ("victoria (TSDB)", f"{PROJECT}-victoria-1")):
         record("A", f"{svc} container running",
