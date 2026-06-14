@@ -366,3 +366,127 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         )
 
     return None
+
+
+# ── SNMP traps (netops.snmptrap) ──────────────────────────────────────────────
+#
+# Traps are discrete control-plane RCA evidence — often the FIRST hard signal of
+# a failure. But the trap firehose is noisy and full of vendor-specific
+# notifications, so ONLY a small, explicit set of high-value, well-standardized
+# families becomes a correlation signal. Everything else stays searchable in
+# OpenSearch and creates NO RCA signal (trap_control_signal returns None → the
+# caller counts it as dropped). Expand the allowlist deliberately, with fixtures.
+
+# Standard SNMPv2-MIB notification OIDs (RFC 3418) + BGP4-MIB (RFC 4273) and its
+# deprecated notification root. Classifying by OID is more robust than by the
+# rendered trap_name (which varies by agent MIB load).
+_TRAP_COLDSTART = "1.3.6.1.6.3.1.1.5.1"
+_TRAP_WARMSTART = "1.3.6.1.6.3.1.1.5.2"
+_TRAP_LINKDOWN  = "1.3.6.1.6.3.1.1.5.3"
+_TRAP_LINKUP    = "1.3.6.1.6.3.1.1.5.4"
+_TRAP_BGP_ESTABLISHED = "1.3.6.1.2.1.15.7.1"
+_TRAP_BGP_BACKWARD    = "1.3.6.1.2.1.15.7.2"
+_TRAP_BGP_ESTABLISHED_LEGACY = "1.3.6.1.2.1.0.1"  # deprecated BGP4-MIB root
+_TRAP_BGP_BACKWARD_LEGACY    = "1.3.6.1.2.1.0.2"
+
+# Varbind OIDs carrying the affected entity identity.
+_VB_IFINDEX = "1.3.6.1.2.1.2.2.1.1"
+_VB_IFNAME  = "1.3.6.1.2.1.31.1.1.1.1"
+_VB_IFDESCR = "1.3.6.1.2.1.2.2.1.2"
+_VB_BGP_PEER_ADDR = "1.3.6.1.2.1.15.3.1.7"  # bgpPeerRemoteAddr
+
+
+def _trap_varbind(ev: dict, *oid_prefixes: str) -> str:
+    """First varbind value whose OID equals or is indexed under one of the given
+    column OIDs (e.g. ifName.7 matches the ifName column). '' when absent."""
+    for vb in ev.get("varbinds") or []:
+        oid = str(vb.get("oid") or "")
+        for p in oid_prefixes:
+            if oid == p or oid.startswith(p + "."):
+                return str(vb.get("value") or "")
+    return ""
+
+
+def _trap_interface(ev: dict) -> str:
+    """Affected interface identity from the trap varbinds: prefer ifName/ifDescr
+    (matches the metric entity model device:ifName); fall back to ifIndex."""
+    return (_trap_varbind(ev, _VB_IFNAME)
+            or _trap_varbind(ev, _VB_IFDESCR)
+            or _trap_varbind(ev, _VB_IFINDEX)
+            or "unknown")
+
+
+def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
+    """Normalized SNMP trap → one control_plane Signal for the high-value
+    families only (link state, device restart, BGP transition); None for every
+    unclassified trap (kept searchable, never an RCA signal). Mirrors the
+    syslog/metric entity model so trap evidence binds to the same interface/peer.
+
+    HA-failover, environmental/hardware-health, and threshold-alarm traps are
+    vendor-specific OIDs — deliberately deferred to a per-vendor fixture-driven
+    follow-up rather than guessed (the anti-noise guardrail)."""
+    device = str(ev.get("device") or ev.get("host") or "")
+    if not device:
+        return None
+    oid = str(ev.get("trap_oid") or "")
+    name = str(ev.get("trap_name") or "")
+    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts_ms = int(ts.timestamp() * 1000)
+    # v1/v2c traps are spoofable (authenticated=false); recorded as evidence but
+    # the flag lets the engine weight it. v3-auth traps are trustworthy.
+    authed = bool(ev.get("authenticated"))
+    observer = Observer(
+        observer_id=device,
+        observer_type=ObserverType.DEVICE,
+        collection_path="direct",   # the device itself emitted the trap
+        clock_quality="unknown",
+    )
+
+    # Link state — interface-scoped (binds to interface metrics).
+    if oid in (_TRAP_LINKDOWN, _TRAP_LINKUP) or name in ("linkDown", "linkUp"):
+        state = "down" if (oid == _TRAP_LINKDOWN or name == "linkDown") else "up"
+        iface = _trap_interface(ev)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="link_state_change",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.INTERFACE, entity_id=f"{device}:{iface}",
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{device}|trap_link|{iface}|{state}|{ts_ms}",
+            entity_tokens=(device, iface), metric_name="link_state",
+            attrs={"interface": iface, "state": state, "trap_oid": oid,
+                   "authenticated": authed},
+        )
+
+    # Device restart — device-scoped lifecycle event.
+    if oid in (_TRAP_COLDSTART, _TRAP_WARMSTART) or name in ("coldStart", "warmStart"):
+        kind_type = "cold" if (oid == _TRAP_COLDSTART or name == "coldStart") else "warm"
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_restart",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=device,
+            severity=Severity.HIGH,
+            native_id=f"{device}|trap_restart|{kind_type}|{ts_ms}",
+            entity_tokens=(device,), metric_name="device_restart",
+            attrs={"restart": kind_type, "trap_oid": oid, "authenticated": authed},
+        )
+
+    # BGP neighbor transition — device:peer scoped (binds to BGP peer metrics).
+    if oid in (_TRAP_BGP_BACKWARD, _TRAP_BGP_ESTABLISHED,
+               _TRAP_BGP_BACKWARD_LEGACY, _TRAP_BGP_ESTABLISHED_LEGACY):
+        established = oid in (_TRAP_BGP_ESTABLISHED, _TRAP_BGP_ESTABLISHED_LEGACY)
+        state = "up" if established else "down"
+        peer = _trap_varbind(ev, _VB_BGP_PEER_ADDR)
+        entity_id = f"{device}:{peer}" if peer else device
+        tokens = (device, peer) if peer else (device,)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="bgp_adjacency_change",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=entity_id,
+            severity=Severity.WARN if established else Severity.HIGH,
+            native_id=f"{device}|trap_bgp|{peer or '?'}|{state}|{ts_ms}",
+            entity_tokens=tokens, metric_name="bgp_adjacency",
+            attrs={"peer": peer, "state": state, "trap_oid": oid,
+                   "authenticated": authed},
+        )
+
+    return None  # unclassified — searchable in OpenSearch, no RCA signal

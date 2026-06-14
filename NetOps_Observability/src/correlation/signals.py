@@ -34,6 +34,7 @@ class Source(str, Enum):
     ALERT = "alert"
     TOPOLOGY = "topology"
     SYSLOG = "syslog"
+    TRAP = "trap"
     SOT_DRIFT = "sot_drift"
 
 

@@ -41,7 +41,13 @@ from pydantic import BaseModel
 from catalog import builtin_catalog
 from engine import EngineConfig, ObjectSnapshot, SeamView, run_window
 from episodes import EpisodeDetector
-from producers import episode_signal, parse_event_ts, probe_signals, syslog_control_signal
+from producers import (
+    episode_signal,
+    parse_event_ts,
+    probe_signals,
+    syslog_control_signal,
+    trap_control_signal,
+)
 from replay import replay_object
 from signals import (
     DeadLetter,
@@ -61,7 +67,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap"]
 
 # Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
 # tenant_id onto each finding so it carries the same tenant discriminator as the
@@ -489,6 +495,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_flow(event)
     elif topic == "netops.probes":
         await handle_probe(event)
+    elif topic == "netops.snmptrap":
+        await handle_snmptrap(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -619,6 +627,31 @@ async def handle_probe(ev: dict) -> None:
         buffer_signal(sig)
         log.info("probe signal %s: %s sev=%s value=%.1f",
                  sig.kind, sig.entity_id, sig.severity.value, sig.value)
+
+
+async def handle_snmptrap(ev: dict) -> None:
+    """Normalized SNMP trap (netops.snmptrap) → control_plane signal for the
+    high-value families only. Unclassified traps stay searchable in OpenSearch
+    and create NO RCA signal (the anti-noise guardrail). The OpenSearch path is
+    untouched — this is an ADDITIONAL evidence lane, not a replacement."""
+    global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED
+    TRAPS_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("device") or ev.get("host") or ""))
+    try:
+        sig = trap_control_signal(ev, tenant, datetime.now(timezone.utc))
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        log.warning("dead-letter (trap): %s", exc)
+        return
+    if sig is None:
+        TRAPS_DROPPED += 1   # unclassified — no RCA signal, kept searchable
+        return
+    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    TRAPS_NORMALIZED += 1
+    buffer_signal(sig)
+    log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
 
 
 async def handle_syslog(ev: dict) -> None:
