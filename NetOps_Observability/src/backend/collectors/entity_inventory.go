@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -79,7 +80,8 @@ func buildEntityInfoLines(device, vendor string, descr, model, serial, class map
 // lines. Best-effort: a device that does not implement ENTITY-MIB yields no
 // lines (the walks return empty), so this is safe to call every poll.
 func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, device, vendor string, tsMillis int64) []string {
-	walk := func(oid []int) map[string]string {
+	// Descr/Model/Serial are OCTET STRING → raw bytes are the text.
+	walkStr := func(oid []int) map[string]string {
 		out := map[string]string{}
 		if rows, err := snmpWalkColumn(ctx, addr, creds, oid); err == nil {
 			for idx, v := range rows {
@@ -88,7 +90,18 @@ func collectEntityInventory(ctx context.Context, addr string, creds snmpCreds, d
 		}
 		return out
 	}
+	// entPhysicalClass is an INTEGER enum — decode to its decimal string so it
+	// matches entClassName (string(v.raw) would yield the raw BER byte, not "3").
+	walkInt := func(oid []int) map[string]string {
+		out := map[string]string{}
+		if rows, err := snmpWalkColumn(ctx, addr, creds, oid); err == nil {
+			for idx, v := range rows {
+				out[idx] = strconv.FormatInt(valueInt(v), 10)
+			}
+		}
+		return out
+	}
 	return buildEntityInfoLines(device, vendor,
-		walk(entPhysicalDescrOID), walk(entPhysicalModelOID),
-		walk(entPhysicalSerialOID), walk(entPhysicalClassOID), tsMillis)
+		walkStr(entPhysicalDescrOID), walkStr(entPhysicalModelOID),
+		walkStr(entPhysicalSerialOID), walkInt(entPhysicalClassOID), tsMillis)
 }
