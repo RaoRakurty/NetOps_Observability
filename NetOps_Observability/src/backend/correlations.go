@@ -268,7 +268,10 @@ SELECT toString(signal_id)  AS signal_id,
        value, baseline, deviation, metric_name, attrs,
        JSONExtractFloat(attrs, 'onset_uncertainty_s') AS onset_uncertainty_s,
        JSONExtractString(attrs, 'phase')              AS phase,
-       JSONExtractString(attrs, 'clear_ts')           AS clear_ts
+       JSONExtractString(attrs, 'clear_ts')           AS clear_ts,
+       JSONExtractString(attrs, 'probe_scope')        AS probe_scope,
+       JSONExtractString(attrs, 'probe_authority')    AS probe_authority,
+       JSONExtractString(attrs, 'classification_source') AS classification_source
   FROM netops.corr_signals_archive
  WHERE archived_for = '` + id + `' AND toString(archived_version) = '` + archiveVer + `'
    AND ts >= '` + ws + `' AND ts <= '` + we + `'

@@ -70,6 +70,123 @@ class Severity(str, Enum):
     CRIT = "crit"
 
 
+# ── Probe authority & independence model (#67 Step 3) ────────────────────────
+# Active-probe evidence is LEGITIMATE (ThousandEyes/Catchpoint/Datadog/Kentik all
+# treat synthetic tests as real monitoring). The trust distinction is vantage,
+# intent and INDEPENDENCE — NOT "synthetic vs real". See docs/design/
+# probe-authority-model.md. Authority is DERIVED from (intent × vantage); the
+# 4-way probe_scope is only a UI projection.
+
+
+class ProbeIntent(str, Enum):
+    CUSTOMER_PATH = "customer_path"            # a real user/customer route
+    SERVICE_DEPENDENCY = "service_dependency"  # a real upstream/SaaS dependency
+    PLATFORM_SELF_CHECK = "platform_self_check"  # the platform watching its own infra
+    LAB_TEST = "lab_test"                      # synthetic/lab generator traffic
+    UNKNOWN = "unknown"
+
+
+class VantageType(str, Enum):
+    PUBLIC_CLOUD_AGENT = "public_cloud_agent"  # vendor-operated, globally distributed
+    ENTERPRISE_AGENT = "enterprise_agent"      # inside the customer org
+    ENDPOINT_AGENT = "endpoint_agent"          # user-side
+    PRIVATE_LOCATION = "private_location"      # customer's private endpoint runner
+    INTERNAL_COLLECTOR = "internal_collector"  # the platform's own collector
+    LOCAL_CONTAINER = "local_container"        # a co-located lab/test container
+    UNKNOWN = "unknown"
+
+
+class ProbeAuthority(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    DEBUG_ONLY = "debug_only"
+
+
+class ProbeScope(str, Enum):
+    """UI-friendly projection of (intent, vantage) — NOT the source of truth."""
+
+    CUSTOMER_PATH = "customer_path"
+    SERVICE_DEPENDENCY = "service_dependency"
+    INTERNAL_SELF_PROBE = "internal_self_probe"
+    SYNTHETIC_LAB_PROBE = "synthetic_lab_probe"
+    UNKNOWN = "unknown"
+
+
+# Authorities that MAY anchor a confirmed verdict (always still + another modality).
+CONFIRM_AUTHORITIES = frozenset({ProbeAuthority.HIGH, ProbeAuthority.MEDIUM})
+
+_REAL_USER_VANTAGES = frozenset({
+    VantageType.ENTERPRISE_AGENT, VantageType.ENDPOINT_AGENT, VantageType.PRIVATE_LOCATION,
+})
+_REAL_VANTAGES = _REAL_USER_VANTAGES | {VantageType.PUBLIC_CLOUD_AGENT}
+
+
+def derive_probe_authority(intent: ProbeIntent, vantage: VantageType) -> ProbeAuthority:
+    """(intent × vantage) → authority. Fail-closed: anything not positively a
+    real, sufficiently-trusted vantage degrades to LOW — never confirm-capable."""
+    if intent is ProbeIntent.LAB_TEST or vantage is VantageType.LOCAL_CONTAINER:
+        return ProbeAuthority.DEBUG_ONLY
+    if intent is ProbeIntent.PLATFORM_SELF_CHECK or vantage is VantageType.INTERNAL_COLLECTOR:
+        return ProbeAuthority.LOW
+    if intent is ProbeIntent.CUSTOMER_PATH and vantage in _REAL_USER_VANTAGES:
+        return ProbeAuthority.HIGH
+    if intent is ProbeIntent.CUSTOMER_PATH and vantage is VantageType.PUBLIC_CLOUD_AGENT:
+        return ProbeAuthority.MEDIUM
+    if intent is ProbeIntent.SERVICE_DEPENDENCY and vantage in _REAL_VANTAGES:
+        return ProbeAuthority.MEDIUM
+    return ProbeAuthority.LOW
+
+
+def derive_probe_scope(intent: ProbeIntent, vantage: VantageType) -> ProbeScope:
+    """The UI label (projection). Source of truth is intent/vantage/authority."""
+    if intent is ProbeIntent.CUSTOMER_PATH:
+        return ProbeScope.CUSTOMER_PATH
+    if intent is ProbeIntent.SERVICE_DEPENDENCY:
+        return ProbeScope.SERVICE_DEPENDENCY
+    if intent is ProbeIntent.PLATFORM_SELF_CHECK or vantage is VantageType.INTERNAL_COLLECTOR:
+        return ProbeScope.INTERNAL_SELF_PROBE
+    if intent is ProbeIntent.LAB_TEST or vantage is VantageType.LOCAL_CONTAINER:
+        return ProbeScope.SYNTHETIC_LAB_PROBE
+    return ProbeScope.UNKNOWN
+
+
+@dataclass(frozen=True)
+class ProbeFate:
+    """The fate-sharing fingerprint of a probe. Two probes that share an agent
+    host, a NAT/public egress, or a (seam, target, schedule) are NOT independent —
+    they share a failure path and must not corroborate each other (§2)."""
+
+    agent_host: str = ""      # agent_id or host_id / VM / container
+    source_egress: str = ""   # NAT / public egress IP
+    seam_id: str = ""
+    target: str = ""
+    schedule_id: str = ""
+
+    def shares_fate_with(self, other: "ProbeFate") -> bool:
+        if self.agent_host and self.agent_host == other.agent_host:
+            return True
+        if self.source_egress and self.source_egress == other.source_egress:
+            return True
+        if (self.seam_id and self.seam_id == other.seam_id
+                and self.target and self.target == other.target
+                and self.schedule_id and self.schedule_id == other.schedule_id):
+            return True
+        return False
+
+
+def probe_authority_of(sig: "Signal") -> "ProbeAuthority | None":
+    """A signal's derived probe authority (None for non-probe). Reads the field
+    enriched at ingestion; fail-closed to LOW for an unclassified probe."""
+    if sig.modality_class is not ModalityClass.ACTIVE_PROBE:
+        return None
+    raw = str(sig.attrs.get("probe_authority", "")) if isinstance(sig.attrs, dict) else ""
+    try:
+        return ProbeAuthority(raw) if raw else ProbeAuthority.LOW
+    except ValueError:
+        return ProbeAuthority.LOW
+
+
 class DeadLetter(ValueError):
     """Record cannot become a Signal (missing mandatory provenance, malformed
     fields). Counted + parked by the caller — never guessed around, never a

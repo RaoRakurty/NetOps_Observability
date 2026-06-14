@@ -107,3 +107,27 @@ export function kindLabel(kind: string): string {
   const words = base.replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+// Probe authority model (Step 3) — operator labels + colors.
+export const PROBE_AUTHORITY_META: Record<string, { label: string; color: string }> = {
+  high: { label: "High authority", color: C.ok },
+  medium: { label: "Medium authority", color: C.info },
+  low: { label: "Low authority — support only", color: C.warn },
+  debug_only: { label: "Debug / lab — excluded", color: C.faint },
+};
+export const PROBE_SCOPE_LABEL: Record<string, string> = {
+  customer_path: "Customer path",
+  service_dependency: "Service dependency",
+  internal_self_probe: "Internal self-probe",
+  synthetic_lab_probe: "Synthetic / lab probe",
+  unknown: "Unclassified probe",
+};
+export function probeAuthorityLabel(a?: string): string {
+  return a ? (PROBE_AUTHORITY_META[a]?.label ?? a) : "";
+}
+export function probeScopeLabel(s?: string): string {
+  return s ? (PROBE_SCOPE_LABEL[s] ?? s) : "";
+}
+export function canConfirm(a?: string): boolean {
+  return a === "high" || a === "medium";
+}

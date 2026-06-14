@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from catalog import Catalog, Clause, Template
-from signals import Signal
+from signals import ProbeAuthority, Signal, probe_authority_of
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier, assess
 
@@ -54,7 +54,12 @@ def clause_matches(clause: Clause, sig: Signal) -> bool:
 
 
 def _satisfying(clause: Clause, evidence: tuple[Signal, ...]) -> tuple[Signal, ...]:
-    return tuple(s for s in evidence if clause_matches(clause, s))
+    # Decision #1: a debug_only / lab probe can never satisfy a clause — it must
+    # not attach as supporting evidence nor drive a customer-facing hypothesis.
+    return tuple(
+        s for s in evidence
+        if clause_matches(clause, s) and probe_authority_of(s) is not ProbeAuthority.DEBUG_ONLY
+    )
 
 
 @dataclass(frozen=True)

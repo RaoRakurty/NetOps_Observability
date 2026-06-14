@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
-import { C, MODALITY_META } from "./labels";
+import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -206,6 +206,11 @@ export default function RcaTimeline({
           <div>onset {fmtAbs(toMs(hover.ts))} ±{(hover.onset_uncertainty_s > 0 ? hover.onset_uncertainty_s : (CLOCK_FLOOR_S[hover.clock_quality] ?? 1))}s ({hover.clock_quality})</div>
           {hover.metric_name && <div>{hover.metric_name} = {hover.value}{hover.deviation ? ` (${Number(hover.deviation).toFixed(1)}σ)` : ""}</div>}
           {hover.clear_ts && <div style={muted}>clears {hover.clear_ts}</div>}
+          {hover.modality_class === "active_probe" && hover.probe_authority && (
+            <div style={{ color: PROBE_AUTHORITY_META[hover.probe_authority]?.color ?? C.muted }}>
+              probe: {probeScopeLabel(hover.probe_scope)} · {probeAuthorityLabel(hover.probe_authority)}
+            </div>
+          )}
           {/* linkage: the engine's recorded reason this signal was/ wasn't linked */}
           <div style={{
             marginTop: 3, paddingTop: 3, borderTop: "1px solid var(--border,#2a2f3a)",

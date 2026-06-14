@@ -416,6 +416,10 @@ export type CorrSignal = {
   link_role: string;   // supporting | contradicting | discriminating (attached only)
   link_reason: string;
   linked_edges: CorrLinkedEdge[] | null;
+  // Probe authority model (Step 3) — set for active_probe signals.
+  probe_scope?: string;        // customer_path | service_dependency | internal_self_probe | synthetic_lab_probe | unknown
+  probe_authority?: string;    // high | medium | low | debug_only
+  classification_source?: string; // registry | inferred | unknown
 };
 
 // One grounded edge a signal's episode sits on (peer node + how it's grounded).

@@ -35,9 +35,20 @@ def make_signal(
     observer_type: ObserverType = ObserverType.DEVICE,
     kind: str = "probe_loss",
     source: Source = Source.PROBE,
+    probe_authority: str = "high",   # default: real vantage (legacy "always trusted")
+    agent_host: str = "",
+    source_egress: str = "",
+    attrs: dict | None = None,
 ) -> Signal:
     global _seq
     _seq += 1
+    a = dict(attrs or {})
+    if modality is ModalityClass.ACTIVE_PROBE:
+        a.setdefault("probe_authority", probe_authority)
+        if agent_host:
+            a.setdefault("agent_host", agent_host)
+        if source_egress:
+            a.setdefault("source_egress", source_egress)
     return Signal(
         tenant_id="t1",
         ts=T0 + timedelta(seconds=_seq),
@@ -53,6 +64,7 @@ def make_signal(
         entity_id="leaf1",
         severity=Severity.WARN,
         native_id=f"test|{_seq}",
+        attrs=a,
     )
 
 
@@ -188,7 +200,7 @@ def test_required_modalities_cap_at_suspected_and_name_whats_missing():
         ModalityClass.ACTIVE_PROBE, ModalityClass.CONTROL_PLANE,
     }))
     assert v.tier is VerdictTier.SUSPECTED
-    assert any(r == "required modality missing: control_plane" for r in v.reasons)
+    assert any("control_plane" in r and "missing" in r for r in v.reasons)
     # Satisfying the requirement flips it.
     sigs.append(make_signal("bgp-collector", ModalityClass.CONTROL_PLANE,
                             observer_type=ObserverType.PLATFORM))
@@ -257,3 +269,94 @@ def test_verdict_dict_is_json_contract():
     assert d["observer_coverage"] == ["agent", "leaf1"]
     assert d["independent_pair"] == ["agent", "leaf1"]
     assert isinstance(d["reasons"], list) and d["reasons"]
+
+
+# ── Probe authority & independence (Step 3) ───────────────────────────────────
+# The load-bearing guards: probe-only, debug_only, low-authority, and fate-shared
+# evidence MUST NOT reach `confirmed`. (docs/design/probe-authority-model.md)
+
+
+def _probe(observer, **kw):  # convenience: an active_probe witness
+    return make_signal(observer, ModalityClass.ACTIVE_PROBE,
+                       observer_type=ObserverType.VANTAGE_AGENT, **kw)
+
+
+def test_high_probe_plus_independent_modality_confirms():
+    # The positive control: a high-authority (real-vantage) probe + an
+    # independent device-telemetry observer on a DIFFERENT host → confirmed.
+    v = assess([
+        _probe("agentA", probe_authority="high", agent_host="hostA"),
+        make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY),
+    ], required_modalities=frozenset({ModalityClass.ACTIVE_PROBE}))
+    assert v.tier is VerdictTier.CONFIRMED
+
+
+def test_probe_only_never_confirms():
+    # Two high-authority probes from two independent agents — still ONE modality.
+    v = assess([
+        _probe("agentA", probe_authority="high", agent_host="hostA"),
+        _probe("agentB", probe_authority="high", agent_host="hostB"),
+    ])
+    assert v.tier is not VerdictTier.CONFIRMED  # single modality cannot confirm
+
+
+def test_low_authority_probe_cannot_confirm_only_supports():
+    # A LOW-authority (self/internal) probe + a device modality → suspected, not
+    # confirmed: the probe can support a suspicion but never anchor a verdict, and
+    # it does NOT satisfy an active_probe requirement.
+    sigs = [
+        _probe("self-probe", probe_authority="low", agent_host="hostA"),
+        make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY),
+    ]
+    assert assess(sigs).tier is VerdictTier.SUSPECTED
+    v = assess(sigs, required_modalities=frozenset({ModalityClass.ACTIVE_PROBE}))
+    assert v.tier is VerdictTier.SUSPECTED
+    assert any("low-authority" in r.lower() or "low" in r.lower() for r in v.reasons)
+
+
+def test_debug_only_probe_is_excluded_entirely():
+    # debug_only/lab probes are EXCLUDED from customer-facing verdicts: they do
+    # not contribute even alongside a real modality, and a debug-only-only window
+    # is undetermined (nothing admissible), not suspected.
+    only_debug = assess([_probe("lab", probe_authority="debug_only", agent_host="ci")])
+    assert only_debug.tier is VerdictTier.UNDETERMINED
+    assert only_debug.coverage.excluded_debug == ("lab",)
+    # debug probe must not turn a single-device suspicion into a confirmation
+    v = assess([
+        _probe("lab", probe_authority="debug_only", agent_host="ci"),
+        make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY),
+    ])
+    assert v.tier is not VerdictTier.CONFIRMED
+    assert v.coverage.modality_count == 1  # only the device counts
+
+
+def test_fate_shared_probe_and_modality_cannot_confirm():
+    # A high-authority probe and a device-telemetry collector on the SAME host
+    # (shared fate) are NOT independent — one host failure correlates both — so
+    # they cannot co-confirm. Moving the device to another host confirms.
+    shared = assess([
+        _probe("agentA", probe_authority="high", agent_host="hostX"),
+        make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY,
+                    attrs={"agent_host": "hostX"}),
+    ])
+    assert shared.tier is VerdictTier.SUSPECTED
+    assert shared.coverage.independent_pair is None
+
+    independent = assess([
+        _probe("agentA", probe_authority="high", agent_host="hostX"),
+        make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY,
+                    attrs={"agent_host": "hostY"}),
+    ])
+    assert independent.tier is VerdictTier.CONFIRMED
+
+
+def test_fate_shared_probes_collapse_to_one_observer():
+    # Two probes sharing a NAT egress are one independent vantage, not two.
+    cov = coverage([
+        _probe("agentA", probe_authority="high", source_egress="1.2.3.4"),
+        _probe("agentB", probe_authority="high", source_egress="1.2.3.4"),
+    ])
+    assert cov.fate_groups == (("agentA", "agentB"),)
+    a = witness_of(_probe("agentA", probe_authority="high", source_egress="1.2.3.4"))
+    b = witness_of(_probe("agentB", probe_authority="high", source_egress="1.2.3.4"))
+    assert not a.independent_of(b)

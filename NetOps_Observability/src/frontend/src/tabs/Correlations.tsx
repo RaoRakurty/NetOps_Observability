@@ -5,6 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
+import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -249,6 +250,12 @@ export function CorrelationDetail({ id }: { id: string }) {
                 : "concurrent — not linked"}
             </span>
             <span style={muted}>Reason</span><span>{selSig.link_reason}</span>
+            {selSig.modality_class === "active_probe" && selSig.probe_authority && (
+              <>
+                <span style={muted}>Probe</span>
+                <span>{probeScopeLabel(selSig.probe_scope)} · <b style={{ color: PROBE_AUTHORITY_META[selSig.probe_authority]?.color }}>{probeAuthorityLabel(selSig.probe_authority)}</b>{selSig.classification_source ? <span style={muted}> ({selSig.classification_source})</span> : null}</span>
+              </>
+            )}
             <span style={muted}>Entity</span><span style={mono}>{selSig.entity_id}</span>
             <span style={muted}>Time</span>
             <span style={mono}>

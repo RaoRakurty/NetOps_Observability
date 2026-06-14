@@ -54,7 +54,11 @@ from signals import (
     EntityType,
     Observer,
     ObserverType,
+    ProbeIntent,
     Signal,
+    VantageType,
+    derive_probe_authority,
+    derive_probe_scope,
 )
 
 # ---------------------------------------------------------------------------
@@ -605,11 +609,65 @@ SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
 
 
+# Probe-authority classification config (Step 3). Registry-sourced fields on the
+# event win; otherwise we infer + FAIL CLOSED. Lab synthetic generators are
+# excluded from customer-facing verdicts (debug_only). See
+# docs/design/probe-authority-model.md.
+_SYNTHETIC_PROBE_OBSERVERS = {
+    o.strip().lower() for o in os.getenv("CORR_SYNTHETIC_PROBE_OBSERVERS", "api,prober").split(",") if o.strip()
+}
+_INTERNAL_PROBE_TARGETS = {
+    t.strip().lower() for t in os.getenv("CORR_INTERNAL_PROBE_TARGETS", "").split(",") if t.strip()
+}
+_SERVICE_DEP_TARGETS = {
+    t.strip().lower() for t in os.getenv("CORR_SERVICE_DEP_TARGETS", "").split(",") if t.strip()
+}
+
+
+def classify_probe(ev: dict, sig: Signal) -> None:
+    """Enrich an active_probe signal IN PLACE with its derived authority/scope +
+    fate fingerprint. Registry fields (`probe_intent`/`vantage_type` on the event)
+    are authoritative; otherwise infer and fail closed to UNKNOWN→LOW."""
+    intent = str(ev.get("probe_intent") or "")
+    vantage = str(ev.get("vantage_type") or "")
+    src = "registry"
+    if intent and vantage:
+        try:
+            pi, vt = ProbeIntent(intent), VantageType(vantage)
+        except ValueError:
+            pi, vt, src = ProbeIntent.UNKNOWN, VantageType.UNKNOWN, "unknown"
+    else:
+        obs = (sig.observer.observer_id or "").lower()
+        target = sig.entity_id.split("->", 1)[1].strip().lower() if "->" in sig.entity_id else ""
+        if obs in _SYNTHETIC_PROBE_OBSERVERS:
+            pi, vt, src = ProbeIntent.LAB_TEST, VantageType.LOCAL_CONTAINER, "inferred"
+        elif target in _INTERNAL_PROBE_TARGETS:
+            pi, vt, src = ProbeIntent.PLATFORM_SELF_CHECK, VantageType.INTERNAL_COLLECTOR, "inferred"
+        elif target in _SERVICE_DEP_TARGETS:
+            pi, vt, src = ProbeIntent.SERVICE_DEPENDENCY, VantageType.PUBLIC_CLOUD_AGENT, "inferred"
+        else:
+            pi, vt, src = ProbeIntent.UNKNOWN, VantageType.UNKNOWN, "unknown"
+    sig.attrs["probe_intent"] = pi.value
+    sig.attrs["vantage_type"] = vt.value
+    sig.attrs["probe_authority"] = derive_probe_authority(pi, vt).value
+    sig.attrs["probe_scope"] = derive_probe_scope(pi, vt).value
+    sig.attrs["classification_source"] = src
+    sig.attrs["agent_host"] = str(ev.get("agent_host") or ev.get("source") or sig.observer.observer_id)
+    egress = str(ev.get("source_egress") or ev.get("egress_ip") or "")
+    if egress:
+        sig.attrs["source_egress"] = egress
+    if ev.get("seam_id"):
+        sig.attrs["seam_id"] = str(ev["seam_id"])
+    if ev.get("schedule_id"):
+        sig.attrs["schedule_id"] = str(ev["schedule_id"])
+
+
 async def handle_probe(ev: dict) -> None:
     """Active-measurement events (STAMP / ICMP / TCP / HTTP) from the Go
     collectors via netops.probes → active_probe signals on the spine
     (#67 build ⑦). The probe path is the evidence class device telemetry
-    cannot supply — gray failures are invisible to counters."""
+    cannot supply — gray failures are invisible to counters. Each signal is
+    classified for probe authority + fate (Step 3) before it enters the spine."""
     global DEADLETTER_COUNT
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
@@ -623,10 +681,12 @@ async def handle_probe(ev: dict) -> None:
         log.warning("dead-letter (probe): %s", exc)
         return
     for sig in sigs:
+        classify_probe(ev, sig)
         await ch.insert("netops.corr_signals", [sig.to_ch_row()])
         buffer_signal(sig)
-        log.info("probe signal %s: %s sev=%s value=%.1f",
-                 sig.kind, sig.entity_id, sig.severity.value, sig.value)
+        log.info("probe signal %s: %s sev=%s value=%.1f scope=%s auth=%s",
+                 sig.kind, sig.entity_id, sig.severity.value, sig.value,
+                 sig.attrs.get("probe_scope"), sig.attrs.get("probe_authority"))
 
 
 async def handle_snmptrap(ev: dict) -> None:

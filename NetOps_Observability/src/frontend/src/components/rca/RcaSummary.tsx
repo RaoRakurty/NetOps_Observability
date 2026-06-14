@@ -100,6 +100,17 @@ export default function RcaSummary({
     return present.length === 1 && present[0] === "active_probe";
   }, [c.attached_by_modality]);
 
+  // Probe authority (Step 3): how trustworthy is the probe evidence, and were
+  // any debug/lab probes excluded from this customer-facing verdict?
+  const probe = useMemo(() => {
+    const probes = timeline.signals.filter((s) => s.modality_class === "active_probe" && !s.kind.endsWith("_clear"));
+    const debugExcluded = probes.filter((s) => s.probe_authority === "debug_only").length;
+    const attachedAuth = new Set(timeline.signals.filter((s) => s.attached && s.modality_class === "active_probe").map((s) => s.probe_authority));
+    const hasConfirmProbe = attachedAuth.has("high") || attachedAuth.has("medium");
+    const lowOnly = probeOnly && !hasConfirmProbe;
+    return { debugExcluded, hasConfirmProbe, lowOnly };
+  }, [timeline.signals, probeOnly]);
+
   const quality: Quality =
     confirmed && grounded && attachedModalities >= 2 && observers >= 2 ? "strong"
     : !grounded || c.attached <= 1 || attachedModalities <= 1 || probeOnly ? "weak/noisy"
@@ -192,6 +203,16 @@ export default function RcaSummary({
       <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{narrative}</div>
       {probeOnly && (
         <div style={{ fontSize: 11.5, color: C.warn }}>⚠ Single-plane probe evidence only — not yet a cross-plane corroborated RCA.</div>
+      )}
+      {probe.lowOnly && (
+        <div style={{ fontSize: 11.5, color: C.warn }}>
+          ⚠ Probe evidence is low-authority (self / internal / unclassified) — supports a suspicion but <b>cannot confirm</b> without an independent, non-fate-shared trusted modality.
+        </div>
+      )}
+      {probe.debugExcluded > 0 && (
+        <div style={{ fontSize: 11, color: C.faint }}>
+          {probe.debugExcluded} debug / lab probe{probe.debugExcluded === 1 ? "" : "s"} excluded from this verdict (shown in the timeline for context only).
+        </div>
       )}
 
       {/* mini seam/topo graph preview — above the fold */}

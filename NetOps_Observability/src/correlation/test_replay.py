@@ -36,6 +36,9 @@ def load_golden() -> tuple[list[Signal], tuple[SeamView, ...], dict]:
     signals = []
     for i, spec in enumerate(data["signals"]):
         modality = ModalityClass(spec["modality"])
+        attrs = dict(spec.get("attrs", {}))
+        if modality is ModalityClass.ACTIVE_PROBE:
+            attrs.setdefault("probe_authority", spec.get("probe_authority", "high"))
         signals.append(Signal(
             tenant_id="",
             ts=T0 + timedelta(seconds=float(spec.get("ts_offset_s", i))),
@@ -52,7 +55,7 @@ def load_golden() -> tuple[list[Signal], tuple[SeamView, ...], dict]:
             severity=Severity(spec.get("severity", "warn")),
             native_id=f"golden|{i}|{spec['kind']}",
             deviation=float(spec.get("deviation", 0.0)),
-            attrs=dict(spec.get("attrs", {})),
+            attrs=attrs,
         ))
     seams = tuple(SeamView.from_dict(d) for d in data.get("seams", ()))
     return signals, seams, data["expect"]

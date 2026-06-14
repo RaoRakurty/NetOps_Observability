@@ -47,6 +47,15 @@ MODALITY_SOURCE = {
 
 def signal_from_fixture(spec: dict, idx: int) -> Signal:
     modality = ModalityClass(spec["modality"])
+    attrs = dict(spec.get("attrs", {}))
+    # Fixtures model REAL incident scenarios, so their probes are real vantages:
+    # default active_probe to HIGH authority unless the fixture says otherwise
+    # (low/debug fixtures set probe_authority explicitly). Fate inputs pass through.
+    if modality is ModalityClass.ACTIVE_PROBE:
+        attrs.setdefault("probe_authority", spec.get("probe_authority", "high"))
+        for k in ("agent_host", "source_egress", "seam_id", "schedule_id", "probe_scope"):
+            if k in spec:
+                attrs.setdefault(k, spec[k])
     return Signal(
         tenant_id="t1",
         ts=T0 + timedelta(seconds=float(spec.get("ts_offset_s", idx))),
@@ -63,6 +72,7 @@ def signal_from_fixture(spec: dict, idx: int) -> Signal:
         severity=Severity.WARN,
         native_id=f"fixture|{idx}|{spec['kind']}",
         deviation=float(spec.get("deviation", 0.0)),
+        attrs=attrs,
     )
 
 
