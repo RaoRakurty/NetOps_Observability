@@ -140,10 +140,13 @@ export default function RcaTimeline({
                 const isHi = highlight?.has(s.signal_id);
                 const isSel = selected === s.signal_id;
                 const dim = highlight && highlight.size > 0 && !isHi;
-                // dot size scales with severity; trigger is largest.
+                // dot size scales with severity; attached evidence reads larger
+                // (it's the linked story); trigger is largest.
                 const sevSz: Record<string, number> = { crit: 13, high: 11, warn: 9, info: 8 };
-                const sz = s.is_trigger ? 15 : (sevSz[s.severity] ?? 9);
+                const base = sevSz[s.severity] ?? 9;
+                const sz = s.is_trigger ? 16 : (s.attached ? base + 2 : base);
                 const isDebugProbe = s.probe_authority === "debug_only";
+                const isRecovery = s.link_status === "recovery";
                 return (
                   <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: "50%", transform: "translate(-50%,-50%)", opacity: dim ? 0.25 : 1 }}>
                     {/* uncertainty bar */}
@@ -164,8 +167,8 @@ export default function RcaTimeline({
                         background: s.attached ? lane.color : "transparent",
                         border: isDebugProbe
                           ? `1.5px dashed ${C.faint}`
-                          : `2px solid ${role ? ROLE_COLOR[role] : lane.color}`,
-                        opacity: isDebugProbe ? 0.55 : 1,
+                          : `${s.attached ? 2.5 : 2}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
+                        opacity: isDebugProbe ? 0.5 : isRecovery ? 0.55 : 1,
                         boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "none"),
                         cursor: "pointer",
                       }}

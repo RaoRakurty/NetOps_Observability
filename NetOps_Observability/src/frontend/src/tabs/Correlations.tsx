@@ -39,17 +39,18 @@ function qualityOf(o: CorrObject): Qual {
   if (o.verdict_tier === "suspected" && grounded && !o.low_authority) return "candidate";
   return "weak";
 }
-const QUAL_TONE: Record<Qual, string> = { strong: "#FF5366", candidate: "#F2B705", weak: "#7E8AA0" };
+// mid-tone hues, readable on the light canvas AND dark theme
+const QUAL_TONE: Record<Qual, string> = { strong: "#E11D48", candidate: "#D97706", weak: "#8A93A6" };
 function pill(text: string, tone: string, filled = false): React.ReactNode {
   return <span style={{
     fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
     whiteSpace: "nowrap",
-    color: filled ? "#0E1320" : tone, background: filled ? tone : tone + "22",
-    border: `1px solid ${tone}66`,
+    color: filled ? "#ffffff" : tone, background: filled ? tone : tone + "1c",
+    border: `1px solid ${tone}55`,
   }}>{text}</span>;
 }
 const QUAL_RANK: Record<Qual, number> = { strong: 2, candidate: 1, weak: 0 };
-const GROUND_TONE: Record<string, string> = { seam: "#F2B705", "seam+topo": "#F2B705", topo: "#5B9DFF", none: "#7E8AA0" };
+const GROUND_TONE: Record<string, string> = { seam: "#D97706", "seam+topo": "#D97706", topo: "#2563EB", none: "#8A93A6" };
 
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
@@ -69,7 +70,7 @@ export default function Correlations() {
       render: (o) => { const q = qualityOf(o); return pill(q, QUAL_TONE[q], q !== "weak"); } },
     { key: "top_hypothesis", header: "Likely cause", width: 200, sortable: true, text: (o) => o.top_hypothesis,
       render: (o) => o.top_hypothesis === "undetermined"
-        ? <span style={{ color: "#7E8AA0" }}>undetermined</span>
+        ? <span style={{ color: "var(--muted)" }}>undetermined</span>
         : <span title={o.top_hypothesis}>{signatureName(o.top_hypothesis)}</span> },
     { key: "owner", header: "Owner", width: 96, sortable: true, text: (o) => o.owner ?? "",
       render: (o) => o.owner ? <span style={{ fontSize: 12 }}>{ownerLabel(o.owner)}</span> : "—" },
@@ -78,12 +79,15 @@ export default function Correlations() {
     { key: "planes", header: "Planes", width: 64, align: "right", sortable: true,
       sortValue: (o) => Number(o.plane_count ?? 0),
       render: (o) => <span style={mono}>{Number(o.plane_count ?? 0)}</span> },
-    { key: "authority", header: "Evidence", width: 100, sortable: true,
-      sortValue: (o) => (o.debug_excluded ? 0 : o.low_authority ? 1 : 2),
-      render: (o) => o.debug_excluded ? pill("debug-excl", "#7E8AA0")
-        : o.low_authority ? pill("low-auth", "#F2B705") : pill("trusted", "#35D6A4") },
-    { key: "shape", header: "N / E / Sig", width: 110, align: "right",
-      render: (o) => <span style={mono}>{o.node_count}n · {Number(o.edge_count ?? 0)}e · {o.signal_count}s</span> },
+    { key: "authority", header: "Evidence source", width: 116, sortable: true,
+      sortValue: (o) => (o.debug_excluded ? 0 : o.low_authority ? 1 : o.top_hypothesis !== "undetermined" ? 3 : 2),
+      render: (o) => o.debug_excluded ? pill("debug excluded", "#8A93A6")
+        : o.low_authority ? pill("low authority", "#D97706")
+        : o.top_hypothesis !== "undetermined" ? pill("trusted source", "#16A34A")
+        : <span style={{ color: "var(--muted)" }}>—</span> },
+    { key: "shape", header: "Size", width: 120, align: "right",
+      render: (o) => <span style={mono} title={`${o.node_count} nodes · ${Number(o.edge_count ?? 0)} edges · ${o.signal_count} signals`}>
+        {o.node_count} nd · {Number(o.edge_count ?? 0)} ed</span> },
   ], []);
 
   useEffect(() => {

@@ -22,22 +22,22 @@ const VERDICT_TONE: Record<string, string> = {
   confirmed: C.crit, suspected: C.warn, undetermined: C.faint,
 };
 
-// A high-contrast filled badge (operator-readable across a room).
+// A high-contrast filled badge — for the headline verdict/quality only.
 function strongBadge(tone: string): React.CSSProperties {
   return {
     fontSize: 11.5, fontWeight: 800, letterSpacing: 0.4, padding: "2px 9px",
-    borderRadius: 5, color: "#0E1320", background: tone, lineHeight: 1.4,
+    borderRadius: 5, color: "#ffffff", background: tone, lineHeight: 1.4,
     whiteSpace: "nowrap",
   };
 }
 
-// Coverage-card semantics (operator legend).
-const COV = {
-  linked: { color: C.ok, bg: tint(C.ok) },          // green — linked evidence
-  present: { color: C.info, bg: tint(C.info) },      // blue — present, not linked
-  absent: { color: C.faint, bg: "transparent" },     // gray — absent
-  required: { color: C.warn, bg: tint(C.warn) },     // amber — missing & required
-};
+// A subtle outlined badge — for per-card evidence states (not alarm-heavy).
+function softBadge(tone: string): React.CSSProperties {
+  return {
+    fontSize: 11, fontWeight: 700, padding: "1px 7px", borderRadius: 4,
+    color: tone, background: tone + "18", border: `1px solid ${tone}55`, whiteSpace: "nowrap",
+  };
+}
 
 // seam_type → friendly story phrase when no signature has matched yet.
 const SEAM_STORY: Record<string, string> = {
@@ -288,17 +288,24 @@ export default function RcaSummary({
         </div>
       )}
 
-      {/* recommended next action (from the matched signature's playbook) */}
-      {recommendedSteps.length > 0 && (
-        <div style={{ border: `1px solid ${C.info}55`, background: tint(C.info, "14"), borderRadius: 6, padding: "8px 10px" }}>
-          <div style={{ ...title, color: C.info }}>
-            Recommended next action{owner ? <span style={{ ...muted, fontWeight: 400 }}> · likely owner: <b style={{ color: C.fg }}>{ownerLabel(owner)}</b></span> : null}
-          </div>
-          <ol style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5 }}>
+      {/* recommended next action — matched-signature playbook, or a fallback so
+          even weak/undetermined objects get an operator-actionable recommendation */}
+      <div style={{ border: "1px solid var(--border)", borderLeft: `3px solid ${C.info}`, background: "var(--hover)", borderRadius: 6, padding: "8px 10px" }}>
+        <div style={{ ...title, color: C.info }}>
+          Recommended next action{recommendedSteps.length > 0 && owner ? <span style={{ ...muted, fontWeight: 400 }}> · likely owner: <b style={{ color: "var(--fg)" }}>{ownerLabel(owner)}</b></span> : null}
+        </div>
+        {recommendedSteps.length > 0 ? (
+          <ol style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5, color: "var(--fg)" }}>
             {recommendedSteps.slice(0, 3).map((s, i) => <li key={i}>{s}</li>)}
           </ol>
-        </div>
-      )}
+        ) : (
+          <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 3, color: "var(--fg)" }}>
+            {probe.lowOnly || probeOnly
+              ? "Don't action as customer-facing RCA unless reproduced by trusted customer-path probes, or corroborated by device telemetry, control-plane events, or flow loss in the same window."
+              : `Collect a second independent modality (${corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "device telemetry, control plane, or flow"}) before acting — current evidence can't confirm a cause.`}
+          </div>
+        )}
+      </div>
 
       {/* per-plane diagnostic coverage — strong state badges */}
       <div>
@@ -310,15 +317,19 @@ export default function RcaSummary({
             const isProbe = key === "active_probe";
             const lowAuthProbe = isProbe && att > 0 && !probe.hasConfirmProbe;
             const debugExcludedHere = isProbe && total > att && probe.debugExcluded > 0;
-            // state → {tone, label}
-            let tone: string = COV.absent.color, badge = "ABSENT", bg = "transparent";
-            if (att > 0 && lowAuthProbe) { tone = C.warn; badge = "USED · LOW-AUTH"; bg = tint(C.warn); }
-            else if (att > 0) { tone = C.ok; badge = "USED"; bg = tint(C.ok); }
-            else if (total > 0) { tone = C.info; badge = "PRESENT · NOT LINKED"; bg = tint(C.info); }
-            else if (requiredModalities.has(key)) { tone = C.warn; badge = "MISSING · REQUIRED"; bg = tint(C.warn); }
+            // state → {tone, label}. Card stays NEUTRAL; the badge + a tinted
+            // left-border carry the state, so the grid doesn't read as all-alarm.
+            let tone: string = C.faint, badge = "Not observed", used = false;
+            if (att > 0 && lowAuthProbe) { tone = C.warn; badge = "Used · low authority"; used = true; }
+            else if (att > 0) { tone = C.ok; badge = "Used"; used = true; }
+            else if (total > 0) { tone = C.info; badge = "Present · not linked"; }
+            else if (requiredModalities.has(key)) { tone = C.warn; badge = "Needed to confirm"; }
             return (
-              <div key={key} style={{ border: `1px solid ${tone}77`, background: bg, borderRadius: 6, padding: "7px 9px", minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
+              <div key={key} style={{
+                border: "1px solid var(--border)", borderLeft: `3px solid ${tone}`,
+                background: used ? "var(--hover)" : "transparent", borderRadius: 6, padding: "7px 9px", minWidth: 0,
+              }}>
+                <div style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--fg)" }}>
                   <span style={{ width: 9, height: 9, borderRadius: 2, background: MODALITY_META[key].color, display: "inline-block" }} />
                   {modalityLabel(key)}
                 </div>
@@ -328,8 +339,8 @@ export default function RcaSummary({
                     : <span style={muted}>0 signals</span>}
                 </div>
                 <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  <span style={strongBadge(tone)}>{badge}</span>
-                  {debugExcludedHere && <span style={strongBadge(C.faint)}>DEBUG EXCLUDED</span>}
+                  <span style={softBadge(tone)}>{badge}</span>
+                  {debugExcludedHere && <span style={softBadge(C.faint)}>debug excluded</span>}
                 </div>
               </div>
             );
@@ -338,24 +349,24 @@ export default function RcaSummary({
       </div>
 
       {/* what would upgrade — actionable */}
-      {(corroborate.length > 0 || clauseItems.length > 0) && (
+      {(corroborate.length > 0 || (view === "debug" && clauseItems.length > 0)) && (
         <div>
           <div style={title}>What would {confirmed ? "strengthen" : "upgrade"} this verdict</div>
 
           {/* actionable corroboration from absent planes (the common case) */}
           {corroborate.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <div style={{ ...muted, fontSize: 12.5 }}>Add corroborating evidence from another plane:</div>
+              <div style={{ ...muted, fontSize: 12.5 }}>To confirm this RCA, collect one of:</div>
               {corroborate.map((p) => (
-                <div key={p} style={{ fontSize: 12.5, padding: "1px 0" }}>
+                <div key={p} style={{ fontSize: 12.5, padding: "1px 0", color: "var(--fg)" }}>
                   ○ {PLANE_SUGGEST[p]} <span style={muted}>— {modalityLabel(p).toLowerCase()}</span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* specific signature clause gaps (cloud/dns-style look-alikes) */}
-          {clauseItems.map((mi, i) => (
+          {/* specific signature clause gaps — Debug View only (raw signature detail) */}
+          {view === "debug" && clauseItems.map((mi, i) => (
             <div key={i} style={{ marginTop: 5 }}>
               <div style={{ fontSize: 12.5 }}>
                 Possible signature: <b>{signatureName(mi.signature)}</b>

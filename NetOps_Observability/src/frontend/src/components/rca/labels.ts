@@ -9,19 +9,24 @@
 // black/white) so a quiet room reads as quiet; severity colors are the ONLY loud
 // hues and are always paired with a glyph/label (colorblind-safe, color-not-only).
 // All values clear WCAG 4.5:1 on the dark slate surfaces below.
+// IMPORTANT: the app ships BOTH a light (default) and a dark theme. Text colors
+// MUST defer to the theme tokens (var(--fg)/var(--muted)/var(--fg-subtle)) or
+// they go invisible on the light canvas. Severity hues are mid-tone (≈600-level)
+// so they read on a WHITE card and on dark slate alike — no neon (which only
+// works on dark) and no pale (which only works on dark).
 export const C = {
-  // severity — the alarm palette (legible across a room)
-  crit: "#FF5366",        // critical / contradicts / malformed
-  warn: "#F2B705",        // warning / caution / missing-required / control-plane / seam
-  ok: "#35D6A4",          // healthy / linked / supports (calm emerald, not neon)
-  info: "#5B9DFF",        // info / device-telemetry / present-not-linked
-  flow: "#2DD4BF",        // flows (teal)
-  discriminates: "#A78BFA", // discriminating evidence (violet)
-  // calm surfaces (fallbacks; the app theme vars take precedence where set)
-  fg: "#EEF3FA",          // off-white, never #FFF (brightened for legibility)
-  muted: "#AEB9CC",       // secondary text — brighter (~5.5:1 on slate, comfortable)
-  faint: "#7E8AA0",       // tertiary / absent — brighter
-  line: "#2E3850",        // borders/dividers
+  // severity — mid-tone, theme-neutral (legible on white AND dark)
+  crit: "#E11D48",        // critical / contradicts / malformed
+  warn: "#D97706",        // warning / caution / needed-to-confirm / control-plane / seam
+  ok: "#16A34A",          // healthy / linked / supports
+  info: "#2563EB",        // info / device-telemetry / present-not-linked
+  flow: "#0D9488",        // flows (teal)
+  discriminates: "#7C3AED", // discriminating evidence (violet)
+  // text/surfaces — defer to theme tokens so they adapt light↔dark
+  fg: "var(--fg)",        // primary text (theme-aware)
+  muted: "#6B7280",       // secondary text — mid gray, readable on white + dark
+  faint: "#8A93A6",       // tertiary / absent — lighter mid gray
+  line: "var(--border)",  // borders/dividers (theme-aware)
   bg: "#0E1320",          // deepest surface, never #000
   panel: "#151B2B",       // card surface
 } as const;
