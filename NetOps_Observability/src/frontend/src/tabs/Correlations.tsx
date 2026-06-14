@@ -84,8 +84,8 @@ export default function Correlations() {
     setSel(o.correlation_id);
     if (ws.enabled) {
       ws.openInspector(<CorrelationDetail id={o.correlation_id} />, {
-        title: o.top_hypothesis === "undetermined" ? "Correlation (undetermined)" : o.top_hypothesis,
-        subtitle: `${o.verdict_tier} · v${o.version} · ${o.node_count} nodes`,
+        title: "RCA · " + (o.top_hypothesis === "undetermined" ? "Candidate" : o.top_hypothesis),
+        subtitle: `${o.verdict_tier} · v${o.version}`,
       });
     }
   };
@@ -155,6 +155,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   const [err, setErr] = useState("");
   const [selEdge, setSelEdge] = useState<CorrEdge | null>(null);
   const [selSignal, setSelSignal] = useState<string | null>(null);
+  const [view, setView] = useState<"operator" | "debug">("operator");
 
   useEffect(() => {
     let alive = true;
@@ -206,20 +207,25 @@ export function CorrelationDetail({ id }: { id: string }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
-      {/* verdict header */}
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <span className={`badge ${TIER_CLASS[obj.verdict_tier] ?? ""}`}>{obj.verdict_tier}</span>
-        <span className="badge">{obj.state}</span>
-        <span className="badge">v{obj.version}</span>
-        <span style={mono}>{obj.top_hypothesis}</span>
-        {obj.top_hypothesis !== "undetermined" && (
-          <span style={{ ...muted, fontSize: 12 }}>rank {obj.top_confidence.toFixed(2)}</span>
-        )}
+      {/* operator ↔ debug toggle */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 0 }}>
+        {(["operator", "debug"] as const).map((v) => (
+          <button key={v} onClick={() => setView(v)} style={{
+            fontSize: 11, padding: "2px 10px", cursor: "pointer", textTransform: "capitalize",
+            border: "1px solid var(--border,#2a2f3a)",
+            borderRadius: v === "operator" ? "4px 0 0 4px" : "0 4px 4px 0",
+            background: view === v ? "var(--accent,#4c8dff)" : "transparent",
+            color: view === v ? "#fff" : "var(--muted)",
+          }}>{v} view</button>
+        ))}
       </div>
 
-      {/* RCA summary: quality, verdict, why-undetermined, coverage, grounding,
-          and the actionable missing-evidence checklist */}
-      {timeline && <RcaSummary timeline={timeline} seams={seams} />}
+      {/* RCA story: clean header, plain-English summary, mini seam preview,
+          diagnostic coverage, human-readable missing-evidence checklist */}
+      {timeline && (
+        <RcaSummary timeline={timeline} seams={seams} view={view}
+          state={obj.state} version={obj.version} nodeCount={obj.node_count} />
+      )}
 
       {/* PRIMARY: the cross-plane cascade */}
       <div>
@@ -227,16 +233,34 @@ export function CorrelationDetail({ id }: { id: string }) {
         {timeline
           ? <RcaTimeline timeline={timeline} selected={selSignal} onSelect={setSelSignal} highlight={highlight} />
           : <div className="empty">Loading window slice…</div>}
+        {/* click-to-explain: why this signal was / wasn't linked */}
         {selSig && (
-          <div style={{ ...mono, fontSize: 11, marginTop: 6 }}>
-            <span style={{ color: STATUS_COLOR[selSig.link_status] ?? "#d29922" }}>
-              {selSig.link_status === "attached"
-                ? `● attached / ${selSig.link_role || "supporting"}`
-                : selSig.link_status === "recovery" ? "○ recovery / clear"
-                : selSig.link_status === "malformed" ? "△ malformed identity"
-                : "○ concurrent — not linked"}
-            </span>{" "}
-            <span style={muted}>{selSig.kind} · {selSig.entity_id} — {selSig.link_reason}</span>
+          <div style={{
+            marginTop: 8, border: `1px solid ${STATUS_COLOR[selSig.link_status] ?? "#d29922"}55`,
+            borderRadius: 6, padding: "8px 10px", background: "var(--panel,#11151c)",
+            display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px", fontSize: 12,
+          }}>
+            <span style={muted}>Signal</span><span>{selSig.kind} <span style={muted}>({selSig.modality_class.replace(/_/g, " ")})</span></span>
+            <span style={muted}>Status</span>
+            <span style={{ color: STATUS_COLOR[selSig.link_status] ?? "#d29922", fontWeight: 600 }}>
+              {selSig.link_status === "attached" ? `attached / ${selSig.link_role || "supporting"}`
+                : selSig.link_status === "recovery" ? "concurrent — recovery/clear"
+                : selSig.link_status === "malformed" ? "malformed identity"
+                : "concurrent — not linked"}
+            </span>
+            <span style={muted}>Reason</span><span>{selSig.link_reason}</span>
+            <span style={muted}>Entity</span><span style={mono}>{selSig.entity_id}</span>
+            <span style={muted}>Time</span>
+            <span style={mono}>
+              {selSig.ts.slice(11, 19)} UTC{timeline && ` (T+${Math.round((Date.parse(selSig.ts.replace(" ", "T") + "Z") - Date.parse(timeline.window_start.replace(" ", "T") + "Z")) / 1000)}s)`}
+            </span>
+            <span style={muted}>Severity</span><span style={{ textTransform: "capitalize" }}>{selSig.severity}</span>
+            {(selSig.linked_edges ?? []).length > 0 && (
+              <>
+                <span style={muted}>Linked to</span>
+                <span style={mono}>{(selSig.linked_edges ?? []).map((e) => `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}]`).join("; ")}</span>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -250,49 +274,53 @@ export function CorrelationDetail({ id }: { id: string }) {
         <SeamGraph edges={edges} seams={seams} onSelectEdge={setSelEdge} />
       </div>
 
-      {/* meta + pins */}
-      <div>
-        {row("Object", <span style={mono}>{obj.correlation_id}</span>)}
-        {row("Window", <span style={mono}>{obj.window_start} → {obj.window_end} UTC</span>)}
-        {row("Pins", <span style={mono}>{obj.engine_version} · {obj.catalog_version} · {obj.topology_version}</span>)}
-        {ctx.topology_gap_hints > 0 &&
-          row("Gap hints", `${ctx.topology_gap_hints} ungrounded co-occurrences (excluded, queued for seam review)`)}
-      </div>
+      {/* DEBUG-only: pins, competing hypotheses, deterministic replay */}
+      {view === "debug" && (
+        <>
+          <div>
+            {row("Object", <span style={mono}>{obj.correlation_id}</span>)}
+            {row("Window", <span style={mono}>{obj.window_start} → {obj.window_end} UTC</span>)}
+            {row("Pins", <span style={mono}>{obj.engine_version} · {obj.catalog_version} · {obj.topology_version}</span>)}
+            {ctx.topology_gap_hints > 0 &&
+              row("Gap hints", `${ctx.topology_gap_hints} ungrounded co-occurrences (excluded, queued for seam review)`)}
+          </div>
 
-      {(ranking.hypotheses ?? []).length > 0 && (
-        <div>
-          <div style={titleStyle}>Competing hypotheses</div>
-          {(ranking.hypotheses as any[]).map((h) => (
-            <div key={h.template_id} style={{ ...mono, padding: "1px 0" }}>
-              {h.template_id} — rank {Number(h.confidence_rank ?? 0).toFixed(2)}, coverage {Number(h.coverage ?? 0).toFixed(2)}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button className="btn" onClick={runReplay} disabled={replaying}>
-          {replaying ? "Replaying…" : "Replay (determinism check)"}
-        </button>
-        {replay && (
-          <span className={`badge ${replay.clean ? "" : "sev-critical"}`}>
-            {replay.clean
-              ? `clean — v${replay.stored_version} reproduced bit-perfect`
-              : `drift: ${replay.differences.length} difference(s)`}
-          </span>
-        )}
-      </div>
-      {replay && !replay.clean && (
-        <div>
-          {replay.differences.map((d) => (
-            <div key={d} style={{ ...mono, ...muted }}>· {d}</div>
-          ))}
-          {!replay.engine_pin_match && (
-            <div style={{ fontSize: 12, ...muted }}>
-              Engine pin mismatch: the object was built by an older engine — expected evolution, not corruption.
+          {(ranking.hypotheses ?? []).length > 0 && (
+            <div>
+              <div style={titleStyle}>Competing hypotheses</div>
+              {(ranking.hypotheses as any[]).map((h) => (
+                <div key={h.template_id} style={{ ...mono, padding: "1px 0" }}>
+                  {h.template_id} — rank {Number(h.confidence_rank ?? 0).toFixed(2)}, coverage {Number(h.coverage ?? 0).toFixed(2)}
+                </div>
+              ))}
             </div>
           )}
-        </div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button className="btn" onClick={runReplay} disabled={replaying}>
+              {replaying ? "Replaying…" : "Replay (determinism check)"}
+            </button>
+            {replay && (
+              <span className={`badge ${replay.clean ? "" : "sev-critical"}`}>
+                {replay.clean
+                  ? `clean — v${replay.stored_version} reproduced bit-perfect`
+                  : `drift: ${replay.differences.length} difference(s)`}
+              </span>
+            )}
+          </div>
+          {replay && !replay.clean && (
+            <div>
+              {replay.differences.map((d) => (
+                <div key={d} style={{ ...mono, ...muted }}>· {d}</div>
+              ))}
+              {!replay.engine_pin_match && (
+                <div style={{ fontSize: 12, ...muted }}>
+                  Engine pin mismatch: the object was built by an older engine — expected evolution, not corruption.
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

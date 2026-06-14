@@ -162,6 +162,18 @@ export default function RcaTimeline({
                         cursor: "pointer",
                       }}
                     />
+                    {/* label — only meaningful events (trigger, crit, or the
+                        rarer control-plane / device lanes) so the probe lane
+                        stays uncluttered. Selecting a signal always labels it. */}
+                    {(s.is_trigger || isSel || s.severity === "crit"
+                      || lane.key === "control_plane" || lane.key === "device_telemetry") && !dim && (
+                      <span style={{
+                        position: "absolute", left: sz / 2 + 4, top: "50%", transform: "translateY(-50%)",
+                        whiteSpace: "nowrap", fontSize: 9, lineHeight: 1, pointerEvents: "none",
+                        color: isSel ? "var(--accent,#4c8dff)" : lane.color, opacity: isSel ? 1 : 0.85,
+                        fontWeight: s.is_trigger || isSel ? 700 : 400,
+                      }}>{s.kind.replace(/_anomaly$/, "").replace(/_change$/, "")}</span>
+                    )}
                   </div>
                 );
               })}
