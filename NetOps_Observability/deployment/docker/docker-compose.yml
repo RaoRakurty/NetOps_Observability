@@ -185,10 +185,20 @@ services:
     networks: [netops]
     restart: *restart
 
-  # Telegraf — edge SNMP poller. Reads device list from config, polls
-  # SNMP, emits InfluxDB line protocol over TCP to vector-aggregator.
+  # Telegraf — DEPRECATED / LEGACY PLACEHOLDER. Not started by default.
+  #
+  # SNMP metrics are owned by the Go collector (src/backend/collectors/), which
+  # polls the fabric with per-device SNMPv3 and emits the canonical device_*
+  # contract to VictoriaMetrics AND the filtered correlation lane (netops.metrics
+  # via Vector :8690). Telegraf's bundled config is a stub (polls 10.0.0.1/2 with
+  # community "public") that only ever timed out; running it would imply a second,
+  # non-canonical SNMP metric path that does not exist. Gated behind the `legacy`
+  # profile so it never starts unless explicitly requested. Do NOT make Telegraf
+  # a producer to netops.metrics — see docs/design/internal-topology.md and the
+  # architecture-contract tests (tests/test_architecture_contract.py).
   telegraf:
     image: telegraf:1.31-alpine@sha256:bf274ea9fbf49a62ed19478ea0badb0f040ee9db09725a94175fa5ffecd8b7ab
+    profiles: [legacy]
     mem_limit: ${TELEGRAF_MEM_LIMIT:-512m}
     cpus: ${TELEGRAF_CPU_LIMIT:-1}
     logging: *deflog

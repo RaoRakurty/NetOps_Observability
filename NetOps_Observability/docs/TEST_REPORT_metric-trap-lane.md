@@ -2,14 +2,31 @@
 
 Date: 2026-06-14 · Branch: `feat/observability-platform` · Stack: live lab (.122)
 
+## Current accurate status (do NOT overclaim)
+
+The docs and UI must reflect exactly this — no more:
+
+| Capability | Status |
+|---|---|
+| SNMP metric → correlation (`device_telemetry`) | **validated** (live) |
+| Trap → `control_plane` correlation | **validated for high-value families** (linkDown/Up, cold/warmStart, BGP transition) |
+| **gNMI metric → correlation bus path** | **Phase 2 — NOT wired** |
+| gNMI fidelity | **partially validated / degraded by platform·version·mode** (catalog-tracked) |
+| Fixture-replay harness | **not complete** |
+
+Foundational correlation is **ready for deeper RCA development using SNMP
+metrics, traps, syslog, flows, probes**. It is **not** ready to claim gNMI metric
+correlation until the Phase-2 bus path + fixture replay are complete.
+
 ## Verdict
 
-**PASS.** The finalized architecture is implemented and proven end-to-end on the
-live stack. SNMP metrics now flow `Go collector → Vector :8690 → netops.metrics →
-correlation → corr_signals` and produce `device_telemetry` signals with canonical
-identity; SNMP traps produce normalized `control_plane` signals (high-value only);
-syslog/flows/probes remain working; VictoriaMetrics stays the metric store, not
-the live RCA path; Telegraf is not a bus producer.
+**PASS** for foundational correlation readiness. The finalized architecture is
+implemented and proven end-to-end on the live stack. SNMP metrics now flow
+`Go collector → Vector :8690 → netops.metrics → correlation → corr_signals` and
+produce `device_telemetry` signals with canonical identity; SNMP traps produce
+normalized `control_plane` signals (high-value only); syslog/flows/probes remain
+working; VictoriaMetrics stays the metric store, not the live RCA path; Telegraf
+is not a bus producer. gNMI metric→correlation remains Phase 2 (see status above).
 
 | Suite | Result |
 |-------|--------|

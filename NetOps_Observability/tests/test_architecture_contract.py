@@ -35,6 +35,16 @@ def test_telegraf_is_not_a_bus_producer():
     assert "netops.metrics" not in cfg, "Telegraf must not target netops.metrics"
 
 
+def test_telegraf_is_gated_off_by_default():
+    """Telegraf must be a non-default (legacy-profile) service so it can never
+    silently run as a second SNMP path. The Go collector owns SNMP metrics."""
+    compose = yaml.safe_load(read("deployment", "docker", "docker-compose.yml"))
+    tg = compose["services"].get("telegraf")
+    if tg is not None:  # allowed to be removed entirely; if present it must be gated
+        assert "legacy" in (tg.get("profiles") or []), \
+            "Telegraf must be gated behind the 'legacy' compose profile (not default)"
+
+
 def test_telegraf_keeps_only_its_vm_output():
     """Telegraf may still write to VictoriaMetrics (its only legitimate output);
     it must not gain a bus output. Exactly one outputs block, and it's http/VM."""
