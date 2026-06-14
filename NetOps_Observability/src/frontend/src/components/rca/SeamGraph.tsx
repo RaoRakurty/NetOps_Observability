@@ -2,6 +2,7 @@ import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
 import { CorrEdge, Seam } from "../../services/api";
 import { chartBase } from "../../theme/charts";
+import { C } from "./labels";
 
 // SeamGraph — the SECONDARY (but honest) RCA view: the engine's grounded causal
 // graph. Every edge is grounded (the engine never emits an ungrounded one). When
@@ -13,11 +14,11 @@ import { chartBase } from "../../theme/charts";
 // We render engine-recorded fields only; we never infer causality here.
 
 const OWNER_COLOR: Record<string, string> = {
-  enterprise: "#4c8dff",
-  isp: "#f0a020",
-  cloud: "#a371f7",
-  sdwan_controller: "#1bc5bd",
-  unknown: "#8b949e",
+  enterprise: C.info,
+  isp: C.warn,
+  cloud: C.discriminates,
+  sdwan_controller: C.flow,
+  unknown: C.faint,
 };
 
 // An edge is drawn directed only if the engine was confident AND it had a real
@@ -63,7 +64,7 @@ export default function SeamGraph({
       seen.add(key);
       nodes.push({
         id: key, name: episodeLabel(key), symbolSize: 26, category: "episode",
-        itemStyle: { color: "#30363d", borderColor: "#8b949e", borderWidth: 1 },
+        itemStyle: { color: "#222a3a", borderColor: C.muted, borderWidth: 1 },
         _kind: "episode", _key: key,
       });
     };
@@ -71,7 +72,7 @@ export default function SeamGraph({
       source, target,
       lineStyle: {
         width: Math.max(1, Math.min(8, e.weight * 8)),
-        color: e.grounding_kind === "seam" ? "#f0a020" : "#5a6472",
+        color: e.grounding_kind === "seam" ? C.warn : "#5a6472",
         type: e.grounding_kind === "seam" ? "solid" : "dashed",
         curveness: 0.12, opacity: 0.85,
       },

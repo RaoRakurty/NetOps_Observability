@@ -1,16 +1,18 @@
 import { useMemo, useState } from "react";
 import { CorrTimeline, Seam } from "../../services/api";
 import {
-  MODALITY_META, MODALITY_ORDER, modalityLabel,
+  C, MODALITY_META, MODALITY_ORDER, modalityLabel,
   signatureName, kindMeta, kindLabel,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
+// hex+alpha tint helper for calm severity backgrounds.
+const tint = (hex: string, a = "1f") => hex + a;
+
 // RcaSummary — the operator-facing RCA story (not an engine dump). Leads with a
-// plain-English sentence ("this appears to be a weak ISP/DIA-seam probe
-// degradation candidate…"), then a clean header, a mini seam preview, per-plane
-// diagnostic coverage, and a human-readable "what would upgrade this" checklist.
-// The engine wording lives under an expandable "Why?" / Debug view. Read-only.
+// precise plain-English sentence, then a clean header, a mini seam preview, per-
+// plane diagnostic coverage, and an actionable "what would corroborate this"
+// list. Engine wording lives under "Why?" / Debug view. Read-only.
 
 type Quality = "strong" | "candidate" | "weak/noisy";
 const QUALITY_CLASS: Record<Quality, string> = {
@@ -19,16 +21,31 @@ const QUALITY_CLASS: Record<Quality, string> = {
 
 // Coverage-card semantics (operator legend).
 const COV = {
-  linked: { color: "#3fb950", bg: "#3fb95018" },   // green — linked evidence
-  present: { color: "#4c8dff", bg: "#4c8dff18" },   // blue — present, not linked
-  absent: { color: "#8b949e", bg: "transparent" }, // gray — absent
-  required: { color: "#d29922", bg: "#d2992218" },  // orange — missing & required
+  linked: { color: C.ok, bg: tint(C.ok) },          // green — linked evidence
+  present: { color: C.info, bg: tint(C.info) },      // blue — present, not linked
+  absent: { color: C.faint, bg: "transparent" },     // gray — absent
+  required: { color: C.warn, bg: tint(C.warn) },     // amber — missing & required
+};
+
+// seam_type → friendly story phrase when no signature has matched yet.
+const SEAM_STORY: Record<string, string> = {
+  DIA: "ISP / DIA egress latency",
+  DX: "DX path degradation",
+  VPN: "VPN tunnel degradation",
+  SDWAN: "SD-WAN overlay degradation",
+  CLOUD_BACKBONE: "cloud backbone degradation",
+};
+
+// absent plane → the concrete evidence that would corroborate it (operator action).
+const PLANE_SUGGEST: Record<string, string> = {
+  device_telemetry: "WAN interface errors / discards / utilization",
+  control_plane: "BGP / link-state / syslog event",
+  passive_flow: "flow loss / drop on the path",
+  active_probe: "probe RTT / loss from an independent vantage",
 };
 
 type MissingItem = { signature: string; needs: string[]; note: string };
 
-// evidence_missing lines are either "sig: needs a|b|c" (clause gaps) or
-// "sig: <gate reason>" (verdict shortfalls, e.g. "single modality class…").
 function parseMissing(raw: string): MissingItem[] {
   let lines: string[] = [];
   try { lines = JSON.parse(raw || "[]"); } catch { lines = []; }
@@ -41,6 +58,13 @@ function parseMissing(raw: string): MissingItem[] {
     }
     return { signature, needs: [], note: rest };
   });
+}
+
+// "a, b, or c"
+function orList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} or ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
 }
 
 export default function RcaSummary({
@@ -68,21 +92,21 @@ export default function RcaSummary({
     [c.attached_by_modality],
   );
   const grounded = timeline.edges.length > 0;
-  const signatureMatch = timeline.verdict_tier === "confirmed" || timeline.verdict_tier === "suspected";
+  const confirmed = timeline.verdict_tier === "confirmed";
+  const crossPlane = attachedModalities >= 2;
   const observers = c.attached_observers ?? 0;
   const probeOnly = useMemo(() => {
-    const present = Object.entries(c.by_modality ?? {}).filter(([, v]) => v > 0).map(([k]) => k);
-    return present.length > 0 && present.every((k) => k === "active_probe");
-  }, [c.by_modality]);
+    const present = Object.entries(c.attached_by_modality ?? {}).filter(([, v]) => v > 0).map(([k]) => k);
+    return present.length === 1 && present[0] === "active_probe";
+  }, [c.attached_by_modality]);
 
   const quality: Quality =
-    signatureMatch && grounded && attachedModalities >= 2 && observers >= 2 ? "strong"
+    confirmed && grounded && attachedModalities >= 2 && observers >= 2 ? "strong"
     : !grounded || c.attached <= 1 || attachedModalities <= 1 || probeOnly ? "weak/noisy"
     : "candidate";
 
   const missing = useMemo(() => parseMissing(timeline.evidence_missing), [timeline.evidence_missing]);
 
-  // seams on the causal path
   const seamRefs = useMemo(() => {
     const refs = new Set<string>();
     for (const e of timeline.edges) if (e.grounding_kind === "seam") refs.add(e.grounding_ref);
@@ -90,50 +114,66 @@ export default function RcaSummary({
   }, [timeline.edges]);
   const primarySeam = seamRefs.length ? seams[seamRefs[0]] : undefined;
 
-  // dominant plane = most linked (fallback: most in-window)
   const dominant = useMemo(() => {
     const by = c.attached_by_modality && Object.values(c.attached_by_modality).some((v) => v > 0)
       ? c.attached_by_modality : c.by_modality;
     return Object.entries(by ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "active_probe";
   }, [c.attached_by_modality, c.by_modality]);
 
-  // which planes are absent but required by some candidate signature → orange
+  // planes with NO linked evidence (candidates to corroborate)
+  const missingPlanes = useMemo(
+    () => MODALITY_ORDER.filter((m) => (c.attached_by_modality?.[m] ?? 0) === 0),
+    [c.attached_by_modality],
+  );
   const requiredModalities = useMemo(() => {
     const s = new Set<string>();
     for (const mi of missing) for (const k of mi.needs) s.add(kindMeta(k).modality);
     return s;
   }, [missing]);
 
-  // ---- the plain-English RCA sentence ---------------------------------------
+  // ---- the plain-English RCA sentence (precise about corroboration) ----------
   const narrative = useMemo(() => {
     const domLabel = modalityLabel(dominant).toLowerCase();
     const story = timeline.top_hypothesis !== "undetermined"
       ? signatureName(timeline.top_hypothesis)
       : primarySeam
-        ? `${primarySeam.control_plane_owner.toUpperCase()}/${primarySeam.seam_type ?? "seam"}-seam ${domLabel} degradation`
+        ? (SEAM_STORY[primarySeam.seam_type ?? ""] ?? `${primarySeam.control_plane_owner.toUpperCase()} / ${primarySeam.seam_type ?? "seam"} degradation`)
         : `${domLabel} degradation`;
     const seamPhrase = primarySeam
-      ? `a ${primarySeam.visibility} ${primarySeam.control_plane_owner.toUpperCase()} ${primarySeam.seam_type ?? "seam"} boundary`
+      ? `a ${primarySeam.visibility} ${primarySeam.control_plane_owner.toUpperCase()}/${primarySeam.seam_type ?? "seam"} boundary`
       : grounded
         ? `${Object.keys(c.by_grounding ?? {}).join("/")} topology`
         : "no grounded boundary";
-    const missingPlanes = MODALITY_ORDER
-      .filter((m) => (c.attached_by_modality?.[m] ?? 0) === 0)
-      .map((m) => modalityLabel(m).toLowerCase());
-    const tail = signatureMatch
-      ? "and independent cross-plane evidence corroborates it."
-      : missingPlanes.length
-        ? `but found no ${missingPlanes.slice(0, 3).join(", ")} evidence required to confirm root cause.`
+    const otherPlanes = missingPlanes.filter((m) => m !== "active_probe").map((m) => modalityLabel(m).toLowerCase());
+    let tail: string;
+    if (confirmed) {
+      tail = "and independent cross-plane evidence corroborates it.";
+    } else if (crossPlane) {
+      tail = `with partial corroboration across ${attachedModalities} planes, pending confirmation.`;
+    } else {
+      tail = otherPlanes.length
+        ? `but no ${orList(otherPlanes)} evidence corroborates it yet.`
         : "but the evidence has not yet cleared the confirmation bar.";
-    return `This appears to be a ${quality.replace("/noisy", "")} ${story} candidate. `
+    }
+    const qual = quality === "weak/noisy" ? "weak" : quality;
+    return `This appears to be a ${qual} ${story} candidate. `
       + `The engine linked ${c.attached} ${domLabel} signal${c.attached === 1 ? "" : "s"} across ${seamPhrase}, ${tail}`;
-  }, [quality, timeline.top_hypothesis, primarySeam, grounded, dominant, c, signatureMatch]);
+  }, [quality, timeline.top_hypothesis, primarySeam, grounded, dominant, c, confirmed, crossPlane, attachedModalities, missingPlanes]);
 
   const card: React.CSSProperties = {
     border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "12px 14px",
     background: "var(--panel,#11151c)", display: "flex", flexDirection: "column", gap: 12,
+    minWidth: 0, maxWidth: "100%", overflow: "hidden",
   };
   const title: React.CSSProperties = { fontWeight: 600, fontSize: 12 };
+  const chip: React.CSSProperties = {
+    fontFamily: "ui-monospace, monospace", fontSize: 11, background: "var(--bg,#0d1117)",
+    padding: "1px 6px", borderRadius: 4, overflowWrap: "anywhere", minWidth: 0,
+  };
+
+  // corroboration suggestions = absent non-probe planes (what to add to confirm)
+  const corroborate = missingPlanes.filter((m) => m !== "active_probe" && (c.by_modality?.[m] ?? 0) === 0);
+  const clauseItems = missing.filter((m) => m.needs.length > 0);
 
   return (
     <div style={card}>
@@ -148,31 +188,34 @@ export default function RcaSummary({
         </span>
       </div>
 
-      {/* the plain-English story sentence */}
+      {/* the precise plain-English story */}
       <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{narrative}</div>
+      {probeOnly && (
+        <div style={{ fontSize: 11.5, color: C.warn }}>⚠ Single-plane probe evidence only — not yet a cross-plane corroborated RCA.</div>
+      )}
 
-      {/* mini seam-graph preview — above the fold */}
+      {/* mini seam/topo graph preview — above the fold */}
       {grounded && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {seamRefs.length > 0 ? timeline.edges.filter((e) => e.grounding_kind === "seam").slice(0, 3).map((e, i) => {
-            const s = seams[e.grounding_ref];
+          {[...timeline.edges].sort((a, b) => (a.grounding_kind === "seam" ? -1 : 1) - (b.grounding_kind === "seam" ? -1 : 1)).slice(0, 3).map((e, i) => {
+            const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
             return (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, flexWrap: "wrap" }}>
-                <span style={{ ...mono(), background: "var(--bg,#0d1117)", padding: "1px 6px", borderRadius: 4 }}>{episodeEntity(e.from_node)}</span>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, flexWrap: "wrap", minWidth: 0 }}>
+                <span style={chip}>{episodeEntity(e.from_node)}</span>
                 <span style={muted}>──</span>
                 <span style={{
-                  background: "#f0a02022", border: "1px solid #f0a02066", borderRadius: 4, padding: "1px 6px",
-                  color: "#f0a020", fontWeight: 600,
+                  background: e.grounding_kind === "seam" ? tint(C.warn, "22") : tint(C.faint, "22"),
+                  border: `1px solid ${e.grounding_kind === "seam" ? tint(C.warn, "66") : tint(C.faint, "66")}`,
+                  borderRadius: 4, padding: "1px 6px", fontWeight: 600,
+                  color: e.grounding_kind === "seam" ? C.warn : "var(--muted)",
                 }} title={e.grounding_ref}>
-                  ◆ {s ? `${s.control_plane_owner.toUpperCase()} · ${s.visibility}` : e.grounding_ref}
+                  {e.grounding_kind === "seam" ? `◆ ${s ? `${s.control_plane_owner.toUpperCase()} · ${s.visibility}` : e.grounding_ref}` : "topo"}
                 </span>
                 <span style={muted}>──</span>
-                <span style={{ ...mono(), background: "var(--bg,#0d1117)", padding: "1px 6px", borderRadius: 4 }}>{episodeEntity(e.to_node)}</span>
+                <span style={chip}>{episodeEntity(e.to_node)}</span>
               </div>
             );
-          }) : (
-            <div style={{ ...muted, fontSize: 11 }}>{timeline.edges.length} grounded topology edge{timeline.edges.length === 1 ? "" : "s"} (no ownership seam) — see the full graph below.</div>
-          )}
+          })}
         </div>
       )}
 
@@ -184,17 +227,18 @@ export default function RcaSummary({
             const total = c.by_modality?.[key] ?? 0;
             const att = c.attached_by_modality?.[key] ?? 0;
             const isDom = key === dominant && att > 0;
+            const otherPlanesPresent = MODALITY_ORDER.some((k) => k !== key && (c.by_modality?.[k] ?? 0) > 0);
             const sev = att > 0 ? COV.linked
               : total > 0 ? COV.present
               : requiredModalities.has(key) ? COV.required
               : COV.absent;
-            const statusText = att > 0 ? (isDom ? "Dominant evidence" : "Linked evidence")
+            const statusText = att > 0 ? (isDom && !otherPlanesPresent ? "Only evidence plane" : isDom ? "Dominant evidence" : "Linked evidence")
               : total > 0 ? "Present, not linked"
               : requiredModalities.has(key) ? "Missing — required"
               : "Absent";
             return (
               <div key={key} style={{
-                border: `1px solid ${sev.color}66`, background: sev.bg, borderRadius: 6, padding: "6px 8px",
+                border: `1px solid ${sev.color}66`, background: sev.bg, borderRadius: 6, padding: "6px 8px", minWidth: 0,
               }}>
                 <div style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: MODALITY_META[key].color, display: "inline-block" }} />
@@ -212,39 +256,46 @@ export default function RcaSummary({
         </div>
       </div>
 
-      {/* what would upgrade — human readable */}
-      {missing.length > 0 && (
+      {/* what would upgrade — actionable */}
+      {(corroborate.length > 0 || clauseItems.length > 0) && (
         <div>
-          <div style={title}>What would upgrade this verdict</div>
-          {missing.map((mi, i) => (
+          <div style={title}>What would {confirmed ? "strengthen" : "upgrade"} this verdict</div>
+
+          {/* actionable corroboration from absent planes (the common case) */}
+          {corroborate.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ ...muted, fontSize: 11 }}>Add corroborating evidence from another plane:</div>
+              {corroborate.map((p) => (
+                <div key={p} style={{ fontSize: 11.5, padding: "1px 0" }}>
+                  ○ {PLANE_SUGGEST[p]} <span style={muted}>— {modalityLabel(p).toLowerCase()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* specific signature clause gaps (cloud/dns-style look-alikes) */}
+          {clauseItems.map((mi, i) => (
             <div key={i} style={{ marginTop: 5 }}>
               <div style={{ fontSize: 12 }}>
                 Possible signature: <b>{signatureName(mi.signature)}</b>
                 <span style={{ ...muted, fontSize: 10, marginLeft: 6, fontFamily: "ui-monospace,monospace" }}>{mi.signature}</span>
               </div>
-              {mi.needs.length > 0 ? (
-                <div style={{ marginTop: 2 }}>
-                  {mi.needs.map((kind) => {
-                    const present = presentKinds.has(kind);
-                    const meta = kindMeta(kind);
-                    return (
-                      <div key={kind} style={{ fontSize: 11.5, padding: "1px 0", color: present ? "#d29922" : "var(--fg,#e6edf3)" }}>
-                        {present ? "⚠" : "○"} {kindLabel(kind)} <span style={muted}>— {modalityLabel(meta.modality).toLowerCase()}</span>
-                        {present && <span style={{ color: "#d29922", fontSize: 10 }}> (present, did not qualify)</span>}
-                        <span style={{ ...muted, fontSize: 10, marginLeft: 6, fontFamily: "ui-monospace,monospace" }}>{kind}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: 11.5, ...muted, paddingLeft: 2 }}>{mi.note}</div>
-              )}
+              {mi.needs.map((kind) => {
+                const present = presentKinds.has(kind);
+                const meta = kindMeta(kind);
+                return (
+                  <div key={kind} style={{ fontSize: 11.5, padding: "1px 0", color: present ? C.warn : "var(--fg,#e6edf3)" }}>
+                    {present ? "⚠" : "○"} {kindLabel(kind)} <span style={muted}>— {modalityLabel(meta.modality).toLowerCase()}</span>
+                    {present && <span style={{ color: C.warn, fontSize: 10 }}> (present, did not qualify)</span>}
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>
       )}
 
-      {/* the engine wording — expandable, or always-on in debug view */}
+      {/* engine wording — expandable in operator, always-on in debug */}
       {view === "operator" && (
         <button onClick={() => setShowWhy((v) => !v)} style={{
           alignSelf: "flex-start", background: "none", border: "none", color: "var(--accent,#4c8dff)",
@@ -270,7 +321,7 @@ export default function RcaSummary({
           {seamRefs.map((ref) => {
             const s = seams[ref];
             return (
-              <div key={ref} style={{ fontFamily: "ui-monospace,monospace" }}>
+              <div key={ref} style={{ fontFamily: "ui-monospace,monospace", overflowWrap: "anywhere" }}>
                 ◆ {ref}{s ? ` — owner ${s.control_plane_owner} · visibility ${s.visibility}${s.display_name ? ` · ${s.display_name}` : ""}` : " — seam metadata unavailable (file backend)"}
               </div>
             );
@@ -279,8 +330,4 @@ export default function RcaSummary({
       )}
     </div>
   );
-}
-
-function mono(): React.CSSProperties {
-  return { fontFamily: "ui-monospace, monospace", fontSize: 11 };
 }

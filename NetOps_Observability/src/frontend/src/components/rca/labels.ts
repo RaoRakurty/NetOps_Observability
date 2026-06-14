@@ -4,11 +4,35 @@
 // `probe_latency_departure` → "Probe latency departure — active probe", while the
 // raw id stays available (rendered small/gray) for debugging.
 
+// NOC color system — tuned for engineers on wall + desk monitors, 24/7 day/night.
+// Principle: the surface stays CALM (desaturated slate, off-white text, never pure
+// black/white) so a quiet room reads as quiet; severity colors are the ONLY loud
+// hues and are always paired with a glyph/label (colorblind-safe, color-not-only).
+// All values clear WCAG 4.5:1 on the dark slate surfaces below.
+export const C = {
+  // severity — the alarm palette (legible across a room)
+  crit: "#FF5366",        // critical / contradicts / malformed
+  warn: "#F2B705",        // warning / caution / missing-required / control-plane / seam
+  ok: "#35D6A4",          // healthy / linked / supports (calm emerald, not neon)
+  info: "#5B9DFF",        // info / device-telemetry / present-not-linked
+  flow: "#2DD4BF",        // flows (teal)
+  discriminates: "#A78BFA", // discriminating evidence (violet)
+  // calm surfaces (fallbacks; the app theme vars take precedence where set)
+  fg: "#E6EDF6",          // off-white, never #FFF
+  muted: "#8B97AD",       // secondary text (≥3:1 on slate)
+  faint: "#5A6473",       // tertiary / absent
+  line: "#2A3346",        // borders/dividers
+  bg: "#0E1320",          // deepest surface, never #000
+  panel: "#151B2B",       // card surface
+} as const;
+
+// Evidence planes — distinct, calm hues; always positioned + labeled so they read
+// without relying on color alone.
 export const MODALITY_META: Record<string, { label: string; color: string }> = {
-  device_telemetry: { label: "Device telemetry", color: "#4c8dff" },
-  control_plane: { label: "Control plane", color: "#f0a020" },
-  passive_flow: { label: "Flows", color: "#1bc5bd" },
-  active_probe: { label: "Probes", color: "#3fb950" },
+  device_telemetry: { label: "Device telemetry", color: C.info },
+  control_plane: { label: "Control plane", color: C.warn },
+  passive_flow: { label: "Flows", color: C.flow },
+  active_probe: { label: "Probes", color: C.ok },
 };
 
 export const MODALITY_ORDER = ["device_telemetry", "control_plane", "passive_flow", "active_probe"];

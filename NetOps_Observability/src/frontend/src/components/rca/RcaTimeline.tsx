@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
+import { C, MODALITY_META } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -10,25 +11,25 @@ import { CorrSignal, CorrTimeline } from "../../services/api";
 // It visualizes engine-recorded values only — never re-derives causality.
 
 const LANES: { key: string; label: string; color: string }[] = [
-  { key: "device_telemetry", label: "Device telemetry", color: "#4c8dff" },
-  { key: "control_plane", label: "Control plane", color: "#f0a020" },
-  { key: "passive_flow", label: "Flows", color: "#1bc5bd" },
-  { key: "active_probe", label: "Probes", color: "#3fb950" },
-  { key: "_other", label: "Other", color: "#8b949e" },
+  { key: "device_telemetry", label: MODALITY_META.device_telemetry.label, color: MODALITY_META.device_telemetry.color },
+  { key: "control_plane", label: MODALITY_META.control_plane.label, color: MODALITY_META.control_plane.color },
+  { key: "passive_flow", label: MODALITY_META.passive_flow.label, color: MODALITY_META.passive_flow.color },
+  { key: "active_probe", label: MODALITY_META.active_probe.label, color: MODALITY_META.active_probe.color },
+  { key: "_other", label: "Other", color: C.faint },
 ];
 
 const ROLE_COLOR: Record<string, string> = {
-  supports: "#3fb950",
-  contradicts: "#f85149",
-  discriminates: "#a371f7",
+  supports: C.ok,
+  contradicts: C.crit,
+  discriminates: C.discriminates,
 };
 
 // Linkage status → color + glyph (mirrors the backend's per-signal taxonomy).
 export const STATUS_COLOR: Record<string, string> = {
-  attached: "#3fb950",
-  recovery: "#8b949e",
-  unlinked: "#d29922",
-  malformed: "#f85149",
+  attached: C.ok,
+  recovery: C.faint,
+  unlinked: C.warn,
+  malformed: C.crit,
 };
 
 function statusLabel(s: CorrSignal): string {
@@ -112,7 +113,7 @@ export default function RcaTimeline({
   const muted: React.CSSProperties = { color: "var(--muted)" };
 
   return (
-    <div style={{ position: "relative", border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "8px 10px" }}>
+    <div style={{ position: "relative", border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "8px 10px", overflow: "hidden" }}>
       {/* axis */}
       <div style={{ position: "relative", height: 16, marginLeft: 132, fontSize: 10, ...muted }}>
         {ticks.map((tk, i) => (
@@ -166,7 +167,7 @@ export default function RcaTimeline({
                         rarer control-plane / device lanes) so the probe lane
                         stays uncluttered. Selecting a signal always labels it. */}
                     {(s.is_trigger || isSel || s.severity === "crit"
-                      || lane.key === "control_plane" || lane.key === "device_telemetry") && !dim && (
+                      || lane.key === "control_plane" || lane.key === "device_telemetry") && !dim && left < 86 && (
                       <span style={{
                         position: "absolute", left: sz / 2 + 4, top: "50%", transform: "translateY(-50%)",
                         whiteSpace: "nowrap", fontSize: 9, lineHeight: 1, pointerEvents: "none",
