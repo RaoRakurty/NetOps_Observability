@@ -32,9 +32,12 @@ PROJECT="${COMPOSE_PROJECT:-netops}"
 APP_URL="${APP_URL:-http://localhost:8000/}"
 NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
 
+# NOTE: telegraf is intentionally absent — it was retired (legacy compose
+# profile, not started by default; Go collector owns SNMP). Re-adding it here
+# would false-alarm every minute. gnmic is the gNMI collector if profiled in.
 EXPECTED_SERVICES="api clickhouse correlation frontend goflow2 grafana nginx \
 opensearch opensearch-dashboards postgres prometheus redis redpanda syslog-ng \
-telegraf vector-aggregator vector-router victoria"
+vector-aggregator vector-router victoria"
 
 push() {  # title, tags, priority, body
   [ -n "${NTFY_TOPIC:-}" ] || return 0
