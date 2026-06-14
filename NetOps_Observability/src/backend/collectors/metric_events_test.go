@@ -21,6 +21,7 @@ func TestBuildMetricEvent_FilterAllowlist(t *testing.T) {
 		"device_if_oper_status", "device_if_admin_status",
 		"device_if_in_errors", "device_if_out_errors",
 		"device_if_in_discards", "device_if_out_discards", "device_if_speed",
+		"device_if_fcs_errors",
 		"device_bgp_peer_state", "device_bgp_fsm_transitions",
 		"device_cpu_percent", "device_mem_percent", "device_temp_celsius",
 	}

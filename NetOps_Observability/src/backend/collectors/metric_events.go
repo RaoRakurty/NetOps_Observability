@@ -78,6 +78,7 @@ var rcaMetricFamilies = map[string]metricMeta{
 	"device_if_out_errors":   {"interface", "errors"},
 	"device_if_in_discards":  {"interface", "discards"},
 	"device_if_out_discards": {"interface", "discards"},
+	"device_if_fcs_errors":   {"interface", "fcs_errors"}, // L1 fault discriminator (EtherLike-MIB)
 	"device_if_speed":        {"interface", "mbps"},
 	// BGP peer state (BGP4-MIB) — discrete control-plane RCA evidence.
 	"device_bgp_peer_state":      {"bgp", "state"},

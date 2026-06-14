@@ -53,6 +53,11 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_if_out_errors", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 20}, Table: true},   // ifOutErrors
 				{Name: "device_if_in_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 13}, Table: true},  // ifInDiscards
 				{Name: "device_if_out_discards", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 19}, Table: true}, // ifOutDiscards
+				// EtherLike-MIB dot3StatsFCSErrors (RFC 3635, dot3StatsTable indexed
+				// by ifIndex). The L1 fault discriminator: FCS errors point at a
+				// physical-layer fault (bad cable/SFP/CRC) distinct from L2/L3 drops,
+				// so correlation can separate a dirty link from a congestion drop.
+				{Name: "device_if_fcs_errors", OID: []int{1, 3, 6, 1, 2, 1, 10, 7, 2, 1, 3}, Table: true},
 				// HC packet-mix counters (ifXTable) — the unicast/multicast/broadcast panels.
 				{Name: "device_if_in_ucast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 7}, Table: true},
 				{Name: "device_if_in_mcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 8}, Table: true},
