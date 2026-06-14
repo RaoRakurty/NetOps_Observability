@@ -87,6 +87,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		vendor := vendorLabel(ent, entOK)
 
 		var lines []string
+		// Canonical metric events for the correlation bus (RCA families only;
+		// buildMetricEvent applies the allowlist filter). Forwarded per device.
+		var events []MetricEvent
 		// ifIndex→ifName map, walked lazily once per device the first time an
 		// interface metric is emitted. Without it interface counters are labelled
 		// by bare ifIndex — which a NOC operator can't map to a physical port
@@ -114,9 +117,15 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 							lines = append(lines, fmt.Sprintf(
 								"%s{device=%q,vendor=%q,index=%q,ifName=%q} %d %d",
 								m.Name, tg.ID, vendor, idx, name, valueInt(v), now))
+							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, name, valueInt(v), now); ok {
+								events = append(events, ev)
+							}
 						} else {
 							lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,index=%q} %d %d",
 								m.Name, tg.ID, vendor, idx, valueInt(v), now))
+							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", valueInt(v), now); ok {
+								events = append(events, ev)
+							}
 						}
 					}
 				} else {
@@ -126,6 +135,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 					}
 					lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q} %d %d",
 						m.Name, tg.ID, vendor, valueInt(v), now))
+					if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, "", "", valueInt(v), now); ok {
+						events = append(events, ev)
+					}
 				}
 			}
 		}
@@ -134,6 +146,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		if len(lines) > 0 {
 			emitMetrics(ctx, strings.Join(lines, "\n"))
 		}
+		// Forward the RCA-filtered canonical subset to the correlation bus
+		// (best-effort, separate from the VM path above).
+		forwardMetricEvents(ctx, events)
 	}
 
 	emitMetrics(ctx, strings.Join([]string{

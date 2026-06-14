@@ -7,11 +7,16 @@
 #   syslog   → topic netops.syslog
 #   netflow  → topic netops.flows
 #   applogs  → topic netops.applogs
+#   metrics  → topic netops.metrics  (RCA-filtered canonical MetricEvents)
 #
-# Metrics (Telegraf SNMP) go DIRECTLY to VictoriaMetrics via Telegraf's
-# own outputs.http remote_write plugin — they don't flow through Vector
-# because the Vector kafka sink doesn't gracefully accept Metric events
-# in the encoding mode we want. See telegraf.conf.
+# Two metric paths, by purpose:
+#   • Dashboard/PromQL/history: the Go SNMP collector writes the FULL sample set
+#     straight to VictoriaMetrics (remote_write) — it does NOT flow through
+#     Vector. VM is the metric store/query backend.
+#   • Live correlation: the same collector POSTs a FILTERED, canonical subset
+#     (RCA families only) as NDJSON to the metrics_in source below → netops.metrics
+#     → correlation engine (device_telemetry modality). Canonical normalization
+#     lives in typed Go (collectors/metric_events.go), not in this YAML.
 
 api:
   enabled: true
@@ -72,6 +77,20 @@ sources:
     address: 0.0.0.0:8689
     decoding:
       codec: json
+
+  # Canonical metric events (the live correlation metric lane). The Go SNMP
+  # collector POSTs a FILTERED, canonical subset of its samples (RCA families
+  # only — see collectors/metric_events.go) here as newline-delimited JSON, one
+  # MetricEvent per line, in addition to the VictoriaMetrics remote_write path.
+  # → topic netops.metrics, consumed by the correlation engine (device_telemetry
+  # modality). VM remains the dashboard/PromQL/history store; this is RCA signal.
+  metrics_in:
+    type: http_server
+    address: 0.0.0.0:8690
+    decoding:
+      codec: json
+    framing:
+      method: newline_delimited
 
   # Vector's own internal metrics. Exposed at /metrics on port 9598
   # so Prometheus can scrape it (added as a target in prometheus.yml).
@@ -255,6 +274,23 @@ transforms:
         }
       }
 
+  # Metric events: the Go collector already canonicalized them (typed code), so
+  # this is minimal — tag the signal and stamp the tenant from the device id, the
+  # same enrichment every other plane uses. No regex/parse chain here.
+  metrics_normalized:
+    type: remap
+    inputs: [metrics_in]
+    source: |
+      .signal = "metric"
+      dev = string(.device) ?? ""
+      .tenant_id = ""
+      if dev != "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": dev }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+
 # ----------------------------------------------------------------------------
 # SINKS — Redpanda topics, one per signal.
 # ----------------------------------------------------------------------------
@@ -297,6 +333,14 @@ sinks:
     inputs: [probe_normalized]
     bootstrap_servers: "redpanda:9092"
     topic: "netops.probes"
+    encoding: { codec: json }
+    compression: snappy
+
+  kafka_metrics:
+    type: kafka
+    inputs: [metrics_normalized]
+    bootstrap_servers: "redpanda:9092"
+    topic: "netops.metrics"
     encoding: { codec: json }
     compression: snappy
 
