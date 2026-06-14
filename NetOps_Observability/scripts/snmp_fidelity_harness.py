@@ -384,6 +384,25 @@ def hop_c_contract(ep: dict, inv: dict, observed: set) -> None:
            PASS if not leaked else FAIL,
            ", ".join(leaked[:8]) if leaked else f"{len([n for n in names if n.startswith('device_')])} clean device_* names")
 
+    # C5: ifAlias enrichment present (operator circuit ID — RCA grounding token).
+    # The label must exist on the contract; population varies by config (INFO).
+    aliased = vm_query(ep["vm"], 'count(device_if_in_octets{ifAlias!=""})')
+    n_alias = int(float(aliased[0]["value"][1])) if aliased else 0
+    has_label = any("ifAlias" in r["metric"] for r in series)
+    record("C", "ifAlias circuit-ID enrichment wired",
+           PASS if has_label else WARN,
+           f"{n_alias} interfaces carry an operator circuit ID"
+           if has_label else "ifAlias label absent from the interface contract")
+
+    # C6: ENTITY-MIB FRU inventory flowing (asset/HW-fault grounding). Vendor
+    # support varies (some container NOSes lack ENTITY-MIB) → INFO when absent.
+    fru = vm_query(ep["vm"], "count(device_entity_info)")
+    n_fru = int(float(fru[0]["value"][1])) if fru else 0
+    record("C", "ENTITY-MIB FRU inventory present",
+           PASS if n_fru > 0 else INFO,
+           f"{n_fru} FRUs (serial/model/class)" if n_fru else
+           "no device_entity_info — devices may not implement ENTITY-MIB")
+
 
 def hop_d_families(ep: dict, inv: dict, observed: set) -> None:
     hop("Hop D — family coverage (research-required IF-MIB families)")
