@@ -42,6 +42,11 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_sysuptime", OID: []int{1, 3, 6, 1, 2, 1, 1, 3}},                           // sysUpTime
 				{Name: "device_if_oper_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 8}, Table: true},   // ifOperStatus
 				{Name: "device_if_admin_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 7}, Table: true},  // ifAdminStatus
+				// ifLastChange (sysUpTime when the interface entered its current
+				// state) — the interface flap timestamp. A change in this value IS a
+				// flap; correlation can pin "this port flapped at T" against other
+				// signals. VM-only (its step-on-flap shape is not a CUSUM level).
+				{Name: "device_if_last_change", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 9}, Table: true},
 				{Name: "device_if_in_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 6}, Table: true}, // ifHCInOctets
 				{Name: "device_if_out_octets", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 10}, Table: true},
 				// ifHighSpeed (Mbps) — denominator for the utilization panels;

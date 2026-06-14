@@ -97,6 +97,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		// (Gi0/1 / ge-0/0/1 / Ethernet1 / ethernet-1/1) and which renumbers on a
 		// reboot or line-card change. The name is the operator-facing identity.
 		var ifNames map[string]string
+		// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
+		// names; empty when the operator configured no interface description.
+		var ifAliases map[string]string
 		for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 			for _, m := range prof.Metrics {
 				if m.Table {
@@ -107,6 +110,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 					isIface := strings.HasPrefix(m.Name, "device_if_")
 					if isIface && ifNames == nil {
 						ifNames = ifNameMap(dctx, addr, creds)
+						ifAliases = ifAliasMap(dctx, addr, creds)
 					}
 					for idx, v := range rows {
 						if isIface {
@@ -115,16 +119,17 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 							if name == "" {
 								name = "ifIndex " + idx // honest: device named no port
 							}
+							alias := ifAliases[idx] // "" when no description configured
 							lines = append(lines, fmt.Sprintf(
-								"%s{device=%q,vendor=%q,index=%q,ifName=%q} %d %d",
-								m.Name, tg.ID, vendor, idx, name, valueInt(v), now))
-							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, name, valueInt(v), now); ok {
+								"%s{device=%q,vendor=%q,index=%q,ifName=%q,ifAlias=%q} %d %d",
+								m.Name, tg.ID, vendor, idx, name, alias, valueInt(v), now))
+							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, name, alias, valueInt(v), now); ok {
 								events = append(events, ev)
 							}
 						} else {
 							lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,index=%q} %d %d",
 								m.Name, tg.ID, vendor, idx, valueInt(v), now))
-							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", valueInt(v), now); ok {
+							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", "", valueInt(v), now); ok {
 								events = append(events, ev)
 							}
 						}
@@ -136,7 +141,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 					}
 					lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q} %d %d",
 						m.Name, tg.ID, vendor, valueInt(v), now))
-					if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, "", "", valueInt(v), now); ok {
+					if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, "", "", "", valueInt(v), now); ok {
 						events = append(events, ev)
 					}
 				}
@@ -195,9 +200,27 @@ func vendorLabel(enterprise int, ok bool) string {
 // operator-facing port name (Gi0/1, ge-0/0/1, Ethernet1, ethernet-1/1);
 // ifDescr is the fallback for platforms that leave ifName blank.
 var (
-	ifNameOID  = []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 1} // IF-MIB::ifName
-	ifDescrOID = []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 2}     // IF-MIB::ifDescr
+	ifNameOID  = []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 1}  // IF-MIB::ifName
+	ifDescrOID = []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 2}      // IF-MIB::ifDescr
+	ifAliasOID = []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 18} // IF-MIB::ifAlias (operator circuit ID)
 )
+
+// ifAliasMap walks ifAlias keyed by ifIndex — the operator-assigned interface
+// description / circuit ID (RFC 2863). Unlike ifName/ifDescr it is the human's
+// own label ("WAN-to-AWS", "Circuit ID 7Y-XYZ"), reboot-persistent, and a
+// grounding token that can intersect a seam/intent. Best-effort: a device with
+// no descriptions configured yields an empty map and metrics carry ifAlias="".
+func ifAliasMap(ctx context.Context, addr string, creds snmpCreds) map[string]string {
+	out := map[string]string{}
+	if rows, err := snmpWalkColumn(ctx, addr, creds, ifAliasOID); err == nil {
+		for idx, v := range rows {
+			if s := strings.TrimSpace(string(v.raw)); s != "" {
+				out[idx] = s
+			}
+		}
+	}
+	return out
+}
 
 // ifNameMap walks ifName keyed by ifIndex, filling any blank from ifDescr, so
 // interface metrics carry the physical port a NOC operator actually reads.

@@ -41,11 +41,12 @@ type MetricEvent struct {
 	CollectionPath string `json:"collection_path"` // "snmp_poll"
 
 	// Identity.
-	Device string `json:"device"`           // operator-assigned device id
-	Vendor string `json:"vendor,omitempty"` // resolved from sysObjectID
-	IfName string `json:"if_name,omitempty"` // interface families only
-	Index  string `json:"index,omitempty"`  // table row index (ifIndex / scalar)
-	Peer   string `json:"peer,omitempty"`   // BGP families: remote peer address
+	Device  string `json:"device"`            // operator-assigned device id
+	Vendor  string `json:"vendor,omitempty"`  // resolved from sysObjectID
+	IfName  string `json:"if_name,omitempty"` // interface families only
+	IfAlias string `json:"if_alias,omitempty"` // operator circuit ID (ifAlias), if set
+	Index   string `json:"index,omitempty"`   // table row index (ifIndex / scalar)
+	Peer    string `json:"peer,omitempty"`    // BGP families: remote peer address
 
 	// Signal.
 	SignalFamily string  `json:"signal_family"` // interface | bgp | device_resource
@@ -92,7 +93,7 @@ var rcaMetricFamilies = map[string]metricMeta{
 // buildMetricEvent constructs a canonical MetricEvent for a sample, or returns
 // ok=false when the metric is not in the RCA allowlist (the bus filter). The
 // caller already holds device/vendor/index/ifName from the SNMP walk.
-func buildMetricEvent(metric, device, vendor, index, ifName string, value int64, tsMillis int64) (MetricEvent, bool) {
+func buildMetricEvent(metric, device, vendor, index, ifName, ifAlias string, value int64, tsMillis int64) (MetricEvent, bool) {
 	meta, ok := rcaMetricFamilies[metric]
 	if !ok {
 		return MetricEvent{}, false
@@ -112,6 +113,7 @@ func buildMetricEvent(metric, device, vendor, index, ifName string, value int64,
 	switch meta.family {
 	case "interface":
 		ev.IfName = ifName
+		ev.IfAlias = ifAlias
 		ev.Index = index
 	case "bgp":
 		// BGP4-MIB tables are indexed by the remote peer address.

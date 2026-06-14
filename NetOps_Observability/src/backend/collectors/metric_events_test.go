@@ -26,7 +26,7 @@ func TestBuildMetricEvent_FilterAllowlist(t *testing.T) {
 		"device_cpu_percent", "device_mem_percent", "device_temp_celsius",
 	}
 	for _, name := range forwarded {
-		if _, ok := buildMetricEvent(name, "leaf1", "arista", "1", "Ethernet1", 5, 1_700_000_000_000); !ok {
+		if _, ok := buildMetricEvent(name, "leaf1", "arista", "1", "Ethernet1", "", 5, 1_700_000_000_000); !ok {
 			t.Errorf("RCA family %q should be forwarded to the bus", name)
 		}
 	}
@@ -36,7 +36,7 @@ func TestBuildMetricEvent_FilterAllowlist(t *testing.T) {
 		"device_disk_used_mb", "collector_up", "gnmi_anything",
 	}
 	for _, name := range dropped {
-		if _, ok := buildMetricEvent(name, "leaf1", "arista", "1", "Ethernet1", 5, 1_700_000_000_000); ok {
+		if _, ok := buildMetricEvent(name, "leaf1", "arista", "1", "Ethernet1", "", 5, 1_700_000_000_000); ok {
 			t.Errorf("non-RCA metric %q must NOT reach the bus", name)
 		}
 	}
@@ -44,7 +44,7 @@ func TestBuildMetricEvent_FilterAllowlist(t *testing.T) {
 
 // Interface families carry ifName + index; the provenance stamp is constant.
 func TestBuildMetricEvent_InterfaceIdentity(t *testing.T) {
-	ev, ok := buildMetricEvent("device_if_in_octets", "spine1", "nokia", "12", "ethernet-1/1", 42, 1_700_000_000_000)
+	ev, ok := buildMetricEvent("device_if_in_octets", "spine1", "nokia", "12", "ethernet-1/1", "uplink-to-spine1", 42, 1_700_000_000_000)
 	if !ok {
 		t.Fatal("expected interface event")
 	}
@@ -53,6 +53,9 @@ func TestBuildMetricEvent_InterfaceIdentity(t *testing.T) {
 	}
 	if ev.SignalFamily != "interface" || ev.IfName != "ethernet-1/1" || ev.Index != "12" {
 		t.Errorf("bad interface identity: %+v", ev)
+	}
+	if ev.IfAlias != "uplink-to-spine1" {
+		t.Errorf("interface event must carry the operator circuit ID (ifAlias): %q", ev.IfAlias)
 	}
 	if ev.Peer != "" {
 		t.Errorf("interface event must not carry a peer: %q", ev.Peer)
@@ -67,7 +70,7 @@ func TestBuildMetricEvent_InterfaceIdentity(t *testing.T) {
 
 // BGP families map the table index to the remote peer identity (BGP4-MIB).
 func TestBuildMetricEvent_BGPPeerIdentity(t *testing.T) {
-	ev, ok := buildMetricEvent("device_bgp_peer_state", "leaf2", "arista", "10.0.0.5", "", 6, 1_700_000_000_000)
+	ev, ok := buildMetricEvent("device_bgp_peer_state", "leaf2", "arista", "10.0.0.5", "", "", 6, 1_700_000_000_000)
 	if !ok {
 		t.Fatal("expected bgp event")
 	}
@@ -81,7 +84,7 @@ func TestBuildMetricEvent_BGPPeerIdentity(t *testing.T) {
 
 // Resource scalars (cpu/mem/temp) carry no interface/peer identity.
 func TestBuildMetricEvent_ResourceScalar(t *testing.T) {
-	ev, ok := buildMetricEvent("device_cpu_percent", "wan-r2", "arista", "", "", 17, 1_700_000_000_000)
+	ev, ok := buildMetricEvent("device_cpu_percent", "wan-r2", "arista", "", "", "", 17, 1_700_000_000_000)
 	if !ok {
 		t.Fatal("expected resource event")
 	}
@@ -99,7 +102,7 @@ func TestBuildMetricEvent_ResourceScalar(t *testing.T) {
 func TestEncodeMetricNDJSON_OneObjectPerLine(t *testing.T) {
 	evs := []MetricEvent{}
 	for _, m := range []string{"device_if_in_octets", "device_bgp_peer_state", "device_cpu_percent"} {
-		ev, _ := buildMetricEvent(m, "leaf1", "arista", "1", "Ethernet1", 3, 1_700_000_000_000)
+		ev, _ := buildMetricEvent(m, "leaf1", "arista", "1", "Ethernet1", "", 3, 1_700_000_000_000)
 		evs = append(evs, ev)
 	}
 	body, err := encodeMetricNDJSON(evs)
@@ -142,7 +145,7 @@ func TestForwardMetricEvents_SendCount(t *testing.T) {
 
 	evs := make([]MetricEvent, 0, 3)
 	for _, m := range []string{"device_if_in_octets", "device_bgp_peer_state", "device_cpu_percent"} {
-		ev, _ := buildMetricEvent(m, "leaf1", "arista", "1", "Ethernet1", 3, 1_700_000_000_000)
+		ev, _ := buildMetricEvent(m, "leaf1", "arista", "1", "Ethernet1", "", 3, 1_700_000_000_000)
 		evs = append(evs, ev)
 	}
 	if sent := forwardMetricEvents(context.Background(), evs); sent != 3 {
@@ -161,7 +164,7 @@ func TestForwardMetricEvents_SendCount(t *testing.T) {
 func TestForwardMetricEvents_VectorUnavailable(t *testing.T) {
 	// An address that refuses/blackholes: closed port on loopback.
 	t.Setenv("METRIC_EVENT_SINK_URL", "http://127.0.0.1:1/")
-	ev, _ := buildMetricEvent("device_if_in_octets", "leaf1", "arista", "1", "Et1", 3, 1_700_000_000_000)
+	ev, _ := buildMetricEvent("device_if_in_octets", "leaf1", "arista", "1", "Et1", "", 3, 1_700_000_000_000)
 	if sent := forwardMetricEvents(context.Background(), []MetricEvent{ev}); sent != 0 {
 		t.Errorf("unreachable sink should send 0, got %d", sent)
 	}
@@ -174,7 +177,7 @@ func TestForwardMetricEvents_RejectedBatch(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("METRIC_EVENT_SINK_URL", srv.URL)
-	ev, _ := buildMetricEvent("device_cpu_percent", "leaf1", "arista", "", "", 3, 1_700_000_000_000)
+	ev, _ := buildMetricEvent("device_cpu_percent", "leaf1", "arista", "", "", "", 3, 1_700_000_000_000)
 	if sent := forwardMetricEvents(context.Background(), []MetricEvent{ev}); sent != 0 {
 		t.Errorf("rejected batch should count 0 sent, got %d", sent)
 	}
