@@ -163,10 +163,165 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 	switch sub {
 	case "":
 		s.serveCorrelationDetail(w, r, id)
+	case "timeline":
+		s.serveCorrelationTimeline(w, r, id)
 	case "replay":
 		s.proxyCorrelationReplay(w, r, id)
 	default:
 		writeError(w, http.StatusNotFound, errors.New("unknown subresource"))
+	}
+}
+
+// isDatetimeToken allowlists a ClickHouse DateTime64 string ("2026-06-14
+// 05:11:39.836") before interpolation — these come from our own DB, but
+// shape-validate per SR-011 rather than quote-escape.
+func isDatetimeToken(s string) bool {
+	if len(s) < 10 || len(s) > 32 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9', c == '-', c == ':', c == '.', c == ' ':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// serveCorrelationTimeline renders the RCA Inspector's primary view: the FULL
+// window slice of signals for one object (corr_signals_archive — every signal in
+// the window, attached or not), each enriched with its evidence role(s) from
+// corr_evidence so the UI can answer "what happened first/next, which planes
+// agree, which signals contradict, what the engine attached vs ignored, how
+// certain the timing is". Read-only; the engine owns all of this.
+//
+// Bounded scan: corr_signals_archive is ordered by (tenant_id, ts, signal_id),
+// so the query is constrained to the object's [window_start, window_end] (the
+// order key) AND archived_for/version — never a full-table scan.
+func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request, id string) {
+	version := intQuery(r, "version", 0, 0, 1<<30)
+	verCond := ""
+	if version > 0 {
+		verCond = " AND version = " + intToString(version)
+	}
+	// 1) Object meta: version + window bounds + verdict + missing evidence + trigger.
+	metaSQL := `
+SELECT version,
+       toString(window_start)   AS window_start,
+       toString(window_end)     AS window_end,
+       toString(trigger_signal) AS trigger_signal,
+       verdict_tier, top_hypothesis, top_confidence, evidence_missing
+  FROM netops.corr_objects
+ WHERE correlation_id = '` + id + `'` + verCond + `
+ ORDER BY version DESC
+ LIMIT 1
+ FORMAT JSON`
+	metaRows, err := s.chRows(r, metaSQL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if len(metaRows) == 0 {
+		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
+		return
+	}
+	meta := metaRows[0]
+	ver := fmt.Sprintf("%v", meta["version"])
+	ws, _ := meta["window_start"].(string)
+	we, _ := meta["window_end"].(string)
+	if !isDatetimeToken(ws) || !isDatetimeToken(we) {
+		writeError(w, http.StatusBadGateway, errors.New("malformed object window"))
+		return
+	}
+
+	// 2) Full window slice (attached or not), ordered by event time = the cascade.
+	sigSQL := `
+SELECT toString(signal_id)  AS signal_id,
+       toString(ts)         AS ts,
+       toString(ingest_ts)  AS ingest_ts,
+       source, kind, observer_type, observer_id, collection_path, modality_class,
+       source_clock_quality AS clock_quality,
+       entity_type, entity_id, entity_tokens, severity,
+       value, baseline, deviation, metric_name, attrs,
+       JSONExtractFloat(attrs, 'onset_uncertainty_s') AS onset_uncertainty_s,
+       JSONExtractString(attrs, 'phase')              AS phase,
+       JSONExtractString(attrs, 'clear_ts')           AS clear_ts
+  FROM netops.corr_signals_archive
+ WHERE archived_for = '` + id + `' AND toString(archived_version) = '` + ver + `'
+   AND ts >= '` + ws + `' AND ts <= '` + we + `'
+ ORDER BY ts ASC, signal_id ASC
+ FORMAT JSON`
+	sigRows, err := s.chRows(r, sigSQL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	// 3) Evidence rows for this version (signal → role/subject); joined in Go so
+	//    every signal carries an authoritative attached flag + its role(s).
+	evSQL := `
+SELECT toString(signal_id) AS signal_id, subject_kind, subject_id, role, note
+  FROM netops.corr_evidence
+ WHERE correlation_id = '` + id + `' AND toString(version) = '` + ver + `'
+ FORMAT JSON`
+	evRows, err := s.chRows(r, evSQL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
+	counts := mergeTimelineEvidence(sigRows, evRows, trigger)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"correlation_id":   id,
+		"version":          meta["version"],
+		"window_start":     ws,
+		"window_end":       we,
+		"trigger_signal":   trigger,
+		"verdict_tier":     meta["verdict_tier"],
+		"top_hypothesis":   meta["top_hypothesis"],
+		"top_confidence":   meta["top_confidence"],
+		"evidence_missing": meta["evidence_missing"],
+		"signals":          sigRows,
+		"evidence":         evRows,
+		"counts":           counts,
+	})
+}
+
+// mergeTimelineEvidence joins the window signal slice with the evidence rows in
+// place: each signal gets an authoritative `attached` flag, its `evidence` rows
+// (role/subject), and `is_trigger`. Returns the count rollup the Inspector uses
+// to answer "what was attached vs ignored, which planes, what contradicts".
+// Pure (no I/O) so the join is unit-tested independently of ClickHouse.
+func mergeTimelineEvidence(sigRows, evRows []map[string]any, trigger string) map[string]any {
+	evBySignal := map[string][]map[string]any{}
+	byRole := map[string]int{}
+	for _, e := range evRows {
+		sid := fmt.Sprintf("%v", e["signal_id"])
+		evBySignal[sid] = append(evBySignal[sid], e)
+		byRole[fmt.Sprintf("%v", e["role"])]++
+	}
+	byModality := map[string]int{}
+	attached := 0
+	for _, sig := range sigRows {
+		sid := fmt.Sprintf("%v", sig["signal_id"])
+		ev := evBySignal[sid]
+		sig["attached"] = len(ev) > 0
+		sig["evidence"] = ev // nil → null when unattached
+		sig["is_trigger"] = sid == trigger
+		if len(ev) > 0 {
+			attached++
+		}
+		byModality[fmt.Sprintf("%v", sig["modality_class"])]++
+	}
+	return map[string]any{
+		"total":       len(sigRows),
+		"attached":    attached,
+		"unattached":  len(sigRows) - attached,
+		"by_modality": byModality,
+		"by_role":     byRole,
 	}
 }
 
