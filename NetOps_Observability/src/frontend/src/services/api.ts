@@ -409,6 +409,22 @@ export type CorrSignal = {
   attached: boolean;
   is_trigger: boolean;
   evidence: CorrEvidence[] | null;
+  // Linkage to the object's causal graph, DERIVED at read time from graph
+  // membership (the engine records evidence only at edge level). Explains, per
+  // signal, whether/why it was linked — the core of the honest RCA story.
+  link_status: "attached" | "recovery" | "unlinked" | "malformed";
+  link_role: string;   // supporting | contradicting | discriminating (attached only)
+  link_reason: string;
+  linked_edges: CorrLinkedEdge[] | null;
+};
+
+// One grounded edge a signal's episode sits on (peer node + how it's grounded).
+export type CorrLinkedEdge = {
+  peer: string;
+  grounding_kind: string;   // seam | topo
+  grounding_ref: string;
+  weight: number;
+  direction_basis: string;
 };
 
 export type CorrTimeline = {
@@ -423,12 +439,19 @@ export type CorrTimeline = {
   evidence_missing: string; // JSON array
   signals: CorrSignal[];
   evidence: CorrEvidence[];
+  edges: CorrEdge[];
   counts: {
     total: number;
     attached: number;
     unattached: number;
+    recovery: number;
+    unlinked: number;
+    attached_observers: number;
     by_modality: Record<string, number>;
+    attached_by_modality: Record<string, number>;
     by_role: Record<string, number>;
+    by_grounding: Record<string, number>;
+    by_status: Record<string, number>;
   };
 };
 
@@ -437,6 +460,7 @@ export type Seam = {
   seam_id: string;
   seam_type?: string;
   state?: string;
+  display_name?: string;
   endpoints?: Record<string, string>;
   control_plane_owner: string;  // enterprise | isp | cloud | sdwan_controller
   visibility: string;           // full | partial | blind

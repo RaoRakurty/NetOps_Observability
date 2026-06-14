@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -57,94 +58,143 @@ func TestIsDatetimeToken(t *testing.T) {
 	}
 }
 
-func sig(id, modality string) map[string]any {
-	return map[string]any{"signal_id": id, "modality_class": modality}
+// sig builds a window signal row with the fields the linkage derivation reads.
+// node key = entity_type:entity_id:kind (mirrors engine.py build_nodes).
+func sig(id, modality, etype, eid, kind string) map[string]any {
+	return map[string]any{
+		"signal_id": id, "modality_class": modality,
+		"entity_type": etype, "entity_id": eid, "kind": kind,
+		"observer_id": "obs-" + id,
+	}
+}
+func edge(from, to, gkind, gref string) map[string]any {
+	return map[string]any{
+		"from_node": from, "to_node": to,
+		"grounding_kind": gkind, "grounding_ref": gref,
+		"weight": 0.8, "direction_basis": "none",
+	}
 }
 func ev(signalID, role, subjectID string) map[string]any {
 	return map[string]any{"signal_id": signalID, "role": role, "subject_kind": "edge", "subject_id": subjectID, "note": ""}
 }
 
-// The timeline join must mark every window signal attached/unattached, attach
-// its evidence role(s), flag the trigger, and roll up counts — the data behind
-// "what happened, what the engine attached vs ignored, which planes, what
-// contradicts". Pure join, no ClickHouse.
-func TestMergeTimelineEvidence_AttachedUnattachedAndCounts(t *testing.T) {
+// Linkage is DERIVED from graph membership: a signal is attached iff its episode
+// (entity_type:entity_id:kind) is a node on an edge; *_clear is recovery; the
+// rest are concurrent-unlinked with a faithful reason. This is the data behind
+// "what the engine linked vs ignored, and why".
+func TestMergeTimelineEvidence_LinkageStatusAndCounts(t *testing.T) {
 	sigs := []map[string]any{
-		sig("s1", "device_telemetry"), // trigger + supported
-		sig("s2", "control_plane"),    // supported
-		sig("s3", "passive_flow"),     // contradicts
-		sig("s4", "device_telemetry"), // UNATTACHED (concurrent, engine ignored)
+		sig("s1", "active_probe", "path", "a->b", "probe_rtt_anomaly"),       // trigger, attached
+		sig("s2", "control_plane", "device", "r1", "bgp_state_anomaly"),      // attached (edge peer)
+		sig("s3", "active_probe", "path", "a->c", "probe_rtt_anomaly_clear"), // recovery (clear)
+		sig("s4", "device_telemetry", "device", "r2", "device_resource_anomaly"), // unlinked (no grounding)
 	}
-	evs := []map[string]any{
-		ev("s1", "supports", "e1"),
-		ev("s2", "supports", "e1"),
-		ev("s3", "contradicts", "e1"),
+	edges := []map[string]any{
+		edge("path:a->b:probe_rtt_anomaly", "device:r1:bgp_state_anomaly", "seam", "sm-1"),
 	}
-	counts := mergeTimelineEvidence(sigs, evs, "s1")
+	counts := mergeTimelineEvidence(sigs, nil, edges, "s1")
 
-	if counts["total"] != 4 || counts["attached"] != 3 || counts["unattached"] != 1 {
-		t.Fatalf("bad counts: %+v", counts)
+	if counts["total"] != 4 || counts["attached"] != 2 || counts["unattached"] != 2 {
+		t.Fatalf("bad attach counts: %+v", counts)
 	}
-	byRole := counts["by_role"].(map[string]int)
-	if byRole["supports"] != 2 || byRole["contradicts"] != 1 {
-		t.Errorf("bad by_role: %+v", byRole)
+	if counts["recovery"] != 1 || counts["unlinked"] != 1 {
+		t.Fatalf("bad recovery/unlinked split: %+v", counts)
 	}
-	byMod := counts["by_modality"].(map[string]int)
-	if byMod["device_telemetry"] != 2 || byMod["control_plane"] != 1 || byMod["passive_flow"] != 1 {
-		t.Errorf("bad by_modality: %+v", byMod)
+	if g := counts["by_grounding"].(map[string]int); g["seam"] != 1 {
+		t.Errorf("by_grounding should count the seam edge: %+v", g)
 	}
-	// per-signal enrichment
-	if sigs[0]["attached"] != true || sigs[0]["is_trigger"] != true {
-		t.Errorf("s1 should be attached + trigger: %+v", sigs[0])
+	abm := counts["attached_by_modality"].(map[string]int)
+	if abm["active_probe"] != 1 || abm["control_plane"] != 1 {
+		t.Errorf("attached_by_modality wrong: %+v", abm)
 	}
-	if got := sigs[0]["evidence"].([]map[string]any); len(got) != 1 || got[0]["role"] != "supports" {
-		t.Errorf("s1 evidence role wrong: %+v", sigs[0]["evidence"])
+	// per-signal linkage
+	if sigs[0]["link_status"] != "attached" || sigs[0]["is_trigger"] != true {
+		t.Errorf("s1 should be attached trigger: %+v", sigs[0])
 	}
-	if sigs[3]["attached"] != false || sigs[3]["is_trigger"] != false {
-		t.Errorf("s4 must be unattached + not trigger (concurrent, ignored): %+v", sigs[3])
+	if le := sigs[0]["linked_edges"].([]map[string]any); len(le) != 1 || le[0]["grounding_ref"] != "sm-1" {
+		t.Errorf("s1 should carry the grounded edge it sits on: %+v", sigs[0]["linked_edges"])
 	}
-	if sigs[3]["evidence"] != nil {
-		// nil slice → JSON null; ensure no phantom evidence on an unattached signal
-		if ev, ok := sigs[3]["evidence"].([]map[string]any); ok && len(ev) != 0 {
-			t.Errorf("unattached signal must carry no evidence: %+v", ev)
-		}
+	if sigs[0]["link_role"] != "supporting" {
+		t.Errorf("attached s1 should default to supporting role: %+v", sigs[0])
+	}
+	if sigs[2]["link_status"] != "recovery" || sigs[2]["attached"] != false {
+		t.Errorf("s3 (_clear) must be recovery/unattached: %+v", sigs[2])
+	}
+	if sigs[3]["link_status"] != "unlinked" {
+		t.Errorf("s4 must be unlinked: %+v", sigs[3])
+	}
+	// s4 (device:r2) shares no token with the probe-path/device:r1 graph → "no shared token".
+	if r := fmt.Sprintf("%v", sigs[3]["link_reason"]); !strings.Contains(r, "no shared seam endpoint or topology token") {
+		t.Errorf("unlinked reason must explain the topology-gap: %q", r)
+	}
+	if obs := counts["attached_observers"]; obs != 2 {
+		t.Errorf("attached_observers should be 2 (obs-s1, obs-s2): %v", obs)
 	}
 }
 
-// A signal supporting multiple subjects keeps all its evidence rows.
-func TestMergeTimelineEvidence_MultiSubject(t *testing.T) {
-	sigs := []map[string]any{sig("s1", "control_plane")}
+// A concurrent signal that SHARES a grounding token with the graph but still
+// wasn't linked must be told it fell below the attach threshold — not that it
+// shares nothing. And a signal with no resolvable identity reads as malformed.
+func TestMergeTimelineEvidence_ReasonRefinement(t *testing.T) {
+	sigs := []map[string]any{
+		sig("s1", "active_probe", "path", "api->x", "probe_rtt_anomaly"),   // attached
+		sig("s2", "active_probe", "path", "api->y", "probe_rtt_anomaly"),   // shares 'api' token, not linked
+		sig("s3", "device_telemetry", "device", "unknown", "metric_anomaly"), // malformed identity
+	}
+	edges := []map[string]any{
+		edge("path:api->x:probe_rtt_anomaly", "path:api->z:probe_rtt_anomaly", "topo", "shared:api"),
+	}
+	mergeTimelineEvidence(sigs, nil, edges, "s1")
+	if r := fmt.Sprintf("%v", sigs[1]["link_reason"]); !strings.Contains(r, "no edge met the attach threshold") {
+		t.Errorf("s2 shares the 'api' token → below-threshold reason expected: %q", r)
+	}
+	if sigs[2]["link_status"] != "malformed" {
+		t.Errorf("s3 (entity_id=unknown) must be malformed: %+v", sigs[2])
+	}
+}
+
+// A singleton object has 0 edges; its trigger episode must still read attached
+// (it IS the object), not orphaned as unlinked.
+func TestMergeTimelineEvidence_SingletonTriggerAttached(t *testing.T) {
+	sigs := []map[string]any{
+		sig("s1", "active_probe", "path", "p->x", "probe_rtt_anomaly"),       // trigger episode
+		sig("s2", "active_probe", "path", "p->x", "probe_rtt_anomaly_clear"), // its clear
+	}
+	counts := mergeTimelineEvidence(sigs, nil, nil, "s1")
+	if counts["attached"] != 1 {
+		t.Fatalf("singleton trigger episode should be attached: %+v", counts)
+	}
+	if sigs[0]["link_status"] != "attached" {
+		t.Errorf("trigger must be attached even with no edges: %+v", sigs[0])
+	}
+	if sigs[1]["link_status"] != "recovery" {
+		t.Errorf("the clear must be recovery: %+v", sigs[1])
+	}
+}
+
+// Forward-compat: if the engine ever writes signal-level evidence rows, they ride
+// along on the matching signal without affecting graph-derived attachment.
+func TestMergeTimelineEvidence_SignalEvidencePassthrough(t *testing.T) {
+	sigs := []map[string]any{sig("s1", "control_plane", "device", "r1", "bgp_state_anomaly")}
 	evs := []map[string]any{ev("s1", "supports", "e1"), ev("s1", "discriminates", "hypA")}
-	mergeTimelineEvidence(sigs, evs, "")
+	counts := mergeTimelineEvidence(sigs, evs, nil, "")
 	got := sigs[0]["evidence"].([]map[string]any)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 evidence rows, got %d", len(got))
 	}
-}
-
-// Honest "nothing proven yet": no evidence → every signal unattached, empty roles.
-func TestMergeTimelineEvidence_NoEvidence(t *testing.T) {
-	sigs := []map[string]any{sig("s1", "device_telemetry"), sig("s2", "active_probe")}
-	counts := mergeTimelineEvidence(sigs, nil, "")
-	if counts["attached"] != 0 || counts["unattached"] != 2 {
-		t.Fatalf("no evidence → all unattached: %+v", counts)
-	}
-	if len(counts["by_role"].(map[string]int)) != 0 {
-		t.Errorf("by_role must be empty with no evidence")
-	}
-	for _, s := range sigs {
-		if s["attached"] != false {
-			t.Errorf("signal must be unattached: %+v", s)
-		}
+	if br := counts["by_role"].(map[string]int); br["supports"] != 1 || br["discriminates"] != 1 {
+		t.Errorf("by_role rollup wrong: %+v", br)
 	}
 }
 
-// Guard the contract that the response shape is JSON-marshalable maps (no typed
-// structs leaking) — fmt-based key access mirrors what the handler does.
-func TestMergeTimelineEvidence_TriggerOnlyFlagsTrigger(t *testing.T) {
-	sigs := []map[string]any{sig("s1", "x"), sig("s2", "x")}
-	mergeTimelineEvidence(sigs, nil, "s2")
-	if fmt.Sprintf("%v", sigs[0]["is_trigger"]) != "false" || fmt.Sprintf("%v", sigs[1]["is_trigger"]) != "true" {
-		t.Errorf("only s2 should be the trigger")
+// No edges at all → every signal unlinked or recovery, nothing attached.
+func TestMergeTimelineEvidence_NoEdgesAllUnlinked(t *testing.T) {
+	sigs := []map[string]any{
+		sig("s1", "device_telemetry", "device", "d1", "metric_anomaly"),
+		sig("s2", "active_probe", "path", "a->b", "probe_loss"),
+	}
+	counts := mergeTimelineEvidence(sigs, nil, nil, "")
+	if counts["attached"] != 0 || counts["unattached"] != 2 || counts["unlinked"] != 2 {
+		t.Fatalf("no edges → all unlinked: %+v", counts)
 	}
 }

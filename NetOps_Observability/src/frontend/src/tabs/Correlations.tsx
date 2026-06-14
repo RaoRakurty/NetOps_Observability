@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { api, CorrObject, CorrEdge, CorrReplay, CorrTimeline, Seam } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
-import RcaTimeline from "../components/rca/RcaTimeline";
+import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
+import RcaSummary from "../components/rca/RcaSummary";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -190,11 +191,9 @@ export function CorrelationDetail({ id }: { id: string }) {
   if (err) return <div className="empty">{err}</div>;
   if (!obj) return <div className="empty">Loading…</div>;
 
-  const missing = parseJSON<string[]>(obj.evidence_missing, []);
   const hyp = parseJSON<any>(obj.hypotheses, {});
   const ranking = hyp?.ranking ?? {};
   const ctx = hyp?.grounding_context ?? {};
-  const counts = timeline?.counts;
   const selSig = selSignal ? timeline?.signals.find((s) => s.signal_id === selSignal) : undefined;
   const muted: React.CSSProperties = { color: "var(--muted)" };
   const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 12, marginBottom: 4 };
@@ -218,17 +217,9 @@ export function CorrelationDetail({ id }: { id: string }) {
         )}
       </div>
 
-      {/* at-a-glance counts: planes, attached vs ignored, contradictions */}
-      {counts && (
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
-          <span><b>{counts.total}</b> signals in window</span>
-          <span style={{ color: "#3fb950" }}><b>{counts.attached}</b> attached</span>
-          <span style={muted}><b>{counts.unattached}</b> concurrent · not linked</span>
-          {(counts.by_role?.contradicts ?? 0) > 0 &&
-            <span style={{ color: "#f85149" }}><b>{counts.by_role.contradicts}</b> contradicting</span>}
-          <span style={muted}>{Object.entries(counts.by_modality).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(" · ")}</span>
-        </div>
-      )}
+      {/* RCA summary: quality, verdict, why-undetermined, coverage, grounding,
+          and the actionable missing-evidence checklist */}
+      {timeline && <RcaSummary timeline={timeline} seams={seams} />}
 
       {/* PRIMARY: the cross-plane cascade */}
       <div>
@@ -237,24 +228,18 @@ export function CorrelationDetail({ id }: { id: string }) {
           ? <RcaTimeline timeline={timeline} selected={selSignal} onSelect={setSelSignal} highlight={highlight} />
           : <div className="empty">Loading window slice…</div>}
         {selSig && (
-          <div style={{ ...mono, fontSize: 11, marginTop: 6, ...muted }}>
-            {selSig.kind} · {selSig.entity_id} —{" "}
-            {selSig.attached
-              ? (selSig.evidence ?? []).map((e) => `${e.role} ${e.subject_kind} ${e.subject_id}`).join("; ")
-              : "concurrent in the window but the engine did not link it"}
+          <div style={{ ...mono, fontSize: 11, marginTop: 6 }}>
+            <span style={{ color: STATUS_COLOR[selSig.link_status] ?? "#d29922" }}>
+              {selSig.link_status === "attached"
+                ? `● attached / ${selSig.link_role || "supporting"}`
+                : selSig.link_status === "recovery" ? "○ recovery / clear"
+                : selSig.link_status === "malformed" ? "△ malformed identity"
+                : "○ concurrent — not linked"}
+            </span>{" "}
+            <span style={muted}>{selSig.kind} · {selSig.entity_id} — {selSig.link_reason}</span>
           </div>
         )}
       </div>
-
-      {/* verdict honesty */}
-      {missing.length > 0 && (
-        <div>
-          <div style={titleStyle}>What would change the verdict</div>
-          {missing.map((m) => (
-            <div key={m} style={{ ...mono, ...muted, padding: "1px 0" }}>· {m}</div>
-          ))}
-        </div>
-      )}
 
       {/* SECONDARY: seam-grounded causal graph */}
       <div>

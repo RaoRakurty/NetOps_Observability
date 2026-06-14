@@ -109,7 +109,14 @@ export default function SeamGraph({
   }, [edges, seams]);
 
   if (edges.length === 0) {
-    return <div className="empty">Singleton object — opened on episode severity alone (no grounded edges).</div>;
+    return (
+      <div className="empty" style={{ fontSize: 12 }}>
+        No grounded causal edges to draw. This is a <b>singleton object</b> — opened on a single
+        high-severity episode alone. The engine admits an edge only with seam or explicit topology
+        grounding, so a lone episode (or co-occurrences it couldn't ground) produces no graph. See
+        the timeline above for the concurrent signals and why each was not linked.
+      </div>
+    );
   }
 
   return (

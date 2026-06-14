@@ -23,6 +23,23 @@ const ROLE_COLOR: Record<string, string> = {
   discriminates: "#a371f7",
 };
 
+// Linkage status → color + glyph (mirrors the backend's per-signal taxonomy).
+export const STATUS_COLOR: Record<string, string> = {
+  attached: "#3fb950",
+  recovery: "#8b949e",
+  unlinked: "#d29922",
+  malformed: "#f85149",
+};
+
+function statusLabel(s: CorrSignal): string {
+  switch (s.link_status) {
+    case "attached": return `● attached / ${s.link_role || "supporting"}`;
+    case "recovery": return "○ recovery / clear";
+    case "malformed": return "△ malformed identity";
+    default: return "○ concurrent — not linked";
+  }
+}
+
 // clock_quality → minimum uncertainty floor (seconds) for point events that
 // carry no CUSUM onset_uncertainty_s. Honest: a free-running clock can't claim
 // sub-second ordering.
@@ -176,8 +193,21 @@ export default function RcaTimeline({
           <div>onset {fmtAbs(toMs(hover.ts))} ±{(hover.onset_uncertainty_s > 0 ? hover.onset_uncertainty_s : (CLOCK_FLOOR_S[hover.clock_quality] ?? 1))}s ({hover.clock_quality})</div>
           {hover.metric_name && <div>{hover.metric_name} = {hover.value}{hover.deviation ? ` (${Number(hover.deviation).toFixed(1)}σ)` : ""}</div>}
           {hover.clear_ts && <div style={muted}>clears {hover.clear_ts}</div>}
-          <div style={{ color: hover.attached ? ROLE_COLOR[signalRole(hover)] || "var(--fg)" : "var(--muted)" }}>
-            {hover.attached ? `attached: ${(hover.evidence ?? []).map((e) => `${e.role}→${e.subject_kind}`).join(", ")}` : "not linked by engine (concurrent)"}
+          {/* linkage: the engine's recorded reason this signal was/ wasn't linked */}
+          <div style={{
+            marginTop: 3, paddingTop: 3, borderTop: "1px solid var(--border,#2a2f3a)",
+            color: STATUS_COLOR[hover.link_status] ?? "#d29922",
+          }}>
+            <b>{statusLabel(hover)}</b>
+            {" — "}
+            <span style={{ color: "var(--fg,#e6edf3)" }}>{hover.link_reason}</span>
+            {(hover.linked_edges ?? []).length > 0 && (
+              <div style={{ ...muted, marginTop: 2 }}>
+                {(hover.linked_edges ?? []).map((e, i) => (
+                  <div key={i}>↔ {e.peer.split(":").slice(1, -1).join(":")} [{e.grounding_kind}:{e.grounding_ref}] w={Number(e.weight).toFixed(2)}</div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
