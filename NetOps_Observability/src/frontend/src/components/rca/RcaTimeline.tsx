@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
-import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel } from "./labels";
+import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel, modalityLabel } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -79,11 +79,13 @@ export default function RcaTimeline({
   selected,
   onSelect,
   highlight,
+  view = "operator",
 }: {
   timeline: CorrTimeline;
   selected?: string | null;
   onSelect?: (signalId: string) => void;
   highlight?: Set<string>;
+  view?: "operator" | "debug";
 }) {
   const [hover, setHover] = useState<CorrSignal | null>(null);
 
@@ -140,6 +142,8 @@ export default function RcaTimeline({
                 const isHi = highlight?.has(s.signal_id);
                 const isSel = selected === s.signal_id;
                 const dim = highlight && highlight.size > 0 && !isHi;
+                // keep dimmed dots legible (item: marker contrast) — not ghosted out.
+                const dimOpacity = 0.35;
                 // dot size scales with severity; attached evidence reads larger
                 // (it's the linked story); trigger is largest.
                 const sevSz: Record<string, number> = { crit: 13, high: 11, warn: 9, info: 8 };
@@ -148,12 +152,12 @@ export default function RcaTimeline({
                 const isDebugProbe = s.probe_authority === "debug_only";
                 const isRecovery = s.link_status === "recovery";
                 return (
-                  <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: "50%", transform: "translate(-50%,-50%)", opacity: dim ? 0.25 : 1 }}>
+                  <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: "50%", transform: "translate(-50%,-50%)", opacity: dim ? dimOpacity : 1 }}>
                     {/* uncertainty bar */}
                     <div style={{
                       position: "absolute", top: "50%", left: "50%",
                       width: `${barW}%`, minWidth: 6, maxWidth: 240, height: 2,
-                      transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.35,
+                      transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.5,
                     }} title={`±${unc}s (${s.clock_quality})`} />
                     {/* marker */}
                     <div
@@ -211,9 +215,9 @@ export default function RcaTimeline({
           borderRadius: 6, padding: "6px 8px", fontSize: 12, fontFamily: "ui-monospace,monospace",
           boxShadow: "0 4px 16px rgba(0,0,0,.4)",
         }}>
-          <div style={{ fontWeight: 600 }}>{hover.kind} {hover.is_trigger ? "· TRIGGER" : ""}</div>
+          <div style={{ fontWeight: 600 }}>{view === "debug" ? hover.kind : kindLabel(hover.kind)} {hover.is_trigger ? "· TRIGGER" : ""}</div>
           <div style={muted}>{entityLabel(hover.entity_id)}</div>
-          <div>{hover.modality_class} · {hover.source} · sev {hover.severity}</div>
+          <div>{view === "debug" ? hover.modality_class : modalityLabel(hover.modality_class)} · {hover.source} · sev {hover.severity}</div>
           <div>onset {fmtAbs(toMs(hover.ts))} ±{(hover.onset_uncertainty_s > 0 ? hover.onset_uncertainty_s : (CLOCK_FLOOR_S[hover.clock_quality] ?? 1))}s ({hover.clock_quality})</div>
           {hover.metric_name && <div>{hover.metric_name} = {hover.value}{hover.deviation ? ` (${Number(hover.deviation).toFixed(1)}σ)` : ""}</div>}
           {hover.clear_ts && <div style={muted}>clears {hover.clear_ts}</div>}
@@ -233,7 +237,9 @@ export default function RcaTimeline({
             {(hover.linked_edges ?? []).length > 0 && (
               <div style={{ ...muted, marginTop: 2 }}>
                 {(hover.linked_edges ?? []).map((e, i) => (
-                  <div key={i}>↔ {e.peer.split(":").slice(1, -1).join(":")} [{e.grounding_kind}:{e.grounding_ref}] w={Number(e.weight).toFixed(2)}</div>
+                  <div key={i}>↔ {view === "debug"
+                    ? `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}] w=${Number(e.weight).toFixed(2)}`
+                    : entityLabel(e.peer.split(":").slice(1, -1).join(":"))}</div>
                 ))}
               </div>
             )}

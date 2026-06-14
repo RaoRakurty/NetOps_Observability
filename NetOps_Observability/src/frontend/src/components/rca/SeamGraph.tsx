@@ -2,7 +2,7 @@ import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
 import { CorrEdge, Seam } from "../../services/api";
 import { chartBase } from "../../theme/charts";
-import { C } from "./labels";
+import { C, entityLabel, kindLabel } from "./labels";
 
 // SeamGraph — the SECONDARY (but honest) RCA view: the engine's grounded causal
 // graph. Every edge is grounded (the engine never emits an ungrounded one). When
@@ -26,13 +26,17 @@ const OWNER_COLOR: Record<string, string> = {
 // into direction_conf by the engine — we honor it, we don't recompute it.
 const DIR_FLOOR = 0.5;
 
-function episodeLabel(key: string): string {
+function episodeLabel(key: string, view: "operator" | "debug"): string {
   // key = "entity_type:entity_id...:kind" — entity_id may itself contain ':'.
   const parts = key.split(":");
   if (parts.length < 2) return key;
   const kind = parts[parts.length - 1];
   const entity = parts.slice(1, -1).join(":") || parts[0];
-  return `${entity}\n${kind.replace(/_/g, " ")}`;
+  // Operator View: friendly entity name + readable signal kind, no raw ids /
+  // storage names. Debug View: raw entity + raw kind.
+  const ent = view === "debug" ? entity : entityLabel(entity);
+  const k = view === "debug" ? kind.replace(/_/g, " ") : kindLabel(kind);
+  return `${ent}\n${k}`;
 }
 
 // entity_id embedded in an episode node key (for timeline cross-highlight).
@@ -41,19 +45,25 @@ export function episodeEntity(key: string): string {
   return parts.length < 2 ? key : parts.slice(1, -1).join(":") || parts[0];
 }
 
-function seamLabel(ref: string, seam?: Seam): string {
-  if (!seam) return `${ref}\n(seam)`;
-  return `${seam.seam_id}\n${seam.control_plane_owner} · ${seam.visibility}`;
+function seamLabel(ref: string, seam: Seam | undefined, view: "operator" | "debug"): string {
+  if (!seam) return view === "debug" ? `${ref}\n(seam)` : "ownership boundary";
+  // Operator: friendly display name (or owner·visibility), no raw seam id.
+  const head = view === "debug" ? seam.seam_id : (seam.display_name || "ownership boundary");
+  return `◆ ${head}\n${seam.control_plane_owner} · ${seam.visibility}`;
 }
 
 export default function SeamGraph({
   edges,
   seams,
   onSelectEdge,
+  view = "operator",
+  height = 360,
 }: {
   edges: CorrEdge[];
   seams: Record<string, Seam>;
   onSelectEdge?: (edge: CorrEdge | null) => void;
+  view?: "operator" | "debug";
+  height?: number;
 }) {
   const { nodes, links } = useMemo(() => {
     const nodes: any[] = [];
@@ -63,7 +73,7 @@ export default function SeamGraph({
       if (seen.has(key)) return;
       seen.add(key);
       nodes.push({
-        id: key, name: episodeLabel(key), symbolSize: 26, category: "episode",
+        id: key, name: episodeLabel(key, view), symbolSize: 26, category: "episode",
         itemStyle: { color: "#222a3a", borderColor: C.muted, borderWidth: 1 },
         _kind: "episode", _key: key,
       });
@@ -91,7 +101,7 @@ export default function SeamGraph({
         if (!seen.has(sid)) {
           seen.add(sid);
           nodes.push({
-            id: sid, name: seamLabel(e.grounding_ref, seam), symbol: "diamond", symbolSize: 46,
+            id: sid, name: seamLabel(e.grounding_ref, seam, view), symbol: "diamond", symbolSize: 46,
             category: "seam",
             itemStyle: { color: OWNER_COLOR[seam?.control_plane_owner ?? "unknown"] ?? OWNER_COLOR.unknown },
             label: { fontSize: 10, fontWeight: 600 },
@@ -107,7 +117,7 @@ export default function SeamGraph({
       }
     }
     return { nodes, links };
-  }, [edges, seams]);
+  }, [edges, seams, view]);
 
   if (edges.length === 0) {
     return (
@@ -122,7 +132,7 @@ export default function SeamGraph({
 
   return (
     <ReactECharts
-      style={{ height: 360 }}
+      style={{ height }}
       notMerge
       option={{
         ...chartBase,
@@ -132,16 +142,25 @@ export default function SeamGraph({
             if (p.dataType === "node") {
               if (p.data._kind === "seam") {
                 const s: Seam | undefined = p.data._seam;
-                const eps = s?.endpoints ? Object.entries(s.endpoints).map(([k, v]) => `${k}=${v}`).join("<br/>") : "";
-                return `<b>seam ${p.data._ref}</b><br/>owner: <b>${s?.control_plane_owner ?? "?"}</b><br/>visibility: <b>${s?.visibility ?? "?"}</b>${eps ? "<br/>" + eps : ""}`;
+                // Operator: friendly seam name; Debug: raw seam id + endpoints.
+                const head = view === "debug" ? `seam ${p.data._ref}` : (s?.display_name || "ownership boundary");
+                const eps = view === "debug" && s?.endpoints ? Object.entries(s.endpoints).map(([k, v]) => `${k}=${v}`).join("<br/>") : "";
+                return `<b>${head}</b><br/>owner: <b>${s?.control_plane_owner ?? "?"}</b><br/>visibility: <b>${s?.visibility ?? "?"}</b>${eps ? "<br/>" + eps : ""}`;
               }
-              return `<b>${p.data._key}</b>`;
+              // episode node: friendly entity → kind in operator, raw key in debug.
+              if (view === "debug") return `<b>${p.data._key}</b>`;
+              return `<b>${episodeLabel(p.data._key, "operator").replace("\n", " · ")}</b>`;
             }
             const e: CorrEdge = p.data._edge;
             if (!e) return "";
             const dir = e.direction_conf >= DIR_FLOOR && e.direction_basis !== "none"
               ? `direction: ${e.direction_basis} (conf ${e.direction_conf.toFixed(2)})`
               : "direction: unclaimed (uncertain / capped by visibility)";
+            // Operator: relationship + grounding kind + direction, no raw ref / weight math.
+            if (view !== "debug") {
+              const g = e.grounding_kind === "seam" ? "grounded by ownership boundary" : "grounded by topology";
+              return `${g}<br/>${dir}`;
+            }
             return `grounding: <b>${e.grounding_kind}</b>:${e.grounding_ref}<br/>weight ${e.weight.toFixed(2)} (t ${e.w_temporal.toFixed(2)} · topo ${e.w_topo.toFixed(2)} · ×${e.w_reinforce.toFixed(2)})<br/>${dir}`;
           },
         },

@@ -48,6 +48,17 @@ const SEAM_STORY: Record<string, string> = {
   CLOUD_BACKBONE: "cloud backbone degradation",
 };
 
+// dominant plane → degradation noun, used as the headline title when no signature
+// has matched and no seam grounds the object ("Probe degradation", "Device
+// degradation", …). Keeps the header concrete instead of generic "RCA Candidate".
+const PLANE_DEGRADATION: Record<string, string> = {
+  active_probe: "Probe",
+  device_telemetry: "Device",
+  control_plane: "Control-plane",
+  passive_flow: "Flow",
+};
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
 // absent plane → the concrete evidence that would corroborate it (operator action).
 const PLANE_SUGGEST: Record<string, string> = {
   device_telemetry: "WAN interface errors / discards / utilization",
@@ -156,14 +167,23 @@ export default function RcaSummary({
     return s;
   }, [missing]);
 
+  // The headline story phrase — matched signature, else seam-type story, else the
+  // dominant plane's degradation noun. Shared by the header title AND the narrative
+  // sentence so they never disagree.
+  const story = useMemo(() => {
+    if (timeline.top_hypothesis !== "undetermined") return signatureName(timeline.top_hypothesis);
+    if (primarySeam) return SEAM_STORY[primarySeam.seam_type ?? ""]
+      ?? `${primarySeam.control_plane_owner.toUpperCase()} / ${primarySeam.seam_type ?? "seam"} degradation`;
+    return `${PLANE_DEGRADATION[dominant] ?? cap(modalityLabel(dominant).toLowerCase())} degradation`;
+  }, [timeline.top_hypothesis, primarySeam, dominant]);
+
+  // Header title: concrete cause + "candidate" unless the engine confirmed it
+  // (then the CONFIRMED verdict badge carries the certainty).
+  const titleText = confirmed ? cap(story) : `${cap(story)} candidate`;
+
   // ---- the plain-English RCA sentence (precise about corroboration) ----------
   const narrative = useMemo(() => {
     const domLabel = modalityLabel(dominant).toLowerCase();
-    const story = timeline.top_hypothesis !== "undetermined"
-      ? signatureName(timeline.top_hypothesis)
-      : primarySeam
-        ? (SEAM_STORY[primarySeam.seam_type ?? ""] ?? `${primarySeam.control_plane_owner.toUpperCase()} / ${primarySeam.seam_type ?? "seam"} degradation`)
-        : `${domLabel} degradation`;
     const conn = primarySeam ? "across" : "on";
     const seamPhrase = primarySeam
       ? `a ${primarySeam.visibility} ${primarySeam.control_plane_owner.toUpperCase()}/${primarySeam.seam_type ?? "seam"} boundary`
@@ -223,9 +243,9 @@ export default function RcaSummary({
 
   return (
     <div style={card}>
-      {/* clean header — stronger verdict + quality badges */}
+      {/* clean header — concrete cause title + stronger verdict + quality badges */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 14, fontWeight: 700 }}>RCA Candidate</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: C.fg }}>{titleText}</span>
         <span style={{ ...strongBadge(QUALITY_TONE[quality]) }}>
           {quality === "weak/noisy" ? "WEAK" : quality.toUpperCase()}
         </span>
@@ -237,8 +257,8 @@ export default function RcaSummary({
         </span>
       </div>
 
-      {/* the precise plain-English story */}
-      <div style={{ fontSize: 14.5, lineHeight: 1.55, color: C.fg }}>{narrative}</div>
+      {/* the precise plain-English story — primary readable text */}
+      <div style={{ fontSize: 14.5, lineHeight: 1.55, color: C.fg, fontWeight: 500 }}>{narrative}</div>
 
       {/* why suspected / why not confirmed — makes the verdict trustable */}
       {timeline.verdict_tier === "suspected" && (
@@ -301,7 +321,7 @@ export default function RcaSummary({
         ) : (
           <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 3, color: "var(--fg)" }}>
             {probe.lowOnly || probeOnly
-              ? "Don't action as customer-facing RCA unless reproduced by trusted customer-path probes, or corroborated by device telemetry, control-plane events, or flow loss in the same window."
+              ? "Do not open a customer-facing incident yet. Re-test with trusted customer-path probes or wait for corroboration from device telemetry, control-plane events, or flow loss."
               : `Collect a second independent modality (${corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "device telemetry, control plane, or flow"}) before acting — current evidence can't confirm a cause.`}
           </div>
         )}
@@ -319,11 +339,13 @@ export default function RcaSummary({
             const debugExcludedHere = isProbe && total > att && probe.debugExcluded > 0;
             // state → {tone, label}. Card stays NEUTRAL; the badge + a tinted
             // left-border carry the state, so the grid doesn't read as all-alarm.
+            // Missing/required evidence is informational (blue), not alarm (orange):
+            // an absent plane is a corroboration opportunity, not a fault.
             let tone: string = C.faint, badge = "Not observed", used = false;
-            if (att > 0 && lowAuthProbe) { tone = C.warn; badge = "Used · low authority"; used = true; }
+            if (att > 0 && lowAuthProbe) { tone = C.warn; badge = "Weak evidence only"; used = true; }
             else if (att > 0) { tone = C.ok; badge = "Used"; used = true; }
             else if (total > 0) { tone = C.info; badge = "Present · not linked"; }
-            else if (requiredModalities.has(key)) { tone = C.warn; badge = "Needed to confirm"; }
+            else if (requiredModalities.has(key)) { tone = C.info; badge = "Needed to confirm"; }
             return (
               <div key={key} style={{
                 border: "1px solid var(--border)", borderLeft: `3px solid ${tone}`,
@@ -340,7 +362,7 @@ export default function RcaSummary({
                 </div>
                 <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
                   <span style={softBadge(tone)}>{badge}</span>
-                  {debugExcludedHere && <span style={softBadge(C.faint)}>debug excluded</span>}
+                  {debugExcludedHere && <span style={softBadge(C.faint)}>Debug-only excluded</span>}
                 </div>
               </div>
             );

@@ -5,7 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, signatureName, ownerLabel } from "../components/rca/labels";
+import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, signatureName, ownerLabel, kindLabel } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -274,7 +274,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       <div>
         <div style={titleStyle}>Timeline — cross-plane cascade</div>
         {timeline
-          ? <RcaTimeline timeline={timeline} selected={selSignal} onSelect={setSelSignal} highlight={highlight} />
+          ? <RcaTimeline timeline={timeline} selected={selSignal} onSelect={setSelSignal} highlight={highlight} view={view} />
           : <div className="empty">Loading window slice…</div>}
         {/* click-to-explain: why this signal was / wasn't linked */}
         {selSig && (
@@ -283,7 +283,7 @@ export function CorrelationDetail({ id }: { id: string }) {
             borderRadius: 6, padding: "8px 10px", background: "var(--panel,#11151c)",
             display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px", fontSize: 13,
           }}>
-            <span style={muted}>Signal</span><span>{selSig.kind} <span style={muted}>({selSig.modality_class.replace(/_/g, " ")})</span></span>
+            <span style={muted}>Signal</span><span>{view === "debug" ? selSig.kind : kindLabel(selSig.kind)} <span style={muted}>({selSig.modality_class.replace(/_/g, " ")})</span></span>
             <span style={muted}>Status</span>
             <span style={{ color: STATUS_COLOR[selSig.link_status] ?? "#d29922", fontWeight: 600 }}>
               {selSig.link_status === "attached" ? `attached / ${selSig.link_role || "supporting"}`
@@ -307,7 +307,9 @@ export function CorrelationDetail({ id }: { id: string }) {
             {(selSig.linked_edges ?? []).length > 0 && (
               <>
                 <span style={muted}>Linked to</span>
-                <span style={mono}>{(selSig.linked_edges ?? []).map((e) => `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}]`).join("; ")}</span>
+                {view === "debug"
+                  ? <span style={mono}>{(selSig.linked_edges ?? []).map((e) => `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}]`).join("; ")}</span>
+                  : <span>{(selSig.linked_edges ?? []).map((e) => entityLabel(e.peer.split(":").slice(1, -1).join(":"))).join(", ")}</span>}
               </>
             )}
           </div>
@@ -320,7 +322,14 @@ export function CorrelationDetail({ id }: { id: string }) {
         <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
           Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction.
         </div>
-        <SeamGraph edges={edges} seams={seams} onSelectEdge={setSelEdge} />
+        {/* For sparse objects (1–2 edges) the force graph reads as empty, so lead
+            with a compact, clickable relationship preview; the graph follows at a
+            reduced height. ≥3 edges go straight to the graph. */}
+        {edges.length >= 1 && edges.length <= 2 && (
+          <RelationshipPreview edges={edges} seams={seams} view={view} onSelect={setSelEdge} selected={selEdge} />
+        )}
+        <SeamGraph edges={edges} seams={seams} view={view} onSelectEdge={setSelEdge}
+          height={edges.length <= 2 ? 220 : 360} />
       </div>
 
       {/* DEBUG-only: pins, competing hypotheses, deterministic replay */}
@@ -371,6 +380,57 @@ export function CorrelationDetail({ id }: { id: string }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// RelationshipPreview — compact, clickable edge rows for sparse objects (1–2
+// edges), where the force graph reads as empty. Mirrors the RcaSummary mini-
+// preview: from → [◆ boundary owner · visibility | topology] → to. Clicking a row
+// selects the edge (highlights its signals on the timeline), same as a graph edge.
+// Honors Operator/Debug: friendly entity names in operator, raw keys in debug.
+function RelationshipPreview({ edges, seams, view, onSelect, selected }: {
+  edges: CorrEdge[];
+  seams: Record<string, Seam>;
+  view: "operator" | "debug";
+  onSelect?: (e: CorrEdge | null) => void;
+  selected?: CorrEdge | null;
+}) {
+  const ent = (key: string) => (view === "debug" ? episodeEntity(key) : entityLabel(episodeEntity(key)));
+  const chip: React.CSSProperties = {
+    fontFamily: "ui-monospace, monospace", fontSize: 12.5, background: "var(--bg,#0d1117)",
+    padding: "1px 6px", borderRadius: 4, overflowWrap: "anywhere", minWidth: 0,
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, margin: "4px 0 8px" }}>
+      {edges.map((e, i) => {
+        const seam = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
+        const directed = Number(e.direction_conf ?? 0) >= 0.5 && e.direction_basis !== "none";
+        const isSel = selected === e;
+        const link = directed ? "→" : "──";
+        const seamTone = e.grounding_kind === "seam" ? "#D97706" : "#8A93A6";
+        return (
+          <div key={i} onClick={() => onSelect?.(isSel ? null : e)} title={e.grounding_ref} style={{
+            display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", cursor: "pointer",
+            fontSize: 12.5, padding: "5px 8px", borderRadius: 6, minWidth: 0,
+            border: `1px solid ${isSel ? "var(--accent,#4c8dff)" : "var(--border,#2a2f3a)"}`,
+            background: isSel ? "var(--hover)" : "transparent",
+          }}>
+            <span style={chip}>{ent(e.from_node)}</span>
+            <span style={{ color: "var(--muted)" }}>{link}</span>
+            <span style={{
+              background: seamTone + "22", border: `1px solid ${seamTone}66`, borderRadius: 4,
+              padding: "1px 6px", fontWeight: 600, color: seamTone,
+            }}>
+              {e.grounding_kind === "seam"
+                ? `◆ ${seam ? `${seam.control_plane_owner.toUpperCase()} · ${seam.visibility}` : "ownership boundary"}`
+                : "topology"}
+            </span>
+            <span style={{ color: "var(--muted)" }}>{link}</span>
+            <span style={chip}>{ent(e.to_node)}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
