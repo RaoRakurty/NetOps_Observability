@@ -32,18 +32,26 @@ export const C = {
 } as const;
 
 // Evidence planes — distinct, calm hues; always positioned + labeled so they read
-// without relying on color alone.
-export const MODALITY_META: Record<string, { label: string; color: string }> = {
-  device_telemetry: { label: "Device telemetry", color: C.info },
-  control_plane: { label: "Control plane", color: C.warn },
-  passive_flow: { label: "Flows", color: C.flow },
-  active_probe: { label: "Probes", color: C.ok },
+// without relying on color alone. `label` is the NOC/operator name; `help` is the
+// plain-English "what this is" line. Debug View shows the raw key instead (see
+// modalityLabel(key, "debug")).
+export const MODALITY_META: Record<string, { label: string; color: string; help: string }> = {
+  device_telemetry: { label: "Device health", color: C.info, help: "interface errors, link counters, CPU, memory" },
+  control_plane: { label: "Routing & link events", color: C.warn, help: "BGP, link up/down, syslog, traps" },
+  passive_flow: { label: "Traffic flow evidence", color: C.flow, help: "traffic loss, volume drop, traffic shift" },
+  active_probe: { label: "Active checks", color: C.ok, help: "ping, HTTP, STAMP, path checks" },
 };
 
 export const MODALITY_ORDER = ["device_telemetry", "control_plane", "passive_flow", "active_probe"];
 
-export function modalityLabel(key: string): string {
+// Operator View → NOC label ("Device health"); Debug View → raw engine key
+// ("device_telemetry"). Most callers are operator paths and omit `view`.
+export function modalityLabel(key: string, view: "operator" | "debug" = "operator"): string {
+  if (view === "debug") return key;
   return MODALITY_META[key]?.label ?? key.replace(/_/g, " ");
+}
+export function modalityHelp(key: string): string {
+  return MODALITY_META[key]?.help ?? "";
 }
 
 // Signature id → friendly "Domain / fault" title.
@@ -68,6 +76,36 @@ export function signatureName(id: string): string {
     const t = p.replace(/-/g, " ");
     return i === 0 ? t.charAt(0).toUpperCase() + t.slice(1) : t;
   }).join(" / ");
+}
+
+// Operator View headline — NOC "Possible …" phrasing from a small, fixed
+// vocabulary (NOT the technical signature name, and never the raw id). Debug View
+// uses signatureName()/the raw id instead.
+const SIG_NOC_TITLE: Record<string, string> = {
+  "sig.ent.middle-mile.dia-egress-latency": "Possible WAN/provider issue",
+  "sig.ent.wan-edge.bgp-peer-flap": "Possible routing issue",
+  "sig.ent.access.local-link-fault": "Possible local link issue",
+  "sig.ent.wan-edge.congestion": "Possible WAN/provider issue",
+  "sig.ent.wan-edge.routing-instability": "Possible routing issue",
+  "sig.ent.middle-mile.physical-degradation": "Possible WAN/provider issue",
+  "sig.ent.internet.dns-impairment": "Possible WAN/provider issue",
+  "sig.ent.cloud.region-degradation": "Possible WAN/provider issue",
+  "sig.ent.wan-edge.tunnel-mtu-blackhole": "Possible routing issue",
+};
+// Dominant evidence plane → NOC headline when no signature has matched.
+export const PLANE_NOC_TITLE: Record<string, string> = {
+  active_probe: "Possible path slowdown",
+  device_telemetry: "Possible device health issue",
+  control_plane: "Possible routing issue",
+  passive_flow: "Possible traffic issue",
+};
+export function signatureNocTitle(id: string): string {
+  if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
+  if (/dia|middle-mile|cloud|internet|provider|congestion/.test(id)) return "Possible WAN/provider issue";
+  if (/bgp|ospf|isis|routing/.test(id)) return "Possible routing issue";
+  if (/link|access/.test(id)) return "Possible local link issue";
+  if (/device|resource|cpu|mem|hardware/.test(id)) return "Possible device health issue";
+  return "Possible network issue";
 }
 
 // signal kind → (humanized label, modality, expected source).
@@ -106,9 +144,26 @@ export function kindMeta(kind: string): { modality: string; source: string } {
   return { modality: "device_telemetry", source: "device metrics" };
 }
 
-// "probe_latency_departure" → "Probe latency departure"; trims a trailing _clear.
+// Friendly NOC names for the engine's signal kinds. Used everywhere a kind is
+// shown to an operator (timeline labels, marker panel, tooltips). Debug surfaces
+// that need the exact engine kind use the raw `kind` string directly instead.
+const KIND_NOC: Record<string, string> = {
+  probe_rtt_anomaly: "Slower response", probe_latency_departure: "Response-time change",
+  probe_loss: "Packet loss", dns_latency_high: "Slow DNS", dns_failure_rate: "DNS failures",
+  if_metric_anomaly: "Interface counter change", if_util_high: "High link utilization",
+  if_errors: "Interface errors", metric_anomaly: "Metric change",
+  device_resource_anomaly: "Device CPU/memory change", qos_drops: "QoS drops",
+  link_state_change: "Link up/down", lldp_neighbor_change: "Neighbor change",
+  bgp_adjacency_change: "BGP neighbor change", bgp_state_anomaly: "BGP state change",
+  bgp_path_change: "Route change", ospf_adjacency_change: "OSPF neighbor change",
+  flow_volume_anomaly: "Traffic volume change", lb_5xx: "Gateway errors",
+  cloud_gw_anomaly: "Cloud gateway change", cloud_health_event: "Cloud health event",
+  tunnel_degraded: "Tunnel degraded", tunnel_flap: "Tunnel flap",
+};
+// "probe_latency_departure" → "Response-time change"; trims a trailing _clear.
 export function kindLabel(kind: string): string {
   const base = kind.replace(/_clear$/, "");
+  if (KIND_NOC[base]) return KIND_NOC[base];
   const words = base.replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
@@ -137,23 +192,37 @@ export function canConfirm(a?: string): boolean {
   return a === "high" || a === "medium";
 }
 
-// Display-name / entity-label layer (Operator View). Internal platform-service
-// names (clickhouse/redis/nginx/api/…) are replaced with friendly roles so the
-// product doesn't leak its own infrastructure; real device/path names pass
-// through. Raw entity ids stay available in Debug View.
+// Display-name / entity-label layer (Operator View). Internal platform-service /
+// container / storage names are replaced with NOC-safe role labels so the product
+// never leaks its own infrastructure (backend component names, raw service /
+// storage / database names). Real network device + path names (leaf1, wan-r2, …)
+// pass through — they ARE NOC-meaningful. Bare IPs with no metadata genericize to
+// "Monitored target". Raw entity ids stay available in Debug View only.
 const INFRA_DISPLAY: Record<string, string> = {
-  clickhouse: "analytics store", redis: "cache", nginx: "edge gateway", api: "API service",
-  netbox: "source of truth", postgres: "app database", opensearch: "search store",
-  grafana: "dashboards", prometheus: "metrics store", victoriametrics: "metrics store",
-  vector: "ingest pipeline", loki: "log store", promtail: "log shipper",
-  correlation: "correlation engine", frontend: "web app", redpanda: "event bus",
-  prober: "synthetic prober",
+  // storage / data services
+  clickhouse: "Analytics store", postgres: "App database", "netbox-postgres": "App database",
+  opensearch: "Search store", "opensearch-dashboards": "Search store", redis: "Cache service",
+  prometheus: "Metrics store", victoriametrics: "Metrics store", victoria: "Metrics store",
+  loki: "Log store", redpanda: "Event bus",
+  // app / gateway / platform services
+  nginx: "Web gateway", api: "Platform service", backend: "Platform service",
+  frontend: "Web app", correlation: "Correlation service", netbox: "Source of truth",
+  grafana: "Dashboards",
+  // pipeline / collectors
+  vector: "Ingest pipeline", "vector-aggregator": "Ingest pipeline", "vector-router": "Ingest pipeline",
+  promtail: "Log shipper", "syslog-ng": "Log collector", goflow2: "Flow collector",
+  "node-exporter": "Host metrics", cadvisor: "Container metrics",
+  // monitoring agents / probes
+  prober: "Test check source",
 };
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 function mapToken(t: string): string {
   const base = t.split(":")[0].trim().toLowerCase();
-  return INFRA_DISPLAY[base] ?? t;
+  if (INFRA_DISPLAY[base]) return INFRA_DISPLAY[base];
+  if (IPV4.test(base)) return "Monitored target";        // no metadata → generic
+  return t;                                              // real device / path name
 }
-// Friendly entity label. "prober->clickhouse" → "synthetic prober → analytics store".
+// Friendly entity label. "prober->clickhouse" → "Test check source → Analytics store".
 export function entityLabel(raw: string): string {
   if (!raw) return raw;
   if (raw.includes("->")) return raw.split("->").map((s) => mapToken(s)).join(" → ");
@@ -167,4 +236,30 @@ export const OWNER_LABEL: Record<string, string> = {
 };
 export function ownerLabel(o?: string): string {
   return o ? (OWNER_LABEL[o] ?? o) : "";
+}
+
+// --- Operator wording for the causal-graph / boundary view (item 10) ----------
+// Engine vocabulary ("seam", "topo", "grounding", "visibility partial/blind") is
+// backend language; Operator View uses plain NOC phrasing. Debug View keeps raw.
+
+// Seam control_plane_owner → who owns the boundary (NOC phrasing).
+export const SEAM_OWNER_LABEL: Record<string, string> = {
+  enterprise: "Internal", isp: "ISP", carrier: "Carrier", cloud: "Cloud",
+  sdwan_controller: "SD-WAN", colo: "Colo", unknown: "Provider",
+};
+export function seamOwnerLabel(o?: string): string {
+  return o ? (SEAM_OWNER_LABEL[o] ?? o) : "Provider";
+}
+// Seam visibility → how much we can see across the boundary.
+export function visibilityLabel(v?: string): string {
+  switch (v) {
+    case "partial": return "limited visibility";
+    case "blind": return "no provider visibility";
+    case "full": return "full visibility";
+    default: return v ? `${v} visibility` : "";
+  }
+}
+// grounding_kind → how the evidence relates (operator phrasing).
+export function relationLabel(kind?: string): string {
+  return kind === "seam" ? "related through provider boundary" : "related on the same path / device area";
 }

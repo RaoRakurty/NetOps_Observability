@@ -10,12 +10,12 @@ import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthority
 // ignored (solid vs hollow), and how certain the timing is (bar width / overlap).
 // It visualizes engine-recorded values only — never re-derives causality.
 
-const LANES: { key: string; label: string; color: string }[] = [
-  { key: "device_telemetry", label: MODALITY_META.device_telemetry.label, color: MODALITY_META.device_telemetry.color },
-  { key: "control_plane", label: MODALITY_META.control_plane.label, color: MODALITY_META.control_plane.color },
-  { key: "passive_flow", label: MODALITY_META.passive_flow.label, color: MODALITY_META.passive_flow.color },
-  { key: "active_probe", label: MODALITY_META.active_probe.label, color: MODALITY_META.active_probe.color },
-  { key: "_other", label: "Other", color: C.faint },
+const LANES: { key: string; label: string; color: string; noun: string }[] = [
+  { key: "device_telemetry", label: MODALITY_META.device_telemetry.label, color: MODALITY_META.device_telemetry.color, noun: "signals" },
+  { key: "control_plane", label: MODALITY_META.control_plane.label, color: MODALITY_META.control_plane.color, noun: "events" },
+  { key: "passive_flow", label: MODALITY_META.passive_flow.label, color: MODALITY_META.passive_flow.color, noun: "flow signals" },
+  { key: "active_probe", label: MODALITY_META.active_probe.label, color: MODALITY_META.active_probe.color, noun: "checks" },
+  { key: "_other", label: "Other", color: C.faint, noun: "signals" },
 ];
 
 const ROLE_COLOR: Record<string, string> = {
@@ -39,6 +39,15 @@ function statusLabel(s: CorrSignal): string {
     case "malformed": return "△ malformed identity";
     default: return "○ concurrent — not linked";
   }
+}
+
+// Operator (NOC) status phrase — no engine vocabulary.
+function nocStatus(s: CorrSignal): string {
+  if (s.probe_authority === "debug_only") return "Test check — ignored";
+  if (s.attached) return `Used as ${s.link_role || "supporting"} evidence`;
+  if (s.link_status === "recovery") return "Recovery / clear";
+  if (s.link_status === "malformed") return "Not usable — missing identity";
+  return "Not linked to this issue";
 }
 
 // clock_quality → minimum uncertainty floor (seconds) for point events that
@@ -114,6 +123,71 @@ export default function RcaTimeline({
 
   const muted: React.CSSProperties = { color: C.muted };
 
+  // --- marker overlap handling (item 9) ---------------------------------------
+  // Important markers (trigger / high-severity) always render individually + are
+  // always labeled. The rest (the noise — e.g. 28 probe flaps) get grouped by
+  // time-proximity into a "N checks" cluster pill; clicking a pill expands it so
+  // each member is selectable. Expanded members get a small vertical zig-zag so
+  // they don't sit on top of each other.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleCluster = (id: string) =>
+    setExpanded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const CLUSTER_GAP = 2.2;        // lane-% within which markers are considered "together"
+  const isProminent = (s: CorrSignal) => s.is_trigger || s.severity === "crit" || s.severity === "high";
+
+  // Render one marker (dot + uncertainty bar + optional label). offsetY shifts it
+  // vertically within the lane (used to de-overlap expanded cluster members).
+  const renderMarker = (s: CorrSignal, lane: { key: string; color: string }, offsetY = 0, forceLabel = false) => {
+    const ms = toMs(s.ts);
+    const left = pct(ms);
+    const unc = s.onset_uncertainty_s > 0 ? s.onset_uncertainty_s : (CLOCK_FLOOR_S[s.clock_quality] ?? 1);
+    const barW = Math.max(2, (unc * 2000 / span) * 100);
+    const role = signalRole(s);
+    const isHi = highlight?.has(s.signal_id);
+    const isSel = selected === s.signal_id;
+    const isHover = hover?.signal_id === s.signal_id;
+    const dim = highlight && highlight.size > 0 && !isHi;
+    const sevSz: Record<string, number> = { crit: 13, high: 11, warn: 9, info: 8 };
+    const baseSz = sevSz[s.severity] ?? 9;
+    const sz = s.is_trigger ? 16 : (s.attached ? baseSz + 2 : baseSz);
+    const isDebugProbe = s.probe_authority === "debug_only";
+    const isRecovery = s.link_status === "recovery";
+    // Labels: selected, trigger, high-severity, or hovered — never every dot.
+    const labeled = (forceLabel || isSel || s.is_trigger || isProminent(s) || isHover) && !dim && !s.kind.endsWith("_clear");
+    return (
+      <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: `calc(50% + ${offsetY}px)`, transform: "translate(-50%,-50%)", opacity: dim ? 0.35 : 1, zIndex: isSel || isHover ? 6 : 1 }}>
+        <div style={{
+          position: "absolute", top: "50%", left: "50%",
+          width: `${barW}%`, minWidth: 6, maxWidth: 240, height: 2,
+          transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.5,
+        }} title={`±${unc}s (${s.clock_quality})`} />
+        <div
+          onMouseEnter={() => setHover(s)}
+          onMouseLeave={() => setHover((h) => (h?.signal_id === s.signal_id ? null : h))}
+          onClick={() => onSelect?.(s.signal_id)}
+          title={view === "debug" ? `${s.kind} · ${s.entity_id}` : `${kindLabel(s.kind)} · ${entityLabel(s.entity_id)}`}
+          style={{
+            position: "relative", width: sz, height: sz, borderRadius: s.is_trigger ? 3 : "50%",
+            background: s.attached ? lane.color : "transparent",
+            border: isDebugProbe ? `1.5px dashed ${C.faint}` : `${s.attached ? 2.5 : 2}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
+            opacity: isDebugProbe ? 0.5 : isRecovery ? 0.55 : 1,
+            boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "0 0 0 1px var(--panel)"),
+            cursor: "pointer",
+          }}
+        />
+        {labeled && (
+          <span style={{
+            position: "absolute", left: sz / 2 + 5, top: "50%", transform: "translateY(-50%)",
+            whiteSpace: "nowrap", fontSize: 11, lineHeight: 1, pointerEvents: "none",
+            padding: "1px 4px", borderRadius: 3, zIndex: 7,
+            background: "var(--panel)", border: `1px solid ${isSel ? "var(--accent,#4c8dff)" : lane.color}`,
+            color: "var(--fg)", fontWeight: 700,
+          }}>{kindLabel(s.kind)}{s.is_trigger ? " · trigger" : ""}</span>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={{ position: "relative", border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "8px 10px", overflow: "hidden" }}>
       {/* axis */}
@@ -133,117 +207,125 @@ export default function RcaTimeline({
               <span style={{ ...muted, marginLeft: 4 }}>{sigs.length}</span>
             </div>
             <div style={{ position: "relative", flex: 1, height: "100%" }}>
-              {sigs.map((s) => {
-                const ms = toMs(s.ts);
-                const left = pct(ms);
-                const unc = s.onset_uncertainty_s > 0 ? s.onset_uncertainty_s : (CLOCK_FLOOR_S[s.clock_quality] ?? 1);
-                const barW = Math.max(2, (unc * 2000 / span) * 100); // ±unc as % of span
-                const role = signalRole(s);
-                const isHi = highlight?.has(s.signal_id);
-                const isSel = selected === s.signal_id;
-                const dim = highlight && highlight.size > 0 && !isHi;
-                // keep dimmed dots legible (item: marker contrast) — not ghosted out.
-                const dimOpacity = 0.35;
-                // dot size scales with severity; attached evidence reads larger
-                // (it's the linked story); trigger is largest.
-                const sevSz: Record<string, number> = { crit: 13, high: 11, warn: 9, info: 8 };
-                const base = sevSz[s.severity] ?? 9;
-                const sz = s.is_trigger ? 16 : (s.attached ? base + 2 : base);
-                const isDebugProbe = s.probe_authority === "debug_only";
-                const isRecovery = s.link_status === "recovery";
-                return (
-                  <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: "50%", transform: "translate(-50%,-50%)", opacity: dim ? dimOpacity : 1 }}>
-                    {/* uncertainty bar */}
-                    <div style={{
-                      position: "absolute", top: "50%", left: "50%",
-                      width: `${barW}%`, minWidth: 6, maxWidth: 240, height: 2,
-                      transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.5,
-                    }} title={`±${unc}s (${s.clock_quality})`} />
-                    {/* marker */}
-                    <div
-                      onMouseEnter={() => setHover(s)}
-                      onMouseLeave={() => setHover((h) => (h?.signal_id === s.signal_id ? null : h))}
-                      onClick={() => onSelect?.(s.signal_id)}
-                      title={`${s.kind} · ${s.entity_id}`}
-                      style={{
-                        position: "relative", width: sz, height: sz, borderRadius: s.is_trigger ? 3 : "50%",
-                        // filled = attached/linked; hollow = concurrent; debug = dashed + faint (excluded).
-                        background: s.attached ? lane.color : "transparent",
-                        border: isDebugProbe
-                          ? `1.5px dashed ${C.faint}`
-                          : `${s.attached ? 2.5 : 2}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
-                        opacity: isDebugProbe ? 0.5 : isRecovery ? 0.55 : 1,
-                        // thin panel-colored halo separates overlapping dots in dense lanes.
-                        boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "0 0 0 1px var(--panel)"),
-                        cursor: "pointer",
-                      }}
-                    />
-                    {/* label ONLY the trigger and the selected dot — dense lanes
-                        (e.g. 28 probes) overlap into mush if every dot is labelled.
-                        Everything else is revealed on hover. Clears are never labelled. */}
-                    {(isSel || s.is_trigger) && !dim && !s.kind.endsWith("_clear") && (
-                      <span style={{
-                        position: "absolute", left: sz / 2 + 5, top: "50%", transform: "translateY(-50%)",
-                        whiteSpace: "nowrap", fontSize: 11, lineHeight: 1, pointerEvents: "none",
-                        padding: "1px 4px", borderRadius: 3, zIndex: 4,
-                        background: "var(--panel)", border: `1px solid ${isSel ? "var(--accent,#4c8dff)" : lane.color}`,
-                        color: "var(--fg)", fontWeight: 700,
-                      }}>{kindLabel(s.kind)}{s.is_trigger ? " · trigger" : ""}</span>
-                    )}
-                  </div>
-                );
-              })}
+              {(() => {
+                // prominent markers always individual + labeled; cluster the rest
+                // by time-proximity so dense lanes don't turn to mush.
+                const prom = sigs.filter(isProminent);
+                const rest = sigs.filter((s) => !isProminent(s)).sort((a, b) => toMs(a.ts) - toMs(b.ts));
+                type Cl = { id: string; members: CorrSignal[]; lastX: number; cx: number };
+                const clusters: Cl[] = [];
+                for (const s of rest) {
+                  const x = pct(toMs(s.ts));
+                  const cur = clusters[clusters.length - 1];
+                  if (cur && x - cur.lastX <= CLUSTER_GAP) { cur.members.push(s); cur.lastX = x; cur.cx = (cur.cx + x) / 2; }
+                  else clusters.push({ id: `${lane.key}:${s.signal_id}`, members: [s], lastX: x, cx: x });
+                }
+                const out: React.ReactNode[] = [];
+                for (const s of prom) out.push(renderMarker(s, lane));
+                for (const cl of clusters) {
+                  if (cl.members.length === 1) { out.push(renderMarker(cl.members[0], lane)); continue; }
+                  if (expanded.has(cl.id)) {
+                    // fan members vertically (zig-zag) so they de-overlap; a small
+                    // pill above collapses the cluster again.
+                    cl.members.forEach((m, i) => out.push(renderMarker(m, lane, ((i % 3) - 1) * 11)));
+                    out.push(
+                      <div key={`${cl.id}-collapse`} onClick={() => toggleCluster(cl.id)}
+                        style={{ position: "absolute", left: `${cl.cx}%`, top: -2, transform: "translateX(-50%)", cursor: "pointer", zIndex: 8,
+                          fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 8, whiteSpace: "nowrap",
+                          background: "var(--panel)", border: `1px solid ${lane.color}`, color: lane.color }}>
+                        {cl.members.length} · collapse ▴
+                      </div>,
+                    );
+                    continue;
+                  }
+                  // collapsed cluster pill: "N checks"
+                  const anyAttached = cl.members.some((m) => m.attached);
+                  out.push(
+                    <div key={cl.id} onClick={() => toggleCluster(cl.id)}
+                      onMouseEnter={() => setHover(cl.members[0])}
+                      onMouseLeave={() => setHover((h) => (cl.members.includes(h as CorrSignal) ? null : h))}
+                      title={`${cl.members.length} ${lane.label.toLowerCase()} — click to expand`}
+                      style={{ position: "absolute", left: `${cl.cx}%`, top: "50%", transform: "translate(-50%,-50%)", cursor: "pointer", zIndex: 2,
+                        fontSize: 10.5, fontWeight: 700, padding: "1px 7px", borderRadius: 9, whiteSpace: "nowrap",
+                        background: anyAttached ? lane.color : "var(--panel)",
+                        border: `1.5px solid ${lane.color}`, color: anyAttached ? "#fff" : lane.color,
+                        boxShadow: "0 0 0 1px var(--panel)" }}>
+                      {cl.members.length} {lane.noun}
+                    </div>,
+                  );
+                }
+                return out;
+              })()}
             </div>
           </div>
         );
       })}
 
-      {/* legend */}
+      {/* legend — NOC wording in Operator, engine terms in Debug */}
       <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 11.5, flexWrap: "wrap", ...muted }}>
-        <span><b style={{ color: "var(--fg,#e6edf3)" }}>◆</b> trigger</span>
-        <span>● filled = attached · ○ hollow = concurrent, engine did not link</span>
-        <span style={{ color: ROLE_COLOR.supports }}>ring: supports</span>
-        <span style={{ color: ROLE_COLOR.contradicts }}>contradicts</span>
-        <span style={{ color: ROLE_COLOR.discriminates }}>discriminates</span>
-        <span>bar = timing uncertainty (overlap ⇒ order not certain)</span>
+        {view === "debug" ? (
+          <>
+            <span><b style={{ color: "var(--fg,#e6edf3)" }}>◆</b> trigger</span>
+            <span>● filled = attached · ○ hollow = concurrent, engine did not link</span>
+            <span style={{ color: ROLE_COLOR.supports }}>ring: supports</span>
+            <span style={{ color: ROLE_COLOR.contradicts }}>contradicts</span>
+            <span style={{ color: ROLE_COLOR.discriminates }}>discriminates</span>
+            <span>bar = timing uncertainty (overlap ⇒ order not certain)</span>
+          </>
+        ) : (
+          <>
+            <span><b style={{ color: "var(--fg,#e6edf3)" }}>◆</b> first/strongest sign</span>
+            <span>● filled = counted as evidence · ○ hollow = seen but not related</span>
+            <span style={{ color: ROLE_COLOR.contradicts }}>red ring = conflicting</span>
+            <span>“N checks” pill = several close together — click to expand</span>
+            <span>bar = timing certainty (overlap ⇒ order not certain)</span>
+          </>
+        )}
       </div>
 
       {hover && (
         <div style={{
-          position: "absolute", right: 10, top: 6, zIndex: 5, maxWidth: 320,
+          position: "absolute", right: 10, top: 6, zIndex: 9, maxWidth: 320,
           background: "var(--panel,#161b22)", border: "1px solid var(--border,#2a2f3a)",
-          borderRadius: 6, padding: "6px 8px", fontSize: 12, fontFamily: "ui-monospace,monospace",
+          borderRadius: 6, padding: "6px 8px", fontSize: 12,
+          fontFamily: view === "debug" ? "ui-monospace,monospace" : "inherit",
           boxShadow: "0 4px 16px rgba(0,0,0,.4)",
         }}>
-          <div style={{ fontWeight: 600 }}>{view === "debug" ? hover.kind : kindLabel(hover.kind)} {hover.is_trigger ? "· TRIGGER" : ""}</div>
-          <div style={muted}>{entityLabel(hover.entity_id)}</div>
-          <div>{view === "debug" ? hover.modality_class : modalityLabel(hover.modality_class)} · {hover.source} · sev {hover.severity}</div>
-          <div>onset {fmtAbs(toMs(hover.ts))} ±{(hover.onset_uncertainty_s > 0 ? hover.onset_uncertainty_s : (CLOCK_FLOOR_S[hover.clock_quality] ?? 1))}s ({hover.clock_quality})</div>
-          {hover.metric_name && <div>{hover.metric_name} = {hover.value}{hover.deviation ? ` (${Number(hover.deviation).toFixed(1)}σ)` : ""}</div>}
-          {hover.clear_ts && <div style={muted}>clears {hover.clear_ts}</div>}
-          {hover.modality_class === "active_probe" && hover.probe_authority && (
-            <div style={{ color: PROBE_AUTHORITY_META[hover.probe_authority]?.color ?? C.muted }}>
-              probe: {probeScopeLabel(hover.probe_scope)} · {probeAuthorityLabel(hover.probe_authority)}
-            </div>
-          )}
-          {/* linkage: the engine's recorded reason this signal was/ wasn't linked */}
-          <div style={{
-            marginTop: 3, paddingTop: 3, borderTop: "1px solid var(--border,#2a2f3a)",
-            color: STATUS_COLOR[hover.link_status] ?? "#d29922",
-          }}>
-            <b>{statusLabel(hover)}</b>
-            {" — "}
-            <span style={{ color: "var(--fg,#e6edf3)" }}>{hover.link_reason}</span>
-            {(hover.linked_edges ?? []).length > 0 && (
-              <div style={{ ...muted, marginTop: 2 }}>
-                {(hover.linked_edges ?? []).map((e, i) => (
-                  <div key={i}>↔ {view === "debug"
-                    ? `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}] w=${Number(e.weight).toFixed(2)}`
-                    : entityLabel(e.peer.split(":").slice(1, -1).join(":"))}</div>
-                ))}
+          {view === "debug" ? (
+            <>
+              <div style={{ fontWeight: 600 }}>{hover.kind} {hover.is_trigger ? "· TRIGGER" : ""}</div>
+              <div style={muted}>{hover.entity_id}</div>
+              <div>{hover.modality_class} · {hover.source} · sev {hover.severity}</div>
+              <div>onset {fmtAbs(toMs(hover.ts))} ±{(hover.onset_uncertainty_s > 0 ? hover.onset_uncertainty_s : (CLOCK_FLOOR_S[hover.clock_quality] ?? 1))}s ({hover.clock_quality})</div>
+              {hover.metric_name && <div>{hover.metric_name} = {hover.value}{hover.deviation ? ` (${Number(hover.deviation).toFixed(1)}σ)` : ""}</div>}
+              {hover.clear_ts && <div style={muted}>clears {hover.clear_ts}</div>}
+              {hover.modality_class === "active_probe" && hover.probe_authority && (
+                <div style={{ color: PROBE_AUTHORITY_META[hover.probe_authority]?.color ?? C.muted }}>
+                  probe: {probeScopeLabel(hover.probe_scope)} · {probeAuthorityLabel(hover.probe_authority)}
+                </div>
+              )}
+              <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid var(--border,#2a2f3a)", color: STATUS_COLOR[hover.link_status] ?? "#d29922" }}>
+                <b>{statusLabel(hover)}</b> — <span style={{ color: "var(--fg,#e6edf3)" }}>{hover.link_reason}</span>
+                {(hover.linked_edges ?? []).length > 0 && (
+                  <div style={{ ...muted, marginTop: 2 }}>
+                    {(hover.linked_edges ?? []).map((e, i) => (
+                      <div key={i}>↔ {e.peer.split(":").slice(1, -1).join(":")} [{e.grounding_kind}:{e.grounding_ref}] w={Number(e.weight).toFixed(2)}</div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontWeight: 700 }}>{kindLabel(hover.kind)} {hover.is_trigger ? "· trigger" : ""}</div>
+              <div style={muted}>{entityLabel(hover.entity_id)}</div>
+              <div>{modalityLabel(hover.modality_class)} · {fmtAbs(toMs(hover.ts)).slice(0, 8)}</div>
+              <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid var(--border,#2a2f3a)", color: STATUS_COLOR[hover.link_status] ?? "#d29922", fontWeight: 700 }}>
+                {nocStatus(hover)}
+              </div>
+              <div style={{ ...muted, marginTop: 1, fontSize: 11 }}>Click for details</div>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -2,7 +2,7 @@ import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
 import { CorrEdge, Seam } from "../../services/api";
 import { chartBase } from "../../theme/charts";
-import { C, entityLabel, kindLabel } from "./labels";
+import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "./labels";
 
 // SeamGraph — the SECONDARY (but honest) RCA view: the engine's grounded causal
 // graph. Every edge is grounded (the engine never emits an ungrounded one). When
@@ -46,10 +46,11 @@ export function episodeEntity(key: string): string {
 }
 
 function seamLabel(ref: string, seam: Seam | undefined, view: "operator" | "debug"): string {
-  if (!seam) return view === "debug" ? `${ref}\n(seam)` : "ownership boundary";
-  // Operator: friendly display name (or owner·visibility), no raw seam id.
-  const head = view === "debug" ? seam.seam_id : (seam.display_name || "ownership boundary");
-  return `◆ ${head}\n${seam.control_plane_owner} · ${seam.visibility}`;
+  if (!seam) return view === "debug" ? `${ref}\n(seam)` : "provider boundary";
+  if (view === "debug") return `◆ ${seam.seam_id}\n${seam.control_plane_owner} · ${seam.visibility}`;
+  // Operator: NOC owner + visibility, no raw seam id / engine vocabulary.
+  const head = seam.display_name || "provider boundary";
+  return `◆ ${head}\n${seamOwnerLabel(seam.control_plane_owner)} · ${visibilityLabel(seam.visibility)}`;
 }
 
 export default function SeamGraph({
@@ -122,10 +123,9 @@ export default function SeamGraph({
   if (edges.length === 0) {
     return (
       <div className="empty" style={{ fontSize: 12 }}>
-        No grounded causal edges to draw. This is a <b>singleton object</b> — opened on a single
-        high-severity episode alone. The engine admits an edge only with seam or explicit topology
-        grounding, so a lone episode (or co-occurrences it couldn't ground) produces no graph. See
-        the timeline above for the concurrent signals and why each was not linked.
+        {view === "debug"
+          ? <>No grounded causal edges to draw. This is a <b>singleton object</b> — opened on a single high-severity episode alone. The engine admits an edge only with seam or explicit topology grounding, so a lone episode (or co-occurrences it couldn&apos;t ground) produces no graph. See the timeline above for the concurrent signals and why each was not linked.</>
+          : <>Nothing to relate yet — this issue rests on a single sign, with no second piece of evidence on the same path or boundary to link it to. See the evidence timeline above for what else was seen in this window and why it wasn&apos;t related.</>}
       </div>
     );
   }
@@ -142,10 +142,13 @@ export default function SeamGraph({
             if (p.dataType === "node") {
               if (p.data._kind === "seam") {
                 const s: Seam | undefined = p.data._seam;
-                // Operator: friendly seam name; Debug: raw seam id + endpoints.
-                const head = view === "debug" ? `seam ${p.data._ref}` : (s?.display_name || "ownership boundary");
-                const eps = view === "debug" && s?.endpoints ? Object.entries(s.endpoints).map(([k, v]) => `${k}=${v}`).join("<br/>") : "";
-                return `<b>${head}</b><br/>owner: <b>${s?.control_plane_owner ?? "?"}</b><br/>visibility: <b>${s?.visibility ?? "?"}</b>${eps ? "<br/>" + eps : ""}`;
+                if (view === "debug") {
+                  const eps = s?.endpoints ? Object.entries(s.endpoints).map(([k, v]) => `${k}=${v}`).join("<br/>") : "";
+                  return `<b>seam ${p.data._ref}</b><br/>owner: <b>${s?.control_plane_owner ?? "?"}</b><br/>visibility: <b>${s?.visibility ?? "?"}</b>${eps ? "<br/>" + eps : ""}`;
+                }
+                // Operator: NOC owner + visibility, no raw id / endpoints.
+                const head = s?.display_name || "Provider boundary";
+                return `<b>${head}</b><br/>owner: <b>${seamOwnerLabel(s?.control_plane_owner)}</b><br/>${visibilityLabel(s?.visibility) || "visibility unknown"}`;
               }
               // episode node: friendly entity → kind in operator, raw key in debug.
               if (view === "debug") return `<b>${p.data._key}</b>`;
@@ -153,14 +156,17 @@ export default function SeamGraph({
             }
             const e: CorrEdge = p.data._edge;
             if (!e) return "";
-            const dir = e.direction_conf >= DIR_FLOOR && e.direction_basis !== "none"
+            const dirDebug = e.direction_conf >= DIR_FLOOR && e.direction_basis !== "none"
               ? `direction: ${e.direction_basis} (conf ${e.direction_conf.toFixed(2)})`
               : "direction: unclaimed (uncertain / capped by visibility)";
-            // Operator: relationship + grounding kind + direction, no raw ref / weight math.
+            // Operator: relationship + direction, no raw ref / weight math / engine terms.
             if (view !== "debug") {
-              const g = e.grounding_kind === "seam" ? "grounded by ownership boundary" : "grounded by topology";
+              const g = e.grounding_kind === "seam" ? "Related through provider boundary" : "Related on the same path / device area";
+              const dir = e.direction_conf >= DIR_FLOOR && e.direction_basis !== "none"
+                ? "direction shown (we're confident)" : "direction not shown (uncertain / limited visibility)";
               return `${g}<br/>${dir}`;
             }
+            const dir = dirDebug;
             return `grounding: <b>${e.grounding_kind}</b>:${e.grounding_ref}<br/>weight ${e.weight.toFixed(2)} (t ${e.w_temporal.toFixed(2)} · topo ${e.w_topo.toFixed(2)} · ×${e.w_reinforce.toFixed(2)})<br/>${dir}`;
           },
         },

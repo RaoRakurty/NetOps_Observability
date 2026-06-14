@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, CorrObject, CorrEdge, CorrReplay, CorrTimeline, Seam } from "../services/api";
+import { api, CorrObject, CorrEdge, CorrReplay, CorrTimeline, CorrSignal, Seam } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, signatureName, ownerLabel, kindLabel } from "../components/rca/labels";
+import { entityLabel, signatureName, signatureNocTitle, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -21,6 +21,64 @@ const TIER_CLASS: Record<string, string> = {
   suspected: "sev-warning",
   undetermined: "",
 };
+
+// Operator-facing view of a single signal (item 8). Translates the engine's
+// per-signal linkage into NOC language: what kind of check, from/to, what changed,
+// whether it counted toward the verdict and why, customer-impact confidence, and
+// the next step. Raw fields stay in the "Show debug details" section.
+function signalOperatorFields(s: CorrSignal): {
+  checkType: string; from: string; to: string; whatChanged: string;
+  used: string; why: string; impact: string; next: string;
+} {
+  const k = s.kind.replace(/_clear$/, "");
+  const isProbe = s.modality_class === "active_probe";
+  const debugOnly = s.probe_authority === "debug_only";
+  const low = s.probe_authority === "low";
+  // check type
+  let checkType: string;
+  if (isProbe) {
+    checkType = /loss/.test(k) ? "Active check: packet loss"
+      : /rtt|latency/.test(k) ? "Active check: response time changed"
+      : "Active check";
+  } else if (s.modality_class === "control_plane") checkType = `Routing & link event: ${kindLabel(k)}`;
+  else if (s.modality_class === "passive_flow") checkType = `Traffic-flow signal: ${kindLabel(k)}`;
+  else checkType = `Device-health signal: ${kindLabel(k)}`;
+  // from / to
+  const raw = s.entity_id || "";
+  const [fromRaw, toRaw] = raw.includes("->") ? raw.split("->") : [raw, ""];
+  const from = entityLabel(fromRaw);
+  const to = toRaw ? entityLabel(toRaw) : "—";
+  // what changed
+  const dev = s.deviation ? ` · ${Math.abs(Number(s.deviation)).toFixed(1)}× above normal` : "";
+  const whatChanged = /loss/.test(k) ? `Packet loss seen on this path${dev}`
+    : /rtt|latency/.test(k) ? `Slower response than normal${dev}`
+    : `${kindLabel(k)}${dev}`;
+  // used in verdict + why + impact + next
+  const used = s.attached ? "Yes" : debugOnly ? "No — test check ignored" : "No";
+  let why: string, impact: string, next: string;
+  if (debugOnly) {
+    why = "This is an internal/test check. It helps troubleshooting, but it cannot confirm customer impact by itself.";
+    impact = "Not customer-impacting (test check)";
+    next = "Re-test from a trusted customer path before acting.";
+  } else if (low) {
+    why = "This is a low-trust check — it can support a suspicion but can't confirm customer impact on its own.";
+    impact = "Low";
+    next = "Confirm with device health, a routing/link event, or traffic loss.";
+  } else if (s.attached) {
+    why = `Counted as ${s.link_role || "supporting"} evidence for this issue.`;
+    impact = isProbe ? "Supports the case" : "Contributes to the case";
+    next = "Correlate with the other evidence in the timeline.";
+  } else if (s.link_status === "recovery") {
+    why = "This marks a recovery / clear, not the problem itself.";
+    impact = "None — recovery";
+    next = "No action — informational.";
+  } else {
+    why = "Happened in the same window but was not linked to this issue (different path or device area).";
+    impact = "None";
+    next = "No action — informational.";
+  }
+  return { checkType, from, to, whatChanged, used, why, impact, next };
+}
 
 function parseJSON<T>(raw: string | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -63,6 +121,9 @@ function pill(text: string, tone: string, filled = false): React.ReactNode {
 }
 const QUAL_RANK: Record<Qual, number> = { strong: 2, candidate: 1, weak: 0 };
 const GROUND_TONE: Record<string, string> = { seam: "#D97706", "seam+topo": "#D97706", topo: "#2563EB", none: "#8A93A6" };
+// NOC labels for the triage list (no engine vocabulary).
+const VERDICT_NOC: Record<string, string> = { confirmed: "Confirmed", suspected: "Suspected", undetermined: "Not confirmed" };
+const GROUND_NOC: Record<string, string> = { seam: "Boundary", "seam+topo": "Boundary + path", topo: "Same path", none: "—" };
 
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
@@ -75,31 +136,32 @@ export default function Correlations() {
     { key: "created_at", header: "Updated", width: 160, sortable: true,
       sortValue: (o) => new Date(o.created_at + "Z").getTime() || 0,
       render: (o) => <span style={mono}>{new Date(o.created_at + "Z").toLocaleString()}</span> },
-    { key: "verdict_tier", header: "Verdict", width: 104, sortable: true, text: (o) => o.verdict_tier,
-      render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{o.verdict_tier}</span> },
+    { key: "verdict_tier", header: "Status", width: 116, sortable: true, text: (o) => o.verdict_tier,
+      render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</span> },
     { key: "quality", header: "Quality", width: 90, sortable: true,
       sortValue: (o) => QUAL_RANK[qualityOf(o)],
       render: (o) => { const q = qualityOf(o); return pill(q, QUAL_TONE[q], q !== "weak"); } },
-    { key: "top_hypothesis", header: "Likely cause", width: 200, sortable: true, text: (o) => o.top_hypothesis,
+    { key: "top_hypothesis", header: "Likely cause", width: 200, sortable: true,
+      text: (o) => (o.top_hypothesis === "undetermined" ? "" : signatureName(o.top_hypothesis)),
       render: (o) => o.top_hypothesis === "undetermined"
-        ? <span style={{ color: "var(--muted)" }}>undetermined</span>
-        : <span title={o.top_hypothesis}>{signatureName(o.top_hypothesis)}</span> },
+        ? <span style={{ color: "var(--muted)" }}>Not yet determined</span>
+        : <span>{signatureName(o.top_hypothesis)}</span> },
     { key: "owner", header: "Owner", width: 96, sortable: true, text: (o) => o.owner ?? "",
       render: (o) => o.owner ? <span style={{ fontSize: 12 }}>{ownerLabel(o.owner)}</span> : "—" },
-    { key: "grounding", header: "Grounding", width: 96, sortable: true, text: (o) => o.grounding ?? "none",
-      render: (o) => { const g = o.grounding ?? "none"; return pill(g, GROUND_TONE[g] ?? "#7E8AA0"); } },
-    { key: "planes", header: "Planes", width: 64, align: "right", sortable: true,
+    { key: "grounding", header: "Linked by", width: 110, sortable: true, text: (o) => o.grounding ?? "none",
+      render: (o) => { const g = o.grounding ?? "none"; return pill(GROUND_NOC[g] ?? g, GROUND_TONE[g] ?? "#7E8AA0"); } },
+    { key: "planes", header: "Evidence types", width: 96, align: "right", sortable: true,
       sortValue: (o) => Number(o.plane_count ?? 0),
       render: (o) => <span style={mono}>{Number(o.plane_count ?? 0)}</span> },
     { key: "authority", header: "Evidence source", width: 116, sortable: true,
       sortValue: (o) => (o.debug_excluded ? 0 : o.low_authority ? 1 : o.top_hypothesis !== "undetermined" ? 3 : 2),
-      render: (o) => o.debug_excluded ? pill("debug excluded", "#8A93A6")
-        : o.low_authority ? pill("low authority", "#D97706")
-        : o.top_hypothesis !== "undetermined" ? pill("trusted source", "#16A34A")
+      render: (o) => o.debug_excluded ? pill("test check", "#8A93A6")
+        : o.low_authority ? pill("weak", "#D97706")
+        : o.top_hypothesis !== "undetermined" ? pill("trusted", "#16A34A")
         : <span style={{ color: "var(--muted)" }}>—</span> },
-    { key: "shape", header: "Size", width: 120, align: "right",
-      render: (o) => <span style={mono} title={`${o.node_count} nodes · ${Number(o.edge_count ?? 0)} edges · ${o.signal_count} signals`}>
-        {o.node_count} nd · {Number(o.edge_count ?? 0)} ed</span> },
+    { key: "shape", header: "Signals", width: 88, align: "right", sortable: true,
+      sortValue: (o) => Number(o.signal_count ?? 0),
+      render: (o) => <span style={mono} title={`${o.signal_count} signals`}>{o.signal_count}</span> },
   ], []);
 
   useEffect(() => {
@@ -121,8 +183,10 @@ export default function Correlations() {
     setSel(o.correlation_id);
     if (ws.enabled) {
       ws.openInspector(<CorrelationDetail id={o.correlation_id} />, {
-        title: "RCA · " + (o.top_hypothesis === "undetermined" ? "Candidate" : o.top_hypothesis),
-        subtitle: `${o.verdict_tier} · v${o.version}`,
+        title: o.top_hypothesis === "undetermined"
+          ? "Possible network issue"
+          : signatureNocTitle(o.top_hypothesis),
+        subtitle: o.verdict_tier === "confirmed" ? "Confirmed" : "Not confirmed",
       });
     }
   };
@@ -131,29 +195,30 @@ export default function Correlations() {
 
   return (
     <div className="card">
-      <h2>Correlations (engine v2 objects)</h2>
+      <h2>Root cause analysis</h2>
       <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 0 }}>
-        Topology-grounded, replayable correlation objects. A verdict is only
-        <b> confirmed</b> with independent evidence from ≥2 modality classes and ≥2 observers —
-        everything weaker says exactly what evidence is missing.
+        Each row is a possible issue, built from related evidence on the same path or
+        boundary. An issue is only marked <b>Confirmed</b> when independent evidence agrees
+        across at least two kinds of evidence — everything weaker says exactly what's missing
+        to confirm it.
       </p>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <select value={state} onChange={(e) => setState(e.target.value)}>
           <option value="">All states</option>
           <option value="open">Open</option>
-          <option value="closed">Closed</option>
+          <option value="closed">Resolved</option>
         </select>
         <select value={tier} onChange={(e) => setTier(e.target.value)}>
-          <option value="">All verdicts</option>
+          <option value="">All statuses</option>
           <option value="confirmed">Confirmed</option>
           <option value="suspected">Suspected</option>
-          <option value="undetermined">Undetermined</option>
+          <option value="undetermined">Not confirmed</option>
         </select>
       </div>
       {items.length === 0 ? (
         <div className="empty">
-          No correlation objects in range. The engine opens one when grounded, correlated
-          episodes (or a single high-severity episode) appear on the signal spine.
+          No issues in this time range. One appears when related evidence — or a single
+          high-severity sign — shows up across your network.
         </div>
       ) : (
         <DataTable<CorrObject>
@@ -270,57 +335,66 @@ export function CorrelationDetail({ id }: { id: string }) {
           recommendedSteps={recommendedSteps} owner={recommendedOwner} />
       )}
 
-      {/* PRIMARY: the cross-plane cascade */}
+      {/* PRIMARY: the evidence timeline */}
       <div>
-        <div style={titleStyle}>Timeline — cross-plane cascade</div>
+        <div style={titleStyle}>Evidence timeline</div>
+        <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
+          Tip: Click any marker to see what was observed and why it was or was not used.
+        </div>
         {timeline
           ? <RcaTimeline timeline={timeline} selected={selSignal} onSelect={setSelSignal} highlight={highlight} view={view} />
           : <div className="empty">Loading window slice…</div>}
-        {/* click-to-explain: why this signal was / wasn't linked */}
-        {selSig && (
-          <div style={{
-            marginTop: 8, border: `1px solid ${STATUS_COLOR[selSig.link_status] ?? "#d29922"}55`,
-            borderRadius: 6, padding: "8px 10px", background: "var(--panel,#11151c)",
-            display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px", fontSize: 13,
-          }}>
-            <span style={muted}>Signal</span><span>{view === "debug" ? selSig.kind : kindLabel(selSig.kind)} <span style={muted}>({selSig.modality_class.replace(/_/g, " ")})</span></span>
-            <span style={muted}>Status</span>
-            <span style={{ color: STATUS_COLOR[selSig.link_status] ?? "#d29922", fontWeight: 600 }}>
-              {selSig.link_status === "attached" ? `attached / ${selSig.link_role || "supporting"}`
-                : selSig.link_status === "recovery" ? "concurrent — recovery/clear"
-                : selSig.link_status === "malformed" ? "malformed identity"
-                : "concurrent — not linked"}
-            </span>
-            <span style={muted}>Reason</span><span>{selSig.link_reason}</span>
-            {selSig.modality_class === "active_probe" && selSig.probe_authority && (
-              <>
-                <span style={muted}>Probe</span>
-                <span>{probeScopeLabel(selSig.probe_scope)} · <b style={{ color: PROBE_AUTHORITY_META[selSig.probe_authority]?.color }}>{probeAuthorityLabel(selSig.probe_authority)}</b>{selSig.classification_source ? <span style={muted}> ({selSig.classification_source})</span> : null}</span>
-              </>
-            )}
-            <span style={muted}>Entity</span><span style={view === "debug" ? mono : undefined}>{view === "debug" ? selSig.entity_id : entityLabel(selSig.entity_id)}</span>
-            <span style={muted}>Time</span>
-            <span style={mono}>
-              {selSig.ts.slice(11, 19)} UTC{timeline && ` (T+${Math.round((Date.parse(selSig.ts.replace(" ", "T") + "Z") - Date.parse(timeline.window_start.replace(" ", "T") + "Z")) / 1000)}s)`}
-            </span>
-            <span style={muted}>Severity</span><span style={{ textTransform: "capitalize" }}>{selSig.severity}</span>
-            {(selSig.linked_edges ?? []).length > 0 && (
-              <>
-                <span style={muted}>Linked to</span>
-                {view === "debug"
-                  ? <span style={mono}>{(selSig.linked_edges ?? []).map((e) => `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}]`).join("; ")}</span>
-                  : <span>{(selSig.linked_edges ?? []).map((e) => entityLabel(e.peer.split(":").slice(1, -1).join(":"))).join(", ")}</span>}
-              </>
-            )}
-          </div>
-        )}
+        {/* click-to-explain: operator-friendly first, raw fields under a collapse */}
+        {selSig && (() => {
+          const f = signalOperatorFields(selSig);
+          const tPlus = timeline ? Math.round((Date.parse(selSig.ts.replace(" ", "T") + "Z") - Date.parse(timeline.window_start.replace(" ", "T") + "Z")) / 1000) : 0;
+          const orow = (k: string, v: React.ReactNode) => (<><span style={muted}>{k}</span><span>{v}</span></>);
+          return (
+            <div style={{
+              marginTop: 8, border: `1px solid ${STATUS_COLOR[selSig.link_status] ?? "#d29922"}55`,
+              borderRadius: 6, padding: "8px 10px", background: "var(--panel,#11151c)", fontSize: 13,
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6, color: "var(--fg)" }}>{f.checkType}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px" }}>
+                {orow("From", f.from)}
+                {f.to !== "—" && orow("To", f.to)}
+                {orow("What changed", f.whatChanged)}
+                {orow("Used in verdict?", <b style={{ color: selSig.attached ? "#16A34A" : "#8A93A6" }}>{f.used}</b>)}
+                {orow("Why", f.why)}
+                {orow("Customer-impact confidence", f.impact)}
+                {orow("Next step", f.next)}
+                {orow("Time", <span style={mono}>{selSig.ts.slice(11, 19)} UTC{timeline ? ` (T+${tPlus}s)` : ""}</span>)}
+              </div>
+              {/* raw backend fields — collapsed, Debug-grade detail */}
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: "pointer", color: "var(--accent,#4c8dff)", fontSize: 12 }}>Show debug details</summary>
+                <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px", marginTop: 6, ...mono, fontSize: 12 }}>
+                  {orow("entity_id", selSig.entity_id)}
+                  {orow("kind", selSig.kind)}
+                  {orow("modality_class", selSig.modality_class)}
+                  {orow("observer_type", selSig.observer_type)}
+                  {selSig.observer_id ? orow("observer_id", selSig.observer_id) : null}
+                  {orow("collection_path", selSig.collection_path)}
+                  {selSig.modality_class === "active_probe" && orow("probe_scope", `${selSig.probe_scope ?? "—"} · ${selSig.probe_authority ?? "—"}${selSig.classification_source ? ` (${selSig.classification_source})` : ""}`)}
+                  {orow("clock_quality", `${selSig.clock_quality} · ±${selSig.onset_uncertainty_s}s`)}
+                  {orow("link_status", `${selSig.link_status}${selSig.link_role ? ` / ${selSig.link_role}` : ""}`)}
+                  {orow("link_reason", selSig.link_reason)}
+                  {(selSig.linked_edges ?? []).length > 0 && orow("linked_edges", (selSig.linked_edges ?? []).map((e) => `${e.peer.split(":").slice(1, -1).join(":")} [${e.grounding_kind}:${e.grounding_ref}] w=${Number(e.weight).toFixed(2)}`).join("; "))}
+                  {selSig.attrs ? orow("attrs", selSig.attrs) : null}
+                </div>
+              </details>
+            </div>
+          );
+        })()}
       </div>
 
-      {/* SECONDARY: seam-grounded causal graph */}
+      {/* SECONDARY: the related-evidence map (engine's grounded causal graph) */}
       <div>
-        <div style={titleStyle}>Grounded causal graph ({edges.length} edge{edges.length === 1 ? "" : "s"})</div>
+        <div style={titleStyle}>{view === "debug" ? `Grounded causal graph (${edges.length} edge${edges.length === 1 ? "" : "s"})` : `How the evidence relates (${edges.length} link${edges.length === 1 ? "" : "s"})`}</div>
         <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
-          Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction.
+          {view === "debug"
+            ? "Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction."
+            : "◆ marks a provider/ownership boundary (who owns it + how much we can see). Click a link to highlight its evidence on the timeline. An arrow shows direction only when we're confident."}
         </div>
         {/* For sparse objects (1–2 edges) the force graph reads as empty, so lead
             with a compact, clickable relationship preview; the graph follows at a
@@ -410,7 +484,7 @@ function RelationshipPreview({ edges, seams, view, onSelect, selected }: {
         const link = directed ? "→" : "──";
         const seamTone = e.grounding_kind === "seam" ? "#D97706" : "#8A93A6";
         return (
-          <div key={i} onClick={() => onSelect?.(isSel ? null : e)} title={e.grounding_ref} style={{
+          <div key={i} onClick={() => onSelect?.(isSel ? null : e)} title={view === "debug" ? e.grounding_ref : undefined} style={{
             display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", cursor: "pointer",
             fontSize: 12.5, padding: "5px 8px", borderRadius: 6, minWidth: 0,
             border: `1px solid ${isSel ? "var(--accent,#4c8dff)" : "var(--border,#2a2f3a)"}`,
@@ -423,8 +497,8 @@ function RelationshipPreview({ edges, seams, view, onSelect, selected }: {
               padding: "1px 6px", fontWeight: 600, color: seamTone,
             }}>
               {e.grounding_kind === "seam"
-                ? `◆ ${seam ? `${seam.control_plane_owner.toUpperCase()} · ${seam.visibility}` : "ownership boundary"}`
-                : "topology"}
+                ? `◆ ${seam ? `${seamOwnerLabel(seam.control_plane_owner)} · ${visibilityLabel(seam.visibility)}` : "provider boundary"}`
+                : "same path / device area"}
             </span>
             <span style={{ color: "var(--muted)" }}>{link}</span>
             <span style={chip}>{ent(e.to_node)}</span>
