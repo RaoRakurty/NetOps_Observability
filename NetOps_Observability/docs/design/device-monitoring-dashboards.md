@@ -5,7 +5,7 @@ Builds on the
 already-shipped `pages/DeviceMonitoring.tsx` (Infrastructure → Device Monitoring)
 and the Flows rebuild (`tabs/Flows.tsx`).
 
-References (Datadog NDM dashboards the user supplied as design targets, captured
+References (reference NDM dashboards the user supplied as design targets, captured
 as PDFs in /var/tmp — ⚠️ not durable):
 - **Network Device Monitoring** (the master board; file `…Datacenter-Overview…`)
 - **Interface Performance** (per-device/per-interface deep dive)
@@ -117,7 +117,7 @@ the new `/api/flows/topn` + `/api/flows/top` + by-proto + timeseries endpoints.
 - **IPsec SNMP OIDs** — tunnels come from the tunnel collector, not vendor IPsec
   MIBs; auth/crypto-failure counters not collected.
 - **GeoIP** (device geomap by country) — no geo enrichment.
-- **DBSCAN outliers / forecast** — Datadog server-side analytics; we'd compute
+- **DBSCAN outliers / forecast** — leading-vendor server-side analytics; we'd compute
   z-score/linear-fit client-side or in the correlation service.
 
 ---

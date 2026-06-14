@@ -22,7 +22,7 @@ active measurement separates two concerns:
    - **Reflector:** lives on the device (capable routers), or we ship a small
      STAMP/TWAMP-Light **reflector** (stdlib UDP echo with timestamping) to run at
      sites/hosts that lack one. Unauthenticated STAMP ↔ TWAMP-Light interop.
-2. **Traceroute (TCP/UDP)** — hop-by-hop path + per-hop latency (the Datadog
+2. **Traceroute (TCP/UDP)** — hop-by-hop path + per-hop latency (the reference
    Network Path view). **Needs TTL control / ICMP receipt**, which stdlib `net`
    does not expose → requires either `golang.org/x/net` (ipv4/icmp) added to the
    dependency allowlist, or a small privileged sidecar prober. **Decision needed.**
