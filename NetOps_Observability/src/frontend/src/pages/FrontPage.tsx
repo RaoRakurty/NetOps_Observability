@@ -1,7 +1,8 @@
 import { Component, ReactNode, useEffect, useState } from "react";
-import { api, CorrObject, FeedItem } from "../services/api";
+import { api, CorrObject, FeedItem, CorrTimeline, Seam } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
+import RcaPathView from "../components/rca/RcaPathView";
 import { signatureNocTitle, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected } from "../components/rca/labels";
 
 // FrontPage (#69) — the Operations Overview: an instrument-grade NOC console
@@ -89,7 +90,6 @@ function HealthStrip() {
   const bandVar = BAND_VAR[data.band] ?? "var(--fg-subtle)";
   const live = data.signal_classes_live ?? [];
   const stale = data.stale_inputs ?? [];
-  const contribs = data.contributions ?? [];
   const bandLabel = insufficient ? "Insufficient" : data.band;
   return (
     <Panel title="Network health index" action={insufficient ? "—" : <span className="fp-num">{data.score} / 100</span>}>
@@ -120,28 +120,12 @@ function HealthStrip() {
             return <div className="fp-meta-line">RCA status: <b style={{ color: tone }}>{txt}</b></div>;
           })()}
           {!insufficient && data.band !== "healthy" && (
-            <div className="fp-meta-line" style={{ color: "var(--fg-muted)" }}>Score driven by the contributors below — not all reductions are confirmed incidents.</div>
+            <div className="fp-meta-line" style={{ color: "var(--fg-muted)" }}>Score driven by the contributors panel — not all reductions are confirmed incidents.</div>
           )}
-          {insufficient ? (
+          {insufficient && (
             <div className="fp-empty-h" style={{ maxWidth: "52ch" }}>
               Not enough independent signals to score the network yet (live: {live.join(", ") || "none"}). Connect more telemetry — this is honest, not broken.
             </div>
-          ) : contribs.length ? (
-            <>
-              <ul className="fp-contribs">
-                {contribs.slice(0, 3).map((c, i) => <li key={i}><b className="fp-num">{c.points}</b> pts — {c.reason}</li>)}
-              </ul>
-              {contribs.length > 3 && (
-                <details>
-                  <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--accent)" }}>View all {contribs.length} health contributors</summary>
-                  <ul className="fp-contribs" style={{ marginTop: 4 }}>
-                    {contribs.slice(3).map((c, i) => <li key={i}><b className="fp-num">{c.points}</b> pts — {c.reason}</li>)}
-                  </ul>
-                </details>
-              )}
-            </>
-          ) : (
-            <div className="fp-empty-h">No degraded contributors — all measured signals nominal.</div>
           )}
         </div>
       </div>
@@ -333,6 +317,132 @@ function CapacityOutlook() {
   );
 }
 
+// ── Panel 2 — Top Health Contributors ───────────────────────────────────────
+function TopHealthContributors() {
+  const { data, err } = usePoll(() => api.healthScore("global"));
+  if (err) return <Panel title="Top health contributors" state="degraded" />;
+  if (!data) return <Panel title="Top health contributors" state="inactive" note="Reading…" />;
+  if (data.coverage_status === "INSUFFICIENT_TELEMETRY")
+    return <Panel title="Top health contributors" state="inactive" note="Insufficient telemetry." hint="Connect more signal classes to assess contributors." />;
+  const contribs = data.contributions ?? [];
+  if (contribs.length === 0)
+    return <Panel title="Top health contributors" state="inactive" note="No degraded contributors." hint="All measured signals are nominal." />;
+  return (
+    <Panel title="Top health contributors" action={<span>{contribs.length}</span>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {contribs.slice(0, 8).map((c, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
+            <span className="fp-num" style={{ fontWeight: 700, minWidth: 30, textAlign: "right", color: c.points >= 12 ? "var(--crit)" : c.points >= 6 ? "var(--warn)" : "var(--fg)" }}>{c.points}</span>
+            <span style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.05, minWidth: 80, flexShrink: 0 }}>{c.signal_class.replace(/_/g, " ")}</span>
+            <span style={{ color: "var(--fg)", minWidth: 0 }}>{c.reason}</span>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+// ── Panel 6 — Telemetry Coverage / Freshness ────────────────────────────────
+const SIGNAL_CLASS_LABEL: Record<string, string> = {
+  availability: "Availability", device_health: "Device health", path_health: "Path checks", correlation: "Correlation",
+};
+function TelemetryCoverage() {
+  const { data, err } = usePoll(() => api.healthScore("global"));
+  if (err) return <Panel title="Telemetry coverage" state="degraded" />;
+  if (!data) return <Panel title="Telemetry coverage" state="inactive" note="Reading…" />;
+  const live = new Set(data.signal_classes_live ?? []);
+  const stale = new Set(data.stale_inputs ?? []);
+  const classes = ["availability", "device_health", "path_health", "correlation"];
+  return (
+    <Panel title="Telemetry coverage" action={<span>{live.size}/{classes.length} live</span>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {classes.map((c) => {
+          const isLive = live.has(c), isStale = stale.has(c);
+          const tone = !isLive ? "var(--fg-subtle)" : isStale ? "var(--warn)" : "var(--ok)";
+          const txt = !isLive ? "inactive" : isStale ? "stale" : "live";
+          return (
+            <div key={c} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: tone, flexShrink: 0 }} />
+              <span style={{ color: "var(--fg)" }}>{SIGNAL_CLASS_LABEL[c] ?? c}</span>
+              <span style={{ marginLeft: "auto", fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.06, color: tone, fontWeight: 700 }}>{txt}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="fp-empty-h" style={{ marginTop: 2 }}>Trust the health score in proportion to live coverage (confidence: {CONF_LABEL[data.confidence] ?? data.confidence}).</div>
+    </Panel>
+  );
+}
+
+// ── Panel 5 — RCA Path View (where the top issue sits / likely fault location) ─
+function RcaPathPanel() {
+  const { data, err } = usePoll(() => api.correlations(80, 2592000, "open"));
+  const [tl, setTl] = useState<CorrTimeline | null>(null);
+  const [seams, setSeams] = useState<Record<string, Seam>>({});
+  const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
+  const top = objs.find((o) => o.verdict_tier === "confirmed") ?? objs[0];
+  const topId = top?.correlation_id;
+  useEffect(() => {
+    if (!topId) { setTl(null); return; }
+    let alive = true;
+    api.correlationTimeline(topId).then((t) => { if (alive) setTl(t); }).catch(() => { if (alive) setTl(null); });
+    api.seams("active").then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } }).catch(() => { /* seams optional */ });
+    return () => { alive = false; };
+  }, [topId]);
+  if (err) return <Panel title="RCA path view" state="degraded" />;
+  if (!top || !tl) return <Panel title="RCA path view" state="inactive" note="No issue to locate yet."
+    hint="When an issue is suspected or confirmed, its path and likely fault location appear here." />;
+  return (
+    <Panel title="RCA path view">
+      <RcaPathView timeline={tl} seams={seams} owner={top.owner} />
+    </Panel>
+  );
+}
+
+// ── Panel 10 — Site / Region Health ─────────────────────────────────────────
+function SiteRegionHealth() {
+  // Honest: per-site scoring needs site-tagged telemetry; never fabricate it.
+  return <Panel title="Site / region health" state="inactive" note="Per-site health not available yet."
+    hint="Add site labels (Source of Truth / geomap) so device + path signals can be scored per site." />;
+}
+
+// ── Panel 13 — Platform Health (admin / internal stack) ─────────────────────
+const STACK_TONE: Record<string, string> = { healthy: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)" };
+function PlatformHealth() {
+  const { data, err } = usePoll(() => api.stackHealth());
+  if (err) return <Panel title="Platform health (internal)" state="degraded" />;
+  if (!data) return <Panel title="Platform health (internal)" state="inactive" note="Reading…" />;
+  const tone = STACK_TONE[data.overall] ?? "var(--fg-subtle)";
+  return (
+    <Panel title="Platform health (internal)">
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span className="fp-tag" style={{ color: tone, border: `1px solid ${tone}`, textTransform: "capitalize" }}>{data.overall}</span>
+        <span style={{ fontSize: 12.5, color: "var(--fg-muted)" }}>
+          <b className="fp-num" style={{ color: "var(--ok)" }}>{data.up}</b> up
+          {data.degraded > 0 && <> · <b className="fp-num" style={{ color: "var(--warn)" }}>{data.degraded}</b> degraded</>}
+          {data.down > 0 && <> · <b className="fp-num" style={{ color: "var(--crit)" }}>{data.down}</b> down</>}
+        </span>
+      </div>
+      <div className="fp-empty-h">The platform's own services — separate from the customer-network health above.</div>
+    </Panel>
+  );
+}
+
+// ── Panel 14 — Internal Monitoring Checks (admin) ───────────────────────────
+function InternalMonitoringChecks() {
+  const { navigate } = useShell();
+  const { data } = usePoll(() => api.correlations(120, 2592000, "open"));
+  const internal = (data?.data ?? []).filter((o) => isInternalStackAffected(o.affected));
+  return (
+    <Panel title="Internal monitoring checks" action={<a href="#/monitoring/correlations" onClick={(e) => { e.preventDefault(); navigate("monitoring/correlations"); }}>view →</a>}>
+      <div style={{ fontSize: 12.5, color: "var(--fg-muted)" }}>
+        <b className="fp-num" style={{ fontSize: 18, color: "var(--fg)" }}>{internal.length}</b> internal self-monitoring object{internal.length === 1 ? "" : "s"}
+      </div>
+      <div className="fp-empty-h">Hidden from customer RCA by design — the platform watching itself. Open Correlations → “Show internal/stack”.</div>
+    </Panel>
+  );
+}
+
 // Error boundary so one bad panel degrades in isolation — never white-screens.
 class Safe extends Component<{ children: ReactNode }, { err: boolean }> {
   state = { err: false };
@@ -356,19 +466,28 @@ export default function FrontPage() {
         </div>
       </div>
       <Safe><HealthStrip /></Safe>
+      {/* 3 columns matching the owner's 14-panel grid; each column groups related
+          panels and masonry-packs so short/inactive panels don't leave row gaps.
+          Order = priority (must-haves first down each column). */}
       <div className="fp-cols">
-        <div className="fp-col" style={{ flex: "2 1 380px" }}>
+        <div className="fp-col" style={{ flex: "1 1 320px" }}>
+          <Safe><TopHealthContributors /></Safe>
           <Safe><TopIssues /></Safe>
           <Safe><Panel title="Hot paths"><PathHealthList limit={5} /></Panel></Safe>
-        </div>
-        <div className="fp-col" style={{ flex: "1 1 300px" }}>
-          <Safe><RecommendedAction /></Safe>
           <Safe><RcaCoverage /></Safe>
-          <Safe><ImpactSummary /></Safe>
         </div>
-        <div className="fp-col" style={{ flex: "1 1 300px" }}>
-          <Safe><WhatChanged /></Safe>
+        <div className="fp-col" style={{ flex: "1 1 320px" }}>
+          <Safe><RecommendedAction /></Safe>
+          <Safe><RcaPathPanel /></Safe>
+          <Safe><SiteRegionHealth /></Safe>
           <Safe><CapacityOutlook /></Safe>
+        </div>
+        <div className="fp-col" style={{ flex: "1 1 320px" }}>
+          <Safe><WhatChanged /></Safe>
+          <Safe><ImpactSummary /></Safe>
+          <Safe><TelemetryCoverage /></Safe>
+          <Safe><PlatformHealth /></Safe>
+          <Safe><InternalMonitoringChecks /></Safe>
         </div>
       </div>
     </div>
