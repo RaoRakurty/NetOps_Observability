@@ -200,12 +200,25 @@ def emit_metrics(degraded: bool, elapsed_s: float) -> int:
 
 
 def emit_traceroute() -> int:
-    # Each destination is traced by BOTH methods (icmp + tcp). They share the
-    # first/last hops but diverge in the middle — realistic: ICMP and TCP take
-    # different ECMP paths / firewalls treat them differently — so the UI renders
-    # one row per protocol.
+    # Two traceroute modes are demonstrated:
+    #  • PRIORITY / "auto" (10.70.245.120): icmp first; where icmp got no reply
+    #    (hop 2 = a "*"), tcp fills the gap — one merged path, the filled hop
+    #    tagged via=tcp. This is the mtr-style "icmp, fall back to tcp" mode.
+    #  • PARALLEL / "both" (others): icmp and tcp traced independently and shown
+    #    as a row each; they diverge in the middle (different ECMP / firewall).
     paths = []
+    auto_tgt = "10.70.245.120"
+    paths.append({
+        "dst": auto_tgt, "method": "auto", "reached": True, "signature": f"sig-auto-{auto_tgt}",
+        "hops": [
+            {"ttl": 1, "ip": "10.0.0.1", "rtt_ms": 0.4},
+            {"ttl": 2, "ip": "172.40.40.52", "rtt_ms": 2.6, "via": "tcp"},  # icmp "*" → filled by tcp
+            {"ttl": 3, "ip": auto_tgt, "rtt_ms": 6.2},
+        ],
+    })
     for tgt in PROBE_TARGETS:
+        if tgt == auto_tgt:
+            continue
         icmp_hops = [
             {"ttl": 1, "ip": "10.0.0.1", "rtt_ms": 0.4},
             {"ttl": 2, "ip": "172.40.40.52", "rtt_ms": 2.1},

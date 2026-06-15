@@ -147,6 +147,7 @@ function HopNode({ data }: NodeProps) {
       </div>
       {d.sub && <div style={{ marginTop: 1, color: C.muted, fontSize: 10.5 }}>{d.sub}</div>}
       {d.metric && <div style={{ marginTop: 2, color: d.tone ?? C.info, fontSize: 10.5, fontWeight: 600 }}>{d.metric}</div>}
+      {d.via && <div style={{ marginTop: 2, color: C.info, fontSize: 10, fontWeight: 700 }}>↳ via {String(d.via).toUpperCase()}</div>}
       <Handle type="source" position={Position.Right} style={handleStyle} />
     </div>
   );
@@ -212,7 +213,8 @@ function groupBySignature(traces: ProbePath[]): { methods: string[]; trace: Prob
   return [...groups.values()];
 }
 
-const methodTag = (methods: string[]): string => methods.map((m) => m.toUpperCase()).join(" · ");
+const methodTag = (methods: string[]): string =>
+  methods.map((m) => (m === "auto" ? "ICMP→TCP" : m.toUpperCase())).join(" · ");
 
 export default function RcaTopology({ timeline, seams, view = "operator", height = 300, probePaths, deviceByIp }: {
   timeline: CorrTimeline;
@@ -366,7 +368,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
               data: { label: hopLabel, meta, elements: (locus?.elements ?? []).slice(0, 4), isTarget: isLast } });
           } else {
             push({ id, type: "hop", position: { x: (i + 1) * COL_HOP, y: yBase }, draggable: true,
-              data: { label: hopLabel, mono: !name, icon: isLast ? "⊚" : undefined, sub: (isLast ? "destination" : `hop ${h.ttl}`) + ipSub, metric, tone: lossHi ? meta.color : undefined } });
+              data: { label: hopLabel, mono: !name, icon: isLast ? "⊚" : undefined, sub: (isLast ? "destination" : `hop ${h.ttl}`) + ipSub, metric, via: h.via, tone: lossHi ? meta.color : undefined } });
           }
           // first segment of each row carries the method tag (+ measured headline).
           const segDegraded = lossHi || (i === faultIdx && !!lossTxt);

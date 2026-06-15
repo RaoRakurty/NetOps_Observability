@@ -90,6 +90,8 @@ func TestParseMethods(t *testing.T) {
 		{"tcp,tcp", []string{"tcp"}},              // deduped
 		{"bogus", []string{"icmp"}},               // unknown → default
 		{" ICMP , TCP ", []string{"icmp", "tcp"}}, // trimmed + lowercased
+		{"auto", []string{"icmp", "tcp"}},         // priority mode needs both
+		{"priority", []string{"icmp", "tcp"}},
 	}
 	for _, c := range cases {
 		got := parseMethods(c.in)
@@ -101,6 +103,45 @@ func TestParseMethods(t *testing.T) {
 				t.Fatalf("parseMethods(%q) = %v, want %v", c.in, got, c.want)
 			}
 		}
+	}
+}
+
+func TestIsComplete(t *testing.T) {
+	full := PathResult{Reached: true, Hops: []Hop{{TTL: 1, IP: "a"}, {TTL: 2, IP: "b"}}}
+	if !isComplete(full) {
+		t.Fatal("a reached path with all hops responding is complete")
+	}
+	gap := PathResult{Reached: true, Hops: []Hop{{TTL: 1, IP: "a"}, {TTL: 2, IP: ""}, {TTL: 3, IP: "c"}}}
+	if isComplete(gap) {
+		t.Fatal("a path with an unresponsive (*) hop is NOT complete")
+	}
+	if isComplete(PathResult{Reached: false, Hops: []Hop{{TTL: 1, IP: "a"}}}) {
+		t.Fatal("an unreached path is NOT complete")
+	}
+}
+
+// Priority/auto mode: icmp base, tcp fills the "*" gaps and extends if icmp
+// never reached the destination; icmp's responsive hops are preferred.
+func TestMergePaths(t *testing.T) {
+	base := PathResult{Reached: true, Hops: []Hop{{TTL: 1, IP: "a"}, {TTL: 2, IP: ""}, {TTL: 3, IP: "c"}}}
+	alt := PathResult{Reached: true, Hops: []Hop{{TTL: 1, IP: "x"}, {TTL: 2, IP: "b2"}, {TTL: 3, IP: "x"}}}
+	m := mergePaths(base, alt, "tcp")
+	if m.Hops[0].IP != "a" || m.Hops[0].Via != "" {
+		t.Fatalf("base responsive hop must be preferred: %+v", m.Hops[0])
+	}
+	if m.Hops[1].IP != "b2" || m.Hops[1].Via != "tcp" {
+		t.Fatalf("gap should be filled by tcp + tagged Via: %+v", m.Hops[1])
+	}
+
+	// icmp didn't reach; tcp did → tcp tail extends the path.
+	short := PathResult{Reached: false, Hops: []Hop{{TTL: 1, IP: "a"}, {TTL: 2, IP: ""}}}
+	long := PathResult{Reached: true, Hops: []Hop{{TTL: 1, IP: "x"}, {TTL: 2, IP: "b2"}, {TTL: 3, IP: "dst"}}}
+	m2 := mergePaths(short, long, "tcp")
+	if !m2.Reached {
+		t.Fatal("merged path should inherit reached=true from the fallback")
+	}
+	if len(m2.Hops) != 3 || m2.Hops[2].IP != "dst" || m2.Hops[2].Via != "tcp" {
+		t.Fatalf("tcp tail should extend base: %+v", m2.Hops)
 	}
 }
 

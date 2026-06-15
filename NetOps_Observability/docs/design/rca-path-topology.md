@@ -72,6 +72,21 @@ falling back to contextual placement otherwise:
   on the left). Backend: `PathResult.Method`, `pathKey(dst,method)`,
   `TRACEROUTE_METHOD` parsed as a list (`icmp` default · `tcp` · `icmp,tcp` /
   `both`); metrics carry a `method` label.
+
+### Two modes — parallel vs priority
+
+`TRACEROUTE_METHOD` selects how the methods combine:
+
+- **Parallel** (`icmp,tcp` / `both`): trace each method independently, store both,
+  render a row each (above).
+- **Priority / fallback** (`auto` / `priority`): trace **ICMP first**; if it didn't
+  reveal the *entire* path (`isComplete` = reached AND no unresponsive `*` hops),
+  **fall back to TCP to fill the gaps** — exactly the `mtr`/modern-traceroute
+  behaviour. `mergePaths` keeps ICMP's responsive hops, fills each `*` hop from
+  TCP's hop at the same TTL (tagged `Hop.Via="tcp"`), and extends with TCP's tail
+  if ICMP never reached. Result is **one merged path** (`Method="auto"`); the UI
+  labels it "ICMP→TCP" and tags each rescued hop "↳ via TCP". Tests:
+  `TestIsComplete`, `TestMergePaths`.
 - **RCA overlay:** the fault lands on the hop whose IP/name matches the locus, else
   on the destination hop (the diagnosed target), carrying the verdict status +
   broken-element chips. Legend shows "● live trace" vs "contextual path".

@@ -36,6 +36,7 @@ type Hop struct {
 	IP    string  `json:"ip"`
 	RTTms float64 `json:"rtt_ms"` // best (min) RTT across this hop's probes
 	Loss  float64 `json:"loss_pct"`
+	Via   string  `json:"via,omitempty"` // priority/auto mode: fallback method that filled this hop
 }
 
 // PathResult is the latest trace to a destination, exposed to the API/UI. A
@@ -201,6 +202,95 @@ func methodLabel(m string) string {
 		return "tcp"
 	}
 	return "icmp"
+}
+
+// isComplete reports whether a trace revealed the ENTIRE path: it reached the
+// destination and every hop responded (no unresponsive "*" gaps). Priority/auto
+// mode uses this to decide whether a fallback method is needed.
+func isComplete(p PathResult) bool {
+	if !p.Reached || len(p.Hops) == 0 {
+		return false
+	}
+	for _, h := range p.Hops {
+		if h.IP == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// mergePaths fills gaps in base using alt (priority/auto mode). base's responsive
+// hops are always preferred (it's the higher-priority method); any unresponsive
+// hop ("*") in base is filled from alt's hop at the same TTL and tagged Via. If
+// base never reached the destination but alt did, alt's tail extends base.
+func mergePaths(base, alt PathResult, via string) PathResult {
+	byTTL := make(map[int]Hop, len(alt.Hops))
+	maxTTL := 0
+	for _, h := range alt.Hops {
+		byTTL[h.TTL] = h
+		if h.TTL > maxTTL {
+			maxTTL = h.TTL
+		}
+	}
+	out := base
+	out.Hops = make([]Hop, len(base.Hops))
+	copy(out.Hops, base.Hops)
+	for i := range out.Hops {
+		if out.Hops[i].IP == "" {
+			if a, ok := byTTL[out.Hops[i].TTL]; ok && a.IP != "" {
+				a.Via = via
+				out.Hops[i] = a
+			}
+		}
+	}
+	if !base.Reached && alt.Reached {
+		baseMax := 0
+		if len(base.Hops) > 0 {
+			baseMax = base.Hops[len(base.Hops)-1].TTL
+		}
+		for ttl := baseMax + 1; ttl <= maxTTL; ttl++ {
+			if a, ok := byTTL[ttl]; ok {
+				a.Via = via
+				out.Hops = append(out.Hops, a)
+			}
+		}
+		out.Reached = alt.Reached
+	}
+	return out
+}
+
+// tracePriority runs methods in priority order: the first (icmp) is the base; if
+// it doesn't reveal the entire path, each subsequent method (tcp) fills the gaps
+// until the path is complete. Returns one merged path (Method "auto"); per-hop
+// Via marks which fallback method rescued each filled hop.
+func tracePriority(ctx context.Context, dst string, cfg traceConfig, methods []string) (PathResult, error) {
+	var base PathResult
+	var firstErr error
+	have := false
+	for _, m := range methods {
+		c := cfg
+		c.method = m
+		res, err := traceOnce(ctx, dst, c)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !have {
+			base, have = res, true
+		} else {
+			base = mergePaths(base, res, methodLabel(m))
+		}
+		if isComplete(base) {
+			break
+		}
+	}
+	if !have {
+		return PathResult{}, firstErr
+	}
+	base.Method = "auto"
+	return base, nil
 }
 
 // traceICMP runs a Paris-consistent ICMP-echo trace (constant id, varying seq).
@@ -560,19 +650,22 @@ type tracerouteCollector struct {
 	interval time.Duration
 	cfg      traceConfig
 	methods  []string // ordered, deduped: which methods to trace each cycle
+	auto     bool     // priority mode: icmp first, fall back to tcp to fill gaps
 	mu       sync.RWMutex
 	status   Status
 }
 
 // parseMethods reads TRACEROUTE_METHOD as a comma-separated list so a dst can be
-// traced by both protocols ("icmp,tcp" or "both"). Default: icmp only (TCP needs
-// a raw TCP socket / CAP_NET_RAW, so it stays opt-in). Order preserved, deduped.
+// traced by both protocols ("icmp,tcp" or "both"). "auto"/"priority" means try
+// icmp first and fall back to tcp to fill gaps — it needs both methods available,
+// so it expands to [icmp, tcp]. Default: icmp only (TCP needs a raw TCP socket /
+// CAP_NET_RAW, so it stays opt-in). Order preserved, deduped.
 func parseMethods(raw string) []string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	if raw == "" {
 		return []string{"icmp"}
 	}
-	if raw == "both" {
+	if raw == "both" || raw == "auto" || raw == "priority" {
 		return []string{"icmp", "tcp"}
 	}
 	seen := map[string]bool{}
@@ -605,7 +698,9 @@ func NewTraceroute() Collector {
 	if sock != "udp4" {
 		sock = "ip4:icmp"
 	}
-	methods := parseMethods(os.Getenv("TRACEROUTE_METHOD"))
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRACEROUTE_METHOD")))
+	auto := raw == "auto" || raw == "priority"
+	methods := parseMethods(raw)
 	return &tracerouteCollector{
 		interval: envDuration("TRACEROUTE_INTERVAL", 60*time.Second),
 		cfg: traceConfig{
@@ -617,6 +712,7 @@ func NewTraceroute() Collector {
 			tcpPort:   envInt("TRACEROUTE_TCP_PORT", 443),
 		},
 		methods: methods,
+		auto:    auto,
 		status:  Status{Name: "traceroute", Healthy: true, Kind: "metrics"},
 	}
 }
@@ -662,7 +758,45 @@ func (c *tracerouteCollector) traceAll(ctx context.Context) {
 	var lines []string
 	var lastErr string
 	reachedAny := map[string]bool{} // a target counts reachable if ANY method reaches it
+	// store one trace result + emit its metrics (method label keeps icmp/tcp/auto
+	// series distinct; route stability via path_changed feeds Path Health).
+	emit := func(dst string, res PathResult) {
+		if prev, ok := Paths.get(dst, res.Method); ok {
+			res.Changed = pathSignature(prev.Hops) != pathSignature(res.Hops)
+		}
+		Paths.set(res)
+		if res.Reached {
+			reachedAny[dst] = true
+		}
+		ml := res.Method
+		for _, h := range res.Hops {
+			if h.IP == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf(`probe_hop_rtt_ms{dst=%q,method=%q,ttl="%d",hop=%q,probe="traceroute"} %.3f %d`, dst, ml, h.TTL, h.IP, h.RTTms, now))
+		}
+		changed := 0
+		if res.Changed {
+			changed = 1
+		}
+		lines = append(lines,
+			fmt.Sprintf(`probe_path_length{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, len(res.Hops), now),
+			fmt.Sprintf(`probe_path_reached{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, b2i(res.Reached), now),
+			fmt.Sprintf(`probe_path_changed{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, changed, now),
+		)
+	}
 	for _, dst := range targets {
+		if c.auto {
+			// Priority mode: icmp first, fall back to tcp to fill gaps → one trace.
+			res, err := tracePriority(ctx, dst, c.cfg, c.methods)
+			if err != nil {
+				lastErr = err.Error()
+				continue
+			}
+			emit(dst, res)
+			continue
+		}
+		// Parallel mode: trace each method independently → one trace per method.
 		for _, method := range c.methods {
 			cfg := c.cfg
 			cfg.method = method
@@ -671,33 +805,7 @@ func (c *tracerouteCollector) traceAll(ctx context.Context) {
 				lastErr = err.Error()
 				continue
 			}
-			// Path-change detection vs the previous trace of the SAME (dst, method).
-			if prev, ok := Paths.get(dst, res.Method); ok {
-				res.Changed = pathSignature(prev.Hops) != pathSignature(res.Hops)
-			}
-			Paths.set(res)
-			if res.Reached {
-				reachedAny[dst] = true
-			}
-			ml := res.Method
-			// Per-hop RTT metrics + per-path summary (RFC-aligned route stability via
-			// path_changed feeds Path Health's 10% route-stability term). The method
-			// label keeps icmp and tcp series distinct.
-			for _, h := range res.Hops {
-				if h.IP == "" {
-					continue
-				}
-				lines = append(lines, fmt.Sprintf(`probe_hop_rtt_ms{dst=%q,method=%q,ttl="%d",hop=%q,probe="traceroute"} %.3f %d`, dst, ml, h.TTL, h.IP, h.RTTms, now))
-			}
-			changed := 0
-			if res.Changed {
-				changed = 1
-			}
-			lines = append(lines,
-				fmt.Sprintf(`probe_path_length{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, len(res.Hops), now),
-				fmt.Sprintf(`probe_path_reached{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, b2i(res.Reached), now),
-				fmt.Sprintf(`probe_path_changed{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, changed, now),
-			)
+			emit(dst, res)
 		}
 	}
 	reachable := len(reachedAny)
