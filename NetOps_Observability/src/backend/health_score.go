@@ -106,8 +106,12 @@ func hingeN(v, lo, hi float64) float64 {
 // blend with the anti-averaging floor (so a hotspot isn't averaged away), bands,
 // confidence, and per-contribution points that sum to the score deficit.
 func aggregateHealthScore(scope, id string, classes []healthClassResult, nowISO string) HealthScoreResp {
-	var live []healthClassResult
-	var liveNames, stale []string
+	// Init to empty (never nil): a nil slice serializes to JSON null, and the UI
+	// reads .length on these — null would throw and blank the page. API contract:
+	// list fields are always arrays.
+	live := []healthClassResult{}
+	liveNames := []string{}
+	stale := []string{}
 	for _, c := range classes {
 		if !c.Live {
 			continue

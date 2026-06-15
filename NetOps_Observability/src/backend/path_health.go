@@ -375,7 +375,7 @@ func ScorePathHealth(cur PathCurrent, base PathBaseline, w Weights) PathHealth {
 
 // buildEvidence lists the concrete, NOC-readable facts behind the score.
 func buildEvidence(cur PathCurrent, base PathBaseline, sev map[string]float64, state HealthState) []string {
-	var ev []string
+	ev := []string{} // never nil — a nil slice serializes to JSON null (UI reads .length)
 	if s, ok := sev["latency"]; ok && s >= 0.40 {
 		ev = append(ev, fmt.Sprintf("Latency p95 (%.0f ms) vs this path's typical %.0f ms / bad %.0f ms",
 			cur.LatencyP95_5m, base.Latency.P50, base.Latency.P99))

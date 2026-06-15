@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from "react";
+import { Component, ReactNode, useEffect, useState } from "react";
 import { api, CorrObject, FeedItem } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
@@ -62,6 +62,11 @@ function HealthStrip() {
   if (!data) return <Panel title="Network health"><div className="empty">Loading…</div></Panel>;
   const insufficient = data.coverage_status === "INSUFFICIENT_TELEMETRY" || data.score == null;
   const color = BAND_COLOR[data.band] ?? "#8A93A6";
+  // defensive: never trust a list field to be non-null (a backend nil slice
+  // serializes to JSON null — .length/.slice on null would blank the page).
+  const live = data.signal_classes_live ?? [];
+  const stale = data.stale_inputs ?? [];
+  const contributions = data.contributions ?? [];
   return (
     <Panel title="Network health">
       <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
@@ -72,20 +77,20 @@ function HealthStrip() {
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
             Confidence: <b style={{ color: "var(--fg)" }}>{CONF_LABEL[data.confidence] ?? data.confidence}</b>
-            {" · based on "}{data.signal_classes_live.length} signal {data.signal_classes_live.length === 1 ? "class" : "classes"}
-            {data.stale_inputs.length > 0 ? ` · ${data.stale_inputs.length} stale` : ""}
+            {" · based on "}{live.length} signal {live.length === 1 ? "class" : "classes"}
+            {stale.length > 0 ? ` · ${stale.length} stale` : ""}
           </div>
           {insufficient ? (
             <div style={{ fontSize: 12.5, marginTop: 4, color: "var(--muted)" }}>
-              Not enough independent signals to score the network yet (live: {data.signal_classes_live.join(", ") || "none"}).
+              Not enough independent signals to score the network yet (live: {live.join(", ") || "none"}).
               Connect more telemetry — this is honest, not broken.
             </div>
           ) : (
             <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5 }}>
-              {data.contributions.slice(0, 3).map((c, i) => (
+              {contributions.slice(0, 3).map((c, i) => (
                 <li key={i}><b>{c.points}</b> pts — {c.reason}</li>
               ))}
-              {data.contributions.length === 0 && <li style={{ color: "var(--muted)", listStyle: "none", marginLeft: -18 }}>No degraded contributors — all measured signals nominal.</li>}
+              {contributions.length === 0 && <li style={{ color: "var(--muted)", listStyle: "none", marginLeft: -18 }}>No degraded contributors — all measured signals nominal.</li>}
             </ul>
           )}
         </div>
@@ -254,22 +259,34 @@ function CapacityOutlook() {
   );
 }
 
+// Safe isolates a panel: if it throws, that panel shows a degraded box instead of
+// blanking the whole page (a bad payload should never white-screen the NOC).
+class Safe extends Component<{ children: ReactNode }, { err: boolean }> {
+  state = { err: false };
+  static getDerivedStateFromError() { return { err: true }; }
+  render() {
+    return this.state.err
+      ? <div className="panel"><div className="empty" style={{ color: "var(--muted)" }}>This panel hit an error and was isolated — the rest of the page is unaffected.</div></div>
+      : this.props.children;
+  }
+}
+
 export default function FrontPage() {
   return (
     <div className="dm-board" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <HealthStrip />
+      <Safe><HealthStrip /></Safe>
       <div className="fp-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
-        <TopIssues />
+        <Safe><TopIssues /></Safe>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <RecommendedAction />
-          <RcaCoverage />
+          <Safe><RecommendedAction /></Safe>
+          <Safe><RcaCoverage /></Safe>
         </div>
-        <WhatChanged />
-        <Panel title="Hot paths">
-          <PathHealthList limit={5} />
-        </Panel>
-        <ImpactSummary />
-        <CapacityOutlook />
+        <Safe><WhatChanged /></Safe>
+        <Safe>
+          <Panel title="Hot paths"><PathHealthList limit={5} /></Panel>
+        </Safe>
+        <Safe><ImpactSummary /></Safe>
+        <Safe><CapacityOutlook /></Safe>
       </div>
     </div>
   );

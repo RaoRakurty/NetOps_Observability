@@ -1,6 +1,32 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// Regression lock: list fields must serialize as [] never null — a nil slice →
+// JSON null → the UI reads .length on null → white screen. Covers both branches.
+func TestHealth_ListFieldsNeverNull(t *testing.T) {
+	for _, name := range []string{"insufficient", "scored"} {
+		var classes []healthClassResult
+		if name == "scored" {
+			classes = []healthClassResult{cls("availability", true, 0.0), cls("device_health", true, 0.1, contrib("device_health", "edge-1", 0.1))}
+		} else {
+			classes = []healthClassResult{cls("device_health", true, 0.3, contrib("device_health", "edge-1", 0.3))}
+		}
+		b, err := json.Marshal(aggregateHealthScore("global", "", classes, "now"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{`"signal_classes_live":null`, `"stale_inputs":null`, `"contributions":null`} {
+			if strings.Contains(string(b), f) {
+				t.Errorf("[%s] response contains %s — would blank the UI; lists must be []", name, f)
+			}
+		}
+	}
+}
 
 func cls(name string, live bool, badness float64, contribs ...healthContribution) healthClassResult {
 	return healthClassResult{Class: name, Live: live, Badness: badness, Contribs: contribs}
