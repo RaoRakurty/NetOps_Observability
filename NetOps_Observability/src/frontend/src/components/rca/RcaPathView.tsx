@@ -1,7 +1,13 @@
 import { useMemo } from "react";
 import { CorrTimeline, Seam } from "../../services/api";
-import { C, MODALITY_ORDER, modalityLabel, entityLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor } from "./labels";
+import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor } from "./labels";
 import { episodeEntity } from "./SeamGraph";
+
+// episodeKind pulls the signal kind off a graph node key ("type:entity…:kind").
+function episodeKind(key: string): string {
+  const parts = key.split(":");
+  return parts.length >= 2 ? kindLabel(parts[parts.length - 1]) : "";
+}
 
 // RcaPathView — the Operator-View "where is the issue" view, between Evidence and
 // the Evidence timeline. OVERLAY MODEL (owner-specified): the grounded path
@@ -80,9 +86,6 @@ export default function RcaPathView({ timeline, seams, owner }: {
   // verdict → segment marker (the "broken link" treatment on the boundary).
   const segTone = confirmed ? C.crit : internalOnly ? C.faint : C.caution;
   const segSym = confirmed ? SYM.confirmed : internalOnly ? SYM.unknown : SYM.possible;
-  const segLabel = confirmed ? "Confirmed issue here"
-    : internalOnly ? "Internal monitoring — not a customer fault"
-    : "Possible issue area";
 
   // Fallback: no grounded path mapping → never invent a segment.
   if (!primary) {
@@ -102,12 +105,22 @@ export default function RcaPathView({ timeline, seams, owner }: {
     );
   }
 
-  const src = entityLabel(episodeEntity(primary.from_node));
-  const dst = entityLabel(episodeEntity(primary.to_node));
   const ownerColor = seam ? seamOwnerColor(seam.control_plane_owner) : C.faint;
-  const boundaryText = seam
-    ? `${SYM.boundary} ${seamOwnerLabel(seam.control_plane_owner)} boundary · ${visibilityLabel(seam.visibility)}`
-    : "same path / device area";
+
+  // Fault locus = the entity the grounded edges converge on (topo "shared:X"),
+  // or the seam boundary — i.e. WHERE on the path the failure sits.
+  const locus = (() => {
+    const counts: Record<string, number> = {};
+    for (const e of edges) {
+      if (e.grounding_kind === "topo" && e.grounding_ref.startsWith("shared:")) {
+        const x = e.grounding_ref.slice(7);
+        counts[x] = (counts[x] || 0) + 1;
+      }
+    }
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (top) return entityLabel(top[0]);
+    return seam ? `${seamOwnerLabel(seam.control_plane_owner)} boundary` : "";
+  })();
 
   return (
     <div style={card}>
@@ -118,21 +131,35 @@ export default function RcaPathView({ timeline, seams, owner }: {
         )}
       </div>
 
-      {/* symbolic path: source ● → ◆ boundary (marked by verdict) → target */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={chip}><span style={{ color: C.ok }}>{SYM.observed}</span> {src}</span>
-        <span style={muted}>──</span>
-        <span style={{
-          ...chip, background: segTone + "1c", border: `1px solid ${segTone}66`, color: segTone,
-          fontWeight: 700,
-        }} title={segLabel}>
-          {segSym} {boundaryText}
-        </span>
-        <span style={muted}>──</span>
-        <span style={chip}><span style={{ color: C.ok }}>{SYM.observed}</span> {dst}</span>
-      </div>
-      <div style={{ fontSize: 12.5, color: segTone, fontWeight: 600 }}>
-        {segSym} {segLabel}{visLimited ? ` · ${SYM.unknown} limited visibility past this boundary` : ""}
+      {/* WHERE it sits: the likely fault location + the grounded topology (every
+          connection with its strength = edge weight), so the operator sees the
+          failure's place on the path, not just a verdict. */}
+      {locus && (
+        <div style={{ fontSize: 13, color: segTone, fontWeight: 700 }}>
+          {segSym} Likely fault location: <span style={{ ...chip, color: segTone, background: segTone + "1c", border: `1px solid ${segTone}66` }}>{locus}</span>
+          {visLimited ? ` · ${SYM.unknown} limited visibility past this boundary` : ""}
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {edges.slice(0, 6).map((e, i) => {
+          const a = entityLabel(episodeEntity(e.from_node));
+          const b = entityLabel(episodeEntity(e.to_node));
+          const w = Number(e.weight) || 0;
+          const directed = Number(e.direction_conf ?? 0) >= 0.5 && e.direction_basis !== "none";
+          const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
+          const gk = e.grounding_kind === "seam"
+            ? `${SYM.boundary} ${s ? seamOwnerLabel(s.control_plane_owner) : "provider"} boundary`
+            : "same path / device area";
+          return (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, flexWrap: "wrap", minWidth: 0 }}>
+              <span style={chip}>{a}{episodeKind(e.from_node) ? <span style={{ ...muted, marginLeft: 4 }}>{episodeKind(e.from_node)}</span> : null}</span>
+              <span style={muted}>{directed ? "→" : "──"}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>{gk} · strength {w.toFixed(2)}</span>
+              <span style={muted}>{directed ? "→" : "──"}</span>
+              <span style={chip}>{b}{episodeKind(e.to_node) ? <span style={{ ...muted, marginLeft: 4 }}>{episodeKind(e.to_node)}</span> : null}</span>
+            </div>
+          );
+        })}
       </div>
 
       {/* evidence status across the path (NOC language, ● observed / ○ missing) */}
