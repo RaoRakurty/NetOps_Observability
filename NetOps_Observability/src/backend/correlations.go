@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -160,6 +161,75 @@ SELECT toString(o.correlation_id)  AS correlation_id,
  ORDER BY o.created_at DESC
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)
+}
+
+// handleCorrelationStats serves GET /api/correlations/stats — the cheap CH
+// aggregates behind the Front Page "RCA coverage" panel (#69 panel 5). Honest by
+// construction: a low actionable/confirmed ratio is *displayed*, that's the point.
+// Tenant-scoped by the corr_objects row policy (chTenantScope). One row, one query:
+// the open-object counts span ALL open objects (an open issue may be old), while
+// the window counts (confirmed/total/signatures) are bounded inside countIf so the
+// two views don't fight over a single WHERE clause.
+func (s *server) handleCorrelationStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	since := durationQuery(r, "since", 7*24*time.Hour)
+	win := intToString(int(since.Seconds()))
+	sql := `
+SELECT countIf(state='open')                                          AS open,
+       countIf(state='open' AND verdict_tier='confirmed')             AS open_confirmed,
+       countIf(state='open' AND verdict_tier='suspected')             AS open_suspected,
+       countIf(state='open' AND verdict_tier='undetermined')          AS open_undetermined,
+       countIf(state='open' AND top_confidence >= 0.5)                AS open_actionable,
+       countIf(created_at >= now() - INTERVAL ` + win + ` SECOND)                              AS total_window,
+       countIf(created_at >= now() - INTERVAL ` + win + ` SECOND AND verdict_tier='confirmed') AS confirmed_window,
+       uniqExactIf(top_hypothesis, top_hypothesis != 'undetermined'
+                   AND created_at >= now() - INTERVAL ` + win + ` SECOND)                       AS signatures_seen
+  FROM netops.corr_objects_latest
+ FORMAT JSON`
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	row := map[string]any{}
+	if len(rows) > 0 {
+		row = rows[0]
+	}
+	num := func(k string) float64 {
+		switch v := row[k].(type) {
+		case float64:
+			return v
+		case string:
+			f, _ := strconv.ParseFloat(v, 64)
+			return f
+		}
+		return 0
+	}
+	open := num("open")
+	totalWin := num("total_window")
+	pct := func(n, d float64) float64 {
+		if d <= 0 {
+			return 0
+		}
+		return (n / d) * 100
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"open":               open,
+		"open_confirmed":     num("open_confirmed"),
+		"open_suspected":     num("open_suspected"),
+		"open_undetermined":  num("open_undetermined"),
+		"actionable_pct":     pct(num("open_actionable"), open),
+		"confirmed_7d_pct":   pct(num("confirmed_window"), totalWin),
+		"total_window":       totalWin,
+		"signatures_matched": num("signatures_seen"),
+		"window_days":        int(since.Hours() / 24),
+	})
 }
 
 // handleCorrelationByID serves GET /api/correlations/{id} (object + edges) and
