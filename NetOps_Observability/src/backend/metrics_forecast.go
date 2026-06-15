@@ -187,6 +187,12 @@ func (s *server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		}
 		historyDays := (pts[len(pts)-1][0] - t0) / 86400.0
 		slopePerDay, last, ok := linFit(xy)
+		// Guard implausible utilization: a fraction far outside 0..1 means the
+		// interface's ifSpeed metadata is wrong/zero (we'd otherwise surface a raw
+		// bps number like 1073807616%). Drop it rather than show garbage.
+		if last < 0 || last > 2.0 {
+			continue
+		}
 		lbl := labels[key]
 		iface := lbl["ifName"]
 		if iface == "" {
@@ -207,8 +213,11 @@ func (s *server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case d == 0:
 				row.Status = "saturated"
-			case d < 0:
+			case d < 0 || d > 365:
+				// flat/declining OR a trickle so slow it's beyond a year — not a
+				// meaningful countdown ("not expected"), don't show a huge day count.
 				row.Status = "stable"
+				row.DaysTo90 = -1
 			default:
 				row.Status = "trending"
 			}

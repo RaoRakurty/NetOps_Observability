@@ -82,6 +82,7 @@ function Kpi({ n, l }: { n: ReactNode; l: string }) {
 // ── Panel 1 — Network Health Index (hero) ───────────────────────────────────
 function HealthStrip() {
   const { data, err } = usePoll(() => api.healthScore("global"));
+  const { data: stats } = usePoll(() => api.correlationsStats());
   if (err) return <Panel title="Network health index" state="degraded" />;
   if (!data) return <Panel title="Network health index" state="inactive" note="Reading…" />;
   const insufficient = data.coverage_status === "INSUFFICIENT_TELEMETRY" || data.score == null;
@@ -108,6 +109,19 @@ function HealthStrip() {
             {" · "}{live.length} signal {live.length === 1 ? "class" : "classes"}
             {stale.length ? ` · ${stale.length} stale` : ""}
           </div>
+          {/* RCA status — decoupled from health: the score can be critical from
+              raw contributors while RCA has confirmed no root cause yet. */}
+          {(() => {
+            const conf = stats?.open_confirmed ?? 0, susp = stats?.open_suspected ?? 0;
+            const tone = conf > 0 ? "var(--crit)" : susp > 0 ? "var(--warn)" : "var(--fg-muted)";
+            const txt = conf > 0 ? `${conf} confirmed RCA incident${conf === 1 ? "" : "s"}`
+              : susp > 0 ? `${susp} suspected · none confirmed`
+              : "no confirmed root cause yet";
+            return <div className="fp-meta-line">RCA status: <b style={{ color: tone }}>{txt}</b></div>;
+          })()}
+          {!insufficient && data.band !== "healthy" && (
+            <div className="fp-meta-line" style={{ color: "var(--fg-muted)" }}>Score driven by the contributors below — not all reductions are confirmed incidents.</div>
+          )}
           {insufficient ? (
             <div className="fp-empty-h" style={{ maxWidth: "52ch" }}>
               Not enough independent signals to score the network yet (live: {live.join(", ") || "none"}). Connect more telemetry — this is honest, not broken.
@@ -129,9 +143,20 @@ function HealthStrip() {
 function TopIssues() {
   const { navigate } = useShell();
   const { data, err } = usePoll(() => api.correlations(50, 86400, "open"));
+  const { data: health } = usePoll(() => api.healthScore("global"));
   const items = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined").slice(0, 6);
   if (err) return <Panel title="Top active issues" state="degraded" note="Correlation engine unreachable." />;
-  if (items.length === 0) return <Panel title="Top active issues" state="inactive" note="No active correlated issues." hint="A good sign — nothing needs attention right now." />;
+  if (items.length === 0) {
+    // Honesty: if health is degraded/critical but RCA hasn't confirmed a cause,
+    // do NOT say "nothing needs attention" — point at the health contributors.
+    const band = health?.band;
+    const unhealthy = band && band !== "healthy" && health?.coverage_status !== "INSUFFICIENT_TELEMETRY";
+    if (unhealthy) {
+      return <Panel title="Top active issues" state="inactive" note="No confirmed RCA incidents."
+        hint={`Health is ${band} — see Network Health for the contributors driving it, and check those first.`} />;
+    }
+    return <Panel title="Top active issues" state="inactive" note="No active correlated issues." hint="A good sign — nothing needs attention right now." />;
+  }
   return (
     <Panel title="Top active issues" action={<a href="#/monitoring/correlations">all →</a>}>
       {items.map((o) => {
@@ -155,19 +180,9 @@ function trusted(o: CorrObject): boolean {
 // ── Panel 3 — Recommended Action ────────────────────────────────────────────
 function RecommendedAction() {
   const { data, err } = usePoll(() => api.correlations(50, 86400, "open"));
+  const { data: health } = usePoll(() => api.healthScore("global"));
   if (err) return <Panel title="Recommended action" state="degraded" />;
-  const objs = data?.data ?? [];
-  const top = objs.find((o) => o.verdict_tier === "confirmed" && trusted(o)) ?? objs.find((o) => trusted(o));
-  if (!top) return <Panel title="Recommended action" state="inactive" note="No action suggested." hint="No trusted issue above the confidence floor." />;
-  const confirmed = top.verdict_tier === "confirmed";
-  const ext = top.owner && OWNER_EXTERNAL.has(top.owner);
-  const verb = confirmed ? "Escalate" : "Hold";
-  const tone = confirmed ? "var(--crit)" : "var(--warn)";
-  const cause = signatureNocTitle(top.top_hypothesis).replace(/^Possible /, "");
-  const text = confirmed
-    ? (ext ? `Escalate to ${ownerLabel(top.owner!)} — confirmed boundary issue.` : `Escalate to the network team — confirmed ${cause.toLowerCase()}.`)
-    : `Do not escalate yet — ${cause} suspected; gather a second independent source to confirm.`;
-  return (
+  const row = (verb: string, tone: string, text: string) => (
     <Panel title="Recommended action">
       <div className="fp-row" style={{ borderLeftColor: tone, cursor: "default" }}>
         <Tag tone={tone}>{verb}</Tag>
@@ -175,6 +190,31 @@ function RecommendedAction() {
       </div>
     </Panel>
   );
+  const objs = data?.data ?? [];
+  const top = objs.find((o) => o.verdict_tier === "confirmed" && trusted(o)) ?? objs.find((o) => trusted(o));
+  if (top) {
+    const confirmed = top.verdict_tier === "confirmed";
+    const ext = top.owner && OWNER_EXTERNAL.has(top.owner);
+    const tone = confirmed ? "var(--crit)" : "var(--warn)";
+    const cause = signatureNocTitle(top.top_hypothesis).replace(/^Possible /, "");
+    const text = confirmed
+      ? (ext ? `Escalate to ${ownerLabel(top.owner!)} — confirmed boundary issue.` : `Escalate to the network team — confirmed ${cause.toLowerCase()}.`)
+      : `Do not escalate yet — ${cause} suspected; gather a second independent source to confirm.`;
+    return row(confirmed ? "Escalate" : "Hold", tone, text);
+  }
+  // No trusted RCA object — fall back to the top HEALTH contributors so a
+  // critical page always tells the operator what to check next.
+  if (health?.coverage_status === "INSUFFICIENT_TELEMETRY") {
+    return row("Connect", "var(--info)", "Not enough telemetry to assess — connect more signal sources.");
+  }
+  const band = health?.band;
+  const contribs = health?.contributions ?? [];
+  if (band && band !== "healthy" && contribs.length) {
+    const tone = band === "critical" ? "var(--crit)" : "var(--warn)";
+    const top2 = contribs.slice(0, 2).map((c) => c.reason).join("; ");
+    return row("Investigate", tone, `Investigate the top health contributors: ${top2}. No confirmed root cause yet.`);
+  }
+  return <Panel title="Recommended action" state="inactive" note="No action needed." hint="Network nominal; no issue above the confidence floor." />;
 }
 
 // ── Panel 5 — RCA Coverage ──────────────────────────────────────────────────
@@ -182,12 +222,14 @@ function RcaCoverage() {
   const { data, err } = usePoll(() => api.correlationsStats());
   if (err) return <Panel title="RCA coverage" state="degraded" />;
   if (!data) return <Panel title="RCA coverage" state="inactive" note="Reading…" />;
+  // "candidates" = open correlation objects incl. undetermined; confirmed/suspected
+  // are the graded subset. Calling the raw count "open issues" overstated it.
   return (
     <Panel title="RCA coverage">
       <div className="fp-kpis">
-        <Kpi n={data.open} l="open issues" />
-        <Kpi n={`${Math.round(data.actionable_pct)}%`} l="actionable" />
-        <Kpi n={`${Math.round(data.confirmed_7d_pct)}%`} l={`confirmed ${data.window_days}d`} />
+        <Kpi n={data.open} l="RCA candidates" />
+        <Kpi n={data.open_confirmed} l="confirmed" />
+        <Kpi n={data.open_suspected} l="suspected" />
         <Kpi n={data.signatures_matched} l="signatures" />
       </div>
     </Panel>
