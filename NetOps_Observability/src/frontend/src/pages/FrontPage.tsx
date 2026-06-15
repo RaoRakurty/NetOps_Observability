@@ -3,7 +3,29 @@ import { api, CorrObject, FeedItem, CorrTimeline, Seam } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
 import RcaPathView from "../components/rca/RcaPathView";
-import { signatureNocTitle, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected } from "../components/rca/labels";
+import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected } from "../components/rca/labels";
+import { CorrSignal } from "../services/api";
+
+// evidencePhrase turns one window signal into the concrete clause the headline
+// sentence is built from — "Gi0/1 down", "BGP peer 10.99.0.2 down", "85% probe loss".
+function evidencePhrase(s: CorrSignal): string {
+  let a: Record<string, unknown> = {};
+  try { a = JSON.parse(s.attrs || "{}"); } catch { /* ignore */ }
+  const k = s.kind.replace(/_clear$/, "");
+  const state = String(a.state || "down");
+  if (k === "link_state_change") {
+    const iface = String(a.interface || (s.entity_id.includes(":") ? s.entity_id.split(":").slice(1).join(":") : s.entity_id));
+    return `${iface} ${state}`;
+  }
+  if (/adjacency/.test(k) && /^(bgp|ospf|isis)/.test(k)) {
+    const proto = k.startsWith("bgp") ? "BGP" : k.startsWith("ospf") ? "OSPF" : "IS-IS";
+    const peer = a.peer ? ` ${a.peer}` : "";
+    return `${proto} peer${peer} ${state}`.replace(/\s+/g, " ").trim();
+  }
+  if (k === "probe_loss") return `${Math.round(Number(s.value) || 0)}% probe loss`;
+  if (/rtt|latency/.test(k)) return "response-time anomaly";
+  return kindLabel(k).toLowerCase();
+}
 
 // FrontPage (#69) — the Operations Overview: an instrument-grade NOC console
 // answering "is anything broken, who does it hurt, what changed, what do I do
@@ -83,59 +105,6 @@ function Tag({ tone, children }: { tone: string; children: ReactNode }) {
 }
 function Kpi({ n, l }: { n: ReactNode; l: string }) {
   return <div className="fp-kpi"><div className="fp-kpi-n">{n}</div><div className="fp-kpi-l">{l}</div></div>;
-}
-
-// ── Panel 1 — Network Health Index (hero) ───────────────────────────────────
-function HealthStrip() {
-  const { data, err } = usePoll(() => api.healthScore("global"));
-  const { data: stats } = usePoll(() => api.correlationsStats());
-  if (err) return <Panel title="Network health index" state="degraded" />;
-  if (!data) return <Panel title="Network health index" state="inactive" note="Reading…" />;
-  const insufficient = data.coverage_status === "INSUFFICIENT_TELEMETRY" || data.score == null;
-  const bandVar = BAND_VAR[data.band] ?? "var(--fg-subtle)";
-  const live = data.signal_classes_live ?? [];
-  const stale = data.stale_inputs ?? [];
-  const bandLabel = insufficient ? "Insufficient" : data.band;
-  return (
-    <Panel title="Network health index" action={insufficient ? "—" : <span className="fp-num">{data.score} / 100</span>}>
-      <div className="fp-hero">
-        <div className="fp-hero-score">
-          <span className="fp-score" style={{ color: bandVar }}>{insufficient ? "—" : data.score}</span>
-          <span className="fp-band" style={{ color: bandVar }}>{bandLabel}</span>
-        </div>
-        <div className="fp-hero-body">
-          {!insufficient && (
-            <div className="fp-meter">
-              <span className="fp-meter-pin" style={{ left: `${Math.max(2, Math.min(98, data.score!))}%` }} />
-            </div>
-          )}
-          <div className="fp-meta-line">
-            Confidence <b style={{ color: "var(--fg)" }}>{CONF_LABEL[data.confidence] ?? data.confidence}</b>
-            {" · "}{live.length} signal {live.length === 1 ? "class" : "classes"}
-            {stale.length ? ` · ${stale.length} stale` : ""}
-          </div>
-          {/* RCA status — decoupled from health: the score can be critical from
-              raw contributors while RCA has confirmed no root cause yet. */}
-          {(() => {
-            const conf = stats?.open_confirmed ?? 0, susp = stats?.open_suspected ?? 0;
-            const tone = conf > 0 ? "var(--crit)" : susp > 0 ? "var(--warn)" : "var(--fg-muted)";
-            const txt = conf > 0 ? `${conf} confirmed RCA incident${conf === 1 ? "" : "s"}`
-              : susp > 0 ? `${susp} suspected · none confirmed`
-              : "no confirmed root cause yet";
-            return <div className="fp-meta-line">RCA status: <b style={{ color: tone }}>{txt}</b></div>;
-          })()}
-          {!insufficient && data.band !== "healthy" && (
-            <div className="fp-meta-line" style={{ color: "var(--fg-muted)" }}>Score driven by the contributors panel — not all reductions are confirmed incidents.</div>
-          )}
-          {insufficient && (
-            <div className="fp-empty-h" style={{ maxWidth: "52ch" }}>
-              Not enough independent signals to score the network yet (live: {live.join(", ") || "none"}). Connect more telemetry — this is honest, not broken.
-            </div>
-          )}
-        </div>
-      </div>
-    </Panel>
-  );
 }
 
 // ── Panel 2 — Top Active Issues ─────────────────────────────────────────────
@@ -448,6 +417,82 @@ function InternalMonitoringChecks() {
   );
 }
 
+// ── Top KPI strip — dense operational state above the fold ───────────────────
+function KpiStrip() {
+  const { data: h } = usePoll(() => api.healthScore("global"));
+  const { data: s } = usePoll(() => api.correlationsStats());
+  const { data: c } = usePoll(() => api.correlations(120, 2592000, "open"));
+  const objs = (c?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
+  const devs = new Set<string>(), sites = new Set<string>();
+  for (const o of objs) {
+    try { const a = JSON.parse(o.affected || "{}"); (a.devices ?? []).forEach((d: string) => devs.add(d)); (a.sites ?? []).forEach((x: string) => sites.add(x)); } catch { /* ignore */ }
+  }
+  const insufficient = !h || h.coverage_status === "INSUFFICIENT_TELEMETRY" || h.score == null;
+  const scoreColor = BAND_VAR[h?.band ?? ""] ?? "var(--fg-subtle)";
+  const live = (h?.signal_classes_live ?? []).length, stale = (h?.stale_inputs ?? []).length;
+  const confirmed = s?.open_confirmed ?? 0, suspected = s?.open_suspected ?? 0;
+  const cell = (label: string, value: ReactNode, tone?: string, sub?: string) => (
+    <div className="fp-kpistrip-cell">
+      <div className="fp-kpistrip-n" style={tone ? { color: tone } : undefined}>{value}</div>
+      <div className="fp-kpistrip-l">{label}</div>
+      {sub ? <div className="fp-kpistrip-sub">{sub}</div> : <div className="fp-kpistrip-sub">&nbsp;</div>}
+    </div>
+  );
+  return (
+    <div className="fp-kpistrip">
+      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""))}
+      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA")}
+      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates")}
+      {cell("Impacted sites", sites.size || "—")}
+      {cell("Impacted devices", devs.size || "—")}
+      {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes")}
+    </div>
+  );
+}
+
+// ── Top issue spotlight — THE product sentence (explainable, network-native) ──
+function TopIssueSpotlight() {
+  const { data } = usePoll(() => api.correlations(80, 2592000, "open"));
+  const [tl, setTl] = useState<CorrTimeline | null>(null);
+  const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
+  const top = objs.find((o) => o.verdict_tier === "confirmed") ?? objs[0];
+  const topId = top?.correlation_id;
+  useEffect(() => {
+    if (!topId) { setTl(null); return; }
+    let alive = true;
+    api.correlationTimeline(topId).then((t) => { if (alive) setTl(t); }).catch(() => { if (alive) setTl(null); });
+    return () => { alive = false; };
+  }, [topId]);
+  if (!top) return null; // no headline when nothing suspected/confirmed
+  const confirmed = top.verdict_tier === "confirmed";
+  const tone = confirmed ? "var(--crit)" : "var(--warn)";
+  let affected: Record<string, string[]> = {};
+  try { affected = JSON.parse(top.affected || "{}"); } catch { /* ignore */ }
+  const device = affected.devices?.[0] || (affected.interfaces?.[0]?.split(":")[0]) || "the network";
+  const sig = top.top_hypothesis !== "undetermined" ? signatureName(top.top_hypothesis).toLowerCase() : "network issue";
+  const phrases: string[] = [];
+  if (tl) {
+    const seen = new Set<string>();
+    for (const s of tl.signals) {
+      if (s.kind.endsWith("_clear")) continue;
+      const p = evidencePhrase(s);
+      if (p && !seen.has(p)) { seen.add(p); phrases.push(p); }
+      if (phrases.length >= 4) break;
+    }
+  }
+  const tail = confirmed ? "" : " · needs independent confirmation";
+  const sentence = `${confirmed ? "Confirmed" : "Suspected"} ${sig} on ${device}${phrases.length ? " — " + phrases.join(" · ") : ""}${tail}`;
+  return (
+    <a className="fp-panel-link" href="#/monitoring/correlations" style={{ display: "block" }}>
+      <div className="fp-spot" style={{ borderLeft: `4px solid ${tone}` }}>
+        <Tag tone={tone}>{confirmed ? "CONFIRMED" : "SUSPECTED"}</Tag>
+        <span className="fp-spot-text">{sentence}</span>
+        <span style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 13, whiteSpace: "nowrap" }}>open →</span>
+      </div>
+    </a>
+  );
+}
+
 // Error boundary so one bad panel degrades in isolation — never white-screens.
 class Safe extends Component<{ children: ReactNode }, { err: boolean }> {
   state = { err: false };
@@ -470,7 +515,10 @@ export default function FrontPage() {
           <span>Auto-refresh 20s</span>
         </div>
       </div>
-      <Safe><HealthStrip /></Safe>
+      {/* Dense top: operational KPIs above the fold + the headline sentence
+          (replaces the tall hero — density over whitespace, NOC-battle-station). */}
+      <Safe><KpiStrip /></Safe>
+      <Safe><TopIssueSpotlight /></Safe>
       {/* 3 columns matching the owner's 14-panel grid; each column groups related
           panels and masonry-packs so short/inactive panels don't leave row gaps.
           Order = priority (must-haves first down each column). */}
