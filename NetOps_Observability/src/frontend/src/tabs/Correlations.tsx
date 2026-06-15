@@ -5,7 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason } from "../components/rca/labels";
+import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -485,7 +485,8 @@ function RelationshipPreview({ edges, seams, view, onSelect, selected }: {
         const directed = Number(e.direction_conf ?? 0) >= 0.5 && e.direction_basis !== "none";
         const isSel = selected === e;
         const link = directed ? "→" : "──";
-        const seamTone = e.grounding_kind === "seam" ? "#D97706" : "#8A93A6";
+        // Boundary tinted by owner (whose domain), grey for same-path/device-area.
+        const seamTone = e.grounding_kind === "seam" ? seamOwnerColor(seam?.control_plane_owner) : "#8A93A6";
         return (
           <div key={i} onClick={() => onSelect?.(isSel ? null : e)} title={view === "debug" ? e.grounding_ref : undefined} style={{
             display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", cursor: "pointer",

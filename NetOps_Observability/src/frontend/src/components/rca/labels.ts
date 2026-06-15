@@ -276,6 +276,24 @@ export const SEAM_OWNER_LABEL: Record<string, string> = {
 export function seamOwnerLabel(o?: string): string {
   return o ? (SEAM_OWNER_LABEL[o] ?? o) : "Provider";
 }
+// Seam control_plane_owner → color, so a boundary reads "whose domain / whose
+// fault" at a glance (the ThousandEyes responsibility-split idea, validated in
+// docs/design/research/cisco-cloud-control-aicanvas-study.md). Always paired with
+// the owner LABEL on the node, so color is reinforcing — never the sole carrier
+// (colorblind-safe). One source of truth across SeamGraph, the summary mini-graph,
+// and the relationship preview.
+export const SEAM_OWNER_COLOR: Record<string, string> = {
+  enterprise: C.info,           // internal — blue
+  isp: C.warn,                  // ISP — amber
+  carrier: "#C2410C",           // carrier — deep orange (distinct from ISP)
+  cloud: C.discriminates,       // cloud — violet
+  sdwan_controller: C.flow,     // SD-WAN — teal
+  colo: "#0EA5E9",              // colo — sky
+  unknown: C.faint,             // unknown owner — grey
+};
+export function seamOwnerColor(o?: string): string {
+  return SEAM_OWNER_COLOR[o ?? "unknown"] ?? SEAM_OWNER_COLOR.unknown;
+}
 // Seam visibility → how much we can see across the boundary.
 export function visibilityLabel(v?: string): string {
   switch (v) {

@@ -704,3 +704,20 @@ closed / merged) — powers the front page's live "Top Active Issues".
 Out of scope here: UI views (front-page doc), cloud-log collectors (own lane),
 ML-learned causal discovery (post-calibration research, only on top of the
 deterministic core — never replacing it).
+
+## Competitive note — config/drift as causal signals (Cisco study, 2026-06-15)
+
+The Cisco Cloud Control / AI Canvas study
+(`docs/design/research/cisco-cloud-control-aicanvas-study.md`) flagged a real white
+space: Cisco's network and **security** assurance live in *separate* products, so a
+policy/config change is never a first-class node in the same causal object as the
+network symptom it caused. Our spine can close this without new architecture:
+**admit change / config-drift / policy events as `corr_signals` via a `source` enum
+extension** (e.g. `change`, `sot_drift`), grounded like any other signal (the device
+/ seam it touches), so "what changed" sits *on the causal graph*, not in a side feed.
+Roadmap, post-P1 — the front page already reads these as discrete change kinds
+(front-page §5); this is the deeper "fold into the object" step. Keeps the grounding
+gate (no edge without seam/topology grounding) unchanged. The study also validates
+the honesty posture: their RCA rests on an opaque LLM (self-reported accuracy, no
+independent benchmark) — our `undetermined` + `evidence_missing` + replay is the
+checkable counter-position, worth keeping prominent rather than hiding.

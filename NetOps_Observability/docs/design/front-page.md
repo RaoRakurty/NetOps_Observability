@@ -320,3 +320,41 @@ data not code.
 
 Out of scope here: Events Explorer full UI (follows the feed API), service catalog
 UI (P2), signature-catalog authoring UI (P3 — catalog arrives as data first).
+
+## 10. Competitive validation (Cisco Cloud Control / AI Canvas study, 2026-06-15)
+
+Source: `docs/design/research/cisco-cloud-control-aicanvas-study.md` (16 primary/
+corroborated sources, every load-bearing claim tagged shipping-vs-announced and
+VERIFIED/UNVERIFIED). **AI Canvas** = Cisco's "first Generative UI for cross-domain
+IT": NL question → multi-agent investigation → one sourced answer with a reasoning
+trail, on a purpose-trained "Deep Network Model" LLM. Announced Cisco Live Jun 2025;
+Controlled Availability (US, limited) by Jun 2026 — real but early. The study
+validates our direction and sharpens five front-page choices:
+
+1. **Owner is the hero.** ThousandEyes (Cisco's mature assurance crown jewel, the
+   strongest competitive threat) markets "whose fault — ISP vs transit vs target"
+   as *"the single most important call you make."* → Panels 2/3 must lead with the
+   `verdict.owner` badge, not the hypothesis name. **Shipped first cut**: the
+   Correlation Window NOC **decision line** (Escalate to ISP/Carrier/Cloud / App /
+   Network team — `5e31dc6`) + **seam responsibility-split coloring** (boundary
+   tinted by `control_plane_owner`, visibility encoded — `<this commit>`).
+2. **Brand the evidence log as the anti-black-box feature.** Cisco bets RCA on an
+   opaque LLM with a self-reported "20% more accurate" (no independent benchmark;
+   the "MTTR −90%" claim was UNVERIFIED). Ours is *checkable*: grounded edges +
+   replay + calibrated rank + `undetermined`/`evidence_missing`. Surface "why this
+   verdict" inline (the Operator View already does), and keep `undetermined` as a
+   **marketed honesty feature** — operators distrust demos that always resolve "in
+   seconds".
+3. **Responsibility-split seam visual** on Hot paths (panel 7) + Topology map
+   (panel 9): color the seam by owner, show `visibility` honestly. (Already in the
+   Correlation Window's seam graph; panels 7/9 adopt the shared `seamOwnerColor` +
+   visibility encoding when built.)
+4. **NL-question entry — but routed to grounded objects only** (explains, never
+   invents). UX benefit of AI Canvas without the LLM-black-box risk. **Roadmap**
+   (Correlix-AI lane / P4): a question box that maps to `/api/correlations*` +
+   `/api/events/feed`, never free-generates a cause.
+5. **Fold config / policy drift into the causal object.** A unification Cisco's
+   split network vs security products do *not* deliver. **Roadmap** (#67): admit
+   change/drift events (`source` extension) as first-class signals on the spine.
+
+Items 4 and 5 are logged as roadmap, not P1 build.

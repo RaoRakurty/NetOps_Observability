@@ -4,7 +4,7 @@ import {
   C, MODALITY_META, MODALITY_ORDER, modalityLabel, modalityHelp,
   signatureName, signatureNocTitle, PLANE_NOC_TITLE, kindMeta, kindLabel,
   entityLabel, ownerLabel, seamOwnerLabel, visibilityLabel, isRoutingKind,
-  AFFECTED_LABEL, OWNER_EXTERNAL,
+  AFFECTED_LABEL, OWNER_EXTERNAL, seamOwnerColor,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
@@ -437,15 +437,17 @@ export default function RcaSummary({
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {[...timeline.edges].sort((a, b) => (a.grounding_kind === "seam" ? -1 : 1) - (b.grounding_kind === "seam" ? -1 : 1)).slice(0, 3).map((e, i) => {
             const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
+            // Seam chip tinted by boundary owner (whose domain), grey for same-path.
+            const oc = e.grounding_kind === "seam" ? seamOwnerColor(s?.control_plane_owner) : C.faint;
             return (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, flexWrap: "wrap", minWidth: 0 }}>
                 <span style={chip}>{view === "debug" ? episodeEntity(e.from_node) : entityLabel(episodeEntity(e.from_node))}</span>
                 <span style={muted}>──</span>
                 <span style={{
-                  background: e.grounding_kind === "seam" ? tint(C.warn, "22") : tint(C.faint, "22"),
-                  border: `1px solid ${e.grounding_kind === "seam" ? tint(C.warn, "66") : tint(C.faint, "66")}`,
+                  background: tint(oc, "22"),
+                  border: `1px solid ${tint(oc, "66")}`,
                   borderRadius: 4, padding: "1px 6px", fontWeight: 600,
-                  color: e.grounding_kind === "seam" ? C.warn : C.muted,
+                  color: e.grounding_kind === "seam" ? oc : C.muted,
                 }} title={view === "debug" ? e.grounding_ref : undefined}>
                   {e.grounding_kind === "seam"
                     ? `◆ ${s ? `${seamOwnerLabel(s.control_plane_owner)} · ${visibilityLabel(s.visibility)}` : "provider boundary"}`

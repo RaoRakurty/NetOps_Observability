@@ -2,7 +2,7 @@ import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
 import { CorrEdge, Seam } from "../../services/api";
 import { chartBase } from "../../theme/charts";
-import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "./labels";
+import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor } from "./labels";
 
 // SeamGraph — the SECONDARY (but honest) RCA view: the engine's grounded causal
 // graph. Every edge is grounded (the engine never emits an ungrounded one). When
@@ -13,13 +13,8 @@ import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "./la
 // blind/partial seams the engine withholds direction, so we draw undirected.
 // We render engine-recorded fields only; we never infer causality here.
 
-const OWNER_COLOR: Record<string, string> = {
-  enterprise: C.info,
-  isp: C.warn,
-  cloud: C.discriminates,
-  sdwan_controller: C.flow,
-  unknown: C.faint,
-};
+// Seam owner colors live in labels.ts (seamOwnerColor) — one source of truth
+// shared with the summary mini-graph and the relationship preview.
 
 // An edge is drawn directed only if the engine was confident AND it had a real
 // directional basis. The visibility cap on blind/partial seams is already baked
@@ -79,12 +74,15 @@ export default function SeamGraph({
         _kind: "episode", _key: key,
       });
     };
-    const mkLink = (source: string, target: string, e: CorrEdge, directed: boolean) => ({
+    // color/dashed override the grounding_kind defaults — seam links are tinted by
+    // the boundary OWNER (whose domain) and dashed past the boundary when our
+    // visibility is limited (blind/partial), an honest "we can't fully see across".
+    const mkLink = (source: string, target: string, e: CorrEdge, directed: boolean, color?: string, dashed?: boolean) => ({
       source, target,
       lineStyle: {
         width: Math.max(1, Math.min(8, e.weight * 8)),
-        color: e.grounding_kind === "seam" ? C.warn : "#5a6472",
-        type: e.grounding_kind === "seam" ? "solid" : "dashed",
+        color: color ?? (e.grounding_kind === "seam" ? C.warn : "#5a6472"),
+        type: dashed ? "dashed" : (e.grounding_kind === "seam" ? "solid" : "dashed"),
         curveness: 0.12, opacity: 0.85,
       },
       symbol: directed ? ["none", "arrow"] : ["none", "none"],
@@ -99,20 +97,31 @@ export default function SeamGraph({
       if (e.grounding_kind === "seam") {
         const sid = "seam:" + e.grounding_ref;
         const seam = seams[e.grounding_ref];
+        const ownerColor = seamOwnerColor(seam?.control_plane_owner);
+        const vis = seam?.visibility ?? "";
+        const limited = vis === "partial" || vis === "blind"; // can't fully see across
         if (!seen.has(sid)) {
           seen.add(sid);
+          // Diamond filled by owner; border encodes visibility (full = solid owner,
+          // partial = dashed caution, blind = dotted critical — flagged, not hidden).
+          const visBorder =
+            vis === "full" ? { borderColor: ownerColor, borderType: "solid", borderWidth: 1 }
+            : vis === "partial" ? { borderColor: C.caution, borderType: "dashed", borderWidth: 2 }
+            : vis === "blind" ? { borderColor: C.crit, borderType: "dotted", borderWidth: 2.5 }
+            : { borderColor: C.muted, borderType: "solid", borderWidth: 1 };
           nodes.push({
             id: sid, name: seamLabel(e.grounding_ref, seam, view), symbol: "diamond", symbolSize: 46,
             category: "seam",
-            itemStyle: { color: OWNER_COLOR[seam?.control_plane_owner ?? "unknown"] ?? OWNER_COLOR.unknown },
+            itemStyle: { color: ownerColor, ...visBorder },
             label: { fontSize: 10, fontWeight: 600 },
             _kind: "seam", _ref: e.grounding_ref, _seam: seam,
           });
         }
-        // The seam sits ON the path: from → [seam boundary] → to. Direction (if
-        // claimed) rides the exit leg, since causality crosses the boundary.
-        links.push(mkLink(e.from_node, sid, e, false));
-        links.push(mkLink(sid, e.to_node, e, directed));
+        // The seam sits ON the path: from → [seam boundary] → to. Our side → boundary
+        // is solid (we see it); beyond the boundary is dashed when visibility is
+        // limited. Direction (if claimed) rides the exit leg, since causality crosses.
+        links.push(mkLink(e.from_node, sid, e, false, ownerColor, false));
+        links.push(mkLink(sid, e.to_node, e, directed, ownerColor, limited));
       } else {
         links.push(mkLink(e.from_node, e.to_node, e, directed));
       }
