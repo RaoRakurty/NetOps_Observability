@@ -302,7 +302,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     };
 
     // ===== TRACED MODE (Phase 2): real hop chain from live traceroute =========
-    if (traced && ends) {
+    if (traced && ends && (traced.hops?.length ?? 0) > 0) {
       const hops = [...(traced.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
       const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
       // which hop carries the RCA fault: a hop whose IP OR resolved device name
@@ -433,9 +433,10 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       }}>
         <span style={{ color: m.color, fontWeight: 800 }}>{m.sym} {m.word}</span>
         <span>◉ observed</span><span>⊚ destination</span>
-        <span style={{ color: model.traced ? C.ok : C.faint }}>
-          {model.traced ? "● live trace" : "contextual path · live trace next"}
-        </span>
+        {(() => {
+          const live = !!model.traced && (model.traced.hops?.length ?? 0) > 0;
+          return <span style={{ color: live ? C.ok : C.faint }}>{live ? "● live trace" : "contextual path · live trace next"}</span>;
+        })()}
       </div>
       {/* opt-in STAMP metrics knob — default OFF so the path stays uncluttered. */}
       {model.hasStamp && (
