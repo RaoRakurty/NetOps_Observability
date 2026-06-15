@@ -2430,3 +2430,79 @@ table.loc-editor th { text-align: left; color: var(--muted); font-weight: 600; p
 table.loc-editor td { padding: 5px 8px; border-bottom: 1px solid var(--surface-2); }
 table.loc-editor input { width: 100%; min-width: 90px; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--r-1); background: var(--surface); color: var(--fg); font-size: var(--fs-meta); }
 table.loc-editor input:focus { outline: none; border-color: var(--accent); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Front Page (Operations Overview) — instrument-grade NOC console.
+   Refined, calm, financial-terminal poise. All color via semantic tokens so
+   light / dark / OLED all hold. Empty states read as deliberate instrument
+   readings, never errors. (docs/design/front-page.md)
+   ════════════════════════════════════════════════════════════════════════ */
+.fp { display: flex; flex-direction: column; gap: var(--sp-4, 16px); }
+
+/* masthead */
+.fp-masthead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.fp-title { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.012em; color: var(--fg); }
+.fp-sub { font-size: 12.5px; color: var(--fg-muted); }
+.fp-mast-meta { margin-left: auto; display: flex; align-items: center; gap: 16px;
+  font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-subtle); }
+.fp-live { display: inline-flex; align-items: center; gap: 7px; color: var(--fg-muted); }
+.fp-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
+  box-shadow: 0 0 0 3px var(--accent-soft); animation: fp-pulse 2.6s ease-in-out infinite; }
+@keyframes fp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* columns */
+.fp-cols { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.fp-col { display: flex; flex-direction: column; gap: 14px; min-width: 300px; }
+
+/* panel chrome */
+.fp-panel { background: var(--panel, var(--surface-2)); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-1); padding: 0; display: flex; flex-direction: column;
+  min-width: 0; overflow: hidden; animation: fp-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.fp-panel-h { display: flex; align-items: center; gap: 8px; padding: 11px 15px 10px;
+  border-bottom: 1px solid var(--border); }
+.fp-panel-t { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--fg-subtle); }
+.fp-panel-meta { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+.fp-panel-meta a { color: var(--accent); text-decoration: none; }
+.fp-panel-b { padding: 13px 15px; display: flex; flex-direction: column; gap: 9px; }
+.fp-tag { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 4px; }
+@keyframes fp-rise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+
+/* hero — Network Health Index */
+.fp-hero { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; }
+.fp-hero-score { display: flex; flex-direction: column; align-items: center; min-width: 132px; }
+.fp-score { font-family: var(--font-mono); font-feature-settings: "tnum" 1, "zero" 1;
+  font-size: 66px; font-weight: 700; line-height: 0.86; letter-spacing: -0.035em; }
+.fp-band { margin-top: 6px; font-size: 11px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+.fp-hero-body { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 9px; }
+.fp-meter { position: relative; height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--crit) 0%, var(--warn) 48%, var(--ok) 100%); opacity: 0.9; }
+.fp-meter-pin { position: absolute; top: -4px; width: 3px; height: 14px; border-radius: 2px;
+  background: var(--fg); box-shadow: 0 0 0 2px var(--panel, var(--surface-2)); transform: translateX(-50%); }
+.fp-meta-line { font-size: 12px; color: var(--fg-muted); }
+.fp-contribs { margin: 2px 0 0; padding-left: 16px; font-size: 12.5px; line-height: 1.55; color: var(--fg); }
+
+/* KPI tiles */
+.fp-kpis { display: flex; gap: 8px; flex-wrap: wrap; }
+.fp-kpi { flex: 1; min-width: 78px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface, transparent); }
+.fp-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 23px;
+  font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.fp-kpi-l { margin-top: 1px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-subtle); }
+
+/* rows (issues / changes / capacity) */
+.fp-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border);
+  border-left-width: 3px; border-radius: 8px; transition: background 0.13s ease, transform 0.13s ease; }
+.fp-row.clk { cursor: pointer; }
+.fp-row.clk:hover { background: var(--accent-soft); transform: translateX(2px); }
+.fp-row-t { font-weight: 600; font-size: 13px; color: var(--fg); }
+.fp-num { font-family: var(--font-mono); font-feature-settings: "tnum" 1; }
+
+/* classy empty / inactive instrument reading */
+.fp-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 20px 14px;
+  text-align: center; border: 1px dashed var(--border); border-radius: 9px; }
+.fp-empty-mark { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--fg-subtle); opacity: 0.7; }
+.fp-empty-t { font-size: 12.5px; color: var(--fg-muted); }
+.fp-empty-h { font-size: 11.5px; color: var(--fg-subtle); max-width: 34ch; line-height: 1.45; }
