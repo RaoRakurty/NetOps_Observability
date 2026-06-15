@@ -4,7 +4,7 @@ import {
   type Node, type Edge, type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { CorrTimeline, CorrSignal, Seam } from "../../services/api";
+import { CorrTimeline, CorrSignal, Seam, ProbePath } from "../../services/api";
 import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor } from "./labels";
 
 // RcaTopology — the END-TO-END contextual path with the fault marked. OVERLAY
@@ -128,6 +128,30 @@ function AffectedNode({ data }: NodeProps) {
   );
 }
 
+// One traced hop (live traceroute): IP/name + ttl, optional rtt/loss. `tone`
+// (set on a trace-loss hop) tints the top border ThousandEyes-style.
+function HopNode({ data }: NodeProps) {
+  const d = data as any;
+  return (
+    <div style={{
+      minWidth: 96, maxWidth: 154, background: "var(--panel,#151b2b)",
+      border: `1px solid ${d.tone ?? "var(--border,#2a2f3a)"}`,
+      borderTop: d.tone ? `3px solid ${d.tone}` : "1px solid var(--border,#2a2f3a)",
+      borderRadius: 8, padding: "7px 9px", fontSize: 11.5, lineHeight: 1.2,
+      boxShadow: "0 4px 12px rgba(0,0,0,.14)",
+    }}>
+      <Handle type="target" position={Position.Left} style={handleStyle} />
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        {d.icon && <span style={{ fontSize: 12 }}>{d.icon}</span>}
+        <span style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 11, overflowWrap: "anywhere" }}>{d.label}</span>
+      </div>
+      {d.sub && <div style={{ marginTop: 1, color: C.muted, fontSize: 10.5 }}>{d.sub}</div>}
+      {d.metric && <div style={{ marginTop: 2, color: d.tone ?? C.info, fontSize: 10.5, fontWeight: 600 }}>{d.metric}</div>}
+      <Handle type="source" position={Position.Right} style={handleStyle} />
+    </div>
+  );
+}
+
 function SeamNode({ data }: NodeProps) {
   const d = data as any;
   return (
@@ -149,15 +173,27 @@ function SeamNode({ data }: NodeProps) {
   );
 }
 
-const nodeTypes = { endpoint: EndpointNode, fault: FaultNode, affected: AffectedNode, seamb: SeamNode };
+const nodeTypes = { endpoint: EndpointNode, fault: FaultNode, affected: AffectedNode, seamb: SeamNode, hop: HopNode };
 
 const COL = 250;
+const COL_HOP = 184;
+const TRACE_LOSS_HI = 2; // % per-hop forwarding loss that flags a hop (ThousandEyes-style)
 
-export default function RcaTopology({ timeline, seams, view = "operator", height = 300 }: {
+// Match the RCA path's destination to a live trace (exact, or either-contains —
+// covers "10.70.245.120" == dst and named dsts like "aws-tgw").
+function matchTrace(dst: string | undefined, paths?: ProbePath[]): ProbePath | undefined {
+  if (!dst || !paths?.length) return undefined;
+  const d = dst.trim();
+  return paths.find((p) => p.dst === d)
+    ?? paths.find((p) => p.dst && (p.dst.includes(d) || d.includes(p.dst)) && (p.hops?.length ?? 0) > 0);
+}
+
+export default function RcaTopology({ timeline, seams, view = "operator", height = 300, probePaths }: {
   timeline: CorrTimeline;
   seams: Record<string, Seam>;
   view?: "operator" | "debug";
   height?: number;
+  probePaths?: ProbePath[];
 }) {
   const model = useMemo(() => {
     const sigs = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
@@ -229,8 +265,13 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const seamEdge = (timeline.edges ?? []).find((e) => e.grounding_kind === "seam");
     const seam = seamEdge ? seams[seamEdge.grounding_ref] : undefined;
 
-    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, hasPath: !!ends };
-  }, [timeline, seams]);
+    // LIVE-TRACE FUSION: if the RCA path's destination has a real traceroute, use
+    // its hops as the true ordered backbone (Phase 2). Else fall back to the
+    // contextual placement (Phase 1).
+    const traced = matchTrace(ends?.dst, probePaths);
+
+    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, traced, hasPath: !!ends };
+  }, [timeline, seams, probePaths]);
 
   const [showStamp, setShowStamp] = useState(false);
 
@@ -239,7 +280,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const edges: Edge[] = [];
     const status = statusForVerdict(timeline.verdict_tier);
     const meta = STATUS_META[status];
-    const { ends, lossTxt, stampTxt, devs, locusDev, seam } = model;
+    const { ends, lossTxt, stampTxt, devs, locusDev, seam, traced } = model;
     // measured-segment label: STAMP detail when the knob is on, else the loss
     // headline only (the fault signature) — keeps the default uncluttered.
     const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
@@ -247,9 +288,6 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const locus = locusDev ? (devs.get(locusDev) ?? { dev: locusDev, elements: [], worst: 0 }) : undefined;
     const targetIsLocus = !!(ends && locus && ends.dst === locus.dev);
 
-    let col = 0;
-    let prevId: string | null = null;
-    let prevHandle: string | undefined;
     const push = (n: Node) => { nodes.push(n); };
     const link = (from: string, to: string, opts: { degraded?: boolean; label?: string; fromHandle?: string } = {}) => {
       edges.push({
@@ -261,6 +299,52 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         style: { stroke: opts.degraded ? meta.color : "#5a6472", strokeWidth: opts.degraded ? 2.6 : 1.6, opacity: 0.92 },
       });
     };
+
+    // ===== TRACED MODE (Phase 2): real hop chain from live traceroute =========
+    if (traced && ends) {
+      const hops = [...(traced.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
+      // which hop carries the RCA fault: a hop whose IP/name matches the locus,
+      // else the destination hop (the diagnosed target).
+      let faultIdx = hops.findIndex((h) => h.ip && locusDev && h.ip === locusDev);
+      if (faultIdx < 0) faultIdx = hops.length - 1;
+
+      // observer / source
+      push({ id: "src", type: "endpoint", position: { x: 0, y: 0 }, draggable: true,
+        data: { icon: "◉", label: entityLabel(ends.src), role: "observed from here", hasIn: false, hasOut: true } });
+      let prev = "src";
+
+      hops.forEach((h, i) => {
+        const id = `hop${i}`;
+        const isLast = i === hops.length - 1;
+        const lossHi = Number(h.loss_pct) > TRACE_LOSS_HI;
+        const rtt = Number(h.rtt_ms);
+        const hopLabel = h.ip && h.ip !== "" ? h.ip : "*";
+        const metric =
+          showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
+          : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
+        if (i === faultIdx) {
+          push({ id, type: "fault", position: { x: (i + 1) * COL_HOP, y: 0 }, draggable: true,
+            data: { label: hopLabel, meta, elements: (locus?.elements ?? []).slice(0, 4), isTarget: isLast } });
+        } else {
+          push({ id, type: "hop", position: { x: (i + 1) * COL_HOP, y: 0 }, draggable: true,
+            data: { label: hopLabel, icon: isLast ? "⊚" : undefined, sub: isLast ? "destination" : `hop ${h.ttl}`, metric, tone: lossHi ? meta.color : undefined } });
+        }
+        // edge into this hop: degraded if this hop lost packets (or it's the fault
+        // hop on a degraded path). first segment carries the measured headline.
+        const segDegraded = lossHi || (i === faultIdx && !!lossTxt);
+        const segLabel = showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms`
+          : i === 0 ? measuredLabel : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
+        link(prev, id, { degraded: segDegraded, label: segLabel });
+        prev = id;
+      });
+
+      return { rfNodes: nodes, rfEdges: edges };
+    }
+
+    // ===== CONTEXTUAL MODE (Phase 1): placement from RCA evidence ==============
+    let col = 0;
+    let prevId: string | null = null;
+    let prevHandle: string | undefined;
 
     // 1) observer / source end
     if (ends) {
@@ -344,7 +428,9 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       }}>
         <span style={{ color: m.color, fontWeight: 800 }}>{m.sym} {m.word}</span>
         <span>◉ observed</span><span>⊚ destination</span>
-        <span style={{ color: C.faint }}>contextual path · live trace next</span>
+        <span style={{ color: model.traced ? C.ok : C.faint }}>
+          {model.traced ? "● live trace" : "contextual path · live trace next"}
+        </span>
       </div>
       {/* opt-in STAMP metrics knob — default OFF so the path stays uncluttered. */}
       {model.hasStamp && (

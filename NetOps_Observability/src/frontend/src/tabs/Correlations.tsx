@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, CorrObject, CorrEdge, CorrReplay, CorrTimeline, CorrSignal, Seam } from "../services/api";
+import { api, CorrObject, CorrEdge, CorrReplay, CorrTimeline, CorrSignal, Seam, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
@@ -276,6 +276,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   const [edges, setEdges] = useState<CorrEdge[]>([]);
   const [timeline, setTimeline] = useState<CorrTimeline | null>(null);
   const [seams, setSeams] = useState<Record<string, Seam>>({});
+  const [probePaths, setProbePaths] = useState<ProbePath[]>([]);
   const [replay, setReplay] = useState<CorrReplay | null>(null);
   const [replaying, setReplaying] = useState(false);
   const [err, setErr] = useState("");
@@ -297,6 +298,11 @@ export function CorrelationDetail({ id }: { id: string }) {
     api.seams("active")
       .then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } })
       .catch(() => { /* seam inventory optional — graph degrades to grounding_ref */ });
+    // Live traceroute paths — fuse real hop order into the end-to-end topology
+    // when a trace matches the RCA path's destination (else contextual fallback).
+    api.probePaths()
+      .then((p) => { if (alive) setProbePaths(p ?? []); })
+      .catch(() => { /* no traces → topology stays contextual */ });
     return () => { alive = false; };
   }, [id]);
 
@@ -368,7 +374,7 @@ export function CorrelationDetail({ id }: { id: string }) {
           <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
             Where the issue sits on the path — and exactly what&apos;s broken there. Drag to arrange; scroll the page, drag the canvas to pan.
           </div>
-          <RcaTopology timeline={timeline} seams={seams} view={view} />
+          <RcaTopology timeline={timeline} seams={seams} view={view} probePaths={probePaths} />
         </div>
       )}
 

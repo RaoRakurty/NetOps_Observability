@@ -51,23 +51,34 @@ devices, zero hardcoded entities:
    tcp|http]`, `probe_jitter`), preferring the STAMP method for RTT. In Phase 2
    this becomes genuine **per-hop** STAMP between adjacent traced hops.
 
-## Phase 2 — live-trace fusion (NEXT, not started)
+## Phase 2 — live-trace fusion (SHIPPED, frontend)
 
-Replace/augment the contextual structure with **real hop order** from active path
-tracing:
+The topology now uses **real hop order** from active path tracing when available,
+falling back to contextual placement otherwise:
 
 - **Source:** `/api/probe/paths` (`ProbePath{ dst, hops[]{ttl, ip, rtt_ms,
-  loss_pct}, reached, changed }`) — already collected (traceroute / STAMP). Gives a
-  true TTL-ordered hop chain plus per-hop loss/rtt for ThousandEyes-style red-link /
-  red-circle marking from the trace itself.
-- **Join (the gap):** traceroute hops are **IPs**; RCA entities are **device
-  names**. Need an `IP → device` resolver from inventory (NetBox mgmt-IP → device;
-  see `netops-netbox-sync`). Add a small backend `path-topology` endpoint that fuses
-  trace + inventory + seam endpoints + RCA findings into one resolved path object so
-  the frontend stays a pure renderer.
+  loss_pct}, reached, changed }`) — traceroute / STAMP, already collected. Fetched
+  in `Correlations.tsx` and passed to `RcaTopology`.
+- **Match:** the RCA path entity's `dst` is matched to a trace's `dst` (exact, or
+  either-contains for named dsts). On a hit, `RcaTopology` renders the true
+  TTL-ordered hop chain `observer → hop → … → destination` with per-hop RTT and
+  per-hop loss; a hop with loss > 2% is flagged red (ThousandEyes-style). The
+  **STAMP knob** then shows genuine **per-hop** RTT between adjacent hops.
+- **RCA overlay:** the fault lands on the hop whose IP/name matches the locus, else
+  on the destination hop (the diagnosed target), carrying the verdict status +
+  broken-element chips. Legend shows "● live trace" vs "contextual path".
+
+### Phase 2 follow-ups (not yet done)
+
+- **IP → device naming:** hops currently show **IPs** (standard, like ThousandEyes).
+  To label them with device names, add an `IP → device` resolver from inventory
+  (NetBox mgmt-IP → device; see `netops-netbox-sync`). Best done server-side: a small
+  `path-topology` endpoint that fuses trace + inventory + seam endpoints + RCA into
+  one resolved object so the frontend stays a pure renderer (also enables precise
+  locus→hop matching instead of the destination-hop fallback).
 - **Scale:** collapse clean hop runs into a `…N healthy hops…` pill; show ECMP/LAG
-  as parallel branches; auto-layout (consider `dagre`/`elk`) only if branching
-  exceeds a simple per-path row layout.
+  as parallel branches; auto-layout (`dagre`/`elk`) only if branching exceeds the
+  simple per-path row layout.
 
 ## Files
 
