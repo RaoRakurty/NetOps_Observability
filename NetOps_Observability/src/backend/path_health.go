@@ -295,21 +295,29 @@ func buildReason(sev map[string]float64, src BaselineSource, state HealthState) 
 		}
 		return "This path is performing within its normal range."
 	}
-	hot := joinAnd(elevatedSignals(sev))
-	if hot == "" {
-		hot = "performance"
+	// Name the DOMINANT driver accurately and distinguish "elevated" (clearly high)
+	// from "near its upper normal range" (only moderately above typical) — so we
+	// never claim latency is elevated when it's actually inside the typical band.
+	names := map[string]string{"latency": "Latency", "jitter": "Jitter", "loss": "Packet loss"}
+	domK, domV := "", 0.0
+	for k, v := range sev {
+		if v > domV {
+			domK, domV = k, v
+		}
 	}
-	verb := "is"
-	if strings.Contains(hot, " and ") || strings.Contains(hot, ", ") {
-		verb = "are"
+	driver := names[domK]
+	if driver == "" {
+		driver = "Performance"
+	}
+	degree := "is near its upper normal range"
+	if domV >= 0.6 || domK == "loss" { // any sustained loss is bad, not "near normal"
+		degree = "is elevated"
 	}
 	switch src {
-	case baselineClass:
-		return fmt.Sprintf("%s %s elevated, compared with similar paths.", capFirst(hot), verb)
-	case baselineGlobal:
-		return fmt.Sprintf("New path — using a fallback baseline; %s %s elevated.", hot, verb)
+	case baselineClass, baselineGlobal:
+		return fmt.Sprintf("%s %s, compared with similar paths (still learning this path's own baseline).", driver, degree)
 	default:
-		return fmt.Sprintf("%s %s elevated compared to this path's normal baseline.", capFirst(hot), verb)
+		return fmt.Sprintf("%s %s, compared with this path's normal baseline.", driver, degree)
 	}
 }
 

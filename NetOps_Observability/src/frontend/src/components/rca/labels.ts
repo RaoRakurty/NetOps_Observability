@@ -255,6 +255,39 @@ export function entityLabel(raw: string): string {
   return mapToken(raw);
 }
 
+// isInternalEntity — true when EVERY part of the entity resolves to the platform's
+// own infrastructure / a test target (clickhouse, nginx, api, prober, …). Used to
+// keep internal self-monitoring objects out of the customer-facing RCA view (RCA is
+// for customer networks, not our own stack). A mixed entity (one real device) is
+// NOT internal, so a genuine incident touching a customer device is never hidden.
+export function isInternalEntity(raw: string): boolean {
+  if (!raw) return false;
+  const parts = raw.includes("->") ? raw.split("->") : [raw];
+  return parts.every((p) => {
+    const s = p.trim().replace(ENTITY_PREFIX, "");
+    const base = s.split(":")[0].trim().toLowerCase();
+    return !!INFRA_DISPLAY[base] || INTERNAL_HINT.test(base);
+  });
+}
+
+// isInternalStackAffected — true when a correlation object's `affected` JSON
+// touches ONLY internal infrastructure (every entity internal). Shared by the
+// Correlations tab + the front-page Top Issues so internal self-monitoring never
+// shows as a customer incident (decision #76).
+export function isInternalStackAffected(affectedJSON: string): boolean {
+  try {
+    const a = JSON.parse(affectedJSON || "{}");
+    const ents: string[] = [];
+    for (const k of ["devices", "interfaces", "paths", "services", "segments", "prefixes", "sites"]) {
+      (a[k] || []).forEach((e: string) => ents.push(e));
+    }
+    if (ents.length === 0) return false;
+    return ents.every(isInternalEntity);
+  } catch {
+    return false;
+  }
+}
+
 // Verdict owner → who acts.
 export const OWNER_LABEL: Record<string, string> = {
   netops: "NetOps", isp: "ISP / carrier", carrier: "Carrier", cloud_provider: "Cloud provider",

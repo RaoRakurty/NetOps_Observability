@@ -2,7 +2,7 @@ import { Component, ReactNode, useEffect, useState } from "react";
 import { api, CorrObject, FeedItem } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
-import { signatureNocTitle, ownerLabel, OWNER_EXTERNAL } from "../components/rca/labels";
+import { signatureNocTitle, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected } from "../components/rca/labels";
 
 // FrontPage (#69) — the Operations Overview: an instrument-grade NOC console
 // answering "is anything broken, who does it hurt, what changed, what do I do
@@ -127,9 +127,19 @@ function HealthStrip() {
               Not enough independent signals to score the network yet (live: {live.join(", ") || "none"}). Connect more telemetry — this is honest, not broken.
             </div>
           ) : contribs.length ? (
-            <ul className="fp-contribs">
-              {contribs.slice(0, 3).map((c, i) => <li key={i}><b className="fp-num">{c.points}</b> pts — {c.reason}</li>)}
-            </ul>
+            <>
+              <ul className="fp-contribs">
+                {contribs.slice(0, 3).map((c, i) => <li key={i}><b className="fp-num">{c.points}</b> pts — {c.reason}</li>)}
+              </ul>
+              {contribs.length > 3 && (
+                <details>
+                  <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--accent)" }}>View all {contribs.length} health contributors</summary>
+                  <ul className="fp-contribs" style={{ marginTop: 4 }}>
+                    {contribs.slice(3).map((c, i) => <li key={i}><b className="fp-num">{c.points}</b> pts — {c.reason}</li>)}
+                  </ul>
+                </details>
+              )}
+            </>
           ) : (
             <div className="fp-empty-h">No degraded contributors — all measured signals nominal.</div>
           )}
@@ -142,9 +152,14 @@ function HealthStrip() {
 // ── Panel 2 — Top Active Issues ─────────────────────────────────────────────
 function TopIssues() {
   const { navigate } = useShell();
-  const { data, err } = usePoll(() => api.correlations(50, 86400, "open"));
+  const { data, err } = usePoll(() => api.correlations(80, 2592000, "open"));
   const { data: health } = usePoll(() => api.healthScore("global"));
-  const items = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined").slice(0, 6);
+  // confirmed + suspected (not undetermined); exclude internal self-monitoring
+  // (customer-network RCA only, decision #76). Wide window so open suspected of any
+  // age show — matching the RCA-coverage count.
+  const items = (data?.data ?? [])
+    .filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected))
+    .slice(0, 6);
   if (err) return <Panel title="Top active issues" state="degraded" note="Correlation engine unreachable." />;
   if (items.length === 0) {
     // Honesty: if health is degraded/critical but RCA hasn't confirmed a cause,
@@ -165,6 +180,7 @@ function TopIssues() {
           <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("monitoring/correlations")}>
             <Tag tone={tone}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</Tag>
             <span className="fp-row-t">{signatureNocTitle(o.top_hypothesis)}</span>
+            {o.verdict_tier === "suspected" && <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", letterSpacing: 0.04 }}>not confirmed</span>}
             {o.owner && <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--fg-muted)" }}>{ownerLabel(o.owner)}</span>}
           </div>
         );
@@ -190,7 +206,7 @@ function RecommendedAction() {
       </div>
     </Panel>
   );
-  const objs = data?.data ?? [];
+  const objs = (data?.data ?? []).filter((o) => !isInternalStackAffected(o.affected));
   const top = objs.find((o) => o.verdict_tier === "confirmed" && trusted(o)) ?? objs.find((o) => trusted(o));
   if (top) {
     const confirmed = top.verdict_tier === "confirmed";
@@ -211,8 +227,9 @@ function RecommendedAction() {
   const contribs = health?.contributions ?? [];
   if (band && band !== "healthy" && contribs.length) {
     const tone = band === "critical" ? "var(--crit)" : "var(--warn)";
-    const top2 = contribs.slice(0, 2).map((c) => c.reason).join("; ");
-    return row("Investigate", tone, `Investigate the top health contributors: ${top2}. No confirmed root cause yet.`);
+    const list = contribs.slice(0, 3).map((c) => c.reason);
+    const joined = list.length > 1 ? `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}` : list[0];
+    return row("Investigate", tone, `Investigate the top health contributors — ${joined}. No root cause is confirmed yet.`);
   }
   return <Panel title="Recommended action" state="inactive" note="No action needed." hint="Network nominal; no issue above the confidence floor." />;
 }
@@ -261,7 +278,7 @@ function WhatChanged() {
 function ImpactSummary() {
   const { data, err } = usePoll(() => api.correlations(100, 86400, "open"));
   if (err) return <Panel title="Impact" state="degraded" />;
-  const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined");
+  const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
   const devices = new Set<string>(); const sites = new Set<string>();
   for (const o of objs) {
     try {
@@ -270,7 +287,9 @@ function ImpactSummary() {
       (a.sites ?? []).forEach((s: string) => sites.add(s));
     } catch { /* ignore */ }
   }
-  if (objs.length === 0) return <Panel title="Impact" state="inactive" note="Nothing impacted." hint="No active issues touching the fleet." />;
+  // "Impact" = CONFIRMED service impact tied to RCA — distinct from raw health.
+  // Don't claim "nothing impacted" (health may be critical from contributors).
+  if (objs.length === 0) return <Panel title="Impact" state="inactive" note="No confirmed service impact." hint="No active RCA incident is currently tied to affected users, apps, or paths." />;
   return (
     <Panel title="Impact" action={<a href="#/infrastructure/topology">topology →</a>}>
       <div className="fp-kpis">

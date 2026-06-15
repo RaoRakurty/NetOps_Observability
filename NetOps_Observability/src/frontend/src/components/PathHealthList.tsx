@@ -51,7 +51,8 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
       <div style={{ fontSize: 13.5, marginTop: 6, color: "var(--fg)", lineHeight: 1.45 }}>{p.reason}</div>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px", fontSize: 12.5, marginTop: 7 }}>
         {row("Current latency", `${p.current.latency_p95_5m} ms (last 5 min)`)}
-        {row("Typical range", `${p.baseline.latency_p50}–${p.baseline.latency_p99} ms`)}
+        {row("Typical", `~${p.baseline.latency_p50} ms`)}
+        {row("Bad range", `≥ ${p.baseline.latency_p99} ms`)}
         {p.current.jitter_p95_5m > 0 && row("Current jitter", `${p.current.jitter_p95_5m} ms`)}
         {p.current.loss_pct_5m > 0 && row("Packet loss", `${p.current.loss_pct_5m}%`)}
         {row("Likely owner", FAULT_LABEL[p.likely_fault_domain] ?? p.likely_fault_domain)}

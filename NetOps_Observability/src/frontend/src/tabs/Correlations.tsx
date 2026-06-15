@@ -6,7 +6,12 @@ import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
 import RcaPathView from "../components/rca/RcaPathView";
-import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor } from "../components/rca/labels";
+import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor, isInternalStackAffected } from "../components/rca/labels";
+
+// RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
+// entity is our own infra) are hidden by default and revealed via a toggle for
+// platform debugging. A mixed object (any real device) is NOT hidden. Decision #76.
+const isInternalStackObject = (o: CorrObject): boolean => isInternalStackAffected(o.affected);
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -132,8 +137,17 @@ export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
   const [state, setState] = useState("");
   const [tier, setTier] = useState("");
+  const [showInternal, setShowInternal] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const ws = useWorkspace();
+
+  // Hide internal-stack/self-monitoring objects by default — RCA is for customer
+  // networks (decision #76). The toggle reveals them for platform debugging.
+  const visible = useMemo(
+    () => (showInternal ? items : items.filter((o) => !isInternalStackObject(o))),
+    [items, showInternal],
+  );
+  const hiddenInternal = items.length - visible.length;
 
   const columns = useMemo<Column<CorrObject>[]>(() => [
     { key: "created_at", header: "Updated", width: 160, sortable: true,
@@ -218,15 +232,20 @@ export default function Correlations() {
           <option value="suspected">Suspected</option>
           <option value="undetermined">Not confirmed</option>
         </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--muted)", marginLeft: "auto" }}>
+          <input type="checkbox" checked={showInternal} onChange={(e) => setShowInternal(e.target.checked)} />
+          Show internal/stack{hiddenInternal > 0 && !showInternal ? ` (${hiddenInternal} hidden)` : ""}
+        </label>
       </div>
-      {items.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="empty">
-          No issues in this time range. One appears when related evidence — or a single
-          high-severity sign — shows up across your network.
+          {items.length > 0
+            ? "No customer-network issues in this range. Internal stack/self-monitoring objects are hidden — tick “Show internal/stack” to see them."
+            : "No issues in this time range. One appears when related evidence — or a single high-severity sign — shows up across your network."}
         </div>
       ) : (
         <DataTable<CorrObject>
-          rows={items}
+          rows={visible}
           columns={columns}
           rowKey={(o) => o.correlation_id}
           height="58vh"
