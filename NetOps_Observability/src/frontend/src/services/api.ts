@@ -356,6 +356,28 @@ export type CorrObject = {
   low_authority?: number;      // 0/1
 };
 
+// Path Behavior Health (docs/design/path-behavior-health.md). Numbers AND
+// explanation: the UI shows state/confidence/ranges/reason/owner/evidence/baseline.
+export type PathHealthItem = {
+  path_id: string;
+  agent: string;
+  dst: string;
+  health_state: "healthy" | "watch" | "degraded" | "severe";
+  score: number;
+  confidence: "low" | "medium_low" | "medium" | "high";
+  severities: Record<string, number | null>; // latency/jitter/loss/route; null = not measured
+  baseline_source: string;
+  reason: string;
+  likely_fault_domain: string;
+  evidence: string[];
+  current: { latency_p95_5m: number; jitter_p95_5m: number; loss_pct_5m: number };
+  baseline: {
+    source: string; source_label: string; window: string; sample_count: number;
+    latency_p50: number; latency_p99: number; jitter_p50: number; jitter_p99: number;
+  };
+};
+export type PathHealthResponse = { paths: PathHealthItem[]; count: number };
+
 export type CorrEdge = {
   from_node: string;
   to_node: string;
@@ -1120,6 +1142,8 @@ export const api = {
   // the seam-aware graph. 501 on the file backend → caller degrades gracefully.
   seams: (state = "active") =>
     request<Seam[]>(`/api/seams?state=${encodeURIComponent(state)}`),
+  // Path Behavior Health — adaptive baseline-relative path scoring (worst-first).
+  pathsHealth: () => request<PathHealthResponse>(`/api/paths/health`),
   vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),
   compliance: (limit = 500) => request<ComplianceResponse>(`/api/compliance?limit=${limit}`),
 

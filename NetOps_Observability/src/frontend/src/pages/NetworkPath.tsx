@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel, MetricTop } from "../components/board/panels";
+import PathHealthList from "../components/PathHealthList";
 
 // NetworkPath (Flow Trace) — visualizes the active-measurement pipeline: the
 // hop-by-hop path from traceroute (/api/probe/paths) and the path SLA from STAMP
@@ -41,6 +42,14 @@ export default function NetworkPath({ rangeMinutes = 60 }: { rangeMinutes?: numb
 
   return (
     <div className="dm-board">
+      <Group title="Path Behavior Health" hue="#14B8A6">
+        <p className="mini-meta" style={{ margin: "0 0 8px" }}>
+          Is each path behaving normally right now, compared with its own typical behavior?
+          Adaptive baseline (not fixed thresholds), with confidence and likely owner — worst first.
+        </p>
+        <PathHealthList />
+      </Group>
+
       <Group title="Network paths (traceroute)" hue="#F97316">
         {err ? (
           <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
