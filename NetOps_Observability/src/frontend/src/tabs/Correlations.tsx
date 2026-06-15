@@ -6,6 +6,7 @@ import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
 import RcaPathView from "../components/rca/RcaPathView";
+import RcaTopology from "../components/rca/RcaTopology";
 import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor, isInternalStackAffected } from "../components/rca/labels";
 
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
@@ -358,8 +359,21 @@ export function CorrelationDetail({ id }: { id: string }) {
           recommendedSteps={recommendedSteps} owner={recommendedOwner} affected={obj.affected} />
       )}
 
-      {/* RCA path view (operator only) — where the issue points, symbolic + NOC
-          language; the full grounded graph stays in Debug View below. */}
+      {/* END-TO-END TOPOLOGY — the path observer→target with the fault marked
+          (broken / suspected / possible). Data-driven overlay; live-trace fusion
+          is the next phase. */}
+      {timeline && (
+        <div>
+          <div style={titleStyle}>End-to-end path</div>
+          <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
+            Where the issue sits on the path — and exactly what&apos;s broken there. Drag to arrange; scroll the page, drag the canvas to pan.
+          </div>
+          <RcaTopology timeline={timeline} seams={seams} view={view} />
+        </div>
+      )}
+
+      {/* RCA path view (operator only) — the textual "evidence along the path"
+          breakdown beneath the topology; full grounded graph stays in Debug. */}
       {view === "operator" && timeline && (
         <RcaPathView timeline={timeline} seams={seams} owner={recommendedOwner} />
       )}
