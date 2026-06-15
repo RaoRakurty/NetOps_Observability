@@ -200,15 +200,26 @@ def emit_metrics(degraded: bool, elapsed_s: float) -> int:
 
 
 def emit_traceroute() -> int:
+    # Each destination is traced by BOTH methods (icmp + tcp). They share the
+    # first/last hops but diverge in the middle — realistic: ICMP and TCP take
+    # different ECMP paths / firewalls treat them differently — so the UI renders
+    # one row per protocol.
     paths = []
     for tgt in PROBE_TARGETS:
-        hops = [
+        icmp_hops = [
             {"ttl": 1, "ip": "10.0.0.1", "rtt_ms": 0.4},
             {"ttl": 2, "ip": "172.40.40.52", "rtt_ms": 2.1},
             {"ttl": 3, "ip": tgt, "rtt_ms": 6.2},
         ]
-        paths.append({"dst": tgt, "method": "icmp", "hops": hops,
-                      "signature": f"sig-{tgt}", "reached": True})
+        tcp_hops = [
+            {"ttl": 1, "ip": "10.0.0.1", "rtt_ms": 0.5},
+            {"ttl": 2, "ip": "172.40.40.86", "rtt_ms": 2.4},  # different middle hop
+            {"ttl": 3, "ip": tgt, "rtt_ms": 6.9},
+        ]
+        paths.append({"dst": tgt, "method": "icmp", "hops": icmp_hops,
+                      "signature": f"sig-icmp-{tgt}", "reached": True})
+        paths.append({"dst": tgt, "method": "tcp", "hops": tcp_hops,
+                      "signature": f"sig-tcp-{tgt}", "reached": True})
     return 1 if redis_set("netops:probe:paths", json.dumps(paths)) else 0
 
 

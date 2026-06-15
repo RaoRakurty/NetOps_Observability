@@ -49,14 +49,58 @@ func TestPathSignatureChange(t *testing.T) {
 // pathRegistry stores and returns latest traces, newest first.
 func TestPathRegistry(t *testing.T) {
 	r := &pathRegistry{m: make(map[string]PathResult)}
-	r.set(PathResult{Dst: "a", TS: time.Unix(100, 0)})
-	r.set(PathResult{Dst: "b", TS: time.Unix(200, 0)})
+	r.set(PathResult{Dst: "a", Method: "icmp", TS: time.Unix(100, 0)})
+	r.set(PathResult{Dst: "b", Method: "icmp", TS: time.Unix(200, 0)})
 	all := r.All()
 	if len(all) != 2 || all[0].Dst != "b" {
 		t.Fatalf("All() ordering wrong: %+v", all)
 	}
-	if _, ok := r.get("a"); !ok {
-		t.Fatal("get(a) missing")
+	if _, ok := r.get("a", "icmp"); !ok {
+		t.Fatal("get(a,icmp) missing")
+	}
+	// empty method normalizes to icmp (legacy default).
+	if _, ok := r.get("a", ""); !ok {
+		t.Fatal("get(a,\"\") should normalize to icmp")
+	}
+
+	// icmp and tcp traces to the SAME dst must coexist (not overwrite).
+	r.set(PathResult{Dst: "a", Method: "tcp", TS: time.Unix(300, 0)})
+	if _, ok := r.get("a", "tcp"); !ok {
+		t.Fatal("get(a,tcp) missing — methods overwrote each other")
+	}
+	if _, ok := r.get("a", "icmp"); !ok {
+		t.Fatal("get(a,icmp) lost after adding tcp")
+	}
+	if len(r.All()) != 3 {
+		t.Fatalf("All() should hold 3 (a/icmp, a/tcp, b/icmp): %+v", r.All())
+	}
+}
+
+func TestParseMethods(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", []string{"icmp"}},
+		{"icmp", []string{"icmp"}},
+		{"tcp", []string{"tcp"}},
+		{"both", []string{"icmp", "tcp"}},
+		{"icmp,tcp", []string{"icmp", "tcp"}},
+		{"tcp,icmp", []string{"tcp", "icmp"}},
+		{"tcp,tcp", []string{"tcp"}},              // deduped
+		{"bogus", []string{"icmp"}},               // unknown → default
+		{" ICMP , TCP ", []string{"icmp", "tcp"}}, // trimmed + lowercased
+	}
+	for _, c := range cases {
+		got := parseMethods(c.in)
+		if len(got) != len(c.want) {
+			t.Fatalf("parseMethods(%q) = %v, want %v", c.in, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("parseMethods(%q) = %v, want %v", c.in, got, c.want)
+			}
+		}
 	}
 }
 

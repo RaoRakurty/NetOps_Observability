@@ -38,9 +38,13 @@ type Hop struct {
 	Loss  float64 `json:"loss_pct"`
 }
 
-// PathResult is the latest trace to a destination, exposed to the API/UI.
+// PathResult is the latest trace to a destination, exposed to the API/UI. A
+// destination can be traced by more than one METHOD (icmp + tcp) — they often
+// diverge (ICMP-blocking firewalls, protocol-specific ECMP hashing), so each
+// (dst, method) is stored and surfaced separately.
 type PathResult struct {
 	Dst     string    `json:"dst"`
+	Method  string    `json:"method"` // "icmp" | "tcp"
 	Hops    []Hop     `json:"hops"`
 	Reached bool      `json:"reached"`
 	Changed bool      `json:"changed"` // path differs from the previous trace
@@ -59,9 +63,19 @@ type pathRegistry struct {
 // the HTTP layer without threading a reference through the pool.
 var Paths = &pathRegistry{m: make(map[string]PathResult)}
 
+// pathKey indexes a stored trace by destination AND method so icmp and tcp
+// traces to the same dst coexist instead of overwriting each other. Legacy/empty
+// method normalizes to "icmp" (the historical default).
+func pathKey(dst, method string) string {
+	if method == "" {
+		method = "icmp"
+	}
+	return dst + "|" + method
+}
+
 func (r *pathRegistry) set(p PathResult) {
 	r.mu.Lock()
-	r.m[p.Dst] = p
+	r.m[pathKey(p.Dst, p.Method)] = p
 	r.mu.Unlock()
 	r.persist()
 }
@@ -89,10 +103,10 @@ func (r *pathRegistry) persist() {
 	}
 }
 
-func (r *pathRegistry) get(dst string) (PathResult, bool) {
+func (r *pathRegistry) get(dst, method string) (PathResult, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	p, ok := r.m[dst]
+	p, ok := r.m[pathKey(dst, method)]
 	return p, ok
 }
 
@@ -168,10 +182,25 @@ func traceOnce(ctx context.Context, dst string, cfg traceConfig) (PathResult, er
 	if err != nil {
 		return PathResult{}, err
 	}
+	var res PathResult
 	if cfg.method == "tcp" {
-		return traceTCP(ctx, dst, ipAddr.IP, cfg)
+		res, err = traceTCP(ctx, dst, ipAddr.IP, cfg)
+	} else {
+		res, err = traceICMP(ctx, dst, ipAddr, cfg)
 	}
-	return traceICMP(ctx, dst, ipAddr, cfg)
+	if err != nil {
+		return PathResult{}, err
+	}
+	res.Method = methodLabel(cfg.method)
+	return res, nil
+}
+
+// methodLabel normalizes the configured method to its stored label.
+func methodLabel(m string) string {
+	if m == "tcp" {
+		return "tcp"
+	}
+	return "icmp"
 }
 
 // traceICMP runs a Paris-consistent ICMP-echo trace (constant id, varying seq).
@@ -530,8 +559,42 @@ func waitTCPEvent(ch <-chan tcpEvent, seq uint32, t0 time.Time, timeout time.Dur
 type tracerouteCollector struct {
 	interval time.Duration
 	cfg      traceConfig
+	methods  []string // ordered, deduped: which methods to trace each cycle
 	mu       sync.RWMutex
 	status   Status
+}
+
+// parseMethods reads TRACEROUTE_METHOD as a comma-separated list so a dst can be
+// traced by both protocols ("icmp,tcp" or "both"). Default: icmp only (TCP needs
+// a raw TCP socket / CAP_NET_RAW, so it stays opt-in). Order preserved, deduped.
+func parseMethods(raw string) []string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return []string{"icmp"}
+	}
+	if raw == "both" {
+		return []string{"icmp", "tcp"}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		switch strings.TrimSpace(p) {
+		case "icmp":
+			if !seen["icmp"] {
+				seen["icmp"] = true
+				out = append(out, "icmp")
+			}
+		case "tcp":
+			if !seen["tcp"] {
+				seen["tcp"] = true
+				out = append(out, "tcp")
+			}
+		}
+	}
+	if len(out) == 0 {
+		return []string{"icmp"}
+	}
+	return out
 }
 
 // NewTraceroute builds the scheduled path-discovery collector. Targets come from
@@ -542,21 +605,19 @@ func NewTraceroute() Collector {
 	if sock != "udp4" {
 		sock = "ip4:icmp"
 	}
-	method := os.Getenv("TRACEROUTE_METHOD")
-	if method != "tcp" {
-		method = "icmp"
-	}
+	methods := parseMethods(os.Getenv("TRACEROUTE_METHOD"))
 	return &tracerouteCollector{
 		interval: envDuration("TRACEROUTE_INTERVAL", 60*time.Second),
 		cfg: traceConfig{
 			maxHops:   envInt("TRACEROUTE_MAX_HOPS", 30),
 			probes:    envInt("TRACEROUTE_PROBES", 3),
 			timeout:   envDuration("TRACEROUTE_TIMEOUT", time.Second),
-			method:    method,
+			method:    methods[0],
 			socketNet: sock,
 			tcpPort:   envInt("TRACEROUTE_TCP_PORT", 443),
 		},
-		status: Status{Name: "traceroute", Healthy: true, Kind: "metrics"},
+		methods: methods,
+		status:  Status{Name: "traceroute", Healthy: true, Kind: "metrics"},
 	}
 }
 
@@ -598,41 +659,48 @@ func tracerouteTargets() []string {
 func (c *tracerouteCollector) traceAll(ctx context.Context) {
 	targets := tracerouteTargets()
 	now := time.Now().UnixMilli()
-	reachable := 0
 	var lines []string
 	var lastErr string
+	reachedAny := map[string]bool{} // a target counts reachable if ANY method reaches it
 	for _, dst := range targets {
-		res, err := traceOnce(ctx, dst, c.cfg)
-		if err != nil {
-			lastErr = err.Error()
-			continue
-		}
-		// Path-change detection vs the previous trace.
-		if prev, ok := Paths.get(dst); ok {
-			res.Changed = pathSignature(prev.Hops) != pathSignature(res.Hops)
-		}
-		Paths.set(res)
-		if res.Reached {
-			reachable++
-		}
-		// Per-hop RTT metrics + per-path summary (RFC-aligned route stability via
-		// path_changed feeds Path Health's 10% route-stability term).
-		for _, h := range res.Hops {
-			if h.IP == "" {
+		for _, method := range c.methods {
+			cfg := c.cfg
+			cfg.method = method
+			res, err := traceOnce(ctx, dst, cfg)
+			if err != nil {
+				lastErr = err.Error()
 				continue
 			}
-			lines = append(lines, fmt.Sprintf(`probe_hop_rtt_ms{dst=%q,ttl="%d",hop=%q,probe="traceroute"} %.3f %d`, dst, h.TTL, h.IP, h.RTTms, now))
+			// Path-change detection vs the previous trace of the SAME (dst, method).
+			if prev, ok := Paths.get(dst, res.Method); ok {
+				res.Changed = pathSignature(prev.Hops) != pathSignature(res.Hops)
+			}
+			Paths.set(res)
+			if res.Reached {
+				reachedAny[dst] = true
+			}
+			ml := res.Method
+			// Per-hop RTT metrics + per-path summary (RFC-aligned route stability via
+			// path_changed feeds Path Health's 10% route-stability term). The method
+			// label keeps icmp and tcp series distinct.
+			for _, h := range res.Hops {
+				if h.IP == "" {
+					continue
+				}
+				lines = append(lines, fmt.Sprintf(`probe_hop_rtt_ms{dst=%q,method=%q,ttl="%d",hop=%q,probe="traceroute"} %.3f %d`, dst, ml, h.TTL, h.IP, h.RTTms, now))
+			}
+			changed := 0
+			if res.Changed {
+				changed = 1
+			}
+			lines = append(lines,
+				fmt.Sprintf(`probe_path_length{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, len(res.Hops), now),
+				fmt.Sprintf(`probe_path_reached{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, b2i(res.Reached), now),
+				fmt.Sprintf(`probe_path_changed{dst=%q,method=%q,probe="traceroute"} %d %d`, dst, ml, changed, now),
+			)
 		}
-		changed := 0
-		if res.Changed {
-			changed = 1
-		}
-		lines = append(lines,
-			fmt.Sprintf(`probe_path_length{dst=%q,probe="traceroute"} %d %d`, dst, len(res.Hops), now),
-			fmt.Sprintf(`probe_path_reached{dst=%q,probe="traceroute"} %d %d`, dst, b2i(res.Reached), now),
-			fmt.Sprintf(`probe_path_changed{dst=%q,probe="traceroute"} %d %d`, dst, changed, now),
-		)
 	}
+	reachable := len(reachedAny)
 	if len(lines) > 0 {
 		emitMetrics(ctx, strings.Join(lines, "\n"))
 	}

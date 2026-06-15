@@ -2011,7 +2011,9 @@ export type PromSeries = { metric: Record<string, string>; values: [number, stri
 
 // Active-measurement (traceroute) path topology — from /api/probe/paths.
 export type ProbeHop = { ttl: number; ip: string; rtt_ms: number; loss_pct: number };
-export type ProbePath = { dst: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
+// A destination can be traced by more than one method (icmp + tcp); they often
+// diverge, so each (dst, method) is a distinct ProbePath.
+export type ProbePath = { dst: string; method?: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
 // Device Geomap — NetBox DCIM sites (lat/lng intent data) joined with inventory health.
 export type DeviceLocationRow = {
   id: string; name: string; vendor?: string; site?: string;

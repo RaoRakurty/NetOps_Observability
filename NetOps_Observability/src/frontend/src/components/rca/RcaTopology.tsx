@@ -179,14 +179,40 @@ const COL = 250;
 const COL_HOP = 184;
 const TRACE_LOSS_HI = 2; // % per-hop forwarding loss that flags a hop (ThousandEyes-style)
 
-// Match the RCA path's destination to a live trace (exact, or either-contains —
-// covers "10.70.245.120" == dst and named dsts like "aws-tgw").
-function matchTrace(dst: string | undefined, paths?: ProbePath[]): ProbePath | undefined {
-  if (!dst || !paths?.length) return undefined;
+// Match the RCA path's destination to live traces (exact, or either-contains —
+// covers "10.70.245.120" == dst and named dsts like "aws-tgw"). Returns ALL
+// matching traces so both methods (icmp + tcp) are surfaced, deduped by method
+// (latest wins). Exact-dst matches win over fuzzy ones.
+function matchTraces(dst: string | undefined, paths?: ProbePath[]): ProbePath[] {
+  if (!dst || !paths?.length) return [];
   const d = dst.trim();
-  return paths.find((p) => p.dst === d)
-    ?? paths.find((p) => p.dst && (p.dst.includes(d) || d.includes(p.dst)) && (p.hops?.length ?? 0) > 0);
+  const withHops = paths.filter((p) => (p.hops?.length ?? 0) > 0);
+  let m = withHops.filter((p) => p.dst === d);
+  if (m.length === 0) m = withHops.filter((p) => p.dst && (p.dst.includes(d) || d.includes(p.dst)));
+  // dedup by method (default "icmp"), keep the first (caller order = newest-first).
+  const byMethod = new Map<string, ProbePath>();
+  for (const p of m) {
+    const k = (p.method || "icmp").toLowerCase();
+    if (!byMethod.has(k)) byMethod.set(k, p);
+  }
+  return [...byMethod.values()];
 }
+
+// Group method-traces by identical hop sequence: when icmp and tcp agree we draw
+// ONE chain labelled "ICMP · TCP"; when they diverge we draw a row each.
+function groupBySignature(traces: ProbePath[]): { methods: string[]; trace: ProbePath }[] {
+  const groups = new Map<string, { methods: string[]; trace: ProbePath }>();
+  for (const t of traces) {
+    const sig = (t.hops ?? []).map((h) => h.ip).join(">");
+    const g = groups.get(sig);
+    const method = (t.method || "icmp").toLowerCase();
+    if (g) g.methods.push(method);
+    else groups.set(sig, { methods: [method], trace: t });
+  }
+  return [...groups.values()];
+}
+
+const methodTag = (methods: string[]): string => methods.map((m) => m.toUpperCase()).join(" · ");
 
 export default function RcaTopology({ timeline, seams, view = "operator", height = 300, probePaths, deviceByIp }: {
   timeline: CorrTimeline;
@@ -266,12 +292,12 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const seamEdge = (timeline.edges ?? []).find((e) => e.grounding_kind === "seam");
     const seam = seamEdge ? seams[seamEdge.grounding_ref] : undefined;
 
-    // LIVE-TRACE FUSION: if the RCA path's destination has a real traceroute, use
-    // its hops as the true ordered backbone (Phase 2). Else fall back to the
-    // contextual placement (Phase 1).
-    const traced = matchTrace(ends?.dst, probePaths);
+    // LIVE-TRACE FUSION: if the RCA path's destination has real traceroute(s), use
+    // their hops as the true ordered backbone (Phase 2), across BOTH methods
+    // (icmp + tcp). Else fall back to the contextual placement (Phase 1).
+    const tracedRows = groupBySignature(matchTraces(ends?.dst, probePaths));
 
-    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, traced, hasPath: !!ends };
+    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, tracedRows, hasPath: !!ends };
   }, [timeline, seams, probePaths]);
 
   const [showStamp, setShowStamp] = useState(false);
@@ -281,7 +307,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const edges: Edge[] = [];
     const status = statusForVerdict(timeline.verdict_tier);
     const meta = STATUS_META[status];
-    const { ends, lossTxt, stampTxt, devs, locusDev, seam, traced } = model;
+    const { ends, lossTxt, stampTxt, devs, locusDev, seam, tracedRows } = model;
     // measured-segment label: STAMP detail when the knob is on, else the loss
     // headline only (the fault signature) — keeps the default uncluttered.
     const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
@@ -301,46 +327,56 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       });
     };
 
-    // ===== TRACED MODE (Phase 2): real hop chain from live traceroute =========
-    if (traced && ends && (traced.hops?.length ?? 0) > 0) {
-      const hops = [...(traced.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
+    // ===== TRACED MODE (Phase 2): real hop chain(s) from live traceroute =======
+    // One row per distinct path; methods that agree share a row (labelled
+    // "ICMP · TCP"), methods that diverge get a row each.
+    if (tracedRows.length > 0 && ends) {
       const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
-      // which hop carries the RCA fault: a hop whose IP OR resolved device name
-      // matches the locus, else the destination hop (the diagnosed target).
-      let faultIdx = hops.findIndex((h) => h.ip && locusDev && (h.ip === locusDev || hopName(h.ip) === locusDev));
-      if (faultIdx < 0) faultIdx = hops.length - 1;
+      const ROW_H = 150;
+      const centerY = ((tracedRows.length - 1) * ROW_H) / 2;
 
-      // observer / source
-      push({ id: "src", type: "endpoint", position: { x: 0, y: 0 }, draggable: true,
+      // shared observer / source, vertically centered against the rows
+      push({ id: "src", type: "endpoint", position: { x: 0, y: centerY }, draggable: true,
         data: { icon: "◉", label: entityLabel(ends.src), role: "observed from here", hasIn: false, hasOut: true } });
-      let prev = "src";
 
-      hops.forEach((h, i) => {
-        const id = `hop${i}`;
-        const isLast = i === hops.length - 1;
-        const lossHi = Number(h.loss_pct) > TRACE_LOSS_HI;
-        const rtt = Number(h.rtt_ms);
-        const ip = h.ip && h.ip !== "" ? h.ip : "*";
-        const name = hopName(ip);
-        const hopLabel = name ?? ip;                 // device name when known, else IP
-        const ipSub = name ? ` · ${ip}` : "";        // keep the IP visible when named
-        const metric =
-          showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
-          : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-        if (i === faultIdx) {
-          push({ id, type: "fault", position: { x: (i + 1) * COL_HOP, y: 0 }, draggable: true,
-            data: { label: hopLabel, meta, elements: (locus?.elements ?? []).slice(0, 4), isTarget: isLast } });
-        } else {
-          push({ id, type: "hop", position: { x: (i + 1) * COL_HOP, y: 0 }, draggable: true,
-            data: { label: hopLabel, mono: !name, icon: isLast ? "⊚" : undefined, sub: (isLast ? "destination" : `hop ${h.ttl}`) + ipSub, metric, tone: lossHi ? meta.color : undefined } });
-        }
-        // edge into this hop: degraded if this hop lost packets (or it's the fault
-        // hop on a degraded path). first segment carries the measured headline.
-        const segDegraded = lossHi || (i === faultIdx && !!lossTxt);
-        const segLabel = showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms`
-          : i === 0 ? measuredLabel : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-        link(prev, id, { degraded: segDegraded, label: segLabel });
-        prev = id;
+      tracedRows.forEach((row, r) => {
+        const yBase = r * ROW_H;
+        const hops = [...(row.trace.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
+        if (hops.length === 0) return;
+        const tag = methodTag(row.methods); // "ICMP" | "TCP" | "ICMP · TCP"
+        // fault hop: matches locus by IP/name, else the destination (diagnosed target).
+        let faultIdx = hops.findIndex((h) => h.ip && locusDev && (h.ip === locusDev || hopName(h.ip) === locusDev));
+        if (faultIdx < 0) faultIdx = hops.length - 1;
+        let prev = "src";
+
+        hops.forEach((h, i) => {
+          const id = `r${r}h${i}`;
+          const isLast = i === hops.length - 1;
+          const lossHi = Number(h.loss_pct) > TRACE_LOSS_HI;
+          const rtt = Number(h.rtt_ms);
+          const ip = h.ip && h.ip !== "" ? h.ip : "*";
+          const name = hopName(ip);
+          const hopLabel = name ?? ip;
+          const ipSub = name ? ` · ${ip}` : "";
+          const metric =
+            showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
+            : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
+          if (i === faultIdx) {
+            push({ id, type: "fault", position: { x: (i + 1) * COL_HOP, y: yBase }, draggable: true,
+              data: { label: hopLabel, meta, elements: (locus?.elements ?? []).slice(0, 4), isTarget: isLast } });
+          } else {
+            push({ id, type: "hop", position: { x: (i + 1) * COL_HOP, y: yBase }, draggable: true,
+              data: { label: hopLabel, mono: !name, icon: isLast ? "⊚" : undefined, sub: (isLast ? "destination" : `hop ${h.ttl}`) + ipSub, metric, tone: lossHi ? meta.color : undefined } });
+          }
+          // first segment of each row carries the method tag (+ measured headline).
+          const segDegraded = lossHi || (i === faultIdx && !!lossTxt);
+          const firstLabel = [tag, measuredLabel].filter(Boolean).join(" · ");
+          const segLabel = i === 0 ? firstLabel
+            : showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms`
+            : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
+          link(prev, id, { degraded: segDegraded, label: segLabel });
+          prev = id;
+        });
       });
 
       return { rfNodes: nodes, rfEdges: edges };
@@ -434,8 +470,9 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         <span style={{ color: m.color, fontWeight: 800 }}>{m.sym} {m.word}</span>
         <span>◉ observed</span><span>⊚ destination</span>
         {(() => {
-          const live = !!model.traced && (model.traced.hops?.length ?? 0) > 0;
-          return <span style={{ color: live ? C.ok : C.faint }}>{live ? "● live trace" : "contextual path · live trace next"}</span>;
+          const methods = model.tracedRows.flatMap((row) => row.methods);
+          const live = methods.length > 0;
+          return <span style={{ color: live ? C.ok : C.faint }}>{live ? `● live trace (${methodTag([...new Set(methods)])})` : "contextual path · live trace next"}</span>;
         })()}
       </div>
       {/* opt-in STAMP metrics knob — default OFF so the path stays uncluttered. */}

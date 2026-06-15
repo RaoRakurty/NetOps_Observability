@@ -64,6 +64,14 @@ falling back to contextual placement otherwise:
   TTL-ordered hop chain `observer → hop → … → destination` with per-hop RTT and
   per-hop loss; a hop with loss > 2% is flagged red (ThousandEyes-style). The
   **STAMP knob** then shows genuine **per-hop** RTT between adjacent hops.
+- **Both methods (icmp + tcp):** a destination is traced by each protocol and they
+  often diverge (ICMP-blocking firewalls, protocol-specific ECMP). The store keys
+  by `(dst, method)` so both coexist; `RcaTopology` matches ALL methods, groups by
+  hop signature, and draws **one row per distinct path** — methods that agree share
+  a row labelled "ICMP · TCP", methods that diverge get a row each (shared observer
+  on the left). Backend: `PathResult.Method`, `pathKey(dst,method)`,
+  `TRACEROUTE_METHOD` parsed as a list (`icmp` default · `tcp` · `icmp,tcp` /
+  `both`); metrics carry a `method` label.
 - **RCA overlay:** the fault lands on the hop whose IP/name matches the locus, else
   on the destination hop (the diagnosed target), carrying the verdict status +
   broken-element chips. Legend shows "● live trace" vs "contextual path".
