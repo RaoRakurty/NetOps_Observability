@@ -4,11 +4,16 @@ import {
   C, MODALITY_META, MODALITY_ORDER, modalityLabel, modalityHelp,
   signatureName, signatureNocTitle, PLANE_NOC_TITLE, kindMeta, kindLabel,
   entityLabel, ownerLabel, seamOwnerLabel, visibilityLabel, isRoutingKind,
+  AFFECTED_LABEL, OWNER_EXTERNAL,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
 // hex+alpha tint helper for calm severity backgrounds.
 const tint = (hex: string, a = "1f") => hex + a;
+
+// Reason shown on hover for the "not tied to this issue" count + badge (item 4).
+const NOT_TIED_HELP =
+  "Seen in the same window but not linked to this issue — a different path or device area, or not strong/corroborated enough to link.";
 
 // RcaSummary — the operator-facing RCA story (not an engine dump). In Operator
 // View it speaks NOC/customer language only and answers four questions: what did
@@ -112,7 +117,7 @@ function orList(items: string[]): string {
 }
 
 export default function RcaSummary({
-  timeline, seams, view, state, version, nodeCount, recommendedSteps = [], owner = "",
+  timeline, seams, view, state, version, nodeCount, recommendedSteps = [], owner = "", affected = "",
 }: {
   timeline: CorrTimeline;
   seams: Record<string, Seam>;
@@ -122,9 +127,39 @@ export default function RcaSummary({
   nodeCount: number;
   recommendedSteps?: string[];
   owner?: string;
+  affected?: string;          // engine `affected` JSON {devices,paths,sites,...} (item 1)
 }) {
   const c = timeline.counts;
   const muted: React.CSSProperties = { color: C.muted };
+
+  // Observed window + duration (item 2). Times are operator-safe in both views.
+  const windowInfo = useMemo(() => {
+    const t0 = Date.parse(timeline.window_start.replace(" ", "T") + "Z");
+    const t1 = Date.parse(timeline.window_end.replace(" ", "T") + "Z");
+    const dur = Number.isFinite(t0) && Number.isFinite(t1) ? Math.max(0, Math.round((t1 - t0) / 1000)) : 0;
+    const mm = Math.floor(dur / 60), ss = dur % 60;
+    return {
+      start: timeline.window_start.slice(0, 19),
+      end: timeline.window_end.slice(0, 19),
+      dur: mm > 0 ? `${mm}m ${ss}s` : `${ss}s`,
+    };
+  }, [timeline.window_start, timeline.window_end]);
+
+  // Affected scope (item 1) — only the buckets the engine populated. Entity ids
+  // are made customer-safe (entityLabel) in Operator View and de-duped after
+  // mapping (several internal names can collapse to one role label); Debug shows
+  // the raw ids.
+  const affectedGroups = useMemo(() => {
+    let obj: Record<string, unknown> = {};
+    try { obj = JSON.parse(affected || "{}"); } catch { obj = {}; }
+    return Object.entries(obj)
+      .filter(([, v]) => Array.isArray(v) && v.length)
+      .map(([k, v]) => {
+        const ids = v as string[];
+        const shown = view === "debug" ? ids : [...new Set(ids.map((i) => entityLabel(i)))];
+        return { key: k, label: AFFECTED_LABEL[k] ?? k, items: shown, raw: ids.length };
+      });
+  }, [affected, view]);
 
   // Display-plane buckets. Operator View groups a signal by the DOMAIN a NOC reads
   // it as (so a polled BGP metric files under "Routing & link events", not "Device
@@ -290,6 +325,27 @@ export default function RcaSummary({
 
   const confidenceTone = confirmed ? C.ok : quality === "candidate" ? C.warn : C.faint;
 
+  // NOC decision line (item 5): a confirmed issue is escalated to whoever owns it
+  // (external provider vs internal team); anything weaker is held with the reason.
+  // Mirrors the verdict/authority logic the rest of the card already trusts.
+  const decision = (() => {
+    if (confirmed) {
+      if (owner && OWNER_EXTERNAL.has(owner))
+        return { verb: "Escalate", tone: C.crit, text: `${ownerLabel(owner)} — confirmed boundary issue; independent evidence agrees.` };
+      if (owner === "app_team")
+        return { verb: "Escalate", tone: C.crit, text: "App team — confirmed, owned by the application layer." };
+      return { verb: "Escalate", tone: C.crit, text: "Network team — confirmed network issue." };
+    }
+    if (probe.lowOnly || probeOnly)
+      return { verb: "Hold", tone: C.caution, text: "Only active/test checks changed. Re-test from a trusted customer path, or corroborate with device health, a routing/link event, or traffic loss." };
+    if (timeline.verdict_tier === "suspected") {
+      const add = corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "a second, independent source";
+      const then = owner && OWNER_EXTERNAL.has(owner) ? `, then escalate to ${ownerLabel(owner)}` : "";
+      return { verb: "Hold", tone: C.caution, text: `Suspected only. Confirm with ${add}${then}.` };
+    }
+    return { verb: "Hold", tone: C.faint, text: "Not enough evidence to confirm a network issue." };
+  })();
+
   return (
     <div style={card}>
       {/* clean header — NOC cause title; status pill + confidence carry certainty.
@@ -316,6 +372,38 @@ export default function RcaSummary({
         <span style={{ ...strongBadge(confirmed ? C.ok : C.faint) }}>{confirmed ? "CONFIRMED" : "NOT CONFIRMED"}</span>
         <span style={{ fontSize: 13, color: confidenceTone, fontWeight: 700 }}>Confidence: {confidenceWord}</span>
         <span style={{ ...muted, fontSize: 12.5 }}>· {stateText}</span>
+      </div>
+
+      {/* observed window + duration (item 2) — near the top, both views */}
+      <div style={{ ...muted, fontSize: 12.5, marginTop: -2 }}>
+        Observed window: <span style={{ color: C.fg }}>{windowInfo.start} → {windowInfo.end} UTC</span>
+        {" · duration "}<b style={{ color: C.fg }}>{windowInfo.dur}</b>
+      </div>
+
+      {/* affected scope (item 1) — what/where this issue touches, when known */}
+      {affectedGroups.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={title}>Affected</div>
+          {affectedGroups.map((g) => (
+            <div key={g.key} style={{ fontSize: 12.5, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ ...muted, minWidth: 118, flexShrink: 0 }}>{g.label}</span>
+              <span style={{ color: C.fg, minWidth: 0, overflowWrap: "anywhere" }}>
+                {g.items.slice(0, 6).join(", ")}{g.items.length > 6 ? ` +${g.items.length - 6} more` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* NOC decision line (item 5) — the punchline: escalate (and to whom) or hold */}
+      <div style={{
+        display: "flex", alignItems: "baseline", gap: 8, padding: "7px 10px", borderRadius: 6,
+        border: `1px solid ${decision.tone}55`, background: decision.tone + "14",
+      }}>
+        <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: 0.4, color: decision.tone, textTransform: "uppercase", flexShrink: 0 }}>
+          {decision.verb}
+        </span>
+        <span style={{ fontSize: 13, color: C.fg, fontWeight: 600, lineHeight: 1.45 }}>{decision.text}</span>
       </div>
 
       {/* the precise plain-English story — primary readable text */}
@@ -423,26 +511,31 @@ export default function RcaSummary({
                 </div>
                 <div style={{ ...muted, fontSize: 11, marginTop: 2 }}>{modalityHelp(key)}</div>
                 <div style={{ fontSize: 12.5, marginTop: 4, display: "flex", flexDirection: "column", gap: 1, color: "var(--fg)" }}>
-                  {total === 0
-                    ? <span style={muted}>No {noun} seen</span>
-                    : lowAuthProbe
-                      ? <>
-                          <span><b>{total}</b> {noun} seen</span>
-                          <span><b style={{ color: tone }}>{att}</b> used as weak evidence</span>
-                          {debugExcludedHere && <span><b style={{ color: C.faint }}>{probe.debugExcluded}</b> test checks ignored</span>}
-                          <span style={{ color: C.caution, fontWeight: 600 }}>Internal/test checks only</span>
-                        </>
-                      : <>
-                          <span><b>{total}</b> {noun} seen</span>
-                          {att > 0 && <span><b style={{ color: tone }}>{att}</b> used</span>}
-                        </>}
+                  {total === 0 ? (
+                    <span style={muted}>No {noun} seen</span>
+                  ) : (() => {
+                    // Make the counts ADD UP (item 3): seen = used + test-ignored +
+                    // not-tied. Without the residual line, "15 seen / 3 used" reads
+                    // as a missing-arithmetic bug to the NOC.
+                    const testIgnored = isProbe ? probe.debugExcluded : 0;
+                    const notTied = Math.max(0, total - att - testIgnored);
+                    return (
+                      <>
+                        <span><b>{total}</b> {noun} seen</span>
+                        {att > 0 && <span><b style={{ color: tone }}>{att}</b> used{lowAuthProbe ? " (weak)" : ""}</span>}
+                        {testIgnored > 0 && <span><b style={{ color: C.faint }}>{testIgnored}</b> test {testIgnored === 1 ? "check" : "checks"} ignored</span>}
+                        {notTied > 0 && (
+                          <span title={NOT_TIED_HELP}><b style={{ color: C.faint }}>{notTied}</b> not tied to this issue</span>
+                        )}
+                        {lowAuthProbe && <span style={{ color: C.caution, fontWeight: 600 }}>Internal/test checks only</span>}
+                      </>
+                    );
+                  })()}
                 </div>
-                {!lowAuthProbe && (
-                  <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    <span style={softBadge(tone)}>{badge}</span>
-                    {debugExcludedHere && <span style={softBadge(C.faint)}>Test check ignored</span>}
-                  </div>
-                )}
+                <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  <span style={softBadge(tone)} title={badge === "Not tied to this issue" ? NOT_TIED_HELP : undefined}>{badge}</span>
+                  {debugExcludedHere && <span style={softBadge(C.faint)}>Test check ignored</span>}
+                </div>
               </div>
             );
           })}

@@ -224,16 +224,31 @@ const INFRA_DISPLAY: Record<string, string> = {
   promtail: "Internal service", "syslog-ng": "Internal service", goflow2: "Internal service",
   "node-exporter": "Internal service", cadvisor: "Internal service",
   // monitoring agents / probes
-  prober: "Monitoring agent",
+  prober: "Monitoring agent", reflector: "Monitoring agent", stamp: "Monitoring agent",
+  // identity / platform sidecars / generators — never surface product internals
+  keycloak: "Identity service", alertmanager: "Internal service", gotenberg: "Internal service",
+  swtpm: "Internal service", "swtpm-sidecar": "Internal service", gnmic: "Ingest pipeline",
+  telegraf: "Ingest pipeline", tgen: "Traffic generator",
 };
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+// Entity-type prefixes the engine stamps onto ids (path:a->b, device:leaf1). They
+// are engine vocabulary — strip them for the operator display so a name never
+// reads as "path:prober". (An interface id like "leaf1:Ethernet1" carries no such
+// keyword prefix, so it survives intact.)
+const ENTITY_PREFIX = /^(?:path|device|host|node|segment|site|service|prefix):/i;
+// Internal / test markers — never customer-meaningful. Genericized even when the
+// exact name isn't in the infra map, so a lab/demo/sidecar target can't leak into
+// Operator View (item 6). Matched only as a delimited word to spare real devices.
+const INTERNAL_HINT = /(?:^|[-_.])(?:demo|scratch|sidecar|dummy|sandbox|fixture|selftest|test)(?:[-_.]|$)/i;
 function mapToken(t: string): string {
-  const base = t.split(":")[0].trim().toLowerCase();
+  const s = t.trim().replace(ENTITY_PREFIX, "");         // drop entity-type prefix for display
+  const base = s.split(":")[0].trim().toLowerCase();
   if (INFRA_DISPLAY[base]) return INFRA_DISPLAY[base];
-  if (IPV4.test(base)) return "Monitored endpoint";      // no metadata → generic
-  return t;                                              // real device / path name
+  if (INTERNAL_HINT.test(base)) return "Internal / test target";
+  if (IPV4.test(base)) return "Monitored endpoint";      // bare IP, no metadata → generic
+  return s;                                              // real device / interface / path name
 }
-// Friendly entity label. "prober->clickhouse" → "Test check source → Analytics store".
+// Friendly entity label. "prober->clickhouse" → "Monitoring agent → Monitoring data store".
 export function entityLabel(raw: string): string {
   if (!raw) return raw;
   if (raw.includes("->")) return raw.split("->").map((s) => mapToken(s)).join(" → ");
@@ -273,4 +288,41 @@ export function visibilityLabel(v?: string): string {
 // grounding_kind → how the evidence relates (operator phrasing).
 export function relationLabel(kind?: string): string {
   return kind === "seam" ? "related through provider boundary" : "related on the same path / device area";
+}
+
+// --- Affected scope (item 1) -------------------------------------------------
+// engine `affected` bucket key → operator label. The engine emits only buckets
+// it populated (devices/interfaces/sites/paths/segments/services/prefixes).
+export const AFFECTED_LABEL: Record<string, string> = {
+  devices: "Devices", interfaces: "Interfaces", sites: "Sites", paths: "Paths",
+  segments: "Boundary segments", services: "Apps / services", prefixes: "Networks",
+};
+
+// --- Escalation decision (item 5) --------------------------------------------
+// Owners that sit OUTSIDE our walls — a confirmed issue owned by one of these is
+// escalated to that provider, not worked internally.
+export const OWNER_EXTERNAL = new Set([
+  "isp", "carrier", "cloud_provider", "colo_provider", "sdwan_vendor",
+]);
+
+// --- "Not tied to this issue" reason (item 4) --------------------------------
+// Operator-safe explanation for why a signal was NOT counted toward the issue.
+// Maps the engine's raw link_reason (which uses seam/topology/grounding words) to
+// plain NOC phrasing; the raw link_reason stays in Debug View only.
+export function nocUnlinkedReason(s: {
+  link_status: string; link_reason?: string; probe_authority?: string;
+}): string {
+  if (s.probe_authority === "debug_only")
+    return "Internal/test check — kept for context, but it can't confirm a customer-impacting issue on its own.";
+  switch (s.link_status) {
+    case "attached": return "";
+    case "recovery": return "This marks a recovery / all-clear, not the problem itself.";
+    case "malformed": return "The source didn't identify what it measured, so it couldn't be tied to this issue.";
+    default: {
+      const r = s.link_reason || "";
+      if (/threshold|weight|reinforc|single-modality|too far|fell short/i.test(r))
+        return "Happened in the same window, but the change wasn't strong or corroborated enough to tie it to this issue.";
+      return "Happened in the same window, but on a different path or device area — not part of this issue.";
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
-import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel, modalityLabel, isRoutingKind } from "./labels";
+import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel, modalityLabel, isRoutingKind, nocUnlinkedReason } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -332,6 +332,10 @@ export default function RcaTimeline({
               <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid var(--border,#2a2f3a)", color: STATUS_COLOR[hover.link_status] ?? "#d29922", fontWeight: 700 }}>
                 {nocStatus(hover)}
               </div>
+              {/* operator-safe reason a signal was NOT tied to this issue (item 4) */}
+              {!hover.attached && nocUnlinkedReason(hover) && (
+                <div style={{ ...muted, marginTop: 2, fontSize: 11, lineHeight: 1.4 }}>{nocUnlinkedReason(hover)}</div>
+              )}
               <div style={{ ...muted, marginTop: 1, fontSize: 11 }}>Click for details</div>
             </>
           )}

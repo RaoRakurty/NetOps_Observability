@@ -5,7 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
-import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel } from "../components/rca/labels";
+import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
 // Every row is a versioned, replayable correlation object: a causal graph of
@@ -69,11 +69,13 @@ function signalOperatorFields(s: CorrSignal): {
     impact = isProbe ? "Supports the case" : "Contributes to the case";
     next = "Correlate with the other evidence in the timeline.";
   } else if (s.link_status === "recovery") {
-    why = "This marks a recovery / clear, not the problem itself.";
+    why = nocUnlinkedReason(s);
     impact = "None — recovery";
     next = "No action — informational.";
   } else {
-    why = "Happened in the same window but was not linked to this issue (different path or device area).";
+    // unlinked / malformed — operator-safe reason (distinguishes "different area"
+    // from "not strong enough to link"); raw link_reason stays in debug details.
+    why = nocUnlinkedReason(s);
     impact = "None";
     next = "No action — informational.";
   }
@@ -333,7 +335,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       {timeline && (
         <RcaSummary timeline={timeline} seams={seams} view={view}
           state={obj.state} version={obj.version} nodeCount={obj.node_count}
-          recommendedSteps={recommendedSteps} owner={recommendedOwner} />
+          recommendedSteps={recommendedSteps} owner={recommendedOwner} affected={obj.affected} />
       )}
 
       {/* PRIMARY: the evidence timeline */}
