@@ -5,6 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
+import RcaPathView from "../components/rca/RcaPathView";
 import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor } from "../components/rca/labels";
 
 // Correlations — read-only inspector for Correlation Engine v2 objects (#67).
@@ -336,6 +337,12 @@ export function CorrelationDetail({ id }: { id: string }) {
         <RcaSummary timeline={timeline} seams={seams} view={view}
           state={obj.state} version={obj.version} nodeCount={obj.node_count}
           recommendedSteps={recommendedSteps} owner={recommendedOwner} affected={obj.affected} />
+      )}
+
+      {/* RCA path view (operator only) — where the issue points, symbolic + NOC
+          language; the full grounded graph stays in Debug View below. */}
+      {view === "operator" && timeline && (
+        <RcaPathView timeline={timeline} seams={seams} owner={recommendedOwner} />
       )}
 
       {/* PRIMARY: the evidence timeline */}
