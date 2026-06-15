@@ -277,6 +277,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   const [timeline, setTimeline] = useState<CorrTimeline | null>(null);
   const [seams, setSeams] = useState<Record<string, Seam>>({});
   const [probePaths, setProbePaths] = useState<ProbePath[]>([]);
+  const [deviceByIp, setDeviceByIp] = useState<Record<string, string>>({});
   const [replay, setReplay] = useState<CorrReplay | null>(null);
   const [replaying, setReplaying] = useState(false);
   const [err, setErr] = useState("");
@@ -303,6 +304,12 @@ export function CorrelationDetail({ id }: { id: string }) {
     api.probePaths()
       .then((p) => { if (alive) setProbePaths(p ?? []); })
       .catch(() => { /* no traces → topology stays contextual */ });
+    // Tenant-scoped device inventory → name traced hops by their mgmt address.
+    // RLS already limits this to the caller's own devices, so foreign/platform
+    // hops correctly stay as raw IPs (no cross-tenant naming leak).
+    api.devices()
+      .then((ds) => { if (alive) { const m: Record<string, string> = {}; (ds ?? []).forEach((d) => { if (d.address) m[d.address.trim()] = d.name; }); setDeviceByIp(m); } })
+      .catch(() => { /* no inventory → hops stay as IPs */ });
     return () => { alive = false; };
   }, [id]);
 
@@ -374,7 +381,7 @@ export function CorrelationDetail({ id }: { id: string }) {
           <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
             Where the issue sits on the path — and exactly what&apos;s broken there. Drag to arrange; scroll the page, drag the canvas to pan.
           </div>
-          <RcaTopology timeline={timeline} seams={seams} view={view} probePaths={probePaths} />
+          <RcaTopology timeline={timeline} seams={seams} view={view} probePaths={probePaths} deviceByIp={deviceByIp} />
         </div>
       )}
 

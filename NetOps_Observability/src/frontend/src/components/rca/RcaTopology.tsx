@@ -143,7 +143,7 @@ function HopNode({ data }: NodeProps) {
       <Handle type="target" position={Position.Left} style={handleStyle} />
       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
         {d.icon && <span style={{ fontSize: 12 }}>{d.icon}</span>}
-        <span style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 11, overflowWrap: "anywhere" }}>{d.label}</span>
+        <span style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", fontFamily: d.mono ? "var(--font-mono, ui-monospace, monospace)" : "inherit", fontSize: 11, overflowWrap: "anywhere" }}>{d.label}</span>
       </div>
       {d.sub && <div style={{ marginTop: 1, color: C.muted, fontSize: 10.5 }}>{d.sub}</div>}
       {d.metric && <div style={{ marginTop: 2, color: d.tone ?? C.info, fontSize: 10.5, fontWeight: 600 }}>{d.metric}</div>}
@@ -188,12 +188,13 @@ function matchTrace(dst: string | undefined, paths?: ProbePath[]): ProbePath | u
     ?? paths.find((p) => p.dst && (p.dst.includes(d) || d.includes(p.dst)) && (p.hops?.length ?? 0) > 0);
 }
 
-export default function RcaTopology({ timeline, seams, view = "operator", height = 300, probePaths }: {
+export default function RcaTopology({ timeline, seams, view = "operator", height = 300, probePaths, deviceByIp }: {
   timeline: CorrTimeline;
   seams: Record<string, Seam>;
   view?: "operator" | "debug";
   height?: number;
   probePaths?: ProbePath[];
+  deviceByIp?: Record<string, string>;
 }) {
   const model = useMemo(() => {
     const sigs = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
@@ -303,9 +304,10 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     // ===== TRACED MODE (Phase 2): real hop chain from live traceroute =========
     if (traced && ends) {
       const hops = [...(traced.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
-      // which hop carries the RCA fault: a hop whose IP/name matches the locus,
-      // else the destination hop (the diagnosed target).
-      let faultIdx = hops.findIndex((h) => h.ip && locusDev && h.ip === locusDev);
+      const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
+      // which hop carries the RCA fault: a hop whose IP OR resolved device name
+      // matches the locus, else the destination hop (the diagnosed target).
+      let faultIdx = hops.findIndex((h) => h.ip && locusDev && (h.ip === locusDev || hopName(h.ip) === locusDev));
       if (faultIdx < 0) faultIdx = hops.length - 1;
 
       // observer / source
@@ -318,7 +320,10 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         const isLast = i === hops.length - 1;
         const lossHi = Number(h.loss_pct) > TRACE_LOSS_HI;
         const rtt = Number(h.rtt_ms);
-        const hopLabel = h.ip && h.ip !== "" ? h.ip : "*";
+        const ip = h.ip && h.ip !== "" ? h.ip : "*";
+        const name = hopName(ip);
+        const hopLabel = name ?? ip;                 // device name when known, else IP
+        const ipSub = name ? ` · ${ip}` : "";        // keep the IP visible when named
         const metric =
           showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
           : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
@@ -327,7 +332,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
             data: { label: hopLabel, meta, elements: (locus?.elements ?? []).slice(0, 4), isTarget: isLast } });
         } else {
           push({ id, type: "hop", position: { x: (i + 1) * COL_HOP, y: 0 }, draggable: true,
-            data: { label: hopLabel, icon: isLast ? "⊚" : undefined, sub: isLast ? "destination" : `hop ${h.ttl}`, metric, tone: lossHi ? meta.color : undefined } });
+            data: { label: hopLabel, mono: !name, icon: isLast ? "⊚" : undefined, sub: (isLast ? "destination" : `hop ${h.ttl}`) + ipSub, metric, tone: lossHi ? meta.color : undefined } });
         }
         // edge into this hop: degraded if this hop lost packets (or it's the fault
         // hop on a degraded path). first segment carries the measured headline.
@@ -398,7 +403,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     }
 
     return { rfNodes: nodes, rfEdges: edges };
-  }, [model, timeline.verdict_tier, view, showStamp]);
+  }, [model, timeline.verdict_tier, view, showStamp, deviceByIp]);
 
   // Nothing groundable → honest fallback (don't invent a path).
   if (rfNodes.length === 0 || (!model.hasPath && !model.locusDev)) {
