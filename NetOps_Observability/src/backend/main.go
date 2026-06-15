@@ -66,6 +66,7 @@ type server struct {
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics       *incidentMetrics
 	seams            *pgSeamStore // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services         *pgServiceStore // service catalog #69 §2 P2 (nil on file backend)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -389,6 +390,7 @@ func newServer() *server {
 	// Seam inventory (#67 build ⑤): the correlation engine's grounding targets.
 	// Postgres only, like incidents; the bootstrap loop starts in main().
 	srv.seams = newSeamStore()
+	srv.services = newServiceStore()
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
@@ -697,6 +699,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/paths/health", s.handlePathsHealth)
 	mux.HandleFunc("/api/health/score", s.handleHealthScore)
 	mux.HandleFunc("/api/metrics/forecast", s.handleMetricsForecast)
+	mux.HandleFunc("/api/services", s.handleServices)
+	mux.HandleFunc("/api/services/", s.handleServiceByID)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
