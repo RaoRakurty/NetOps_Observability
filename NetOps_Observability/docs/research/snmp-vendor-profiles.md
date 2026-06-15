@@ -421,10 +421,10 @@ load**.
 | **fgSysCpuUsage** | `1.3.6.1.4.1.12356.101.4.1.3.0` | gauge | % | ✅ verified |
 | **fgSysMemUsage** | `1.3.6.1.4.1.12356.101.4.1.4.0` | gauge | % | ✅ verified |
 | fgSysMemCapacity | `1.3.6.1.4.1.12356.101.4.1.5.0` | gauge | KB | high |
-| fgSysLowMemUsage | `1.3.6.1.4.1.12356.101.4.1.6.0` | gauge | % | medium ⚠ |
+| fgSysLowMemUsage | `1.3.6.1.4.1.12356.101.4.1.9.0` | gauge | % | ✅ verified (was `.6`; corrected) |
 | fgSysDiskUsage | `1.3.6.1.4.1.12356.101.4.1.6.0`? | gauge | MB | ⚠ VERIFY leaf (disk leaf moved across FortiOS) |
 | **fgSysSesCount** | `1.3.6.1.4.1.12356.101.4.1.8.0` | gauge | sessions | ✅ verified |
-| fgSysSesRate1 | `1.3.6.1.4.1.12356.101.4.1.9.0` | gauge | sess/s | medium ⚠ |
+| fgSysSesRate1 | `1.3.6.1.4.1.12356.101.4.1.11.0` | gauge | sess/s | ✅ verified (was `.9` = fgSysLowMemUsage; corrected) |
 | fgHaSystemMode | `1.3.6.1.4.1.12356.101.13.1.1.0` | enum | standalone/a-p/a-a | medium ⚠ |
 | Per-CPU table | `fgProcessorTable` `1.3.6.1.4.1.12356.101.4.4` | gauge | % | medium ⚠ |
 
@@ -490,7 +490,7 @@ Reuses JUNIPER-MIB jnxOperatingTable (§2.3) for CPU/temp. Flow/session stats vi
 | 13 | Forti CPU | 1.3.6.1.4.1.12356.101.4.1.3.0 | gauge | % | 60s |
 | 14 | Forti mem | 1.3.6.1.4.1.12356.101.4.1.4.0 | gauge | % | 60s |
 | 15 | Forti sessions | 1.3.6.1.4.1.12356.101.4.1.8.0 | gauge | sess | 60s |
-| 16 | Forti session rate | 1.3.6.1.4.1.12356.101.4.1.9.0 | gauge | sess/s | 60s |
+| 16 | Forti session rate | 1.3.6.1.4.1.12356.101.4.1.11.0 | gauge | sess/s | 60s |
 | 17 | Forti HA mode | 1.3.6.1.4.1.12356.101.13.1.1.0 | enum | — | 300s |
 | 18 | ASA conns in-use | 1.3.6.1.4.1.9.9.147.1.2.2.2.1.5 | gauge | conns | 60s |
 | 19 | ASA CPU 5min | 1.3.6.1.4.1.9.9.109.1.1.1.1.8 | gauge | % | 60s |

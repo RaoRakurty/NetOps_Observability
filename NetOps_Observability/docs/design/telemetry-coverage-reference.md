@@ -76,10 +76,12 @@ Owner per family = SNMP vs gNMI-on-change vs controller-API. Mode = sample vs
 ### Firewall / NGFW (P5 — two planes; metric + event)
 **Metric plane (canonical `device_fw_*`):**
 - **FortiGate** (FORTINET-FORTIGATE-MIB, ent 12356.101) — best-grounded:
-  - `device_fw_sessions` = `fgSysSesCount` (…101.4.1.8); setup rate `fgSysSesRate1`; CPU `fgSysCpuUsage`, mem `fgSysMemUsage`. **Session-util % is DERIVED** (count vs platform max), not a single OID.
-  - `device_fw_ha_state` = per-VDOM role `fgVdEntHaState` (…101.3.2.1.1.4: primary/master(1), secondary/backup(2), standalone(3)); mode `fgHaSystemMode`; sync `fgHaStatsSyncStatus`.
-  - `device_fw_tunnel_state` = per-tunnel `fgVpnTunEntStatus` (…101.12.2.2.1.20: down1/up2) + aggregate `fgVpnTunnelUpCount`.
-  - `device_fw_policy_denies` = per-policy `fgFwPolPktCount`/`ByteCount`.
+  - `device_fw_sessions` = `fgSysSesCount` (…101.4.1.8); `device_fw_session_rate` = setup rate `fgSysSesRate1` (**…101.4.1.11** — corrected 2026-06-15; `.9` is `fgSysLowMemUsage`); CPU `fgSysCpuUsage`, mem `fgSysMemUsage`. **Session-util % is DERIVED** (count vs platform max), not a single OID.
+  - `device_fw_ha_state` = per-VDOM role `fgVdEntHaState` (…101.3.2.1.1.4: primary/master(1), secondary/backup(2), standalone(3)); mode `fgHaSystemMode`; sync `fgHaStatsSyncStatus` (**0/1**, not 1/2).
+  - `device_fw_tunnel_state` = per-tunnel `fgVpnTunEntStatus` (…101.12.2.2.1.20: down1/up2) + aggregate `fgVpnTunnelUpCount`. FortiGate is the **one vendor with a real per-tunnel state enum** via SNMP.
+  - `device_fw_ips_detected`/`_blocked` = `fgIps` (…101.9.2.1.1); `device_fw_av_detected`/`_blocked` = `fgAntivirus` (…101.8.2.1.1) — aggregate per-VDOM counters DO exist via SNMP (good for z-score baselining; per-event detail is syslog-only).
+  - **`fgFwPolPktCount`/`ByteCount` (…fgFwPolStatsTable) are TOTAL pass-through counters, NOT denies** (corrected 2026-06-15). `device_fw_policy_denies` is **event-derived** (syslog `action=deny`), never an SNMP counter.
+  - Authority: `docs/design/research/p5-firewall-telemetry.md` (2026-06-15, ~52 claims verified vs FORTINET-FORTIGATE-MIB).
 - **Juniper SRX** — chassis-cluster failover delivered as an **SNMP TRAP** (not pollable) carrying prev/current state + reason → ideal `device_fw_ha_state` transition. SPU-Monitoring MIB for flow sessions. ⚠️ **REFUTED: `jnxJsFlowSofSummary` is NOT the session OID** — do not use.
 - **Check Point** — HA `haState` (.1.3.6.1.4.1.2620.1.5.6, known defect: reads "Active" on all members); deny/drop via `fwDropPckts`/`fwReject*`. ⚠️ **REFUTED: `fwNumConn`/`fwConnsRate`/`haWorkMode`/`haClusterXLFailover`** — do not use as-cited.
 - **OPEN (unverified):** Cisco ASA/FTD (CISCO-UNIFIED-FIREWALL-MIB/cfwConnectionStat), Palo Alto SNMP (PAN-COMMON-MIB panSession*), Versa, and the "device vs management-plane which-is-canonical" question.
