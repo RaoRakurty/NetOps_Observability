@@ -2,6 +2,7 @@ import { SectionCtx } from "./context/shell";
 
 // Pages / tabs (existing components, reparented into product sections).
 import Dashboard from "./pages/Dashboard";
+import FrontPage from "./pages/FrontPage";
 import Devices from "./pages/Devices";
 import DeviceMonitoring from "./pages/DeviceMonitoring";
 import InterfacePerformance from "./pages/InterfacePerformance";
@@ -94,7 +95,8 @@ export const NAV: NavSection[] = [
     label: "Dashboards",
     icon: "dashboards",
     children: [
-      { id: "board", label: "Overview", render: () => <Dashboard /> },
+      { id: "home", label: "Home", render: () => <FrontPage /> },
+      { id: "board", label: "My Dashboard", render: () => <Dashboard /> },
       {
         id: "list",
         label: "Dashboard List",

@@ -356,6 +356,25 @@ export type CorrObject = {
   low_authority?: number;      // 0/1
 };
 
+// Front page (#69) — scope health score, unified event feed, RCA coverage stats.
+export type HealthContribution = {
+  signal_class: string; entity: string; badness: number; points: number; reason: string; timestamp?: string;
+};
+export type HealthScoreResp = {
+  scope: string; id?: string; score: number | null; band: string; confidence: string;
+  coverage_status: string; signal_classes_live: string[]; contributions: HealthContribution[];
+  stale_inputs: string[]; updated_at: string;
+};
+export type FeedItem = {
+  signal_id: string; ts: string; source: string; kind: string; severity: string;
+  entity_type: string; entity_id: string; site: string; title: string; correlation_id: string | null;
+};
+export type EventsFeedResp = { items: FeedItem[]; next_cursor: string; facets: Record<string, Record<string, number>> };
+export type CorrStats = {
+  open: number; open_confirmed: number; open_suspected: number; open_undetermined: number;
+  actionable_pct: number; confirmed_7d_pct: number; total_window: number; signatures_matched: number; window_days: number;
+};
+
 // Path Behavior Health (docs/design/path-behavior-health.md). Numbers AND
 // explanation: the UI shows state/confidence/ranges/reason/owner/evidence/baseline.
 export type PathHealthItem = {
@@ -1142,6 +1161,16 @@ export const api = {
   // the seam-aware graph. 501 on the file backend → caller degrades gracefully.
   seams: (state = "active") =>
     request<Seam[]>(`/api/seams?state=${encodeURIComponent(state)}`),
+  // Front page (#69)
+  healthScore: (scope = "global", id?: string) => {
+    const p = new URLSearchParams({ scope });
+    if (id) p.set("id", id);
+    return request<HealthScoreResp>(`/api/health/score?${p}`);
+  },
+  eventsFeed: (params: Record<string, string> = {}) =>
+    request<EventsFeedResp>(`/api/events/feed?${new URLSearchParams(params)}`),
+  correlationsStats: (sinceSeconds = 604800) =>
+    request<CorrStats>(`/api/correlations/stats?since=${sinceSeconds}s`),
   // Path Behavior Health — adaptive baseline-relative path scoring (worst-first).
   pathsHealth: () => request<PathHealthResponse>(`/api/paths/health`),
   vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),
