@@ -3,7 +3,7 @@ import { CorrTimeline, Seam } from "../../services/api";
 import {
   C, MODALITY_META, MODALITY_ORDER, modalityLabel, modalityHelp,
   signatureName, signatureNocTitle, PLANE_NOC_TITLE, kindMeta, kindLabel,
-  entityLabel, ownerLabel, seamOwnerLabel, visibilityLabel,
+  entityLabel, ownerLabel, seamOwnerLabel, visibilityLabel, isRoutingKind,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
@@ -30,6 +30,10 @@ const PLANE_NOC_SHORT: Record<string, string> = {
   control_plane: "routing/link event",
   passive_flow: "traffic-flow",
   active_probe: "active-check",
+};
+// plane → countable noun for the evidence cards ("15 checks seen").
+const PLANE_NOUN: Record<string, string> = {
+  device_telemetry: "signals", control_plane: "events", passive_flow: "flow signals", active_probe: "checks",
 };
 // missing plane → the concrete check that would confirm it (item 11 checklist).
 const PLANE_CONFIRM: Record<string, { what: string; plane: string }> = {
@@ -122,14 +126,35 @@ export default function RcaSummary({
   const c = timeline.counts;
   const muted: React.CSSProperties = { color: C.muted };
 
+  // Display-plane buckets. Operator View groups a signal by the DOMAIN a NOC reads
+  // it as (so a polled BGP metric files under "Routing & link events", not "Device
+  // health"), keeping timeline lanes, evidence cards, dominant plane, and the
+  // summary all consistent. Debug View groups by the true modality_class. The
+  // engine's independence/verdict math always uses modality_class, never this.
+  const planeOf = (s: { kind: string; modality_class: string }) =>
+    view === "operator" && isRoutingKind(s.kind) ? "control_plane" : s.modality_class;
+  const { byPlane, attByPlane } = useMemo(() => {
+    const by: Record<string, number> = {}; const att: Record<string, number> = {};
+    for (const s of timeline.signals) {
+      if (s.kind.endsWith("_clear")) continue;
+      const p = planeOf(s);
+      by[p] = (by[p] ?? 0) + 1;
+      if (s.attached) att[p] = (att[p] ?? 0) + 1;
+    }
+    return { byPlane: by, attByPlane: att };
+  }, [timeline.signals, view]);
+
   const presentKinds = useMemo(() => {
     const s = new Set<string>();
     for (const sig of timeline.signals) if (!sig.kind.endsWith("_clear")) s.add(sig.kind);
     return s;
   }, [timeline.signals]);
 
+  // Verdict-relevant count uses the TRUE modality_class (the engine's independence
+  // basis), so quality/confidence never contradicts a confirmed verdict even when
+  // two true modalities (e.g. a BGP metric + a BGP syslog) share one display lane.
   const attachedModalities = useMemo(
-    () => Object.entries(c.attached_by_modality ?? {}).filter(([, v]) => v > 0).length,
+    () => Object.values(c.attached_by_modality ?? {}).filter((v) => v > 0).length,
     [c.attached_by_modality],
   );
   const grounded = timeline.edges.length > 0;
@@ -137,9 +162,9 @@ export default function RcaSummary({
   const crossPlane = attachedModalities >= 2;
   const observers = c.attached_observers ?? 0;
   const probeOnly = useMemo(() => {
-    const present = Object.entries(c.attached_by_modality ?? {}).filter(([, v]) => v > 0).map(([k]) => k);
+    const present = Object.entries(attByPlane).filter(([, v]) => v > 0).map(([k]) => k);
     return present.length === 1 && present[0] === "active_probe";
-  }, [c.attached_by_modality]);
+  }, [attByPlane]);
 
   // Probe authority (Step 3): how trustworthy is the probe evidence, and were
   // any debug/lab probes excluded from this customer-facing verdict?
@@ -167,19 +192,18 @@ export default function RcaSummary({
   const primarySeam = seamRefs.length ? seams[seamRefs[0]] : undefined;
 
   const dominant = useMemo(() => {
-    const by = c.attached_by_modality && Object.values(c.attached_by_modality).some((v) => v > 0)
-      ? c.attached_by_modality : c.by_modality;
+    const by = Object.values(attByPlane).some((v) => v > 0) ? attByPlane : byPlane;
     return Object.entries(by ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "active_probe";
-  }, [c.attached_by_modality, c.by_modality]);
+  }, [attByPlane, byPlane]);
 
   // planes with NO linked evidence (candidates to corroborate)
   const missingPlanes = useMemo(
-    () => MODALITY_ORDER.filter((m) => (c.attached_by_modality?.[m] ?? 0) === 0),
-    [c.attached_by_modality],
+    () => MODALITY_ORDER.filter((m) => (attByPlane[m] ?? 0) === 0),
+    [attByPlane],
   );
   const requiredModalities = useMemo(() => {
     const s = new Set<string>();
-    for (const mi of missing) for (const k of mi.needs) s.add(kindMeta(k).modality);
+    for (const mi of missing) for (const k of mi.needs) s.add(isRoutingKind(k) ? "control_plane" : kindMeta(k).modality);
     return s;
   }, [missing]);
 
@@ -208,7 +232,11 @@ export default function RcaSummary({
     () => timeline.signals.some((s) => s.clear_ts && s.clear_ts.length > 0) || (c.recovery ?? 0) > 0,
     [timeline.signals, c.recovery],
   );
-  const stateWord = state === "open" ? "Open" : cleared ? "Cleared" : "No longer active";
+  // "Cleared" is scoped to the SIGNAL so it never reads as "incident resolved"
+  // next to a Not-confirmed verdict.
+  const stateText = state === "open" ? "Current state: Open"
+    : cleared ? "Signal state: Cleared"
+    : "Current state: No longer active";
 
   // ---- the plain-English RCA summary — NOC language, answers "what did we see"
   // + "is it confirmed / why not" (items 1 & 12) ------------------------------
@@ -217,14 +245,14 @@ export default function RcaSummary({
     if (confirmed) return `${lead}, and independent evidence confirms a real network issue.`;
     const miss = missingPlanes.filter((m) => m !== dominant).map((m) => PLANE_NOC_SHORT[m] ?? modalityLabel(m).toLowerCase());
     if (crossPlane) {
-      const have = MODALITY_ORDER.filter((m) => (c.attached_by_modality?.[m] ?? 0) > 0)
+      const have = MODALITY_ORDER.filter((m) => (attByPlane[m] ?? 0) > 0)
         .map((m) => PLANE_NOC_SHORT[m] ?? modalityLabel(m).toLowerCase());
       return `${lead}, with partial agreement from ${orList(have)} evidence — but not enough to confirm a real network issue yet.`;
     }
     return miss.length
       ? `${lead}, but no ${orList(miss)} evidence confirms a real network issue yet.`
       : `${lead}, but the evidence does not yet confirm a real network issue.`;
-  }, [dominant, confirmed, crossPlane, missingPlanes, c.attached_by_modality]);
+  }, [dominant, confirmed, crossPlane, missingPlanes, attByPlane]);
 
   const card: React.CSSProperties = {
     border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "10px 14px",
@@ -238,7 +266,7 @@ export default function RcaSummary({
   };
 
   // corroboration suggestions = absent non-probe planes (what to add to confirm)
-  const corroborate = missingPlanes.filter((m) => m !== "active_probe" && (c.by_modality?.[m] ?? 0) === 0);
+  const corroborate = missingPlanes.filter((m) => m !== "active_probe" && (byPlane[m] ?? 0) === 0);
   // Dedupe "Possible signature" — group all needs per signature, show each once.
   const clauseItems = useMemo(() => {
     const m = new Map<string, Set<string>>();
@@ -252,7 +280,7 @@ export default function RcaSummary({
 
   // planes that actually carry linked evidence (for "why suspected") — NOC labels
   const attachedPlaneLabels = MODALITY_ORDER
-    .filter((m) => (c.attached_by_modality?.[m] ?? 0) > 0)
+    .filter((m) => (attByPlane[m] ?? 0) > 0)
     .map((m) => modalityLabel(m).toLowerCase());
   const whyNotConfirmed = probe.lowOnly
     ? "the only evidence is internal/test checks — they can't confirm a customer-impacting issue on their own. Needs device health, a routing/link event, or traffic loss."
@@ -287,7 +315,7 @@ export default function RcaSummary({
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -4 }}>
         <span style={{ ...strongBadge(confirmed ? C.ok : C.faint) }}>{confirmed ? "CONFIRMED" : "NOT CONFIRMED"}</span>
         <span style={{ fontSize: 13, color: confidenceTone, fontWeight: 700 }}>Confidence: {confidenceWord}</span>
-        <span style={{ ...muted, fontSize: 12.5 }}>· State: {stateWord}</span>
+        <span style={{ ...muted, fontSize: 12.5 }}>· {stateText}</span>
       </div>
 
       {/* the precise plain-English story — primary readable text */}
@@ -367,12 +395,13 @@ export default function RcaSummary({
         <div style={title}>Evidence</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(168px,1fr))", gap: 8, marginTop: 6 }}>
           {MODALITY_ORDER.map((key) => {
-            const total = c.by_modality?.[key] ?? 0;
-            const att = c.attached_by_modality?.[key] ?? 0;
+            const total = byPlane[key] ?? 0;
+            const att = attByPlane[key] ?? 0;
             const isProbe = key === "active_probe";
             const lowAuthProbe = isProbe && att > 0 && !probe.hasConfirmProbe;
             const debugExcludedHere = isProbe && total > att && probe.debugExcluded > 0;
             const isMain = key === dominant && att > 0;
+            const noun = PLANE_NOUN[key] ?? "signals";
             // state → {tone, badge}. Card stays NEUTRAL; the badge + a tinted
             // left-border carry the state, so the grid doesn't read as all-alarm.
             // "Needed to confirm" is informational (blue), not alarm (orange):
@@ -393,21 +422,26 @@ export default function RcaSummary({
                   {isMain && <span style={{ ...softBadge(C.ok), fontSize: 10, fontWeight: 700 }}>Main evidence</span>}
                 </div>
                 <div style={{ ...muted, fontSize: 11, marginTop: 2 }}>{modalityHelp(key)}</div>
-                <div style={{ fontSize: 13, marginTop: 3 }}>
+                <div style={{ fontSize: 12.5, marginTop: 4, display: "flex", flexDirection: "column", gap: 1, color: "var(--fg)" }}>
                   {total === 0
-                    ? <span style={muted}>Seen 0</span>
-                    : (lowAuthProbe
+                    ? <span style={muted}>No {noun} seen</span>
+                    : lowAuthProbe
                       ? <>
-                          <span style={muted}>Seen </span><b>{total}</b>
-                          <span style={muted}> · Used as weak evidence </span><b style={{ color: tone }}>{att}</b>
-                          {debugExcludedHere && <><span style={muted}> · Test checks ignored </span><b style={{ color: C.faint }}>{probe.debugExcluded}</b></>}
+                          <span><b>{total}</b> {noun} seen</span>
+                          <span><b style={{ color: tone }}>{att}</b> used as weak evidence</span>
+                          {debugExcludedHere && <span><b style={{ color: C.faint }}>{probe.debugExcluded}</b> test checks ignored</span>}
                         </>
-                      : <><span style={muted}>Seen </span><b>{total}</b><span style={muted}> · Used </span><b style={{ color: tone }}>{att}</b></>)}
+                      : <>
+                          <span><b>{total}</b> {noun} seen</span>
+                          {att > 0 && <span><b style={{ color: tone }}>{att}</b> used</span>}
+                        </>}
                 </div>
-                <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  <span style={softBadge(tone)}>{badge}</span>
-                  {debugExcludedHere && !lowAuthProbe && <span style={softBadge(C.faint)}>Test check ignored</span>}
-                </div>
+                {!lowAuthProbe && (
+                  <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    <span style={softBadge(tone)}>{badge}</span>
+                    {debugExcludedHere && <span style={softBadge(C.faint)}>Test check ignored</span>}
+                  </div>
+                )}
               </div>
             );
           })}

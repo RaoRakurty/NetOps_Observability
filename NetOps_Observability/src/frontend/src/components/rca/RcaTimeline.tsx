@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CorrSignal, CorrTimeline } from "../../services/api";
-import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel, modalityLabel } from "./labels";
+import { C, MODALITY_META, PROBE_AUTHORITY_META, probeScopeLabel, probeAuthorityLabel, entityLabel, kindLabel, modalityLabel, isRoutingKind } from "./labels";
 
 // RcaTimeline — the PRIMARY RCA Inspector view. Cross-plane cascade over time:
 // one swimlane per modality, each signal plotted at its onset (ts) with an
@@ -66,8 +66,14 @@ const toMs = (s?: string): number => {
   return isNaN(t) ? Date.parse(s) : t;
 };
 
-function laneOf(modality: string): string {
-  return LANES.some((l) => l.key === modality) ? modality : "_other";
+// Which lane a signal is drawn on. Operator View places routing-protocol signals
+// (e.g. a polled BGP state metric) on the "Routing & link events" lane — that's
+// where a NOC looks for BGP, even when it was observed via device telemetry.
+// Debug View keeps the true modality_class lane. Engine independence math is
+// unaffected (it uses modality_class, never this display lane).
+function laneOf(s: CorrSignal, view: "operator" | "debug"): string {
+  const m = view === "operator" && isRoutingKind(s.kind) ? "control_plane" : s.modality_class;
+  return LANES.some((l) => l.key === m) ? m : "_other";
 }
 
 function signalRole(sig: CorrSignal): string {
@@ -106,9 +112,9 @@ export default function RcaTimeline({
   const byLane = useMemo(() => {
     const m: Record<string, CorrSignal[]> = {};
     for (const l of LANES) m[l.key] = [];
-    for (const s of timeline.signals) m[laneOf(s.modality_class)].push(s);
+    for (const s of timeline.signals) m[laneOf(s, view)].push(s);
     return m;
-  }, [timeline.signals]);
+  }, [timeline.signals, view]);
 
   const pct = (ms: number) => Math.max(0, Math.min(100, ((ms - t0) / span) * 100));
 

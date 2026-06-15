@@ -136,6 +136,15 @@ const KIND_META: Record<string, { modality: string; source: string }> = {
   tunnel_flap: { modality: "control_plane", source: "SD-WAN controller" },
 };
 
+// Routing-protocol signals that a NOC reads as "routing", regardless of HOW they
+// were observed. The engine keeps these on their true modality_class for the
+// independence math (a polled BGP metric and a BGP syslog event are independent
+// observers); this is a DISPLAY-only test, used to place them on the operator
+// timeline's "Routing & link events" lane where operators expect to find them.
+export function isRoutingKind(kind: string): boolean {
+  return /bgp|ospf|isis|^ldp|rsvp|adjacency|route_|_route|^bfd|peer/.test(kind);
+}
+
 export function kindMeta(kind: string): { modality: string; source: string } {
   if (KIND_META[kind]) return KIND_META[kind];
   if (/^probe_|_rtt|loss|latency/.test(kind)) return { modality: "active_probe", source: "synthetic probes" };
@@ -207,14 +216,14 @@ const INFRA_DISPLAY: Record<string, string> = {
   loki: "Log store", redpanda: "Event bus",
   // app / gateway / platform services
   nginx: "Web gateway", api: "Platform service", backend: "Platform service",
-  frontend: "Web app", correlation: "Correlation service", netbox: "Source of truth",
+  frontend: "Web app", correlation: "Correlation service", netbox: "Network inventory",
   grafana: "Dashboards",
   // pipeline / collectors
   vector: "Ingest pipeline", "vector-aggregator": "Ingest pipeline", "vector-router": "Ingest pipeline",
   promtail: "Log shipper", "syslog-ng": "Log collector", goflow2: "Flow collector",
   "node-exporter": "Host metrics", cadvisor: "Container metrics",
   // monitoring agents / probes
-  prober: "Test check source",
+  prober: "Monitoring agent",
 };
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 function mapToken(t: string): string {
