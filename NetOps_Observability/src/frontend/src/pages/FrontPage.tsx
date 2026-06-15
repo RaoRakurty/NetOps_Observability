@@ -471,10 +471,10 @@ export default function FrontPage() {
           Order = priority (must-haves first down each column). */}
       <div className="fp-cols">
         <div className="fp-col" style={{ flex: "1 1 320px" }}>
+          <Safe><RcaCoverage /></Safe>
           <Safe><TopHealthContributors /></Safe>
           <Safe><TopIssues /></Safe>
           <Safe><Panel title="Hot paths"><PathHealthList limit={5} /></Panel></Safe>
-          <Safe><RcaCoverage /></Safe>
         </div>
         <div className="fp-col" style={{ flex: "1 1 320px" }}>
           <Safe><RecommendedAction /></Safe>
