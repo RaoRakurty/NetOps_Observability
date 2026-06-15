@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ReactFlow, Background, BackgroundVariant, Controls, Handle, Position, MarkerType,
   type Node, type Edge, type NodeProps,
@@ -166,14 +166,37 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       ?? sigs.find((s) => s.entity_type === "path");
     const ends = pathSig ? splitPath(pathSig.entity_id) : null;
 
-    // loss / metric on the measured path (for the degraded segment label).
-    const lossTxt = (() => {
-      if (!pathSig) return "";
-      const v = Number(pathSig.value);
-      if (/loss/.test(pathSig.kind) && isFinite(v) && v > 0) return `${v <= 1 ? Math.round(v * 100) : Math.round(v)}% loss`;
-      if (/rtt|latency/.test(pathSig.kind)) return "latency rise";
-      return "degraded";
+    // Active-measurement (STAMP/probe) metrics on the measured path. The headline
+    // `lossTxt` is always shown on the degraded segment (it's the fault signature);
+    // the fuller `stampTxt` (loss · rtt · jitter) is opt-in (the toggle) so the
+    // default stays uncluttered. Metrics are pulled from the path signals on THIS
+    // path (probe_loss → loss; probe_rtt_ms[stamp|icmp|…] → rtt; probe_jitter →
+    // jitter), preferring the STAMP method for rtt.
+    const pathId = pathSig?.entity_id;
+    const pathSigs = pathId ? sigs.filter((s) => s.entity_type === "path" && s.entity_id === pathId) : [];
+    const lossPct = (() => {
+      const s = pathSigs.find((x) => /loss/.test(x.kind));
+      if (!s) return NaN;
+      const v = Number(s.value);
+      return isFinite(v) ? (v <= 1 ? v * 100 : v) : NaN;
     })();
+    const rttMs = (() => {
+      const cand = pathSigs.filter((x) => /rtt|latency/.test(x.kind) && isFinite(Number(x.value)));
+      const s = cand.find((x) => /\[stamp\]/.test(x.metric_name)) ?? cand[0];
+      return s ? Number(s.value) : NaN;
+    })();
+    const jitterMs = (() => {
+      const s = pathSigs.find((x) => /jitter/.test(x.kind) || /jitter/.test(x.metric_name));
+      return s ? Number(s.value) : NaN;
+    })();
+    const lossTxt = isFinite(lossPct) && lossPct > 0 ? `${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss`
+      : pathSigs.some((x) => /rtt|latency/.test(x.kind)) ? "latency rise" : pathSig ? "degraded" : "";
+    const stampParts: string[] = [];
+    if (isFinite(lossPct) && lossPct > 0) stampParts.push(`${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss`);
+    if (isFinite(rttMs)) stampParts.push(`${rttMs.toFixed(rttMs < 10 ? 2 : 1)} ms rtt`);
+    if (isFinite(jitterMs)) stampParts.push(`${jitterMs.toFixed(2)} ms jitter`);
+    const stampTxt = stampParts.join("  ·  ");
+    const hasStamp = stampParts.length > 0;
 
     // aggregate device-level evidence (everything that isn't the path measure).
     type Dev = { dev: string; elements: string[]; worst: number };
@@ -206,15 +229,20 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const seamEdge = (timeline.edges ?? []).find((e) => e.grounding_kind === "seam");
     const seam = seamEdge ? seams[seamEdge.grounding_ref] : undefined;
 
-    return { ends, lossTxt, devs, locusDev, seam, hasPath: !!ends };
+    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, hasPath: !!ends };
   }, [timeline, seams]);
+
+  const [showStamp, setShowStamp] = useState(false);
 
   const { rfNodes, rfEdges } = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
     const status = statusForVerdict(timeline.verdict_tier);
     const meta = STATUS_META[status];
-    const { ends, lossTxt, devs, locusDev, seam } = model;
+    const { ends, lossTxt, stampTxt, devs, locusDev, seam } = model;
+    // measured-segment label: STAMP detail when the knob is on, else the loss
+    // headline only (the fault signature) — keeps the default uncluttered.
+    const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
 
     const locus = locusDev ? (devs.get(locusDev) ?? { dev: locusDev, elements: [], worst: 0 }) : undefined;
     const targetIsLocus = !!(ends && locus && ends.dst === locus.dev);
@@ -255,7 +283,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
           vis: view === "debug" ? vis : visibilityLabel(seam.visibility),
           color: ownerColor, border, borderColor: vis === "blind" ? C.crit : vis === "partial" ? C.caution : ownerColor,
         } });
-      if (prevId) link(prevId, id, { degraded: !!lossTxt, label: prevId === "src" ? lossTxt : undefined });
+      if (prevId) link(prevId, id, { degraded: !!lossTxt, label: prevId === "src" ? measuredLabel : undefined });
       prevId = id; col++;
     }
 
@@ -264,7 +292,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       const id = "fault";
       push({ id, type: "fault", position: { x: col * COL, y: 0 }, draggable: true,
         data: { label: entityLabel(locus.dev), meta, elements: locus.elements.slice(0, 4), isTarget: targetIsLocus } });
-      if (prevId) link(prevId, id, { degraded: !!lossTxt, label: prevId === "src" ? lossTxt : undefined });
+      if (prevId) link(prevId, id, { degraded: !!lossTxt, label: prevId === "src" ? measuredLabel : undefined });
       prevId = id; prevHandle = undefined; col++;
 
       // 3b) co-affected devices branch BELOW the locus (no fake hop order)
@@ -286,7 +314,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     }
 
     return { rfNodes: nodes, rfEdges: edges };
-  }, [model, timeline.verdict_tier, view]);
+  }, [model, timeline.verdict_tier, view, showStamp]);
 
   // Nothing groundable → honest fallback (don't invent a path).
   if (rfNodes.length === 0 || (!model.hasPath && !model.locusDev)) {
@@ -318,6 +346,21 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         <span>◉ observed</span><span>⊚ destination</span>
         <span style={{ color: C.faint }}>contextual path · live trace next</span>
       </div>
+      {/* opt-in STAMP metrics knob — default OFF so the path stays uncluttered. */}
+      {model.hasStamp && (
+        <button
+          onClick={() => setShowStamp((v) => !v)}
+          title="Show per-path active-measurement (STAMP) metrics — loss · RTT · jitter — on the measured segment"
+          style={{
+            position: "absolute", right: 10, top: 10, zIndex: 5, cursor: "pointer",
+            fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 6,
+            background: showStamp ? C.info + "22" : "var(--panel,#151b2b)",
+            border: `1px solid ${showStamp ? C.info : "var(--border,#2a2f3a)"}`,
+            color: showStamp ? C.info : C.muted,
+          }}>
+          {showStamp ? "● STAMP metrics" : "○ STAMP metrics"}
+        </button>
+      )}
     </div>
   );
 }

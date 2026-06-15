@@ -44,6 +44,12 @@ devices, zero hardcoded entities:
 4. **Seam** boundary inserted when a seam-grounded edge exists.
 5. **Verdict tier** → fault status + color. If the destination *is* the locus, the
    target node carries the fault badge.
+6. **STAMP metrics knob (opt-in):** the measured segment always shows the loss
+   headline (the fault signature); a top-right toggle (**default OFF**, to avoid
+   clutter) overlays the fuller active-measurement set — `loss · RTT · jitter` —
+   pulled from the path's probe signals (`probe_loss`, `probe_rtt_ms[stamp|icmp|
+   tcp|http]`, `probe_jitter`), preferring the STAMP method for RTT. In Phase 2
+   this becomes genuine **per-hop** STAMP between adjacent traced hops.
 
 ## Phase 2 — live-trace fusion (NEXT, not started)
 
