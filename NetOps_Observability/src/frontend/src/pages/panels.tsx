@@ -256,7 +256,7 @@ function TrafficInOut() {
         style={{ height: 220 }}
         option={{
           ...chartBase,
-          grid: { left: 64, right: 12, top: 16, bottom: 24 },
+          grid: { left: 6, right: 14, top: 28, bottom: 6, containLabel: true },
           tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtBps(v) },
           legend: { ...chartBase.legend, top: 0, data: ["In", "Out"] },
           xAxis: { type: "time", ...axisStyle },
@@ -358,7 +358,7 @@ function WanInterfaces() {
             style={{ height: 150 }}
             option={{
               ...chartBase,
-              grid: { left: 60, right: 10, top: 8, bottom: 20 },
+              grid: { left: 6, right: 12, top: 8, bottom: 6, containLabel: true },
               tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtBps(v) },
               legend: { show: false },
               xAxis: { type: "time", ...axisStyle },

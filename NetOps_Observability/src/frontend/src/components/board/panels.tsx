@@ -192,8 +192,10 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
             ...chartBase,
             tooltip: { ...chartBase.tooltip, trigger: "axis" },
             legend: series.length > 1 && series.length <= 10 ? { ...chartBase.legend, top: 0, type: "scroll" } : { show: false },
-            grid: { left: 56, right: 24, top: series.length > 1 ? 30 : 12, bottom: 24 },
-            xAxis: { type: "time", ...axisStyle },
+            // containLabel so formatted y-axis ticks ("1.5 Gbps", "100 %") are never
+            // clipped regardless of width, and the last x-tick isn't cut (#71 ⑧).
+            grid: { left: 6, right: 16, top: series.length > 1 ? 30 : 12, bottom: 6, containLabel: true },
+            xAxis: { type: "time", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, hideOverlap: true } },
             yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtY(v) } },
             series: series.slice(0, 14).map((s, i) => ({
               name: seriesLabel(s, labelKeys),

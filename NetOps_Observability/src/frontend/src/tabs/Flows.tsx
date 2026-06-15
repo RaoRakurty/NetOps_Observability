@@ -40,19 +40,35 @@ const PROTO_NAMES: Record<string, string> = {
   "132": "SCTP",
 };
 
-// A few well-known ports, annotated for readability in the port panels.
+// Well-known ports → application name, annotated for readability in the port
+// panels (#71 ⑨ — "flows show only tcp/udp, no app names"). Broad IANA / common-
+// enterprise coverage so the dst-port panel reads as applications, not bare
+// numbers. The richer, attribution-grade port→app_label rollup is the #69 P1
+// service-attribution job (svc_flow_rollup_1m); this is the honest client-side
+// lookup that needs no backend change.
 const PORT_NAMES: Record<string, string> = {
-  "22": "SSH",
-  "53": "DNS",
-  "80": "HTTP",
-  "123": "NTP",
-  "179": "BGP",
-  "443": "HTTPS",
-  "161": "SNMP",
-  "162": "SNMP-trap",
-  "514": "syslog",
-  "636": "LDAPS",
-  "3389": "RDP",
+  // remote access / mgmt
+  "22": "SSH", "23": "Telnet", "3389": "RDP", "5900": "VNC", "5985": "WinRM", "5986": "WinRM-TLS",
+  // web
+  "80": "HTTP", "443": "HTTPS", "8080": "HTTP-alt", "8443": "HTTPS-alt", "8000": "HTTP-alt", "3000": "HTTP-app",
+  // mail
+  "25": "SMTP", "465": "SMTPS", "587": "SMTP-sub", "110": "POP3", "995": "POP3S", "143": "IMAP", "993": "IMAPS",
+  // name / time / dir
+  "53": "DNS", "853": "DNS-TLS", "123": "NTP", "389": "LDAP", "636": "LDAPS", "88": "Kerberos",
+  // file transfer / share
+  "20": "FTP-data", "21": "FTP", "69": "TFTP", "445": "SMB", "2049": "NFS",
+  // databases / cache / queue
+  "1433": "MSSQL", "1521": "Oracle", "3306": "MySQL", "5432": "PostgreSQL", "6379": "Redis",
+  "27017": "MongoDB", "9092": "Kafka", "9200": "Elasticsearch", "5672": "AMQP",
+  // routing / network control
+  "179": "BGP", "646": "LDP", "500": "IKE", "4500": "IPsec-NAT-T", "1701": "L2TP", "1723": "PPTP",
+  // mgmt / telemetry
+  "161": "SNMP", "162": "SNMP-trap", "514": "syslog", "6343": "sFlow", "2055": "NetFlow", "4739": "IPFIX",
+  "57400": "gNMI", "9339": "gNMI", "9090": "Prometheus", "8428": "metrics",
+  // AAA / voice
+  "49": "TACACS+", "1812": "RADIUS-auth", "1813": "RADIUS-acct", "5060": "SIP", "5061": "SIP-TLS",
+  // dhcp / misc
+  "67": "DHCP", "68": "DHCP", "3478": "STUN/TURN",
 };
 
 const FLOW_TYPES: { value: string; label: string }[] = [
