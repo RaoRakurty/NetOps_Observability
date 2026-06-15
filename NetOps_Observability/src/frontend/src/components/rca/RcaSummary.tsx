@@ -242,16 +242,16 @@ export default function RcaSummary({
   // + "is it confirmed / why not" (items 1 & 12) ------------------------------
   const nocSummary = useMemo(() => {
     const lead = PLANE_SEEN_LEAD[dominant] ?? `${modalityLabel(dominant)} changed`;
-    if (confirmed) return `${lead}, and independent evidence confirms a real network issue.`;
+    if (confirmed) return `${lead}. Independent evidence confirms a real network issue.`;
     const miss = missingPlanes.filter((m) => m !== dominant).map((m) => PLANE_NOC_SHORT[m] ?? modalityLabel(m).toLowerCase());
     if (crossPlane) {
       const have = MODALITY_ORDER.filter((m) => (attByPlane[m] ?? 0) > 0)
         .map((m) => PLANE_NOC_SHORT[m] ?? modalityLabel(m).toLowerCase());
-      return `${lead}, with partial agreement from ${orList(have)} evidence — but not enough to confirm a real network issue yet.`;
+      return `${lead}. Partial agreement from ${orList(have)} evidence, but not enough to confirm a real network issue yet.`;
     }
     return miss.length
-      ? `${lead}, but no ${orList(miss)} evidence confirms a real network issue yet.`
-      : `${lead}, but the evidence does not yet confirm a real network issue.`;
+      ? `${lead}. No ${orList(miss)} evidence confirms a real network issue yet.`
+      : `${lead}. The evidence does not yet confirm a real network issue.`;
   }, [dominant, confirmed, crossPlane, missingPlanes, attByPlane]);
 
   const card: React.CSSProperties = {
@@ -335,7 +335,7 @@ export default function RcaSummary({
       )}
       {probe.lowOnly && (
         <div style={{ fontSize: 12.5, color: C.caution, fontWeight: 600 }}>
-          ⚠ These are internal/test checks. They are useful for troubleshooting, but they cannot confirm a customer-impacting issue.
+          ⚠ These are internal/test checks. They are useful for troubleshooting, but they cannot confirm customer impact.
         </div>
       )}
       {probe.debugExcluded > 0 && (
@@ -384,8 +384,8 @@ export default function RcaSummary({
         ) : (
           <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 3, color: "var(--fg)" }}>
             {probe.lowOnly || probeOnly
-              ? "Do not open a customer-facing incident yet. Re-test with trusted customer-path probes or wait for corroboration from device telemetry, control-plane events, or flow loss."
-              : `Collect a second independent modality (${corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "device telemetry, control plane, or flow"}) before acting — current evidence can't confirm a cause.`}
+              ? "Do not open a customer incident yet. Re-test from a trusted customer path, or confirm with interface errors, routing/link events, or traffic loss."
+              : `Confirm with ${corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "device health, routing/link events, or traffic flow evidence"} before acting — current evidence can't confirm a cause.`}
           </div>
         )}
       </div>
@@ -409,7 +409,7 @@ export default function RcaSummary({
             let tone: string = C.faint, badge = "Not observed", used = false;
             if (att > 0 && lowAuthProbe) { tone = C.caution; badge = "Weak evidence only"; used = true; }
             else if (att > 0) { tone = C.ok; badge = "Used"; used = true; }
-            else if (total > 0) { tone = C.info; badge = "Seen, not related"; }
+            else if (total > 0) { tone = C.info; badge = "Not tied to this issue"; }
             else if (requiredModalities.has(key)) { tone = C.info; badge = "Needed to confirm"; }
             return (
               <div key={key} style={{
@@ -430,6 +430,7 @@ export default function RcaSummary({
                           <span><b>{total}</b> {noun} seen</span>
                           <span><b style={{ color: tone }}>{att}</b> used as weak evidence</span>
                           {debugExcludedHere && <span><b style={{ color: C.faint }}>{probe.debugExcluded}</b> test checks ignored</span>}
+                          <span style={{ color: C.caution, fontWeight: 600 }}>Internal/test checks only</span>
                         </>
                       : <>
                           <span><b>{total}</b> {noun} seen</span>

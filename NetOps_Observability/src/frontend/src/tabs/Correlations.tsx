@@ -305,7 +305,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   const recommendedSteps: string[] = topHyp?.verdict?.first_steps ?? [];
   const recommendedOwner: string = topHyp?.verdict?.owner ?? "";
   const muted: React.CSSProperties = { color: "#AEB9CC" };
-  const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginBottom: 4 };
+  const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginBottom: 2 };
   const row = (k: string, v: React.ReactNode) => (
     <div style={{ display: "flex", gap: 8, fontSize: 13, padding: "2px 0" }}>
       <span style={{ ...muted, minWidth: 110 }}>{k}</span>
@@ -314,7 +314,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 9, fontSize: 13 }}>
       {/* operator ↔ debug toggle */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 0 }}>
         {(["operator", "debug"] as const).map((v) => (

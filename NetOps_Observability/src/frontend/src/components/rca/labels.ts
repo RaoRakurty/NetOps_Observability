@@ -209,19 +209,20 @@ export function canConfirm(a?: string): boolean {
 // pass through — they ARE NOC-meaningful. Bare IPs with no metadata genericize to
 // "Monitored target". Raw entity ids stay available in Debug View only.
 const INFRA_DISPLAY: Record<string, string> = {
-  // storage / data services
-  clickhouse: "Analytics store", postgres: "App database", "netbox-postgres": "App database",
-  opensearch: "Search store", "opensearch-dashboards": "Search store", redis: "Cache service",
-  prometheus: "Metrics store", victoriametrics: "Metrics store", victoria: "Metrics store",
-  loki: "Log store", redpanda: "Event bus",
+  // our own telemetry/data stores → generic, never product-internal names
+  clickhouse: "Monitoring data store", opensearch: "Monitoring data store",
+  "opensearch-dashboards": "Monitoring data store", prometheus: "Monitoring data store",
+  victoriametrics: "Monitoring data store", victoria: "Monitoring data store",
+  loki: "Monitoring data store", redpanda: "Internal service", redis: "Internal service",
+  postgres: "Internal service", "netbox-postgres": "Internal service",
   // app / gateway / platform services
   nginx: "Web gateway", api: "Platform service", backend: "Platform service",
-  frontend: "Web app", correlation: "Correlation service", netbox: "Network inventory",
-  grafana: "Dashboards",
+  frontend: "Web app", correlation: "Monitoring service", netbox: "Inventory service",
+  grafana: "Monitoring service",
   // pipeline / collectors
   vector: "Ingest pipeline", "vector-aggregator": "Ingest pipeline", "vector-router": "Ingest pipeline",
-  promtail: "Log shipper", "syslog-ng": "Log collector", goflow2: "Flow collector",
-  "node-exporter": "Host metrics", cadvisor: "Container metrics",
+  promtail: "Internal service", "syslog-ng": "Internal service", goflow2: "Internal service",
+  "node-exporter": "Internal service", cadvisor: "Internal service",
   // monitoring agents / probes
   prober: "Monitoring agent",
 };
@@ -229,7 +230,7 @@ const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 function mapToken(t: string): string {
   const base = t.split(":")[0].trim().toLowerCase();
   if (INFRA_DISPLAY[base]) return INFRA_DISPLAY[base];
-  if (IPV4.test(base)) return "Monitored target";        // no metadata → generic
+  if (IPV4.test(base)) return "Monitored endpoint";      // no metadata → generic
   return t;                                              // real device / path name
 }
 // Friendly entity label. "prober->clickhouse" → "Test check source → Analytics store".

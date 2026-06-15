@@ -153,19 +153,22 @@ export default function RcaTimeline({
     const isSel = selected === s.signal_id;
     const isHover = hover?.signal_id === s.signal_id;
     const dim = highlight && highlight.size > 0 && !isHi;
-    const sevSz: Record<string, number> = { crit: 13, high: 11, warn: 9, info: 8 };
-    const baseSz = sevSz[s.severity] ?? 9;
-    const sz = s.is_trigger ? 16 : (s.attached ? baseSz + 2 : baseSz);
+    // Bigger, bolder markers so used/important events stand out and are easy to
+    // click. Attached (used) evidence = larger solid dot; concurrent = hollow;
+    // debug/test = muted dashed; trigger = largest square; selected = accent ring.
+    const sevSz: Record<string, number> = { crit: 16, high: 14, warn: 12, info: 11 };
+    const baseSz = sevSz[s.severity] ?? 12;
+    const sz = s.is_trigger ? 20 : (s.attached ? baseSz + 3 : baseSz);
     const isDebugProbe = s.probe_authority === "debug_only";
     const isRecovery = s.link_status === "recovery";
     // Labels: selected, trigger, high-severity, or hovered — never every dot.
     const labeled = (forceLabel || isSel || s.is_trigger || isProminent(s) || isHover) && !dim && !s.kind.endsWith("_clear");
     return (
-      <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: `calc(50% + ${offsetY}px)`, transform: "translate(-50%,-50%)", opacity: dim ? 0.35 : 1, zIndex: isSel || isHover ? 6 : 1 }}>
+      <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: `calc(50% + ${offsetY}px)`, transform: "translate(-50%,-50%)", opacity: dim ? 0.4 : 1, zIndex: isSel || isHover ? 6 : (s.attached ? 3 : 1) }}>
         <div style={{
           position: "absolute", top: "50%", left: "50%",
           width: `${barW}%`, minWidth: 6, maxWidth: 240, height: 2,
-          transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.5,
+          transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.45,
         }} title={`±${unc}s (${s.clock_quality})`} />
         <div
           onMouseEnter={() => setHover(s)}
@@ -174,10 +177,10 @@ export default function RcaTimeline({
           title={view === "debug" ? `${s.kind} · ${s.entity_id}` : `${kindLabel(s.kind)} · ${entityLabel(s.entity_id)}`}
           style={{
             position: "relative", width: sz, height: sz, borderRadius: s.is_trigger ? 3 : "50%",
-            background: s.attached ? lane.color : "transparent",
-            border: isDebugProbe ? `1.5px dashed ${C.faint}` : `${s.attached ? 2.5 : 2}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
-            opacity: isDebugProbe ? 0.5 : isRecovery ? 0.55 : 1,
-            boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 2px ${lane.color}55` : "0 0 0 1px var(--panel)"),
+            background: s.attached ? lane.color : "var(--panel)",
+            border: isDebugProbe ? `2px dashed ${C.faint}` : `${s.attached ? 3 : 2.25}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
+            opacity: isDebugProbe ? 0.55 : isRecovery ? 0.6 : 1,
+            boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 3px ${lane.color}66` : (s.attached ? `0 1px 3px rgba(0,0,0,.35), 0 0 0 1.5px var(--panel)` : "0 0 0 1.5px var(--panel)")),
             cursor: "pointer",
           }}
         />
