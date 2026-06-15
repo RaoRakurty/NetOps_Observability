@@ -317,11 +317,22 @@ export default function RcaSummary({
   const attachedPlaneLabels = MODALITY_ORDER
     .filter((m) => (attByPlane[m] ?? 0) > 0)
     .map((m) => modalityLabel(m).toLowerCase());
+  // Independence gap: control-plane evidence reported by a single observer (the
+  // device describing its own state) can't confirm customer impact on its own —
+  // surface this specific reason (the engine's actual confirm-gate basis).
+  const controlObservers = useMemo(() => new Set(
+    timeline.signals.filter((s) => s.attached && s.modality_class === "control_plane" && !s.kind.endsWith("_clear"))
+      .map((s) => s.observer_id || s.entity_id),
+  ).size, [timeline.signals]);
+  const singleObserverControl = controlObservers <= 1 && (attByPlane["control_plane"] ?? 0) > 0;
+
   const whyNotConfirmed = probe.lowOnly
     ? "the only evidence is internal/test checks — they can't confirm a customer-impacting issue on their own. Needs device health, a routing/link event, or traffic loss."
-    : corroborate.length
-      ? `no independent ${orList(corroborate.map((p) => modalityLabel(p).toLowerCase()))} evidence yet.`
-      : "needs a second, independent source to confirm.";
+    : singleObserverControl
+      ? "the control-plane evidence comes from a single observer (the device reporting on itself). One observer can't confirm a customer-impacting issue — an independent view is needed."
+      : corroborate.length
+        ? `no independent ${orList(corroborate.map((p) => modalityLabel(p).toLowerCase()))} evidence yet.`
+        : "needs a second, independent source to confirm.";
 
   const confidenceTone = confirmed ? C.ok : quality === "candidate" ? C.warn : C.faint;
 
@@ -344,6 +355,26 @@ export default function RcaSummary({
       return { verb: "Hold", tone: C.caution, text: `Suspected only. Confirm with ${add}${then}.` };
     }
     return { verb: "Hold", tone: C.faint, text: "Not enough evidence to confirm a network issue." };
+  })();
+
+  // Ranked Next-Actions queue (NOC workflow) — replaces the text-heavy paragraph.
+  // Ordered by what the operator should do first; verb = the action class.
+  const nextActions: { verb: string; detail: string; primary?: boolean }[] = (() => {
+    const acts: { verb: string; detail: string; primary?: boolean }[] = [];
+    if (confirmed) {
+      const who = owner ? ownerLabel(owner) : "the network team";
+      acts.push({ verb: "Escalate", detail: `Hand off to ${who} — confirmed ${nocTitle.replace(/^Possible /, "").toLowerCase()}.`, primary: true });
+      recommendedSteps.slice(0, 2).forEach((s) => acts.push({ verb: "Do", detail: s }));
+      acts.push({ verb: "Create incident", detail: "Open or relate an incident to track resolution." });
+      acts.push({ verb: "Open evidence", detail: "Review the cascade in the timeline below." });
+      return acts;
+    }
+    if (recommendedSteps.length) recommendedSteps.slice(0, 2).forEach((s, i) => acts.push({ verb: "Investigate", detail: s, primary: i === 0 }));
+    else acts.push({ verb: "Investigate", detail: "Check the affected interface admin/oper state and recent changes on the device.", primary: true });
+    if (singleObserverControl) acts.push({ verb: "Run check", detail: "Run an active path check from an independent vantage, and verify the peer-side BGP / routing state." });
+    acts.push({ verb: "Open evidence", detail: "Review the cascade + which signals are / aren't tied, in the timeline below." });
+    acts.push({ verb: "Acknowledge", detail: "Mark under investigation — don't open a customer incident until confirmed." });
+    return acts;
   })();
 
   return (
@@ -373,6 +404,13 @@ export default function RcaSummary({
         <span style={{ fontSize: 13, color: confidenceTone, fontWeight: 700 }}>Confidence: {confidenceWord}</span>
         <span style={{ ...muted, fontSize: 12.5 }}>· {stateText}</span>
       </div>
+
+      {/* recovery tracking — when link/BGP/probe restore, show resolving vs closed */}
+      {(c.recovery ?? 0) > 0 && (
+        <div style={{ fontSize: 12.5, color: C.ok, fontWeight: 600, marginTop: -4 }}>
+          ↩ Recovering — {c.recovery} signal{c.recovery === 1 ? "" : "s"} cleared{state !== "open" ? " · object closing" : " · watching for full recovery"}.
+        </div>
+      )}
 
       {/* observed window + duration (item 2) — near the top, both views */}
       <div style={{ ...muted, fontSize: 12.5, marginTop: -2 }}>
@@ -416,6 +454,9 @@ export default function RcaSummary({
             <div><b style={{ color: C.caution }}>Why suspected:</b> the signs match a <b>{nocTitle.replace(/^Possible /, "")}</b> using {attachedPlaneLabels.length ? attachedPlaneLabels.join(" + ") : "the available"} evidence.</div>
           )}
           <div><b style={{ color: C.caution }}>Why not confirmed:</b> {whyNotConfirmed}</div>
+          {singleObserverControl && (
+            <div><b style={{ color: C.info }}>To confirm:</b> add an independent observer — a remote probe, the peer-side BGP / routing state, downstream service impact, or second-device telemetry.</div>
+          )}
         </div>
       )}
       {probeOnly && (
@@ -461,23 +502,24 @@ export default function RcaSummary({
         </div>
       )}
 
-      {/* recommended next action — matched-signature playbook, or a fallback so
-          even weak/undetermined objects get an operator-actionable recommendation */}
+      {/* ranked Next-Actions queue — scannable NOC workflow (not a paragraph) */}
       <div style={{ border: "1px solid var(--border)", borderLeft: `3px solid ${C.info}`, background: "var(--hover)", borderRadius: 6, padding: "8px 10px" }}>
         <div style={{ ...title, color: C.info }}>
-          Recommended next action{recommendedSteps.length > 0 && owner ? <span style={{ ...muted, fontWeight: 400 }}> · likely owner: <b style={{ color: "var(--fg)" }}>{ownerLabel(owner)}</b></span> : null}
+          Next actions{owner ? <span style={{ ...muted, fontWeight: 400 }}> · likely owner: <b style={{ color: "var(--fg)" }}>{ownerLabel(owner)}</b></span> : null}
         </div>
-        {recommendedSteps.length > 0 ? (
-          <ol style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5, color: "var(--fg)" }}>
-            {recommendedSteps.slice(0, 3).map((s, i) => <li key={i}>{s}</li>)}
-          </ol>
-        ) : (
-          <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 3, color: "var(--fg)" }}>
-            {probe.lowOnly || probeOnly
-              ? "Do not open a customer incident yet. Re-test from a trusted customer path, or confirm with interface errors, routing/link events, or traffic loss."
-              : `Confirm with ${corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "device health, routing/link events, or traffic flow evidence"} before acting — current evidence can't confirm a cause.`}
-          </div>
-        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 5 }}>
+          {nextActions.map((a, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
+              <span style={{ ...muted, fontFamily: "ui-monospace,monospace", minWidth: 14, textAlign: "right" }}>{i + 1}</span>
+              <span style={{
+                fontSize: 10, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", padding: "1px 6px",
+                borderRadius: 4, whiteSpace: "nowrap", flexShrink: 0,
+                color: a.primary ? "#fff" : C.info, background: a.primary ? C.info : C.info + "1c", border: `1px solid ${C.info}55`,
+              }}>{a.verb}</span>
+              <span style={{ color: "var(--fg)", lineHeight: 1.45 }}>{a.detail}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* evidence coverage — what each kind of evidence showed (NOC language) */}
