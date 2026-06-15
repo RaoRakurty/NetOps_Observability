@@ -147,40 +147,53 @@ export default function RcaTimeline({
     const ms = toMs(s.ts);
     const left = pct(ms);
     const unc = s.onset_uncertainty_s > 0 ? s.onset_uncertainty_s : (CLOCK_FLOOR_S[s.clock_quality] ?? 1);
-    const barW = Math.max(2, (unc * 2000 / span) * 100);
+    // Onset uncertainty capsule: drawn ONLY when we have a measured onset window
+    // (CUSUM onset_uncertainty_s). Point events (link up/down) carry only the
+    // clock floor and get no capsule — that removes the stray "lines" that made
+    // the old timeline unreadable. The capsule is a soft, rounded time-window.
+    const showUnc = s.onset_uncertainty_s > 0;
+    const barW = Math.max(8, (unc * 2000 / span) * 100);
     const role = signalRole(s);
     const isHi = highlight?.has(s.signal_id);
     const isSel = selected === s.signal_id;
     const isHover = hover?.signal_id === s.signal_id;
     const dim = highlight && highlight.size > 0 && !isHi;
-    // Bigger, bolder markers so used/important events stand out and are easy to
-    // click. Attached (used) evidence = larger solid dot; concurrent = hollow;
-    // debug/test = muted dashed; trigger = largest square; selected = accent ring.
-    const sevSz: Record<string, number> = { crit: 16, high: 14, warn: 12, info: 11 };
+    // Attached (used) evidence = larger solid dot; concurrent = hollow ring;
+    // debug/test = muted dashed; trigger = a diamond with a soft glow (the start);
+    // selected = accent ring. Severity scales size so big problems read bigger.
+    const sevSz: Record<string, number> = { crit: 15, high: 13, warn: 12, info: 11 };
     const baseSz = sevSz[s.severity] ?? 12;
-    const sz = s.is_trigger ? 20 : (s.attached ? baseSz + 3 : baseSz);
+    const sz = s.is_trigger ? 17 : (s.attached ? baseSz + 2 : baseSz);
     const isDebugProbe = s.probe_authority === "debug_only";
     const isRecovery = s.link_status === "recovery";
-    // Labels: selected, trigger, high-severity, or hovered — never every dot.
-    const labeled = (forceLabel || isSel || s.is_trigger || isProminent(s) || isHover) && !dim && !s.kind.endsWith("_clear");
+    const ringColor = role ? ROLE_COLOR[role] : lane.color;
+    // Labels: only the trigger, the selected, or the hovered marker — never every
+    // dot. Auto-labeling every high-severity marker made labels collide; lanes +
+    // colors + hover carry the rest, and a click opens full detail.
+    const labeled = (forceLabel || isSel || s.is_trigger || isHover) && !dim && !s.kind.endsWith("_clear");
     return (
       <div key={s.signal_id} style={{ position: "absolute", left: `${left}%`, top: `calc(50% + ${offsetY}px)`, transform: "translate(-50%,-50%)", opacity: dim ? 0.4 : 1, zIndex: isSel || isHover ? 6 : (s.attached ? 3 : 1) }}>
-        <div style={{
-          position: "absolute", top: "50%", left: "50%",
-          width: `${barW}%`, minWidth: 6, maxWidth: 240, height: 2,
-          transform: "translate(-50%,-50%)", background: lane.color, opacity: 0.45,
-        }} title={`±${unc}s (${s.clock_quality})`} />
+        {showUnc && (
+          <div style={{
+            position: "absolute", top: "50%", left: "50%",
+            width: `${barW}%`, minWidth: 14, maxWidth: 240, height: 11,
+            transform: "translate(-50%,-50%)", borderRadius: 6,
+            background: lane.color + "26", border: `1px solid ${lane.color}55`,
+          }} title={`±${unc}s onset window (${s.clock_quality})`} />
+        )}
         <div
           onMouseEnter={() => setHover(s)}
           onMouseLeave={() => setHover((h) => (h?.signal_id === s.signal_id ? null : h))}
           onClick={() => onSelect?.(s.signal_id)}
           title={view === "debug" ? `${s.kind} · ${s.entity_id}` : `${kindLabel(s.kind)} · ${entityLabel(s.entity_id)}`}
           style={{
-            position: "relative", width: sz, height: sz, borderRadius: s.is_trigger ? 3 : "50%",
+            position: "relative", width: sz, height: sz,
+            borderRadius: s.is_trigger ? 3 : "50%",
+            transform: s.is_trigger ? "rotate(45deg)" : undefined,
             background: s.attached ? lane.color : "var(--panel)",
-            border: isDebugProbe ? `2px dashed ${C.faint}` : `${s.attached ? 3 : 2.25}px solid ${role ? ROLE_COLOR[role] : lane.color}`,
+            border: isDebugProbe ? `2px dashed ${C.faint}` : `${s.attached ? 2.5 : 2.25}px solid ${ringColor}`,
             opacity: isDebugProbe ? 0.55 : isRecovery ? 0.6 : 1,
-            boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 3px ${lane.color}66` : (s.attached ? `0 1px 3px rgba(0,0,0,.35), 0 0 0 1.5px var(--panel)` : "0 0 0 1.5px var(--panel)")),
+            boxShadow: isSel ? `0 0 0 3px var(--accent,#4c8dff)` : (s.is_trigger ? `0 0 0 4px ${lane.color}33, 0 1px 4px rgba(0,0,0,.4)` : (s.attached ? `0 1px 3px rgba(0,0,0,.35), 0 0 0 1.5px var(--panel)` : "0 0 0 1.5px var(--panel)")),
             cursor: "pointer",
           }}
         />
@@ -216,6 +229,12 @@ export default function RcaTimeline({
               <span style={{ ...muted, marginLeft: 4 }}>{sigs.length}</span>
             </div>
             <div style={{ position: "relative", flex: 1, height: "100%" }}>
+              {/* time grid + centerline rail — gives the dots a frame to read
+                  against instead of floating in space. */}
+              {ticks.map((tk, i) => (
+                <div key={`g${i}`} style={{ position: "absolute", left: `${tk.left}%`, top: 0, bottom: 0, width: 1, background: "var(--border,#23272f)", opacity: 0.5 }} />
+              ))}
+              <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: lane.color, opacity: 0.16 }} />
               {(() => {
                 // prominent markers always individual + labeled; cluster the rest
                 // by time-proximity so dense lanes don't turn to mush.
