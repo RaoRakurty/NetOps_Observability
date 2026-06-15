@@ -374,6 +374,11 @@ export type CorrStats = {
   open: number; open_confirmed: number; open_suspected: number; open_undetermined: number;
   actionable_pct: number; confirmed_7d_pct: number; total_window: number; signatures_matched: number; window_days: number;
 };
+export type ForecastRow = {
+  device: string; interface: string; current_util_pct: number; slope_per_day_pct: number;
+  days_to_90: number; status: "saturated" | "trending" | "stable" | "building_baseline"; history_days: number;
+};
+export type ForecastResp = { class: string; interfaces: ForecastRow[]; count: number; min_days: number };
 
 // Path Behavior Health (docs/design/path-behavior-health.md). Numbers AND
 // explanation: the UI shows state/confidence/ranges/reason/owner/evidence/baseline.
@@ -1171,6 +1176,7 @@ export const api = {
     request<EventsFeedResp>(`/api/events/feed?${new URLSearchParams(params)}`),
   correlationsStats: (sinceSeconds = 604800) =>
     request<CorrStats>(`/api/correlations/stats?since=${sinceSeconds}s`),
+  metricsForecast: (days = 28) => request<ForecastResp>(`/api/metrics/forecast?days=${days}`),
   // Path Behavior Health — adaptive baseline-relative path scoring (worst-first).
   pathsHealth: () => request<PathHealthResponse>(`/api/paths/health`),
   vulns: (limit = 500) => request<VulnsResponse>(`/api/vulns?limit=${limit}`),

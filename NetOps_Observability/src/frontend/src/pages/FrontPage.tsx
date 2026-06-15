@@ -218,6 +218,42 @@ function ImpactSummary() {
   );
 }
 
+// ── Panel 10 — Capacity outlook ─────────────────────────────────────────────
+function CapacityOutlook() {
+  const { data, err } = usePoll(() => api.metricsForecast());
+  if (err) return <Panel title="Capacity outlook" state="degraded" />;
+  const rows = data?.interfaces ?? [];
+  if (rows.length === 0) return <Panel title="Capacity outlook" state="inactive" note="No interface utilization data yet." />;
+  const trending = rows.filter((r) => r.status === "trending" || r.status === "saturated");
+  if (trending.length === 0) {
+    const building = rows.filter((r) => r.status === "building_baseline").length;
+    return <Panel title="Capacity outlook" state="inactive"
+      note={building > 0
+        ? `Building baseline — needs ${data!.min_days} days of history (${building} interface${building === 1 ? "" : "s"} still learning).`
+        : "No interfaces trending toward saturation — all stable."} />;
+  }
+  return (
+    <Panel title="Capacity outlook">
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {trending.slice(0, 6).map((r, i) => {
+          const soon = r.status === "saturated" || r.days_to_90 < 14;
+          const tone = soon ? "#E11D48" : r.days_to_90 < 30 ? "#D97706" : "var(--fg)";
+          return (
+            <div key={i} style={{ display: "flex", gap: 8, fontSize: 12.5, alignItems: "baseline" }}>
+              <span style={{ fontFamily: "ui-monospace,monospace" }}>{r.device}</span>
+              <span style={{ color: "var(--muted)" }}>{r.interface}</span>
+              <span style={{ marginLeft: "auto", fontWeight: 700, color: tone }}>
+                {r.status === "saturated" ? "at capacity" : `~${Math.round(r.days_to_90)}d to 90%`}
+              </span>
+              <span style={{ color: "var(--muted)", fontSize: 11.5 }}>{Math.round(r.current_util_pct)}% now</span>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
 export default function FrontPage() {
   return (
     <div className="dm-board" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -233,6 +269,7 @@ export default function FrontPage() {
           <PathHealthList limit={5} />
         </Panel>
         <ImpactSummary />
+        <CapacityOutlook />
       </div>
     </div>
   );
