@@ -52,16 +52,21 @@ function EmptyReading({ t, h }: { t: string; h?: string }) {
   );
 }
 
-function Panel({ title, action, state = "ok", note, hint, children }: {
-  title: string; action?: ReactNode; state?: PanelState; note?: string; hint?: string; children?: ReactNode;
+function Panel({ title, action, state = "ok", note, hint, to, children }: {
+  title: string; action?: ReactNode; state?: PanelState; note?: string; hint?: string; to?: string; children?: ReactNode;
 }) {
+  // `to` makes the whole header a drill-through link (hash route; the SPA router
+  // handles it) with a hover affordance + "→" when there's no explicit action.
+  const head = (
+    <div className="fp-panel-h">
+      <h3 className="fp-panel-t">{title}</h3>
+      {state === "degraded" && <span className="fp-tag" style={{ color: "var(--warn)", border: "1px solid var(--warn)" }}>degraded</span>}
+      {action ? <span className="fp-panel-meta">{action}</span> : to ? <span className="fp-panel-meta" aria-hidden>→</span> : null}
+    </div>
+  );
   return (
     <div className="fp-panel">
-      <div className="fp-panel-h">
-        <h3 className="fp-panel-t">{title}</h3>
-        {state === "degraded" && <span className="fp-tag" style={{ color: "var(--warn)", border: "1px solid var(--warn)" }}>degraded</span>}
-        {action && <span className="fp-panel-meta">{action}</span>}
-      </div>
+      {to ? <a className="fp-panel-link" href={`#/${to}`}>{head}</a> : head}
       <div className="fp-panel-b">
         {state === "degraded"
           ? <EmptyReading t={note || "This source is temporarily unavailable."} h="The rest of the page is unaffected." />
@@ -183,7 +188,7 @@ function RecommendedAction() {
   const { data: health } = usePoll(() => api.healthScore("global"));
   if (err) return <Panel title="Recommended action" state="degraded" />;
   const row = (verb: string, tone: string, text: string) => (
-    <Panel title="Recommended action">
+    <Panel title="Recommended action" to="monitoring/correlations">
       <div className="fp-row" style={{ borderLeftColor: tone, cursor: "default" }}>
         <Tag tone={tone}>{verb}</Tag>
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{text}</span>
@@ -226,7 +231,7 @@ function RcaCoverage() {
   // "candidates" = open correlation objects incl. undetermined; confirmed/suspected
   // are the graded subset. Calling the raw count "open issues" overstated it.
   return (
-    <Panel title="RCA coverage">
+    <Panel title="RCA coverage" to="monitoring/correlations">
       <div className="fp-kpis">
         <Kpi n={data.open} l="RCA candidates" />
         <Kpi n={data.open_confirmed} l="confirmed" />
@@ -244,7 +249,7 @@ function WhatChanged() {
   const items: FeedItem[] = data?.items ?? [];
   if (items.length === 0) return <Panel title="What changed" state="inactive" note="No changes in the last 24h." hint="Topology, inventory, and alert-state changes appear here." />;
   return (
-    <Panel title="What changed">
+    <Panel title="What changed" to="monitoring/events">
       <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 280, overflowY: "auto" }}>
         {items.map((it) => (
           <div key={it.signal_id} style={{ display: "flex", gap: 9, fontSize: 12.5, alignItems: "baseline" }}>
@@ -299,7 +304,7 @@ function CapacityOutlook() {
       hint={building > 0 ? `Needs ${data!.min_days} days of history — ${building} interface${building === 1 ? "" : "s"} still learning their trend.` : "No interfaces trending toward saturation."} />;
   }
   return (
-    <Panel title="Capacity outlook">
+    <Panel title="Capacity outlook" to="infrastructure/ifperf">
       {trending.slice(0, 6).map((r, i) => {
         const tone = r.status === "saturated" || r.days_to_90 < 14 ? "var(--crit)" : r.days_to_90 < 30 ? "var(--warn)" : "var(--fg-subtle)";
         return (
@@ -328,7 +333,7 @@ function TopHealthContributors() {
   if (contribs.length === 0)
     return <Panel title="Top health contributors" state="inactive" note="No degraded contributors." hint="All measured signals are nominal." />;
   return (
-    <Panel title="Top health contributors" action={<span>{contribs.length}</span>}>
+    <Panel title="Top health contributors" action={<span>{contribs.length}</span>} to="monitoring/triggered">
       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
         {contribs.slice(0, 8).map((c, i) => (
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
@@ -393,7 +398,7 @@ function RcaPathPanel() {
   if (!top || !tl) return <Panel title="RCA path view" state="inactive" note="No issue to locate yet."
     hint="When an issue is suspected or confirmed, its path and likely fault location appear here." />;
   return (
-    <Panel title="RCA path view">
+    <Panel title="RCA path view" to="monitoring/correlations">
       <RcaPathView timeline={tl} seams={seams} owner={top.owner} />
     </Panel>
   );
@@ -474,7 +479,7 @@ export default function FrontPage() {
           <Safe><RcaCoverage /></Safe>
           <Safe><TopHealthContributors /></Safe>
           <Safe><TopIssues /></Safe>
-          <Safe><Panel title="Hot paths"><PathHealthList limit={5} /></Panel></Safe>
+          <Safe><Panel title="Hot paths" to="infrastructure/flowtrace"><PathHealthList limit={5} /></Panel></Safe>
         </div>
         <div className="fp-col" style={{ flex: "1 1 320px" }}>
           <Safe><RecommendedAction /></Safe>

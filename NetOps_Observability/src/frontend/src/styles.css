@@ -2506,3 +2506,8 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
 .fp-empty-mark { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--fg-subtle); opacity: 0.7; }
 .fp-empty-t { font-size: 12.5px; color: var(--fg-muted); }
 .fp-empty-h { font-size: 11.5px; color: var(--fg-subtle); max-width: 34ch; line-height: 1.45; }
+
+/* Front-page panel drill-through: header becomes a link with a hover affordance. */
+.fp-panel-link { text-decoration: none; color: inherit; display: block; cursor: pointer; }
+.fp-panel-link:hover .fp-panel-t { color: var(--accent); }
+.fp-panel-link:hover .fp-panel-meta { color: var(--accent); }
