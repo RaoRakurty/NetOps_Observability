@@ -695,6 +695,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	mux.HandleFunc("/api/events/feed", s.handleEventsFeed)
 	mux.HandleFunc("/api/paths/health", s.handlePathsHealth)
+	mux.HandleFunc("/api/health/score", s.handleHealthScore)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
