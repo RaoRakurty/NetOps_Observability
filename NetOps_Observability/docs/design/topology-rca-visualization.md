@@ -97,14 +97,19 @@ verdict Suspected, confidence 0.50.
   `rca-path-topology.md`.
 - [ ] **1–2: UI-ready `/api/correlations/{id}/rca-path-view` + overlay mapping**
   (corr evidence → node/edge/path_segment annotations). NEXT.
-- [ ] Base-topology backend: `topology_nodes/edges` + **LLDP + CDP + BGP-LS**
-  collectors (support all three even before data exists) + `/api/topology/graph`.
+- [~] Base-topology backend: **LLDP collector SHIPPED** (`collectors/lldp.go`,
+  SNMP LLDP-MIB → Redis) + `/api/topology/links` (tenant-scoped, bidir-dedup,
+  source-agnostic `source_protocol`). Validated live on the clos lab (cEOS +
+  SR Linux + Cisco). TODO: CDP (CISCO-CDP-MIB) + BGP-LS sources (same link shape);
+  persistent `topology_nodes/edges` tables + `/api/topology/graph` (Redis MVP today).
 - [ ] NetworkPathView/TopologyCanvas split, BoundaryNode, EvidencePopover,
   InspectorSidePanel, TopologyLegend; elkjs layered layout.
-- [ ] Device Topology page rebuilt on TopologyCanvas + real discovered links.
-- [ ] **7–8: tests** — unit (LLDP/CDP/BGP-LS normalize, dedup, iface identity,
-  stale, mapping, internal-exclusion, overlay-non-mutation), integration (golden
-  object render, no-fake-link, operator-vs-debug, reduced-motion), Playwright.
+- [x] Device Topology page draws **real LLDP-discovered links** (tabs/Topology.tsx;
+  tier-inference now a dashed labelled fallback). Full TopologyCanvas rebuild TBD.
+- [~] **7–8: tests** — LLDP DONE (composite-index parse, chassis-vs-port subtype
+  render, bidir dedup, sysName/FQDN/mgmt-addr resolution, tenant isolation). TODO:
+  CDP/BGP-LS normalize, stale handling, integration (golden render, no-fake-link,
+  operator-vs-debug, reduced-motion), Playwright.
 
 ## Performance / accessibility
 
