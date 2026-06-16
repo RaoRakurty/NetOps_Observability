@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 // shapes.tsx — a small network-topology shape kit. Following the universal
 // convention (Cisco/Kentik/Auvik/Lucidchart): DEVICE TYPE = shape, HEALTH =
 // color + glow, VENDOR = the logo inside the shape. Shapes beat boxes — an
@@ -31,8 +33,7 @@ const GLYPH: Record<ShapeKind, string> = {
   access: "▤", cloud: "☁", server: "▦", vantage: "◎", target: "◉",
 };
 
-function shapeEls(kind: ShapeKind, tone: string): JSX.Element {
-  const fill = tone + "1f";
+function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
   const stroke = tone;
   const sw = 5;
   switch (kind) {
@@ -81,25 +82,38 @@ function shapeEls(kind: ShapeKind, tone: string): JSX.Element {
   }
 }
 
-// ShapeSVG — the device shape at `size`px, toned + glowing, with a faint type
-// glyph. `pulse` adds a breathing ring (for a fault). `logo` (data/URL) overlays
-// the vendor mark; pass it via the wrapper instead when you want crisp <img>.
+// ShapeSVG — the device shape at `size`px: glossy (gradient fill + specular
+// highlight), a vivid toned stroke, and a soft glow so it pops on the dark NOC
+// canvas. `pulse` adds a breathing ring (for a fault). A faint type glyph hints
+// the device type.
 export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false }: {
   kind: ShapeKind; tone: string; size?: number; glyph?: boolean; pulse?: boolean;
 }) {
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const gid = `g-${uid}`;
   return (
     <svg width={size} height={size} viewBox="0 0 100 100"
-      style={{ filter: `drop-shadow(0 0 5px ${tone}66) drop-shadow(0 2px 4px rgba(0,0,0,.3))`, overflow: "visible" }}>
+      style={{ filter: `drop-shadow(0 0 7px ${tone}88) drop-shadow(0 3px 5px rgba(0,0,0,.45))`, overflow: "visible" }}>
+      <defs>
+        {/* glossy sheen: bright tone top-left → deep tone bottom-right */}
+        <radialGradient id={gid} cx="38%" cy="30%" r="80%">
+          <stop offset="0%" stopColor={tone} stopOpacity={0.55} />
+          <stop offset="55%" stopColor={tone} stopOpacity={0.18} />
+          <stop offset="100%" stopColor={tone} stopOpacity={0.07} />
+        </radialGradient>
+      </defs>
       {pulse && (
         <circle cx="50" cy="50" r="44" fill="none" stroke={tone} strokeWidth={3} opacity={0.5}>
           <animate attributeName="r" values="40;52;40" dur="1.8s" repeatCount="indefinite" />
           <animate attributeName="opacity" values="0.6;0;0.6" dur="1.8s" repeatCount="indefinite" />
         </circle>
       )}
-      {shapeEls(kind, tone)}
+      {shapeEls(kind, tone, `url(#${gid})`)}
+      {/* specular highlight — the "gloss" */}
+      <ellipse cx="40" cy="30" rx="22" ry="13" fill="#ffffff" opacity={0.14} transform="rotate(-18 40 30)" />
       {glyph && (
-        <text x="50" y="50" textAnchor="middle" dominantBaseline="central"
-          fontSize="30" fill={tone} opacity={0.85} style={{ fontWeight: 700 }}>
+        <text x="50" y="51" textAnchor="middle" dominantBaseline="central"
+          fontSize="28" fill="#ffffff" opacity={0.92} style={{ fontWeight: 800 }}>
           {GLYPH[kind]}
         </text>
       )}

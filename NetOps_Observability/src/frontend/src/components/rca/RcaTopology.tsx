@@ -5,7 +5,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { CorrTimeline, CorrSignal, Seam, ProbePath } from "../../services/api";
-import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor } from "./labels";
+import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor, isInternalEntity } from "./labels";
 import { ShapeSVG, kindForRole, type ShapeKind } from "../graph/shapes";
 import FlowEdge from "../graph/FlowEdge";
 
@@ -65,8 +65,14 @@ function TopoNode({ data }: NodeProps) {
   const size = d.size ?? 56;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: d.width ?? 124, gap: 2 }}>
-      {d.hasIn !== false && <Handle type="target" position={Position.Left} style={handleStyle} />}
-      <ShapeSVG kind={d.kind} tone={d.tone} size={size} pulse={d.pulse} />
+      {/* handles sit on the SHAPE's vertical center (not the whole node, whose
+          label rows would otherwise pull the anchor down → crooked edges). */}
+      <div style={{ position: "relative", width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {d.hasIn !== false && <Handle type="target" position={Position.Left} style={{ ...handleStyle, top: "50%" }} />}
+        <ShapeSVG kind={d.kind} tone={d.tone} size={size} pulse={d.pulse} />
+        {d.hasOut !== false && <Handle type="source" position={Position.Right} style={{ ...handleStyle, top: "50%" }} />}
+        {d.hasBottom && <Handle type="source" position={Position.Bottom} id="b" style={{ ...handleStyle, left: "50%" }} />}
+      </div>
       <div style={{ fontWeight: 700, fontSize: 12, color: "var(--fg,#e6edf3)", textAlign: "center", lineHeight: 1.2, fontFamily: d.mono ? "var(--font-mono, ui-monospace, monospace)" : "inherit", overflowWrap: "anywhere", maxWidth: 124 }}>
         {d.label}
       </div>
@@ -82,8 +88,6 @@ function TopoNode({ data }: NodeProps) {
         </div>
       )}
       {d.via && <div style={{ fontSize: 10, fontWeight: 700, color: C.info }}>↳ via {String(d.via).toUpperCase()}</div>}
-      {d.hasOut !== false && <Handle type="source" position={Position.Right} style={handleStyle} />}
-      {d.hasBottom && <Handle type="source" position={Position.Bottom} id="b" style={handleStyle} />}
     </div>
   );
 }
@@ -161,8 +165,10 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       const s = pathSigs.find((x) => /jitter/.test(x.kind) || /jitter/.test(x.metric_name));
       return s ? Number(s.value) : NaN;
     })();
-    const lossTxt = isFinite(lossPct) && lossPct > 0 ? `${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss`
-      : pathSigs.some((x) => /rtt|latency/.test(x.kind)) ? "latency rise" : pathSig ? "degraded" : "";
+    // label = a real metric only (loss %). No "latency rise"/"degraded" filler on
+    // the arrow — the edge COLOUR already conveys degraded; text stays meaningful.
+    const lossTxt = isFinite(lossPct) && lossPct > 0 ? `${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss` : "";
+    const measuredDegraded = (isFinite(lossPct) && lossPct > 0) || pathSigs.some((x) => /rtt|latency/.test(x.kind));
     const stampParts: string[] = [];
     if (isFinite(lossPct) && lossPct > 0) stampParts.push(`${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss`);
     if (isFinite(rttMs)) stampParts.push(`${rttMs.toFixed(rttMs < 10 ? 2 : 1)} ms rtt`);
@@ -214,7 +220,23 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
 
     const tracedRows = groupBySignature(matchTraces(ends?.dst, probePaths));
 
-    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, peer, tracedRows, hasPath: !!ends };
+    // DECISION #76 — platform services (api/clickhouse/netbox=Inventory service…)
+    // and monitoring agents (prober/stamp/reflector) are how we OBSERVE, not the
+    // customer network. Drop them from the path; keep only real network entities
+    // (hosts/routers/switches/firewalls/WAN/ISP/cloud/IP endpoints). If NOTHING
+    // customer-facing remains, it's a platform self-monitoring object → render an
+    // "Internal monitoring path" note instead of a fake customer path.
+    for (const k of [...devs.keys()]) if (isInternalEntity(k)) devs.delete(k);
+    const cleanEnds = ends ? {
+      src: isInternalEntity(ends.src) ? "" : ends.src,
+      dst: isInternalEntity(ends.dst) ? "" : ends.dst,
+    } : null;
+    const cleanPeer = peer && !isInternalEntity(peer.peer) ? peer : undefined;
+    if (locusDev && isInternalEntity(locusDev)) locusDev = "";
+    const networkCount = devs.size + (cleanEnds?.src ? 1 : 0) + (cleanEnds?.dst ? 1 : 0) + (cleanPeer ? 1 : 0);
+    const internal = networkCount === 0;
+
+    return { ends: cleanEnds, lossTxt, measuredDegraded, stampTxt, hasStamp, devs, locusDev, seam, peer: cleanPeer, tracedRows, internal, hasPath: !!ends };
   }, [timeline, seams, probePaths]);
 
   const [showStamp, setShowStamp] = useState(false);
@@ -223,7 +245,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const nodes: Node[] = [];
     const edges: Edge[] = [];
     const meta = STATUS_META[statusForVerdict(timeline.verdict_tier)];
-    const { ends, lossTxt, stampTxt, devs, locusDev, seam, peer, tracedRows } = model;
+    const { ends, lossTxt, measuredDegraded, stampTxt, devs, locusDev, seam, peer, tracedRows } = model;
     const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
     const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
 
@@ -254,7 +276,12 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     if (tracedRows.length > 0 && ends) {
       const ROW_H = 168;
       const centerY = ((tracedRows.length - 1) * ROW_H) / 2;
-      node({ id: "src", x: 0, y: centerY, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
+      // observer shown only when it's a real customer vantage (a platform/agent
+      // source was dropped by the #76 filter → start at the first hop).
+      const hasObserver = !!ends.src;
+      if (hasObserver) {
+        node({ id: "src", x: 0, y: centerY, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
+      }
 
       tracedRows.forEach((row, r) => {
         const yBase = r * ROW_H;
@@ -263,7 +290,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         const tag = methodTag(row.methods);
         let faultIdx = hops.findIndex((h) => h.ip && locusDev && (h.ip === locusDev || hopName(h.ip) === locusDev));
         if (faultIdx < 0) faultIdx = hops.length - 1;
-        let prev = "src";
+        let prev = hasObserver ? "src" : "";
         hops.forEach((h, i) => {
           const id = `r${r}h${i}`;
           const isLast = i === hops.length - 1;
@@ -290,7 +317,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
           const segLabel = i === 0 ? firstLabel
             : showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms`
             : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-          link(prev, id, { state: isFault ? faultEdgeState : lossHi ? "degraded" : "healthy", label: segLabel, flow: true });
+          if (prev) link(prev, id, { state: isFault ? faultEdgeState : lossHi ? "degraded" : "healthy", label: segLabel, flow: true });
           prev = id;
         });
       });
@@ -301,7 +328,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     let col = 0;
     let prev: string | null = null;
 
-    if (ends) {
+    if (ends?.src) {
       node({ id: "src", x: col * COL, y: 0, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
       prev = "src"; col++;
     }
@@ -314,7 +341,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         label: view === "debug" ? (seam.seam_id || "boundary") : (seam.display_name || "Provider boundary"),
         sub: `${view === "debug" ? (seam.control_plane_owner ?? "?") : seamOwnerLabel(seam.control_plane_owner)}${vis ? " · " + (view === "debug" ? vis : visibilityLabel(seam.visibility)) : ""}`,
       } });
-      if (prev) link(prev, "seam", { state: lossTxt ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
+      if (prev) link(prev, "seam", { state: measuredDegraded ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
       prev = "seam"; col++;
     }
 
@@ -324,7 +351,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         label: entityLabel(locus.dev), badge: `${meta.sym} ${meta.word}${targetIsLocus ? " · dest" : ""}`,
         chips: locus.elements.slice(0, 4), hasBottom: true,
       } });
-      if (prev) link(prev, "fault", { state: lossTxt ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
+      if (prev) link(prev, "fault", { state: measuredDegraded ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
       prev = "fault"; col++;
 
       // co-affected devices branch below the locus
@@ -341,20 +368,31 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
 
     // CONTROL-PLANE PEER: the far end of a BGP/peering session = the rest of the
     // path (fixes "lone WAN-R2" — a flap is device → peer, the total segment).
-    if (peer && !ends) {
+    if (peer && !ends?.dst) {
       const down = /down|idle|active|flap/i.test(peer.state);
       node({ id: "peer", x: col * COL, y: 0, data: {
         kind: "router", tone: down ? meta.color : C.info, label: peer.peer, mono: true, sub: `${peer.rel.toLowerCase()} peer`, hasOut: false,
       } });
       if (prev) link(prev, "peer", { state: down ? faultEdgeState : "healthy", label: `${peer.rel}${peer.state ? " " + peer.state : ""}` });
       prev = "peer"; col++;
-    } else if (ends && !targetIsLocus) {
+    } else if (ends?.dst && ends.dst !== locusDev) {
       node({ id: "dst", x: col * COL, y: 0, data: { kind: destKind(ends.dst), tone: C.info, label: entityLabel(ends.dst), sub: "destination", hasOut: false } });
       if (prev) link(prev, "dst", {});
     }
 
     return { rfNodes: nodes, rfEdges: edges };
   }, [model, timeline.verdict_tier, view, showStamp, deviceByIp]);
+
+  // Platform self-monitoring object (no customer network entity) → don't dress it
+  // up as a customer path (decision #76).
+  if (model.internal) {
+    return (
+      <div style={{ fontSize: 12.5, padding: "12px 14px", borderRadius: 10, border: "1px solid var(--border,#2a2f3a)", background: "var(--panel,#151b2b)", color: C.muted, display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 18, opacity: 0.7 }}>◎</span>
+        <span><b style={{ color: "var(--fg,#e6edf3)" }}>Internal monitoring path</b> — this is the platform observing itself (monitoring agents / platform services), not a customer network path. See Stack Health for self-monitoring.</span>
+      </div>
+    );
+  }
 
   if (rfNodes.length === 0 || (!model.hasPath && !model.locusDev)) {
     return (
