@@ -10,6 +10,7 @@ import VendorIcon from "../components/VendorIcon";
 import { brandDataUri, vendorKey } from "../components/vendorBrands";
 import { NetIcon, kindForDevice, type NetKind } from "../components/graph/NetIcon";
 import FlowEdge from "../components/graph/FlowEdge";
+import { layoutTopology, type TopoType } from "../components/graph/topologyLayout";
 
 // Topology — a modern NOC device map (React Flow). Devices are drawn as real
 // network SHAPES (router circle, switch hexagon, firewall shield, gateway diamond,
@@ -19,9 +20,10 @@ import FlowEdge from "../components/graph/FlowEdge";
 // Clicking a node opens a detail panel. Links are inferred from role tiers until
 // LLDP/CDP/BGP-LS discovery lands (tracker #77).
 
-const TIER: Record<string, number> = {
-  core: 0, distribution: 1, dist: 1, aggregation: 1, agg: 1, firewall: 1, fw: 1,
-  edge: 2, access: 2, leaf: 2,
+// Human labels for the detected topology shape (from the layout engine).
+const TOPO_TYPE_LABEL: Record<TopoType, string> = {
+  star: "Star", ring: "Ring", bus: "Bus", tree: "Tree",
+  clos: "Spine-leaf (CLOS)", mesh: "Mesh", hybrid: "Hybrid",
 };
 
 type Health = "ok" | "warning" | "critical";
@@ -34,10 +36,6 @@ function roleOf(d: Device): string {
 }
 function siteOf(d: Device): string {
   return d.labels?.site || d.labels?.location || "default";
-}
-function tierOf(d: Device): number {
-  const t = TIER[roleOf(d)];
-  return t === undefined ? 2 : t;
 }
 function healthFor(id: string, alertsByDev: Record<string, SeverityKey>): Health {
   const sev = alertsByDev[id];
@@ -161,108 +159,84 @@ export default function Topology() {
     return { physicalCount: p, logicalCount: l, igpName: [...igs].sort().join(" / ") };
   }, [links]);
 
-  const { rfNodes, rfEdges, counts } = useMemo(() => {
+  const { rfNodes, rfEdges, counts, topoType } = useMemo(() => {
     // Only the active sub-object's links are drawn. A "bgp_ls+lldp" link is both
     // physical and logical, so it shows in either view.
     const viewLinks = links.filter((lk) => (view === "logical" ? isLogical(lk) : isPhysical(lk)));
-    const bySiteTier: Record<string, Record<number, Device[]>> = {};
-    for (const d of devices) {
-      const s = siteOf(d), t = tierOf(d);
-      (bySiteTier[s] ??= {})[t] ??= [];
-      bySiteTier[s][t].push(d);
+    const deviceById = new Map(devices.map((d) => [d.id, d]));
+
+    // External (unmanaged) endpoints: a neighbour no managed device resolves to —
+    // Internet / another domain. Drawn as a plain cloud so the edge of visibility
+    // is explicit.
+    const extNodes = new Map<string, string>(); // id → display name
+    for (const lk of viewLinks) {
+      if (lk.target.startsWith("ext:") && deviceById.has(lk.source) && !extNodes.has(lk.target)) {
+        extNodes.set(lk.target, lk.target_name && lk.target_name !== "external" ? lk.target_name : "");
+      }
     }
-    const X_GAP = 180, Y_GAP = 165, SITE_GAP = 110;
-    const rfNodes: Node[] = [];
-    const rfEdges: Edge[] = [];
+    const plottable = (id: string) => deviceById.has(id) || extNodes.has(id);
+
+    // Classify + position from the OBSERVED adjacency (no fixed tier assumption).
+    const layoutNodes = [
+      ...devices.map((d) => ({ id: d.id, role: roleOf(d) })),
+      ...[...extNodes.keys()].map((id) => ({ id, role: undefined as string | undefined })),
+    ];
+    const layoutEdges = viewLinks
+      .filter((lk) => plottable(lk.source) && plottable(lk.target))
+      .map((lk) => ({ source: lk.source, target: lk.target }));
+    const { type: topoType, positions, layer } = layoutTopology(layoutNodes, layoutEdges);
+
     const counts = { ok: 0, warning: 0, critical: 0 };
-    let xCursor = 0;
-
-    for (const site of Object.keys(bySiteTier).sort()) {
-      const tiers = bySiteTier[site];
-      const maxRow = Math.max(...Object.values(tiers).map((a) => a.length), 1);
-      const siteWidth = maxRow * X_GAP;
-      const present = Object.keys(tiers).map(Number).sort((a, b) => a - b);
-
-      for (const t of present) {
-        const row = tiers[t];
-        row.forEach((d, i) => {
-          const x = xCursor + (siteWidth / (row.length + 1)) * (i + 1);
-          const y = t * Y_GAP;
-          const h = healthFor(d.id, alertsByDev);
-          counts[h]++;
-          rfNodes.push({
-            id: d.id, type: "device", position: { x, y }, draggable: true,
-            data: {
-              kind: kindForDevice(roleOf(d)), tone: HEALTH_COLOR[h], health: h,
-              name: d.name || d.id, role: roleOf(d), addr: d.address || "",
-              logo: vendorIcons[vendorKey(d.vendor || "")] || brandDataUri(d.vendor || ""),
-              icon: typeIcons[kindForDevice(roleOf(d))],
-            },
-          });
-        });
-      }
-      // Inferred tier links (each node → each node in the next non-empty tier) are
-      // a FALLBACK only — used in the PHYSICAL view when no real L2 adjacencies have
-      // been discovered. The Logical view never infers IGP adjacency from tiers (it
-      // would be dishonest) — it shows an honest empty state instead.
-      if (viewLinks.length === 0 && view === "physical") {
-        for (let ti = 0; ti < present.length - 1; ti++) {
-          for (const u of tiers[present[ti]]) for (const l of tiers[present[ti + 1]]) {
-            rfEdges.push({
-              id: `tier-${u.id}-${l.id}`, source: u.id, sourceHandle: "b", target: l.id, targetHandle: "t",
-              type: "flow", data: { flow: true, state: "healthy", particles: 1, speed: 4 },
-              style: { stroke: "#3f4a5e", strokeWidth: 1.4, opacity: 0.7, strokeDasharray: "5 4" },
-            });
-          }
-        }
-      }
-      xCursor += siteWidth + SITE_GAP;
+    const rfNodes: Node[] = [];
+    for (const d of devices) {
+      const h = healthFor(d.id, alertsByDev);
+      counts[h]++;
+      rfNodes.push({
+        id: d.id, type: "device", position: positions[d.id] ?? { x: 0, y: 0 }, draggable: true,
+        data: {
+          kind: kindForDevice(roleOf(d)), tone: HEALTH_COLOR[h], health: h,
+          name: d.name || d.id, role: roleOf(d), addr: d.address || "",
+          logo: vendorIcons[vendorKey(d.vendor || "")] || brandDataUri(d.vendor || ""),
+          icon: typeIcons[kindForDevice(roleOf(d))],
+        },
+      });
+    }
+    for (const [id, name] of extNodes) {
+      rfNodes.push({
+        id, type: "device", position: positions[id] ?? { x: 0, y: 0 }, draggable: true,
+        data: { kind: "cloud", tone: "#7c8aa5", health: "ok", name, role: "", addr: "" },
+      });
     }
 
-    // REAL topology: discovered adjacencies (tenant-scoped, deduped) for the active
-    // sub-object. Physical = LLDP/CDP L2; Logical = BGP-LS IGP (IS-IS/OSPF), drawn
-    // as a violet dashed L3 overlay with the IGP/area on the label. Draws only
-    // between plotted nodes; unresolved neighbours become a light "external" node.
-    if (viewLinks.length > 0) {
-      const logicalView = view === "logical";
-      const nodeIds = new Set(rfNodes.map((n) => n.id));
-      const posOf = (id: string) => rfNodes.find((n) => n.id === id)?.position ?? { x: 0, y: 0 };
-      const extPlaced = new Set<string>();
-      for (const lk of viewLinks) {
-        if (!nodeIds.has(lk.source)) continue;
-        let target = lk.target;
-        if (!nodeIds.has(target)) {
-          if (!lk.target.startsWith("ext:")) continue;
-          // A hop that no managed device reports back (not in inventory) is an
-          // unmanaged boundary (Internet / another domain). Draw it as a plain
-          // cloud icon so the edge of our visibility is explicit, not a gap — no
-          // "Internet/ISP" wording, the cloud says it.
-          if (!extPlaced.has(target)) {
-            extPlaced.add(target);
-            const p = posOf(lk.source);
-            const extName = lk.target_name && lk.target_name !== "external" ? lk.target_name : "";
-            rfNodes.push({
-              id: target, type: "device", position: { x: p.x + 40, y: p.y + 150 }, draggable: true,
-              data: { kind: "cloud", tone: "#7c8aa5", health: "ok", name: extName, role: "", addr: "" },
-            });
-            nodeIds.add(target);
-          }
-        }
-        const portLabel = [lk.local_port, lk.remote_port].filter(Boolean).join(" ↔ ");
-        const label = logicalView
-          ? [igpLabel(lk.igp), lk.area ? `area ${lk.area}` : "", portLabel].filter(Boolean).join(" · ")
-          : (portLabel || undefined);
-        rfEdges.push({
-          id: `${view}-${lk.source}-${target}`, source: lk.source, sourceHandle: "r", target, targetHandle: "l",
-          type: "flow", label: label || undefined,
-          data: { flow: true, state: "healthy", particles: logicalView ? 1 : 2, speed: 3.4 },
-          style: {
-            stroke: logicalView ? "#a78bfa" : (lk.resolved ? "#5a93c2" : "#6b7280"),
-            strokeWidth: lk.bidirectional ? 2.2 : 1.6, opacity: 0.92,
-            ...(logicalView ? { strokeDasharray: "6 3" } : {}),
-          },
-        });
+    // Edges follow real adjacency, oriented by layer: cross-layer links run
+    // vertically (upper node's bottom → lower node's top = tree/CLOS look),
+    // same-layer links run horizontally (siblings). No inferred/mesh edges.
+    const rfEdges: Edge[] = [];
+    const logicalView = view === "logical";
+    for (const lk of viewLinks) {
+      if (!positions[lk.source] || !positions[lk.target]) continue;
+      const la = layer[lk.source] ?? 0, lb = layer[lk.target] ?? 0;
+      let source = lk.source, target = lk.target, sourceHandle = "r", targetHandle = "l";
+      if (la !== lb) {
+        if (la > lb) { source = lk.target; target = lk.source; } // ensure upper→lower
+        sourceHandle = "b"; targetHandle = "t";
+      } else if (positions[lk.target].x < positions[lk.source].x) {
+        source = lk.target; target = lk.source; // ensure left→right
       }
+      const portLabel = [lk.local_port, lk.remote_port].filter(Boolean).join(" ↔ ");
+      const label = logicalView
+        ? [igpLabel(lk.igp), lk.area ? `area ${lk.area}` : "", portLabel].filter(Boolean).join(" · ")
+        : (portLabel || undefined);
+      rfEdges.push({
+        id: `${view}-${lk.source}-${lk.target}`, source, sourceHandle, target, targetHandle,
+        type: "flow", label: label || undefined,
+        data: { flow: true, state: "healthy", particles: logicalView ? 1 : 2, speed: 3.4 },
+        style: {
+          stroke: logicalView ? "#a78bfa" : (lk.resolved ? "#5a93c2" : "#6b7280"),
+          strokeWidth: lk.bidirectional ? 2.2 : 1.6, opacity: 0.92,
+          ...(logicalView ? { strokeDasharray: "6 3" } : {}),
+        },
+      });
     }
 
     // overlay tunnels (real latency/status) on top, if endpoints resolve.
@@ -287,7 +261,7 @@ export default function Topology() {
         style: { stroke: color, strokeWidth: 2.4, opacity: 0.95 },
       });
     }
-    return { rfNodes, rfEdges, counts };
+    return { rfNodes, rfEdges, counts, topoType };
   }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links, view]);
 
   const vendors = useMemo(() => {
@@ -344,6 +318,11 @@ export default function Topology() {
           </p>
         </div>
         <div className="topo-stats">
+          {rfEdges.length > 0 && (
+            <span className="topo-stat" title="Layout auto-detected from the discovered adjacency">
+              <b>{TOPO_TYPE_LABEL[topoType]}</b> layout
+            </span>
+          )}
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.ok }}>{counts.ok}</b> healthy</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
