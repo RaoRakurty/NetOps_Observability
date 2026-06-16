@@ -171,9 +171,9 @@ export default function RcaPathView({ timeline, seams, owner }: {
         )}
       </div>
 
-      {/* WHERE it sits: the likely fault location + the grounded topology (every
-          connection with its strength = edge weight), so the operator sees the
-          failure's place on the path, not just a verdict. */}
+      {/* WHERE it sits: localization (confirmed → "Likely fault location",
+          suspected → "Evidence localizes to") + the grounded relationships, in NOC
+          language — edge weights/strength stay in Debug View. */}
       {locus && (
         <div style={{ fontSize: 14, lineHeight: 1.5, color: segTone, fontWeight: 700 }}>
           {segSym} {confirmed ? "Likely fault location" : internalOnly ? "Internal check path" : "Evidence localizes to"}: <span style={{ ...chip, color: segTone, background: segTone + "1c", border: `1px solid ${segTone}66` }}>{locus}</span>
