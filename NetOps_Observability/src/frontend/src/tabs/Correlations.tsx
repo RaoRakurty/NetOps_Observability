@@ -8,6 +8,7 @@ import RcaSummary from "../components/rca/RcaSummary";
 import RcaPathView from "../components/rca/RcaPathView";
 import RcaTopology, { classifyRcaPath } from "../components/rca/RcaTopology";
 import CaseContext from "../components/rca/CaseContext";
+import { exportRcaPdf } from "../components/rca/rcaExport";
 import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor, isInternalStackAffected, signalClassKey, signalClassTitle, CLASS_NOUN } from "../components/rca/labels";
 
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
@@ -351,8 +352,26 @@ export function CorrelationDetail({ id }: { id: string }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 9, fontSize: 13 }}>
-      {/* operator ↔ debug toggle */}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 0 }}>
+      {/* top bar: export to PDF (left) + operator ↔ debug toggle (right) */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <button
+          onClick={() => {
+            if (!timeline) return;
+            const ok = exportRcaPdf(timeline, seams, recommendedOwner, recommendedSteps, obj.correlation_id || "");
+            if (!ok) alert("Allow pop-ups for this site to export the RCA as PDF.");
+          }}
+          disabled={!timeline}
+          title="Generate an elegant, print-ready RCA report (Save as PDF)"
+          style={{
+            fontSize: 12.5, fontWeight: 600, padding: "4px 12px", cursor: timeline ? "pointer" : "default",
+            border: "1px solid var(--border,#2a2f3a)", borderRadius: 5,
+            background: "transparent", color: "var(--fg,#e6edf3)", display: "inline-flex", alignItems: "center", gap: 6,
+            opacity: timeline ? 1 : 0.5,
+          }}
+        >
+          ⤓ Export PDF
+        </button>
+        <div style={{ display: "flex", gap: 0 }}>
         {(["operator", "debug"] as const).map((v) => (
           <button key={v} onClick={() => setView(v)} style={{
             fontSize: 12.5, padding: "2px 10px", cursor: "pointer", textTransform: "capitalize",
@@ -362,6 +381,7 @@ export function CorrelationDetail({ id }: { id: string }) {
             color: view === v ? "#fff" : "var(--muted)",
           }}>{v} view</button>
         ))}
+        </div>
       </div>
 
       {/* RCA story: clean header, plain-English summary, mini seam preview,

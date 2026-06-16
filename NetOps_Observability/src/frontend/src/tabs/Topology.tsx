@@ -400,7 +400,7 @@ export default function Topology() {
             <ReactFlow
               nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               fitView fitViewOptions={{ padding: 0.18 }} proOptions={{ hideAttribution: true }}
-              nodesConnectable={false} minZoom={0.2} maxZoom={1.6}
+              nodesConnectable={false} minZoom={0.2} maxZoom={1.6} zoomOnScroll={false} preventScrolling={false}
               onNodeClick={(_, n) => setSelected(n.id)} onPaneClick={() => setSelected(null)}
             >
               <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />

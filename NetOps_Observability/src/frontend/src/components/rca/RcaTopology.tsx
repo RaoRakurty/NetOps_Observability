@@ -486,7 +486,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         fitView fitViewOptions={{ padding: 0.28, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }}
         nodesConnectable={false} elementsSelectable nodesDraggable panOnDrag
-        minZoom={0.3} maxZoom={1.8} zoomOnScroll preventScrolling
+        minZoom={0.3} maxZoom={1.8} zoomOnScroll={false} preventScrolling={false}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />
         <Controls showInteractive={false} position="bottom-right" />
