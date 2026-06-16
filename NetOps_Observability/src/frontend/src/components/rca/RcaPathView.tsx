@@ -76,7 +76,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
     border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "10px 14px",
     background: "var(--panel,#11151c)", display: "flex", flexDirection: "column", gap: 9, minWidth: 0,
   };
-  const titleStyle: React.CSSProperties = { fontWeight: 700, fontSize: 13.5, color: C.fg };
+  const titleStyle: React.CSSProperties = { fontWeight: 700, fontSize: 15, color: C.fg };
   const muted: React.CSSProperties = { color: C.muted };
   const chip: React.CSSProperties = {
     fontSize: 12.5, background: "var(--bg,#0d1117)", padding: "2px 8px", borderRadius: 5,
@@ -93,7 +93,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
     return (
       <div style={card}>
         <div style={titleStyle}>{title}</div>
-        <div style={{ fontSize: 13, color: C.fg }}>
+        <div style={{ fontSize: 14, lineHeight: 1.5, color: C.fg }}>
           {SYM.unknown} Issue observed, path location unknown — not enough evidence to place it on a path or boundary yet.
         </div>
         {trig && !mentionsInternal(trig.entity_id) && (
@@ -138,7 +138,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
           connection with its strength = edge weight), so the operator sees the
           failure's place on the path, not just a verdict. */}
       {locus && (
-        <div style={{ fontSize: 13, color: segTone, fontWeight: 700 }}>
+        <div style={{ fontSize: 14, lineHeight: 1.5, color: segTone, fontWeight: 700 }}>
           {segSym} Likely fault location: <span style={{ ...chip, color: segTone, background: segTone + "1c", border: `1px solid ${segTone}66` }}>{locus}</span>
           {visLimited ? ` · ${SYM.unknown} limited visibility past this boundary` : ""}
         </div>

@@ -5,7 +5,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { CorrTimeline, CorrSignal, Seam, ProbePath } from "../../services/api";
-import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor, isInternalEntity } from "./labels";
+import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor, isInternalEntity, isRoutingKind, mentionsInternal } from "./labels";
 import { ShapeSVG, kindForRole, type ShapeKind } from "../graph/shapes";
 import FlowEdge from "../graph/FlowEdge";
 
@@ -152,6 +152,59 @@ function groupBySignature(traces: ProbePath[]): { methods: string[]; trace: Prob
 
 const methodTag = (methods: string[]): string =>
   methods.map((m) => (m === "auto" ? "ICMP→TCP" : m.toUpperCase())).join(" · ");
+
+// classifyRcaPath — decide WHAT the path/context view is for this object and
+// whether it can be placed on a canvas at all. Drives the section title (so we
+// never call a BGP-only object an "End-to-end path") and the compact empty-state
+// when there is nothing structural to draw. Pure; mirrors the model the canvas
+// builds. Precedence: full path → interface/link → routing peer → ownership
+// boundary → device area → (unplaceable).
+export type RcaPathCtx = {
+  title: string; subtitle?: string; placeable: boolean; strongest?: string;
+};
+export function classifyRcaPath(timeline: CorrTimeline, _seams?: Record<string, Seam>): RcaPathCtx {
+  const sigs = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
+  const isDebug = (s: CorrSignal) =>
+    s.probe_authority === "debug_only" || s.probe_scope === "internal_self_probe" || s.probe_scope === "synthetic_lab_probe";
+
+  // internal/self-monitoring only (every attached signal an internal probe)
+  const probes = sigs.filter((s) => s.modality_class === "active_probe");
+  const others = sigs.filter((s) => s.modality_class !== "active_probe");
+  if (sigs.length > 0 && others.length === 0 && probes.length > 0 && probes.every(isDebug))
+    return { title: "Internal monitoring path", placeable: true };
+
+  const edges = timeline.edges ?? [];
+  const seamEdge = edges.find((e) => e.grounding_kind === "seam");
+
+  // measured path with both ends real (customer source → destination)
+  const pathSig = sigs.find((s) => s.entity_type === "path" && s.is_trigger) ?? sigs.find((s) => s.entity_type === "path");
+  const ends = pathSig ? splitPath(pathSig.entity_id) : null;
+  const fullPath = !!(ends && !isInternalEntity(ends.src) && !isInternalEntity(ends.dst) && ends.src && ends.dst);
+
+  // a local interface/link the issue sits on (link_state, if counters, …)
+  const ifaceSig = sigs.find((s) => s.entity_type === "interface" && !isInternalEntity(s.entity_id));
+
+  // a routing peer/session (BGP/OSPF/… with a named far end)
+  const hasRouting = sigs.some((s) => isRoutingKind(s.kind));
+
+  // device the grounded edges converge on (topo shared:X), non-internal
+  const share = new Map<string, number>();
+  for (const e of edges) if (e.grounding_kind === "topo" && e.grounding_ref.startsWith("shared:")) {
+    const x = e.grounding_ref.slice(7);
+    if (!isInternalEntity(x)) share.set(x, (share.get(x) ?? 0) + 1);
+  }
+  const locus = [...share.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+
+  const trig = sigs.find((s) => s.is_trigger) ?? sigs[0] ?? timeline.signals[0];
+  const strongest = trig && !mentionsInternal(trig.entity_id) ? entityLabel(trig.entity_id) : undefined;
+
+  if (fullPath) return { title: "End-to-end path", placeable: true };
+  if (ifaceSig) return { title: "Affected link or interface", placeable: true };
+  if (hasRouting) return { title: "Routing context", subtitle: "The routing peer/session involved in this issue.", placeable: true };
+  if (seamEdge) return { title: "Ownership boundary involved", subtitle: "A provider/ownership handoff is part of this issue.", placeable: true };
+  if (locus) return { title: "Affected device area", placeable: true };
+  return { title: "Path location not known yet", placeable: false, strongest };
+}
 
 export default function RcaTopology({ timeline, seams, view = "operator", height = 320, probePaths, deviceByIp }: {
   timeline: CorrTimeline;

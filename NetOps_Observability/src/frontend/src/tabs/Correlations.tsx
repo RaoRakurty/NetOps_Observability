@@ -6,8 +6,8 @@ import RcaTimeline, { STATUS_COLOR } from "../components/rca/RcaTimeline";
 import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
 import RcaPathView from "../components/rca/RcaPathView";
-import RcaTopology from "../components/rca/RcaTopology";
-import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor, isInternalStackAffected } from "../components/rca/labels";
+import RcaTopology, { classifyRcaPath } from "../components/rca/RcaTopology";
+import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor, isInternalStackAffected, signalClassKey, signalClassTitle, CLASS_NOUN } from "../components/rca/labels";
 
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
 // entity is our own infra) are hidden by default and revealed via a toggle for
@@ -41,15 +41,12 @@ function signalOperatorFields(s: CorrSignal): {
   const isProbe = s.modality_class === "active_probe";
   const debugOnly = s.probe_authority === "debug_only";
   const low = s.probe_authority === "low";
-  // check type
-  let checkType: string;
-  if (isProbe) {
-    checkType = /loss/.test(k) ? "Active check: packet loss"
-      : /rtt|latency/.test(k) ? "Active check: response time changed"
-      : "Active check";
-  } else if (s.modality_class === "control_plane") checkType = `Routing & link event: ${kindLabel(k)}`;
-  else if (s.modality_class === "passive_flow") checkType = `Traffic-flow signal: ${kindLabel(k)}`;
-  else checkType = `Device-health signal: ${kindLabel(k)}`;
+  // check type — classed by the operator lane (routing/link, device-health,
+  // traffic-flow, active-check). Routing kinds (BGP/OSPF/…) read as routing/link
+  // even when polled, so a BGP state change never shows as "Device-health".
+  const classKey = signalClassKey(s);
+  const checkType = signalClassTitle(s);
+  const classNoun = CLASS_NOUN[classKey] ?? "supporting";
   // from / to
   const raw = s.entity_id || "";
   const [fromRaw, toRaw] = raw.includes("->") ? raw.split("->") : [raw, ""];
@@ -72,9 +69,11 @@ function signalOperatorFields(s: CorrSignal): {
     impact = "Low";
     next = "Confirm with device health, a routing/link event, or traffic loss.";
   } else if (s.attached) {
-    why = `Counted as ${s.link_role || "supporting"} evidence for this issue.`;
-    impact = isProbe ? "Supports the case" : "Contributes to the case";
-    next = "Correlate with the other evidence in the timeline.";
+    why = `Counted as ${s.link_role || "supporting"} ${classNoun} evidence for this issue.`;
+    impact = (isProbe ? "Supports the case" : "Contributes to the case") + ", but does not confirm impact alone.";
+    next = classKey === "control_plane"
+      ? "Correlate with peer-side state, interface errors/drops, traffic loss, or active checks."
+      : "Correlate with the other evidence in the timeline.";
   } else if (s.link_status === "recovery") {
     why = nocUnlinkedReason(s);
     impact = "None — recovery";
@@ -341,7 +340,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   const recommendedSteps: string[] = topHyp?.verdict?.first_steps ?? [];
   const recommendedOwner: string = topHyp?.verdict?.owner ?? "";
   const muted: React.CSSProperties = { color: "#AEB9CC" };
-  const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginBottom: 2 };
+  const titleStyle: React.CSSProperties = { fontWeight: 700, fontSize: 15, marginBottom: 3 };
   const row = (k: string, v: React.ReactNode) => (
     <div style={{ display: "flex", gap: 8, fontSize: 13, padding: "2px 0" }}>
       <span style={{ ...muted, minWidth: 110 }}>{k}</span>
@@ -372,18 +371,41 @@ export function CorrelationDetail({ id }: { id: string }) {
           recommendedSteps={recommendedSteps} owner={recommendedOwner} affected={obj.affected} />
       )}
 
-      {/* END-TO-END TOPOLOGY — the path observer→target with the fault marked
-          (broken / suspected / possible). Data-driven overlay; live-trace fusion
-          is the next phase. */}
-      {timeline && (
-        <div>
-          <div style={titleStyle}>End-to-end path</div>
-          <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
-            Where the issue sits on the path — and exactly what&apos;s broken there. Drag to arrange; scroll the page, drag the canvas to pan.
+      {/* PATH / CONTEXT — title is context-aware (End-to-end path · Routing context
+          · Affected link or interface · Ownership boundary · Affected device area).
+          With nothing structural to place, we show a compact card, never an empty
+          canvas (it must never overclaim a full app path). */}
+      {timeline && (() => {
+        const ctx = classifyRcaPath(timeline, seams);
+        return (
+          <div>
+            <div style={titleStyle}>{ctx.title}</div>
+            <div style={{ ...muted, fontSize: 13, marginBottom: 4 }}>
+              {ctx.subtitle
+                ? ctx.subtitle
+                : ctx.placeable
+                  ? "Where the issue sits — and what's involved there. Drag to arrange; scroll the page, drag the canvas to pan."
+                  : ""}
+            </div>
+            {ctx.placeable ? (
+              <RcaTopology timeline={timeline} seams={seams} view={view} probePaths={probePaths} deviceByIp={deviceByIp} />
+            ) : (
+              <div style={{ border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "12px 14px", background: "var(--panel,#11151c)" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Path location not known yet</div>
+                <div style={{ ...muted, fontSize: 13, lineHeight: 1.5, marginTop: 3 }}>
+                  The issue was observed, but Correlix does not yet have enough topology, path, or boundary
+                  evidence to place it on a specific path segment or boundary.
+                </div>
+                {ctx.strongest && (
+                  <div style={{ ...muted, fontSize: 13, marginTop: 5 }}>
+                    Strongest sign: <b style={{ color: "var(--fg)" }}>{ctx.strongest}</b>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          <RcaTopology timeline={timeline} seams={seams} view={view} probePaths={probePaths} deviceByIp={deviceByIp} />
-        </div>
-      )}
+        );
+      })()}
 
       {/* RCA path view (operator only) — the textual "evidence along the path"
           breakdown beneath the topology; full grounded graph stays in Debug. */}
@@ -394,7 +416,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       {/* PRIMARY: the evidence timeline */}
       <div>
         <div style={titleStyle}>Evidence timeline</div>
-        <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
+        <div style={{ ...muted, fontSize: 13, marginBottom: 4 }}>
           Tip: Click any marker to see what was observed and why it was or was not used.
         </div>
         {timeline
@@ -444,22 +466,38 @@ export function CorrelationDetail({ id }: { id: string }) {
         })()}
       </div>
 
-      {/* SECONDARY: the related-evidence map (engine's grounded causal graph) */}
+      {/* SECONDARY: the related-evidence map. Operator View speaks plainly and
+          NEVER shows an empty graph or a "(0 links)" metric — with no related
+          evidence it states that in words. Debug View keeps the engine graph. */}
       <div>
-        <div style={titleStyle}>{view === "debug" ? `Grounded causal graph (${edges.length} edge${edges.length === 1 ? "" : "s"})` : `How the evidence relates (${edges.length} link${edges.length === 1 ? "" : "s"})`}</div>
-        <div style={{ ...muted, fontSize: 12.5, marginBottom: 4 }}>
-          {view === "debug"
-            ? "Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction."
-            : "◆ marks a provider/ownership boundary (who owns it + how much we can see). Click a link to highlight its evidence on the timeline. An arrow shows direction only when we're confident."}
-        </div>
-        {/* For sparse objects (1–2 edges) the force graph reads as empty, so lead
-            with a compact, clickable relationship preview; the graph follows at a
-            reduced height. ≥3 edges go straight to the graph. */}
-        {edges.length >= 1 && edges.length <= 2 && (
-          <RelationshipPreview edges={edges} seams={seams} view={view} onSelect={setSelEdge} selected={selEdge} />
+        {view === "operator" && edges.length === 0 ? (
+          <div style={{ border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "10px 14px", background: "var(--panel,#11151c)" }}>
+            <div style={titleStyle}>No related confirming evidence yet</div>
+            <div style={{ ...muted, fontSize: 13, lineHeight: 1.5 }}>
+              This issue currently rests on a single observed signal. Correlix has not found a second
+              related piece of device-health, traffic-flow, active-check, or peer-side routing evidence
+              in this window.
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={titleStyle}>{view === "debug" ? `Grounded causal graph (${edges.length} edge${edges.length === 1 ? "" : "s"})` : "How the evidence relates"}</div>
+            <div style={{ ...muted, fontSize: 13, marginBottom: 4 }}>
+              {view === "debug"
+                ? "Seams (◆) are ownership boundaries — owner + visibility shown. Click an edge to highlight its signals on the timeline. Arrows appear only where the engine claimed direction."
+                : "◆ marks a provider/ownership boundary (who owns it + how much we can see). Click a link to highlight its evidence on the timeline. An arrow shows direction only when we're confident."}
+            </div>
+            {/* For sparse objects (1–2 edges) the force graph reads as empty, so lead
+                with a compact, clickable relationship preview; the graph follows at a
+                reduced height. ≥3 edges go straight to the graph. */}
+            {edges.length >= 1 && edges.length <= 2 && (
+              <RelationshipPreview edges={edges} seams={seams} view={view} onSelect={setSelEdge} selected={selEdge} />
+            )}
+            {edges.length > 0
+              ? <SeamGraph edges={edges} seams={seams} view={view} onSelectEdge={setSelEdge} height={edges.length <= 2 ? 220 : 360} />
+              : <div className="empty" style={{ fontSize: 13 }}>Singleton — opened on a single high-severity signal; no grounded cross-evidence to map.</div>}
+          </>
         )}
-        <SeamGraph edges={edges} seams={seams} view={view} onSelectEdge={setSelEdge}
-          height={edges.length <= 2 ? 220 : 360} />
       </div>
 
       {/* DEBUG-only: pins, competing hypotheses, deterministic replay */}

@@ -178,6 +178,33 @@ export function kindLabel(kind: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+// Operator-facing evidence CLASS for a signal — the lane a NOC reads it as.
+// Routing-protocol kinds (BGP/OSPF/ISIS/…) read as "routing/link" regardless of
+// HOW they were observed: a *polled* BGP state metric (modality device_telemetry)
+// is still routing evidence to an operator, NOT device health. So this classifies
+// by isRoutingKind() over the raw modality_class. The engine's independence /
+// verdict math always uses modality_class; this is DISPLAY-only. Pure + testable.
+export function signalClassKey(s: { kind: string; modality_class: string }): string {
+  return isRoutingKind(s.kind.replace(/_clear$/, "")) ? "control_plane" : s.modality_class;
+}
+// class key → the "<Class> signal:" prefix used on the selected-evidence panel.
+const CLASS_SIGNAL_LABEL: Record<string, string> = {
+  control_plane: "Routing/link signal",
+  device_telemetry: "Device-health signal",
+  passive_flow: "Traffic-flow signal",
+  active_probe: "Active-check signal",
+};
+// class key → short noun for inline prose ("supporting routing/link evidence").
+export const CLASS_NOUN: Record<string, string> = {
+  control_plane: "routing/link", device_telemetry: "device-health",
+  passive_flow: "traffic-flow", active_probe: "active-check",
+};
+// "Routing/link signal: BGP state change" — the operator title for one signal.
+export function signalClassTitle(s: { kind: string; modality_class: string }): string {
+  const key = signalClassKey(s);
+  return `${CLASS_SIGNAL_LABEL[key] ?? "Signal"}: ${kindLabel(s.kind)}`;
+}
+
 // Probe authority model (Step 3) — operator labels + colors.
 export const PROBE_AUTHORITY_META: Record<string, { label: string; color: string }> = {
   high: { label: "High authority", color: C.ok },

@@ -142,6 +142,7 @@ export default function RcaSummary({
       start: timeline.window_start.slice(0, 19),
       end: timeline.window_end.slice(0, 19),
       dur: mm > 0 ? `${mm}m ${ss}s` : `${ss}s`,
+      instant: dur < 1,   // start==end → a point-in-time observation, not a window
     };
   }, [timeline.window_start, timeline.window_end]);
 
@@ -412,14 +413,18 @@ export default function RcaSummary({
       {/* recovery tracking — when link/BGP/probe restore, show resolving vs closed */}
       {(c.recovery ?? 0) > 0 && (
         <div style={{ fontSize: 12.5, color: C.ok, fontWeight: 600, marginTop: -4 }}>
-          ↩ Recovering — {c.recovery} signal{c.recovery === 1 ? "" : "s"} cleared{state !== "open" ? " · object closing" : " · watching for full recovery"}.
+          ↩ Recovering — {c.recovery} signal{c.recovery === 1 ? "" : "s"} cleared; object will close if no new evidence appears.
         </div>
       )}
 
       {/* observed window + duration (item 2) — near the top, both views */}
-      <div style={{ ...muted, fontSize: 12.5, marginTop: -2 }}>
-        Observed window: <span style={{ color: C.fg }}>{windowInfo.start} → {windowInfo.end} UTC</span>
-        {" · duration "}<b style={{ color: C.fg }}>{windowInfo.dur}</b>
+      <div style={{ ...muted, fontSize: 13, marginTop: -2 }}>
+        {windowInfo.instant ? (
+          <>Observed at: <span style={{ color: C.fg }}>{windowInfo.start} UTC</span></>
+        ) : (
+          <>Observed window: <span style={{ color: C.fg }}>{windowInfo.start} → {windowInfo.end} UTC</span>
+          {" · duration "}<b style={{ color: C.fg }}>{windowInfo.dur}</b></>
+        )}
       </div>
 
       {/* affected scope (item 1) — what/where this issue touches, when known */}
@@ -453,7 +458,7 @@ export default function RcaSummary({
 
       {/* why suspected / why not confirmed — makes the verdict trustable */}
       {timeline.verdict_tier === "suspected" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, borderLeft: `3px solid ${C.caution}`, paddingLeft: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 13.5, lineHeight: 1.5, borderLeft: `3px solid ${C.caution}`, paddingLeft: 8 }}>
           {timeline.top_hypothesis !== "undetermined" && (
             <div><b style={{ color: C.caution }}>Why suspected:</b> the signs match a <b>{nocTitle.replace(/^Possible /, "")}</b> using {attachedPlaneLabels.length ? attachedPlaneLabels.join(" + ") : "the available"} evidence.</div>
           )}
