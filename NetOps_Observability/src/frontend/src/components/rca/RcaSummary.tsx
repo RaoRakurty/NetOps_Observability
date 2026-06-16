@@ -9,6 +9,7 @@ import {
 import { episodeEntity } from "./SeamGraph";
 import ConfidenceLadder, { type LadderLevel } from "./ConfidenceLadder";
 import ImpactPanel from "./ImpactPanel";
+import HypothesisStack, { type Hypothesis, type Confidence } from "./HypothesisStack";
 
 // hex+alpha tint helper for calm severity backgrounds.
 const tint = (hex: string, a = "1f") => hex + a;
@@ -451,6 +452,40 @@ export default function RcaSummary({
   const flowTied = (attByPlane["passive_flow"] ?? 0) > 0;
   const probeTied = (attByPlane["active_probe"] ?? 0) > 0 && probe.hasConfirmProbe;
 
+  // ---- Hypothesis ranking (§10): grounded alternatives, never invented --------
+  const hypotheses = useMemo((): Hypothesis[] => {
+    const hasDevice = (attByPlane["device_telemetry"] ?? 0) > 0;
+    const hasRouting = (attByPlane["control_plane"] ?? 0) > 0;
+    const hasFlow = (attByPlane["passive_flow"] ?? 0) > 0;
+    const conf: Confidence = confirmed ? "High" : quality === "candidate" ? "Medium" : "Low";
+    const list: Hypothesis[] = [{
+      title: nocTitle,
+      confidence: conf,
+      why: ladderObserved.length ? `${ladderObserved.join("; ")}.` : "Based on the evidence observed.",
+      missing: confirmed ? undefined : "independent customer-impact evidence",
+    }];
+    // Alternatives are interpretations of the SAME evidence at lower confidence —
+    // only offered while not confirmed (a confirmed verdict isn't second-guessed).
+    if (!confirmed) {
+      if (hasDevice) list.push({
+        title: "Isolated device-health change", confidence: "Low",
+        why: "Device CPU/memory changed, but no traffic-flow or path impact is confirmed.",
+        missing: "traffic-flow loss or path impact tied to this device",
+      });
+      if (hasRouting) list.push({
+        title: "Customer-impacting routing issue", confidence: "Low",
+        why: "A routing/BGP change was observed, but peer-side or downstream evidence is missing.",
+        missing: "peer-side routing state or downstream service impact",
+      });
+      if (!hasDevice && !hasRouting && hasFlow) list.push({
+        title: "Traffic-path issue", confidence: "Low",
+        why: "Traffic-flow changed, but no device or routing evidence corroborates it.",
+        missing: "device-health or routing evidence",
+      });
+    }
+    return list.slice(0, 3);
+  }, [attByPlane, nocTitle, confirmed, quality, ladderObserved]);
+
   return (
     <div style={card}>
       {/* clean header — NOC cause title; status pill + confidence carry certainty.
@@ -547,6 +582,9 @@ export default function RcaSummary({
       {ladderObserved.length > 0 && !confirmed && (
         <ConfidenceLadder level={ladderLevel} observed={ladderObserved} related={ladderRelated} missing={ladderMissing} />
       )}
+
+      {/* hypothesis ranking (§10): explainable, grounded "what else could this be" */}
+      {hypotheses.length > 1 && <HypothesisStack hypotheses={hypotheses} />}
       {probeOnly && (
         <div style={{ fontSize: 12.5, color: C.caution, fontWeight: 600 }}>⚠ Only active checks changed. This is not enough to confirm root cause.</div>
       )}
