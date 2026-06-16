@@ -7,6 +7,7 @@ import SeamGraph, { episodeEntity } from "../components/rca/SeamGraph";
 import RcaSummary from "../components/rca/RcaSummary";
 import RcaPathView from "../components/rca/RcaPathView";
 import RcaTopology, { classifyRcaPath } from "../components/rca/RcaTopology";
+import CaseContext from "../components/rca/CaseContext";
 import { entityLabel, signatureName, ownerLabel, kindLabel, seamOwnerLabel, visibilityLabel, nocUnlinkedReason, seamOwnerColor, isInternalStackAffected, signalClassKey, signalClassTitle, CLASS_NOUN } from "../components/rca/labels";
 
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
@@ -411,6 +412,12 @@ export function CorrelationDetail({ id }: { id: string }) {
           breakdown beneath the topology; full grounded graph stays in Debug. */}
       {view === "operator" && timeline && (
         <RcaPathView timeline={timeline} seams={seams} owner={recommendedOwner} />
+      )}
+
+      {/* case context (§14/§15/§16): ticket sync · related changes · similar
+          incidents — honest empty states until those sources are wired. */}
+      {view === "operator" && timeline && (
+        <CaseContext confirmed={timeline.verdict_tier === "confirmed"} />
       )}
 
       {/* PRIMARY: the evidence timeline */}
