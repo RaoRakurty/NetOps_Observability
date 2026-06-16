@@ -297,7 +297,8 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
           const lossHi = Number(h.loss_pct) > TRACE_LOSS_HI;
           const rtt = Number(h.rtt_ms);
           const ip = h.ip && h.ip !== "" ? h.ip : "*";
-          const name = hopName(ip);
+          // hostname preference: rDNS host (from the trace) → inventory name → IP.
+          const name = h.host || hopName(ip);
           const isFault = i === faultIdx;
           const metric = showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
             : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;

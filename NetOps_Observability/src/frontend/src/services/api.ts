@@ -2012,7 +2012,7 @@ export type PromSeries = { metric: Record<string, string>; values: [number, stri
 // Active-measurement (traceroute) path topology — from /api/probe/paths.
 // `via` is set in priority/auto mode: the fallback method (e.g. "tcp") that
 // filled this hop when the primary method (icmp) got no reply.
-export type ProbeHop = { ttl: number; ip: string; rtt_ms: number; loss_pct: number; via?: string };
+export type ProbeHop = { ttl: number; ip: string; host?: string; rtt_ms: number; loss_pct: number; via?: string };
 // A destination can be traced by more than one method (icmp + tcp); they often
 // diverge, so each (dst, method) is a distinct ProbePath.
 export type ProbePath = { dst: string; method?: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };

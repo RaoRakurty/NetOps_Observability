@@ -211,9 +211,9 @@ def emit_traceroute() -> int:
     paths.append({
         "dst": auto_tgt, "method": "auto", "reached": True, "signature": f"sig-auto-{auto_tgt}",
         "hops": [
-            {"ttl": 1, "ip": "10.0.0.1", "rtt_ms": 0.4},
-            {"ttl": 2, "ip": "172.40.40.52", "rtt_ms": 2.6, "via": "tcp"},  # icmp "*" → filled by tcp
-            {"ttl": 3, "ip": auto_tgt, "rtt_ms": 6.2},
+            {"ttl": 1, "ip": "10.0.0.1", "host": "lan-gw1", "rtt_ms": 0.4},
+            {"ttl": 2, "ip": "172.40.40.52", "host": "wan-edge2", "rtt_ms": 2.6, "via": "tcp"},  # icmp "*" → filled by tcp
+            {"ttl": 3, "ip": auto_tgt, "host": "dc-core1", "rtt_ms": 6.2},
         ],
     })
     for tgt in PROBE_TARGETS:

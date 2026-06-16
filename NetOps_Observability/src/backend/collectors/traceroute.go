@@ -34,9 +34,51 @@ import (
 type Hop struct {
 	TTL   int     `json:"ttl"`
 	IP    string  `json:"ip"`
-	RTTms float64 `json:"rtt_ms"` // best (min) RTT across this hop's probes
+	Host  string  `json:"host,omitempty"` // rDNS hostname for IP (best-effort), so the UI shows names not IPs
+	RTTms float64 `json:"rtt_ms"`         // best (min) RTT across this hop's probes
 	Loss  float64 `json:"loss_pct"`
 	Via   string  `json:"via,omitempty"` // priority/auto mode: fallback method that filled this hop
+}
+
+// ── reverse DNS (hop IP → hostname) ───────────────────────────────────────────
+// Resolved best-effort with a short timeout and cached process-wide (PTR records
+// rarely change), so the UI can label hops by name. Empty when no PTR exists.
+// Disable with TRACEROUTE_RDNS=off.
+var (
+	rdnsMu    sync.Mutex
+	rdnsCache = map[string]string{}
+)
+
+func rdnsLookup(ctx context.Context, ip string) string {
+	if ip == "" || os.Getenv("TRACEROUTE_RDNS") == "off" {
+		return ""
+	}
+	rdnsMu.Lock()
+	v, ok := rdnsCache[ip]
+	rdnsMu.Unlock()
+	if ok {
+		return v
+	}
+	c, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
+	name := ""
+	if names, err := net.DefaultResolver.LookupAddr(c, ip); err == nil && len(names) > 0 {
+		name = strings.TrimSuffix(names[0], ".")
+	}
+	rdnsMu.Lock()
+	rdnsCache[ip] = name
+	rdnsMu.Unlock()
+	return name
+}
+
+// resolveHostnames fills Hop.Host for each responding hop (best-effort rDNS).
+func resolveHostnames(ctx context.Context, hops []Hop) {
+	for i := range hops {
+		if hops[i].IP == "" || hops[i].Host != "" {
+			continue
+		}
+		hops[i].Host = rdnsLookup(ctx, hops[i].IP)
+	}
 }
 
 // PathResult is the latest trace to a destination, exposed to the API/UI. A
@@ -193,6 +235,7 @@ func traceOnce(ctx context.Context, dst string, cfg traceConfig) (PathResult, er
 		return PathResult{}, err
 	}
 	res.Method = methodLabel(cfg.method)
+	resolveHostnames(ctx, res.Hops) // rDNS so the UI shows hostnames, not IPs
 	return res, nil
 }
 
