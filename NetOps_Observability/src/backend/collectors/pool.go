@@ -60,6 +60,7 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewSTAMPReflector())
 	p.register(NewTraceroute())
 	p.register(NewSynthetics())
+	p.register(NewLLDP(targets))
 	return p
 }
 

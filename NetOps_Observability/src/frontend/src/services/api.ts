@@ -1124,6 +1124,9 @@ export const api = {
     request<ClickHouseResponse>(`/api/flows/by-type?since=${sinceSeconds}s`),
   // Active-measurement path topology (traceroute).
   probePaths: () => request<ProbePath[]>("/api/probe/paths"),
+  // LLDP-discovered topology adjacencies (tenant-scoped, deduped). Empty when the
+  // LLDP collector is off — the topology then falls back to tier inference.
+  topologyLinks: () => request<{ links: TopoLink[]; count: number; source: string }>("/api/topology/links"),
   // Device Geomap — sites (SoT intent) + per-site device health.
   geomap: () => request<GeomapResponse>("/api/geomap"),
   deviceLocations: () => request<{ devices: DeviceLocationRow[] }>("/api/devices/locations"),
@@ -2016,6 +2019,13 @@ export type ProbeHop = { ttl: number; ip: string; host?: string; rtt_ms: number;
 // A destination can be traced by more than one method (icmp + tcp); they often
 // diverge, so each (dst, method) is a distinct ProbePath.
 export type ProbePath = { dst: string; method?: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
+
+// A normalized topology adjacency (LLDP today; CDP/BGP-LS later via source_protocol).
+export type TopoLink = {
+  source: string; target: string; source_name: string; target_name: string;
+  local_port: string; remote_port: string; source_protocol: string;
+  resolved: boolean; bidirectional: boolean; last_observed_at: number;
+};
 // Device Geomap — NetBox DCIM sites (lat/lng intent data) joined with inventory health.
 export type DeviceLocationRow = {
   id: string; name: string; vendor?: string; site?: string;

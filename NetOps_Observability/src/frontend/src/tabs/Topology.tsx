@@ -4,7 +4,7 @@ import {
   type Node, type Edge, type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { api, Device, Alert, Tunnel } from "../services/api";
+import { api, Device, Alert, Tunnel, TopoLink } from "../services/api";
 import { SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import VendorIcon from "../components/VendorIcon";
 import { brandDataUri, vendorKey } from "../components/vendorBrands";
@@ -105,6 +105,7 @@ export default function Topology() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  const [links, setLinks] = useState<TopoLink[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [vendorIcons, setVendorIcons] = useState<Record<string, string>>(loadVendorIcons);
@@ -115,6 +116,7 @@ export default function Topology() {
     api.devices().then((d) => setDevices(d ?? [])).catch((e) => setError((e as Error).message));
     api.alerts().then((a) => setAlerts(a ?? [])).catch(() => {});
     api.tunnels(200).then((r) => setTunnels((r?.data as Tunnel[]) ?? [])).catch(() => {});
+    api.topologyLinks().then((r) => setLinks(r?.links ?? [])).catch(() => {});
   }, []);
 
   const alertsByDev = useMemo(() => {
@@ -166,17 +168,53 @@ export default function Topology() {
           });
         });
       }
-      // inferred tier links: each node → each node in the next non-empty tier.
-      for (let ti = 0; ti < present.length - 1; ti++) {
-        for (const u of tiers[present[ti]]) for (const l of tiers[present[ti + 1]]) {
-          rfEdges.push({
-            id: `tier-${u.id}-${l.id}`, source: u.id, sourceHandle: "b", target: l.id, targetHandle: "t",
-            type: "flow", data: { flow: true, state: "healthy", particles: 1, speed: 4 },
-            style: { stroke: "#3f4a5e", strokeWidth: 1.4, opacity: 0.7 },
-          });
+      // Inferred tier links (each node → each node in the next non-empty tier) are
+      // a FALLBACK only — used when no real LLDP adjacencies have been discovered.
+      // Real links replace them wholesale below.
+      if (links.length === 0) {
+        for (let ti = 0; ti < present.length - 1; ti++) {
+          for (const u of tiers[present[ti]]) for (const l of tiers[present[ti + 1]]) {
+            rfEdges.push({
+              id: `tier-${u.id}-${l.id}`, source: u.id, sourceHandle: "b", target: l.id, targetHandle: "t",
+              type: "flow", data: { flow: true, state: "healthy", particles: 1, speed: 4 },
+              style: { stroke: "#3f4a5e", strokeWidth: 1.4, opacity: 0.7, strokeDasharray: "5 4" },
+            });
+          }
         }
       }
       xCursor += siteWidth + SITE_GAP;
+    }
+
+    // REAL topology: LLDP-discovered adjacencies (tenant-scoped, deduped). Draws
+    // only between nodes we actually plotted; unresolved neighbours become a light
+    // "external" node so a device→ISP/unmanaged link is still visible and honest.
+    if (links.length > 0) {
+      const nodeIds = new Set(rfNodes.map((n) => n.id));
+      const posOf = (id: string) => rfNodes.find((n) => n.id === id)?.position ?? { x: 0, y: 0 };
+      const extPlaced = new Set<string>();
+      for (const lk of links) {
+        if (!nodeIds.has(lk.source)) continue;
+        let target = lk.target;
+        if (!nodeIds.has(target)) {
+          if (!lk.target.startsWith("ext:")) continue;
+          if (!extPlaced.has(target)) {
+            extPlaced.add(target);
+            const p = posOf(lk.source);
+            rfNodes.push({
+              id: target, type: "device", position: { x: p.x + 40, y: p.y + 150 }, draggable: true,
+              data: { kind: "cloud", tone: HEALTH_COLOR.ok, health: "ok", name: lk.target_name || "external", role: "external", addr: "" },
+            });
+            nodeIds.add(target);
+          }
+        }
+        const portLabel = [lk.local_port, lk.remote_port].filter(Boolean).join(" ↔ ");
+        rfEdges.push({
+          id: `lldp-${lk.source}-${target}`, source: lk.source, sourceHandle: "r", target, targetHandle: "l",
+          type: "flow", label: portLabel || undefined,
+          data: { flow: true, state: "healthy", particles: 2, speed: 3.4 },
+          style: { stroke: lk.resolved ? "#5a93c2" : "#6b7280", strokeWidth: lk.bidirectional ? 2.2 : 1.6, opacity: 0.92 },
+        });
+      }
     }
 
     // overlay tunnels (real latency/status) on top, if endpoints resolve.
@@ -202,7 +240,7 @@ export default function Topology() {
       });
     }
     return { rfNodes, rfEdges, counts };
-  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons]);
+  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links]);
 
   const vendors = useMemo(() => {
     const set = new Set<string>();
@@ -238,14 +276,16 @@ export default function Topology() {
           <h2 style={{ margin: 0 }}>Network Topology</h2>
           <p className="topo-sub">
             Devices as health-coloured network shapes in role tiers; tunnels drawn as
-            latency-coloured traffic-flow overlays. LLDP/CDP/BGP-LS discovery will replace inferred links.
+            latency-coloured traffic-flow overlays. {links.length > 0
+              ? "Links are real LLDP-discovered adjacencies."
+              : "Links are inferred from role tiers (dashed) until LLDP/CDP/BGP-LS discovery is enabled."}
           </p>
         </div>
         <div className="topo-stats">
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.ok }}>{counts.ok}</b> healthy</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
-          <span className="topo-stat"><b>{rfEdges.length}</b> links</span>
+          <span className="topo-stat" title={links.length > 0 ? "LLDP-discovered adjacencies" : "inferred from role tiers"}><b>{rfEdges.length}</b> {links.length > 0 ? "LLDP links" : "inferred links"}</span>
           <button className={`btn${iconEditor ? "" : " accent"}`} onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per device type or vendor">
             {iconEditor ? "Done" : "+ Icons"}
           </button>

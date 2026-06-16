@@ -138,3 +138,14 @@ func FetchProbePaths(ctx context.Context) (string, error) {
 	defer c.Close()
 	return redisCmd(c, "GET", probePathsKey)
 }
+
+// FetchTopologyLinks reads the raw LLDP neighbour records published by the LLDP
+// collector (JSON array of LLDPNeighbor). Returns ("", nil) when the key is absent.
+func FetchTopologyLinks(ctx context.Context) (string, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer c.Close()
+	return redisCmd(c, "GET", topoLinksKey)
+}

@@ -207,6 +207,10 @@ func newServer() *server {
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
+	// LLDP neighbour discovery (real Layer-1 topology links via SNMP LLDP-MIB) —
+	// opt-in; without it the Device Topology keeps the labelled tier-inference
+	// fallback. Reuses the per-device SNMP creds; UDP/161, no raw socket.
+	pool.Enable("lldp", os.Getenv("ENABLE_LLDP_DISCOVERY") == "true")
 	// SNMP trap receiver (UDP/162) — passive listener that decodes v1/v2c/v3
 	// traps and forwards them onto the log bus (→ netops-snmptrap-*). Off by
 	// default; opt in with FEATURE_SNMP_TRAPS=true (see deployment compose).
@@ -683,6 +687,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/flows/services", s.handleFlowsServices) // #69 P2: flow traffic per service
+	mux.HandleFunc("/api/topology/links", s.handleTopologyLinks) // LLDP-discovered adjacencies
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed

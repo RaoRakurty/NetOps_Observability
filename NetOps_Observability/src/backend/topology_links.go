@@ -1,0 +1,182 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"sort"
+	"strings"
+
+	"netops/backend/collectors"
+)
+
+// topology_links.go — GET /api/topology/links : real Layer-1 adjacencies from the
+// LLDP collector, normalized for the Device Topology map.
+//
+// The collector publishes raw directed half-links (device A saw neighbour B on a
+// local port). This read-side handler:
+//   - TENANT-SCOPES: only links whose local device is visible to the caller, and
+//     only resolves a neighbour to a managed device within the CALLER's own
+//     inventory (a neighbour matching another tenant's device stays "external" —
+//     its hostname was advertised to the caller's own device, so no cross-tenant
+//     leak, but we never reveal it's a managed device of another tenant);
+//   - RESOLVES remote system-name → device id (name → mgmt-address fallback),
+//     mirroring the inventory dedup order;
+//   - DEDUPS bidirectional adjacencies (A→B and B→A → one undirected link).
+//
+// Source-agnostic: the link shape carries source_protocol so CDP / BGP-LS links
+// can be merged in later without changing the contract or the frontend.
+
+type topoLink struct {
+	Source        string `json:"source"`           // local device id (always a managed device)
+	Target        string `json:"target"`           // managed device id, or "ext:<sysname>"
+	SourceName    string `json:"source_name"`      // display name
+	TargetName    string `json:"target_name"`      // display name (neighbour sysname)
+	LocalPort     string `json:"local_port"`       // port on the source device
+	RemotePort    string `json:"remote_port"`      // port on the neighbour
+	SourceProto   string `json:"source_protocol"`  // "lldp" (CDP/BGP-LS later)
+	Resolved      bool   `json:"resolved"`         // target is a managed device in inventory
+	Bidirectional bool   `json:"bidirectional"`    // both ends reported the adjacency
+	LastSeen      int64  `json:"last_observed_at"` // unix millis
+}
+
+func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+
+	// Tenant-scoped device inventory → resolution maps (all keyed within the
+	// caller's own visible devices, so resolution can never reach another tenant).
+	devs := visibleDevices(s.discovery.Devices(), claims)
+	ownedID := make(map[string]string, len(devs)) // id → display name
+	byName := make(map[string]string, len(devs))  // lower(name) → id
+	byAddr := make(map[string]string, len(devs))  // address → id
+	for _, d := range devs {
+		ownedID[d.ID] = d.Name
+		if d.Name != "" {
+			byName[strings.ToLower(strings.TrimSpace(d.Name))] = d.ID
+		}
+		if d.Address != "" {
+			byAddr[strings.TrimSpace(d.Address)] = d.ID
+		}
+	}
+
+	raw, err := collectors.FetchTopologyLinks(r.Context())
+	if err != nil || strings.TrimSpace(raw) == "" {
+		// No LLDP data (collector off / Redis absent) → empty set; the UI falls
+		// back to labelled tier-inference. Not an error condition.
+		writeJSON(w, http.StatusOK, map[string]any{"links": []topoLink{}, "count": 0, "source": "lldp"})
+		return
+	}
+	var neighbors []collectors.LLDPNeighbor
+	if err := json.Unmarshal([]byte(raw), &neighbors); err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("topology store returned malformed data"))
+		return
+	}
+
+	links := normalizeLLDP(neighbors, ownedID, byName, byAddr)
+	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": "lldp"})
+}
+
+// normalizeLLDP turns raw directed half-links into deduped undirected topology
+// links, scoped to the owned device set. Pure (unit-tested) — no I/O.
+func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr map[string]string) []topoLink {
+	// key (sorted endpoints) → link, so A→B and B→A collapse and mark bidirectional.
+	merged := map[string]*topoLink{}
+	order := []string{}
+
+	for _, n := range neighbors {
+		src := n.LocalDevice
+		if _, owned := ownedID[src]; !owned {
+			continue // only links anchored on a device the caller can see
+		}
+		// resolve the neighbour within the caller's own inventory only.
+		tgtID, resolved := resolveNeighbor(n, byName, byAddr)
+		targetName := strings.TrimSpace(n.RemSysName)
+		if targetName == "" {
+			targetName = n.RemChassis
+		}
+		if !resolved {
+			if targetName == "" {
+				continue // nothing to identify the neighbour by
+			}
+			tgtID = "ext:" + strings.ToLower(targetName)
+		}
+		if tgtID == src {
+			continue // self-loop guard
+		}
+
+		key := linkKey(src, tgtID)
+		if ex, dup := merged[key]; dup {
+			ex.Bidirectional = true
+			if n.TS > ex.LastSeen {
+				ex.LastSeen = n.TS
+			}
+			// fill a missing remote-port from the reverse direction's local port
+			if ex.RemotePort == "" && n.LocalPort != "" && ex.Source != src {
+				ex.RemotePort = n.LocalPort
+			}
+			continue
+		}
+		l := &topoLink{
+			Source: src, Target: tgtID,
+			SourceName: ownedID[src], TargetName: targetName,
+			LocalPort: n.LocalPort, RemotePort: n.RemPort,
+			SourceProto: "lldp", Resolved: resolved, LastSeen: n.TS,
+		}
+		if resolved {
+			l.TargetName = ownedID[tgtID]
+		}
+		merged[key] = l
+		order = append(order, key)
+	}
+
+	out := make([]topoLink, 0, len(order))
+	for _, k := range order {
+		out = append(out, *merged[k])
+	}
+	// stable order for deterministic responses + tests
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].Target < out[j].Target
+	})
+	return out
+}
+
+// resolveNeighbor maps an LLDP neighbour to a managed device id within the owned
+// set: by system-name first (the common case — hostnames match inventory), then by
+// a chassis/port-id that looks like a management address. "" + false when unknown.
+func resolveNeighbor(n collectors.LLDPNeighbor, byName, byAddr map[string]string) (string, bool) {
+	if name := strings.ToLower(strings.TrimSpace(n.RemSysName)); name != "" {
+		if id, ok := byName[name]; ok {
+			return id, true
+		}
+		// some agents advertise an FQDN — try the leading label.
+		if i := strings.IndexByte(name, '.'); i > 0 {
+			if id, ok := byName[name[:i]]; ok {
+				return id, true
+			}
+		}
+	}
+	for _, cand := range []string{n.RemChassis, n.RemPort} {
+		if id, ok := byAddr[strings.TrimSpace(cand)]; ok {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// linkKey is the order-independent key for an adjacency between two endpoints.
+func linkKey(a, b string) string {
+	if a <= b {
+		return a + "\x00" + b
+	}
+	return b + "\x00" + a
+}
