@@ -132,7 +132,26 @@ function reportHtml(r: Report, objId: string): string {
     `<section><h2>${esc(label)}</h2>${body}</section>`;
   const line = (k: string, v: string) => v ? `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>` : "";
   const verdictColor = r.verdict === "CONFIRMED" ? "#b91c1c" : "#b45309";
+  const confirmed = r.verdict === "CONFIRMED";
   const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+
+  // print-safe SVG of the routing context (the live graph can't be serialized).
+  const [dDev, dEdge, dPeer] = r.routingContext ? r.routingContext.split(" → ") : ["", "", ""];
+  const diagram = r.device ? `<svg viewBox="0 0 600 92" width="100%" style="max-width:560px;display:block;margin:6px auto" role="img" aria-label="routing context">
+    <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#b45309"/></marker></defs>
+    <rect x="8" y="28" width="172" height="40" rx="9" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="94" y="53" text-anchor="middle" font-size="14" font-weight="700" fill="#1e3a8a">${esc(dDev || r.device)}</text>
+    <text x="300" y="40" text-anchor="middle" font-size="11.5" font-weight="600" fill="#b45309">${esc(dEdge || "routing change")}</text>
+    <line x1="182" y1="50" x2="416" y2="50" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+    <rect x="420" y="28" width="172" height="40" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="506" y="53" text-anchor="middle" font-size="12.5" font-family="ui-monospace,monospace" fill="#334155">${esc(dPeer || r.peer || "peer")}</text>
+  </svg>` : "";
+
+  // visual confidence ladder (chips), mirroring the on-screen rungs.
+  const rung = (label: string, on: boolean, tone: string, locked: boolean) =>
+    `<span style="font-size:12px;font-weight:700;padding:4px 13px;border-radius:18px;${on ? `background:${tone};color:#fff;border:1px solid ${tone}` : `color:#94a3b8;border:1px solid #cbd5e1`}">${locked ? "&#128274; " : on ? "&#10003; " : ""}${label}</span>`;
+  const conn = `<span style="width:24px;height:2px;background:#cbd5e1"></span>`;
+  const ladder = `<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap">${rung("Observed", true, "#16a34a", false)}${conn}${rung("Suspected", true, "#b45309", false)}${conn}${rung("Confirmed", confirmed, "#b91c1c", !confirmed)}</div>`;
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>RCA Report — ${esc(r.title)}</title>
 <style>
@@ -159,7 +178,16 @@ function reportHtml(r: Report, objId: string): string {
   ol { margin:4px 0; padding-left: 20px; }
   ol li { margin: 3px 0; }
   footer.rpt { margin-top: 24px; border-top:1px solid #e2e8f0; padding-top:8px; font-size:10.5px; color:#94a3b8; display:flex; justify-content:space-between; }
-</style></head><body><div class="doc">
+  .toolbar { position: sticky; top: 0; z-index: 10; display:flex; gap:8px; justify-content:flex-end; padding:10px 14px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; }
+  .toolbar button { font:600 13px/1 inherit; padding:8px 16px; border-radius:6px; cursor:pointer; border:1px solid #cbd5e1; background:#fff; color:#1f2933; }
+  .toolbar button.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
+  @media print { .no-print { display:none !important; } body { background:#fff; } }
+</style></head><body>
+  <div class="toolbar no-print">
+    <button class="primary" onclick="window.print()">⤓ Save as PDF</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+  <div class="doc">
   <header class="rpt"><span class="brand">CORRELIX</span><span class="doctype">Root Cause Analysis Report</span></header>
   <h1>${esc(r.title)}</h1>
   <div class="badges">${esc(r.verdict)} · Confidence: ${esc(r.confidence)} · State: ${esc(r.state)} · Observed: ${esc(r.observed)}</div>
@@ -171,8 +199,9 @@ function reportHtml(r: Report, objId: string): string {
     <p class="body"><b>Why suspected:</b> ${esc(r.whySuspected)}</p>
     <p class="body"><b>Why not confirmed:</b> ${esc(r.whyNotConfirmed)}</p>
     <p class="body"><b>To confirm:</b> ${esc(r.toConfirm)}</p></div>`)}
+  ${block("Confidence", ladder)}
   ${block("Impact &amp; blast radius", line("Impact", r.impact) + (r.impactWhy ? `<p class="body" style="color:#64748b">Why: ${esc(r.impactWhy)}</p>` : ""))}
-  ${r.routingContext ? block("Routing context", `<p class="body">${esc(r.routingContext)}</p><div class="kv"><span class="v">${esc(r.localization)}</span></div>`) : ""}
+  ${r.routingContext ? block("Routing context", `${diagram}<div class="kv" style="justify-content:center"><span class="v">${esc(r.localization)}</span></div>`) : ""}
   ${block("Evidence", `<table><thead><tr><th>Evidence type</th><th>Covers</th><th>Status</th></tr></thead><tbody>${
     r.evidence.map((e) => `<tr><td>${esc(e.plane)}</td><td>${esc(e.detail)}</td><td>${esc(e.status)}</td></tr>`).join("")
   }</tbody></table>`)}
@@ -180,7 +209,12 @@ function reportHtml(r: Report, objId: string): string {
 
   <footer class="rpt"><span>Generated ${esc(now)} UTC · Correlix RCA</span><span>Object ${esc(objId.slice(0, 8))} · Confidential</span></footer>
 </div>
-<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},250);</script>
+<script>
+  function rcaPrint(){try{window.focus();window.print();}catch(e){}}
+  // wait for full layout (SVG/fonts) before printing so nothing is cut off.
+  if (document.readyState === 'complete') setTimeout(rcaPrint, 400);
+  else window.addEventListener('load', function(){ setTimeout(rcaPrint, 400); });
+</script>
 </body></html>`;
 }
 
