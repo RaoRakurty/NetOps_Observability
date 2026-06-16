@@ -250,9 +250,22 @@ export default function RcaSummary({
   }, [missing]);
 
   // ---- Operator headline (NOC "Possible …" phrasing; never a raw id) ----------
-  const nocTitle = timeline.top_hypothesis !== "undetermined"
-    ? signatureNocTitle(timeline.top_hypothesis)
-    : (PLANE_NOC_TITLE[dominant] ?? "Possible network issue");
+  const nocTitle = (() => {
+    const base = timeline.top_hypothesis !== "undetermined"
+      ? signatureNocTitle(timeline.top_hypothesis)
+      : (PLANE_NOC_TITLE[dominant] ?? "Possible network issue");
+    // §2 evidence-mix refinement: when BOTH device-health and routing/link evidence
+    // are present (not just one), name both so the title matches the evidence —
+    // "Possible routing issue" → "Possible device/routing issue". Don't override a
+    // confirmed verdict or a more specific boundary/WAN title.
+    if (confirmed) return base;
+    const hasDevice = (attByPlane["device_telemetry"] ?? 0) > 0;
+    const hasRouting = (attByPlane["control_plane"] ?? 0) > 0;
+    if (hasDevice && hasRouting && /routing|network/i.test(base) && !/wan|provider|boundary/i.test(base)) {
+      return "Possible device/routing issue";
+    }
+    return base;
+  })();
 
   // Debug headline keeps the technical story (matched signature / plane noun).
   const debugStory = useMemo(() => {
