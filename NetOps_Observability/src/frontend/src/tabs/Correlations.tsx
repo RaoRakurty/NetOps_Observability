@@ -361,7 +361,7 @@ export function CorrelationDetail({ id }: { id: string }) {
           onClick={() => {
             if (!timeline) return;
             const ok = exportRcaPdf(timeline, seams, recommendedOwner, recommendedSteps, obj.correlation_id || "");
-            if (!ok) alert("Allow pop-ups for this site to export the RCA as PDF.");
+            if (!ok) alert("Could not generate the RCA report.");
           }}
           disabled={!timeline}
           title="Generate an elegant, print-ready RCA report (Save as PDF)"

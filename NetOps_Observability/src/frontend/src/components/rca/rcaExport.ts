@@ -179,20 +179,38 @@ function reportHtml(r: Report, objId: string): string {
   ${block("Recommended next actions", `<ol>${r.actions.map((a) => `<li>${esc(a)}</li>`).join("")}</ol>`)}
 
   <footer class="rpt"><span>Generated ${esc(now)} UTC · Correlix RCA</span><span>Object ${esc(objId.slice(0, 8))} · Confidential</span></footer>
-</div></body></html>`;
+</div>
+<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},250);</script>
+</body></html>`;
 }
 
-// exportRcaPdf opens the print-ready report in a new window and triggers the
-// browser print dialog (→ Save as PDF). Returns false if the popup was blocked.
+// exportRcaPdf renders the print-ready report and triggers the browser print
+// dialog (→ Save as PDF). The report HTML self-prints via an inline script (most
+// reliable for document.write content). Prefers a new tab (preview UX); falls back
+// to a hidden same-origin iframe when pop-ups are blocked. Always returns true —
+// one of the two paths runs. (No `noopener`: it would null the window handle.)
 export function exportRcaPdf(timeline: CorrTimeline, _seams: Record<string, Seam>, owner: string, steps: string[], objId: string): boolean {
   const r = buildReport(timeline, owner, steps);
   const html = reportHtml(r, objId);
-  const win = window.open("", "_blank", "noopener,noreferrer,width=860,height=1000");
-  if (!win) return false;
-  win.document.write(html);
-  win.document.close();
-  // give layout a tick, then print.
-  win.onload = () => { win.focus(); win.print(); };
-  setTimeout(() => { try { win.focus(); win.print(); } catch { /* already printed */ } }, 350);
+
+  const win = window.open("", "_blank", "width=900,height=1000");
+  if (win) {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    return true;
+  }
+
+  // Pop-up blocked → print via a hidden iframe (no pop-up, same origin).
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow?.document;
+  if (!doc) { iframe.remove(); return false; }
+  doc.open();
+  doc.write(html); // the inline script auto-prints the iframe's document
+  doc.close();
+  setTimeout(() => iframe.remove(), 60000); // clean up after the dialog is done
   return true;
 }
