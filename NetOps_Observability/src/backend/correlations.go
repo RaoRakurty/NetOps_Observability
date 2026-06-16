@@ -253,6 +253,8 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.serveCorrelationDetail(w, r, id)
 	case "timeline":
 		s.serveCorrelationTimeline(w, r, id)
+	case "rca-path-view":
+		s.serveRcaPathView(w, r, id)
 	case "replay":
 		s.proxyCorrelationReplay(w, r, id)
 	default:
@@ -289,6 +291,37 @@ func isDatetimeToken(s string) bool {
 // order key) AND archived_for/version — never a full-table scan.
 func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request, id string) {
 	version := intQuery(r, "version", 0, 0, 1<<30)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r, id, version)
+	if err != nil {
+		writeError(w, status, err)
+		return
+	}
+	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
+	counts := mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"correlation_id":   id,
+		"version":          meta["version"],
+		"window_start":     meta["window_start"],
+		"window_end":       meta["window_end"],
+		"trigger_signal":   trigger,
+		"verdict_tier":     meta["verdict_tier"],
+		"top_hypothesis":   meta["top_hypothesis"],
+		"top_confidence":   meta["top_confidence"],
+		"evidence_missing": meta["evidence_missing"],
+		"signals":          sigRows,
+		"evidence":         evRows,
+		"edges":            edgeRows,
+		"counts":           counts,
+	})
+}
+
+// loadCorrSlice loads one correlation object's window slice — meta (version,
+// window, verdict, trigger, missing-evidence), the full archived signal slice,
+// the evidence rows, and the edges of that version. Shared by the timeline and
+// rca-path-view endpoints so the (bounded, RLS-scoped) read SQL lives once.
+// Returns an HTTP status + error for the caller to surface.
+func (s *server) loadCorrSlice(r *http.Request, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
 	verCond := ""
 	if version > 0 {
 		verCond = " AND version = " + intToString(version)
@@ -307,20 +340,17 @@ SELECT version,
  FORMAT JSON`
 	metaRows, err := s.chRows(r, metaSQL)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
 	if len(metaRows) == 0 {
-		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
-		return
+		return nil, nil, nil, nil, http.StatusNotFound, errors.New("correlation object not found")
 	}
 	meta := metaRows[0]
 	ver := fmt.Sprintf("%v", meta["version"])
 	ws, _ := meta["window_start"].(string)
 	we, _ := meta["window_end"].(string)
 	if !isDatetimeToken(ws) || !isDatetimeToken(we) {
-		writeError(w, http.StatusBadGateway, errors.New("malformed object window"))
-		return
+		return nil, nil, nil, nil, http.StatusBadGateway, errors.New("malformed object window")
 	}
 
 	// 1b) Resolve the archive slice version. The object's `version` increments on
@@ -337,8 +367,7 @@ SELECT version,
  WHERE archived_for = '` + id + `'` + avCond + ` FORMAT JSON`
 	avRows, err := s.chRows(r, avSQL)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
 	archiveVer := "0"
 	if len(avRows) > 0 && avRows[0]["av"] != nil {
@@ -367,8 +396,7 @@ SELECT toString(signal_id)  AS signal_id,
  FORMAT JSON`
 	sigRows, err := s.chRows(r, sigSQL)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
 
 	// 3) Evidence rows for this version (signal → role/subject); joined in Go so
@@ -380,8 +408,7 @@ SELECT toString(signal_id) AS signal_id, subject_kind, subject_id, role, note
  FORMAT JSON`
 	evRows, err := s.chRows(r, evSQL)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
 
 	// 4) Edges of this exact version — the authoritative graph membership. A
@@ -397,28 +424,12 @@ SELECT from_node, to_node, grounding_kind, grounding_ref,
  FORMAT JSON`
 	edgeRows, err := s.chRows(r, edgeSQL)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
+		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
-
-	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
-	counts := mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"correlation_id":   id,
-		"version":          meta["version"],
-		"window_start":     ws,
-		"window_end":       we,
-		"trigger_signal":   trigger,
-		"verdict_tier":     meta["verdict_tier"],
-		"top_hypothesis":   meta["top_hypothesis"],
-		"top_confidence":   meta["top_confidence"],
-		"evidence_missing": meta["evidence_missing"],
-		"signals":          sigRows,
-		"evidence":         evRows,
-		"edges":            edgeRows,
-		"counts":           counts,
-	})
+	// normalize the window strings onto meta so callers don't re-cast.
+	meta["window_start"] = ws
+	meta["window_end"] = we
+	return meta, sigRows, evRows, edgeRows, http.StatusOK, nil
 }
 
 // signalNodeKey reconstructs the engine's graph-node key for a signal exactly as
