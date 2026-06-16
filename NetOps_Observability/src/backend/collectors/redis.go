@@ -3,6 +3,7 @@ package collectors
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -139,13 +140,26 @@ func FetchProbePaths(ctx context.Context) (string, error) {
 	return redisCmd(c, "GET", probePathsKey)
 }
 
-// FetchTopologyLinks reads the raw LLDP neighbour records published by the LLDP
-// collector (JSON array of LLDPNeighbor). Returns ("", nil) when the key is absent.
-func FetchTopologyLinks(ctx context.Context) (string, error) {
+// FetchTopologyLinks reads + merges the neighbour records published by every
+// topology-discovery collector (LLDP, CDP, …) into one slice. LLDP is listed
+// first so it wins the read-side dedup when two protocols report the same
+// adjacency. A missing/empty per-protocol key is not an error (collector off).
+func FetchTopologyLinks(ctx context.Context) ([]LLDPNeighbor, error) {
 	c, err := redisDial(ctx)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer c.Close()
-	return redisCmd(c, "GET", topoLinksKey)
+	var out []LLDPNeighbor
+	for _, key := range []string{topoLinksKeyLLDP, topoLinksKeyCDP} {
+		raw, err := redisCmd(c, "GET", key)
+		if err != nil || raw == "" {
+			continue
+		}
+		var n []LLDPNeighbor
+		if json.Unmarshal([]byte(raw), &n) == nil {
+			out = append(out, n...)
+		}
+	}
+	return out, nil
 }

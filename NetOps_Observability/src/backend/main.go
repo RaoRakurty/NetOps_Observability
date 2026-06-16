@@ -211,6 +211,9 @@ func newServer() *server {
 	// opt-in; without it the Device Topology keeps the labelled tier-inference
 	// fallback. Reuses the per-device SNMP creds; UDP/161, no raw socket.
 	pool.Enable("lldp", os.Getenv("ENABLE_LLDP_DISCOVERY") == "true")
+	// CDP neighbour discovery (Cisco-native L2 topology) — merges with LLDP at the
+	// API. Opt-in; reuses SNMP creds, UDP/161.
+	pool.Enable("cdp", os.Getenv("ENABLE_CDP_DISCOVERY") == "true")
 	// SNMP trap receiver (UDP/162) — passive listener that decodes v1/v2c/v3
 	// traps and forwards them onto the log bus (→ netops-snmptrap-*). Off by
 	// default; opt in with FEATURE_SNMP_TRAPS=true (see deployment compose).

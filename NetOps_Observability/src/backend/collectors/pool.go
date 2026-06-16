@@ -61,6 +61,7 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewTraceroute())
 	p.register(NewSynthetics())
 	p.register(NewLLDP(targets))
+	p.register(NewCDP(targets))
 	return p
 }
 

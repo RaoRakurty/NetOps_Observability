@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -66,21 +65,13 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	raw, err := collectors.FetchTopologyLinks(r.Context())
-	if err != nil || strings.TrimSpace(raw) == "" {
-		// No LLDP data (collector off / Redis absent) → empty set; the UI falls
-		// back to labelled tier-inference. Not an error condition.
-		writeJSON(w, http.StatusOK, map[string]any{"links": []topoLink{}, "count": 0, "source": "lldp"})
-		return
-	}
-	var neighbors []collectors.LLDPNeighbor
-	if err := json.Unmarshal([]byte(raw), &neighbors); err != nil {
-		writeError(w, http.StatusBadGateway, errors.New("topology store returned malformed data"))
-		return
-	}
+	// Merged neighbour records from every discovery protocol (LLDP, CDP, …).
+	// Absent data (collectors off / Redis down) → empty set; the UI falls back to
+	// labelled tier-inference. Not an error condition.
+	neighbors, _ := collectors.FetchTopologyLinks(r.Context())
 
 	links := normalizeLLDP(neighbors, ownedID, byName, byAddr)
-	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": "lldp"})
+	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": "lldp+cdp"})
 }
 
 // normalizeLLDP turns raw directed half-links into deduped undirected topology
@@ -123,11 +114,15 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 			}
 			continue
 		}
+		proto := n.Proto
+		if proto == "" {
+			proto = "lldp"
+		}
 		l := &topoLink{
 			Source: src, Target: tgtID,
 			SourceName: ownedID[src], TargetName: targetName,
 			LocalPort: n.LocalPort, RemotePort: n.RemPort,
-			SourceProto: "lldp", Resolved: resolved, LastSeen: n.TS,
+			SourceProto: proto, Resolved: resolved, LastSeen: n.TS,
 		}
 		if resolved {
 			l.TargetName = ownedID[tgtID]

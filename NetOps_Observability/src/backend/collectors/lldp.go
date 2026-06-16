@@ -55,7 +55,12 @@ type LLDPNeighbor struct {
 	TS          int64  `json:"ts"`           // last-observed unix millis
 }
 
-const topoLinksKey = "netops:topology:links"
+// Per-protocol topology keys — each discovery collector publishes its own, and
+// the API (FetchTopologyLinks) merges them. LLDP first → wins read-side dedup.
+const (
+	topoLinksKeyLLDP = "netops:topology:lldp"
+	topoLinksKeyCDP  = "netops:topology:cdp"
+)
 
 type lldpCollector struct {
 	interval time.Duration
@@ -124,8 +129,11 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 
 	// Publish the full neighbour set (replace, not merge — stale devices drop off).
 	// TTL self-expires the topology if the collector dies (ADR 0001 share-via-Redis).
+	if all == nil {
+		all = []LLDPNeighbor{} // store "[]" not "null" when empty
+	}
 	if b, err := json.Marshal(all); err == nil {
-		_ = redisSetEX(ctx, topoLinksKey, string(b), 1800)
+		_ = redisSetEX(ctx, topoLinksKeyLLDP, string(b), 1800)
 	}
 
 	emitMetrics(ctx, strings.Join([]string{

@@ -653,8 +653,10 @@ services:
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
       # LLDP neighbour discovery (real L1 topology links via SNMP LLDP-MIB) →
-      # netops:topology:links → /api/topology/links → Device Topology real edges.
+      # netops:topology:lldp → /api/topology/links → Device Topology real edges.
       ENABLE_LLDP_DISCOVERY: ${ENABLE_LLDP_DISCOVERY:-false}
+      # CDP neighbour discovery (Cisco-native; CISCO-CDP-MIB) — merges with LLDP.
+      ENABLE_CDP_DISCOVERY: ${ENABLE_CDP_DISCOVERY:-false}
       # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
       # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
       ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
