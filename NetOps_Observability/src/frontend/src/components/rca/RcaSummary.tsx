@@ -8,6 +8,7 @@ import {
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 import ConfidenceLadder, { type LadderLevel } from "./ConfidenceLadder";
+import ImpactPanel from "./ImpactPanel";
 
 // hex+alpha tint helper for calm severity backgrounds.
 const tint = (hex: string, a = "1f") => hex + a;
@@ -442,6 +443,14 @@ export default function RcaSummary({
     return out;
   }, [confirmOptions, confirmed]);
 
+  // ---- Impact & blast radius (§7) ----
+  const impactDeviceGroup = affectedGroups.find((g) => /device/i.test(g.label)) ?? affectedGroups[0];
+  const impactScope = impactDeviceGroup
+    ? `${/device/i.test(impactDeviceGroup.label) ? "Device area" : impactDeviceGroup.label}: ${impactDeviceGroup.items.slice(0, 3).join(", ")}`
+    : "";
+  const flowTied = (attByPlane["passive_flow"] ?? 0) > 0;
+  const probeTied = (attByPlane["active_probe"] ?? 0) > 0 && probe.hasConfirmProbe;
+
   return (
     <div style={card}>
       {/* clean header — NOC cause title; status pill + confidence carry certainty.
@@ -512,6 +521,9 @@ export default function RcaSummary({
         </span>
         <span style={{ fontSize: 13, color: C.fg, fontWeight: 600, lineHeight: 1.45 }}>{decision.text}</span>
       </div>
+
+      {/* impact & blast radius (§7) — is there confirmed customer impact + how far */}
+      <ImpactPanel confirmed={confirmed} affectedScope={impactScope} flowTied={flowTied} probeTied={probeTied} />
 
       {/* the precise plain-English story — primary readable text */}
       <div style={{ fontSize: 14.5, lineHeight: 1.55, color: C.fg, fontWeight: 500 }}>{nocSummary}</div>
