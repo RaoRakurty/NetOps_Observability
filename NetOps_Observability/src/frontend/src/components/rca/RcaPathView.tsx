@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { CorrTimeline, Seam } from "../../services/api";
-import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor, mentionsInternal } from "./labels";
+import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor, mentionsInternal, isRoutingKind } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
 // episodeKind pulls the signal kind off a graph node key ("type:entity…:kind").
@@ -87,8 +87,41 @@ export default function RcaPathView({ timeline, seams, owner }: {
   const segTone = confirmed ? C.crit : internalOnly ? C.faint : C.caution;
   const segSym = confirmed ? SYM.confirmed : internalOnly ? SYM.unknown : SYM.possible;
 
-  // Fallback: no grounded path mapping → never invent a segment.
+  // Routing context: a routing/peer signal (BGP/OSPF/…) names a device + peer even
+  // with no grounded edge. We DO know the adjacency involved — don't say "location
+  // unknown" (the contradiction). Show the peer/session and what's still needed.
+  const routing = (() => {
+    for (const s of timeline.signals) {
+      if (!s.attached || s.kind.endsWith("_clear") || !isRoutingKind(s.kind)) continue;
+      let device = s.entity_id, peer = "";
+      try { const a = JSON.parse((s as { attrs?: string }).attrs || "{}"); peer = a.peer || a.neighbor || ""; } catch { /* no attrs */ }
+      const ci = s.entity_id.indexOf(":");
+      if (ci > 0) { device = s.entity_id.slice(0, ci); if (!peer) peer = s.entity_id.slice(ci + 1); }
+      if (mentionsInternal(device)) return null;
+      return { device, peer, kind: s.kind };
+    }
+    return null;
+  })();
+
+  // Fallback: no grounded path mapping. With routing context we name the
+  // adjacency; otherwise we say the location isn't known yet (never invent one).
   if (!primary) {
+    if (routing) {
+      return (
+        <div style={card}>
+          <div style={titleStyle}>Routing context — not confirmed</div>
+          <div style={{ fontSize: 14, lineHeight: 1.5, color: C.fg }}>
+            Correlix observed a {kindLabel(routing.kind)} between <b>{entityLabel(routing.device)}</b>
+            {routing.peer ? <> and peer <b>{routing.peer}</b></> : null}.
+          </div>
+          <div style={{ ...muted, fontSize: 13, lineHeight: 1.5 }}>
+            This identifies the routing adjacency involved, but does not confirm customer impact.
+            Correlix needs peer-side routing evidence, interface health, traffic-flow loss, or an
+            independent active check to confirm the issue.
+          </div>
+        </div>
+      );
+    }
     const trig = timeline.signals.find((s) => s.is_trigger) ?? timeline.signals[0];
     return (
       <div style={card}>
@@ -97,7 +130,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
           {SYM.unknown} Issue observed, path location unknown — not enough evidence to place it on a path or boundary yet.
         </div>
         {trig && !mentionsInternal(trig.entity_id) && (
-          <div style={{ ...muted, fontSize: 12.5 }}>
+          <div style={{ ...muted, fontSize: 13 }}>
             Strongest sign: <b style={{ color: C.fg }}>{entityLabel(trig.entity_id)}</b>
           </div>
         )}

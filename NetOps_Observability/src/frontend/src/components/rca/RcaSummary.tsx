@@ -40,12 +40,14 @@ const PLANE_NOC_SHORT: Record<string, string> = {
 const PLANE_NOUN: Record<string, string> = {
   device_telemetry: "signals", control_plane: "events", passive_flow: "flow signals", active_probe: "checks",
 };
-// missing plane → the concrete check that would confirm it (item 11 checklist).
+// plane → the concrete INDEPENDENT check that would confirm it (confirmation
+// checklist). For routing objects the control-plane option asks for the *peer
+// side* (an independent second observer), not just "a routing event".
 const PLANE_CONFIRM: Record<string, { what: string; plane: string }> = {
+  control_plane: { what: "Peer-side BGP/routing state", plane: "Routing & link events" },
   device_telemetry: { what: "Interface errors or drops", plane: "Device health" },
-  control_plane: { what: "BGP / link / syslog event", plane: "Routing & link events" },
   passive_flow: { what: "Traffic loss or drop", plane: "Traffic flow evidence" },
-  active_probe: { what: "Re-test from a trusted customer path", plane: "Active checks" },
+  active_probe: { what: "Independent active path check", plane: "Active checks" },
 };
 
 type Quality = "strong" | "candidate" | "weak/noisy";
@@ -274,8 +276,11 @@ export default function RcaSummary({
   );
   // "Cleared" is scoped to the SIGNAL so it never reads as "incident resolved"
   // next to a Not-confirmed verdict.
-  const stateText = state === "open" ? "Current state: Open"
-    : cleared ? "Signal state: Cleared"
+  // Recovering takes precedence over the raw lifecycle: when a signal has cleared,
+  // the operator-facing state is "Recovering" (the raw backend state stays in the
+  // Debug header). Otherwise show Open / no-longer-active.
+  const stateText = cleared ? "State: Recovering"
+    : state === "open" ? "Current state: Open"
     : "Current state: No longer active";
 
   // ---- the plain-English RCA summary — NOC language, answers "what did we see"
@@ -330,6 +335,16 @@ export default function RcaSummary({
       .map((s) => s.observer_id || s.entity_id),
   ).size, [timeline.signals]);
   const singleObserverControl = controlObservers <= 1 && (attByPlane["control_plane"] ?? 0) > 0;
+  // Fuller confirmation checklist (item 13): every plane lacking an INDEPENDENT
+  // confirming observer. Control-plane is listed when absent OR single-observer
+  // (the device reporting on itself) — then we still need the PEER side. So a
+  // single-witness BGP object lists all four (peer-side routing · device health ·
+  // traffic-flow · active check), which is what a NOC engineer actually wants.
+  const confirmOptions = MODALITY_ORDER.filter((m) =>
+    m === "control_plane"
+      ? (attByPlane["control_plane"] ?? 0) === 0 || singleObserverControl
+      : (attByPlane[m] ?? 0) === 0,
+  );
 
   const whyNotConfirmed = probe.lowOnly
     ? "the only evidence is internal/test checks — they can't confirm a customer-impacting issue on their own. Needs device health, a routing/link event, or traffic loss."
@@ -552,7 +567,7 @@ export default function RcaSummary({
             let tone: string = C.faint, badge = "Not observed", used = false;
             if (att > 0 && lowAuthProbe) { tone = C.caution; badge = "Weak evidence only"; used = true; }
             else if (att > 0) { tone = C.ok; badge = "Used"; used = true; }
-            else if (total > 0) { tone = C.info; badge = "Not tied to this issue"; }
+            else if (total > 0) { tone = C.info; badge = "Seen, not linked"; }
             else if (requiredModalities.has(key)) { tone = C.info; badge = "Needed to confirm"; }
             return (
               <div key={key} style={{
@@ -580,7 +595,7 @@ export default function RcaSummary({
                         {att > 0 && <span><b style={{ color: tone }}>{att}</b> used{lowAuthProbe ? " (weak)" : ""}</span>}
                         {testIgnored > 0 && <span><b style={{ color: C.faint }}>{testIgnored}</b> test {testIgnored === 1 ? "check" : "checks"} ignored</span>}
                         {notTied > 0 && (
-                          <span title={NOT_TIED_HELP}><b style={{ color: C.faint }}>{notTied}</b> not tied to this issue</span>
+                          <span title={NOT_TIED_HELP}><b style={{ color: C.faint }}>{notTied}</b> seen, not linked</span>
                         )}
                         {lowAuthProbe && <span style={{ color: C.caution, fontWeight: 600 }}>Internal/test checks only</span>}
                       </>
@@ -588,7 +603,7 @@ export default function RcaSummary({
                   })()}
                 </div>
                 <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  <span style={softBadge(tone)} title={badge === "Not tied to this issue" ? NOT_TIED_HELP : undefined}>{badge}</span>
+                  <span style={softBadge(tone)} title={badge === "Seen, not linked" ? NOT_TIED_HELP : undefined}>{badge}</span>
                   {debugExcludedHere && <span style={softBadge(C.faint)}>Test check ignored</span>}
                 </div>
               </div>
@@ -597,19 +612,19 @@ export default function RcaSummary({
         </div>
       </div>
 
-      {/* confirmation checklist — what evidence would confirm this (item 11) */}
-      {(corroborate.length > 0 || (view === "debug" && clauseItems.length > 0)) && (
+      {/* confirmation checklist — what INDEPENDENT evidence would confirm this */}
+      {((!confirmed && confirmOptions.length > 0) || (view === "debug" && clauseItems.length > 0)) && (
         <div>
           <div style={title}>What evidence would confirm this?</div>
 
-          {/* actionable corroboration from absent planes (the common case) */}
-          {corroborate.length > 0 && (
+          {/* actionable corroboration — every plane lacking an independent observer */}
+          {!confirmed && confirmOptions.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <div style={{ ...muted, fontSize: 12.5 }}>To confirm this issue, collect one of:</div>
-              {corroborate.map((p) => {
+              <div style={{ ...muted, fontSize: 13 }}>To confirm this issue, collect one of:</div>
+              {confirmOptions.map((p) => {
                 const cf = PLANE_CONFIRM[p];
                 return (
-                  <div key={p} style={{ fontSize: 12.5, padding: "1px 0", color: "var(--fg)" }}>
+                  <div key={p} style={{ fontSize: 13, padding: "1px 0", color: "var(--fg)" }}>
                     ○ {cf?.what ?? modalityHelp(p)} <span style={muted}>— {cf?.plane ?? modalityLabel(p)}</span>
                   </div>
                 );

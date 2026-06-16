@@ -496,7 +496,8 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         {(() => {
           const methods = model.tracedRows.flatMap((row) => row.methods);
           const live = methods.length > 0;
-          return <span style={{ color: live ? C.ok : C.faint }}>{live ? `● live trace (${methodTag([...new Set(methods)])})` : "contextual path"}</span>;
+          const fallbackLabel = model.peer ? "routing context" : "contextual path";
+          return <span style={{ color: live ? C.ok : C.faint }}>{live ? `● live trace (${methodTag([...new Set(methods)])})` : fallbackLabel}</span>;
         })()}
       </div>
       {model.hasStamp && (
