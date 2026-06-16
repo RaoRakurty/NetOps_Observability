@@ -54,6 +54,25 @@ function parseAttrs(s?: string): Record<string, any> {
   try { return JSON.parse(s || "{}"); } catch { return {}; }
 }
 
+// What kind of evidence a signal is, for the fault's "what's broken" chips. The
+// physical/control-plane cause (link down, BGP/routing) outranks device-resource
+// (CPU/mem) — which is usually a SYMPTOM or co-occurrence, not the cause. The end-
+// to-end path leads with the real cause and drops resource noise when a stronger
+// signal is present, so a BGP flap reads as link/BGP, not "high CPU".
+function elementRank(kind: string): number {
+  if (/link_state|interface|carrier|los|fcs/i.test(kind)) return 5;
+  if (/bgp|adjacency|peer|ospf|isis|ldp|route/i.test(kind)) return 4;
+  if (/flow|traffic|discard|drop/i.test(kind)) return 2;
+  if (/resource|cpu|mem|temperat|fan|power|disk/i.test(kind)) return 1;
+  return 3;
+}
+type RankedEl = { label: string; rank: number };
+function faultEls(d?: { els: RankedEl[] }): string[] {
+  if (!d) return [];
+  const strong = d.els.some((e) => e.rank >= 4);
+  return d.els.filter((e) => !strong || e.rank >= 2).sort((a, b) => b.rank - a.rank).map((e) => e.label);
+}
+
 const SEV_RANK: Record<string, number> = { crit: 4, high: 3, warn: 2, info: 1 };
 const handleStyle = { width: 7, height: 7, background: "var(--border,#3a4252)", border: "none" } as const;
 
@@ -176,15 +195,15 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const stampTxt = stampParts.join("  ·  ");
     const hasStamp = stampParts.length > 0;
 
-    type Dev = { dev: string; elements: string[]; worst: number };
+    type Dev = { dev: string; els: RankedEl[]; worst: number };
     const devs = new Map<string, Dev>();
     for (const s of sigs) {
       if (s.entity_type === "path") continue;
       const dev = baseDevice(s.entity_type, s.entity_id);
       if (!dev) continue;
-      const d = devs.get(dev) ?? { dev, elements: [], worst: 0 };
-      const el = brokenElement(s);
-      if (!d.elements.includes(el)) d.elements.push(el);
+      const d = devs.get(dev) ?? { dev, els: [], worst: 0 };
+      const label = brokenElement(s);
+      if (!d.els.some((x) => x.label === label)) d.els.push({ label, rank: elementRank(s.kind) });
       d.worst = Math.max(d.worst, SEV_RANK[s.severity] ?? 1);
       devs.set(dev, d);
     }
@@ -249,7 +268,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
     const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
 
-    const locus = locusDev ? (devs.get(locusDev) ?? { dev: locusDev, elements: [], worst: 0 }) : undefined;
+    const locus = locusDev ? (devs.get(locusDev) ?? { dev: locusDev, els: [], worst: 0 }) : undefined;
     const targetIsLocus = !!(ends && locus && ends.dst === locus.dev);
 
     // verdict → the state of the segment that carries the fault.
@@ -310,7 +329,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
               label: name ?? ip, mono: !name,
               sub: [isLast ? "destination" : `hop ${h.ttl}`, name ? ip : "", metric].filter(Boolean).join(" · ") || undefined,
               badge: isFault ? `${meta.sym} ${meta.word}` : undefined,
-              chips: isFault ? (locus?.elements ?? []).slice(0, 3) : undefined,
+              chips: isFault ? faultEls(locus).slice(0, 3) : undefined,
               via: h.via,
             },
           });
@@ -350,7 +369,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       node({ id: "fault", x: col * COL, y: 0, data: {
         kind: kindForRole(locus.dev), tone: meta.color, pulse: true, size: 62,
         label: entityLabel(locus.dev), badge: `${meta.sym} ${meta.word}${targetIsLocus ? " · dest" : ""}`,
-        chips: locus.elements.slice(0, 4), hasBottom: true,
+        chips: faultEls(locus).slice(0, 4), hasBottom: true,
       } });
       if (prev) link(prev, "fault", { state: measuredDegraded ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
       prev = "fault"; col++;
@@ -360,7 +379,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       others.slice(0, 4).forEach((d, i) => {
         const aid = `aff${i}`;
         node({ id: aid, x: (col - 1) * COL + (i - (others.length - 1) / 2) * 140, y: 150, data: {
-          kind: kindForRole(d.dev), tone: C.warn, label: entityLabel(d.dev), sub: "also affected", hasIn: true, hasOut: false,
+          kind: kindForRole(d.dev), tone: C.warn, label: entityLabel(d.dev), sub: faultEls(d)[0] || "also affected", hasIn: true, hasOut: false,
         } });
         nodes[nodes.length - 1].data.hasIn = true;
         link("fault", aid, { fromHandle: "b", state: "unknown", flow: false });
@@ -409,8 +428,8 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       <ReactFlow
         nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         fitView fitViewOptions={{ padding: 0.28, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }}
-        nodesConnectable={false} elementsSelectable={false} nodesDraggable
-        minZoom={0.3} maxZoom={1.6} zoomOnScroll={false} panOnScroll
+        nodesConnectable={false} elementsSelectable nodesDraggable panOnDrag
+        minZoom={0.3} maxZoom={1.8} zoomOnScroll preventScrolling
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />
         <Controls showInteractive={false} position="bottom-right" />
