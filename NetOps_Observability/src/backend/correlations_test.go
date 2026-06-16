@@ -198,3 +198,53 @@ func TestMergeTimelineEvidence_NoEdgesAllUnlinked(t *testing.T) {
 		t.Fatalf("no edges → all unlinked: %+v", counts)
 	}
 }
+
+// groundingTokens MUST stay in lock-step with the Python engine's
+// engine.py Node.tokens(): the ':' device-split and '->' path-split are what
+// let the Inspector honestly say "shares a token" vs "no shared token at all".
+// If the two implementations drift, the read-side explanation stops matching
+// the gate that actually built (or refused) the edge. This pins both forms and
+// the positive/negative grounding cases the lab scenarios rely on.
+func TestGroundingTokens_MirrorEngineNodeTokens(t *testing.T) {
+	tok := func(id string) map[string]bool {
+		return groundingTokens(map[string]any{"entity_id": id})
+	}
+
+	// device-scoped interface id → {full id, device part}
+	iface := tok("leaf1:Gi0/1")
+	for _, want := range []string{"leaf1:Gi0/1", "leaf1"} {
+		if !iface[want] {
+			t.Errorf("interface id missing token %q: %v", want, iface)
+		}
+	}
+
+	// two interfaces on the SAME device share the device token (local-link-fault grounding)
+	if !tokensIntersect(tok("leaf1:Gi0/1"), tok("leaf1:Eth2")) {
+		t.Error("two interfaces on one device must share the device token")
+	}
+	// interfaces on DIFFERENT devices must not share — the gate's negative case
+	if tokensIntersect(tok("leaf1:Gi0/1"), tok("spine9:Eth1")) {
+		t.Error("interfaces on different devices must not share a token")
+	}
+
+	// path id a->b → {full id, both endpoints}; two vantages to the SAME target
+	// share the target token (the cross-vantage DIA grounding from the E2E test).
+	a, b := tok("vp-a->8.8.8.8"), tok("vp-b->8.8.8.8")
+	if !a["8.8.8.8"] || !a["vp-a"] {
+		t.Errorf("path id must yield both endpoints: %v", a)
+	}
+	if a["vp-b"] {
+		t.Errorf("path tokens must not include the other vantage: %v", a)
+	}
+	if !tokensIntersect(a, b) {
+		t.Error("two vantages to the same target must share the target token")
+	}
+
+	// declared entity_tokens flow through (JSON []any and []string forms)
+	if !groundingTokens(map[string]any{"entity_id": "x", "entity_tokens": []any{"site-A"}})["site-A"] {
+		t.Error("declared entity_tokens ([]any) dropped")
+	}
+	if !groundingTokens(map[string]any{"entity_id": "x", "entity_tokens": []string{"site-B"}})["site-B"] {
+		t.Error("declared entity_tokens ([]string) dropped")
+	}
+}

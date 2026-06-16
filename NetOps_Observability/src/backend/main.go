@@ -682,6 +682,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)
 	mux.HandleFunc("/api/flows/by-type", s.handleFlowsByType)
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
+	mux.HandleFunc("/api/flows/services", s.handleFlowsServices) // #69 P2: flow traffic per service
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed
