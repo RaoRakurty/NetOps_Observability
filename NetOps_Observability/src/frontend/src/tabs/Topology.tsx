@@ -1,49 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import {
+  ReactFlow, Background, BackgroundVariant, Controls, MiniMap, Handle, Position, MarkerType,
+  type Node, type Edge, type NodeProps,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import { api, Device, Alert, Tunnel } from "../services/api";
-import { chartBase, hexToRgba } from "../theme/charts";
-import { cssVar } from "../theme/tokens";
 import { SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import VendorIcon from "../components/VendorIcon";
 import { brandDataUri, vendorKey } from "../components/vendorBrands";
+import { ShapeSVG, kindForRole } from "../components/graph/shapes";
+import FlowEdge from "../components/graph/FlowEdge";
 
-// Topology — a a "network-path"-style view. Devices are laid out in
-// role tiers (core → distribution → access/edge → firewall) per site, drawn as
-// health-colored node cards. Logical links connect adjacent tiers; if overlay
-// tunnels exist they are drawn on top as latency-colored edges with ms labels.
-// Clicking a node opens a detail panel. Edges/links are inferred from device
-// role labels until LLDP/CDP/BGP-LS discovery lands (see discovery.go).
+// Topology — a modern NOC device map (React Flow). Devices are drawn as real
+// network SHAPES (router circle, switch hexagon, firewall shield, gateway diamond,
+// cloud, host) coloured by health with a glossy glow, laid out in role tiers per
+// site (core → distribution → access/edge). Links are TrafficFlowEdges: tier links
+// flow gently; overlay tunnels animate and are coloured by latency / down state.
+// Clicking a node opens a detail panel. Links are inferred from role tiers until
+// LLDP/CDP/BGP-LS discovery lands (tracker #77).
 
-// Role → tier (lower = closer to the core). Unknown roles fall to the access tier.
 const TIER: Record<string, number> = {
-  core: 0,
-  distribution: 1,
-  dist: 1,
-  aggregation: 1,
-  agg: 1,
-  firewall: 1,
-  fw: 1,
-  edge: 2,
-  access: 2,
-  leaf: 2,
-};
-const ROLE_GLYPH: Record<string, string> = {
-  core: "◆", distribution: "▣", dist: "▣", aggregation: "▣", agg: "▣",
-  firewall: "⛨", fw: "⛨", edge: "▲", access: "▲", leaf: "▲", router: "▲",
+  core: 0, distribution: 1, dist: 1, aggregation: 1, agg: 1, firewall: 1, fw: 1,
+  edge: 2, access: 2, leaf: 2,
 };
 
 type Health = "ok" | "warning" | "critical";
 const HEALTH_COLOR: Record<Health, string> = {
-  ok: SEVERITY_COLOR.ok,
-  warning: SEVERITY_COLOR.warning,
-  critical: SEVERITY_COLOR.critical,
-};
-// Faint health wash for the node card fill — gives the map color at a glance
-// (the reference platform tints node cards by status rather than leaving them flat white).
-const HEALTH_TINT: Record<Health, () => string> = {
-  ok: () => cssVar("--sev-ok-bg", "rgba(5,150,105,0.10)"),
-  warning: () => cssVar("--sev-warning-bg", "rgba(217,119,6,0.12)"),
-  critical: () => cssVar("--sev-critical-bg", "rgba(225,29,72,0.10)"),
+  ok: SEVERITY_COLOR.ok, warning: SEVERITY_COLOR.warning, critical: SEVERITY_COLOR.critical,
 };
 
 function roleOf(d: Device): string {
@@ -56,32 +39,51 @@ function tierOf(d: Device): number {
   const t = TIER[roleOf(d)];
   return t === undefined ? 2 : t;
 }
-
-// Worst active-alert severity per device → node health.
 function healthFor(id: string, alertsByDev: Record<string, SeverityKey>): Health {
   const sev = alertsByDev[id];
   if (sev === "critical" || sev === "error") return "critical";
   if (sev === "warning" || sev === "notice") return "warning";
   return "ok";
 }
-
 function latencyColor(ms: number): string {
   if (ms < 50) return SEVERITY_COLOR.ok;
   if (ms < 120) return SEVERITY_COLOR.warning;
   return SEVERITY_COLOR.critical;
 }
 
-// Per-vendor custom icons (operator-assigned). Persisted client-side so each
-// operator can map their fleet's vendors to recognizable glyphs/logos. Keyed by
-// a normalized vendor slug; value is an image URL or a data: URI.
 const VENDOR_ICONS_KEY = "netops_vendor_icons";
 function loadVendorIcons(): Record<string, string> {
-  try {
-    return JSON.parse(localStorage.getItem(VENDOR_ICONS_KEY) || "{}");
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(localStorage.getItem(VENDOR_ICONS_KEY) || "{}"); } catch { return {}; }
 }
+
+// ── custom device node ──────────────────────────────────────────────────────
+const handleStyle = { width: 7, height: 7, background: "var(--border,#3a4252)", border: "none" } as const;
+function DeviceNode({ data }: NodeProps) {
+  const d = data as any;
+  const size = 58;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 134, gap: 2, cursor: "pointer" }}>
+      <Handle type="target" position={Position.Top} id="t" style={{ ...handleStyle, left: "50%" }} />
+      <Handle type="target" position={Position.Left} id="l" style={{ ...handleStyle, top: 30 }} />
+      <div style={{ position: "relative", width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <ShapeSVG kind={d.kind} tone={d.tone} size={size} glyph={!d.logo} />
+        {d.logo && (
+          <img src={d.logo} alt="" style={{ position: "absolute", width: size * 0.44, height: size * 0.44, objectFit: "contain", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }} />
+        )}
+        {/* health LED */}
+        <span style={{ position: "absolute", top: 1, right: 6, width: 9, height: 9, borderRadius: "50%", background: d.tone, boxShadow: `0 0 6px ${d.tone}, 0 0 0 1.5px var(--bg,#0e1320)` }} />
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 12, color: "var(--fg,#e6edf3)", textAlign: "center", lineHeight: 1.15, overflowWrap: "anywhere", maxWidth: 134 }}>{d.name}</div>
+      <div style={{ fontSize: 10.5, color: "var(--fg-muted,#6B7280)", textAlign: "center", lineHeight: 1.1 }}>
+        {d.role}{d.addr ? ` · ${d.addr}` : ""}
+      </div>
+      <Handle type="source" position={Position.Bottom} id="b" style={{ ...handleStyle, left: "50%" }} />
+      <Handle type="source" position={Position.Right} id="r" style={{ ...handleStyle, top: 30 }} />
+    </div>
+  );
+}
+const nodeTypes = { device: DeviceNode };
+const edgeTypes = { flow: FlowEdge };
 
 export default function Topology() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -110,96 +112,56 @@ export default function Topology() {
     return m;
   }, [alerts]);
 
-  // Build laid-out nodes (role tiers per site) + inferred tier links.
-  const { nodes, links, counts } = useMemo(() => {
-    // Group by site, then tier, to assign x positions.
+  const { rfNodes, rfEdges, counts } = useMemo(() => {
     const bySiteTier: Record<string, Record<number, Device[]>> = {};
     for (const d of devices) {
-      const s = siteOf(d);
-      const t = tierOf(d);
+      const s = siteOf(d), t = tierOf(d);
       (bySiteTier[s] ??= {})[t] ??= [];
       bySiteTier[s][t].push(d);
     }
-
-    const X_GAP = 200, Y_GAP = 200, SITE_GAP = 120;
-    const nodes: any[] = [];
-    const links: any[] = [];
+    const X_GAP = 180, Y_GAP = 165, SITE_GAP = 110;
+    const rfNodes: Node[] = [];
+    const rfEdges: Edge[] = [];
     const counts = { ok: 0, warning: 0, critical: 0 };
     let xCursor = 0;
 
-    const sites = Object.keys(bySiteTier).sort();
-    for (const site of sites) {
+    for (const site of Object.keys(bySiteTier).sort()) {
       const tiers = bySiteTier[site];
       const maxRow = Math.max(...Object.values(tiers).map((a) => a.length), 1);
       const siteWidth = maxRow * X_GAP;
-      const byId: Record<string, { x: number; y: number; tier: number }> = {};
+      const present = Object.keys(tiers).map(Number).sort((a, b) => a - b);
 
-      for (const tStr of Object.keys(tiers)) {
-        const t = Number(tStr);
+      for (const t of present) {
         const row = tiers[t];
         row.forEach((d, i) => {
-          // center each tier row within the site's allotted width
           const x = xCursor + (siteWidth / (row.length + 1)) * (i + 1);
           const y = t * Y_GAP;
           const h = healthFor(d.id, alertsByDev);
           counts[h]++;
-          byId[d.id] = { x, y, tier: t };
-          const color = HEALTH_COLOR[h];
-          const role = roleOf(d);
-          // Operator override wins; otherwise the bundled vendor brand mark.
-          const vico = vendorIcons[vendorKey(d.vendor || "")] || brandDataUri(d.vendor || "");
-          // First label line: health dot + (custom vendor icon | role glyph) + name.
-          const head = vico ? `{dot|●} {vico|} {n|${d.name || d.id}}` : `{dot|●} {g|${ROLE_GLYPH[role] || "▤"}} {n|${d.name || d.id}}`;
-          nodes.push({
-            id: d.id,
-            name: d.name || d.id,
-            x, y,
-            symbol: "roundRect",
-            symbolSize: [134, 52],
-            itemStyle: {
-              color: HEALTH_TINT[h](),
-              borderColor: color,
-              borderWidth: 2.5,
-              shadowBlur: 14,
-              shadowColor: hexToRgba(color, 0.28),
+          rfNodes.push({
+            id: d.id, type: "device", position: { x, y }, draggable: true,
+            data: {
+              kind: kindForRole(roleOf(d)), tone: HEALTH_COLOR[h],
+              name: d.name || d.id, role: roleOf(d), addr: d.address || "",
+              logo: vendorIcons[vendorKey(d.vendor || "")] || brandDataUri(d.vendor || ""),
             },
-            label: {
-              show: true,
-              formatter: [
-                head,
-                `{m|${role} · ${d.address || ""}}`,
-              ].join("\n"),
-              rich: {
-                dot: { color, fontSize: 13, padding: [0, 2, 0, 0] },
-                g: { color, fontSize: 15, fontWeight: 700 },
-                vico: { height: 16, width: 16, backgroundColor: vico ? { image: vico } : undefined, padding: [0, 2, 0, 0] },
-                n: { color: cssVar("--fg", "#1a2230"), fontSize: 13, fontWeight: 700 },
-                m: { color: cssVar("--fg-muted", "#667085"), fontSize: 11, padding: [4, 0, 0, 0] },
-              },
-            },
-            _device: d,
-            _health: h,
           });
         });
       }
-
-      // Inferred logical links: connect every node in tier T to every node in
-      // the next non-empty tier within the same site.
-      const presentTiers = Object.keys(tiers).map(Number).sort((a, b) => a - b);
-      for (let ti = 0; ti < presentTiers.length - 1; ti++) {
-        const upper = tiers[presentTiers[ti]];
-        const lower = tiers[presentTiers[ti + 1]];
-        for (const u of upper) for (const l of lower) {
-          links.push({
-            source: u.id, target: l.id,
-            lineStyle: { color: "rgba(100,116,139,0.45)", width: 1.5, curveness: 0 },
+      // inferred tier links: each node → each node in the next non-empty tier.
+      for (let ti = 0; ti < present.length - 1; ti++) {
+        for (const u of tiers[present[ti]]) for (const l of tiers[present[ti + 1]]) {
+          rfEdges.push({
+            id: `tier-${u.id}-${l.id}`, source: u.id, sourceHandle: "b", target: l.id, targetHandle: "t",
+            type: "flow", data: { flow: true, state: "healthy", particles: 1, speed: 4 },
+            style: { stroke: "#3f4a5e", strokeWidth: 1.4, opacity: 0.7 },
           });
         }
       }
       xCursor += siteWidth + SITE_GAP;
     }
 
-    // Overlay tunnel edges (real latency/status) on top, if endpoints resolve.
+    // overlay tunnels (real latency/status) on top, if endpoints resolve.
     const idByName: Record<string, string> = {};
     for (const d of devices) {
       idByName[(d.name || "").toLowerCase()] = d.id;
@@ -212,19 +174,18 @@ export default function Topology() {
       if (!a || !b || a === b) continue;
       const ms = Number(t.latency_ms) || 0;
       const down = String(t.status).toLowerCase() === "down";
-      links.push({
-        source: a, target: b,
-        label: { show: true, formatter: down ? "down" : `${ms.toFixed(0)}ms`, fontSize: 10, color: "#fff",
-          backgroundColor: down ? SEVERITY_COLOR.critical : latencyColor(ms), padding: [2, 5], borderRadius: 4 },
-        lineStyle: { color: down ? SEVERITY_COLOR.critical : latencyColor(ms), width: 2.5, curveness: 0.2,
-          type: down ? "dashed" : "solid" },
+      const color = down ? SEVERITY_COLOR.critical : latencyColor(ms);
+      rfEdges.push({
+        id: `tun-${a}-${b}`, source: a, sourceHandle: "r", target: b, targetHandle: "l",
+        type: "flow", label: down ? "down" : `${ms.toFixed(0)} ms`,
+        data: { flow: !down, state: down ? "confirmed_down" : ms >= 120 ? "degraded" : "healthy", particles: 3, speed: 2.2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
+        style: { stroke: color, strokeWidth: 2.4, opacity: 0.95 },
       });
     }
-
-    return { nodes, links, counts };
+    return { rfNodes, rfEdges, counts };
   }, [devices, alertsByDev, tunnels, vendorIcons]);
 
-  // Distinct vendors present in the fleet — the rows of the icon editor.
   const vendors = useMemo(() => {
     const set = new Set<string>();
     for (const d of devices) if ((d.vendor || "").trim()) set.add(d.vendor!.trim());
@@ -235,9 +196,8 @@ export default function Topology() {
     setVendorIcons((cur) => {
       const next = { ...cur };
       const k = vendorKey(vendor);
-      if (url.trim()) next[k] = url.trim();
-      else delete next[k];
-      try { localStorage.setItem(VENDOR_ICONS_KEY, JSON.stringify(next)); } catch { /* ignore quota */ }
+      if (url.trim()) next[k] = url.trim(); else delete next[k];
+      try { localStorage.setItem(VENDOR_ICONS_KEY, JSON.stringify(next)); } catch { /* quota */ }
       return next;
     });
   };
@@ -250,20 +210,16 @@ export default function Topology() {
         <div>
           <h2 style={{ margin: 0 }}>Network Topology</h2>
           <p className="topo-sub">
-            Devices in role tiers; links inferred from role labels, tunnels drawn as
-            latency-colored overlays. LLDP/CDP discovery will replace inferred links.
+            Devices as health-coloured network shapes in role tiers; tunnels drawn as
+            latency-coloured traffic-flow overlays. LLDP/CDP/BGP-LS discovery will replace inferred links.
           </p>
         </div>
         <div className="topo-stats">
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.ok }}>{counts.ok}</b> healthy</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
-          <span className="topo-stat"><b>{links.length}</b> links</span>
-          <button
-            className={`btn${iconEditor ? "" : " accent"}`}
-            onClick={() => setIconEditor((v) => !v)}
-            title="Assign a custom icon per vendor"
-          >
+          <span className="topo-stat"><b>{rfEdges.length}</b> links</span>
+          <button className={`btn${iconEditor ? "" : " accent"}`} onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per vendor">
             {iconEditor ? "Done" : "+ Vendor icons"}
           </button>
         </div>
@@ -284,19 +240,9 @@ export default function Topology() {
                 const auto = !url && !!brandDataUri(v);
                 return (
                   <div key={v} className="vendor-row">
-                    <span className="vendor-tile">
-                      {url ? <img src={url} alt={v} /> : <VendorIcon vendor={v} size={22} />}
-                    </span>
-                    <span className="vendor-name" title={v}>
-                      {v}
-                      {auto && <span className="vendor-auto">auto</span>}
-                    </span>
-                    <input
-                      className="vendor-input"
-                      placeholder="override: https://… or data:image/…"
-                      value={url}
-                      onChange={(e) => setVendorIcon(v, e.target.value)}
-                    />
+                    <span className="vendor-tile">{url ? <img src={url} alt={v} /> : <VendorIcon vendor={v} size={22} />}</span>
+                    <span className="vendor-name" title={v}>{v}{auto && <span className="vendor-auto">auto</span>}</span>
+                    <input className="vendor-input" placeholder="override: https://… or data:image/…" value={url} onChange={(e) => setVendorIcon(v, e.target.value)} />
                   </div>
                 );
               })}
@@ -310,7 +256,7 @@ export default function Topology() {
           <span className="topo-leg" key={h}><i style={{ background: HEALTH_COLOR[h] }} />{h}</span>
         ))}
         <span className="topo-leg-sep" />
-        <span className="topo-leg-label">Edge color = latency:</span>
+        <span className="topo-leg-label">Tunnel colour = latency:</span>
         <span className="topo-leg"><i style={{ background: SEVERITY_COLOR.ok }} />&lt;50ms</span>
         <span className="topo-leg"><i style={{ background: SEVERITY_COLOR.warning }} />&lt;120ms</span>
         <span className="topo-leg"><i style={{ background: SEVERITY_COLOR.critical }} />slow/down</span>
@@ -319,36 +265,22 @@ export default function Topology() {
       {error && <p style={{ color: "var(--bad)" }}>{error}</p>}
 
       <div className="topo-body">
-        {nodes.length === 0 ? (
+        {rfNodes.length === 0 ? (
           <div className="empty">No devices to plot yet — add some on the Devices tab.</div>
         ) : (
-          <ReactECharts
-            style={{ height: 520, flex: 1, minWidth: 0 }}
-            option={{
-              ...chartBase,
-              tooltip: {
-                ...chartBase.tooltip,
-                formatter: (p: any) =>
-                  p.dataType === "node"
-                    ? `<b>${p.data.name}</b><br/>${p.data._device?.vendor || "unknown vendor"} · ${roleOf(p.data._device)}<br/>${p.data._device?.address || ""} — <b style="color:${HEALTH_COLOR[p.data._health as Health]}">${p.data._health}</b>`
-                    : "",
-              },
-              series: [{
-                type: "graph",
-                layout: "none",
-                roam: true,
-                draggable: true,
-                label: { show: true, position: "inside" },
-                edgeSymbol: ["none", "none"],
-                data: nodes,
-                links,
-                emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
-              }],
-            }}
-            onEvents={{
-              click: (p: any) => { if (p.dataType === "node") setSelected(p.data.id); },
-            }}
-          />
+          <div style={{ flex: 1, minWidth: 0, height: 560, borderRadius: 10, overflow: "hidden", border: "1px solid var(--border,#2a2f3a)", background: "radial-gradient(120% 120% at 0% 0%, rgba(40,52,74,0.35), var(--bg,#0e1320) 60%)" }}>
+            <ReactFlow
+              nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+              fitView fitViewOptions={{ padding: 0.18 }} proOptions={{ hideAttribution: true }}
+              nodesConnectable={false} minZoom={0.2} maxZoom={1.6}
+              onNodeClick={(_, n) => setSelected(n.id)} onPaneClick={() => setSelected(null)}
+            >
+              <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />
+              <Controls showInteractive={false} position="bottom-right" />
+              <MiniMap pannable zoomable nodeColor={(n) => (n.data as any)?.tone || "#5a6472"}
+                style={{ background: "var(--panel,#151b2b)" }} maskColor="rgba(0,0,0,0.45)" />
+            </ReactFlow>
+          </div>
         )}
 
         {selDevice && (
