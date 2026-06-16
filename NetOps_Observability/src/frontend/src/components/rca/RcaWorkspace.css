@@ -129,9 +129,13 @@
 .rca-ws .rw-edge-label.bad { border-color: #ffb5ad; color: #bd2b22; background: #fff6f5; }
 .rca-ws .rw-edge-label.side1 { top: auto; bottom: -24px; }
 
-/* evidence grid — wide rectangles, content-sized (no dead vertical space) */
-.rca-ws .rw-evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 10px; }
-.rca-ws .rw-ecard { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--rw-line);
+/* evidence grid — auto-fit so cards GROW to fill the row (no phantom empty
+   columns), all cells EQUAL size: fixed 4-up grid that divides evenly for the
+   4 standard planes (→ 2-up on narrower widths), grid-auto-rows:1fr equalises
+   row heights, and the footer pins to the bottom so every box is identical. */
+.rca-ws .rw-evidence-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px; grid-auto-rows: 1fr; }
+.rca-ws .rw-ecard { display: flex; flex-direction: column; gap: 3px; min-height: 100px; border: 1px solid var(--rw-line);
   border-radius: 10px; background: #fff; padding: 11px 13px; }
 .rca-ws .rw-ecard.main { border-left: 4px solid var(--rw-orange); }
 .rca-ws .rw-ecard.confirm { border-left: 4px solid var(--rw-green); }
@@ -140,8 +144,8 @@
 .rca-ws .rw-ehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .rca-ws .rw-etitle { font-weight: 800; display: inline-flex; align-items: center; }
 .rca-ws .rw-edesc { font-size: 12px; color: var(--rw-muted); margin: 0; }
-.rca-ws .rw-efinding { font-size: 13px; font-weight: 700; margin: 3px 0 0; line-height: 1.4; }
-.rca-ws .rw-efoot { margin: 4px 0 0; font-size: 12px; color: #667085; }
+.rca-ws .rw-efinding { font-size: 13px; font-weight: 700; margin: 2px 0 0; line-height: 1.38; }
+.rca-ws .rw-efoot { margin-top: auto; padding-top: 4px; font-size: 11.5px; color: #667085; }
 .rca-ws .rw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .rca-ws .rw-dot.orange { background: var(--rw-orange); }
 .rca-ws .rw-dot.green { background: var(--rw-green); }
@@ -203,8 +207,13 @@
 .rca-ws .rw-jsonbox { background: #0f172a; color: #d9e5ff; border-radius: 11px; padding: 13px; overflow: auto;
   font-family: var(--rw-mono); font-size: 12px; line-height: 1.5; max-height: 420px; white-space: pre; }
 
+/* below ~1080px (incl. the Inspector drawer) the 4-up matrix drops to a clean
+   2-up — still even for 4 standard planes, never a ragged single-card row. */
+@media (max-width: 1080px) {
+  .rca-ws .rw-evidence-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 900px) {
-  .rca-ws .rw-grid, .rca-ws .rw-evidence-grid { grid-template-columns: 1fr; }
+  .rca-ws .rw-grid { grid-template-columns: 1fr; }
   .rca-ws .rw-case { grid-template-columns: 1fr; }
   .rca-ws .rw-aside { border-left: 0; border-top: 1px solid var(--rw-line); padding-left: 0; padding-top: 10px; }
   .rca-ws .rw-keyval { grid-template-columns: 120px 1fr; }

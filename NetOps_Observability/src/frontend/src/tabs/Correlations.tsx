@@ -276,7 +276,8 @@ export function CorrelationDetail({ id }: { id: string }) {
   if (!obj || !timeline || !rcaCase) return <div className="empty">Loading…</div>;
 
   const exportPdf = () => {
-    const ok = exportRcaPdf(timeline, seams, recommendedOwner, recommendedSteps, obj.correlation_id || "");
+    if (!rcaCase) return;
+    const ok = exportRcaPdf(rcaCase, obj.correlation_id || "");
     if (!ok) alert("Could not generate the RCA report.");
   };
 

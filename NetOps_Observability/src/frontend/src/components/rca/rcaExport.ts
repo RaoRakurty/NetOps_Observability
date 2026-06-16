@@ -1,187 +1,137 @@
-import { CorrTimeline, Seam } from "../../services/api";
-import {
-  signatureNocTitle, PLANE_NOC_TITLE, entityLabel, kindLabel, isRoutingKind,
-  modalityLabel, MODALITY_ORDER, mentionsInternal, ownerLabel,
-} from "./labels";
+import type { RcaCase, RcaPill, KV, Tone } from "./rcaCase";
 
 // rcaExport — generates an elegant, light-themed, print-ready RCA report and
 // opens it for the browser's "Save as PDF". No PDF dependency: a self-contained
-// HTML document + print CSS. The product name appears only in the report's
-// header/footer metadata (allowed in exports), never in the operator narrative.
+// HTML document + print CSS.
 //
-// Derived from the same CorrTimeline + labels helpers the on-screen Operator View
-// uses, with the canonical demo-ready wording, so the PDF reads like the page.
+// SINGLE SOURCE OF TRUTH: the report is rendered from the SAME `RcaCase` the
+// on-screen workspace renders (see rcaCase.ts / RcaWorkspace.tsx), so the PDF
+// always matches the page and includes every section — summary, impact, causal
+// topology, evidence matrix, confidence ladder, hypothesis ranking, ticket, and
+// next actions. The product name appears only in the report header/footer
+// metadata (allowed in exports), never in the operator narrative.
 
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+const esc = (s: string) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
 
-interface Report {
-  title: string; verdict: string; confidence: string; state: string; observed: string;
-  device: string; peer: string; scopeType: string;
-  summary: string; decision: string;
-  whySuspected: string; whyNotConfirmed: string; toConfirm: string;
-  impact: string; impactWhy: string;
-  routingContext: string; localization: string;
-  evidence: { plane: string; detail: string; status: string }[];
-  actions: string[];
-}
+// tone → print colour (matches the on-screen .rca-ws palette)
+const TONE: Record<Tone, { fg: string; bg: string; bd: string }> = {
+  green: { fg: "#0f9f4f", bg: "#eafaf1", bd: "#bfeccf" },
+  orange: { fg: "#d66a00", bg: "#fff4e8", bd: "#ffd3a9" },
+  blue: { fg: "#2563eb", bg: "#eef4ff", bd: "#c9dbff" },
+  red: { fg: "#d92d20", bg: "#fff0ee", bd: "#ffd0cc" },
+  gray: { fg: "#667085", bg: "#eef1f6", bd: "#d8dee8" },
+  purple: { fg: "#6d5dfc", bg: "#f3f1ff", bd: "#ddd7ff" },
+};
+const NODE: Record<string, { fg: string; bg: string; bd: string }> = {
+  good: { fg: "#087c3d", bg: "#effcf4", bd: "#1aaf5d" },
+  warn: { fg: "#c45a00", bg: "#fff7ed", bd: "#f59e0b" },
+  bad: { fg: "#c5221a", bg: "#fff1f1", bd: "#ef4444" },
+  info: { fg: "#2563eb", bg: "#eff6ff", bd: "#3b82f6" },
+};
+const EDGE: Record<string, string> = { good: "#22c55e", warn: "#f59e0b", bad: "#ef4444" };
 
-function buildReport(timeline: CorrTimeline, owner: string, steps: string[]): Report {
-  const confirmed = timeline.verdict_tier === "confirmed";
+const pill = (p: RcaPill) => {
+  const t = TONE[p.tone] ?? TONE.gray;
+  return `<span style="font-size:11px;font-weight:800;padding:3px 8px;border-radius:7px;background:${t.bg};color:${t.fg};border:1px solid ${t.bd};white-space:nowrap">${esc(p.text)}</span>`;
+};
+const kvRows = (rows: KV[]) => rows.map((r) =>
+  `<div class="kv"><span class="k">${esc(r.k)}</span><span class="v"${r.mono ? ' style="font-family:ui-monospace,monospace"' : ""}>${esc(r.v)}</span></div>`).join("");
+const block = (label: string, body: string) => body ? `<section><h2>${esc(label)}</h2>${body}</section>` : "";
 
-  // display-plane counts (routing kinds read as routing/link, like Operator View)
-  const att: Record<string, number> = {};
-  for (const s of timeline.signals) {
-    if (s.kind.endsWith("_clear") || !s.attached) continue;
-    const p = isRoutingKind(s.kind) ? "control_plane" : s.modality_class;
-    att[p] = (att[p] ?? 0) + 1;
+// Causal-topology SVG — a horizontal node chain (1..N), print-safe (the live
+// React-Flow canvas can't be serialized). Mirrors the workspace's node colours.
+function topoSvg(topo: RcaCase["topology"]): string {
+  if (!topo || topo.nodes.length === 0) return "";
+  const nodes = topo.nodes, edges = topo.edges;
+  const NW = 150, GAP = 64, PADX = 8, NY = 34, NH = 46;
+  const width = PADX * 2 + nodes.length * NW + (nodes.length - 1) * GAP;
+  const cx = (i: number) => PADX + i * (NW + GAP);
+  let parts = "";
+  // edges first (under nodes)
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const e = edges[i]; const col = EDGE[e?.state ?? "good"] ?? "#cad5e5";
+    const x1 = cx(i) + NW, x2 = cx(i + 1), midY = NY + NH / 2;
+    const dash = e?.state === "good" ? "" : ' stroke-dasharray="6 4"';
+    parts += `<line x1="${x1}" y1="${midY}" x2="${x2}" y2="${midY}" stroke="${col}" stroke-width="${e?.state === "good" ? 2 : 3}"${dash}/>`;
+    if (e?.label) {
+      const lx = (x1 + x2) / 2, ly = (e.side === 1 ? midY + 22 : midY - 12);
+      parts += `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${col}">${esc(e.label)}</text>`;
+    }
   }
-  const dominant = Object.entries(att).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "control_plane";
-  const hasDevice = (att["device_telemetry"] ?? 0) > 0;
-  const hasRouting = (att["control_plane"] ?? 0) > 0;
-  const attachedCount = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).length;
-
-  // routing context (device + peer)
-  let device = "", peer = "", routeKind = "";
-  for (const s of timeline.signals) {
-    if (!s.attached || s.kind.endsWith("_clear") || !isRoutingKind(s.kind)) continue;
-    device = s.entity_id; routeKind = s.kind;
-    try { const a = JSON.parse((s as { attrs?: string }).attrs || "{}"); peer = a.peer || a.neighbor || ""; } catch { /* */ }
-    const ci = s.entity_id.indexOf(":");
-    if (ci > 0) { device = s.entity_id.slice(0, ci); if (!peer) peer = s.entity_id.slice(ci + 1); }
-    if (mentionsInternal(device)) { device = ""; peer = ""; }
-    break;
-  }
-  device = device ? entityLabel(device) : "";
-
-  // title (with device/routing evidence-mix refinement)
-  let title = timeline.top_hypothesis !== "undetermined"
-    ? signatureNocTitle(timeline.top_hypothesis)
-    : (PLANE_NOC_TITLE[dominant] ?? "Possible network issue");
-  if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) {
-    title = "Possible device/routing issue";
-  }
-
-  const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";
-  const w = (timeline.window_start || "").replace("T", " ").slice(0, 19);
-
-  const summary = confirmed
-    ? `${title.replace(/^Possible /, "")} — independent evidence confirms a real network issue.`
-    : (hasRouting && device)
-      ? `A ${kindLabel(routeKind)} was observed on ${device}${peer ? ` with peer ${peer}` : ""}. Customer impact is not confirmed yet.`
-      : `Evidence changed but does not yet confirm a real network issue.`;
-
-  const whySuspected = (hasDevice && hasRouting)
-    ? "Device health and routing/link evidence were observed on the same device area."
-    : hasRouting ? "A routing/link change was observed on the affected routing adjacency."
-      : "The available evidence matches this issue type.";
-  const whyNotConfirmed = attachedCount <= 1
-    ? "This issue currently rests on a single observed signal. Independent evidence is needed before confirming customer impact."
-    : "The supporting signals are related, but independent evidence is needed before confirming customer impact.";
-  const toConfirm = hasDevice
-    ? "Add peer-side BGP/routing state, traffic-flow loss, downstream service impact, or an active check from an independent vantage."
-    : "Add peer-side BGP/routing state, interface errors or drops, traffic-flow loss, downstream service impact, or an active check from an independent vantage.";
-
-  const confirmMenu = ["peer-side routing", "device health", "traffic-flow loss", "downstream impact", "or an independent active check"]
-    .filter((o) => !(hasDevice && o === "device health"));
-  const decision = confirmed
-    ? `ESCALATE — confirmed; route to ${owner ? ownerLabel(owner) : "the network team"}.`
-    : `HOLD — suspected only. Confirm with ${confirmMenu.join(", ")}.`;
-
-  const notTied: string[] = [];
-  if (!hasDevice) notTied.push("device-health");
-  if ((att["passive_flow"] ?? 0) === 0) notTied.push("traffic-flow");
-  if ((att["active_probe"] ?? 0) === 0) notTied.push("active-check");
-  if (!hasRouting || attachedCount <= 1) notTied.push("peer-side");
-  const impactWhy = notTied.length ? `${notTied.join(", ")} evidence ${notTied.length > 1 ? "are" : "is"} not tied to this issue.` : "";
-
-  // evidence rows (per plane)
-  const PLANE_DESC: Record<string, string> = {
-    device_telemetry: "interface errors, link counters, CPU, memory",
-    control_plane: "BGP, link up/down, syslog, traps",
-    passive_flow: "traffic loss, volume drop, traffic shift",
-    active_probe: "ping, HTTP, STAMP, path checks",
-  };
-  const evidence = MODALITY_ORDER.map((p) => {
-    const n = att[p] ?? 0;
-    return {
-      plane: modalityLabel(p), detail: PLANE_DESC[p] ?? "",
-      status: n > 0 ? (p === dominant ? "Main evidence · used" : "Used") : "Not observed",
-    };
+  // nodes
+  nodes.forEach((nd, i) => {
+    const c = NODE[nd.kind] ?? NODE.info; const x = cx(i);
+    parts += `<rect x="${x}" y="${NY}" width="${NW}" height="${NH}" rx="10" fill="${c.bg}" stroke="${c.bd}" stroke-width="1.6"/>`;
+    parts += `<text x="${x + NW / 2}" y="${NY + 19}" text-anchor="middle" font-size="12.5" font-weight="800" fill="${c.fg}">${esc(nd.name)}</text>`;
+    parts += `<text x="${x + NW / 2}" y="${NY + 35}" text-anchor="middle" font-size="10" fill="#697386">${esc(nd.meta)}</text>`;
+    if (nd.tag) {
+      const t = TONE[nd.tag.tone] ?? TONE.gray;
+      parts += `<text x="${x + NW / 2}" y="${NY + NH + 14}" text-anchor="middle" font-size="9.5" font-weight="800" fill="${t.fg}">${esc(nd.tag.text)}</text>`;
+    }
   });
-
-  const actions = steps.length ? steps.slice(0, 6) : [
-    "Check peer-side BGP/routing state for the affected adjacency.",
-    "Review device CPU/memory and control-plane load around the event window.",
-    "Run an independent active path check from another vantage.",
-    "Hold ticketing/escalation until independent impact evidence appears.",
-  ];
-
-  return {
-    title, verdict: confirmed ? "CONFIRMED" : "NOT CONFIRMED", confidence, state: timeline.verdict_tier === "confirmed" ? "Open" : "Open",
-    observed: w ? `${w} UTC` : "—", device, peer, scopeType: device && peer ? "Routing adjacency" : "",
-    summary, decision, whySuspected, whyNotConfirmed, toConfirm,
-    impact: confirmed ? "Confirmed customer-impacting issue" : "No confirmed customer impact", impactWhy,
-    routingContext: device ? `${device} → ${kindLabel(routeKind) === "BGP state change" ? "BGP neighbor changed" : "routing change"} → ${peer || "peer"}` : "",
-    localization: device ? `Evidence localizes to: ${device}` : "",
-    evidence, actions,
-  };
+  return `<svg viewBox="0 0 ${width} ${NY + NH + 24}" width="100%" style="max-width:${Math.min(width, 680)}px;display:block;margin:4px auto" role="img" aria-label="Causal topology">${parts}</svg>`;
 }
 
-function reportHtml(r: Report, objId: string): string {
-  const block = (label: string, body: string) =>
-    `<section><h2>${esc(label)}</h2>${body}</section>`;
-  const line = (k: string, v: string) => v ? `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>` : "";
-  const verdictColor = r.verdict === "CONFIRMED" ? "#b91c1c" : "#b45309";
-  const confirmed = r.verdict === "CONFIRMED";
+function reportHtml(d: RcaCase, objId: string): string {
   const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 
-  // print-safe SVG of the routing context (the live graph can't be serialized).
-  const [dDev, dEdge, dPeer] = r.routingContext ? r.routingContext.split(" → ") : ["", "", ""];
-  const diagram = r.device ? `<svg viewBox="0 0 600 92" width="100%" style="max-width:560px;display:block;margin:6px auto" role="img" aria-label="routing context">
-    <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#b45309"/></marker></defs>
-    <rect x="8" y="28" width="172" height="40" rx="9" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
-    <text x="94" y="53" text-anchor="middle" font-size="14" font-weight="700" fill="#1e3a8a">${esc(dDev || r.device)}</text>
-    <text x="300" y="40" text-anchor="middle" font-size="11.5" font-weight="600" fill="#b45309">${esc(dEdge || "routing change")}</text>
-    <line x1="182" y1="50" x2="416" y2="50" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ar)"/>
-    <rect x="420" y="28" width="172" height="40" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-    <text x="506" y="53" text-anchor="middle" font-size="12.5" font-family="ui-monospace,monospace" fill="#334155">${esc(dPeer || r.peer || "peer")}</text>
-  </svg>` : "";
+  const why = d.why.map((w) => {
+    const t = TONE[w.tone] ?? TONE.orange;
+    return `<p class="body"><b style="color:${t.fg}">${esc(w.label)}:</b> ${esc(w.text)}</p>`;
+  }).join("");
 
-  // visual confidence ladder (chips), mirroring the on-screen rungs.
-  const rung = (label: string, on: boolean, tone: string, locked: boolean) =>
-    `<span style="font-size:12px;font-weight:700;padding:4px 13px;border-radius:18px;${on ? `background:${tone};color:#fff;border:1px solid ${tone}` : `color:#94a3b8;border:1px solid #cbd5e1`}">${locked ? "&#128274; " : on ? "&#10003; " : ""}${label}</span>`;
-  const conn = `<span style="width:24px;height:2px;background:#cbd5e1"></span>`;
-  const ladder = `<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap">${rung("Observed", true, "#16a34a", false)}${conn}${rung("Suspected", true, "#b45309", false)}${conn}${rung("Confirmed", confirmed, "#b91c1c", !confirmed)}</div>`;
+  const ladder = `<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap">${
+    d.ladder.map((s, i) => {
+      const tone = s.state === "done" ? "#16a34a" : s.state === "active" ? "#d66a00" : "#94a3b8";
+      const on = s.state !== "next";
+      const chip = `<span style="font-size:11.5px;font-weight:700;padding:4px 12px;border-radius:18px;${on ? `background:${tone};color:#fff;border:1px solid ${tone}` : "color:#94a3b8;border:1px solid #cbd5e1"}">${esc(s.label)}</span>`;
+      const conn = i < d.ladder.length - 1 ? `<span style="width:20px;height:2px;background:#cbd5e1"></span>` : "";
+      return chip + conn;
+    }).join("")
+  }</div>`;
 
-  return `<!doctype html><html><head><meta charset="utf-8"><title>RCA Report — ${esc(r.title)}</title>
+  const evidence = `<table><thead><tr><th>Evidence type</th><th>Covers</th><th>Finding</th><th>Status</th></tr></thead><tbody>${
+    d.evidence.map((e) => `<tr><td>${esc(e.title)}</td><td style="color:#64748b">${esc(e.desc)}</td><td>${esc(e.finding)}</td><td>${pill(e.pill)}</td></tr>`).join("")
+  }</tbody></table>`;
+
+  const hypotheses = d.hypotheses.length ? `<table><thead><tr><th>Rank</th><th>Hypothesis</th><th>Confidence</th><th>Reason</th></tr></thead><tbody>${
+    d.hypotheses.map((h) => `<tr><td style="font-family:ui-monospace,monospace;font-weight:800">${esc(h.rank)}</td><td><b>${esc(h.hypo)}</b><div style="color:#697386;font-size:11px">${esc(h.sub)}</div></td><td>${pill(h.conf)}</td><td>${esc(h.reason)}</td></tr>`).join("")
+  }</tbody></table>` : "";
+
+  const ticket = `<div class="decision" style="${d.ticket.callout.tone === "red" ? "border-left-color:#b91c1c" : d.ticket.callout.tone === "confirmed" ? "border-left-color:#0f9f4f;background:#f2fbf6;border-color:#b9e5c7" : ""}"><b>${esc(d.ticket.callout.strong)}</b> ${esc(d.ticket.callout.text)}</div>${kvRows(d.ticket.rows)}`;
+
+  const actions = `<ol>${d.nextActions.map((a) => `<li><b>${esc(a.badge)}</b> — ${esc(a.text)}</li>`).join("")}</ol>`;
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>RCA Report — ${esc(d.title)}</title>
 <style>
-  @page { size: A4; margin: 18mm 16mm; }
+  @page { size: A4; margin: 16mm 14mm; }
   * { box-sizing: border-box; }
-  body { font: 13px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1f2933; margin: 0; }
-  .doc { max-width: 720px; margin: 0 auto; padding: 8px 0 32px; }
-  header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom: 2px solid #1f2933; padding-bottom: 10px; margin-bottom: 18px; }
+  body { font: 13px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; }
+  .doc { max-width: 740px; margin: 0 auto; padding: 8px 0 32px; }
+  header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom: 2px solid #172033; padding-bottom: 10px; margin-bottom: 16px; }
   header.rpt .brand { font-weight: 800; letter-spacing: .5px; font-size: 13px; color:#334155; }
   header.rpt .doctype { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color:#64748b; }
-  h1 { font-size: 21px; margin: 0 0 6px; }
-  .badges { font-size: 12px; font-weight: 700; color: ${verdictColor}; margin-bottom: 12px; }
-  section { margin: 14px 0; }
-  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color:#64748b; margin: 0 0 5px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; }
+  h1 { font-size: 21px; margin: 0 0 8px; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom: 8px; }
+  .meta { font-size:11.5px; color:#64748b; margin-bottom: 12px; }
+  .meta b { color:#172033; font-family:ui-monospace,monospace; }
+  section { margin: 13px 0; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color:#64748b; margin: 0 0 6px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; }
   .kv { display:flex; gap:10px; padding:1px 0; }
-  .kv .k { color:#64748b; min-width: 130px; }
-  .kv .v { color:#1f2933; font-weight:600; }
-  p.body { margin: 4px 0; font-size: 14px; }
-  .decision { background:#fff7ed; border:1px solid #fed7aa; border-left:3px solid ${verdictColor}; border-radius:6px; padding:9px 12px; font-weight:600; }
-  .reason b { color:#b45309; }
+  .kv .k { color:#64748b; min-width: 150px; }
+  .kv .v { color:#172033; font-weight:600; }
+  p.body { margin: 3px 0; }
+  .decision { background:#fff7ed; border:1px solid #fed7aa; border-left:3px solid #d66a00; border-radius:6px; padding:9px 12px; margin-bottom:6px; }
   table { width:100%; border-collapse: collapse; font-size:12px; }
-  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; }
-  th { color:#64748b; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
-  ol { margin:4px 0; padding-left: 20px; }
-  ol li { margin: 3px 0; }
-  footer.rpt { margin-top: 24px; border-top:1px solid #e2e8f0; padding-top:8px; font-size:10.5px; color:#94a3b8; display:flex; justify-content:space-between; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+  th { color:#64748b; font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; background:#f8fafc; }
+  ol { margin:4px 0; padding-left: 20px; } ol li { margin: 3px 0; }
+  ol li b { color:#1d55d7; font-size:11px; }
+  footer.rpt { margin-top: 22px; border-top:1px solid #e2e8f0; padding-top:8px; font-size:10.5px; color:#94a3b8; display:flex; justify-content:space-between; }
   .toolbar { position: sticky; top: 0; z-index: 10; display:flex; gap:8px; justify-content:flex-end; padding:10px 14px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; }
-  .toolbar button { font:600 13px/1 inherit; padding:8px 16px; border-radius:6px; cursor:pointer; border:1px solid #cbd5e1; background:#fff; color:#1f2933; }
-  .toolbar button.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
-  @media print { .no-print { display:none !important; } body { background:#fff; } section { break-inside: avoid; page-break-inside: avoid; } svg { max-width:100%; } }
+  .toolbar button { font:600 13px/1 inherit; padding:8px 16px; border-radius:6px; cursor:pointer; border:1px solid #cbd5e1; background:#fff; color:#172033; }
+  .toolbar button.primary { background:#4f46e5; color:#fff; border-color:#4f46e5; }
+  @media print { .no-print { display:none !important; } body { background:#fff; } section { break-inside: avoid; page-break-inside: avoid; } svg { max-width:100%; } table { break-inside:auto; } }
 </style></head><body>
   <div class="toolbar no-print">
     <button id="rca-save" class="primary">⤓ Save as PDF</button>
@@ -189,43 +139,34 @@ function reportHtml(r: Report, objId: string): string {
   </div>
   <div class="doc">
   <header class="rpt"><span class="brand">CORRELIX</span><span class="doctype">Root Cause Analysis Report</span></header>
-  <h1>${esc(r.title)}</h1>
-  <div class="badges">${esc(r.verdict)} · Confidence: ${esc(r.confidence)} · State: ${esc(r.state)} · Observed: ${esc(r.observed)}</div>
+  <h1>${esc(d.title)}</h1>
+  <div class="badges">${d.pills.map(pill).join("")}</div>
+  <div class="meta">Observed at: <b>${esc(d.observedAt)}</b> &middot; RCA ID: <b>${esc(d.rcaId)}</b></div>
 
-  ${block("Affected", line("Device", r.device) + line("Peer", r.peer) + line("Scope type", r.scopeType))}
-  ${block("Decision", `<div class="decision">${esc(r.decision)}</div>`)}
-  ${block("Summary", `<p class="body">${esc(r.summary)}</p>`)}
-  ${block("Assessment", `<div class="reason">
-    <p class="body"><b>Why suspected:</b> ${esc(r.whySuspected)}</p>
-    <p class="body"><b>Why not confirmed:</b> ${esc(r.whyNotConfirmed)}</p>
-    <p class="body"><b>To confirm:</b> ${esc(r.toConfirm)}</p></div>`)}
-  ${block("Confidence", ladder)}
-  ${block("Impact &amp; blast radius", line("Impact", r.impact) + (r.impactWhy ? `<p class="body" style="color:#64748b">Why: ${esc(r.impactWhy)}</p>` : ""))}
-  ${r.routingContext ? block("Routing context", `${diagram}<div class="kv" style="justify-content:center"><span class="v">${esc(r.localization)}</span></div>`) : ""}
-  ${block("Evidence", `<table><thead><tr><th>Evidence type</th><th>Covers</th><th>Status</th></tr></thead><tbody>${
-    r.evidence.map((e) => `<tr><td>${esc(e.plane)}</td><td>${esc(e.detail)}</td><td>${esc(e.status)}</td></tr>`).join("")
-  }</tbody></table>`)}
-  ${block("Recommended next actions", `<ol>${r.actions.map((a) => `<li>${esc(a)}</li>`).join("")}</ol>`)}
+  ${d.decision.text ? block("Decision", `<div class="decision"${d.decision.tone === "confirmed" ? ' style="border-left-color:#0f9f4f;background:#f2fbf6;border-color:#b9e5c7"' : ""}>${esc(d.decision.text)}</div>`) : ""}
+  ${block("Case", kvRows(d.aside))}
+  ${block("Executive summary", `<p class="body">${esc(d.summary)}</p>${why}`)}
+  ${block("Impact &amp; blast radius", kvRows(d.impact))}
+  ${block("Causal topology", topoSvg(d.topology))}
+  ${block("Evidence matrix", evidence)}
+  ${block("Confidence ladder", ladder)}
+  ${block("Hypothesis ranking", hypotheses)}
+  ${block("Ticket &amp; escalation", ticket)}
+  ${block("Next actions", actions)}
 
-  <footer class="rpt"><span>Generated ${esc(now)} UTC · Correlix RCA</span><span>Object ${esc(objId.slice(0, 8))} · Confidential</span></footer>
+  <footer class="rpt"><span>Generated ${esc(now)} UTC &middot; Correlix RCA</span><span>Object ${esc(objId.slice(0, 8))} &middot; Confidential</span></footer>
 </div>
 </body></html>`;
-  // NB: no inline <script> or onclick — the app's CSP (script-src 'self') blocks
-  // inline script in the about:blank popup. The parent window wires the buttons
-  // + print via the DOM API (CSP-safe) in exportRcaPdf.
+  // NB: no inline <script>/onclick — the app CSP (script-src 'self') blocks inline
+  // script in the popup. The parent wires the buttons + print via the DOM API below.
 }
 
-// exportRcaPdf renders the print-ready report and triggers the browser print
-// dialog (→ Save as PDF). The report HTML self-prints via an inline script (most
-// reliable for document.write content). Prefers a new tab (preview UX); falls back
-// to a hidden same-origin iframe when pop-ups are blocked. Always returns true —
-// one of the two paths runs. (No `noopener`: it would null the window handle.)
-export function exportRcaPdf(timeline: CorrTimeline, _seams: Record<string, Seam>, owner: string, steps: string[], objId: string): boolean {
-  const r = buildReport(timeline, owner, steps);
-  const html = reportHtml(r, objId);
+// exportRcaPdf renders the print-ready report from the RcaCase and opens it for
+// "Save as PDF". Prefers a new tab (preview + working toolbar); falls back to a
+// real-size off-screen iframe when pop-ups are blocked. Always returns true.
+export function exportRcaPdf(data: RcaCase, objId: string): boolean {
+  const html = reportHtml(data, objId);
 
-  // Preferred: a real tab with the report + working toolbar. The parent wires the
-  // buttons (CSP blocks inline handlers in the popup).
   const win = window.open("", "_blank", "width=920,height=1040");
   if (win) {
     win.document.open();
@@ -233,20 +174,18 @@ export function exportRcaPdf(timeline: CorrTimeline, _seams: Record<string, Seam
     win.document.close();
     const wire = () => {
       try {
-        const d = win.document;
-        d.getElementById("rca-save")?.addEventListener("click", () => { win.focus(); win.print(); });
-        d.getElementById("rca-close")?.addEventListener("click", () => win.close());
-      } catch { /* cross-origin guard — same-origin here, so fine */ }
+        const dd = win.document;
+        dd.getElementById("rca-save")?.addEventListener("click", () => { win.focus(); win.print(); });
+        dd.getElementById("rca-close")?.addEventListener("click", () => win.close());
+      } catch { /* same-origin — fine */ }
     };
-    // document.write content is ready synchronously after close(); wire now + on load.
     wire();
     win.addEventListener("load", wire);
     win.focus();
     return true;
   }
 
-  // Pop-up blocked → render in a REAL-SIZE off-screen iframe (a 0×0 iframe clips
-  // the print to a sliver) and print it from the parent after it lays out.
+  // Pop-up blocked → real-size off-screen iframe (a 0×0 iframe clips the print).
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
   iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:820px;height:1160px;border:0;";
@@ -259,7 +198,7 @@ export function exportRcaPdf(timeline: CorrTimeline, _seams: Record<string, Seam
   doc.close();
   const printIframe = () => { try { cw.focus(); cw.print(); } catch { /* ignore */ } };
   iframe.addEventListener("load", () => setTimeout(printIframe, 400));
-  setTimeout(printIframe, 700); // belt-and-suspenders if load already fired
+  setTimeout(printIframe, 700);
   setTimeout(() => iframe.remove(), 60000);
   return true;
 }
