@@ -11,6 +11,7 @@ import { brandDataUri, vendorKey } from "../components/vendorBrands";
 import { NetIcon, kindForDevice, type NetKind } from "../components/graph/NetIcon";
 import FlowEdge from "../components/graph/FlowEdge";
 import { layoutTopology, type TopoType } from "../components/graph/topologyLayout";
+import { abbrevPortPair } from "../components/graph/ifname";
 
 // Topology — a modern NOC device map (React Flow). Devices are drawn as real
 // network SHAPES (router circle, switch hexagon, firewall shield, gateway diamond,
@@ -223,7 +224,7 @@ export default function Topology() {
       } else if (positions[lk.target].x < positions[lk.source].x) {
         source = lk.target; target = lk.source; // ensure left→right
       }
-      const portLabel = [lk.local_port, lk.remote_port].filter(Boolean).join(" ↔ ");
+      const portLabel = abbrevPortPair(lk.local_port, lk.remote_port);
       const label = logicalView
         ? [igpLabel(lk.igp), lk.area ? `area ${lk.area}` : "", portLabel].filter(Boolean).join(" · ")
         : (portLabel || undefined);
