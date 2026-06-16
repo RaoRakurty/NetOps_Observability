@@ -97,19 +97,42 @@ verdict Suspected, confidence 0.50.
   `rca-path-topology.md`.
 - [ ] **1–2: UI-ready `/api/correlations/{id}/rca-path-view` + overlay mapping**
   (corr evidence → node/edge/path_segment annotations). NEXT.
-- [~] Base-topology backend: **LLDP collector SHIPPED** (`collectors/lldp.go`,
-  SNMP LLDP-MIB → Redis) + `/api/topology/links` (tenant-scoped, bidir-dedup,
-  source-agnostic `source_protocol`). Validated live on the clos lab (cEOS +
-  SR Linux + Cisco). TODO: CDP (CISCO-CDP-MIB) + BGP-LS sources (same link shape);
-  persistent `topology_nodes/edges` tables + `/api/topology/graph` (Redis MVP today).
+- [x] Base-topology backend: **LLDP + CDP + BGP-LS collectors SHIPPED**. LLDP
+  (`collectors/lldp.go`, SNMP LLDP-MIB) + CDP (`collectors/cdp.go`, CISCO-CDP-MIB)
+  + **BGP-LS** (`collectors/bgpls.go`, receive-only stdlib BGP speaker, RFC 7752/9552)
+  all publish the same `LLDPNeighbor` link shape → Redis → merged by
+  `FetchTopologyLinks` → `/api/topology/links` (tenant-scoped, bidir-dedup,
+  cross-protocol `source_protocol` union = independent confirmation). LLDP/CDP
+  validated live on the clos lab; BGP-LS validated by byte-fixture unit tests
+  (needs a lab RR/exporter running `distribute link-state` for live validation —
+  owner action). **Layered source model (owner, 2026-06-16):** BGP-LS = base IGP
+  graph (IS-IS *or* OSPF, node/link/prefix) → SNMP/gNMI enrichment (hostname/
+  ifNames/speeds/status/counters) → LLDP/CDP validation → flow/probe overlay.
+
+  **BGP-LS receive-only speaker** (zero-trust, never advertises NLRI): TCP/179 →
+  OPEN/KEEPALIVE with MP-BGP Link-State capability (AFI 16388/SAFI 71) + 4-octet-AS
+  → decode Node/Link/Prefix NLRI from MP_REACH (attr 14, BGP-LS attr 29), withdraws
+  from MP_UNREACH (15). IS-IS LSDB: Protocol-ID 1/2 → isis-l1/l2, IGP Router-ID (515)
+  → ISO System-ID "0020.9000.0003" (+PSN). OSPF: Protocol-ID 3/6, dotted Router-ID.
+  Dormant behind `ENABLE_BGPLS_DISCOVERY` + `BGPLS_PEERS` (`host[:port][@peerAS]`,
+  `BGPLS_LOCAL_AS`/`BGPLS_ROUTER_ID`/`BGPLS_HOLD_TIME`). Stdlib only — no GoBGP/gRPC.
+  TODO: SR topology TLVs, prefix→node surfacing, persistent `topology_nodes/edges`
+  tables + `/api/topology/graph` (Redis MVP today), full SNMP/gNMI enrichment join.
 - [ ] NetworkPathView/TopologyCanvas split, BoundaryNode, EvidencePopover,
   InspectorSidePanel, TopologyLegend; elkjs layered layout.
-- [x] Device Topology page draws **real LLDP-discovered links** (tabs/Topology.tsx;
-  tier-inference now a dashed labelled fallback). Full TopologyCanvas rebuild TBD.
-- [~] **7–8: tests** — LLDP DONE (composite-index parse, chassis-vs-port subtype
-  render, bidir dedup, sysName/FQDN/mgmt-addr resolution, tenant isolation). TODO:
-  CDP/BGP-LS normalize, stale handling, integration (golden render, no-fake-link,
-  operator-vs-debug, reduced-motion), Playwright.
+- [x] **Device Topology sub-objects (UI)**: the Topology page carries two named
+  sub-objects — **Physical** (LLDP/CDP Layer-2 adjacency) and **Logical** (BGP-LS
+  IGP link-state graph, labelled IS-IS / OSPF from the `igp` field; violet dashed
+  L3 edges with protocol/area labels). Logical never infers adjacency from tiers
+  (honest empty state instead). Physical keeps tier-inference dashed fallback. Hops
+  not learned by LLDP/CDP/BGP-LS (unresolved `ext:` endpoints) render as a plain
+  **cloud icon** (Internet / unmanaged boundary). Full TopologyCanvas rebuild TBD.
+- [~] **7–8: tests** — LLDP + CDP + **BGP-LS DONE** (BGP-LS: byte-fixture
+  Node/Link/Prefix NLRI parse, IS-IS System-ID render + pseudonode, OSPF parity,
+  node↔link descriptor-key join, MP_REACH header strip, withdraw, OPEN encode,
+  truncation safety; normalize: both-endpoint resolution, tenant isolation,
+  cross-protocol union). TODO: stale handling, integration (golden render,
+  no-fake-link, operator-vs-debug, reduced-motion), Playwright.
 
 ## Performance / accessibility
 

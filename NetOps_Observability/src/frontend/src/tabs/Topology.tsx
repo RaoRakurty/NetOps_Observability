@@ -51,6 +51,24 @@ function latencyColor(ms: number): string {
   return SEVERITY_COLOR.critical;
 }
 
+// Device Topology sub-objects: Physical = L2 adjacency (LLDP/CDP); Logical = the
+// IGP link-state graph carried by BGP-LS (IS-IS OR OSPF — whichever the backend
+// runs). A link confirmed by both protocols ("bgp_ls+lldp") appears in BOTH views.
+type TopoView = "physical" | "logical";
+const protoSet = (lk: TopoLink) => lk.source_protocol.split("+");
+function isLogical(lk: TopoLink): boolean { return protoSet(lk).includes("bgp_ls"); }
+function isPhysical(lk: TopoLink): boolean {
+  const p = protoSet(lk);
+  return p.includes("lldp") || p.includes("cdp");
+}
+// igpLabel collapses the wire IGP code to the protocol family shown to operators.
+function igpLabel(igp?: string): string {
+  if (!igp) return "";
+  if (igp.startsWith("isis")) return "IS-IS";
+  if (igp.startsWith("ospf")) return "OSPF";
+  return igp.toUpperCase();
+}
+
 const VENDOR_ICONS_KEY = "netops_vendor_icons";
 function loadVendorIcons(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(VENDOR_ICONS_KEY) || "{}"); } catch { return {}; }
@@ -111,6 +129,7 @@ export default function Topology() {
   const [vendorIcons, setVendorIcons] = useState<Record<string, string>>(loadVendorIcons);
   const [typeIcons, setTypeIcons] = useState<Partial<Record<NetKind, string>>>(loadTypeIcons);
   const [iconEditor, setIconEditor] = useState(false);
+  const [view, setView] = useState<TopoView>("physical"); // Device Topology sub-object
 
   useEffect(() => {
     api.devices().then((d) => setDevices(d ?? [])).catch((e) => setError((e as Error).message));
@@ -131,7 +150,21 @@ export default function Topology() {
     return m;
   }, [alerts]);
 
+  // Link availability per sub-object (drives the tab labels + honest empty states).
+  const { physicalCount, logicalCount, igpName } = useMemo(() => {
+    let p = 0, l = 0;
+    const igs = new Set<string>();
+    for (const lk of links) {
+      if (isPhysical(lk)) p++;
+      if (isLogical(lk)) { l++; const n = igpLabel(lk.igp); if (n) igs.add(n); }
+    }
+    return { physicalCount: p, logicalCount: l, igpName: [...igs].sort().join(" / ") };
+  }, [links]);
+
   const { rfNodes, rfEdges, counts } = useMemo(() => {
+    // Only the active sub-object's links are drawn. A "bgp_ls+lldp" link is both
+    // physical and logical, so it shows in either view.
+    const viewLinks = links.filter((lk) => (view === "logical" ? isLogical(lk) : isPhysical(lk)));
     const bySiteTier: Record<string, Record<number, Device[]>> = {};
     for (const d of devices) {
       const s = siteOf(d), t = tierOf(d);
@@ -169,9 +202,10 @@ export default function Topology() {
         });
       }
       // Inferred tier links (each node → each node in the next non-empty tier) are
-      // a FALLBACK only — used when no real LLDP adjacencies have been discovered.
-      // Real links replace them wholesale below.
-      if (links.length === 0) {
+      // a FALLBACK only — used in the PHYSICAL view when no real L2 adjacencies have
+      // been discovered. The Logical view never infers IGP adjacency from tiers (it
+      // would be dishonest) — it shows an honest empty state instead.
+      if (viewLinks.length === 0 && view === "physical") {
         for (let ti = 0; ti < present.length - 1; ti++) {
           for (const u of tiers[present[ti]]) for (const l of tiers[present[ti + 1]]) {
             rfEdges.push({
@@ -185,34 +219,48 @@ export default function Topology() {
       xCursor += siteWidth + SITE_GAP;
     }
 
-    // REAL topology: LLDP-discovered adjacencies (tenant-scoped, deduped). Draws
-    // only between nodes we actually plotted; unresolved neighbours become a light
-    // "external" node so a device→ISP/unmanaged link is still visible and honest.
-    if (links.length > 0) {
+    // REAL topology: discovered adjacencies (tenant-scoped, deduped) for the active
+    // sub-object. Physical = LLDP/CDP L2; Logical = BGP-LS IGP (IS-IS/OSPF), drawn
+    // as a violet dashed L3 overlay with the IGP/area on the label. Draws only
+    // between plotted nodes; unresolved neighbours become a light "external" node.
+    if (viewLinks.length > 0) {
+      const logicalView = view === "logical";
       const nodeIds = new Set(rfNodes.map((n) => n.id));
       const posOf = (id: string) => rfNodes.find((n) => n.id === id)?.position ?? { x: 0, y: 0 };
       const extPlaced = new Set<string>();
-      for (const lk of links) {
+      for (const lk of viewLinks) {
         if (!nodeIds.has(lk.source)) continue;
         let target = lk.target;
         if (!nodeIds.has(target)) {
           if (!lk.target.startsWith("ext:")) continue;
+          // A hop that no managed device reports back (not in inventory) is an
+          // unmanaged boundary (Internet / another domain). Draw it as a plain
+          // cloud icon so the edge of our visibility is explicit, not a gap — no
+          // "Internet/ISP" wording, the cloud says it.
           if (!extPlaced.has(target)) {
             extPlaced.add(target);
             const p = posOf(lk.source);
+            const extName = lk.target_name && lk.target_name !== "external" ? lk.target_name : "";
             rfNodes.push({
               id: target, type: "device", position: { x: p.x + 40, y: p.y + 150 }, draggable: true,
-              data: { kind: "cloud", tone: HEALTH_COLOR.ok, health: "ok", name: lk.target_name || "external", role: "external", addr: "" },
+              data: { kind: "cloud", tone: "#7c8aa5", health: "ok", name: extName, role: "", addr: "" },
             });
             nodeIds.add(target);
           }
         }
         const portLabel = [lk.local_port, lk.remote_port].filter(Boolean).join(" ↔ ");
+        const label = logicalView
+          ? [igpLabel(lk.igp), lk.area ? `area ${lk.area}` : "", portLabel].filter(Boolean).join(" · ")
+          : (portLabel || undefined);
         rfEdges.push({
-          id: `lldp-${lk.source}-${target}`, source: lk.source, sourceHandle: "r", target, targetHandle: "l",
-          type: "flow", label: portLabel || undefined,
-          data: { flow: true, state: "healthy", particles: 2, speed: 3.4 },
-          style: { stroke: lk.resolved ? "#5a93c2" : "#6b7280", strokeWidth: lk.bidirectional ? 2.2 : 1.6, opacity: 0.92 },
+          id: `${view}-${lk.source}-${target}`, source: lk.source, sourceHandle: "r", target, targetHandle: "l",
+          type: "flow", label: label || undefined,
+          data: { flow: true, state: "healthy", particles: logicalView ? 1 : 2, speed: 3.4 },
+          style: {
+            stroke: logicalView ? "#a78bfa" : (lk.resolved ? "#5a93c2" : "#6b7280"),
+            strokeWidth: lk.bidirectional ? 2.2 : 1.6, opacity: 0.92,
+            ...(logicalView ? { strokeDasharray: "6 3" } : {}),
+          },
         });
       }
     }
@@ -240,7 +288,7 @@ export default function Topology() {
       });
     }
     return { rfNodes, rfEdges, counts };
-  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links]);
+  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links, view]);
 
   const vendors = useMemo(() => {
     const set = new Set<string>();
@@ -273,19 +321,35 @@ export default function Topology() {
     <div className="card topo-card">
       <div className="topo-head">
         <div>
-          <h2 style={{ margin: 0 }}>Network Topology</h2>
+          <h2 style={{ margin: 0 }}>Device Topology</h2>
+          {/* Sub-objects under Device Topology: Physical (L2) vs Logical (IGP). */}
+          <div className="seg" style={{ display: "inline-flex", gap: 4, margin: "8px 0 6px" }}>
+            <button className={`btn${view === "physical" ? " accent" : ""}`} onClick={() => setView("physical")}
+              title="Layer-2 adjacency from LLDP/CDP">
+              Physical{physicalCount > 0 ? ` · ${physicalCount}` : ""}
+            </button>
+            <button className={`btn${view === "logical" ? " accent" : ""}`} onClick={() => setView("logical")}
+              title="IGP link-state topology carried by BGP-LS (IS-IS / OSPF)">
+              Logical{igpName ? ` · ${igpName}` : " (IGP)"}{logicalCount > 0 ? ` · ${logicalCount}` : ""}
+            </button>
+          </div>
           <p className="topo-sub">
-            Devices as health-coloured network shapes in role tiers; tunnels drawn as
-            latency-coloured traffic-flow overlays. {links.length > 0
-              ? "Links are real LLDP-discovered adjacencies."
-              : "Links are inferred from role tiers (dashed) until LLDP/CDP/BGP-LS discovery is enabled."}
+            {view === "logical"
+              ? (logicalCount > 0
+                ? `Logical topology — the ${igpName || "IGP"} link-state graph learned via BGP-LS. Violet dashed edges are IGP adjacencies labelled with protocol/area.`
+                : "Logical topology — the IGP (IS-IS/OSPF) link-state graph. Enable BGP-LS discovery (ENABLE_BGPLS_DISCOVERY) with a peer running `distribute link-state` to populate it.")
+              : (physicalCount > 0
+                ? "Physical topology — real LLDP/CDP-discovered Layer-2 adjacencies, health-coloured; tunnels overlaid by latency."
+                : "Physical topology — links inferred from role tiers (dashed) until LLDP/CDP discovery is enabled.")}
           </p>
         </div>
         <div className="topo-stats">
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.ok }}>{counts.ok}</b> healthy</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
-          <span className="topo-stat" title={links.length > 0 ? "LLDP-discovered adjacencies" : "inferred from role tiers"}><b>{rfEdges.length}</b> {links.length > 0 ? "LLDP links" : "inferred links"}</span>
+          <span className="topo-stat" title={view === "logical" ? "BGP-LS IGP adjacencies" : (physicalCount > 0 ? "LLDP/CDP-discovered adjacencies" : "inferred from role tiers")}>
+            <b>{rfEdges.length}</b> {view === "logical" ? "IGP adjacencies" : (physicalCount > 0 ? "L2 links" : "inferred links")}
+          </span>
           <button className={`btn${iconEditor ? "" : " accent"}`} onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per device type or vendor">
             {iconEditor ? "Done" : "+ Icons"}
           </button>

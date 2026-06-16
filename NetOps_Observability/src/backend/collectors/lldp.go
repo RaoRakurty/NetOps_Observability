@@ -44,22 +44,33 @@ var (
 
 // LLDPNeighbor is one raw observed adjacency (a directed half-link: this device
 // saw that neighbour on this local port). The API normalizes + dedups these.
+//
+// LLDP/CDP populate LocalDevice with the polled device's id (we know it — we
+// polled it). BGP-LS is different: it learns the WHOLE topology from a peer, so
+// neither endpoint is "the device we polled". For Proto=="bgp_ls" LocalDevice is
+// left empty and LocalName/LocalAddr carry the local node's identity so the API
+// can resolve BOTH ends through the same tenant-scoped inventory maps.
 type LLDPNeighbor struct {
-	LocalDevice string `json:"local_device"` // the polled device's id
-	LocalPort   string `json:"local_port"`   // local port name (lldpLocPort* / "port N")
-	RemSysName  string `json:"rem_sysname"`  // neighbour hostname (lldpRemSysName)
-	RemChassis  string `json:"rem_chassis"`  // neighbour chassis id (rendered by subtype)
-	RemPort     string `json:"rem_port"`     // neighbour port (rendered by subtype)
-	RemPortDesc string `json:"rem_portdesc"` // neighbour port description (free text)
-	Proto       string `json:"proto"`        // "lldp" (source protocol)
-	TS          int64  `json:"ts"`           // last-observed unix millis
+	LocalDevice string `json:"local_device"`         // polled device id (lldp/cdp); "" for bgp_ls
+	LocalName   string `json:"local_name,omitempty"` // bgp_ls local node hostname / rendered System-ID
+	LocalAddr   string `json:"local_addr,omitempty"` // bgp_ls local node IPv4 Router-ID (addr resolution)
+	LocalPort   string `json:"local_port"`           // local port name (lldpLocPort* / "port N" / iface addr)
+	RemSysName  string `json:"rem_sysname"`          // neighbour hostname (lldpRemSysName / node name / System-ID)
+	RemChassis  string `json:"rem_chassis"`          // neighbour chassis id / IPv4 router-id (rendered by subtype)
+	RemPort     string `json:"rem_port"`             // neighbour port (rendered by subtype / iface addr)
+	RemPortDesc string `json:"rem_portdesc"`         // neighbour port description (free text)
+	Proto       string `json:"proto"`                // source protocol: "lldp" | "cdp" | "bgp_ls"
+	IGP         string `json:"igp,omitempty"`        // bgp_ls IGP origin: isis-l1|isis-l2|ospfv2|ospfv3|direct|static
+	Area        string `json:"area,omitempty"`       // bgp_ls IGP area / IS-IS area (display)
+	TS          int64  `json:"ts"`                   // last-observed unix millis
 }
 
 // Per-protocol topology keys — each discovery collector publishes its own, and
 // the API (FetchTopologyLinks) merges them. LLDP first → wins read-side dedup.
 const (
-	topoLinksKeyLLDP = "netops:topology:lldp"
-	topoLinksKeyCDP  = "netops:topology:cdp"
+	topoLinksKeyLLDP  = "netops:topology:lldp"
+	topoLinksKeyCDP   = "netops:topology:cdp"
+	topoLinksKeyBGPLS = "netops:topology:bgpls"
 )
 
 type lldpCollector struct {

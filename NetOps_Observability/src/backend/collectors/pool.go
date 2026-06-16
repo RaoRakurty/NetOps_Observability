@@ -62,6 +62,7 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewSynthetics())
 	p.register(NewLLDP(targets))
 	p.register(NewCDP(targets))
+	p.register(NewBGPLS())
 	return p
 }
 

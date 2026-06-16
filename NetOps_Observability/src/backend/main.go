@@ -65,8 +65,8 @@ type server struct {
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics       *incidentMetrics
-	seams            *pgSeamStore // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services         *pgServiceStore // service catalog #69 §2 P2 (nil on file backend)
+	seams            *pgSeamStore          // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services         *pgServiceStore       // service catalog #69 §2 P2 (nil on file backend)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -214,6 +214,12 @@ func newServer() *server {
 	// CDP neighbour discovery (Cisco-native L2 topology) — merges with LLDP at the
 	// API. Opt-in; reuses SNMP creds, UDP/161.
 	pool.Enable("cdp", os.Getenv("ENABLE_CDP_DISCOVERY") == "true")
+	// BGP-LS topology discovery — receive-only BGP speaker that peers with a
+	// route-reflector/export speaker (BGPLS_PEERS) and ingests the IGP (IS-IS/OSPF)
+	// link-state database via the Link-State AFI. Merges with LLDP/CDP at the API
+	// as source_protocol=bgp_ls. Opt-in; needs a peer configured to
+	// `distribute link-state`. TCP/179, no raw socket, no new dependency.
+	pool.Enable("bgpls", os.Getenv("ENABLE_BGPLS_DISCOVERY") == "true")
 	// SNMP trap receiver (UDP/162) — passive listener that decodes v1/v2c/v3
 	// traps and forwards them onto the log bus (→ netops-snmptrap-*). Off by
 	// default; opt in with FEATURE_SNMP_TRAPS=true (see deployment compose).

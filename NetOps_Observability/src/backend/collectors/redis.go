@@ -151,7 +151,7 @@ func FetchTopologyLinks(ctx context.Context) ([]LLDPNeighbor, error) {
 	}
 	defer c.Close()
 	var out []LLDPNeighbor
-	for _, key := range []string{topoLinksKeyLLDP, topoLinksKeyCDP} {
+	for _, key := range []string{topoLinksKeyLLDP, topoLinksKeyCDP, topoLinksKeyBGPLS} {
 		raw, err := redisCmd(c, "GET", key)
 		if err != nil || raw == "" {
 			continue

@@ -2020,10 +2020,14 @@ export type ProbeHop = { ttl: number; ip: string; host?: string; rtt_ms: number;
 // diverge, so each (dst, method) is a distinct ProbePath.
 export type ProbePath = { dst: string; method?: string; hops: ProbeHop[]; reached: boolean; changed: boolean; ts: string };
 
-// A normalized topology adjacency (LLDP today; CDP/BGP-LS later via source_protocol).
+// A normalized topology adjacency. source_protocol is one (or a "+"-joined set
+// when independently confirmed) of lldp | cdp | bgp_ls. For bgp_ls links igp
+// carries the IGP origin (isis-l1/l2, ospfv2/v3) and area the IGP area — these
+// drive the Logical (IGP) topology sub-view.
 export type TopoLink = {
   source: string; target: string; source_name: string; target_name: string;
   local_port: string; remote_port: string; source_protocol: string;
+  igp?: string; area?: string;
   resolved: boolean; bidirectional: boolean; last_observed_at: number;
 };
 // Device Geomap — NetBox DCIM sites (lat/lng intent data) joined with inventory health.

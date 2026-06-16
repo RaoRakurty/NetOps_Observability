@@ -33,7 +33,9 @@ type topoLink struct {
 	TargetName    string `json:"target_name"`      // display name (neighbour sysname)
 	LocalPort     string `json:"local_port"`       // port on the source device
 	RemotePort    string `json:"remote_port"`      // port on the neighbour
-	SourceProto   string `json:"source_protocol"`  // "lldp" (CDP/BGP-LS later)
+	SourceProto   string `json:"source_protocol"`  // "lldp" | "cdp" | "bgp_ls"; "+"-joined when confirmed by several
+	IGP           string `json:"igp,omitempty"`    // bgp_ls IGP origin (isis-l2 / ospfv2 …)
+	Area          string `json:"area,omitempty"`   // bgp_ls IGP area
 	Resolved      bool   `json:"resolved"`         // target is a managed device in inventory
 	Bidirectional bool   `json:"bidirectional"`    // both ends reported the adjacency
 	LastSeen      int64  `json:"last_observed_at"` // unix millis
@@ -71,7 +73,7 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 	neighbors, _ := collectors.FetchTopologyLinks(r.Context())
 
 	links := normalizeLLDP(neighbors, ownedID, byName, byAddr)
-	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": "lldp+cdp"})
+	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": topoSources(links)})
 }
 
 // normalizeLLDP turns raw directed half-links into deduped undirected topology
@@ -82,12 +84,38 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 	order := []string{}
 
 	for _, n := range neighbors {
-		src := n.LocalDevice
-		if _, owned := ownedID[src]; !owned {
-			continue // only links anchored on a device the caller can see
+		proto := n.Proto
+		if proto == "" {
+			proto = "lldp"
 		}
+
+		// Resolve the LOCAL endpoint to a managed device the caller owns.
+		// LLDP/CDP: the local end IS the polled device (LocalDevice is its id).
+		// BGP-LS: the local end is just another node in the learned graph, so it
+		// resolves through the same name/addr maps — and is kept only if it lands
+		// on a device the caller owns (the tenant-scope anchor).
+		var src string
+		if proto == "bgp_ls" {
+			id, ok := resolveIdentity(n.LocalName, byName, byAddr, n.LocalAddr)
+			if !ok {
+				continue
+			}
+			src = id
+		} else {
+			src = n.LocalDevice
+			if _, owned := ownedID[src]; !owned {
+				continue // only links anchored on a device the caller can see
+			}
+		}
+
 		// resolve the neighbour within the caller's own inventory only.
-		tgtID, resolved := resolveNeighbor(n, byName, byAddr)
+		var tgtID string
+		var resolved bool
+		if proto == "bgp_ls" {
+			tgtID, resolved = resolveIdentity(n.RemSysName, byName, byAddr, n.RemChassis)
+		} else {
+			tgtID, resolved = resolveNeighbor(n, byName, byAddr)
+		}
 		targetName := strings.TrimSpace(n.RemSysName)
 		if targetName == "" {
 			targetName = n.RemChassis
@@ -112,17 +140,24 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 			if ex.RemotePort == "" && n.LocalPort != "" && ex.Source != src {
 				ex.RemotePort = n.LocalPort
 			}
+			// union the source protocols: a link confirmed by several observers
+			// (e.g. "bgp_ls+lldp") is the strongest topology evidence. Carry over
+			// the IGP origin if BGP-LS contributed it.
+			ex.SourceProto = addProto(ex.SourceProto, proto)
+			if ex.IGP == "" {
+				ex.IGP = n.IGP
+			}
+			if ex.Area == "" {
+				ex.Area = n.Area
+			}
 			continue
-		}
-		proto := n.Proto
-		if proto == "" {
-			proto = "lldp"
 		}
 		l := &topoLink{
 			Source: src, Target: tgtID,
 			SourceName: ownedID[src], TargetName: targetName,
 			LocalPort: n.LocalPort, RemotePort: n.RemPort,
-			SourceProto: proto, Resolved: resolved, LastSeen: n.TS,
+			SourceProto: proto, IGP: n.IGP, Area: n.Area,
+			Resolved: resolved, LastSeen: n.TS,
 		}
 		if resolved {
 			l.TargetName = ownedID[tgtID]
@@ -145,27 +180,83 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 	return out
 }
 
-// resolveNeighbor maps an LLDP neighbour to a managed device id within the owned
-// set: by system-name first (the common case — hostnames match inventory), then by
-// a chassis/port-id that looks like a management address. "" + false when unknown.
+// resolveNeighbor maps an LLDP/CDP neighbour to a managed device id within the
+// owned set: by system-name first (the common case — hostnames match inventory),
+// then by a chassis/port-id that looks like a management address.
 func resolveNeighbor(n collectors.LLDPNeighbor, byName, byAddr map[string]string) (string, bool) {
-	if name := strings.ToLower(strings.TrimSpace(n.RemSysName)); name != "" {
-		if id, ok := byName[name]; ok {
+	return resolveIdentity(n.RemSysName, byName, byAddr, n.RemChassis, n.RemPort)
+}
+
+// resolveIdentity maps a (name, candidate-addresses…) pair to a managed device id
+// within the owned set: by name first (full, then leading FQDN label), then by any
+// candidate that matches a management address. "" + false when unknown. Shared by
+// LLDP/CDP (remote end) and BGP-LS (both ends — neither is the polled device).
+func resolveIdentity(name string, byName, byAddr map[string]string, addrs ...string) (string, bool) {
+	if nm := strings.ToLower(strings.TrimSpace(name)); nm != "" {
+		if id, ok := byName[nm]; ok {
 			return id, true
 		}
-		// some agents advertise an FQDN — try the leading label.
-		if i := strings.IndexByte(name, '.'); i > 0 {
-			if id, ok := byName[name[:i]]; ok {
+		if i := strings.IndexByte(nm, '.'); i > 0 {
+			if id, ok := byName[nm[:i]]; ok {
 				return id, true
 			}
 		}
 	}
-	for _, cand := range []string{n.RemChassis, n.RemPort} {
-		if id, ok := byAddr[strings.TrimSpace(cand)]; ok {
-			return id, true
+	for _, cand := range addrs {
+		if c := strings.TrimSpace(cand); c != "" {
+			if id, ok := byAddr[c]; ok {
+				return id, true
+			}
 		}
 	}
 	return "", false
+}
+
+// addProto unions a source-protocol token into a "+"-joined set, keeping a stable
+// order and never duplicating ("lldp" + "bgp_ls" → "bgp_ls+lldp"). A link reported
+// by several observers is the strongest topology evidence.
+func addProto(existing, add string) string {
+	if add == "" {
+		return existing
+	}
+	set := map[string]bool{}
+	for _, p := range strings.Split(existing, "+") {
+		if p != "" {
+			set[p] = true
+		}
+	}
+	if set[add] {
+		return existing
+	}
+	set[add] = true
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return strings.Join(out, "+")
+}
+
+// topoSources reports which discovery protocols contributed the returned links,
+// as a stable "+"-joined set (e.g. "bgp_ls+lldp"). Empty set → "none".
+func topoSources(links []topoLink) string {
+	set := map[string]bool{}
+	for _, l := range links {
+		for _, p := range strings.Split(l.SourceProto, "+") {
+			if p != "" {
+				set[p] = true
+			}
+		}
+	}
+	if len(set) == 0 {
+		return "none"
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return strings.Join(out, "+")
 }
 
 // linkKey is the order-independent key for an adjacency between two endpoints.
