@@ -320,6 +320,30 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       edges.push({ state: confirmed ? "bad" : "warn", label: hasRouting ? kindLabel(routeKind) : "evidence", side: -1 });
     }
     topology = { nodes, edges };
+  } else {
+    // Device-less / path-based case: active-probe correlations whose affected set
+    // is a probe path ("prober → 10.0.0.1") rather than a routing device. Draw the
+    // path so the PDF + fallback chain still localize the issue (the on-screen view
+    // gets the richer RcaTopology; this is what serializes into the report).
+    try {
+      const aff = JSON.parse(obj.affected || "{}") as { paths?: string[] };
+      const path = (aff.paths ?? []).find((p) => /->|→/.test(p));
+      if (path) {
+        const [a, b] = path.split(/->|→/).map((s) => s.trim()).filter(Boolean);
+        if (a && b) {
+          topology = {
+            nodes: [
+              { kind: "info", abbr: mkAbbr(a), name: a, meta: "probe source" },
+              {
+                kind: confirmed ? "bad" : "warn", abbr: mkAbbr(b), name: b, meta: "probe target",
+                tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "DEGRADED PATH" : "SUSPECT PATH" },
+              },
+            ],
+            edges: [{ state: confirmed ? "bad" : "warn", label: "active-probe loss/latency", side: -1 }],
+          };
+        }
+      }
+    } catch { /* affected not JSON — leave topology undefined */ }
   }
 
   const subtitle = confirmed ? "Independent evidence across multiple planes"

@@ -105,7 +105,10 @@ function reportHtml(d: RcaCase, objId: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>RCA Report — ${esc(d.title)}</title>
 <style>
   @page { size: A4; margin: 16mm 14mm; }
-  * { box-sizing: border-box; }
+  /* force background colours/graphics (pills, callouts, table headers, topology
+     node fills) to print — browsers drop backgrounds by default on Save-as-PDF. */
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body { font: 13px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; }
   .doc { max-width: 740px; margin: 0 auto; padding: 8px 0 32px; }
   header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom: 2px solid #172033; padding-bottom: 10px; margin-bottom: 16px; }
@@ -146,12 +149,12 @@ function reportHtml(d: RcaCase, objId: string): string {
   ${d.decision.text ? block("Decision", `<div class="decision"${d.decision.tone === "confirmed" ? ' style="border-left-color:#0f9f4f;background:#f2fbf6;border-color:#b9e5c7"' : ""}>${esc(d.decision.text)}</div>`) : ""}
   ${block("Case", kvRows(d.aside))}
   ${block("Executive summary", `<p class="body">${esc(d.summary)}</p>${why}`)}
-  ${block("Impact &amp; blast radius", kvRows(d.impact))}
+  ${block("Impact & blast radius", kvRows(d.impact))}
   ${block("Causal topology", topoSvg(d.topology))}
   ${block("Evidence matrix", evidence)}
   ${block("Confidence ladder", ladder)}
   ${block("Hypothesis ranking", hypotheses)}
-  ${block("Ticket &amp; escalation", ticket)}
+  ${block("Ticket & escalation", ticket)}
   ${block("Next actions", actions)}
 
   <footer class="rpt"><span>Generated ${esc(now)} UTC &middot; Correlix RCA</span><span>Object ${esc(objId.slice(0, 8))} &middot; Confidential</span></footer>

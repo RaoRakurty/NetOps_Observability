@@ -10,8 +10,11 @@ package main
 //                        &entity=&site=&q=&class=&cursor=&limit=
 //     → { items:[FeedItem], next_cursor, facets:{source,severity,kind} }
 //
-// class=changes restricts to discrete "what changed" kinds (topology / sot_drift /
-// alert) — the Front Page "What changed" panel is this same API pre-filtered.
+// class=changes restricts to discrete "what changed" events — the dedicated change
+// sources (topology / sot_drift / alert) AND any "*_change" kind (BGP/IS-IS/OSPF
+// adjacency, link state, LLDP/CDP neighbour), which arrive over syslog/trap rather
+// than a change-specific source. The Front Page "What changed" panel is this same
+// API pre-filtered.
 
 import (
 	"encoding/base64"
@@ -167,9 +170,11 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 		}
 		conds = append(conds, "entity_type = '"+v+"'")
 	}
-	// class=changes → discrete "what changed" sources (Front Page panel 4).
+	// class=changes → discrete "what changed" (Front Page panel 4). Match the
+	// change-specific sources OR any "*_change" kind (adjacency / link / neighbour
+	// changes arrive over syslog/trap, not a change-specific source).
 	if strings.TrimSpace(q.Get("class")) == "changes" {
-		conds = append(conds, "source IN ('topology','sot_drift','alert')")
+		conds = append(conds, "(source IN ('topology','sot_drift','alert') OR endsWith(kind, '_change'))")
 	}
 	// text filters — sanitized literals (quotes stripped, not escaped)
 	if v := sanitizeCHText(q.Get("kind")); v != "" {

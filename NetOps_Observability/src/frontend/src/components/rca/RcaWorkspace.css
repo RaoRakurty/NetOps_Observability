@@ -129,14 +129,21 @@
 .rca-ws .rw-edge-label.bad { border-color: #ffb5ad; color: #bd2b22; background: #fff6f5; }
 .rca-ws .rw-edge-label.side1 { top: auto; bottom: -24px; }
 
-/* evidence grid — auto-fit so cards GROW to fill the row (no phantom empty
-   columns), all cells EQUAL size: fixed 4-up grid that divides evenly for the
-   4 standard planes (→ 2-up on narrower widths), grid-auto-rows:1fr equalises
-   row heights, and the footer pins to the bottom so every box is identical. */
+/* evidence grid — exactly 4 equal rectangles filling the matrix width (one per
+   standard plane). grid-auto-rows:1fr equalises heights so the 4 boxes are
+   identical; the footer pins to the bottom (margin-top:auto). No min-height: the
+   row sizes to the tallest card's CONTENT, so sparse cases don't get padded with
+   dead vertical space. (→ 2-up on narrower widths.) */
 .rca-ws .rw-evidence-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px; grid-auto-rows: 1fr; }
-.rca-ws .rw-ecard { display: flex; flex-direction: column; gap: 3px; min-height: 100px; border: 1px solid var(--rw-line);
-  border-radius: 10px; background: #fff; padding: 11px 13px; }
+  gap: 8px; grid-auto-rows: 1fr; align-items: stretch; }
+/* grid-area:auto + overflow reset is LOAD-BEARING: the variant class `main`
+   collides with the global app-shell rule `.main { grid-area: main; overflow:
+   auto }` (styles.css). Without this reset the "Main evidence" card inherits
+   grid-area:main, gets placed into a non-existent named area, and corrupts the
+   whole evidence grid into a broken narrow+wide layout. Reset defends every
+   variant against any global utility-class collision. */
+.rca-ws .rw-ecard { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--rw-line);
+  border-radius: 10px; background: #fff; padding: 10px 12px; grid-area: auto; overflow: visible; }
 .rca-ws .rw-ecard.main { border-left: 4px solid var(--rw-orange); }
 .rca-ws .rw-ecard.confirm { border-left: 4px solid var(--rw-green); }
 .rca-ws .rw-ecard.missing { border-left: 4px solid #98a2b3; }
