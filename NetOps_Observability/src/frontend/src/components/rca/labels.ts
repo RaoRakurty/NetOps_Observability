@@ -270,6 +270,22 @@ export function isInternalEntity(raw: string): boolean {
   });
 }
 
+// mentionsInternal — true when ANY part of the entity is platform infra / a
+// monitoring agent. Used for ENTITY-LEVEL display filtering: a path episode like
+// "api->10.70.245.120" must NOT show to the operator (its source is a platform
+// service), even though isInternalEntity() (all-parts) returns false for it.
+// (Object-level HIDING still uses the conservative all-parts isInternalEntity so a
+// real customer incident touching some infra is never hidden wholesale.)
+export function mentionsInternal(raw: string): boolean {
+  if (!raw) return false;
+  const parts = raw.includes("->") ? raw.split("->") : [raw];
+  return parts.some((p) => {
+    const s = p.trim().replace(ENTITY_PREFIX, "");
+    const base = s.split(":")[0].trim().toLowerCase();
+    return !!INFRA_DISPLAY[base] || INTERNAL_HINT.test(base);
+  });
+}
+
 // isInternalStackAffected — true when a correlation object's `affected` JSON
 // touches ONLY internal infrastructure (every entity internal). Shared by the
 // Correlations tab + the front-page Top Issues so internal self-monitoring never

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { CorrTimeline, Seam } from "../../services/api";
-import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor, isInternalEntity } from "./labels";
+import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor, mentionsInternal } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
 // episodeKind pulls the signal kind off a graph node key ("type:entity…:kind").
@@ -96,7 +96,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
         <div style={{ fontSize: 13, color: C.fg }}>
           {SYM.unknown} Issue observed, path location unknown — not enough evidence to place it on a path or boundary yet.
         </div>
-        {trig && !isInternalEntity(trig.entity_id) && (
+        {trig && !mentionsInternal(trig.entity_id) && (
           <div style={{ ...muted, fontSize: 12.5 }}>
             Strongest sign: <b style={{ color: C.fg }}>{entityLabel(trig.entity_id)}</b>
           </div>
@@ -114,7 +114,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
     for (const e of edges) {
       if (e.grounding_kind === "topo" && e.grounding_ref.startsWith("shared:")) {
         const x = e.grounding_ref.slice(7);
-        if (!isInternalEntity(x)) counts[x] = (counts[x] || 0) + 1; // #76: never a platform/agent locus
+        if (!mentionsInternal(x)) counts[x] = (counts[x] || 0) + 1; // #76: never a platform/agent locus
       }
     }
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
@@ -123,7 +123,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
   })();
 
   // #76: only customer-facing grounded relationships in the operator path list.
-  const visibleEdges = edges.filter((e) => !isInternalEntity(episodeEntity(e.from_node)) && !isInternalEntity(episodeEntity(e.to_node)));
+  const visibleEdges = edges.filter((e) => !mentionsInternal(episodeEntity(e.from_node)) && !mentionsInternal(episodeEntity(e.to_node)));
 
   return (
     <div style={card}>

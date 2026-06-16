@@ -4,7 +4,7 @@ import {
   C, MODALITY_META, MODALITY_ORDER, modalityLabel, modalityHelp,
   signatureName, signatureNocTitle, PLANE_NOC_TITLE, kindMeta, kindLabel,
   entityLabel, ownerLabel, seamOwnerLabel, visibilityLabel, isRoutingKind,
-  AFFECTED_LABEL, OWNER_EXTERNAL, seamOwnerColor, isInternalEntity,
+  AFFECTED_LABEL, OWNER_EXTERNAL, seamOwnerColor, mentionsInternal,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
@@ -158,7 +158,7 @@ export default function RcaSummary({
         const ids = v as string[];
         // Operator View (decision #76): drop internal platform/agent entities so
         // the affected scope shows only customer network entities.
-        const visible = view === "debug" ? ids : ids.filter((i) => !isInternalEntity(i));
+        const visible = view === "debug" ? ids : ids.filter((i) => !mentionsInternal(i));
         const shown = view === "debug" ? visible : [...new Set(visible.map((i) => entityLabel(i)))];
         return { key: k, label: AFFECTED_LABEL[k] ?? k, items: shown, raw: ids.length };
       })
@@ -481,7 +481,7 @@ export default function RcaSummary({
       {grounded && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {[...timeline.edges]
-            .filter((e) => view === "debug" || (!isInternalEntity(episodeEntity(e.from_node)) && !isInternalEntity(episodeEntity(e.to_node))))
+            .filter((e) => view === "debug" || (!mentionsInternal(episodeEntity(e.from_node)) && !mentionsInternal(episodeEntity(e.to_node))))
             .sort((a, b) => (a.grounding_kind === "seam" ? -1 : 1) - (b.grounding_kind === "seam" ? -1 : 1)).slice(0, 3).map((e, i) => {
             const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
             // Seam chip tinted by boundary owner (whose domain), grey for same-path.
