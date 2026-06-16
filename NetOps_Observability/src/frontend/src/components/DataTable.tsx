@@ -60,6 +60,8 @@ export interface DataTableProps<T> {
   rowActions?: (row: T) => ReactNode;
   empty?: ReactNode;
   ariaLabel?: string;
+  /** Allow the user to drag column borders to widen/narrow them. */
+  resizable?: boolean;
 }
 
 const OVERSCAN = 12;
@@ -78,12 +80,29 @@ export default function DataTable<T>({
   rowActions,
   empty,
   ariaLabel,
+  resizable = false,
 }: DataTableProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(typeof height === "number" ? height : 480);
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(initialSort ?? null);
   const [active, setActive] = useState(0);
+  // User-overridden column widths (px), keyed by column key, when resizable.
+  const [colW, setColW] = useState<Record<string, number>>({});
+
+  // Drag a column border: capture the header cell's current width, then track the
+  // pointer and clamp to a sane minimum. Stops propagation so it never sorts.
+  const startResize = (e: React.MouseEvent, key: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const th = (e.currentTarget as HTMLElement).parentElement;
+    const startW = th ? th.getBoundingClientRect().width : 120;
+    const startX = e.clientX;
+    const onMove = (me: MouseEvent) => setColW((p) => ({ ...p, [key]: Math.max(60, Math.round(startW + (me.clientX - startX))) }));
+    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   // The grid track template — shared verbatim by the header and every body row so
   // columns stay pixel-aligned. An extra zero-width track is NOT needed; row
@@ -92,14 +111,16 @@ export default function DataTable<T>({
     () =>
       columns
         .map((c) =>
-          c.width === undefined
-            ? "minmax(0,1fr)"
-            : typeof c.width === "number"
-              ? `${c.width}px`
-              : c.width,
+          colW[c.key] != null
+            ? `${colW[c.key]}px`
+            : c.width === undefined
+              ? "minmax(0,1fr)"
+              : typeof c.width === "number"
+                ? `${c.width}px`
+                : c.width,
         )
         .join(" "),
-    [columns],
+    [columns, colW],
   );
 
   // Global filter, then sort. Both derive from column accessors so the consumer
@@ -205,12 +226,22 @@ export default function DataTable<T>({
               role="columnheader"
               aria-sort={sorted ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined}
               className={`dtv-th${c.sortable ? " sortable" : ""}${sorted ? " sorted" : ""}`}
-              style={{ textAlign: c.align ?? "left" }}
+              style={{ textAlign: c.align ?? "left", position: resizable ? "relative" : undefined }}
               onClick={c.sortable ? () => toggleSort(c.key) : undefined}
             >
               {c.header}
               {c.sortable && (
                 <span className="dtv-arrow">{sorted ? (sort!.dir === "asc" ? "▲" : "▼") : "↕"}</span>
+              )}
+              {resizable && (
+                <span
+                  role="separator"
+                  aria-label="Resize column"
+                  title="Drag to resize"
+                  onMouseDown={(e) => startResize(e, c.key)}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ position: "absolute", top: 0, right: 0, width: 7, height: "100%", cursor: "col-resize" }}
+                />
               )}
             </div>
           );
