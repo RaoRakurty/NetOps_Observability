@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrTimeline, Seam } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
+import RcaTopology from "../components/rca/RcaTopology";
 import { buildRcaCase } from "../components/rca/rcaCase";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected } from "../components/rca/labels";
@@ -216,6 +217,8 @@ export function CorrelationDetail({ id }: { id: string }) {
   const [obj, setObj] = useState<CorrObject | null>(null);
   const [timeline, setTimeline] = useState<CorrTimeline | null>(null);
   const [seams, setSeams] = useState<Record<string, Seam>>({});
+  const [probePaths, setProbePaths] = useState<ProbePath[]>([]);
+  const [deviceByIp, setDeviceByIp] = useState<Record<string, string>>({});
   const [replay, setReplay] = useState<CorrReplay | null>(null);
   const [replaying, setReplaying] = useState(false);
   const [err, setErr] = useState("");
@@ -234,6 +237,16 @@ export function CorrelationDetail({ id }: { id: string }) {
     api.seams("active")
       .then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } })
       .catch(() => { /* seam inventory optional */ });
+    // Live traceroute / STAMP paths — fuse real hop order into the Network-Path
+    // topology when a trace matches the RCA path's destination (else contextual).
+    api.probePaths()
+      .then((p) => { if (alive) setProbePaths(p ?? []); })
+      .catch(() => { /* no traces → topology stays contextual */ });
+    // Tenant-scoped device inventory → name traced hops by their mgmt address.
+    // RLS limits this to the caller's own devices (no cross-tenant naming leak).
+    api.devices()
+      .then((ds) => { if (alive) { const m: Record<string, string> = {}; (ds ?? []).forEach((d) => { if (d.address) m[d.address.trim()] = d.name; }); setDeviceByIp(m); } })
+      .catch(() => { /* no inventory → hops stay as IPs */ });
     return () => { alive = false; };
   }, [id]);
 
@@ -304,6 +317,10 @@ export function CorrelationDetail({ id }: { id: string }) {
       onExportPdf={exportPdf}
       exportDisabled={!timeline}
       debugExtra={replayPanel}
+      topologySlot={
+        <RcaTopology timeline={timeline} seams={seams} view={view}
+          probePaths={probePaths} deviceByIp={deviceByIp} height={300} />
+      }
     />
   );
 }

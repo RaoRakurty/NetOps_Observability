@@ -1,5 +1,6 @@
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
+import { api } from "../../services/api";
 import type { RcaCase, RcaPill, KV, TopoNode, TopoEdge } from "./rcaCase";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
@@ -16,6 +17,87 @@ import type { RcaCase, RcaPill, KV, TopoNode, TopoEdge } from "./rcaCase";
 //    locked ladder steps); nothing is promoted to confirmed by the view.
 
 const Pill = ({ p }: { p: RcaPill }) => <span className={`rw-pill ${p.tone}`}>{p.text}</span>;
+
+// Operator-safe grounding for the assistant — RCA facts only (already shown on
+// the page). No secrets/credentials/IDs are added (LLM06): the model sees exactly
+// what the operator sees, nothing more.
+function groundingText(d: RcaCase): string {
+  return [
+    `RCA: ${d.title}`,
+    `Status: ${d.pills.map((p) => p.text).join(" · ")}`,
+    `Summary: ${d.summary}`,
+    ...d.why.map((w) => `${w.label}: ${w.text}`),
+    `Impact: ${d.impact.map((i) => `${i.k}=${i.v}`).join("; ")}`,
+    `Evidence: ${d.evidence.map((e) => `${e.title} [${e.pill.text}] ${e.finding}`).join(" | ")}`,
+    `Hypotheses: ${d.hypotheses.map((h) => `${h.rank} ${h.hypo} (${h.conf.text})`).join("; ")}`,
+    `Decision: ${d.decision.text}`,
+  ].join("\n");
+}
+
+// AskRcaPanel — wires the assistant box to Correlix AI (the copilot proxy).
+// The server owns the system prompt (LLM01); we ground the question with the
+// operator-facing RCA context as a normal user turn and never inject a system
+// role. Degrades honestly when the assistant isn't enabled (no key / feature off).
+function AskRcaPanel({ data }: { data: RcaCase }) {
+  const [q, setQ] = useState(data.assistant.questions[0] ?? "");
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [offline, setOffline] = useState(false);
+
+  const ask = async (question: string) => {
+    const text = question.trim();
+    if (!text || busy) return;
+    setBusy(true); setAnswer(""); setOffline(false);
+    try {
+      const res = await api.copilotChat([{
+        role: "user",
+        content:
+          "You are an RCA assistant for a network operations center. Answer the operator's question using ONLY the RCA context below. Be concise and factual. Do not claim customer impact is confirmed unless the status says CONFIRMED; if the context lacks the answer, say which evidence is missing.\n\n" +
+          `RCA context:\n${groundingText(data)}\n\nQuestion: ${text}`,
+      }]);
+      const out = (res as { text?: string }).text
+        ?? (res as { content?: { text?: string }[] }).content?.[0]?.text
+        ?? (res as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content
+        ?? "";
+      if (out) setAnswer(out); else setOffline(true);
+    } catch {
+      setOffline(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rw-panel rw-assistant">
+      <h3>Ask RCA Assistant</h3>
+      <h4>Suggested operator questions</h4>
+      <div className="rw-small">
+        {data.assistant.questions.map((s, i) => (
+          <div key={i}>
+            <button type="button" className="rw-ask-suggest" onClick={() => { setQ(s); ask(s); }}>• {s}</button>
+          </div>
+        ))}
+      </div>
+      <div className="rw-assistant-q">
+        <input value={q} onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") ask(q); }}
+          aria-label="Ask RCA Assistant" placeholder="Ask about this RCA…" />
+        <button className="rw-btn primary" type="button" disabled={busy} onClick={() => ask(q)}>
+          {busy ? "Asking…" : "Ask"}
+        </button>
+      </div>
+      <div className="rw-tdetail" style={{ marginTop: 10 }}>
+        {answer ? (
+          <><b>Correlix AI:</b> {answer}</>
+        ) : offline ? (
+          <><b>Assistant not connected.</b> Correlix AI isn&apos;t enabled yet — an administrator can connect a provider and key under Assistant settings. Until then, use the suggested reasoning: {data.assistant.sampleAnswer}</>
+        ) : (
+          <><b>Sample answer:</b> {data.assistant.sampleAnswer}</>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function KeyVal({ rows }: { rows: KV[] }) {
   return (
@@ -56,7 +138,7 @@ function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[]
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -64,6 +146,7 @@ export default function RcaWorkspace({
   onExportPdf: () => void;
   exportDisabled?: boolean;
   debugExtra?: ReactNode;
+  topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -72,7 +155,7 @@ export default function RcaWorkspace({
       {/* topbar */}
       <div className="rw-topbar">
         <div className="rw-brand">
-          <div className="rw-logo">C</div>
+          <div className="rw-logo">RCA</div>
           <div>
             <div className="rw-h1">Root cause analysis</div>
             <div className="rw-sub">{data.subtitle}</div>
@@ -125,18 +208,23 @@ export default function RcaWorkspace({
             </div>
           </section>
 
-          {/* causal topology */}
-          <div className="rw-section-title">Causal topology</div>
-          <section className="rw-panel" style={{ padding: 10 }}>
-            {data.topology && data.topology.nodes.length > 0 ? (
-              <CausalTopology nodes={data.topology.nodes} edges={data.topology.edges} />
-            ) : (
-              <div style={{ padding: "14px 6px", color: "var(--rw-muted)" }}>
-                <b style={{ color: "var(--rw-text)" }}>Path location not placed yet.</b> There isn&apos;t enough routing or path
-                evidence to place this issue on a specific link or device chain.
-              </div>
-            )}
-          </section>
+          {/* causal topology — advanced Network-Path graphics (RcaTopology) when
+              provided, with the data-driven chain / placement card as fallback */}
+          <div className="rw-section-title">Network path &amp; causal topology</div>
+          {topologySlot ? (
+            <section style={{ marginBottom: 4 }}>{topologySlot}</section>
+          ) : (
+            <section className="rw-panel" style={{ padding: 10 }}>
+              {data.topology && data.topology.nodes.length > 0 ? (
+                <CausalTopology nodes={data.topology.nodes} edges={data.topology.edges} />
+              ) : (
+                <div style={{ padding: "14px 6px", color: "var(--rw-muted)" }}>
+                  <b style={{ color: "var(--rw-text)" }}>Path location not placed yet.</b> There isn&apos;t enough routing or path
+                  evidence to place this issue on a specific link or device chain.
+                </div>
+              )}
+            </section>
+          )}
 
           {/* evidence matrix */}
           <div className="rw-section-title">Evidence matrix</div>
@@ -229,16 +317,7 @@ export default function RcaWorkspace({
                 ))}
               </ol>
             </div>
-            <div className="rw-panel rw-assistant">
-              <h3>Ask RCA Assistant</h3>
-              <h4>Suggested operator questions</h4>
-              <div className="rw-small">{data.assistant.questions.map((q, i) => <div key={i}>• {q}</div>)}</div>
-              <div className="rw-assistant-q">
-                <input defaultValue={data.assistant.questions[0] ?? ""} aria-label="Ask RCA Assistant" />
-                <button className="rw-btn primary" type="button">Ask</button>
-              </div>
-              <div className="rw-tdetail" style={{ marginTop: 10 }}><b>Sample answer:</b> {data.assistant.sampleAnswer}</div>
-            </div>
+            <AskRcaPanel data={data} />
           </section>
         </>
       ) : (

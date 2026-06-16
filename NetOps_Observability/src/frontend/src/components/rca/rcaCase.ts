@@ -285,7 +285,10 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     const left = Math.max(3, Math.min(97, ((Date.parse(s.ts.replace(" ", "T") + "Z") - t0) / span) * 94 + 3));
     lane.markers.push({ left, tone: s.attached ? (p === "control_plane" ? "orange" : "blue") : "gray", label: kindLabel(s.kind.replace(/_clear$/, "")), detail: `${kindLabel(s.kind)} on ${entityLabel(s.entity_id.split(":")[0])}. ${s.attached ? "Counted as evidence for this issue." : "Seen in the window but not linked."}` });
   }
-  const timelineLanes = [...lanes.values()].filter((l) => l.markers.length > 0);
+  // Show ALL standard evidence lanes (in MODALITY_ORDER), even empty ones — an
+  // empty lane is informative: it shows the operator exactly which evidence plane
+  // has nothing in this window (what's missing to confirm), not just what fired.
+  const timelineLanes = MODALITY_ORDER.map((p) => lanes.get(p)).filter((l): l is TimelineLane => !!l);
 
   // hypotheses
   const conf: RcaPill = { tone: confirmed ? "green" : "gray", text: confidence };
