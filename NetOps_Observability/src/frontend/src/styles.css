@@ -1625,39 +1625,39 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
   /* Canvas + interaction primaries; surfaces/text-ramp/severity come from the
      semantic block below (legacy --panel/--muted/--good/--bad are aliases). */
-  --bg: #0e1320;
-  --fg: #e7ebf3;
-  --hover: rgba(255, 255, 255, 0.06);
+  --bg: #0a0e1a;
+  --fg: #e8ecf3;
+  --hover: rgba(255, 255, 255, 0.08);
 
   /* Glass surfaces for the dark canvas — desaturated translucency, hairline edge. */
-  --glass-bg: rgba(26, 34, 52, 0.62);
-  --glass-bg-strong: rgba(26, 34, 52, 0.9);
-  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-bg: rgba(18, 24, 41, 0.65);
+  --glass-bg-strong: rgba(18, 24, 41, 0.92);
+  --glass-border: rgba(255, 255, 255, 0.12);
   --glass-hi: rgba(255, 255, 255, 0.07);
-  --glass-shadow: 0 8px 26px rgba(0, 0, 0, 0.38);
-  --glass-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
-  --glass-tint-a: rgba(99, 102, 241, 0.18);
-  --glass-tint-b: rgba(16, 185, 129, 0.12);
-  --glass-scrim: rgba(4, 8, 16, 0.58);
+  --glass-shadow: 0 8px 26px rgba(0, 0, 0, 0.42);
+  --glass-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.58);
+  --glass-tint-a: rgba(165, 180, 252, 0.20);
+  --glass-tint-b: rgba(16, 185, 129, 0.14);
+  --glass-scrim: rgba(4, 8, 16, 0.60);
 
   /* Severity hues stay vivid; lift the translucent fills for the darker canvas. */
-  --sev-critical-bg: rgba(244, 63, 94, 0.16);
-  --sev-error-bg:    rgba(251, 146, 60, 0.16);
-  --sev-warning-bg:  rgba(251, 191, 36, 0.16);
-  --sev-notice-bg:   rgba(167, 139, 250, 0.16);
-  --sev-info-bg:     rgba(96, 165, 250, 0.16);
+  --sev-critical-bg: rgba(244, 80, 107, 0.18);
+  --sev-error-bg:    rgba(251, 146, 60, 0.18);
+  --sev-warning-bg:  rgba(251, 191, 36, 0.18);
+  --sev-notice-bg:   rgba(167, 139, 250, 0.18);
+  --sev-info-bg:     rgba(96, 165, 250, 0.18);
   --sev-debug-bg:    rgba(148, 163, 184, 0.18);
-  --sev-ok-bg:       rgba(52, 211, 153, 0.16);
+  --sev-ok-bg:       rgba(52, 211, 153, 0.18);
 
-  /* Slightly brighter accents read better on slate. */
-  --accent: #818cf8;
-  --accent-soft:   rgba(129, 140, 248, 0.16);
-  --accent-soft-2: rgba(167, 139, 250, 0.16);
+  /* Brighter indigo accent — reserved for true signal (active/focus). */
+  --accent: #a5b4fc;
+  --accent-soft:   rgba(165, 180, 252, 0.18);
+  --accent-soft-2: rgba(167, 139, 250, 0.18);
 
   /* Shadows need more depth on a dark canvas. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
-  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.50);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.60);
 }
 
 /* Semantic token set (redesign #45) remapped for dark + oled. Surfaces step up
@@ -1667,14 +1667,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 :root[data-theme="dark"],
 :root[data-theme="oled"] {
   color-scheme: dark;
-  /* Surfaces adopt the approved dark slate (former legacy --panel ramp). */
-  --surface:      #161d2e;
-  --surface-2:    #1b2336;
-  --overlay:      #1e2740;
-  --border:       #273149;
-  --border-strong:#324264;
-  --fg-muted:  #9aa6bf;
-  --fg-subtle: #6b7488;
+  /* Surfaces: richer charcoal-indigo with stronger elevation steps (bg < surface
+     < surface-2 < overlay) so panels/headers read as layered, not flush. */
+  --surface:      #121829;
+  --surface-2:    #1a2238;
+  --overlay:      #1f2843;
+  --border:       #2a3455;
+  --border-strong:#3a4671;
+  --fg-muted:  #a8b5cf;
+  --fg-subtle: #717a95;
   --ok:   #10b981;
   --crit: #f4506b;
   --info: #60a5fa;
