@@ -116,14 +116,17 @@ export default function RcaTimeline({
     return m;
   }, [timeline.signals, view]);
 
-  const pct = (ms: number) => Math.max(0, Math.min(100, ((ms - t0) / span) * 100));
+  // Inset the plot by a small gutter so a marker at the origin (centered via
+  // translate(-50%)) doesn't bleed left of the "+0.0s" column.
+  const PAD = 3;
+  const pct = (ms: number) => PAD + Math.max(0, Math.min(100, ((ms - t0) / span) * 100)) * (100 - 2 * PAD) / 100;
 
-  // A few axis ticks (relative seconds from window start).
+  // A few axis ticks (relative seconds from window start) — same inset scale.
   const ticks = useMemo(() => {
     const n = 5;
     return Array.from({ length: n + 1 }, (_, i) => {
       const ms = t0 + (span * i) / n;
-      return { left: (i / n) * 100, label: `+${((ms - t0) / 1000).toFixed(span > 120000 ? 0 : 1)}s` };
+      return { left: PAD + (i / n) * (100 - 2 * PAD), label: `+${((ms - t0) / 1000).toFixed(span > 120000 ? 0 : 1)}s` };
     });
   }, [t0, span]);
 

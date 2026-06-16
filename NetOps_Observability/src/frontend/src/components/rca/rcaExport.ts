@@ -181,11 +181,11 @@ function reportHtml(r: Report, objId: string): string {
   .toolbar { position: sticky; top: 0; z-index: 10; display:flex; gap:8px; justify-content:flex-end; padding:10px 14px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; }
   .toolbar button { font:600 13px/1 inherit; padding:8px 16px; border-radius:6px; cursor:pointer; border:1px solid #cbd5e1; background:#fff; color:#1f2933; }
   .toolbar button.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
-  @media print { .no-print { display:none !important; } body { background:#fff; } }
+  @media print { .no-print { display:none !important; } body { background:#fff; } section { break-inside: avoid; page-break-inside: avoid; } svg { max-width:100%; } }
 </style></head><body>
   <div class="toolbar no-print">
-    <button class="primary" onclick="window.print()">⤓ Save as PDF</button>
-    <button onclick="window.close()">Close</button>
+    <button id="rca-save" class="primary">⤓ Save as PDF</button>
+    <button id="rca-close">Close</button>
   </div>
   <div class="doc">
   <header class="rpt"><span class="brand">CORRELIX</span><span class="doctype">Root Cause Analysis Report</span></header>
@@ -209,13 +209,10 @@ function reportHtml(r: Report, objId: string): string {
 
   <footer class="rpt"><span>Generated ${esc(now)} UTC · Correlix RCA</span><span>Object ${esc(objId.slice(0, 8))} · Confidential</span></footer>
 </div>
-<script>
-  function rcaPrint(){try{window.focus();window.print();}catch(e){}}
-  // wait for full layout (SVG/fonts) before printing so nothing is cut off.
-  if (document.readyState === 'complete') setTimeout(rcaPrint, 400);
-  else window.addEventListener('load', function(){ setTimeout(rcaPrint, 400); });
-</script>
 </body></html>`;
+  // NB: no inline <script> or onclick — the app's CSP (script-src 'self') blocks
+  // inline script in the about:blank popup. The parent window wires the buttons
+  // + print via the DOM API (CSP-safe) in exportRcaPdf.
 }
 
 // exportRcaPdf renders the print-ready report and triggers the browser print
@@ -227,24 +224,42 @@ export function exportRcaPdf(timeline: CorrTimeline, _seams: Record<string, Seam
   const r = buildReport(timeline, owner, steps);
   const html = reportHtml(r, objId);
 
-  const win = window.open("", "_blank", "width=900,height=1000");
+  // Preferred: a real tab with the report + working toolbar. The parent wires the
+  // buttons (CSP blocks inline handlers in the popup).
+  const win = window.open("", "_blank", "width=920,height=1040");
   if (win) {
     win.document.open();
     win.document.write(html);
     win.document.close();
+    const wire = () => {
+      try {
+        const d = win.document;
+        d.getElementById("rca-save")?.addEventListener("click", () => { win.focus(); win.print(); });
+        d.getElementById("rca-close")?.addEventListener("click", () => win.close());
+      } catch { /* cross-origin guard — same-origin here, so fine */ }
+    };
+    // document.write content is ready synchronously after close(); wire now + on load.
+    wire();
+    win.addEventListener("load", wire);
+    win.focus();
     return true;
   }
 
-  // Pop-up blocked → print via a hidden iframe (no pop-up, same origin).
+  // Pop-up blocked → render in a REAL-SIZE off-screen iframe (a 0×0 iframe clips
+  // the print to a sliver) and print it from the parent after it lays out.
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
-  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+  iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:820px;height:1160px;border:0;";
   document.body.appendChild(iframe);
-  const doc = iframe.contentWindow?.document;
-  if (!doc) { iframe.remove(); return false; }
+  const cw = iframe.contentWindow;
+  const doc = cw?.document;
+  if (!cw || !doc) { iframe.remove(); return false; }
   doc.open();
-  doc.write(html); // the inline script auto-prints the iframe's document
+  doc.write(html);
   doc.close();
-  setTimeout(() => iframe.remove(), 60000); // clean up after the dialog is done
+  const printIframe = () => { try { cw.focus(); cw.print(); } catch { /* ignore */ } };
+  iframe.addEventListener("load", () => setTimeout(printIframe, 400));
+  setTimeout(printIframe, 700); // belt-and-suspenders if load already fired
+  setTimeout(() => iframe.remove(), 60000);
   return true;
 }
