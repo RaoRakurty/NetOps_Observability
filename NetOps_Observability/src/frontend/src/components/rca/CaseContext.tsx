@@ -35,7 +35,10 @@ export default function CaseContext({ confirmed, ticketRef, ticketStatus, ticket
         ) : confirmed ? (
           <div style={emptyText}>Not opened — <span style={{ color: C.info }}>create an evidence-backed ticket</span> to track resolution.</div>
         ) : (
-          <div style={emptyText}>Not opened — <span style={{ color: C.faint }}>RCA not confirmed</span>. Auto-ticketing holds until customer impact is confirmed.</div>
+          <>
+            <div style={{ fontSize: 13, color: C.fg, fontWeight: 600 }}>Not opened — impact not confirmed.</div>
+            <div style={emptyText}>Auto-ticketing is on hold until independent evidence confirms customer impact.</div>
+          </>
         )}
       </div>
 

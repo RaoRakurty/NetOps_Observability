@@ -300,11 +300,30 @@ export default function RcaSummary({
     : state === "open" ? "Current state: Open"
     : "Current state: No longer active";
 
+  // Routing context (device + peer) for a routing/BGP object — drives the
+  // peer-aware summary, affected scope, and impact panel.
+  const routingPeer = useMemo(() => {
+    for (const s of timeline.signals) {
+      if (!s.attached || s.kind.endsWith("_clear") || !isRoutingKind(s.kind)) continue;
+      let device = s.entity_id, peer = "";
+      try { const a = JSON.parse((s as { attrs?: string }).attrs || "{}"); peer = a.peer || a.neighbor || ""; } catch { /* no attrs */ }
+      const ci = s.entity_id.indexOf(":");
+      if (ci > 0) { device = s.entity_id.slice(0, ci); if (!peer) peer = s.entity_id.slice(ci + 1); }
+      if (mentionsInternal(device)) return null;
+      return { device: entityLabel(device), peer, kind: s.kind };
+    }
+    return null;
+  }, [timeline.signals]);
+
   // ---- the plain-English RCA summary — NOC language, answers "what did we see"
   // + "is it confirmed / why not" (items 1 & 12) ------------------------------
   const nocSummary = useMemo(() => {
     const lead = PLANE_SEEN_LEAD[dominant] ?? `${modalityLabel(dominant)} changed`;
     if (confirmed) return `${lead}. Independent evidence confirms a real network issue.`;
+    // Routing-dominant object: a precise, peer-aware one-liner (no overclaim).
+    if (routingPeer && dominant === "control_plane") {
+      return `A ${kindLabel(routingPeer.kind)} was observed on ${routingPeer.device}${routingPeer.peer ? ` with peer ${routingPeer.peer}` : ""}. Customer impact is not confirmed yet.`;
+    }
     const miss = missingPlanes.filter((m) => m !== dominant).map((m) => PLANE_NOC_SHORT[m] ?? modalityLabel(m).toLowerCase());
     if (crossPlane) {
       const have = MODALITY_ORDER.filter((m) => (attByPlane[m] ?? 0) > 0)
@@ -314,7 +333,7 @@ export default function RcaSummary({
     return miss.length
       ? `${lead}. No ${orList(miss)} evidence confirms a real network issue yet.`
       : `${lead}. The evidence does not yet confirm a real network issue.`;
-  }, [dominant, confirmed, crossPlane, missingPlanes, attByPlane]);
+  }, [dominant, confirmed, crossPlane, missingPlanes, attByPlane, routingPeer]);
 
   const card: React.CSSProperties = {
     border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "10px 14px",
@@ -387,9 +406,15 @@ export default function RcaSummary({
     if (probe.lowOnly || probeOnly)
       return { verb: "Hold", tone: C.caution, text: "Only active/test checks changed. Re-test from a trusted customer path, or corroborate with device health, a routing/link event, or traffic loss." };
     if (timeline.verdict_tier === "suspected") {
-      const add = corroborate.length ? orList(corroborate.map((p) => modalityLabel(p).toLowerCase())) : "a second, independent source";
-      const then = owner && OWNER_EXTERNAL.has(owner) ? `, then escalate to ${ownerLabel(owner)}` : "";
-      return { verb: "Hold", tone: C.caution, text: `Suspected only. Confirm with ${add}${then}.` };
+      // The full menu of independent confirmations — never narrow it to one plane.
+      // Only drop "device health" when device-health evidence is already present;
+      // peer-side routing stays (a single-observer routing change still needs the
+      // independent peer view to confirm).
+      const hasDeviceEv = (attByPlane["device_telemetry"] ?? 0) > 0;
+      const opts = ["peer-side routing", "device health", "traffic-flow loss", "downstream impact", "or an independent active check"]
+        .filter((o) => !(hasDeviceEv && o === "device health"));
+      const then = owner && OWNER_EXTERNAL.has(owner) ? ` Then escalate to ${ownerLabel(owner)}.` : "";
+      return { verb: "Hold", tone: C.caution, text: `Suspected only. Confirm with ${opts.join(", ")}.${then}` };
     }
     return { verb: "Hold", tone: C.faint, text: "Not enough evidence to confirm a network issue." };
   })();
@@ -417,20 +442,16 @@ export default function RcaSummary({
   // ---- Confidence ladder (§5): explainable Observed → Suspected → Confirmed ----
   const ladderLevel: LadderLevel = confirmed ? "confirmed" : timeline.verdict_tier === "suspected" ? "suspected" : "observed";
   const ladderObserved = useMemo(() => {
-    const out: string[] = [];
-    for (const m of MODALITY_ORDER) {
-      if ((attByPlane[m] ?? 0) <= 0) continue;
-      const sig = timeline.signals.find((s) => s.attached && s.modality_class === m && !s.kind.endsWith("_clear") && !mentionsInternal(s.entity_id));
-      const dev = sig ? entityLabel(sig.entity_id.split(":")[0]) : "";
-      const where = dev ? ` on ${dev}` : "";
-      if (m === "control_plane") out.push(`${sig ? kindLabel(sig.kind) : "Routing/link change"}${where}`);
-      else if (m === "device_telemetry") out.push(`Device-health change${where}`);
-      else if (m === "passive_flow") out.push(`Traffic-flow change${where}`);
-      else if (m === "active_probe") out.push("Active-check change");
-    }
-    return out;
-  }, [attByPlane, timeline.signals]);
-  const ladderRelated = (crossPlane || singleObserverControl) ? "These observations are related on the same device area" : undefined;
+    // Brief class names — the device/peer are already named in Affected + summary.
+    const LABEL: Record<string, string> = {
+      control_plane: "Routing/link change", device_telemetry: "Device-health change",
+      passive_flow: "Traffic-flow change", active_probe: "Active-check change",
+    };
+    return MODALITY_ORDER.filter((m) => (attByPlane[m] ?? 0) > 0).map((m) => LABEL[m] ?? `${modalityLabel(m)} change`);
+  }, [attByPlane]);
+  const ladderRelated = (crossPlane || singleObserverControl)
+    ? (routingPeer ? `Evidence points to ${routingPeer.device} routing adjacency` : "These observations are related on the same device area")
+    : undefined;
   const ladderMissing = useMemo(() => {
     const CONFIRM_LABEL: Record<string, string> = {
       control_plane: "Peer-side BGP/routing state",
@@ -445,13 +466,24 @@ export default function RcaSummary({
     return out;
   }, [confirmOptions, confirmed]);
 
-  // ---- Impact & blast radius (§7) ----
+  // ---- Impact & blast radius (§7/§17) ----
+  const hasDeviceEv = (attByPlane["device_telemetry"] ?? 0) > 0;
+  const hasRoutingEv = (attByPlane["control_plane"] ?? 0) > 0;
   const impactDeviceGroup = affectedGroups.find((g) => /device/i.test(g.label)) ?? affectedGroups[0];
-  const impactScope = impactDeviceGroup
-    ? `${/device/i.test(impactDeviceGroup.label) ? "Device area" : impactDeviceGroup.label}: ${impactDeviceGroup.items.slice(0, 3).join(", ")}`
-    : "";
+  const impactDevice = routingPeer?.device || impactDeviceGroup?.items[0] || "";
+  const impactPeer = routingPeer?.peer || "";
+  const scopeType = routingPeer ? "Routing adjacency" : "";
   const flowTied = (attByPlane["passive_flow"] ?? 0) > 0;
   const probeTied = (attByPlane["active_probe"] ?? 0) > 0 && probe.hasConfirmProbe;
+  // Evidence classes not tied to this issue → the impact "why" + missing checklist.
+  const notTied = useMemo(() => {
+    const out: string[] = [];
+    if (!hasDeviceEv) out.push("device-health");
+    if (!flowTied) out.push("traffic-flow");
+    if (!probeTied) out.push("active-check");
+    if (singleObserverControl || !hasRoutingEv) out.push("peer-side");
+    return out;
+  }, [hasDeviceEv, flowTied, probeTied, singleObserverControl, hasRoutingEv]);
 
   // ---- Hypothesis ranking (§10): grounded alternatives, never invented --------
   const hypotheses = useMemo((): Hypothesis[] => {
@@ -462,7 +494,9 @@ export default function RcaSummary({
     const list: Hypothesis[] = [{
       title: nocTitle,
       confidence: conf,
-      why: ladderObserved.length ? `${ladderObserved.join("; ")}.` : "Based on the evidence observed.",
+      why: routingPeer
+        ? `${kindLabel(routingPeer.kind)} observed on ${routingPeer.device}.`
+        : ladderObserved.length ? `${ladderObserved.join("; ")}.` : "Based on the evidence observed.",
       missing: confirmed ? undefined : "independent customer-impact evidence",
     }];
     // Alternatives are interpretations of the SAME evidence at lower confidence —
@@ -475,8 +509,8 @@ export default function RcaSummary({
       });
       if (hasRouting) list.push({
         title: "Customer-impacting routing issue", confidence: "Low",
-        why: "A routing/BGP change was observed, but peer-side or downstream evidence is missing.",
-        missing: "peer-side routing state or downstream service impact",
+        why: "Possible, but not supported yet.",
+        missing: "peer-side state, device-health evidence, traffic-flow loss, active check, or downstream impact",
       });
       if (!hasDevice && !hasRouting && hasFlow) list.push({
         title: "Traffic-path issue", confidence: "Low",
@@ -513,6 +547,22 @@ export default function RcaSummary({
     });
     return items;
   }, [confirmed, whyNotConfirmed, ladderMissing, nextActions, owner, probe.debugExcluded, probe.lowOnly]);
+
+  // ---- reasoning copy (§3/§17): exact, brief, evidence-aware wording ----------
+  const attachedCount = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).length;
+  const whySuspectedText = (hasDeviceEv && hasRoutingEv)
+    ? "Device health and routing/link evidence were observed on the same device area."
+    : hasRoutingEv
+      ? "A routing/link change was observed on the affected routing adjacency."
+      : `The signs match a ${nocTitle.replace(/^Possible /, "")} using ${attachedPlaneLabels.length ? attachedPlaneLabels.join(" + ") : "the available"} evidence.`;
+  const whyNotConfirmedText = attachedCount <= 1
+    ? "This issue currently rests on a single observed signal. Independent evidence is needed before confirming customer impact."
+    : (hasDeviceEv && hasRoutingEv)
+      ? "The supporting signals are related, but they come from the same device area. Independent evidence is needed before confirming customer impact."
+      : whyNotConfirmed;
+  const toConfirmText = hasDeviceEv
+    ? "Add peer-side BGP/routing state, traffic-flow loss, downstream service impact, or an active check from an independent vantage."
+    : "Add peer-side BGP/routing state, interface errors or drops, traffic-flow loss, downstream service impact, or an active check from an independent vantage.";
 
   return (
     <div style={card}>
@@ -560,7 +610,7 @@ export default function RcaSummary({
       </div>
 
       {/* affected scope (item 1) — what/where this issue touches, when known */}
-      {affectedGroups.length > 0 && (
+      {(affectedGroups.length > 0 || routingPeer) && (
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <div style={title}>Affected</div>
           {affectedGroups.map((g) => (
@@ -571,6 +621,19 @@ export default function RcaSummary({
               </span>
             </div>
           ))}
+          {/* routing adjacency: name the peer + scope type explicitly (§17) */}
+          {routingPeer?.peer && (
+            <div style={{ fontSize: 12.5, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ ...muted, minWidth: 118, flexShrink: 0 }}>Peer</span>
+              <span style={{ color: C.fg, fontFamily: "ui-monospace,monospace" }}>{routingPeer.peer}</span>
+            </div>
+          )}
+          {routingPeer && (
+            <div style={{ fontSize: 12.5, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ ...muted, minWidth: 118, flexShrink: 0 }}>Scope type</span>
+              <span style={{ color: C.fg }}>Routing adjacency</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -586,21 +649,17 @@ export default function RcaSummary({
       </div>
 
       {/* impact & blast radius (§7) — is there confirmed customer impact + how far */}
-      <ImpactPanel confirmed={confirmed} affectedScope={impactScope} flowTied={flowTied} probeTied={probeTied} />
+      <ImpactPanel confirmed={confirmed} device={impactDevice} peer={impactPeer} scopeType={scopeType} notTied={notTied} />
 
       {/* the precise plain-English story — primary readable text */}
       <div style={{ fontSize: 14.5, lineHeight: 1.55, color: C.fg, fontWeight: 500 }}>{nocSummary}</div>
 
       {/* why suspected / why not confirmed — makes the verdict trustable */}
       {timeline.verdict_tier === "suspected" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 13.5, lineHeight: 1.5, borderLeft: `3px solid ${C.caution}`, paddingLeft: 8 }}>
-          {timeline.top_hypothesis !== "undetermined" && (
-            <div><b style={{ color: C.caution }}>Why suspected:</b> the signs match a <b>{nocTitle.replace(/^Possible /, "")}</b> using {attachedPlaneLabels.length ? attachedPlaneLabels.join(" + ") : "the available"} evidence.</div>
-          )}
-          <div><b style={{ color: C.caution }}>Why not confirmed:</b> {whyNotConfirmed}</div>
-          {singleObserverControl && (
-            <div><b style={{ color: C.info }}>To confirm:</b> add an independent observer — a remote probe, the peer-side BGP / routing state, downstream service impact, or second-device telemetry.</div>
-          )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13.5, lineHeight: 1.55, borderLeft: `3px solid ${C.caution}`, paddingLeft: 8 }}>
+          <div><b style={{ color: C.caution }}>Why suspected:</b> {whySuspectedText}</div>
+          <div><b style={{ color: C.caution }}>Why not confirmed:</b> {whyNotConfirmedText}</div>
+          <div><b style={{ color: C.info }}>To confirm:</b> {toConfirmText}</div>
         </div>
       )}
 
@@ -693,6 +752,7 @@ export default function RcaSummary({
             const debugExcludedHere = isProbe && total > att && probe.debugExcluded > 0;
             const isMain = key === dominant && att > 0;
             const noun = PLANE_NOUN[key] ?? "signals";
+            const seenNoun = total === 1 ? noun.replace(/s$/, "") : noun; // "1 event", not "1 events"
             // state → {tone, badge}. Card stays NEUTRAL; the badge + a tinted
             // left-border carry the state, so the grid doesn't read as all-alarm.
             // "Needed to confirm" is informational (blue), not alarm (orange):
@@ -724,7 +784,7 @@ export default function RcaSummary({
                     const notTied = Math.max(0, total - att - testIgnored);
                     return (
                       <>
-                        <span><b>{total}</b> {noun} seen</span>
+                        <span><b>{total}</b> {seenNoun} seen</span>
                         {att > 0 && <span><b style={{ color: tone }}>{att}</b> used{lowAuthProbe ? " (weak)" : ""}</span>}
                         {testIgnored > 0 && <span><b style={{ color: C.faint }}>{testIgnored}</b> test {testIgnored === 1 ? "check" : "checks"} ignored</span>}
                         {notTied > 0 && (

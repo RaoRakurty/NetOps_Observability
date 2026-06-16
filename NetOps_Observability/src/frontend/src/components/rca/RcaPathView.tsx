@@ -120,8 +120,8 @@ export default function RcaPathView({ timeline, seams, owner }: {
           </div>
           <div style={{ ...muted, fontSize: 13, lineHeight: 1.5 }}>
             This identifies the routing adjacency involved, but does not confirm customer impact.
-            Independent evidence is needed — peer-side BGP/routing state, traffic-flow loss,
-            downstream service impact, or an active check from an independent vantage.
+            Independent evidence is needed — peer-side BGP/routing state, device health,
+            traffic-flow loss, downstream service impact, or an active check from an independent vantage.
           </div>
         </div>
       );

@@ -439,7 +439,7 @@ export function CorrelationDetail({ id }: { id: string }) {
               marginTop: 8, border: `1px solid ${STATUS_COLOR[selSig.link_status] ?? "#d29922"}55`,
               borderRadius: 6, padding: "8px 10px", background: "var(--panel,#11151c)", fontSize: 13,
             }}>
-              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6, color: "var(--fg)" }}>{f.checkType}</div>
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6, color: "var(--fg)" }}>{f.checkType}: {f.whatChanged}</div>
               <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px" }}>
                 {orow("From", f.from)}
                 {f.to !== "—" && orow("To", f.to)}
