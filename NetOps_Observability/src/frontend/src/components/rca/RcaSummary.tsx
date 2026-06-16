@@ -518,7 +518,7 @@ export default function RcaSummary({
                 }} title={view === "debug" ? e.grounding_ref : undefined}>
                   {e.grounding_kind === "seam"
                     ? `◆ ${s ? `${seamOwnerLabel(s.control_plane_owner)} · ${visibilityLabel(s.visibility)}` : "provider boundary"}`
-                    : "same path / device area"}
+                    : "related on the same path"}
                 </span>
                 <span style={muted}>──</span>
                 <span style={chip}>{view === "debug" ? episodeEntity(e.to_node) : entityLabel(episodeEntity(e.to_node))}</span>

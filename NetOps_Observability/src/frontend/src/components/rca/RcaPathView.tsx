@@ -109,15 +109,19 @@ export default function RcaPathView({ timeline, seams, owner }: {
     if (routing) {
       return (
         <div style={card}>
-          <div style={titleStyle}>Routing context — not confirmed</div>
+          <div style={titleStyle}>Routing context</div>
+          <div style={{ ...muted, fontSize: 12.5 }}>The routing peer/session involved in this issue.</div>
           <div style={{ fontSize: 14, lineHeight: 1.5, color: C.fg }}>
-            Correlix observed a {kindLabel(routing.kind)} between <b>{entityLabel(routing.device)}</b>
-            {routing.peer ? <> and peer <b>{routing.peer}</b></> : null}.
+            A {kindLabel(routing.kind)} was observed on <b>{entityLabel(routing.device)}</b>
+            {routing.peer ? <> with peer <b>{routing.peer}</b></> : null}.
+          </div>
+          <div style={{ fontSize: 14, lineHeight: 1.5, color: C.caution, fontWeight: 700 }}>
+            {SYM.possible} Evidence localizes to: <span style={{ ...chip, color: C.caution, background: C.caution + "1c", border: `1px solid ${C.caution}66` }}>{entityLabel(routing.device)}</span>
           </div>
           <div style={{ ...muted, fontSize: 13, lineHeight: 1.5 }}>
             This identifies the routing adjacency involved, but does not confirm customer impact.
-            Correlix needs peer-side routing evidence, interface health, traffic-flow loss, or an
-            independent active check to confirm the issue.
+            Independent evidence is needed — peer-side BGP/routing state, traffic-flow loss,
+            downstream service impact, or an active check from an independent vantage.
           </div>
         </div>
       );
@@ -172,7 +176,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
           failure's place on the path, not just a verdict. */}
       {locus && (
         <div style={{ fontSize: 14, lineHeight: 1.5, color: segTone, fontWeight: 700 }}>
-          {segSym} Likely fault location: <span style={{ ...chip, color: segTone, background: segTone + "1c", border: `1px solid ${segTone}66` }}>{locus}</span>
+          {segSym} {confirmed ? "Likely fault location" : internalOnly ? "Internal check path" : "Evidence localizes to"}: <span style={{ ...chip, color: segTone, background: segTone + "1c", border: `1px solid ${segTone}66` }}>{locus}</span>
           {visLimited ? ` · ${SYM.unknown} limited visibility past this boundary` : ""}
         </div>
       )}
@@ -180,17 +184,16 @@ export default function RcaPathView({ timeline, seams, owner }: {
         {visibleEdges.slice(0, 6).map((e, i) => {
           const a = entityLabel(episodeEntity(e.from_node));
           const b = entityLabel(episodeEntity(e.to_node));
-          const w = Number(e.weight) || 0;
           const directed = Number(e.direction_conf ?? 0) >= 0.5 && e.direction_basis !== "none";
           const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
           const gk = e.grounding_kind === "seam"
             ? `${SYM.boundary} ${s ? seamOwnerLabel(s.control_plane_owner) : "provider"} boundary`
-            : "same path / device area";
+            : "related on the same path";
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, flexWrap: "wrap", minWidth: 0 }}>
               <span style={chip}>{a}{episodeKind(e.from_node) ? <span style={{ ...muted, marginLeft: 4 }}>{episodeKind(e.from_node)}</span> : null}</span>
               <span style={muted}>{directed ? "→" : "──"}</span>
-              <span style={{ fontSize: 11, color: C.muted }}>{gk} · strength {w.toFixed(2)}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>{gk}</span>
               <span style={muted}>{directed ? "→" : "──"}</span>
               <span style={chip}>{b}{episodeKind(e.to_node) ? <span style={{ ...muted, marginLeft: 4 }}>{episodeKind(e.to_node)}</span> : null}</span>
             </div>

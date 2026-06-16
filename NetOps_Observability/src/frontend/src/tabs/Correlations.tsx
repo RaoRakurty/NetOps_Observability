@@ -393,8 +393,8 @@ export function CorrelationDetail({ id }: { id: string }) {
               <div style={{ border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "12px 14px", background: "var(--panel,#11151c)" }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Path location not known yet</div>
                 <div style={{ ...muted, fontSize: 13, lineHeight: 1.5, marginTop: 3 }}>
-                  The issue was observed, but Correlix does not yet have enough topology, path, or boundary
-                  evidence to place it on a specific path segment or boundary.
+                  This issue hasn't been located on a specific link or path yet — there isn't enough
+                  routing or path evidence to place it.
                 </div>
                 {ctx.strongest && (
                   <div style={{ ...muted, fontSize: 13, marginTop: 5 }}>
@@ -474,9 +474,9 @@ export function CorrelationDetail({ id }: { id: string }) {
           <div style={{ border: "1px solid var(--border,#2a2f3a)", borderRadius: 8, padding: "10px 14px", background: "var(--panel,#11151c)" }}>
             <div style={titleStyle}>No related confirming evidence yet</div>
             <div style={{ ...muted, fontSize: 13, lineHeight: 1.5 }}>
-              This issue currently rests on a single observed signal. Correlix has not found a second
-              related piece of device-health, traffic-flow, active-check, or peer-side routing evidence
-              in this window.
+              This issue currently rests on a single observation. No second, independent piece of
+              evidence — device health, traffic loss, an active check, or peer-side routing — has
+              appeared in this window.
             </div>
           </div>
         ) : (
@@ -593,7 +593,7 @@ function RelationshipPreview({ edges, seams, view, onSelect, selected }: {
             }}>
               {e.grounding_kind === "seam"
                 ? `◆ ${seam ? `${seamOwnerLabel(seam.control_plane_owner)} · ${visibilityLabel(seam.visibility)}` : "provider boundary"}`
-                : "same path / device area"}
+                : "related on the same path"}
             </span>
             <span style={{ color: "var(--muted)" }}>{link}</span>
             <span style={chip}>{ent(e.to_node)}</span>

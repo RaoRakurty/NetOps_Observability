@@ -446,7 +446,11 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       node({ id: "peer", x: col * COL, y: 0, data: {
         kind: "router", tone: down ? meta.color : C.info, label: peer.peer, mono: true, sub: `${peer.rel.toLowerCase()} peer`, hasOut: false,
       } });
-      if (prev) link(prev, "peer", { state: down ? faultEdgeState : "healthy", label: `${peer.rel}${peer.state ? " " + peer.state : ""}` });
+      // Label the edge by the EVENT, not the current session state: this object
+      // exists because the adjacency CHANGED, so "BGP session up" would read as
+      // misleadingly healthy. Edge carries the verdict tone (suspected = amber),
+      // never a healthy green, but stays unbroken unless the overlay is down.
+      if (prev) link(prev, "peer", { state: down ? faultEdgeState : (timeline.verdict_tier === "confirmed" ? "healthy" : "degraded"), label: /bgp/i.test(peer.rel) ? "BGP neighbor changed" : `${peer.rel} changed` });
       prev = "peer"; col++;
     } else if (ends?.dst && ends.dst !== locusDev) {
       node({ id: "dst", x: col * COL, y: 0, data: { kind: destKind(ends.dst), tone: C.info, label: entityLabel(ends.dst), sub: "destination", hasOut: false } });
