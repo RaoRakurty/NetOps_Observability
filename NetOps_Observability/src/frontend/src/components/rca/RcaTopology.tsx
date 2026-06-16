@@ -6,18 +6,16 @@ import {
 import "@xyflow/react/dist/style.css";
 import { CorrTimeline, CorrSignal, Seam, ProbePath } from "../../services/api";
 import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor } from "./labels";
+import { ShapeSVG, kindForRole, type ShapeKind } from "../graph/shapes";
+import FlowEdge from "../graph/FlowEdge";
 
-// RcaTopology — the END-TO-END contextual path with the fault marked. OVERLAY
-// MODEL: the path STRUCTURE (observer → device area → target) is built from data
-// — today from the correlation object's own entities, tomorrow fused with live
-// traceroute (/api/probe/paths) for true hop order — and RCA ANNOTATES it with
-// where it's broken / suspected / possible. Fully data-driven: no entity is
-// hardcoded, so it scales as devices and seams are added to the network.
-//
-// Honesty: without a live trace we do NOT invent a hop sequence. We show what we
-// can prove — "loss observed from <observer> to <target>; evidence converges on
-// <device>; here is exactly what's broken there" — and place co-affected devices
-// as a branch off the locus, not as a fake ordered chain.
+// RcaTopology — the END-TO-END path with the fault marked, drawn with real
+// network shapes (vantage / router / switch / firewall / gateway / cloud /
+// target), health colour + glow, and animated traffic-flow links. OVERLAY MODEL:
+// the path STRUCTURE comes from data — a live traceroute when one matches the
+// destination (true hop order, both icmp+tcp), else the correlation object's own
+// entities — and RCA ANNOTATES where it's broken / suspected / possible. We never
+// invent a hop order we can't prove.
 
 type FaultStatus = "broken" | "suspected" | "possible";
 
@@ -31,7 +29,6 @@ function statusForVerdict(tier: string): FaultStatus {
   return tier === "confirmed" ? "broken" : tier === "suspected" ? "suspected" : "possible";
 }
 
-// "vantage-e2e->e2e-edge1" → { src, dst }; tolerant of missing arrow.
 function splitPath(id: string): { src: string; dst: string } | null {
   if (!id.includes("->")) return null;
   const [src, dst] = id.split("->");
@@ -41,11 +38,10 @@ function splitPath(id: string): { src: string; dst: string } | null {
 // Base device an entity sits on: interface "dev:Gi0/1" → "dev"; device → itself.
 function baseDevice(entityType: string, entityId: string): string {
   if (entityType === "interface") return entityId.split(":")[0];
-  if (entityType === "path") return entityId; // handled separately
+  if (entityType === "path") return entityId;
   return entityId.split(":")[0];
 }
 
-// Readable "what's broken" phrase for one signal (operator wording).
 function brokenElement(s: CorrSignal): string {
   if (s.entity_type === "interface") {
     const iface = s.entity_id.split(":").slice(1).join(":");
@@ -54,143 +50,63 @@ function brokenElement(s: CorrSignal): string {
   return kindLabel(s.kind);
 }
 
-const SEV_RANK: Record<string, number> = { crit: 4, high: 3, warn: 2, info: 1 };
-
-// --- custom nodes -----------------------------------------------------------
-const handleStyle = { width: 6, height: 6, background: "var(--border,#3a4252)", border: "none" } as const;
-
-function EndpointNode({ data }: NodeProps) {
-  const d = data as any;
-  return (
-    <div style={{
-      minWidth: 124, maxWidth: 168, background: "var(--panel,#151b2b)",
-      border: "1px solid var(--border,#2a2f3a)", borderRadius: 10, padding: "9px 11px",
-      boxShadow: "0 1px 2px rgba(0,0,0,.18), 0 6px 16px rgba(0,0,0,.14)", fontSize: 12, lineHeight: 1.25,
-    }}>
-      {d.hasIn && <Handle type="target" position={Position.Left} style={handleStyle} />}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontSize: 13 }}>{d.icon}</span>
-        <span style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", overflowWrap: "anywhere" }}>{d.label}</span>
-      </div>
-      <div style={{ marginTop: 2, color: C.muted, fontSize: 11 }}>{d.role}</div>
-      {d.hasOut && <Handle type="source" position={Position.Right} style={handleStyle} />}
-    </div>
-  );
+function parseAttrs(s?: string): Record<string, any> {
+  try { return JSON.parse(s || "{}"); } catch { return {}; }
 }
 
-function FaultNode({ data }: NodeProps) {
+const SEV_RANK: Record<string, number> = { crit: 4, high: 3, warn: 2, info: 1 };
+const handleStyle = { width: 7, height: 7, background: "var(--border,#3a4252)", border: "none" } as const;
+
+// ── one shape-based node for every role ────────────────────────────────────
+// data: { kind, tone, label, sub, badge, chips[], via, pulse, mono, size,
+//          hasIn, hasOut, hasBottom }
+function TopoNode({ data }: NodeProps) {
   const d = data as any;
-  const m: { sym: string; word: string; color: string } = d.meta;
+  const size = d.size ?? 56;
   return (
-    <div style={{
-      minWidth: 184, maxWidth: 248, background: "var(--panel,#151b2b)",
-      border: `2px solid ${m.color}`, borderRadius: 11, padding: "10px 12px",
-      boxShadow: `0 0 0 4px ${m.color}24, 0 8px 22px rgba(0,0,0,.22)`, fontSize: 12, lineHeight: 1.3,
-    }}>
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-        <span style={{ fontSize: 15 }}>{m.sym}</span>
-        <span style={{ fontWeight: 800, color: "var(--fg,#e6edf3)", fontSize: 13, overflowWrap: "anywhere" }}>{d.label}</span>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: d.width ?? 124, gap: 2 }}>
+      {d.hasIn !== false && <Handle type="target" position={Position.Left} style={handleStyle} />}
+      <ShapeSVG kind={d.kind} tone={d.tone} size={size} pulse={d.pulse} />
+      <div style={{ fontWeight: 700, fontSize: 12, color: "var(--fg,#e6edf3)", textAlign: "center", lineHeight: 1.2, fontFamily: d.mono ? "var(--font-mono, ui-monospace, monospace)" : "inherit", overflowWrap: "anywhere", maxWidth: 124 }}>
+        {d.label}
       </div>
-      <div style={{ marginTop: 1, fontSize: 11, fontWeight: 700, color: m.color, textTransform: "uppercase", letterSpacing: 0.3 }}>
-        {m.word} fault {d.isTarget ? "· destination" : ""}
-      </div>
-      {d.elements?.length > 0 && (
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-          {d.elements.map((e: string, i: number) => (
-            <div key={i} style={{
-              fontSize: 11, fontWeight: 600, color: "var(--fg,#e6edf3)",
-              background: m.color + "1c", border: `1px solid ${m.color}55`,
-              borderRadius: 5, padding: "2px 7px", overflowWrap: "anywhere",
-            }}>{e}</div>
+      {d.sub && <div style={{ fontSize: 10.5, color: C.muted, textAlign: "center", lineHeight: 1.15 }}>{d.sub}</div>}
+      {d.badge && (
+        <div style={{ fontSize: 10, fontWeight: 800, color: d.tone, textTransform: "uppercase", letterSpacing: 0.3 }}>{d.badge}</div>
+      )}
+      {d.chips?.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 1 }}>
+          {d.chips.map((c: string, i: number) => (
+            <div key={i} style={{ fontSize: 10.5, fontWeight: 600, color: "var(--fg,#e6edf3)", background: d.tone + "1c", border: `1px solid ${d.tone}55`, borderRadius: 5, padding: "1px 6px", textAlign: "center", overflowWrap: "anywhere" }}>{c}</div>
           ))}
         </div>
       )}
-      <Handle type="source" position={Position.Right} style={handleStyle} />
-      <Handle type="source" position={Position.Bottom} id="b" style={handleStyle} />
+      {d.via && <div style={{ fontSize: 10, fontWeight: 700, color: C.info }}>↳ via {String(d.via).toUpperCase()}</div>}
+      {d.hasOut !== false && <Handle type="source" position={Position.Right} style={handleStyle} />}
+      {d.hasBottom && <Handle type="source" position={Position.Bottom} id="b" style={handleStyle} />}
     </div>
   );
 }
 
-function AffectedNode({ data }: NodeProps) {
-  const d = data as any;
-  return (
-    <div style={{
-      minWidth: 120, maxWidth: 176, background: "var(--panel,#151b2b)",
-      border: `1px solid ${C.warn}77`, borderLeft: `4px solid ${C.warn}`, borderRadius: 9,
-      padding: "7px 10px", fontSize: 11.5, lineHeight: 1.25, boxShadow: "0 4px 12px rgba(0,0,0,.16)",
-    }}>
-      <Handle type="target" position={Position.Top} id="t" style={handleStyle} />
-      <div style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", overflowWrap: "anywhere" }}>{d.label}</div>
-      <div style={{ marginTop: 1, color: C.warn, fontSize: 10.5, fontWeight: 600 }}>also affected</div>
-      {d.detail && <div style={{ marginTop: 1, color: C.muted, fontSize: 10.5, overflowWrap: "anywhere" }}>{d.detail}</div>}
-    </div>
-  );
+const nodeTypes = { topo: TopoNode };
+const edgeTypes = { flow: FlowEdge };
+
+const COL = 200;
+const COL_HOP = 168;
+const TRACE_LOSS_HI = 2;
+
+// destination kind: cloud/internet/transit → cloud; an IP/host → target bullseye.
+function destKind(dst: string): ShapeKind {
+  if (/cloud|internet|inet|aws|azure|gcp|tgw|transit|saas/i.test(dst)) return "cloud";
+  return "target";
 }
 
-// One traced hop (live traceroute): IP/name + ttl, optional rtt/loss. `tone`
-// (set on a trace-loss hop) tints the top border ThousandEyes-style.
-function HopNode({ data }: NodeProps) {
-  const d = data as any;
-  return (
-    <div style={{
-      minWidth: 96, maxWidth: 154, background: "var(--panel,#151b2b)",
-      border: `1px solid ${d.tone ?? "var(--border,#2a2f3a)"}`,
-      borderTop: d.tone ? `3px solid ${d.tone}` : "1px solid var(--border,#2a2f3a)",
-      borderRadius: 8, padding: "7px 9px", fontSize: 11.5, lineHeight: 1.2,
-      boxShadow: "0 4px 12px rgba(0,0,0,.14)",
-    }}>
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        {d.icon && <span style={{ fontSize: 12 }}>{d.icon}</span>}
-        <span style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", fontFamily: d.mono ? "var(--font-mono, ui-monospace, monospace)" : "inherit", fontSize: 11, overflowWrap: "anywhere" }}>{d.label}</span>
-      </div>
-      {d.sub && <div style={{ marginTop: 1, color: C.muted, fontSize: 10.5 }}>{d.sub}</div>}
-      {d.metric && <div style={{ marginTop: 2, color: d.tone ?? C.info, fontSize: 10.5, fontWeight: 600 }}>{d.metric}</div>}
-      {d.via && <div style={{ marginTop: 2, color: C.info, fontSize: 10, fontWeight: 700 }}>↳ via {String(d.via).toUpperCase()}</div>}
-      <Handle type="source" position={Position.Right} style={handleStyle} />
-    </div>
-  );
-}
-
-function SeamNode({ data }: NodeProps) {
-  const d = data as any;
-  return (
-    <div style={{
-      minWidth: 128, maxWidth: 168, background: "var(--panel,#151b2b)",
-      border: `2px ${d.border} ${d.borderColor}`, borderRadius: 7, padding: "7px 10px",
-      boxShadow: `0 0 0 3px ${d.color}1f, 0 6px 16px rgba(0,0,0,.16)`, fontSize: 11.5, lineHeight: 1.2,
-    }}>
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ width: 10, height: 10, transform: "rotate(45deg)", flexShrink: 0, background: d.color, borderRadius: 2 }} />
-        <span style={{ fontWeight: 700, color: "var(--fg,#e6edf3)", overflowWrap: "anywhere" }}>{d.head}</span>
-      </div>
-      <div style={{ marginTop: 3, color: C.muted, fontSize: 11 }}>
-        <span style={{ color: d.color, fontWeight: 600 }}>{d.owner}</span>{d.vis ? ` · ${d.vis}` : ""}
-      </div>
-      <Handle type="source" position={Position.Right} style={handleStyle} />
-    </div>
-  );
-}
-
-const nodeTypes = { endpoint: EndpointNode, fault: FaultNode, affected: AffectedNode, seamb: SeamNode, hop: HopNode };
-
-const COL = 250;
-const COL_HOP = 184;
-const TRACE_LOSS_HI = 2; // % per-hop forwarding loss that flags a hop (ThousandEyes-style)
-
-// Match the RCA path's destination to live traces (exact, or either-contains —
-// covers "10.70.245.120" == dst and named dsts like "aws-tgw"). Returns ALL
-// matching traces so both methods (icmp + tcp) are surfaced, deduped by method
-// (latest wins). Exact-dst matches win over fuzzy ones.
 function matchTraces(dst: string | undefined, paths?: ProbePath[]): ProbePath[] {
   if (!dst || !paths?.length) return [];
   const d = dst.trim();
   const withHops = paths.filter((p) => (p.hops?.length ?? 0) > 0);
   let m = withHops.filter((p) => p.dst === d);
   if (m.length === 0) m = withHops.filter((p) => p.dst && (p.dst.includes(d) || d.includes(p.dst)));
-  // dedup by method (default "icmp"), keep the first (caller order = newest-first).
   const byMethod = new Map<string, ProbePath>();
   for (const p of m) {
     const k = (p.method || "icmp").toLowerCase();
@@ -199,8 +115,6 @@ function matchTraces(dst: string | undefined, paths?: ProbePath[]): ProbePath[] 
   return [...byMethod.values()];
 }
 
-// Group method-traces by identical hop sequence: when icmp and tcp agree we draw
-// ONE chain labelled "ICMP · TCP"; when they diverge we draw a row each.
 function groupBySignature(traces: ProbePath[]): { methods: string[]; trace: ProbePath }[] {
   const groups = new Map<string, { methods: string[]; trace: ProbePath }>();
   for (const t of traces) {
@@ -216,7 +130,7 @@ function groupBySignature(traces: ProbePath[]): { methods: string[]; trace: Prob
 const methodTag = (methods: string[]): string =>
   methods.map((m) => (m === "auto" ? "ICMP→TCP" : m.toUpperCase())).join(" · ");
 
-export default function RcaTopology({ timeline, seams, view = "operator", height = 300, probePaths, deviceByIp }: {
+export default function RcaTopology({ timeline, seams, view = "operator", height = 320, probePaths, deviceByIp }: {
   timeline: CorrTimeline;
   seams: Record<string, Seam>;
   view?: "operator" | "debug";
@@ -226,17 +140,10 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
 }) {
   const model = useMemo(() => {
     const sigs = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
-    // primary probe path = the attached path signal (prefer trigger), gives ENDS.
     const pathSig = sigs.find((s) => s.entity_type === "path" && s.is_trigger)
       ?? sigs.find((s) => s.entity_type === "path");
     const ends = pathSig ? splitPath(pathSig.entity_id) : null;
 
-    // Active-measurement (STAMP/probe) metrics on the measured path. The headline
-    // `lossTxt` is always shown on the degraded segment (it's the fault signature);
-    // the fuller `stampTxt` (loss · rtt · jitter) is opt-in (the toggle) so the
-    // default stays uncluttered. Metrics are pulled from the path signals on THIS
-    // path (probe_loss → loss; probe_rtt_ms[stamp|icmp|…] → rtt; probe_jitter →
-    // jitter), preferring the STAMP method for rtt.
     const pathId = pathSig?.entity_id;
     const pathSigs = pathId ? sigs.filter((s) => s.entity_type === "path" && s.entity_id === pathId) : [];
     const lossPct = (() => {
@@ -263,7 +170,6 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     const stampTxt = stampParts.join("  ·  ");
     const hasStamp = stampParts.length > 0;
 
-    // aggregate device-level evidence (everything that isn't the path measure).
     type Dev = { dev: string; elements: string[]; worst: number };
     const devs = new Map<string, Dev>();
     for (const s of sigs) {
@@ -277,8 +183,6 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       devs.set(dev, d);
     }
 
-    // locus = device the grounded topo edges converge on (shared:X), else the
-    // worst-severity device, else the path destination.
     const shareCount = new Map<string, number>();
     for (const e of timeline.edges ?? []) {
       if (e.grounding_kind === "topo" && e.grounding_ref.startsWith("shared:")) {
@@ -290,16 +194,27 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
     if (!locusDev) locusDev = [...devs.values()].sort((a, b) => b.worst - a.worst)[0]?.dev;
     if (!locusDev && ends) locusDev = ends.dst;
 
-    // seam boundary on the path (first seam-grounded edge), if any.
+    // CONTROL-PLANE PEER (the "total path" when there is no probe): a BGP/peer
+    // signal names the far end (attrs.peer, or entity_id "device:peer"). That peer
+    // IS the other end of the path segment — so a BGP flap draws device → peer,
+    // not a lone node.
+    const peer = (() => {
+      for (const s of sigs) {
+        if (!/bgp|peer|adjacency|neighbor|ldp|ospf|isis/i.test(s.kind)) continue;
+        const a = parseAttrs(s.attrs);
+        let p = (a.peer || a.neighbor || "") as string;
+        if (!p && s.entity_id.includes(":")) p = s.entity_id.split(":").slice(1).join(":");
+        if (p) return { peer: p, rel: /bgp/i.test(s.kind) ? "BGP session" : "Peering", state: (a.state || "") as string };
+      }
+      return undefined;
+    })();
+
     const seamEdge = (timeline.edges ?? []).find((e) => e.grounding_kind === "seam");
     const seam = seamEdge ? seams[seamEdge.grounding_ref] : undefined;
 
-    // LIVE-TRACE FUSION: if the RCA path's destination has real traceroute(s), use
-    // their hops as the true ordered backbone (Phase 2), across BOTH methods
-    // (icmp + tcp). Else fall back to the contextual placement (Phase 1).
     const tracedRows = groupBySignature(matchTraces(ends?.dst, probePaths));
 
-    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, tracedRows, hasPath: !!ends };
+    return { ends, lossTxt, stampTxt, hasStamp, devs, locusDev, seam, peer, tracedRows, hasPath: !!ends };
   }, [timeline, seams, probePaths]);
 
   const [showStamp, setShowStamp] = useState(false);
@@ -307,50 +222,48 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
   const { rfNodes, rfEdges } = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
-    const status = statusForVerdict(timeline.verdict_tier);
-    const meta = STATUS_META[status];
-    const { ends, lossTxt, stampTxt, devs, locusDev, seam, tracedRows } = model;
-    // measured-segment label: STAMP detail when the knob is on, else the loss
-    // headline only (the fault signature) — keeps the default uncluttered.
+    const meta = STATUS_META[statusForVerdict(timeline.verdict_tier)];
+    const { ends, lossTxt, stampTxt, devs, locusDev, seam, peer, tracedRows } = model;
     const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
+    const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
 
     const locus = locusDev ? (devs.get(locusDev) ?? { dev: locusDev, elements: [], worst: 0 }) : undefined;
     const targetIsLocus = !!(ends && locus && ends.dst === locus.dev);
 
-    const push = (n: Node) => { nodes.push(n); };
-    const link = (from: string, to: string, opts: { degraded?: boolean; label?: string; fromHandle?: string } = {}) => {
+    // verdict → the state of the segment that carries the fault.
+    const faultEdgeState = statusForVerdict(timeline.verdict_tier) === "broken" ? "confirmed_down" : "suspected_down";
+    const node = (n: Partial<Node> & { id: string; data: any; x: number; y: number }) =>
+      nodes.push({ id: n.id, type: "topo", position: { x: n.x, y: n.y }, draggable: true, data: n.data });
+    type ES = "healthy" | "degraded" | "suspected_down" | "confirmed_down" | "unknown";
+    const stateColor = (s: ES) =>
+      s === "confirmed_down" || s === "suspected_down" ? meta.color
+      : s === "degraded" ? C.warn : s === "unknown" ? C.faint : "#5a93c2";
+    const link = (from: string, to: string, o: { state?: ES; label?: string; flow?: boolean; fromHandle?: string } = {}) => {
+      const state: ES = o.state ?? "healthy";
+      const color = stateColor(state);
+      const down = state === "suspected_down" || state === "confirmed_down";
       edges.push({
-        id: `${from}~${to}`, source: from, target: to, sourceHandle: opts.fromHandle, type: "smoothstep",
-        animated: !!opts.degraded, label: opts.label,
-        labelStyle: { fill: "var(--fg,#e6edf3)", fontSize: 11, fontWeight: 700 },
-        labelBgStyle: { fill: "var(--panel,#151b2b)" }, labelBgPadding: [4, 2] as [number, number], labelBgBorderRadius: 4,
-        markerEnd: { type: MarkerType.ArrowClosed, color: opts.degraded ? meta.color : "#5a6472", width: 15, height: 15 },
-        style: { stroke: opts.degraded ? meta.color : "#5a6472", strokeWidth: opts.degraded ? 2.6 : 1.6, opacity: 0.92 },
+        id: `${from}~${to}`, source: from, target: to, sourceHandle: o.fromHandle, type: "flow",
+        label: o.label, markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
+        data: { flow: o.flow !== false, state, particles: state === "degraded" ? 4 : 2, speed: state === "degraded" ? 1.8 : 3.0 },
+        style: { stroke: color, strokeWidth: down || state === "degraded" ? 2.8 : 1.8, opacity: 0.95 },
       });
     };
 
-    // ===== TRACED MODE (Phase 2): real hop chain(s) from live traceroute =======
-    // One row per distinct path; methods that agree share a row (labelled
-    // "ICMP · TCP"), methods that diverge get a row each.
+    // ===== TRACED MODE: real hop chain(s) from live traceroute ================
     if (tracedRows.length > 0 && ends) {
-      const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
-      const ROW_H = 150;
+      const ROW_H = 168;
       const centerY = ((tracedRows.length - 1) * ROW_H) / 2;
-
-      // shared observer / source, vertically centered against the rows
-      push({ id: "src", type: "endpoint", position: { x: 0, y: centerY }, draggable: true,
-        data: { icon: "◉", label: entityLabel(ends.src), role: "observed from here", hasIn: false, hasOut: true } });
+      node({ id: "src", x: 0, y: centerY, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
 
       tracedRows.forEach((row, r) => {
         const yBase = r * ROW_H;
         const hops = [...(row.trace.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
         if (hops.length === 0) return;
-        const tag = methodTag(row.methods); // "ICMP" | "TCP" | "ICMP · TCP"
-        // fault hop: matches locus by IP/name, else the destination (diagnosed target).
+        const tag = methodTag(row.methods);
         let faultIdx = hops.findIndex((h) => h.ip && locusDev && (h.ip === locusDev || hopName(h.ip) === locusDev));
         if (faultIdx < 0) faultIdx = hops.length - 1;
         let prev = "src";
-
         hops.forEach((h, i) => {
           const id = `r${r}h${i}`;
           const isLast = i === hops.length - 1;
@@ -358,92 +271,91 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
           const rtt = Number(h.rtt_ms);
           const ip = h.ip && h.ip !== "" ? h.ip : "*";
           const name = hopName(ip);
-          const hopLabel = name ?? ip;
-          const ipSub = name ? ` · ${ip}` : "";
-          const metric =
-            showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
+          const isFault = i === faultIdx;
+          const metric = showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
             : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-          if (i === faultIdx) {
-            push({ id, type: "fault", position: { x: (i + 1) * COL_HOP, y: yBase }, draggable: true,
-              data: { label: hopLabel, meta, elements: (locus?.elements ?? []).slice(0, 4), isTarget: isLast } });
-          } else {
-            push({ id, type: "hop", position: { x: (i + 1) * COL_HOP, y: yBase }, draggable: true,
-              data: { label: hopLabel, mono: !name, icon: isLast ? "⊚" : undefined, sub: (isLast ? "destination" : `hop ${h.ttl}`) + ipSub, metric, via: h.via, tone: lossHi ? meta.color : undefined } });
-          }
-          // first segment of each row carries the method tag (+ measured headline).
-          const segDegraded = lossHi || (i === faultIdx && !!lossTxt);
+          const kind: ShapeKind = isLast ? destKind(ip) : isFault ? kindForRole(name ?? ip) : "router";
+          node({
+            id, x: (i + 1) * COL_HOP, y: yBase,
+            data: {
+              kind, tone: isFault ? meta.color : isLast ? C.info : C.flow, pulse: isFault,
+              label: name ?? ip, mono: !name,
+              sub: [isLast ? "destination" : `hop ${h.ttl}`, name ? ip : "", metric].filter(Boolean).join(" · ") || undefined,
+              badge: isFault ? `${meta.sym} ${meta.word}` : undefined,
+              chips: isFault ? (locus?.elements ?? []).slice(0, 3) : undefined,
+              via: h.via,
+            },
+          });
           const firstLabel = [tag, measuredLabel].filter(Boolean).join(" · ");
           const segLabel = i === 0 ? firstLabel
             : showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms`
             : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-          link(prev, id, { degraded: segDegraded, label: segLabel });
+          link(prev, id, { state: isFault ? faultEdgeState : lossHi ? "degraded" : "healthy", label: segLabel, flow: true });
           prev = id;
         });
       });
-
       return { rfNodes: nodes, rfEdges: edges };
     }
 
-    // ===== CONTEXTUAL MODE (Phase 1): placement from RCA evidence ==============
+    // ===== CONTEXTUAL MODE: placement from RCA evidence =======================
     let col = 0;
-    let prevId: string | null = null;
-    let prevHandle: string | undefined;
+    let prev: string | null = null;
 
-    // 1) observer / source end
     if (ends) {
-      const id = "src";
-      push({ id, type: "endpoint", position: { x: col * COL, y: 0 }, draggable: true,
-        data: { icon: "◉", label: entityLabel(ends.src), role: "observed from here", hasIn: false, hasOut: true } });
-      prevId = id; col++;
+      node({ id: "src", x: col * COL, y: 0, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
+      prev = "src"; col++;
     }
 
-    // 2) optional seam boundary on the path
     if (seam) {
-      const id = "seam";
       const vis = seam.visibility ?? "";
-      const border = vis === "partial" ? "dashed" : vis === "blind" ? "dotted" : "solid";
       const ownerColor = seamOwnerColor(seam.control_plane_owner);
-      push({ id, type: "seamb", position: { x: col * COL, y: 0 }, draggable: true,
-        data: {
-          head: view === "debug" ? (seam.seam_id || "boundary") : (seam.display_name || "Provider boundary"),
-          owner: view === "debug" ? (seam.control_plane_owner ?? "?") : seamOwnerLabel(seam.control_plane_owner),
-          vis: view === "debug" ? vis : visibilityLabel(seam.visibility),
-          color: ownerColor, border, borderColor: vis === "blind" ? C.crit : vis === "partial" ? C.caution : ownerColor,
-        } });
-      if (prevId) link(prevId, id, { degraded: !!lossTxt, label: prevId === "src" ? measuredLabel : undefined });
-      prevId = id; col++;
+      node({ id: "seam", x: col * COL, y: 0, data: {
+        kind: "gateway", tone: ownerColor,
+        label: view === "debug" ? (seam.seam_id || "boundary") : (seam.display_name || "Provider boundary"),
+        sub: `${view === "debug" ? (seam.control_plane_owner ?? "?") : seamOwnerLabel(seam.control_plane_owner)}${vis ? " · " + (view === "debug" ? vis : visibilityLabel(seam.visibility)) : ""}`,
+      } });
+      if (prev) link(prev, "seam", { state: lossTxt ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
+      prev = "seam"; col++;
     }
 
-    // 3) the fault locus (prominent)
     if (locus) {
-      const id = "fault";
-      push({ id, type: "fault", position: { x: col * COL, y: 0 }, draggable: true,
-        data: { label: entityLabel(locus.dev), meta, elements: locus.elements.slice(0, 4), isTarget: targetIsLocus } });
-      if (prevId) link(prevId, id, { degraded: !!lossTxt, label: prevId === "src" ? measuredLabel : undefined });
-      prevId = id; prevHandle = undefined; col++;
+      node({ id: "fault", x: col * COL, y: 0, data: {
+        kind: kindForRole(locus.dev), tone: meta.color, pulse: true, size: 62,
+        label: entityLabel(locus.dev), badge: `${meta.sym} ${meta.word}${targetIsLocus ? " · dest" : ""}`,
+        chips: locus.elements.slice(0, 4), hasBottom: true,
+      } });
+      if (prev) link(prev, "fault", { state: lossTxt ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
+      prev = "fault"; col++;
 
-      // 3b) co-affected devices branch BELOW the locus (no fake hop order)
+      // co-affected devices branch below the locus
       const others = [...devs.values()].filter((d) => d.dev !== locus.dev);
       others.slice(0, 4).forEach((d, i) => {
         const aid = `aff${i}`;
-        push({ id: aid, type: "affected", position: { x: (col - 1) * COL + (i - (others.length - 1) / 2) * 150, y: 150 }, draggable: true,
-          data: { label: entityLabel(d.dev), detail: d.elements[0] ?? "" } });
-        link("fault", aid, { fromHandle: "b" });
+        node({ id: aid, x: (col - 1) * COL + (i - (others.length - 1) / 2) * 140, y: 150, data: {
+          kind: kindForRole(d.dev), tone: C.warn, label: entityLabel(d.dev), sub: "also affected", hasIn: true, hasOut: false,
+        } });
+        nodes[nodes.length - 1].data.hasIn = true;
+        link("fault", aid, { fromHandle: "b", state: "unknown", flow: false });
       });
     }
 
-    // 4) destination end (only if distinct from the fault device)
-    if (ends && !targetIsLocus) {
-      const id = "dst";
-      push({ id, type: "endpoint", position: { x: col * COL, y: 0 }, draggable: true,
-        data: { icon: "⊚", label: entityLabel(ends.dst), role: "destination", hasIn: true, hasOut: false } });
-      if (prevId) link(prevId, id, { fromHandle: prevHandle });
+    // CONTROL-PLANE PEER: the far end of a BGP/peering session = the rest of the
+    // path (fixes "lone WAN-R2" — a flap is device → peer, the total segment).
+    if (peer && !ends) {
+      const down = /down|idle|active|flap/i.test(peer.state);
+      node({ id: "peer", x: col * COL, y: 0, data: {
+        kind: "router", tone: down ? meta.color : C.info, label: peer.peer, mono: true, sub: `${peer.rel.toLowerCase()} peer`, hasOut: false,
+      } });
+      if (prev) link(prev, "peer", { state: down ? faultEdgeState : "healthy", label: `${peer.rel}${peer.state ? " " + peer.state : ""}` });
+      prev = "peer"; col++;
+    } else if (ends && !targetIsLocus) {
+      node({ id: "dst", x: col * COL, y: 0, data: { kind: destKind(ends.dst), tone: C.info, label: entityLabel(ends.dst), sub: "destination", hasOut: false } });
+      if (prev) link(prev, "dst", {});
     }
 
     return { rfNodes: nodes, rfEdges: edges };
   }, [model, timeline.verdict_tier, view, showStamp, deviceByIp]);
 
-  // Nothing groundable → honest fallback (don't invent a path).
   if (rfNodes.length === 0 || (!model.hasPath && !model.locusDev)) {
     return (
       <div className="empty" style={{ fontSize: 12, padding: "10px 0" }}>
@@ -454,14 +366,14 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
 
   const m = STATUS_META[statusForVerdict(timeline.verdict_tier)];
   return (
-    <div style={{ position: "relative", height, borderRadius: 8, overflow: "hidden", border: "1px solid var(--border,#2a2f3a)", background: "var(--bg,#0e1320)" }}>
+    <div style={{ position: "relative", height, borderRadius: 10, overflow: "hidden", border: "1px solid var(--border,#2a2f3a)", background: "radial-gradient(120% 120% at 0% 0%, rgba(40,52,74,0.35), var(--bg,#0e1320) 60%)" }}>
       <ReactFlow
-        nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes}
-        fitView fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}
+        nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+        fitView fitViewOptions={{ padding: 0.28, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }}
         nodesConnectable={false} elementsSelectable={false} nodesDraggable
         minZoom={0.3} maxZoom={1.6} zoomOnScroll={false} panOnScroll
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--border,#2a2f3a)" />
+        <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />
         <Controls showInteractive={false} position="bottom-right" />
       </ReactFlow>
       <div style={{
@@ -470,18 +382,16 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
         background: "var(--panel,#151b2b)", border: "1px solid var(--border,#2a2f3a)", color: C.muted,
       }}>
         <span style={{ color: m.color, fontWeight: 800 }}>{m.sym} {m.word}</span>
-        <span>◉ observed</span><span>⊚ destination</span>
         {(() => {
           const methods = model.tracedRows.flatMap((row) => row.methods);
           const live = methods.length > 0;
-          return <span style={{ color: live ? C.ok : C.faint }}>{live ? `● live trace (${methodTag([...new Set(methods)])})` : "contextual path · live trace next"}</span>;
+          return <span style={{ color: live ? C.ok : C.faint }}>{live ? `● live trace (${methodTag([...new Set(methods)])})` : "contextual path"}</span>;
         })()}
       </div>
-      {/* opt-in STAMP metrics knob — default OFF so the path stays uncluttered. */}
       {model.hasStamp && (
         <button
           onClick={() => setShowStamp((v) => !v)}
-          title="Show per-path active-measurement (STAMP) metrics — loss · RTT · jitter — on the measured segment"
+          title="Show per-path active-measurement (STAMP) metrics — loss · RTT · jitter"
           style={{
             position: "absolute", right: 10, top: 10, zIndex: 5, cursor: "pointer",
             fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 6,

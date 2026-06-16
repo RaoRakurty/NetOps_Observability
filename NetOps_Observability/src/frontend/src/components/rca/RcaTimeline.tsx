@@ -223,12 +223,14 @@ export default function RcaTimeline({
         if (lane.key === "_other" && sigs.length === 0) return null;
         return (
           <div key={lane.key} style={{ display: "flex", alignItems: "center", height: 40, borderTop: "1px solid var(--border,#23272f)" }}>
-            <div style={{ width: 124, flexShrink: 0, fontSize: 12 }}>
-              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: lane.color, marginRight: 6 }} />
-              {lane.label}
+            <div style={{ width: 124, flexShrink: 0, fontSize: 12, position: "relative", zIndex: 2, paddingRight: 8, height: "100%", display: "flex", alignItems: "center" }}>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: lane.color, marginRight: 6, flexShrink: 0 }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lane.label}</span>
               <span style={{ ...muted, marginLeft: 4 }}>{sigs.length}</span>
             </div>
-            <div style={{ position: "relative", flex: 1, height: "100%" }}>
+            {/* overflow:hidden clips markers/capsules to their lane so a hop at the
+                window start can't bleed left over the lane name. */}
+            <div style={{ position: "relative", flex: 1, height: "100%", overflow: "hidden" }}>
               {/* time grid + centerline rail — gives the dots a frame to read
                   against instead of floating in space. */}
               {ticks.map((tk, i) => (
