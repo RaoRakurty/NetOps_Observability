@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ReactFlow, Background, BackgroundVariant, Controls, MiniMap, Handle, Position, MarkerType,
+  ReactFlow, Background, BackgroundVariant, Controls, Handle, Position, MarkerType,
   type Node, type Edge, type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -8,7 +8,7 @@ import { api, Device, Alert, Tunnel } from "../services/api";
 import { SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import VendorIcon from "../components/VendorIcon";
 import { brandDataUri, vendorKey } from "../components/vendorBrands";
-import { ShapeSVG, kindForRole } from "../components/graph/shapes";
+import { NetIcon, kindForDevice, type NetKind } from "../components/graph/NetIcon";
 import FlowEdge from "../components/graph/FlowEdge";
 
 // Topology — a modern NOC device map (React Flow). Devices are drawn as real
@@ -56,6 +56,19 @@ function loadVendorIcons(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(VENDOR_ICONS_KEY) || "{}"); } catch { return {}; }
 }
 
+// Per-device-type icon overrides (router/switch/firewall/…) — drop in any icon set
+// (e.g. licensed Icons8 exports) and it renders inside the health-ringed tile.
+const TYPE_ICONS_KEY = "netops_type_icons";
+function loadTypeIcons(): Partial<Record<NetKind, string>> {
+  try { return JSON.parse(localStorage.getItem(TYPE_ICONS_KEY) || "{}"); } catch { return {}; }
+}
+const TYPE_ROWS: { kind: NetKind; label: string }[] = [
+  { kind: "router", label: "Router" }, { kind: "core", label: "Core router" },
+  { kind: "switch", label: "Switch" }, { kind: "firewall", label: "Firewall" },
+  { kind: "loadbalancer", label: "Load balancer" }, { kind: "gateway", label: "Gateway / WAN" },
+  { kind: "server", label: "Server / host" }, { kind: "cloud", label: "Cloud / internet" },
+];
+
 // ── custom device node ──────────────────────────────────────────────────────
 const handleStyle = { width: 7, height: 7, background: "var(--border,#3a4252)", border: "none" } as const;
 function DeviceNode({ data }: NodeProps) {
@@ -66,9 +79,12 @@ function DeviceNode({ data }: NodeProps) {
       <Handle type="target" position={Position.Top} id="t" style={{ ...handleStyle, left: "50%" }} />
       <Handle type="target" position={Position.Left} id="l" style={{ ...handleStyle, top: 30 }} />
       <div style={{ position: "relative", width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <ShapeSVG kind={d.kind} tone={d.tone} size={size} glyph={!d.logo} />
+        <NetIcon kind={d.kind} tone={d.tone} size={size} src={d.icon} alert={d.health !== "ok"} pulse={d.health === "critical"} />
+        {/* vendor brand badge — bottom-right corner chip */}
         {d.logo && (
-          <img src={d.logo} alt="" style={{ position: "absolute", width: size * 0.44, height: size * 0.44, objectFit: "contain", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }} />
+          <span style={{ position: "absolute", bottom: -2, right: 0, width: 20, height: 20, borderRadius: "50%", background: "var(--panel,#151b2b)", border: "1px solid var(--border,#2a2f3a)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 3px rgba(0,0,0,.5)" }}>
+            <img src={d.logo} alt="" style={{ width: 13, height: 13, objectFit: "contain" }} />
+          </span>
         )}
         {/* health LED */}
         <span style={{ position: "absolute", top: 1, right: 6, width: 9, height: 9, borderRadius: "50%", background: d.tone, boxShadow: `0 0 6px ${d.tone}, 0 0 0 1.5px var(--bg,#0e1320)` }} />
@@ -92,6 +108,7 @@ export default function Topology() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [vendorIcons, setVendorIcons] = useState<Record<string, string>>(loadVendorIcons);
+  const [typeIcons, setTypeIcons] = useState<Partial<Record<NetKind, string>>>(loadTypeIcons);
   const [iconEditor, setIconEditor] = useState(false);
 
   useEffect(() => {
@@ -141,9 +158,10 @@ export default function Topology() {
           rfNodes.push({
             id: d.id, type: "device", position: { x, y }, draggable: true,
             data: {
-              kind: kindForRole(roleOf(d)), tone: HEALTH_COLOR[h],
+              kind: kindForDevice(roleOf(d)), tone: HEALTH_COLOR[h], health: h,
               name: d.name || d.id, role: roleOf(d), addr: d.address || "",
               logo: vendorIcons[vendorKey(d.vendor || "")] || brandDataUri(d.vendor || ""),
+              icon: typeIcons[kindForDevice(roleOf(d))],
             },
           });
         });
@@ -184,7 +202,7 @@ export default function Topology() {
       });
     }
     return { rfNodes, rfEdges, counts };
-  }, [devices, alertsByDev, tunnels, vendorIcons]);
+  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons]);
 
   const vendors = useMemo(() => {
     const set = new Set<string>();
@@ -198,6 +216,15 @@ export default function Topology() {
       const k = vendorKey(vendor);
       if (url.trim()) next[k] = url.trim(); else delete next[k];
       try { localStorage.setItem(VENDOR_ICONS_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
+  };
+
+  const setTypeIcon = (kind: NetKind, url: string) => {
+    setTypeIcons((cur) => {
+      const next = { ...cur };
+      if (url.trim()) next[kind] = url.trim(); else delete next[kind];
+      try { localStorage.setItem(TYPE_ICONS_KEY, JSON.stringify(next)); } catch { /* quota */ }
       return next;
     });
   };
@@ -219,8 +246,8 @@ export default function Topology() {
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.warning }}>{counts.warning}</b> warning</span>
           <span className="topo-stat"><b style={{ color: HEALTH_COLOR.critical }}>{counts.critical}</b> critical</span>
           <span className="topo-stat"><b>{rfEdges.length}</b> links</span>
-          <button className={`btn${iconEditor ? "" : " accent"}`} onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per vendor">
-            {iconEditor ? "Done" : "+ Vendor icons"}
+          <button className={`btn${iconEditor ? "" : " accent"}`} onClick={() => setIconEditor((v) => !v)} title="Assign a custom icon per device type or vendor">
+            {iconEditor ? "Done" : "+ Icons"}
           </button>
         </div>
       </div>
@@ -228,6 +255,24 @@ export default function Topology() {
       {iconEditor && (
         <div className="vendor-editor">
           <div className="vendor-editor-head">
+            <strong>Device-type icons</strong>
+            <span className="vendor-editor-hint">Each type ships a built-in icon. Paste an image URL or data: URI (e.g. your licensed Icons8 export) to override one — it renders inside the health-ringed tile.</span>
+          </div>
+          <div className="vendor-editor-grid">
+            {TYPE_ROWS.map((t) => {
+              const url = typeIcons[t.kind] || "";
+              return (
+                <div key={t.kind} className="vendor-row">
+                  <span className="vendor-tile" style={{ padding: 0, background: "transparent", border: "none" }}>
+                    <NetIcon kind={t.kind} tone="#16A34A" size={26} src={url || undefined} />
+                  </span>
+                  <span className="vendor-name" title={t.label}>{t.label}{!url && <span className="vendor-auto">built-in</span>}</span>
+                  <input className="vendor-input" placeholder="override: https://… or data:image/…" value={url} onChange={(e) => setTypeIcon(t.kind, e.target.value)} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="vendor-editor-head" style={{ marginTop: 12 }}>
             <strong>Vendor icons</strong>
             <span className="vendor-editor-hint">Brand marks are detected automatically. Paste an image URL or data: URI to override one.</span>
           </div>
@@ -277,8 +322,6 @@ export default function Topology() {
             >
               <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />
               <Controls showInteractive={false} position="bottom-right" />
-              <MiniMap pannable zoomable nodeColor={(n) => (n.data as any)?.tone || "#5a6472"}
-                style={{ background: "var(--panel,#151b2b)" }} maskColor="rgba(0,0,0,0.45)" />
             </ReactFlow>
           </div>
         )}
