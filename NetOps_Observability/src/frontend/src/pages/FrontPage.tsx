@@ -3,7 +3,7 @@ import { api, CorrObject, FeedItem, CorrTimeline, Seam } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
 import RcaPathView from "../components/rca/RcaPathView";
-import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected } from "../components/rca/labels";
+import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected, isInternalEntity } from "../components/rca/labels";
 import { CorrSignal } from "../services/api";
 
 // evidencePhrase turns one window signal into the concrete clause the headline
@@ -241,8 +241,9 @@ function ImpactSummary() {
   for (const o of objs) {
     try {
       const a = JSON.parse(o.affected || "{}");
-      (a.devices ?? []).forEach((d: string) => devices.add(d));
-      (a.sites ?? []).forEach((s: string) => sites.add(s));
+      // #76: count only customer entities, not platform/agent infra mixed in.
+      (a.devices ?? []).forEach((d: string) => { if (!isInternalEntity(d)) devices.add(d); });
+      (a.sites ?? []).forEach((s: string) => { if (!isInternalEntity(s)) sites.add(s); });
     } catch { /* ignore */ }
   }
   // "Impact" = CONFIRMED service impact tied to RCA — distinct from raw health.

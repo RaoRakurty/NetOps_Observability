@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { CorrTimeline, Seam } from "../../services/api";
-import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor } from "./labels";
+import { C, MODALITY_ORDER, modalityLabel, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, ownerLabel, seamOwnerColor, isInternalEntity } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
 // episodeKind pulls the signal kind off a graph node key ("type:entity…:kind").
@@ -96,7 +96,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
         <div style={{ fontSize: 13, color: C.fg }}>
           {SYM.unknown} Issue observed, path location unknown — not enough evidence to place it on a path or boundary yet.
         </div>
-        {trig && (
+        {trig && !isInternalEntity(trig.entity_id) && (
           <div style={{ ...muted, fontSize: 12.5 }}>
             Strongest sign: <b style={{ color: C.fg }}>{entityLabel(trig.entity_id)}</b>
           </div>
@@ -114,13 +114,16 @@ export default function RcaPathView({ timeline, seams, owner }: {
     for (const e of edges) {
       if (e.grounding_kind === "topo" && e.grounding_ref.startsWith("shared:")) {
         const x = e.grounding_ref.slice(7);
-        counts[x] = (counts[x] || 0) + 1;
+        if (!isInternalEntity(x)) counts[x] = (counts[x] || 0) + 1; // #76: never a platform/agent locus
       }
     }
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
     if (top) return entityLabel(top[0]);
     return seam ? `${seamOwnerLabel(seam.control_plane_owner)} boundary` : "";
   })();
+
+  // #76: only customer-facing grounded relationships in the operator path list.
+  const visibleEdges = edges.filter((e) => !isInternalEntity(episodeEntity(e.from_node)) && !isInternalEntity(episodeEntity(e.to_node)));
 
   return (
     <div style={card}>
@@ -141,7 +144,7 @@ export default function RcaPathView({ timeline, seams, owner }: {
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-        {edges.slice(0, 6).map((e, i) => {
+        {visibleEdges.slice(0, 6).map((e, i) => {
           const a = entityLabel(episodeEntity(e.from_node));
           const b = entityLabel(episodeEntity(e.to_node));
           const w = Number(e.weight) || 0;

@@ -4,7 +4,7 @@ import {
   C, MODALITY_META, MODALITY_ORDER, modalityLabel, modalityHelp,
   signatureName, signatureNocTitle, PLANE_NOC_TITLE, kindMeta, kindLabel,
   entityLabel, ownerLabel, seamOwnerLabel, visibilityLabel, isRoutingKind,
-  AFFECTED_LABEL, OWNER_EXTERNAL, seamOwnerColor,
+  AFFECTED_LABEL, OWNER_EXTERNAL, seamOwnerColor, isInternalEntity,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
 
@@ -156,9 +156,13 @@ export default function RcaSummary({
       .filter(([, v]) => Array.isArray(v) && v.length)
       .map(([k, v]) => {
         const ids = v as string[];
-        const shown = view === "debug" ? ids : [...new Set(ids.map((i) => entityLabel(i)))];
+        // Operator View (decision #76): drop internal platform/agent entities so
+        // the affected scope shows only customer network entities.
+        const visible = view === "debug" ? ids : ids.filter((i) => !isInternalEntity(i));
+        const shown = view === "debug" ? visible : [...new Set(visible.map((i) => entityLabel(i)))];
         return { key: k, label: AFFECTED_LABEL[k] ?? k, items: shown, raw: ids.length };
-      });
+      })
+      .filter((g) => g.items.length > 0);
   }, [affected, view]);
 
   // Display-plane buckets. Operator View groups a signal by the DOMAIN a NOC reads
@@ -476,7 +480,9 @@ export default function RcaSummary({
       {/* mini seam/topo graph preview — above the fold */}
       {grounded && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {[...timeline.edges].sort((a, b) => (a.grounding_kind === "seam" ? -1 : 1) - (b.grounding_kind === "seam" ? -1 : 1)).slice(0, 3).map((e, i) => {
+          {[...timeline.edges]
+            .filter((e) => view === "debug" || (!isInternalEntity(episodeEntity(e.from_node)) && !isInternalEntity(episodeEntity(e.to_node))))
+            .sort((a, b) => (a.grounding_kind === "seam" ? -1 : 1) - (b.grounding_kind === "seam" ? -1 : 1)).slice(0, 3).map((e, i) => {
             const s = e.grounding_kind === "seam" ? seams[e.grounding_ref] : undefined;
             // Seam chip tinted by boundary owner (whose domain), grey for same-path.
             const oc = e.grounding_kind === "seam" ? seamOwnerColor(s?.control_plane_owner) : C.faint;
