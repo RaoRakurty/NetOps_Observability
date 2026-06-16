@@ -7,6 +7,7 @@ import {
   AFFECTED_LABEL, OWNER_EXTERNAL, seamOwnerColor, mentionsInternal,
 } from "./labels";
 import { episodeEntity } from "./SeamGraph";
+import ConfidenceLadder, { type LadderLevel } from "./ConfidenceLadder";
 
 // hex+alpha tint helper for calm severity backgrounds.
 const tint = (hex: string, a = "1f") => hex + a;
@@ -410,6 +411,37 @@ export default function RcaSummary({
     return acts;
   })();
 
+  // ---- Confidence ladder (§5): explainable Observed → Suspected → Confirmed ----
+  const ladderLevel: LadderLevel = confirmed ? "confirmed" : timeline.verdict_tier === "suspected" ? "suspected" : "observed";
+  const ladderObserved = useMemo(() => {
+    const out: string[] = [];
+    for (const m of MODALITY_ORDER) {
+      if ((attByPlane[m] ?? 0) <= 0) continue;
+      const sig = timeline.signals.find((s) => s.attached && s.modality_class === m && !s.kind.endsWith("_clear") && !mentionsInternal(s.entity_id));
+      const dev = sig ? entityLabel(sig.entity_id.split(":")[0]) : "";
+      const where = dev ? ` on ${dev}` : "";
+      if (m === "control_plane") out.push(`${sig ? kindLabel(sig.kind) : "Routing/link change"}${where}`);
+      else if (m === "device_telemetry") out.push(`Device-health change${where}`);
+      else if (m === "passive_flow") out.push(`Traffic-flow change${where}`);
+      else if (m === "active_probe") out.push("Active-check change");
+    }
+    return out;
+  }, [attByPlane, timeline.signals]);
+  const ladderRelated = (crossPlane || singleObserverControl) ? "These observations are related on the same device area" : undefined;
+  const ladderMissing = useMemo(() => {
+    const CONFIRM_LABEL: Record<string, string> = {
+      control_plane: "Peer-side BGP/routing state",
+      passive_flow: "Traffic-flow loss/drop",
+      active_probe: "Independent active check",
+      device_telemetry: "Interface errors or drops",
+    };
+    const out = confirmOptions.map((m) => CONFIRM_LABEL[m]).filter(Boolean);
+    // Downstream service impact isn't tracked as a plane, so it's always an
+    // outstanding independent confirmer for a not-confirmed object.
+    if (!confirmed) out.push("Downstream service impact");
+    return out;
+  }, [confirmOptions, confirmed]);
+
   return (
     <div style={card}>
       {/* clean header — NOC cause title; status pill + confidence carry certainty.
@@ -495,6 +527,13 @@ export default function RcaSummary({
             <div><b style={{ color: C.info }}>To confirm:</b> add an independent observer — a remote probe, the peer-side BGP / routing state, downstream service impact, or second-device telemetry.</div>
           )}
         </div>
+      )}
+
+      {/* confidence ladder (§5): explainable Observed → Suspected → Confirmed +
+          what's still missing to confirm. Shown for un-confirmed objects (the
+          confirmed case has already climbed the ladder). */}
+      {ladderObserved.length > 0 && !confirmed && (
+        <ConfidenceLadder level={ladderLevel} observed={ladderObserved} related={ladderRelated} missing={ladderMissing} />
       )}
       {probeOnly && (
         <div style={{ fontSize: 12.5, color: C.caution, fontWeight: 600 }}>⚠ Only active checks changed. This is not enough to confirm root cause.</div>
