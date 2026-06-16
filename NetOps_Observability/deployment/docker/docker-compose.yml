@@ -657,6 +657,14 @@ services:
       ENABLE_LLDP_DISCOVERY: ${ENABLE_LLDP_DISCOVERY:-false}
       # CDP neighbour discovery (Cisco-native; CISCO-CDP-MIB) — merges with LLDP.
       ENABLE_CDP_DISCOVERY: ${ENABLE_CDP_DISCOVERY:-false}
+      # BGP-LS topology discovery (receive-only stdlib BGP speaker → IGP LSDB
+      # IS-IS/OSPF) → netops:topology:bgpls → Device Topology "Logical" sub-object.
+      # Peers = host[:port][@peerAS] CSV of BGP-LS exporters (RR or any L2 router).
+      ENABLE_BGPLS_DISCOVERY: ${ENABLE_BGPLS_DISCOVERY:-false}
+      BGPLS_PEERS: ${BGPLS_PEERS:-}
+      BGPLS_LOCAL_AS: ${BGPLS_LOCAL_AS:-65000}
+      BGPLS_ROUTER_ID: ${BGPLS_ROUTER_ID:-}
+      BGPLS_HOLD_TIME: ${BGPLS_HOLD_TIME:-90}
       # Vendor-neutral tunnel discovery (standard IF-MIB + TUNNEL-MIB walks over
       # the SNMP inventory) → netops.tunnels → Tunnels view + Device Monitoring.
       ENABLE_TUNNEL_DISCOVERY: ${ENABLE_TUNNEL_DISCOVERY:-true}
