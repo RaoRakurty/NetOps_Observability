@@ -10,6 +10,7 @@ import { episodeEntity } from "./SeamGraph";
 import ConfidenceLadder, { type LadderLevel } from "./ConfidenceLadder";
 import ImpactPanel from "./ImpactPanel";
 import HypothesisStack, { type Hypothesis, type Confidence } from "./HypothesisStack";
+import AskRca, { type QA } from "./AskRca";
 
 // hex+alpha tint helper for calm severity backgrounds.
 const tint = (hex: string, a = "1f") => hex + a;
@@ -486,6 +487,33 @@ export default function RcaSummary({
     return list.slice(0, 3);
   }, [attByPlane, nocTitle, confirmed, quality, ladderObserved]);
 
+  // ---- Ask this RCA (§13): grounded Q&A built from this issue's own values ----
+  const askItems = useMemo((): QA[] => {
+    const items: QA[] = [];
+    items.push({
+      q: "Why is this not confirmed?",
+      a: confirmed
+        ? "This issue is confirmed — independent evidence agrees on a real network issue."
+        : `It's suspected, not confirmed: ${whyNotConfirmed}`,
+    });
+    if (!confirmed && ladderMissing.length) {
+      items.push({ q: "What would confirm it?", a: `Add ${orList(ladderMissing.map((s) => s.toLowerCase()))}.` });
+    }
+    if (nextActions[0]) {
+      items.push({ q: `What should ${owner ? ownerLabel(owner) : "the team"} check first?`, a: nextActions[0].detail });
+    }
+    if (probe.debugExcluded > 0 || probe.lowOnly) {
+      items.push({ q: "Why were active checks ignored?", a: "Those were internal/test checks. They help troubleshooting but can't confirm a customer-impacting issue on their own, so they don't count toward the verdict." });
+    }
+    items.push({
+      q: "Should a ticket be opened?",
+      a: confirmed
+        ? "Yes — this is confirmed. Open an evidence-backed ticket and route it to the owner."
+        : "Not yet — customer impact isn't confirmed. Hold the ticket until independent evidence appears.",
+    });
+    return items;
+  }, [confirmed, whyNotConfirmed, ladderMissing, nextActions, owner, probe.debugExcluded, probe.lowOnly]);
+
   return (
     <div style={card}>
       {/* clean header — NOC cause title; status pill + confidence carry certainty.
@@ -585,6 +613,9 @@ export default function RcaSummary({
 
       {/* hypothesis ranking (§10): explainable, grounded "what else could this be" */}
       {hypotheses.length > 1 && <HypothesisStack hypotheses={hypotheses} />}
+
+      {/* ask this RCA (§13): grounded, collapsible Q&A — assists, doesn't dominate */}
+      <AskRca items={askItems} />
       {probeOnly && (
         <div style={{ fontSize: 12.5, color: C.caution, fontWeight: 600 }}>⚠ Only active checks changed. This is not enough to confirm root cause.</div>
       )}
