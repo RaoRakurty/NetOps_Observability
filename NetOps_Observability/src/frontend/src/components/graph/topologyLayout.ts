@@ -92,6 +92,58 @@ function twoColor(g: Graph): [string[], string[]] | null {
   return [a, b];
 }
 
+// findBridges — Tarjan's bridge-finding (edges whose removal disconnects the
+// graph). Topologies are small, so the recursive DFS is fine.
+function findBridges(g: Graph): Array<[string, string]> {
+  const disc = new Map<string, number>(), low = new Map<string, number>();
+  const out: Array<[string, string]> = [];
+  let t = 0;
+  const dfs = (u: string, parent: string | null) => {
+    disc.set(u, t); low.set(u, t); t++;
+    for (const v of g.adj.get(u) ?? []) {
+      if (v === parent) continue;
+      if (!disc.has(v)) {
+        dfs(v, u);
+        low.set(u, Math.min(low.get(u)!, low.get(v)!));
+        if (low.get(v)! > disc.get(u)!) out.push([u, v]);
+      } else {
+        low.set(u, Math.min(low.get(u)!, disc.get(v)!));
+      }
+    }
+  };
+  for (const id of g.ids) if (!disc.has(id)) dfs(id, null);
+  return out;
+}
+
+// reachSet — nodes reachable from `start` with edge (ax,bx) removed.
+function reachSet(g: Graph, start: string, ax: string, bx: string): Set<string> {
+  const seen = new Set<string>([start]); const q = [start];
+  while (q.length) {
+    const c = q.shift()!;
+    for (const nb of g.adj.get(c) ?? []) {
+      if ((c === ax && nb === bx) || (c === bx && nb === ax)) continue;
+      if (!seen.has(nb)) { seen.add(nb); q.push(nb); }
+    }
+  }
+  return seen;
+}
+
+// splitClusters — if ONE bridge edge separates the graph into two substantial
+// groups (each ≥2 nodes), return them (the most balanced such split). This is how
+// a DC fabric and a LAN edge that meet at a single WAN router get recognised as
+// two islands rather than one tangled column. null when there's no clean split.
+function splitClusters(g: Graph): { a: Set<string>; b: Set<string>; bridge: [string, string] } | null {
+  let best: { a: Set<string>; b: Set<string>; bridge: [string, string]; score: number } | null = null;
+  for (const [u, v] of findBridges(g)) {
+    const a = reachSet(g, u, u, v);
+    if (a.has(v)) continue; // parallel path exists → not a true split
+    const b = new Set(g.ids.filter((id) => !a.has(id)));
+    const score = Math.min(a.size, b.size);
+    if (score >= 2 && (!best || score > best.score)) best = { a, b, bridge: [u, v], score };
+  }
+  return best;
+}
+
 function classify(g: Graph, nodes: LayoutNodeInput[]): TopoType {
   const n = g.ids.length;
   let m = 0;
@@ -253,8 +305,55 @@ function layered(g: Graph, nodes: LayoutNodeInput[], type: TopoType): { position
 // layoutTopology classifies the graph and returns node positions + per-node
 // layer (for edge-handle orientation). Pure; deterministic for a given input.
 export function layoutTopology(nodes: LayoutNodeInput[], edges: LayoutEdgeInput[]): LayoutResult {
+  return layoutGraph(nodes, edges, true);
+}
+
+// edge-cluster heuristic: how many WAN/LAN-edge-ish roles a node set holds (used
+// to decide which cluster sits on the left = the LAN/edge side, traffic L→R).
+function edgeScore(nodes: LayoutNodeInput[]): number {
+  return nodes.filter((n) => /wan|edge|border|gateway|fire|access|switch|lan/i.test(n.role || "")).length;
+}
+
+function layoutGraph(nodes: LayoutNodeInput[], edges: LayoutEdgeInput[], allowSplit: boolean): LayoutResult {
   if (nodes.length === 0) return { type: "hybrid", positions: {}, layer: {} };
   const g = buildGraph(nodes, edges);
+
+  // Two-island layout: a single bridge separates the graph into two real clusters
+  // (e.g. a DC fabric and a LAN edge meeting at the WAN router) → lay each out on
+  // its own and place them side by side, joined by that one link. Dynamic: no
+  // hardcoded device names, purely structural (bridge/component analysis).
+  if (allowSplit && nodes.length >= 5) {
+    const split = splitClusters(g);
+    if (split) {
+      const subOf = (set: Set<string>) => {
+        const ns = nodes.filter((n) => set.has(n.id));
+        const es = edges.filter((e) => set.has(e.source) && set.has(e.target));
+        return { ns, res: layoutGraph(ns, es, false) };
+      };
+      let left = subOf(split.a), right = subOf(split.b);
+      if (edgeScore(right.ns) > edgeScore(left.ns)) [left, right] = [right, left]; // edge cluster on the left
+      const bbox = (res: LayoutResult) => {
+        const ps = Object.values(res.positions);
+        if (!ps.length) return { minX: 0, minY: 0, w: 0, h: 0 };
+        const xs = ps.map((p) => p.x), ys = ps.map((p) => p.y);
+        return { minX: Math.min(...xs), minY: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+      };
+      const lb = bbox(left.res), rb = bbox(right.res), maxH = Math.max(lb.h, rb.h), GAP = 280;
+      const positions: Record<string, { x: number; y: number }> = {};
+      const layer: Record<string, number> = {};
+      for (const [id, p] of Object.entries(left.res.positions)) {
+        positions[id] = { x: 80 + (p.x - lb.minX), y: 80 + (p.y - lb.minY) + (maxH - lb.h) / 2 };
+        layer[id] = left.res.layer[id] ?? 0;
+      }
+      const rx = 80 + lb.w + GAP;
+      for (const [id, p] of Object.entries(right.res.positions)) {
+        positions[id] = { x: rx + (p.x - rb.minX), y: 80 + (p.y - rb.minY) + (maxH - rb.h) / 2 };
+        layer[id] = right.res.layer[id] ?? 0;
+      }
+      return { type: "hybrid", positions, layer };
+    }
+  }
+
   const type = classify(g, nodes);
   switch (type) {
     case "star":

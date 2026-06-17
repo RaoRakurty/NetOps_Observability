@@ -79,6 +79,13 @@ const TYPE_ICONS_KEY = "netops_type_icons";
 function loadTypeIcons(): Partial<Record<NetKind, string>> {
   try { return JSON.parse(localStorage.getItem(TYPE_ICONS_KEY) || "{}"); } catch { return {}; }
 }
+
+// Operator-custom node positions (per device id) — the auto-layout is the default,
+// but operators can drag devices into a custom arrangement that survives reloads.
+const NODE_POS_KEY = "netops_topo_positions";
+function loadNodePos(): Record<string, { x: number; y: number }> {
+  try { return JSON.parse(localStorage.getItem(NODE_POS_KEY) || "{}"); } catch { return {}; }
+}
 const TYPE_ROWS: { kind: NetKind; label: string }[] = [
   { kind: "router", label: "Router" }, { kind: "core", label: "Core router" },
   { kind: "switch", label: "Switch" }, { kind: "firewall", label: "Firewall" },
@@ -129,6 +136,7 @@ export default function Topology() {
   const [typeIcons, setTypeIcons] = useState<Partial<Record<NetKind, string>>>(loadTypeIcons);
   const [iconEditor, setIconEditor] = useState(false);
   const [view, setView] = useState<TopoView>("physical"); // Device Topology sub-object
+  const [customPos, setCustomPos] = useState<Record<string, { x: number; y: number }>>(loadNodePos);
 
   useEffect(() => {
     api.devices().then((d) => setDevices(d ?? [])).catch((e) => setError((e as Error).message));
@@ -193,7 +201,7 @@ export default function Topology() {
       const h = healthFor(d.id, alertsByDev);
       counts[h]++;
       rfNodes.push({
-        id: d.id, type: "device", position: positions[d.id] ?? { x: 0, y: 0 }, draggable: true,
+        id: d.id, type: "device", position: customPos[d.id] ?? positions[d.id] ?? { x: 0, y: 0 }, draggable: true,
         data: {
           kind: kindForDevice(roleOf(d)), tone: HEALTH_COLOR[h], health: h,
           name: d.name || d.id, role: roleOf(d), addr: d.address || "",
@@ -204,7 +212,7 @@ export default function Topology() {
     }
     for (const [id, name] of extNodes) {
       rfNodes.push({
-        id, type: "device", position: positions[id] ?? { x: 0, y: 0 }, draggable: true,
+        id, type: "device", position: customPos[id] ?? positions[id] ?? { x: 0, y: 0 }, draggable: true,
         data: { kind: "cloud", tone: "#7c8aa5", health: "ok", name, role: "", addr: "" },
       });
     }
@@ -273,7 +281,18 @@ export default function Topology() {
       }
     }
     return { rfNodes, rfEdges, counts, topoType };
-  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links, view]);
+  }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links, view, customPos]);
+
+  // persist a dragged node's position; operators arrange the map and it sticks.
+  const onNodeDragStop = (_: unknown, n: { id: string; position: { x: number; y: number } }) => {
+    setCustomPos((cur) => {
+      const next = { ...cur, [n.id]: { x: Math.round(n.position.x), y: Math.round(n.position.y) } };
+      try { localStorage.setItem(NODE_POS_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
+  };
+  const resetLayout = () => { setCustomPos({}); try { localStorage.removeItem(NODE_POS_KEY); } catch { /* */ } };
+  const hasCustomLayout = Object.keys(customPos).length > 0;
 
   const vendors = useMemo(() => {
     const set = new Set<string>();
@@ -317,6 +336,10 @@ export default function Topology() {
               title="IGP link-state topology carried by BGP-LS (IS-IS / OSPF)">
               Logical{igpName ? ` · ${igpName}` : " (IGP)"}{logicalCount > 0 ? ` · ${logicalCount}` : ""}
             </button>
+            {hasCustomLayout && (
+              <button className="btn" onClick={resetLayout} title="Discard custom node positions and return to the automatic layout"
+                style={{ marginLeft: 10 }}>↺ Reset layout</button>
+            )}
           </div>
           <p className="topo-sub">
             {view === "logical"
@@ -412,6 +435,7 @@ export default function Topology() {
               nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               fitView fitViewOptions={{ padding: 0.18 }} proOptions={{ hideAttribution: true }}
               nodesConnectable={false} minZoom={0.2} maxZoom={1.6} zoomOnScroll={false} preventScrolling={false}
+              nodesDraggable onNodeDragStop={onNodeDragStop}
               onNodeClick={(_, n) => setSelected(n.id)} onPaneClick={() => setSelected(null)}
             >
               <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--border,#2a2f3a)" />
