@@ -40,7 +40,7 @@ const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 // Three layers (the hybrid IA): Operations (monitor/operate) · Explain (access
 // reasoning) · and — anchored at the foot — Governance (Administration + Stack).
 const GROUPS: { label: string; ids: string[] }[] = [
-  { label: "Monitor", ids: ["dashboards", "monitoring", "events", "incident", "automation"] },
+  { label: "Monitor", ids: ["dashboards", "monitoring", "incident", "automation"] },
   { label: "Infrastructure", ids: ["infrastructure", "security"] },
   { label: "Data", ids: ["metrics", "flows", "logs"] },
 ];

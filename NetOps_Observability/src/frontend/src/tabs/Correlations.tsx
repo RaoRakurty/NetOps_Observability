@@ -74,7 +74,7 @@ const GROUND_TONE: Record<string, string> = { seam: "#D97706", "seam+topo": "#D9
 const VERDICT_NOC: Record<string, string> = { confirmed: "Confirmed", suspected: "Suspected", undetermined: "Not confirmed" };
 const GROUND_NOC: Record<string, string> = { seam: "Boundary", "seam+topo": "Boundary + path", topo: "Same path", none: "—" };
 
-// initial verdict-tier filter from a deep link (#/events/correlations?tier=suspected)
+// initial verdict-tier filter from a deep link (#/monitoring/correlations?tier=suspected)
 // — the Front Page KPI strip drills through with this so "Suspected RCA" lands
 // pre-filtered to suspected, not the full list.
 function tierFromHash(): string {

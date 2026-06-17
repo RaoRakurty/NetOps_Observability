@@ -36,7 +36,7 @@ const DASHBOARD_GROUPS: { title: string; cards: DashboardCard[] }[] = [
     cards: [
       { id: "troubleshooting-board", label: "Troubleshooting", desc: "Collection-pipeline health — collector status, flow/trap arrival, gaps.", href: "#/infrastructure/troubleshooting", icon: "alerts" },
       { id: "datasources-board", label: "Data Sources", desc: "Per-device coverage matrix: SNMP, flows, syslog, traps — what's live and fresh.", href: "#/admin/datasources", icon: "datasets" },
-      { id: "events-board", label: "Events", desc: "Unified syslog + trap + alert timeline.", href: "#/events/events", icon: "logs" },
+      { id: "events-board", label: "Events", desc: "Unified syslog + trap + alert timeline.", href: "#/monitoring/events", icon: "logs" },
       { id: "threat-board", label: "Threat Detection", desc: "Flow fan-out scan detection over IPFIX.", href: "#/security/threat", icon: "reports" },
     ],
   },

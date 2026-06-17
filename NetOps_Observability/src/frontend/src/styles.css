@@ -305,8 +305,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .rail-group { display: flex; flex-direction: column; gap: 1px; }
 .rail-group + .rail-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--rail-border); }
 .rail-group-label {
-  font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
-  color: var(--rail-fg-muted); opacity: 0.75; padding: 4px 10px 3px;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--rail-fg-muted); opacity: 0.8; padding: 4px 10px 3px;
 }
 
 /* Brand lockup — icon mark + wordmark. */
@@ -456,9 +457,10 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 
 /* --- v2 tabs/chips: modern, elite. Page tabs become a soft segmented control
    with a sliding active fill; filter chips get a refined pill treatment. --- */
-.shell-v2 .subnav { gap: 2px; margin-top: 4px; }
+.shell-v2 .subnav { gap: 2px; margin-top: 4px; align-items: center; }
 .shell-v2 .subnav button {
-  padding: 5px 12px; font-size: 13px; font-weight: 600;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  padding: 6px 13px; font-size: 14px; font-weight: 600; letter-spacing: -0.005em;
   border: 0; border-bottom: 0; border-radius: 8px;
   color: var(--rail-fg-muted);
   transition: background 0.14s ease, color 0.14s ease;
@@ -534,8 +536,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .nav-flyout-subitem:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
 /* labelled group divider (e.g. "Developer") */
 .nav-flyout-group {
-  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--rail-fg-muted, var(--muted)); padding: 10px 10px 3px; margin-top: 4px;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--rail-accent, var(--accent)); padding: 10px 10px 4px; margin-top: 4px;
   border-top: 1px solid var(--rail-border);
 }
 
@@ -912,9 +915,10 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    "Inventory | … · Dashboards | …" instead of one flat tab row. */
 .subnav-cell { display: inline-flex; align-items: center; }
 .subnav-group {
-  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
-  color: var(--muted); opacity: .85; padding: 0 8px 0 14px; margin-left: 6px;
-  border-left: 1px solid var(--border); white-space: nowrap;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--accent); opacity: .9; padding: 0 10px 0 14px; margin-left: 6px;
+  border-left: 1px solid var(--border); white-space: nowrap; align-self: center;
 }
 .subnav .subnav-cell:first-child .subnav-group { border-left: 0; margin-left: 0; padding-left: 0; }
 

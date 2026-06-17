@@ -112,31 +112,23 @@ export const NAV: NavSection[] = [
       { id: "reports", label: "Reports", render: () => <Reports /> },
     ],
   },
-  // Monitoring — monitor definitions, creation, triggered (live) state, quality.
-  // (Event Management is its own top-level object below — clicking Monitoring
-  // shows only monitor definitions, never event/incident/anomaly objects.)
+  // Monitoring — one section, two labelled sub-hierarchies (the flyout AND the
+  // in-page tab bar render the groups as headers): "Monitors" (definitions, live
+  // state, quality) and "Event Management" (events · incidents · anomalies ·
+  // correlations). Routes stay monitoring/* so deep links are stable.
   {
     id: "monitoring",
     label: "Monitoring",
     icon: "monitoring",
     children: [
-      { id: "monitors", label: "Monitors", render: () => <Rules /> },
-      { id: "new", label: "New Monitor", render: () => <NewMonitor /> },
-      { id: "triggered", label: "Triggered", render: () => <Alerts /> },
-      { id: "quality", label: "Quality", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
-    ],
-  },
-  // Event Management — the event/incident/anomaly/correlation objects, split out
-  // of Monitoring so each top-level object owns only its own hierarchy.
-  {
-    id: "events",
-    label: "Event Management",
-    icon: "incident",
-    children: [
-      { id: "events", label: "Events", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
-      { id: "incidents", label: "Incidents", render: () => <Incidents /> },
-      { id: "anomalies", label: "Anomalies", render: () => <Findings /> },
-      { id: "correlations", label: "Correlations", render: () => <Correlations /> },
+      { id: "monitors", label: "Monitors", group: "Monitors", render: () => <Rules /> },
+      { id: "new", label: "New Monitor", group: "Monitors", render: () => <NewMonitor /> },
+      { id: "triggered", label: "Triggered", group: "Monitors", render: () => <Alerts /> },
+      { id: "quality", label: "Quality", group: "Monitors", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
+      { id: "events", label: "Events", group: "Event Management", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
+      { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
+      { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
+      { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
     ],
   },
   // Incident Response — coordinate response across chat/collaboration tools, and
