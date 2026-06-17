@@ -20,7 +20,10 @@ export interface WhyLine { tone: "orange" | "green" | "blue"; label: string; tex
 // kind = health state (→ colour); shape = device type (→ icon), matching the
 // on-screen RcaTopology convention so the PDF reads in the same visual language.
 export interface TopoNode { kind: NodeKind; abbr: string; name: string; meta: string; tag?: RcaPill; shape?: ShapeKind; chips?: string[]; }
-export interface TopoEdge { state: "good" | "warn" | "bad"; label?: string; side?: -1 | 1; }
+// from/to are node indices for an ARBITRARY graph (e.g. two probe sources
+// converging on one target). When omitted, the edge is positional (edge i joins
+// node i↔i+1) — the legacy linear-chain form, still supported.
+export interface TopoEdge { state: "good" | "warn" | "bad"; label?: string; side?: -1 | 1; from?: number; to?: number; }
 export interface EvidenceCard { variant: "main" | "confirm" | "missing" | "conflict"; dot: Tone; title: string; pill: RcaPill; desc: string; finding: string; foot: string; }
 export interface LadderStep { state: "done" | "active" | "next"; label: string; caption: string; }
 export interface TimelineMarker { left: number; tone: Tone; label: string; detail: string; }
@@ -338,43 +341,60 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // probe/path destinations read as cloud (internet/SaaS) or a target bullseye —
   // mirrors RcaTopology.destKind so the PDF picks the same icon.
   const destShape = (n: string): ShapeKind => (/cloud|internet|inet|aws|azure|gcp|tgw|transit|saas/i.test(n) ? "cloud" : "target");
+  // Build a COMPLETE small graph (not a single chain) so the report localizes the
+  // issue the same way for EVERY verdict tier: the routing device + peer AND every
+  // affected path segment, deduped, with arbitrary edges (two probe sources can
+  // converge on one target). topoSvg lays it out left→right by layer.
   let topology: RcaCase["topology"];
-  if (device) {
-    const nodes: TopoNode[] = [{
-      kind: confirmed ? "bad" : "warn", abbr: mkAbbr(device), name: device, shape: kindForRole(device),
-      meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "signal observed",
-      tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
-    }];
-    const edges: TopoEdge[] = [];
-    if (peer) {
-      nodes.push({ kind: "info", abbr: mkAbbr(peer), name: peer, shape: kindForRole(peer), meta: "adjacency peer" });
-      edges.push({ state: confirmed ? "bad" : "warn", label: hasRouting ? kindLabel(routeKind) : "evidence", side: -1 });
+  {
+    const idx = new Map<string, number>();
+    const tNodes: TopoNode[] = [];
+    const tEdges: TopoEdge[] = [];
+    const addNode = (name: string, o: { kind: NodeKind; shape?: ShapeKind; meta?: string; tag?: RcaPill }): number => {
+      const key = name.toLowerCase();
+      let i = idx.get(key);
+      if (i === undefined) {
+        i = tNodes.length;
+        tNodes.push({ kind: o.kind, abbr: mkAbbr(name), name, shape: o.shape ?? kindForRole(name), meta: o.meta ?? "", tag: o.tag });
+        idx.set(key, i);
+      } else if (o.tag && !tNodes[i].tag) {
+        tNodes[i].tag = o.tag; // upgrade a plain node to the tagged anchor
+      }
+      return i;
+    };
+    const addEdge = (from: number, to: number, label: string) => {
+      if (from !== to && !tEdges.some((e) => e.from === from && e.to === to)) {
+        tEdges.push({ state: confirmed ? "bad" : "warn", label, side: -1, from, to });
+      }
+    };
+    // 1) routing context: device (anchor) → peer
+    if (device) {
+      const di = addNode(device, {
+        kind: confirmed ? "bad" : "warn", shape: kindForRole(device),
+        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "signal observed",
+        tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
+      });
+      if (peer) addEdge(di, addNode(peer, { kind: "info", shape: kindForRole(peer), meta: "adjacency peer" }), hasRouting ? kindLabel(routeKind) : "evidence");
     }
-    topology = { nodes, edges };
-  } else {
-    // Device-less / path-based case: active-probe correlations whose affected set
-    // is a probe path ("prober → 10.0.0.1") rather than a routing device. Draw the
-    // path so the PDF + fallback chain still localize the issue (the on-screen view
-    // gets the richer RcaTopology; this is what serializes into the report).
+    // 2) every affected path segment ("a -> b"), deduped — the ACTUAL connections
     try {
-      const aff = JSON.parse(obj.affected || "{}") as { paths?: string[] };
-      const path = (aff.paths ?? []).find((p) => /->|→/.test(p));
-      if (path) {
-        const [a, b] = path.split(/->|→/).map((s) => s.trim()).filter(Boolean);
-        if (a && b) {
-          topology = {
-            nodes: [
-              { kind: "info", abbr: mkAbbr(a), name: a, shape: kindForRole(a), meta: "probe source" },
-              {
-                kind: confirmed ? "bad" : "warn", abbr: mkAbbr(b), name: b, shape: destShape(b), meta: "probe target",
-                tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "DEGRADED PATH" : "SUSPECT PATH" },
-              },
-            ],
-            edges: [{ state: confirmed ? "bad" : "warn", label: "active-probe loss/latency", side: -1 }],
-          };
+      const aff = JSON.parse(obj.affected || "{}") as { paths?: string[]; devices?: string[] };
+      for (const p of (aff.paths ?? []).slice(0, 6)) {
+        const hops = p.split(/->|→/).map((s) => s.trim()).filter(Boolean);
+        for (let h = 0; h < hops.length - 1; h++) {
+          const last = h === hops.length - 2;
+          const ai = addNode(hops[h], { kind: "info", shape: kindForRole(hops[h]), meta: h === 0 ? "source" : "hop" });
+          const bi = addNode(hops[h + 1], {
+            kind: last ? (confirmed ? "bad" : "warn") : "info", shape: last ? destShape(hops[h + 1]) : kindForRole(hops[h + 1]),
+            meta: last ? "target" : "hop", tag: last ? { tone: confirmed ? "red" : "orange", text: confirmed ? "DEGRADED PATH" : "SUSPECT PATH" } : undefined,
+          });
+          addEdge(ai, bi, last ? "active-probe loss/latency" : "");
         }
       }
-    } catch { /* affected not JSON — leave topology undefined */ }
+      // 3) fallback: affected devices with no path/peer — at least plot the nodes
+      if (tNodes.length === 0) for (const d of (aff.devices ?? []).slice(0, 6)) addNode(d, { kind: confirmed ? "bad" : "warn", meta: "affected device", tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "AFFECTED" : "SUSPECTED" } });
+    } catch { /* affected not JSON */ }
+    if (tNodes.length > 0) topology = { nodes: tNodes.slice(0, 8), edges: tEdges };
   }
 
   const subtitle = confirmed ? "Independent evidence across multiple planes"

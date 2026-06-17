@@ -68,52 +68,77 @@ function shapeInner(kind: ShapeKind, fill: string, stroke: string): string {
 // didn't carry one, so every report draws icons rather than bare boxes.
 function topoSvg(topo: RcaCase["topology"]): string {
   if (!topo || topo.nodes.length === 0) return "";
-  const nodes = topo.nodes, edges = topo.edges;
-  const ICON = 50, NW = 138, GAP = 60, PADX = 12, H = 150;
-  const W = PADX * 2 + nodes.length * NW + (nodes.length - 1) * GAP;
-  const colCx = (i: number) => PADX + i * (NW + GAP) + NW / 2;
-  const iconTop = 12, iconCY = iconTop + ICON / 2, s = ICON / 100;
+  const nodes = topo.nodes, N = nodes.length;
+  const ICON = 46, NW = 132, COLGAP = 58, ROWGAP = 98, PADX = 12, PADTOP = 12;
+
+  // Resolve edges to explicit (from,to). Supports the graph form (from/to set) AND
+  // the legacy positional chain (edge i joins node i↔i+1).
+  const E = topo.edges.map((e, i) => ({ from: e.from ?? i, to: e.to ?? i + 1, state: e.state ?? "good", label: e.label }))
+    .filter((e) => e.from >= 0 && e.to >= 0 && e.from < N && e.to < N && e.from !== e.to);
+
+  // Layered layout — longest-path layer from the sources (no incoming edge), so
+  // two probe sources sit in column 0 and their shared target in column 1.
+  const layer = new Array(N).fill(0);
+  for (let pass = 0; pass < N; pass++) {
+    let changed = false;
+    for (const e of E) if (layer[e.to] < layer[e.from] + 1) { layer[e.to] = layer[e.from] + 1; changed = true; }
+    if (!changed) break;
+  }
+  const maxLayer = Math.max(0, ...layer);
+  const perLayer = new Array(maxLayer + 1).fill(0);
+  const rowOf = new Array(N).fill(0);
+  for (let i = 0; i < N; i++) rowOf[i] = perLayer[layer[i]]++;
+  const maxRows = Math.max(1, ...perLayer);
+
+  const cx = (i: number) => PADX + layer[i] * (NW + COLGAP) + NW / 2;
+  const cy = (i: number) => {
+    const totalH = maxRows * ROWGAP, colH = perLayer[layer[i]] * ROWGAP;
+    return PADTOP + (totalH - colH) / 2 + rowOf[i] * ROWGAP + ICON / 2;
+  };
+  const W = PADX * 2 + (maxLayer + 1) * NW + maxLayer * COLGAP;
+  const H = PADTOP + maxRows * ROWGAP + 28;
+  const s = ICON / 100;
   const markers = ["good", "warn", "bad"].map((st) =>
     `<marker id="ah-${st}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${EDGE[st]}"/></marker>`).join("");
   let parts = "";
 
-  // edges (under nodes): toned arrow, dashed when not healthy, with a pill label
-  for (let i = 0; i < nodes.length - 1; i++) {
-    const e = edges[i]; const st = e?.state ?? "good"; const col = EDGE[st] ?? "#cad5e5";
-    const x1 = colCx(i) + ICON / 2 + 4, x2 = colCx(i + 1) - ICON / 2 - 4;
-    const dash = st === "good" ? "" : ` stroke-dasharray="7 5"`;
-    parts += `<line x1="${x1}" y1="${iconCY}" x2="${x2 - 2}" y2="${iconCY}" stroke="${col}" stroke-width="${st === "good" ? 2.2 : 3}"${dash} marker-end="url(#ah-${st})"/>`;
-    if (e?.label) {
-      const lx = (x1 + x2) / 2, ly = e.side === 1 ? iconCY + 18 : iconCY - 13, tw = e.label.length * 5.6 + 14;
+  // edges — curved bezier from source's right to target's left, dashed when degraded
+  for (const e of E) {
+    const col = EDGE[e.state] ?? "#cad5e5";
+    const x1 = cx(e.from) + ICON / 2 + 3, y1 = cy(e.from), x2 = cx(e.to) - ICON / 2 - 5, y2 = cy(e.to);
+    const mx = (x1 + x2) / 2, dash = e.state === "good" ? "" : ` stroke-dasharray="7 5"`;
+    parts += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="${e.state === "good" ? 2.2 : 3}"${dash} marker-end="url(#ah-${e.state})"/>`;
+    if (e.label) {
+      const lx = mx, ly = (y1 + y2) / 2 - 8, tw = e.label.length * 5.4 + 12;
       parts += `<rect x="${lx - tw / 2}" y="${ly - 10}" width="${tw}" height="15" rx="7.5" fill="#fff" stroke="${col}"/>`;
-      parts += `<text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="9.5" font-weight="800" fill="${col}">${esc(e.label)}</text>`;
+      parts += `<text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="9" font-weight="800" fill="${col}">${esc(e.label)}</text>`;
     }
   }
 
-  // nodes: device-type shape + name + meta + status tag
+  // nodes — device-type shape + name + meta + status tag
   nodes.forEach((nd, i) => {
-    const c = NODE[nd.kind] ?? NODE.info; const cx = colCx(i);
+    const c = NODE[nd.kind] ?? NODE.info; const x = cx(i), y = cy(i);
     const shape: ShapeKind = nd.shape ?? kindForRole(nd.name);
-    parts += `<g transform="translate(${cx - ICON / 2},${iconTop}) scale(${s})">${shapeInner(shape, c.bg, c.bd)}</g>`;
-    parts += `<text x="${cx}" y="78" text-anchor="middle" font-size="12" font-weight="800" fill="#172033">${esc(clip(nd.name, 18))}</text>`;
-    parts += `<text x="${cx}" y="91" text-anchor="middle" font-size="9.5" fill="#697386">${esc(clip(nd.meta, 24))}</text>`;
+    parts += `<g transform="translate(${x - ICON / 2},${y - ICON / 2}) scale(${s})">${shapeInner(shape, c.bg, c.bd)}</g>`;
+    parts += `<text x="${x}" y="${y + ICON / 2 + 13}" text-anchor="middle" font-size="11.5" font-weight="800" fill="#172033">${esc(clip(nd.name, 16))}</text>`;
+    if (nd.meta) parts += `<text x="${x}" y="${y + ICON / 2 + 25}" text-anchor="middle" font-size="9" fill="#697386">${esc(clip(nd.meta, 22))}</text>`;
     if (nd.tag) {
-      const t = TONE[nd.tag.tone] ?? TONE.gray; const tw = nd.tag.text.length * 5.6 + 14;
-      parts += `<rect x="${cx - tw / 2}" y="100" width="${tw}" height="15" rx="7.5" fill="${t.bg}" stroke="${t.bd}"/>`;
-      parts += `<text x="${cx}" y="110.5" text-anchor="middle" font-size="9" font-weight="800" fill="${t.fg}">${esc(nd.tag.text)}</text>`;
+      const t = TONE[nd.tag.tone] ?? TONE.gray; const tw = nd.tag.text.length * 5.4 + 12;
+      parts += `<rect x="${x - tw / 2}" y="${y + ICON / 2 + 31}" width="${tw}" height="14" rx="7" fill="${t.bg}" stroke="${t.bd}"/>`;
+      parts += `<text x="${x}" y="${y + ICON / 2 + 41}" text-anchor="middle" font-size="8.5" font-weight="800" fill="${t.fg}">${esc(nd.tag.text)}</text>`;
     }
   });
 
   // legend
   const leg: [string, string][] = [["good", "Healthy"], ["warn", "Degraded"], ["bad", "Down / fault"]];
-  let lx = PADX, legend = "";
+  let lx = PADX, legend = ""; const legendY = H - 9;
   for (const [st, lbl] of leg) {
-    legend += `<line x1="${lx}" y1="134" x2="${lx + 18}" y2="134" stroke="${EDGE[st]}" stroke-width="3"${st === "good" ? "" : ` stroke-dasharray="7 5"`}/>`;
-    legend += `<text x="${lx + 24}" y="137.5" font-size="9" fill="#697386">${lbl}</text>`;
+    legend += `<line x1="${lx}" y1="${legendY}" x2="${lx + 18}" y2="${legendY}" stroke="${EDGE[st]}" stroke-width="3"${st === "good" ? "" : ` stroke-dasharray="7 5"`}/>`;
+    legend += `<text x="${lx + 24}" y="${legendY + 3.5}" font-size="9" fill="#697386">${lbl}</text>`;
     lx += 24 + lbl.length * 5.4 + 22;
   }
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 700)}px;display:block;margin:6px auto" role="img" aria-label="Causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 720)}px;display:block;margin:6px auto" role="img" aria-label="Causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
 }
 
 function reportHtml(d: RcaCase, objId: string): string {
