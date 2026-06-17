@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
-import { usePrefs, CHROME_PRESETS } from "../theme/prefs";
+import { usePrefs, CHROME_PRESETS, THEME_PRESETS } from "../theme/prefs";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
@@ -223,10 +223,12 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
               </div>
               <div className="pref-row">
                 <span className="pref-label">Theme</span>
-                <span className="pref-seg">
-                  <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
-                  <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
-                  <button className={theme === "oled" ? "on" : ""} onClick={() => setTheme("oled")}>OLED</button>
+                <span className="pref-seg pref-seg-wrap">
+                  {THEME_PRESETS.map((t) => (
+                    <button key={t.id} className={theme === t.id ? "on" : ""} onClick={() => setTheme(t.id)}>
+                      <span className="pref-swatch" style={{ background: t.swatch }} />{t.label}
+                    </button>
+                  ))}
                 </span>
               </div>
               <div className="pref-row">

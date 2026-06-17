@@ -6,7 +6,17 @@ import { useEffect, useState } from "react";
 // theming). See the [data-theme] / [data-density] / [data-chrome] blocks in
 // styles.css.
 
-export type Theme = "light" | "dark" | "oled";
+export type Theme = "light" | "dark" | "oled" | "indigo" | "graphite" | "white";
+// Curated Correlix themes shown in the picker (light/dark/oled stay available).
+export const THEME_PRESETS: { id: Theme; label: string; swatch: string }[] = [
+  { id: "indigo", label: "Indigo", swatch: "#8B7CFF" },
+  { id: "graphite", label: "Graphite", swatch: "#9BB0C7" },
+  { id: "white", label: "White", swatch: "#5B45F0" },
+  { id: "dark", label: "Dark", swatch: "#0a0e1a" },
+  { id: "light", label: "Light", swatch: "#f6f7fb" },
+  { id: "oled", label: "OLED", swatch: "#000000" },
+];
+const THEME_IDS: Theme[] = THEME_PRESETS.map((t) => t.id);
 export type Density = "comfortable" | "compact";
 // Chrome = the accent hue of the always-dark, glassy nav rail + topbar. The
 // frosted-glass treatment is shared; only the hue/lightness shifts. "navy" is
@@ -27,8 +37,8 @@ const DENSITY_KEY = "netops.density";
 const CHROME_KEY = "netops.chrome";
 
 function readTheme(): Theme {
-  const v = localStorage.getItem(THEME_KEY);
-  return v === "dark" || v === "oled" ? v : "light";
+  const v = localStorage.getItem(THEME_KEY) as Theme | null;
+  return v && THEME_IDS.includes(v) ? v : "indigo"; // Indigo Causal is the default identity
 }
 
 function readDensity(): Density {

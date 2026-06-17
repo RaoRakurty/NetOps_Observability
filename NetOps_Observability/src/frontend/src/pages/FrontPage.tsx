@@ -524,33 +524,15 @@ class Safe extends Component<{ children: ReactNode }, { err: boolean }> {
   }
 }
 
-const FP_THEMES = ["indigo", "graphite", "white"] as const;
-type FpTheme = typeof FP_THEMES[number];
-const FP_THEME_LABEL: Record<FpTheme, string> = { indigo: "Indigo", graphite: "Graphite", white: "White" };
-function loadFpTheme(): FpTheme {
-  try { const t = localStorage.getItem("netops_fp_theme") as FpTheme; return FP_THEMES.includes(t) ? t : "indigo"; } catch { return "indigo"; }
-}
-
 export default function FrontPage() {
-  const [theme, setTheme] = useState<FpTheme>(loadFpTheme);
-  const pickTheme = (t: FpTheme) => { setTheme(t); try { localStorage.setItem("netops_fp_theme", t); } catch { /* quota */ } };
-  // Extend the theme to the surrounding shell content area (so a dark theme isn't a
-  // dark island framed by the light shell). Scoped to this page: removed on leave.
-  useEffect(() => {
-    document.body.setAttribute("data-fp-theme", theme);
-    return () => document.body.removeAttribute("data-fp-theme");
-  }, [theme]);
+  // Theme is now app-wide (the global picker in the top bar / icon rail sets
+  // data-theme on <html>); the Operations Overview just reads the tokens.
   return (
-    <div className={`fp dm-board theme-${theme}`}>
+    <div className="fp dm-board">
       <div className="fp-masthead">
         <h1 className="fp-title">Operations Overview</h1>
         <span className="fp-sub">Network health, root cause &amp; impact — at a glance</span>
         <div className="fp-mast-meta">
-          <div className="fp-theme-pick" role="group" aria-label="Theme">
-            {FP_THEMES.map((t) => (
-              <button key={t} className={theme === t ? "on" : ""} onClick={() => pickTheme(t)} aria-pressed={theme === t}>{FP_THEME_LABEL[t]}</button>
-            ))}
-          </div>
           <span className="fp-live"><span className="fp-live-dot" /> Live</span>
           <span>Auto-refresh 20s</span>
         </div>

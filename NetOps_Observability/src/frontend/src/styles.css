@@ -1633,11 +1633,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    is already a dark indigo-slate, so dark mode mainly remaps the light canvas
    (bg/panel/fg/border) to slate equivalents and keeps the severity hues. */
 
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+:root[data-theme="indigo"],
+:root[data-theme="graphite"] {
   color-scheme: dark;
 
   /* Canvas + interaction primaries; surfaces/text-ramp/severity come from the
-     semantic block below (legacy --panel/--muted/--good/--bad are aliases). */
+     semantic block below (legacy --panel/--muted/--good/--bad are aliases).
+     indigo/graphite inherit this proven dark base, then override their signature
+     (bg/accent/glass tint) in their own blocks below. */
   --bg: #0a0e1a;
   --fg: #e8ecf3;
   --hover: rgba(255, 255, 255, 0.08);
@@ -1678,7 +1682,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    severity hues are tuned for dark contrast. oled shares this dark ramp and
    only swaps the deepest surfaces to true-black for OLED NOC walls. */
 :root[data-theme="dark"],
-:root[data-theme="oled"] {
+:root[data-theme="oled"],
+:root[data-theme="indigo"],
+:root[data-theme="graphite"] {
   color-scheme: dark;
   /* Surfaces: richer charcoal-indigo with stronger elevation steps (bg < surface
      < surface-2 < overlay) so panels/headers read as layered, not flush. */
@@ -1711,6 +1717,34 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.70);
 }
 
+/* ── Correlix signature themes (app-wide via data-theme on <html>) — inherit the
+   dark/light base above, override only the brand signature. ─────────────────── */
+/* INDIGO CAUSAL — obsidian + violet, the default brand identity. */
+:root[data-theme="indigo"] {
+  --bg: #0A0A0F; --fg: #F4F4F8;
+  --surface: #14131c; --surface-2: #1b1928; --overlay: #221f33;
+  --border: #2a2740; --border-strong: #3a3658;
+  --fg-muted: #C9C6DA; --fg-subtle: #8b88a0;
+  --accent: #8B7CFF; --accent-soft: rgba(139,124,255,0.18); --accent-soft-2: rgba(139,124,255,0.12);
+  --glass-bg: rgba(20,19,28,0.66); --glass-bg-strong: rgba(26,24,38,0.92); --glass-border: rgba(160,156,190,0.16);
+  --glass-tint-a: rgba(139,124,255,0.20);
+}
+/* GRAPHITE — austere monochrome instrument: steel-neutral accent, colour reserved
+   for status. */
+:root[data-theme="graphite"] {
+  --bg: #0D0F13; --fg: #E8EAED;
+  --surface: #171b21; --surface-2: #1d222a; --overlay: #232932;
+  --border: #2b313b; --border-strong: #3a4250;
+  --fg-muted: #AAB1BB; --fg-subtle: #79828e;
+  --accent: #9BB0C7; --accent-soft: rgba(155,176,199,0.16); --accent-soft-2: rgba(155,176,199,0.10);
+  --glass-bg: rgba(23,27,33,0.82); --glass-bg-strong: rgba(28,33,40,0.94); --glass-border: rgba(150,162,178,0.18);
+  --glass-tint-a: rgba(155,176,199,0.14);
+}
+/* WHITE — clean report/case-file: inherits the light base; ink-indigo accent. */
+:root[data-theme="white"] {
+  --accent: #5B45F0; --accent-soft: rgba(91,69,240,0.10); --accent-soft-2: rgba(91,69,240,0.07);
+}
+
 /* A couple of light-mode hardcodes that need a dark counterpart. */
 :root[data-theme="dark"] th,
 :root[data-theme="oled"] th { border-bottom-color: var(--panel-border); }
@@ -1737,6 +1771,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: 3px 9px; font-size: var(--fs-micro); font-weight: 600;
 }
 .pref-seg button.on { background: var(--accent-soft); color: var(--accent); }
+/* wrap variant for the 6-way theme picker, with a colour swatch per option */
+.pref-seg-wrap { flex-wrap: wrap; gap: 1px; }
+.pref-seg-wrap button { display: inline-flex; align-items: center; gap: 6px; }
+.pref-swatch { width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(127,127,127,0.4); flex: 0 0 auto; }
 
 /* Chrome (rail accent) picker — glassy reflective dots. Each dot is the preset's
    color with a diagonal highlight so it reads like a bead of glass. */
@@ -2551,10 +2589,10 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
    "Indigo Causal" — Correlix's ownable Operations-Overview identity. Obsidian
    base, violet/indigo signature (live telemetry / owner / candidates / AI),
    causal-lattice motif, Space Grotesk + IBM Plex Mono. Status colours stay
-   conventional. Scoped to .fp.theme-indigo so the rest of the app is untouched;
+   conventional. Scoped to :root[data-theme="indigo"] .fp so the rest of the app is untouched;
    built as a selectable theme (graphite + white siblings to follow).
    ════════════════════════════════════════════════════════════════════════════ */
-.fp.theme-indigo {
+:root[data-theme="indigo"] .fp {
   /* token overrides — the fp-* rules read these, so they re-theme automatically */
   --fg: #F4F4F8; --fg-muted: #C9C6DA; --fg-subtle: #A6A3B8;
   --border: rgba(160,156,190,0.14); --panel: rgba(20,19,28,0.72); --surface-2: rgba(20,19,28,0.72);
@@ -2573,42 +2611,42 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
     #0A0A0F;
 }
 /* causal-lattice watermark — the brand tell, very faint, behind content */
-.fp.theme-indigo::before {
+:root[data-theme="indigo"] .fp::before {
   content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: .55;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='340' height='300'><g fill='none' stroke='%236D5DFC' stroke-width='1' opacity='0.10'><line x1='40' y1='60' x2='150' y2='40'/><line x1='150' y1='40' x2='250' y2='95'/><line x1='150' y1='40' x2='120' y2='160'/><line x1='250' y1='95' x2='300' y2='200'/><line x1='120' y1='160' x2='220' y2='230'/><line x1='40' y1='60' x2='70' y2='200'/><line x1='70' y1='200' x2='120' y2='160'/></g><g fill='%238B7CFF' opacity='0.16'><circle cx='40' cy='60' r='2.5'/><circle cx='150' cy='40' r='3'/><circle cx='250' cy='95' r='2.5'/><circle cx='120' cy='160' r='2.5'/><circle cx='300' cy='200' r='2.5'/><circle cx='220' cy='230' r='2.5'/><circle cx='70' cy='200' r='2.5'/></g></svg>");
 }
-.fp.theme-indigo > * { position: relative; z-index: 1; }
-.fp.theme-indigo .fp-title,
-.fp.theme-indigo .fp-panel-t,
-.fp.theme-indigo .fp-tag,
-.fp.theme-indigo .fp-band { font-family: var(--fp-disp); }
-.fp.theme-indigo .fp-live-dot { background: var(--fp-violet); box-shadow: 0 0 0 3px rgba(139,124,255,.2); }
+:root[data-theme="indigo"] .fp > * { position: relative; z-index: 1; }
+:root[data-theme="indigo"] .fp .fp-title,
+:root[data-theme="indigo"] .fp .fp-panel-t,
+:root[data-theme="indigo"] .fp .fp-tag,
+:root[data-theme="indigo"] .fp .fp-band { font-family: var(--fp-disp); }
+:root[data-theme="indigo"] .fp .fp-live-dot { background: var(--fp-violet); box-shadow: 0 0 0 3px rgba(139,124,255,.2); }
 /* glass panels */
-.fp.theme-indigo .fp-panel {
+:root[data-theme="indigo"] .fp .fp-panel {
   background: var(--fp-glass); backdrop-filter: blur(16px) saturate(120%); -webkit-backdrop-filter: blur(16px) saturate(120%);
   border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
 /* KPI strip — stronger glass, instrument-grade, violet signature */
-.fp.theme-indigo .fp-kpistrip {
+:root[data-theme="indigo"] .fp .fp-kpistrip {
   background: var(--fp-glass-strong); border-color: var(--fp-bd-strong);
   backdrop-filter: blur(16px) saturate(120%); -webkit-backdrop-filter: blur(16px) saturate(120%);
   box-shadow: 0 14px 44px rgba(0,0,0,.55);
 }
-.fp.theme-indigo a.fp-kpistrip-cell:hover { background: rgba(109,93,252,.07); }
+:root[data-theme="indigo"] .fp a.fp-kpistrip-cell:hover { background: rgba(109,93,252,.07); }
 /* suspected hero — amber glass aura */
-.fp.theme-indigo .fp-spot {
+:root[data-theme="indigo"] .fp .fp-spot {
   background: linear-gradient(90deg, rgba(245,158,11,.10), var(--fp-glass-strong) 40%);
   border-color: rgba(245,158,11,.28); box-shadow: 0 12px 40px rgba(0,0,0,.5);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
 }
 /* premium empty state — quiet, not a flat dash */
-.fp.theme-indigo .fp-empty-mark { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(16,185,129,.14); opacity: 1; }
+:root[data-theme="indigo"] .fp .fp-empty-mark { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(16,185,129,.14); opacity: 1; }
 
 /* ── Theme option 2: GRAPHITE — austere monochrome INSTRUMENT. Its own design,
    not Indigo recoloured: steel-neutral accent (no brand hue), colour reserved
    strictly for status; solid matte surfaces (no frosted blur, no lattice); a fine
    ruled top-edge on panels = the instrument tell. Heavy data-mono emphasis. ──── */
-.fp.theme-graphite {
+:root[data-theme="graphite"] .fp {
   --fg: #E8EAED; --fg-muted: #AAB1BB; --fg-subtle: #79828E;
   --border: rgba(150,162,178,0.18); --panel: #171B21; --surface-2: #171B21;
   --surface-3: rgba(150,162,178,0.06); --bg: #0D0F13;
@@ -2619,20 +2657,20 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
   color: var(--fg); padding: 20px 22px; border-radius: 14px;
   background: #0D0F13;
 }
-.fp.theme-graphite .fp-title, .fp.theme-graphite .fp-panel-t, .fp.theme-graphite .fp-tag, .fp.theme-graphite .fp-band { font-family: var(--fp-disp); }
-.fp.theme-graphite .fp-live-dot { background: #9BB0C7; box-shadow: 0 0 0 3px rgba(155,176,199,.16); }
+:root[data-theme="graphite"] .fp .fp-title, :root[data-theme="graphite"] .fp .fp-panel-t, :root[data-theme="graphite"] .fp .fp-tag, :root[data-theme="graphite"] .fp .fp-band { font-family: var(--fp-disp); }
+:root[data-theme="graphite"] .fp .fp-live-dot { background: #9BB0C7; box-shadow: 0 0 0 3px rgba(155,176,199,.16); }
 /* solid matte panels with a fine ruled top edge (instrument cassette look) */
-.fp.theme-graphite .fp-panel { background: var(--panel); border: 1px solid var(--border); border-top: 1px solid rgba(155,176,199,.32); box-shadow: 0 6px 20px rgba(0,0,0,.38); }
-.fp.theme-graphite .fp-kpistrip { background: #14181E; border: 1px solid var(--border); border-top: 2px solid rgba(155,176,199,.30); box-shadow: 0 8px 24px rgba(0,0,0,.45); }
-.fp.theme-graphite a.fp-kpistrip-cell:hover { background: rgba(155,176,199,.07); }
-.fp.theme-graphite .fp-spot { background: #171B21; border: 1px solid rgba(224,144,43,.40); border-left: 3px solid var(--warn); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
-.fp.theme-graphite .fp-empty-mark { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(43,166,111,.14); opacity: 1; }
+:root[data-theme="graphite"] .fp .fp-panel { background: var(--panel); border: 1px solid var(--border); border-top: 1px solid rgba(155,176,199,.32); box-shadow: 0 6px 20px rgba(0,0,0,.38); }
+:root[data-theme="graphite"] .fp .fp-kpistrip { background: #14181E; border: 1px solid var(--border); border-top: 2px solid rgba(155,176,199,.30); box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+:root[data-theme="graphite"] .fp a.fp-kpistrip-cell:hover { background: rgba(155,176,199,.07); }
+:root[data-theme="graphite"] .fp .fp-spot { background: #171B21; border: 1px solid rgba(224,144,43,.40); border-left: 3px solid var(--warn); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+:root[data-theme="graphite"] .fp .fp-empty-mark { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(43,166,111,.14); opacity: 1; }
 
 /* ── Theme option 3: WHITE — clean "report / case-file" light design. Its own
    design, not a recolour: crisp paper cards (NO frosted blur), ink-indigo accent,
    hairline borders + soft document shadow, a fine accent rule under each panel
    title = the report tell. Calm, print-credible, daylight-readable. ─────────── */
-.fp.theme-white {
+:root[data-theme="white"] .fp {
   --fg: #16203A; --fg-muted: #51607A; --fg-subtle: #8492A8;
   --border: rgba(22,32,58,0.12); --panel: #FFFFFF; --surface-2: #FFFFFF;
   --surface-3: rgba(22,32,58,0.035); --bg: #EEF1F6;
@@ -2643,15 +2681,15 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
   color: var(--fg); padding: 20px 22px; border-radius: 14px;
   background: #EEF1F6;
 }
-.fp.theme-white .fp-title, .fp.theme-white .fp-panel-t, .fp.theme-white .fp-tag, .fp.theme-white .fp-band { font-family: var(--fp-disp); }
-.fp.theme-white .fp-live-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(14,143,99,.14); }
+:root[data-theme="white"] .fp .fp-title, :root[data-theme="white"] .fp .fp-panel-t, :root[data-theme="white"] .fp .fp-tag, :root[data-theme="white"] .fp .fp-band { font-family: var(--fp-disp); }
+:root[data-theme="white"] .fp .fp-live-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(14,143,99,.14); }
 /* crisp paper cards — no blur; hairline + soft shadow; accent rule under the title */
-.fp.theme-white .fp-panel { background: var(--panel); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(22,32,58,.05), 0 10px 26px rgba(22,32,58,.07); }
-.fp.theme-white .fp-panel-h { border-bottom: 1px solid var(--border); box-shadow: inset 0 -2px 0 -1px var(--accent-soft); }
-.fp.theme-white .fp-kpistrip { background: #FFFFFF; border: 1px solid var(--border); border-top: 2px solid var(--accent); box-shadow: 0 1px 2px rgba(22,32,58,.05), 0 12px 30px rgba(22,32,58,.08); }
-.fp.theme-white a.fp-kpistrip-cell:hover { background: rgba(63,61,158,.045); }
-.fp.theme-white .fp-spot { background: #FFFFFF; border: 1px solid rgba(180,88,22,.32); border-left: 3px solid var(--warn); box-shadow: 0 1px 2px rgba(22,32,58,.05), 0 10px 26px rgba(22,32,58,.07); }
-.fp.theme-white .fp-empty-mark { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(14,143,99,.14); opacity: 1; }
+:root[data-theme="white"] .fp .fp-panel { background: var(--panel); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(22,32,58,.05), 0 10px 26px rgba(22,32,58,.07); }
+:root[data-theme="white"] .fp .fp-panel-h { border-bottom: 1px solid var(--border); box-shadow: inset 0 -2px 0 -1px var(--accent-soft); }
+:root[data-theme="white"] .fp .fp-kpistrip { background: #FFFFFF; border: 1px solid var(--border); border-top: 2px solid var(--accent); box-shadow: 0 1px 2px rgba(22,32,58,.05), 0 12px 30px rgba(22,32,58,.08); }
+:root[data-theme="white"] .fp a.fp-kpistrip-cell:hover { background: rgba(63,61,158,.045); }
+:root[data-theme="white"] .fp .fp-spot { background: #FFFFFF; border: 1px solid rgba(180,88,22,.32); border-left: 3px solid var(--warn); box-shadow: 0 1px 2px rgba(22,32,58,.05), 0 10px 26px rgba(22,32,58,.07); }
+:root[data-theme="white"] .fp .fp-empty-mark { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(14,143,99,.14); opacity: 1; }
 
 /* theme picker (Operations Overview) — segmented control in the masthead */
 .fp-theme-pick { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; border: 1px solid var(--border); }
@@ -2659,42 +2697,35 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
   padding: 5px 9px; border-radius: 6px; border: 0; background: transparent; color: var(--fg-subtle); cursor: pointer; }
 .fp-theme-pick button.on { background: var(--accent-soft); color: var(--accent); }
 
-/* Extend the active Operations-Overview theme to the surrounding shell content
-   area so a dark theme isn't a dark island framed by the light shell. Scoped via
-   body[data-fp-theme] (FrontPage sets it on mount, removes it on leave), so every
-   other page keeps the default light shell. */
-body[data-fp-theme="indigo"] .main, body[data-fp-theme="indigo"] .main-head { background: #0A0A0F; }
-body[data-fp-theme="graphite"] .main, body[data-fp-theme="graphite"] .main-head { background: #0D0F13; }
-body[data-fp-theme="white"] .main, body[data-fp-theme="white"] .main-head { background: #EEF1F6; }
-body[data-fp-theme="indigo"] .main-head,
-body[data-fp-theme="graphite"] .main-head { color: #C9C6DA; border-bottom-color: rgba(160,156,190,.14); }
-/* the page itself already carries the dark base; drop the card framing so it blends
-   seamlessly into the now-dark content area */
-body[data-fp-theme="indigo"] .fp.theme-indigo,
-body[data-fp-theme="graphite"] .fp.theme-graphite { border-radius: 0; padding: 6px 2px 24px; background: transparent; }
-body[data-fp-theme="indigo"] .fp.theme-indigo { background: radial-gradient(120% 60% at 8% -6%, rgba(109,93,252,.14) 0%, transparent 46%); }
+/* The theme is now app-wide (data-theme on <html>), so the shell content area is
+   already themed via --bg — no per-page shell override needed. The Operations
+   Overview just drops its card framing so it blends into the themed canvas; an
+   indigo glow gives the page its atmosphere. */
+:root[data-theme="indigo"] .fp,
+:root[data-theme="graphite"] .fp { padding: 6px 2px 24px; background: transparent; }
+:root[data-theme="indigo"] .fp { background: radial-gradient(120% 60% at 8% -6%, rgba(109,93,252,.14) 0%, transparent 46%); }
 
 /* ── Character: edge-weighted causal-lattice pattern + film grain + vignette on the
    dark themes (premium NOC atmosphere; restrained — never competes with data). ── */
 /* edge-mask the existing indigo lattice watermark so the pattern reads at the edges */
-.fp.theme-indigo::before { opacity: .7;
+:root[data-theme="indigo"] .fp::before { opacity: .7;
   -webkit-mask-image: radial-gradient(120% 100% at 50% 45%, transparent 46%, #000 100%);
   mask-image: radial-gradient(120% 100% at 50% 45%, transparent 46%, #000 100%); }
 /* graphite gets a steel lattice (its own tint) */
-.fp.theme-graphite { position: relative; overflow: hidden; }
-.fp.theme-graphite::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: .6;
+:root[data-theme="graphite"] .fp { position: relative; overflow: hidden; }
+:root[data-theme="graphite"] .fp::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: .6;
   -webkit-mask-image: radial-gradient(120% 100% at 50% 45%, transparent 46%, #000 100%);
   mask-image: radial-gradient(120% 100% at 50% 45%, transparent 46%, #000 100%);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='340' height='300'%3E%3Cg fill='none' stroke='%239BB0C7' stroke-width='1' opacity='0.12'%3E%3Cline x1='40' y1='60' x2='150' y2='40'/%3E%3Cline x1='150' y1='40' x2='250' y2='95'/%3E%3Cline x1='150' y1='40' x2='120' y2='160'/%3E%3Cline x1='250' y1='95' x2='300' y2='200'/%3E%3Cline x1='120' y1='160' x2='220' y2='230'/%3E%3Cline x1='40' y1='60' x2='70' y2='200'/%3E%3C/g%3E%3Cg fill='%239BB0C7' opacity='0.18'%3E%3Ccircle cx='40' cy='60' r='2.5'/%3E%3Ccircle cx='150' cy='40' r='3'/%3E%3Ccircle cx='250' cy='95' r='2.5'/%3E%3Ccircle cx='120' cy='160' r='2.5'/%3E%3Ccircle cx='300' cy='200' r='2.5'/%3E%3Ccircle cx='220' cy='230' r='2.5'/%3E%3C/g%3E%3C/svg%3E"); }
-.fp.theme-graphite > * { position: relative; z-index: 1; }
+:root[data-theme="graphite"] .fp > * { position: relative; z-index: 1; }
 /* film grain over both dark themes (edge-weighted, overlay blend) */
-.fp.theme-indigo::after, .fp.theme-graphite::after {
+:root[data-theme="indigo"] .fp::after, :root[data-theme="graphite"] .fp::after {
   content: ""; position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: .09; mix-blend-mode: overlay;
   -webkit-mask-image: radial-gradient(120% 100% at 50% 50%, transparent 50%, #000 100%);
   mask-image: radial-gradient(120% 100% at 50% 50%, transparent 50%, #000 100%);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E"); }
-/* edge vignette via the dark content scroll area */
-body[data-fp-theme="indigo"] .main, body[data-fp-theme="graphite"] .main { box-shadow: inset 0 0 170px 28px rgba(0,0,0,.55); }
+/* edge vignette on the Operations Overview (page-specific atmosphere, not app-wide) */
+:root[data-theme="indigo"] .fp, :root[data-theme="graphite"] .fp { box-shadow: inset 0 0 160px 24px rgba(0,0,0,.45); }
 /* inner KPI cells — themed so they're no longer white squares */
-.fp.theme-indigo .fp-kpi { background: rgba(139,124,255,.09); border-color: rgba(139,124,255,.22); }
-.fp.theme-graphite .fp-kpi { background: rgba(0,0,0,.24); border-color: var(--border); box-shadow: inset 0 1px 2px rgba(0,0,0,.4); }
+:root[data-theme="indigo"] .fp .fp-kpi { background: rgba(139,124,255,.09); border-color: rgba(139,124,255,.22); }
+:root[data-theme="graphite"] .fp .fp-kpi { background: rgba(0,0,0,.24); border-color: var(--border); box-shadow: inset 0 1px 2px rgba(0,0,0,.4); }
