@@ -3,6 +3,7 @@ import { api, Finding } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import Logs from "./Logs";
 
 // Findings are written by the Correlation/AI service into ClickHouse
@@ -77,41 +78,59 @@ export default function Findings() {
 
   const selected = !ws.enabled && sel ? items.find((f) => f.id === sel) : undefined;
 
+  const fCrit = items.filter((f) => f.severity === "critical").length;
+  const fWarn = items.filter((f) => f.severity === "warning").length;
+  const fInfo = items.filter((f) => f.severity === "info").length;
   return (
-    <div className="card">
-      <h2>Findings (correlation + anomaly detection)</h2>
-      <div style={{ marginBottom: 12 }}>
-        <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
-          <option value="">All severities</option>
-          <option value="info">Info</option>
-          <option value="warning">Warning</option>
-          <option value="critical">Critical</option>
-        </select>
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Detected Findings"
+        subtitle="Signals that deviate from baseline and may contribute to incidents or RCA candidates."
+        chips={<><Chip label={`${items.length} findings`} /><LiveChip detail="anomaly + correlation" /></>}
+      >
+        <NocKpis cols={4}>
+          <NocKpi n={items.length} label="Findings" interp="detected this window" />
+          <NocKpi n={fCrit} label="Critical" interp="severe deviation" tone={fCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={fWarn} label="Warning" interp="above baseline" tone={fWarn ? "var(--warn)" : undefined} />
+          <NocKpi n={fInfo} label="Informational" interp="low-severity signal" />
+        </NocKpis>
+      </NocHeader>
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Findings</h3>
+          <span className="cc-panel-meta">{items.length} · click a row for context</span>
+        </div>
+        <div style={{ padding: "11px 13px" }}>
+          <div style={{ marginBottom: 10 }}>
+            <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+              <option value="">All severities</option>
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          {items.length === 0 ? (
+            <div className="empty">No findings in this window. The correlation engine writes here as it detects anomalies and event clusters.</div>
+          ) : (
+            <DataTable<Finding>
+              rows={items}
+              columns={columns}
+              rowKey={(f) => f.id}
+              height="58vh"
+              ariaLabel="Findings"
+              onRowClick={(f) => select(f)}
+              rowAccent={(f) => severityColor(f.severity)}
+              rowClassName={(f) => (sel === f.id ? "dtv-selected" : "")}
+              initialSort={{ key: "ts", dir: "desc" }}
+            />
+          )}
+          {selected && (
+            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <FindingDetailBody finding={selected} />
+            </div>
+          )}
+        </div>
       </div>
-      {items.length === 0 ? (
-        <div className="empty">
-          No findings yet. The correlation engine writes here as it spots anomalies and event
-          clusters.
-        </div>
-      ) : (
-        <DataTable<Finding>
-          rows={items}
-          columns={columns}
-          rowKey={(f) => f.id}
-          height="62vh"
-          ariaLabel="Findings"
-          onRowClick={(f) => select(f)}
-          rowAccent={(f) => severityColor(f.severity)}
-          rowClassName={(f) => (sel === f.id ? "dtv-selected" : "")}
-          initialSort={{ key: "ts", dir: "desc" }}
-        />
-      )}
-
-      {selected && (
-        <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>
-          <FindingDetailBody finding={selected} />
-        </div>
-      )}
     </div>
   );
 }
