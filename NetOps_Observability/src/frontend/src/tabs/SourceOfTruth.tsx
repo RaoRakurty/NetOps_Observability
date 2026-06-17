@@ -213,7 +213,7 @@ export default function SourceOfTruth() {
             </p>
           )}
           <label style={labelStyle}>
-            Inventory URL <span style={{ color: "#c0392b" }}>*</span>
+            Inventory URL <span style={{ color: "var(--bad)" }}>*</span>
           </label>
           <input className="input" style={{ width: "100%" }} placeholder="https://inventory.example.com" value={urlV} onChange={(e) => setUrlV(e.target.value)} />
         </div>
@@ -227,7 +227,7 @@ export default function SourceOfTruth() {
       render: () => (
         <div>
           <label style={labelStyle}>
-            API token {cfg?.token_set ? "(leave blank to keep current)" : <span style={{ color: "#c0392b" }}>*</span>}
+            API token {cfg?.token_set ? "(leave blank to keep current)" : <span style={{ color: "var(--bad)" }}>*</span>}
           </label>
           <input
             className="input"
@@ -323,18 +323,18 @@ export default function SourceOfTruth() {
         {poll && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
             Inventory → Devices (poll): {poll.last_poll ? new Date(poll.last_poll).toLocaleString() : "—"} · {poll.devices ?? 0} device(s)
-            {poll.last_error ? <span style={{ color: "#c0392b" }}> · error: {poll.last_error}</span> : null}
+            {poll.last_error ? <span style={{ color: "var(--bad)" }}> · error: {poll.last_error}</span> : null}
           </div>
         )}
         {syncStat?.enabled && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
             Devices → NetBox (write-through): {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
             {syncStat.last_run ? <> · {syncStat.created} created · {syncStat.present} already present</> : null}
-            {syncStat.last_error ? <span style={{ color: "#c0392b" }}> · error: {syncStat.last_error}</span> : null}
+            {syncStat.last_error ? <span style={{ color: "var(--bad)" }}> · error: {syncStat.last_error}</span> : null}
           </div>
         )}
-        {msg && <p style={{ color: "var(--accent, #2e7d32)", margin: "8px 0 0" }}>{msg}</p>}
-        {err && <p style={{ color: "#c0392b", margin: "8px 0 0" }}>{err}</p>}
+        {msg && <p style={{ color: "var(--good)", margin: "8px 0 0" }}>{msg}</p>}
+        {err && <p style={{ color: "var(--bad)", margin: "8px 0 0" }}>{err}</p>}
       </div>
 
       {/* Embedded, auto-logged-in inventory dashboard — the hero of the page. */}
