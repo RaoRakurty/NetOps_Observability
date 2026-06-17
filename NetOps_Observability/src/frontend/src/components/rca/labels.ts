@@ -82,16 +82,40 @@ export function signatureName(id: string): string {
 // Operator View headline — NOC "Possible …" phrasing from a small, fixed
 // vocabulary (NOT the technical signature name, and never the raw id). Debug View
 // uses signatureName()/the raw id instead.
+// Scenario-signature → factual NOC title (the #14 decision: titles state WHAT was
+// observed, never the verdict — confirmed/suspected is carried by the RCA-state
+// pill + the engine wording). Covers every signature the correlation engine emits
+// today, plus the enterprise/SP/DC scenarios the Phase-2/3 catalog will add (SD-WAN,
+// cloud, LAN access, app, MPLS, DC fabric, security) so wording is ready the moment
+// a signature lands. Titles stay neutral and non-overclaiming per rca-copy-precision.
 const SIG_NOC_TITLE: Record<string, string> = {
+  // ── WAN edge / middle-mile / internet / cloud (emitted today) ──
   "sig.ent.middle-mile.dia-egress-latency": "Middle-mile latency increase",
-  "sig.ent.wan-edge.bgp-peer-flap": "Routing adjacency change",
-  "sig.ent.access.local-link-fault": "Link state change",
-  "sig.ent.wan-edge.congestion": "WAN edge congestion",
-  "sig.ent.wan-edge.routing-instability": "Routing instability",
   "sig.ent.middle-mile.physical-degradation": "Middle-mile path degradation",
+  "sig.ent.wan-edge.bgp-peer-flap": "Routing adjacency change",
+  "sig.ent.wan-edge.routing-instability": "Routing instability",
+  "sig.ent.wan-edge.congestion": "WAN edge congestion",
+  "sig.ent.wan-edge.tunnel-mtu-blackhole": "Path MTU blackhole",
+  "sig.ent.access.local-link-fault": "Link state change",
   "sig.ent.internet.dns-impairment": "DNS resolution impairment",
   "sig.ent.cloud.region-degradation": "Cloud region degradation",
-  "sig.ent.wan-edge.tunnel-mtu-blackhole": "Path MTU blackhole",
+  "sig.ent.cloud.region-impairment": "Cloud region impairment",
+  // ── SD-WAN overlay (Phase 2) ──
+  "sig.ent.sdwan.tunnel-sla-breach": "SD-WAN tunnel SLA breach",
+  "sig.ent.sdwan.tunnel-flap": "SD-WAN tunnel flap",
+  "sig.ent.wan-edge.ipsec-down": "IPsec tunnel down",
+  // ── Cloud reachability (Phase 3) ──
+  "sig.ent.cloud.path-blocked": "Cloud path unreachable",
+  "sig.ent.cloud.gateway-degradation": "Cloud gateway degradation",
+  // ── LAN / access (Phase 2) ──
+  "sig.ent.access.uplink-down": "Access uplink down",
+  "sig.ent.access.qos-drops": "QoS drops on access",
+  // ── Application (network attribution) ──
+  "sig.ent.app.degradation-network-clear": "Application degradation (network clear)",
+  // ── Service-provider core · DC fabric · security ──
+  "sig.sp.core.mpls-lsp-down": "MPLS LSP down",
+  "sig.dc.fabric.uplink-fault": "Fabric uplink fault",
+  "sig.ent.security.fw-policy-drop": "Firewall policy drop",
 };
 // Dominant evidence plane → NOC headline when no signature has matched.
 // Titles describe the OBSERVED condition factually — the NOT CONFIRMED / Confidence
@@ -102,12 +126,21 @@ export const PLANE_NOC_TITLE: Record<string, string> = {
   control_plane: "Routing adjacency change",
   passive_flow: "Traffic flow change",
 };
+// Domain-correct fallback for an unmapped signature — order matters: cloud and
+// SD-WAN/tunnel are tested BEFORE the generic WAN/provider catch, so a cloud or
+// overlay fault is never mislabelled "WAN / provider path change" (the bug the
+// old single `cloud`-in-WAN branch caused).
 export function signatureNocTitle(id: string): string {
   if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
-  if (/dia|middle-mile|cloud|internet|provider|congestion/.test(id)) return "WAN / provider path change";
+  if (/cloud/.test(id)) return "Cloud service-path change";
+  if (/sdwan|overlay|tunnel|ipsec/.test(id)) return "SD-WAN / tunnel change";
+  if (/dns/.test(id)) return "DNS resolution impairment";
+  if (/mpls|lsp|l3vpn|vrf/.test(id)) return "MPLS / VPN path change";
+  if (/dia|middle-mile|internet|provider|congestion|wan/.test(id)) return "WAN / provider path change";
   if (/bgp|ospf|isis|routing/.test(id)) return "Routing adjacency change";
-  if (/link|access/.test(id)) return "Link state change";
-  if (/device|resource|cpu|mem|hardware/.test(id)) return "Device health change";
+  if (/link|access|uplink/.test(id)) return "Link state change";
+  if (/fw|firewall|policy|security/.test(id)) return "Security policy change";
+  if (/device|resource|cpu|mem|hardware|fabric/.test(id)) return "Device health change";
   return "Network change observed";
 }
 
