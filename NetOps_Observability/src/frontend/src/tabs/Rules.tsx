@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, Rule } from "../services/api";
 import Icon from "../components/Icon";
+import { NocHeader, Chip, LiveChip } from "../components/noc";
 
 const EMPTY: Rule = { name: "", expr: "", for: 300, severity: "warning" };
 
@@ -47,7 +48,12 @@ export default function Rules() {
   };
 
   return (
-    <>
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Monitor Rules"
+        subtitle="Define alert conditions, review built-in rules, and manage custom monitors over your telemetry."
+        chips={<><Chip label={`${rules.length} rules`} /><LiveChip detail="live evaluation" /></>}
+      />
       <div className="card form-card">
         <div className="form-head">
           <span className="form-head-icon"><Icon name="alerts" size={18} /></span>
@@ -176,6 +182,6 @@ export default function Rules() {
           </table>
         )}
       </div>
-    </>
+    </div>
   );
 }

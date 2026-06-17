@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, Tunnel } from "../services/api";
 import { StatStrip, Stat } from "../components/ui";
 import { Group, Panel, MetricTop, MetricStat, BarPanel } from "../components/board/panels";
+import { NocHeader, LiveChip } from "../components/noc";
 
 // Quality — service- and link-quality scoring across the fleet. Distinct from the
 // raw error/discard counts on Device Monitoring: this board is about RATES and
@@ -117,7 +118,12 @@ function TunnelQuality() {
 export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number } = {}) {
   const m = rangeMinutes;
   return (
-    <div className="dm-board">
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Link Quality"
+        subtitle="Interface error, discard and saturation signals — normalized per 1,000 packets so quiet links with high drop fractions aren't hidden behind busy-link volume."
+        chips={<LiveChip detail="signal quality" />}
+      />
       <Group title="Link error quality" hue="#22C55E">
         <StatStrip>
           <MetricStat label="Interfaces monitored" query="count(device_if_oper_status) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />

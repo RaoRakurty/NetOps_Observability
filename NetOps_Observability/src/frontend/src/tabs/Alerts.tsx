@@ -3,6 +3,7 @@ import { api, Alert } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import Logs from "./Logs";
 
 // Active alerts. Selecting a row opens the alert's context in the dockable
@@ -70,30 +71,51 @@ export default function Alerts() {
 
   const selected = !ws.enabled && sel ? items.find((a) => a.id === sel) : undefined;
 
+  const aCrit = items.filter((a) => a.severity === "critical" || a.severity === "error").length;
+  const aWarn = items.filter((a) => a.severity === "warning").length;
+  const aAging = items.filter((a) => a.fired_at && Date.now() - Date.parse(a.fired_at) > 3600_000).length;
   return (
-    <div className="card">
-      <h2>Active alerts</h2>
-      {items.length === 0 ? (
-        <div className="empty">No active alerts.</div>
-      ) : (
-        <DataTable<Alert>
-          rows={items}
-          columns={columns}
-          rowKey={(a) => a.id}
-          height="62vh"
-          ariaLabel="Active alerts"
-          onRowClick={(a) => select(a)}
-          rowAccent={(a) => severityColor(a.severity)}
-          rowClassName={(a) => (sel === a.id ? "dtv-selected" : "")}
-          initialSort={{ key: "fired", dir: "desc" }}
-        />
-      )}
-
-      {selected && (
-        <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>
-          <AlertDetailBody alert={selected} />
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Active Alerts"
+        subtitle="Monitor rules currently firing across devices, collectors and interfaces — triage before they correlate into incidents."
+        chips={<><Chip label={`${items.length} firing`} tone={items.length ? "var(--warn)" : "var(--ok)"} /><LiveChip detail="rule evaluation" /></>}
+      >
+        <NocKpis cols={4}>
+          <NocKpi n={items.length} label="Active alerts" interp="rules currently firing" tone={items.length ? "var(--warn)" : "var(--ok)"} />
+          <NocKpi n={aCrit} label="Critical" interp="severe condition" tone={aCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={aWarn} label="Warning" interp="above threshold" tone={aWarn ? "var(--warn)" : undefined} />
+          <NocKpi n={aAging} label="Aging > 1h" interp="firing over an hour" tone={aAging ? "var(--warn)" : undefined} />
+        </NocKpis>
+      </NocHeader>
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Alert queue</h3>
+          <span className="cc-panel-meta">{items.length} firing · click a row for detail</span>
         </div>
-      )}
+        <div style={{ padding: "11px 13px" }}>
+          {items.length === 0 ? (
+            <div className="empty">No active alerts — all monitored conditions are within threshold.</div>
+          ) : (
+            <DataTable<Alert>
+              rows={items}
+              columns={columns}
+              rowKey={(a) => a.id}
+              height="58vh"
+              ariaLabel="Active alerts"
+              onRowClick={(a) => select(a)}
+              rowAccent={(a) => severityColor(a.severity)}
+              rowClassName={(a) => (sel === a.id ? "dtv-selected" : "")}
+              initialSort={{ key: "fired", dir: "desc" }}
+            />
+          )}
+          {selected && (
+            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <AlertDetailBody alert={selected} />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
