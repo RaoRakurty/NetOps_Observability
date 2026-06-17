@@ -222,8 +222,15 @@ export function exportRcaPdf(data: RcaCase, objId: string): boolean {
     const wire = () => {
       try {
         const dd = win.document;
-        dd.getElementById("rca-save")?.addEventListener("click", () => { win.focus(); win.print(); });
-        dd.getElementById("rca-close")?.addEventListener("click", () => win.close());
+        // onclick (idempotent) NOT addEventListener — wire() runs twice (now + on
+        // load) and a stacked listener would fire print() twice → two Save dialogs.
+        const save = dd.getElementById("rca-save");
+        if (save) (save as HTMLElement).onclick = () => { win.focus(); win.print(); };
+        const close = dd.getElementById("rca-close");
+        if (close) (close as HTMLElement).onclick = () => win.close();
+        // close the preview tab once the Save/print dialog is dismissed, so it
+        // doesn't linger after the PDF is saved.
+        win.onafterprint = () => { try { win.close(); } catch { /* ignore */ } };
       } catch { /* same-origin — fine */ }
     };
     wire();

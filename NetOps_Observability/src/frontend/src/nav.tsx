@@ -303,7 +303,7 @@ export function filteredNav(platformAdmin: boolean): NavSection[] {
 // defaults to the full tree; pass a filtered tree to keep hidden routes
 // unreachable via the hash (they fall back to the first visible entry).
 export function resolveRoute(hash: string, nav: NavSection[] = NAV): Resolved {
-  const path = hash.replace(/^#\/?/, "");
+  const path = hash.replace(/^#\/?/, "").split("?")[0]; // drop ?query (deep-link params)
   const [sectionId, leafId] = path.split("/");
   const section = nav.find((s) => s.id === sectionId) ?? nav[0];
   if (!section.children) return { section };

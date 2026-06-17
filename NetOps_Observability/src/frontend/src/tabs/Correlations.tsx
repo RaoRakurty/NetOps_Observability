@@ -73,10 +73,19 @@ const GROUND_TONE: Record<string, string> = { seam: "#D97706", "seam+topo": "#D9
 const VERDICT_NOC: Record<string, string> = { confirmed: "Confirmed", suspected: "Suspected", undetermined: "Not confirmed" };
 const GROUND_NOC: Record<string, string> = { seam: "Boundary", "seam+topo": "Boundary + path", topo: "Same path", none: "—" };
 
+// initial verdict-tier filter from a deep link (#/monitoring/correlations?tier=suspected)
+// — the Front Page KPI strip drills through with this so "Suspected RCA" lands
+// pre-filtered to suspected, not the full list.
+function tierFromHash(): string {
+  const q = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
+  const t = new URLSearchParams(q).get("tier") || "";
+  return ["confirmed", "suspected", "undetermined"].includes(t) ? t : "";
+}
+
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
   const [state, setState] = useState("");
-  const [tier, setTier] = useState("");
+  const [tier, setTier] = useState(tierFromHash);
   const [showInternal, setShowInternal] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const ws = useWorkspace();

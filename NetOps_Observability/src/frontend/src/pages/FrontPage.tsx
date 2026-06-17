@@ -451,8 +451,8 @@ function KpiStrip() {
   return (
     <div className="fp-kpistrip">
       {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered")}
-      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations")}
-      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations")}
+      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations?tier=confirmed")}
+      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations?tier=suspected")}
       {cell("Impacted sites", sites.size || "—", undefined, undefined, "infrastructure/topology")}
       {cell("Impacted devices", devs.size || "—", undefined, undefined, "infrastructure/topology")}
       {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "monitoring/triggered")}
