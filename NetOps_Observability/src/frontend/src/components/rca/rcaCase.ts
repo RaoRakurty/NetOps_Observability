@@ -1,5 +1,6 @@
 import { CorrTimeline, CorrObject, Seam } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE } from "./labels";
+import { kindForRole, type ShapeKind } from "../graph/shapes";
 
 // rcaCase.ts — the data contract for the RCA workspace + the adapter that maps a
 // real correlation object/timeline into it. The workspace component is pure
@@ -16,7 +17,9 @@ export type NodeKind = "good" | "warn" | "bad" | "info";
 export interface RcaPill { tone: Tone; text: string; }
 export interface KV { k: string; v: string; mono?: boolean; tone?: Tone; }
 export interface WhyLine { tone: "orange" | "green" | "blue"; label: string; text: string; }
-export interface TopoNode { kind: NodeKind; abbr: string; name: string; meta: string; tag?: RcaPill; }
+// kind = health state (→ colour); shape = device type (→ icon), matching the
+// on-screen RcaTopology convention so the PDF reads in the same visual language.
+export interface TopoNode { kind: NodeKind; abbr: string; name: string; meta: string; tag?: RcaPill; shape?: ShapeKind; chips?: string[]; }
 export interface TopoEdge { state: "good" | "warn" | "bad"; label?: string; side?: -1 | 1; }
 export interface EvidenceCard { variant: "main" | "confirm" | "missing" | "conflict"; dot: Tone; title: string; pill: RcaPill; desc: string; finding: string; foot: string; }
 export interface LadderStep { state: "done" | "active" | "next"; label: string; caption: string; }
@@ -307,16 +310,19 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // known; the peer node appears when the routing adjacency resolved one. Suspected
   // objects render the device as SUSPECTED (amber), confirmed as ROOT CAUSE (red).
   const mkAbbr = (n: string): string => (/^[\d[]/.test(n) ? "NET" : (n.replace(/[^a-zA-Z]/g, "").slice(0, 3).toUpperCase() || "DEV"));
+  // probe/path destinations read as cloud (internet/SaaS) or a target bullseye —
+  // mirrors RcaTopology.destKind so the PDF picks the same icon.
+  const destShape = (n: string): ShapeKind => (/cloud|internet|inet|aws|azure|gcp|tgw|transit|saas/i.test(n) ? "cloud" : "target");
   let topology: RcaCase["topology"];
   if (device) {
     const nodes: TopoNode[] = [{
-      kind: confirmed ? "bad" : "warn", abbr: mkAbbr(device), name: device,
+      kind: confirmed ? "bad" : "warn", abbr: mkAbbr(device), name: device, shape: kindForRole(device),
       meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "signal observed",
       tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
     }];
     const edges: TopoEdge[] = [];
     if (peer) {
-      nodes.push({ kind: "info", abbr: mkAbbr(peer), name: peer, meta: "adjacency peer" });
+      nodes.push({ kind: "info", abbr: mkAbbr(peer), name: peer, shape: kindForRole(peer), meta: "adjacency peer" });
       edges.push({ state: confirmed ? "bad" : "warn", label: hasRouting ? kindLabel(routeKind) : "evidence", side: -1 });
     }
     topology = { nodes, edges };
@@ -333,9 +339,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
         if (a && b) {
           topology = {
             nodes: [
-              { kind: "info", abbr: mkAbbr(a), name: a, meta: "probe source" },
+              { kind: "info", abbr: mkAbbr(a), name: a, shape: kindForRole(a), meta: "probe source" },
               {
-                kind: confirmed ? "bad" : "warn", abbr: mkAbbr(b), name: b, meta: "probe target",
+                kind: confirmed ? "bad" : "warn", abbr: mkAbbr(b), name: b, shape: destShape(b), meta: "probe target",
                 tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "DEGRADED PATH" : "SUSPECT PATH" },
               },
             ],

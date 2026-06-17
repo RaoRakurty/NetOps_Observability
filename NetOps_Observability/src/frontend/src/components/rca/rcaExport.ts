@@ -1,4 +1,5 @@
 import type { RcaCase, RcaPill, KV, Tone } from "./rcaCase";
+import { kindForRole, type ShapeKind } from "../graph/shapes";
 
 // rcaExport — generates an elegant, light-themed, print-ready RCA report and
 // opens it for the browser's "Save as PDF". No PDF dependency: a self-contained
@@ -38,38 +39,81 @@ const kvRows = (rows: KV[]) => rows.map((r) =>
   `<div class="kv"><span class="k">${esc(r.k)}</span><span class="v"${r.mono ? ' style="font-family:ui-monospace,monospace"' : ""}>${esc(r.v)}</span></div>`).join("");
 const block = (label: string, body: string) => body ? `<section><h2>${esc(label)}</h2>${body}</section>` : "";
 
-// Causal-topology SVG — a horizontal node chain (1..N), print-safe (the live
-// React-Flow canvas can't be serialized). Mirrors the workspace's node colours.
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+// shapeInner — the device-type geometry in a 0 0 100 100 box, mirroring the
+// on-screen shape kit (shapes.tsx): device TYPE = shape, health = colour. Light
+// theme: faint tone fill + toned stroke. No glyphs (print-safe; the geometry
+// alone reads the type, and missing-font glyphs would tofu).
+function shapeInner(kind: ShapeKind, fill: string, stroke: string): string {
+  const sw = 5;
+  switch (kind) {
+    case "core": return `<circle cx="50" cy="50" r="42" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/><circle cx="50" cy="50" r="29" fill="none" stroke="${stroke}" stroke-width="2.5" opacity="0.6"/>`;
+    case "router": return `<circle cx="50" cy="50" r="42" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+    case "switch": case "access": return `<polygon points="50,8 88,29 88,71 50,92 12,71 12,29" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+    case "firewall": return `<path d="M50 7 L86 21 V51 C86 73 69 88 50 95 C31 88 14 73 14 51 V21 Z" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+    case "gateway": return `<polygon points="50,6 94,50 50,94 6,50" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+    case "server": return `<rect x="22" y="12" width="56" height="76" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+    case "cloud": return `<path d="M28 74 C16 74 12 58 24 54 C20 38 44 30 52 42 C58 30 82 34 80 52 C92 54 90 74 76 74 Z" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+    case "vantage": return `<circle cx="50" cy="50" r="42" fill="none" stroke="${stroke}" stroke-width="2" opacity="0.4"/><circle cx="50" cy="50" r="28" fill="none" stroke="${stroke}" stroke-width="2.5" opacity="0.7"/><circle cx="50" cy="50" r="13" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+    case "target": return `<circle cx="50" cy="50" r="42" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/><circle cx="50" cy="50" r="26" fill="none" stroke="${stroke}" stroke-width="3" opacity="0.7"/><circle cx="50" cy="50" r="10" fill="${stroke}"/>`;
+    default: return `<circle cx="50" cy="50" r="42" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+  }
+}
+
+// Causal-topology SVG — print-safe re-creation of the on-screen RcaTopology graph
+// (the live React-Flow canvas can't be serialized). Same visual language: device
+// TYPE = shape, health = colour; toned edges (dashed when degraded) with metric
+// labels + a legend. A node's shape falls back to kindForRole(name) when the case
+// didn't carry one, so every report draws icons rather than bare boxes.
 function topoSvg(topo: RcaCase["topology"]): string {
   if (!topo || topo.nodes.length === 0) return "";
   const nodes = topo.nodes, edges = topo.edges;
-  const NW = 150, GAP = 64, PADX = 8, NY = 34, NH = 46;
-  const width = PADX * 2 + nodes.length * NW + (nodes.length - 1) * GAP;
-  const cx = (i: number) => PADX + i * (NW + GAP);
+  const ICON = 50, NW = 138, GAP = 60, PADX = 12, H = 150;
+  const W = PADX * 2 + nodes.length * NW + (nodes.length - 1) * GAP;
+  const colCx = (i: number) => PADX + i * (NW + GAP) + NW / 2;
+  const iconTop = 12, iconCY = iconTop + ICON / 2, s = ICON / 100;
+  const markers = ["good", "warn", "bad"].map((st) =>
+    `<marker id="ah-${st}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${EDGE[st]}"/></marker>`).join("");
   let parts = "";
-  // edges first (under nodes)
+
+  // edges (under nodes): toned arrow, dashed when not healthy, with a pill label
   for (let i = 0; i < nodes.length - 1; i++) {
-    const e = edges[i]; const col = EDGE[e?.state ?? "good"] ?? "#cad5e5";
-    const x1 = cx(i) + NW, x2 = cx(i + 1), midY = NY + NH / 2;
-    const dash = e?.state === "good" ? "" : ' stroke-dasharray="6 4"';
-    parts += `<line x1="${x1}" y1="${midY}" x2="${x2}" y2="${midY}" stroke="${col}" stroke-width="${e?.state === "good" ? 2 : 3}"${dash}/>`;
+    const e = edges[i]; const st = e?.state ?? "good"; const col = EDGE[st] ?? "#cad5e5";
+    const x1 = colCx(i) + ICON / 2 + 4, x2 = colCx(i + 1) - ICON / 2 - 4;
+    const dash = st === "good" ? "" : ` stroke-dasharray="7 5"`;
+    parts += `<line x1="${x1}" y1="${iconCY}" x2="${x2 - 2}" y2="${iconCY}" stroke="${col}" stroke-width="${st === "good" ? 2.2 : 3}"${dash} marker-end="url(#ah-${st})"/>`;
     if (e?.label) {
-      const lx = (x1 + x2) / 2, ly = (e.side === 1 ? midY + 22 : midY - 12);
-      parts += `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${col}">${esc(e.label)}</text>`;
+      const lx = (x1 + x2) / 2, ly = e.side === 1 ? iconCY + 18 : iconCY - 13, tw = e.label.length * 5.6 + 14;
+      parts += `<rect x="${lx - tw / 2}" y="${ly - 10}" width="${tw}" height="15" rx="7.5" fill="#fff" stroke="${col}"/>`;
+      parts += `<text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="9.5" font-weight="800" fill="${col}">${esc(e.label)}</text>`;
     }
   }
-  // nodes
+
+  // nodes: device-type shape + name + meta + status tag
   nodes.forEach((nd, i) => {
-    const c = NODE[nd.kind] ?? NODE.info; const x = cx(i);
-    parts += `<rect x="${x}" y="${NY}" width="${NW}" height="${NH}" rx="10" fill="${c.bg}" stroke="${c.bd}" stroke-width="1.6"/>`;
-    parts += `<text x="${x + NW / 2}" y="${NY + 19}" text-anchor="middle" font-size="12.5" font-weight="800" fill="${c.fg}">${esc(nd.name)}</text>`;
-    parts += `<text x="${x + NW / 2}" y="${NY + 35}" text-anchor="middle" font-size="10" fill="#697386">${esc(nd.meta)}</text>`;
+    const c = NODE[nd.kind] ?? NODE.info; const cx = colCx(i);
+    const shape: ShapeKind = nd.shape ?? kindForRole(nd.name);
+    parts += `<g transform="translate(${cx - ICON / 2},${iconTop}) scale(${s})">${shapeInner(shape, c.bg, c.bd)}</g>`;
+    parts += `<text x="${cx}" y="78" text-anchor="middle" font-size="12" font-weight="800" fill="#172033">${esc(clip(nd.name, 18))}</text>`;
+    parts += `<text x="${cx}" y="91" text-anchor="middle" font-size="9.5" fill="#697386">${esc(clip(nd.meta, 24))}</text>`;
     if (nd.tag) {
-      const t = TONE[nd.tag.tone] ?? TONE.gray;
-      parts += `<text x="${x + NW / 2}" y="${NY + NH + 14}" text-anchor="middle" font-size="9.5" font-weight="800" fill="${t.fg}">${esc(nd.tag.text)}</text>`;
+      const t = TONE[nd.tag.tone] ?? TONE.gray; const tw = nd.tag.text.length * 5.6 + 14;
+      parts += `<rect x="${cx - tw / 2}" y="100" width="${tw}" height="15" rx="7.5" fill="${t.bg}" stroke="${t.bd}"/>`;
+      parts += `<text x="${cx}" y="110.5" text-anchor="middle" font-size="9" font-weight="800" fill="${t.fg}">${esc(nd.tag.text)}</text>`;
     }
   });
-  return `<svg viewBox="0 0 ${width} ${NY + NH + 24}" width="100%" style="max-width:${Math.min(width, 680)}px;display:block;margin:4px auto" role="img" aria-label="Causal topology">${parts}</svg>`;
+
+  // legend
+  const leg: [string, string][] = [["good", "Healthy"], ["warn", "Degraded"], ["bad", "Down / fault"]];
+  let lx = PADX, legend = "";
+  for (const [st, lbl] of leg) {
+    legend += `<line x1="${lx}" y1="134" x2="${lx + 18}" y2="134" stroke="${EDGE[st]}" stroke-width="3"${st === "good" ? "" : ` stroke-dasharray="7 5"`}/>`;
+    legend += `<text x="${lx + 24}" y="137.5" font-size="9" fill="#697386">${lbl}</text>`;
+    lx += 24 + lbl.length * 5.4 + 22;
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 700)}px;display:block;margin:6px auto" role="img" aria-label="Causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
 }
 
 function reportHtml(d: RcaCase, objId: string): string {
