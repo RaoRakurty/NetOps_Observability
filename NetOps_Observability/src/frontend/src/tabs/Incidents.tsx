@@ -4,6 +4,7 @@ import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { useWorkspace } from "../context/workspace";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
 // alerts/anomalies), drives the lifecycle in-platform (ack → investigate →
@@ -103,71 +104,69 @@ export default function Incidents() {
   // Inspector instead, so this only mounts when the workspace pane is disabled).
   const selected = !ws.enabled && sel ? items.find((i) => i.id === sel) : undefined;
 
+  const iOpen = items.filter((i) => i.status === "open" || i.status === "acknowledged" || i.status === "investigating").length;
+  const iCrit = items.filter((i) => i.severity === "critical").length;
+  const iUnassigned = items.filter((i) => !i.owner || i.owner.trim() === "").length;
+  const iTicketed = items.filter((i) => i.sync_status === "synced").length;
   return (
-    <>
-      <div className="card">
-        <h2>Incidents</h2>
-        <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-          Tracked operational problems — automatically opened from alerts (deduplicated), driven through
-          their lifecycle here, and optionally mirrored to an external ticketing system.
-        </p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
-            <option value="">All severities</option>
-            {SEVERITIES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <button className="btn" type="button" onClick={load} disabled={busy}>
-            <Icon name="refresh" size={14} /> {busy ? "Loading…" : "Refresh"}
-          </button>
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Operational Incidents"
+        subtitle="Tracked problems opened from deduplicated alerts, driven through their lifecycle and optionally mirrored to ITSM."
+        chips={<><Chip label={`${items.length} incidents`} /><LiveChip /></>}
+      >
+        <NocKpis cols={4}>
+          <NocKpi n={iOpen} label="Open" interp="unresolved + in-progress" tone={iOpen ? "var(--warn)" : undefined} />
+          <NocKpi n={iCrit} label="Critical" interp="severe impact" tone={iCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={iUnassigned} label="Unassigned" interp="owner missing" tone={iUnassigned ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={iTicketed} label="Ticketed" interp="synced to ITSM" />
+        </NocKpis>
+      </NocHeader>
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Incident queue</h3>
+          <span className="cc-panel-meta">{items.length} · {status || "all statuses"} · click a row for lifecycle</span>
         </div>
-        {error && (
-          <p style={{ color: "var(--bad)", marginTop: 10 }}>
-            <strong>Error:</strong> {error}
-          </p>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>
-          {status || "All"} ({items.length})
-        </h2>
-        {unavailable ? (
-          <div className="empty">Incident management isn’t enabled in this environment yet.</div>
-        ) : items.length === 0 ? (
-          <div className="empty">{busy ? "Loading…" : "No incidents match. Quiet is good."}</div>
-        ) : (
-          <DataTable<Incident>
-            rows={items}
-            columns={columns}
-            rowKey={(i) => i.id}
-            height="55vh"
-            ariaLabel="Incidents"
-            onRowClick={(i) => select(i)}
-            rowAccent={(i) => severityColor(i.severity)}
-            rowClassName={(i) => (sel === i.id ? "dtv-selected" : "")}
-            initialSort={{ key: "last_seen", dir: "desc" }}
-          />
-        )}
-      </div>
-
-      {selected && (
-        <div className="card">
-          <IncidentDetailBody incident={selected} onChanged={load} />
+        <div style={{ padding: "11px 13px" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">All statuses</option>
+              {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+              <option value="">All severities</option>
+              {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button className="btn" type="button" onClick={load} disabled={busy}>
+              <Icon name="refresh" size={14} /> {busy ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+          {error && <p style={{ color: "var(--bad)", marginBottom: 8 }}><strong>Error:</strong> {error}</p>}
+          {unavailable ? (
+            <div className="empty">Incident management isn’t enabled in this environment yet.</div>
+          ) : items.length === 0 ? (
+            <div className="empty">{busy ? "Loading…" : "No incidents match — quiet is good."}</div>
+          ) : (
+            <DataTable<Incident>
+              rows={items}
+              columns={columns}
+              rowKey={(i) => i.id}
+              height="55vh"
+              ariaLabel="Incidents"
+              onRowClick={(i) => select(i)}
+              rowAccent={(i) => severityColor(i.severity)}
+              rowClassName={(i) => (sel === i.id ? "dtv-selected" : "")}
+              initialSort={{ key: "last_seen", dir: "desc" }}
+            />
+          )}
+          {selected && (
+            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <IncidentDetailBody incident={selected} onChanged={load} />
+            </div>
+          )}
         </div>
-      )}
-    </>
+      </div>
+    </div>
   );
 }
 
