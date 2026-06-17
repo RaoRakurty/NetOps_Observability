@@ -188,9 +188,6 @@ const PLANE_TITLE: Record<string, string> = {
 };
 
 export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Record<string, Seam>, owner: string, steps: string[]): RcaCase {
-  const confirmed = timeline.verdict_tier === "confirmed";
-  const suspected = timeline.verdict_tier === "suspected";
-
   // display-plane counts (routing kinds read as routing/link in operator view)
   const att: Record<string, number> = {};
   for (const s of timeline.signals) {
@@ -202,6 +199,15 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   const hasDevice = (att.device_telemetry ?? 0) > 0;
   const hasRouting = (att.control_plane ?? 0) > 0;
   const attachedCount = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).length;
+
+  // INDEPENDENT evidence streams (NOC hard rule): a routing-or-device event,
+  // a traffic/flow change, and an active probe are three independent ways to see
+  // the same fault. "Confirmed root cause" is NEVER shown on fewer than two — a
+  // single stream, however strong, reads as suspected, not confirmed. This guard
+  // sits in the UI on top of the engine verdict so the page can never overclaim.
+  const streamCount = [hasRouting || hasDevice, (att.passive_flow ?? 0) > 0, (att.active_probe ?? 0) > 0].filter(Boolean).length;
+  const confirmed = timeline.verdict_tier === "confirmed" && streamCount >= 2;
+  const suspected = !confirmed && (timeline.verdict_tier === "suspected" || timeline.verdict_tier === "confirmed");
 
   // routing context (device + peer)
   let device = "", peer = "", routeKind = "";
@@ -220,8 +226,24 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) title = "Possible device/routing issue";
 
   const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";
-  const stateText = (obj.state === "open") ? "Open" : "No longer active";
+  // lifecycle (user state model): active → recovering (clears seen, still open) →
+  // recovered (object closed). Drives the State badge + the MONITOR decision.
+  const hasClears = timeline.signals.some((s) => s.kind.endsWith("_clear"));
+  const lifecycle: "active" | "recovering" | "recovered" = obj.state !== "open" ? "recovered" : hasClears ? "recovering" : "active";
+  const stateText = lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : "Open";
   const verdictTone: Tone = confirmed ? "green" : suspected ? "orange" : "gray";
+
+  // ticket decision → exact global NOC phrase (consistent wording across the app).
+  // confirmed → OPEN; cleared/recovered with no impact → MONITOR; >=2 aligned but
+  // unconfirmed streams → INVESTIGATE; otherwise → HOLD.
+  const decisionKind: "open" | "monitor" | "investigate" | "hold" =
+    confirmed ? "open" : lifecycle === "recovered" ? "monitor" : streamCount >= 2 ? "investigate" : "hold";
+  const DECISION_TEXT: Record<typeof decisionKind, string> = {
+    open: "OPEN INCIDENT — customer impact is confirmed by independent evidence. Assign ownership and begin restoration workflow.",
+    investigate: "INVESTIGATE — evidence is aligned but not sufficient to confirm customer impact. Validate missing signals before opening a customer incident.",
+    monitor: "MONITOR — the triggering signal has cleared and no customer-impacting evidence was observed. Auto-close if no recurrence appears.",
+    hold: "HOLD — suspected only. Customer impact is not confirmed. Auto-ticketing remains on hold until independent evidence confirms impact.",
+  };
 
   const summary = confirmed
     ? `${title.replace(/^Possible /, "")} — independent evidence confirms a real network issue.`
@@ -364,9 +386,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       { tone: "blue", text: `Confidence: ${confidence}` },
       { tone: "orange", text: `State: ${stateText}` },
     ],
-    decision: confirmed
-      ? { tone: "confirmed", text: `Escalate — confirmed; route to ${owner || "the network team"}.` }
-      : { tone: "", text: `HOLD — suspected only. Confirm with ${(hasDevice ? ["peer-side routing", "traffic-flow loss", "downstream impact", "or an independent active check"] : ["peer-side routing", "device health", "traffic-flow loss", "downstream impact", "or an independent active check"]).join(", ")}.` },
+    decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
     observedAt: (timeline.window_start || "").replace("T", " ").slice(0, 19) + " UTC",
     rcaId: obj.correlation_id.slice(0, 13),
     aside: [

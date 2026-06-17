@@ -111,10 +111,10 @@ describe("buildRcaCase — confirmed multi-plane object", () => {
     expect(texts).toContain("Confidence: High");
   });
 
-  it("decision escalates and names the owner", () => {
+  it("decision opens an incident on confirmed independent evidence", () => {
     expect(c.decision.tone).toBe("confirmed");
-    expect(c.decision.text).toMatch(/Escalate/i);
-    expect(c.decision.text).toContain("NetOps");
+    expect(c.decision.text).toMatch(/^OPEN INCIDENT/);
+    expect(c.decision.text).toMatch(/confirmed by independent evidence/i);
   });
 
   it("impact reports confirmed customer impact", () => {
@@ -153,6 +153,30 @@ describe("buildRcaCase — copy guards (operator view)", () => {
 
   it("never uses 'BGP session up' as RCA wording", () => {
     expect(operatorText).not.toMatch(/BGP session up/i);
+  });
+});
+
+describe("buildRcaCase — ≥2 independent-stream confirmation guard", () => {
+  // HARD RULE: the engine may say verdict_tier=confirmed, but the UI must NEVER
+  // render "confirmed root cause" on a single independent evidence stream — a
+  // routing event + a device-health event on the same area is ONE stream, not two.
+  const tl = timeline({
+    verdict_tier: "confirmed", top_hypothesis: "bgp-flap",
+    signals: [
+      signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}' }),
+      signal({ kind: "device_resource_anomaly", modality_class: "device_telemetry", entity_id: "wan-r2", is_trigger: false }),
+    ],
+  });
+  const c = buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", state: "open", signal_count: 2 }), {}, "NetOps", []);
+
+  it("downgrades single-stream 'confirmed' to NOT CONFIRMED", () => {
+    const texts = c.pills.map((p) => p.text);
+    expect(texts).toContain("NOT CONFIRMED");
+    expect(texts).not.toContain("✓ CONFIRMED");
+  });
+  it("does not OPEN an incident on a single stream", () => {
+    expect(c.decision.text).not.toMatch(/^OPEN INCIDENT/);
+    expect(c.impact[0].v).toBe("No confirmed customer impact");
   });
 });
 
