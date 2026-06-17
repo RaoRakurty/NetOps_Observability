@@ -240,34 +240,37 @@ export default function Topology() {
       });
     }
 
-    // overlay tunnels (real latency/status) on top, if endpoints resolve.
-    const idByName: Record<string, string> = {};
-    for (const d of devices) {
-      // NEVER index an empty key — a device with a blank name/address would make
-      // idByName[""] resolve, and any tunnel with an unknown end (see below) would
-      // then draw a bogus edge to it (this is what put a phantom DMZ-FW↔leaf link
-      // on the map: the dmz-fw tunnel has no remote, so "" matched a leaf).
-      if (d.name) idByName[d.name.toLowerCase()] = d.id;
-      if (d.address) idByName[d.address.toLowerCase()] = d.id;
-      idByName[d.id.toLowerCase()] = d.id;
-    }
-    for (const t of tunnels) {
-      const lkey = (t.local_device || t.local_addr || "").toLowerCase();
-      const rkey = (t.remote_device || t.remote_addr || "").toLowerCase();
-      if (!lkey || !rkey) continue; // a tunnel with an unresolved end can't be drawn
-      const a = idByName[lkey];
-      const b = idByName[rkey];
-      if (!a || !b || a === b) continue;
-      const ms = Number(t.latency_ms) || 0;
-      const down = String(t.status).toLowerCase() === "down";
-      const color = down ? SEVERITY_COLOR.critical : latencyColor(ms);
-      rfEdges.push({
-        id: `tun-${a}-${b}`, source: a, sourceHandle: "r", target: b, targetHandle: "l",
-        type: "flow", label: down ? "down" : `${ms.toFixed(0)} ms`,
-        data: { flow: !down, state: down ? "confirmed_down" : ms >= 120 ? "degraded" : "healthy", particles: 3, speed: 2.2 },
-        markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
-        style: { stroke: color, strokeWidth: 2.4, opacity: 0.95 },
-      });
+    // Tunnels are a LOGICAL construct (IPsec/SD-WAN overlay), NOT physical cabling
+    // — they belong only in the Logical view. The Physical view stays strictly
+    // LLDP/CDP L2 adjacencies so it reflects real wiring.
+    if (logicalView) {
+      const idByName: Record<string, string> = {};
+      for (const d of devices) {
+        // NEVER index an empty key — a device with a blank name/address would make
+        // idByName[""] resolve, and a tunnel with an unknown end would draw a bogus
+        // edge to it (this is what put a phantom DMZ-FW↔leaf link on the map).
+        if (d.name) idByName[d.name.toLowerCase()] = d.id;
+        if (d.address) idByName[d.address.toLowerCase()] = d.id;
+        idByName[d.id.toLowerCase()] = d.id;
+      }
+      for (const t of tunnels) {
+        const lkey = (t.local_device || t.local_addr || "").toLowerCase();
+        const rkey = (t.remote_device || t.remote_addr || "").toLowerCase();
+        if (!lkey || !rkey) continue; // a tunnel with an unresolved end can't be drawn
+        const a = idByName[lkey];
+        const b = idByName[rkey];
+        if (!a || !b || a === b) continue;
+        const ms = Number(t.latency_ms) || 0;
+        const down = String(t.status).toLowerCase() === "down";
+        const color = down ? SEVERITY_COLOR.critical : latencyColor(ms);
+        rfEdges.push({
+          id: `tun-${a}-${b}`, source: a, sourceHandle: "r", target: b, targetHandle: "l",
+          type: "flow", label: down ? "down" : `${ms.toFixed(0)} ms`,
+          data: { flow: !down, state: down ? "confirmed_down" : ms >= 120 ? "degraded" : "healthy", particles: 3, speed: 2.2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
+          style: { stroke: color, strokeWidth: 2.4, opacity: 0.95 },
+        });
+      }
     }
     return { rfNodes, rfEdges, counts, topoType };
   }, [devices, alertsByDev, tunnels, vendorIcons, typeIcons, links, view]);
