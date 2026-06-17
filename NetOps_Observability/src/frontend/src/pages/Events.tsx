@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
-import { StatStrip, Stat } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
-import { Group, Panel, EmptyHint } from "../components/board/panels";
+import { EmptyHint } from "../components/board/panels";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 
 // Events — a unified event stream. Merges the
 // signals we already collect into one time-sorted feed: syslog (OpenSearch),
@@ -99,25 +99,34 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
   ], []);
 
   return (
-    <div className="dm-board">
-      <Group title="Event stream" hue="#EC4899">
-        <StatStrip>
-          <Stat label="Total events" value={events.length} />
-          <Stat label="Syslog" value={counts.syslog} />
-          <Stat label="SNMP traps" value={counts.trap} />
-          <Stat label="Active alerts" value={counts.alert} tone={counts.alert > 0 ? "warn" : "good"} />
-        </StatStrip>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input className="flows-filter-input" placeholder="Filter events…" value={q} onChange={(e) => setQ(e.target.value)}
-            style={{ padding: "6px 9px", fontSize: 12.5, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)", color: "var(--fg)", width: 220 }} />
-          <span className="seg-mini" role="group" aria-label="Type">
-            {(["", "syslog", "trap", "alert"] as const).map((t) => (
-              <button key={t || "all"} className={typeFilter === t ? "on" : ""} onClick={() => setTypeFilter(t)}>{t || "All"}</button>
-            ))}
-          </span>
-          <span className="mini-meta" style={{ marginLeft: "auto" }}>Merged from syslog · SNMP traps · alerts</span>
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="Events"
+        subtitle="Raw signal stream — syslog, SNMP traps and active alerts on one timeline to correlate against metrics and flows."
+        chips={<><Chip label={`${events.length} signals`} /><LiveChip detail="merged feed" /></>}
+      >
+        <NocKpis>
+          <NocKpi n={events.length} label="Total events" interp="raw signals ingested" />
+          <NocKpi n={counts.syslog} label="Syslog" interp="device log events" />
+          <NocKpi n={counts.trap} label="SNMP traps" interp="pushed notifications" />
+          <NocKpi n={counts.alert} label="Active alerts" interp="monitor-rule fired" tone={counts.alert > 0 ? "var(--warn)" : undefined} />
+        </NocKpis>
+      </NocHeader>
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Signal stream</h3>
+          <span className="cc-panel-meta">{filtered.length} shown · click a row for detail</span>
         </div>
-        <Panel title={`Events (${filtered.length})`}>
+        <div style={{ padding: "11px 13px" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <input className="flows-filter-input" placeholder="Search events…" value={q} onChange={(e) => setQ(e.target.value)}
+              style={{ padding: "6px 9px", fontSize: 12.5, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)", color: "var(--fg)", width: 220 }} />
+            <span className="seg-mini" role="group" aria-label="Type">
+              {(["", "syslog", "trap", "alert"] as const).map((t) => (
+                <button key={t || "all"} className={typeFilter === t ? "on" : ""} onClick={() => setTypeFilter(t)}>{t || "All"}</button>
+              ))}
+            </span>
+          </div>
           {err ? (
             <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
           ) : filtered.length === 0 ? (
@@ -125,8 +134,8 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
           ) : (
             <DataTable<Ev> rows={filtered} columns={cols} rowKey={(e) => `${e.ts}-${e.type}-${e.source}-${e.message.slice(0, 40)}`} height={520} ariaLabel="Event stream" initialSort={{ key: "ts", dir: "desc" }} onRowClick={(e) => setSel(e)} />
           )}
-        </Panel>
-      </Group>
+        </div>
+      </div>
       {sel && (
         <div className="ev-detail-scrim" onClick={() => setSel(null)}>
           <aside className="ev-detail" onClick={(e) => e.stopPropagation()}>
