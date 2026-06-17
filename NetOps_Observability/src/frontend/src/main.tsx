@@ -8,6 +8,13 @@ import "@fontsource/inter/700.css";
 // Manrope (variable) — the shell-v2 UI face: elegant, rounded-humanist, very
 // legible at small sizes. Bundled offline like Inter.
 import "@fontsource-variable/manrope";
+// Space Grotesk (display) + IBM Plex Mono (data) — the "Indigo Causal" identity
+// faces for the Operations Overview; bundled offline.
+import "@fontsource/space-grotesk/500.css";
+import "@fontsource/space-grotesk/600.css";
+import "@fontsource/space-grotesk/700.css";
+import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/ibm-plex-mono/600.css";
 import App from "./App";
 import { captureSSORedirect } from "./services/api";
 import { applyPrefs } from "./theme/prefs";
