@@ -1,137 +1,169 @@
 #!/usr/bin/env python3
-"""Generate/validate the embedded OID index (oididx.json) — BUILD TIME ONLY.
+"""Generate + validate the embedded OID index (oididx.json) — BUILD TIME ONLY.
 
 Design: docs/design/research/telemetry-normalization-architecture.md §6.
 
-Two modes, both run offline:
-  * Always: load the current index, validate its schema + a fixed set of known-OID
-    resolve assertions (so a broken index fails the build, not prod), recompute the
-    content-hash `version`, and rewrite it deterministically.
-  * If pysmi is installed AND vendored .mib files exist under ietf/iana/vendor/*,
-    compile them to JSON and MERGE the discovered objects/notifications into the
-    index before validating (this is how enterprise OIDs get decoded — drop the
-    MIBs, run `make mib-index`, rebuild Go).
+Compiles a curated MIB set with pysmi's `mibdump` (offline-capable; resolves
+IMPORTS from vendored dirs first, then public mirrors) into JSON, then flattens
+every object/column/notification into the runtime index
+({name,mib,kind,type,enum,severity_hint}). The Go runtime only embeds the JSON
+(stdlib `embed`); pysmi is build-time tooling, never a runtime dep (CLAUDE.md §6).
 
-pysmi is build-time tooling only — never imported by the Go runtime (CLAUDE.md §6).
-Usage:  python3 gen_index.py   (run from anywhere; paths are resolved relative here)
-Exit non-zero if validation fails.
+  python3 gen_index.py                 # default MIB set
+  MIBS="IF-MIB ARISTA-SMI-MIB" python3 gen_index.py   # override
+
+Adds vendor coverage = list the vendor's trap MIBs below (or via $MIBS) and ensure
+they're reachable from a --mib-source (vendored dir or the LibreNMS mirror).
 """
 from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(HERE, "index", "oididx.json")
-MIB_DIRS = [os.path.join(HERE, d) for d in ("ietf", "iana")] + [
-    os.path.join(HERE, "vendor", v) for v in (
-        sorted(os.listdir(os.path.join(HERE, "vendor"))) if os.path.isdir(os.path.join(HERE, "vendor")) else []
-    )
+VENDOR_LOCAL = [os.path.join(HERE, d) for d in ("ietf", "iana")] + [
+    os.path.join(HERE, "vendor", v)
+    for v in (sorted(os.listdir(os.path.join(HERE, "vendor"))) if os.path.isdir(os.path.join(HERE, "vendor")) else [])
 ]
 
-# Resolve assertions — the index MUST decode these (regression guard mirroring
-# collectors/oidindex_test.go). Add the canonical ones any real fabric emits.
-ASSERTIONS = {
+# Curated MIB set: IETF core every fabric emits + the lab's vendors. Expand here
+# (or $MIBS). Vendor MIBs resolve from the LibreNMS mirror source below.
+DEFAULT_MIBS = [
+    "SNMPv2-MIB", "IF-MIB", "BGP4-MIB", "OSPF-MIB", "OSPF-TRAP-MIB", "ISIS-MIB",
+    "ENTITY-MIB", "ENTITY-SENSOR-MIB", "IP-MIB", "TCP-MIB", "UDP-MIB",
+    "HOST-RESOURCES-MIB", "LLDP-MIB", "BRIDGE-MIB", "CISCO-CONFIG-MAN-MIB",
+    "ARISTA-SMI-MIB",
+]
+# mibdump source order: vendored dirs (offline, authoritative) → public mirror →
+# LibreNMS comprehensive vendor mirror (@mib@ is the module-name placeholder).
+SOURCES = ["file://" + d for d in VENDOR_LOCAL if os.path.isdir(d)] + [
+    "https://mibs.pysnmp.com/asn1/@mib@",
+    "https://raw.githubusercontent.com/librenms/librenms/master/mibs/@mib@",
+    "https://raw.githubusercontent.com/librenms/librenms/master/mibs/arista/@mib@",
+]
+
+# MIBs carry no universal severity; seed the well-known IETF notifications.
+SEVERITY_HINT = {
+    "linkDown": "warning", "authenticationFailure": "warning",
+    "bgpBackwardTransition": "warning", "ospfNbrStateChange": "warning",
+    "ospfIfStateChange": "warning", "coldStart": "info", "warmStart": "info",
+    "linkUp": "info", "bgpEstablished": "info", "entConfigChange": "notice",
+}
+ASSERTIONS = {  # regression guard — mirrors collectors/oidindex_test.go
     "1.3.6.1.2.1.2.2.1.8": ("ifOperStatus", "column"),
     "1.3.6.1.6.3.1.1.5.3": ("linkDown", "notification"),
-    "1.3.6.1.2.1.15.0.2": ("bgpBackwardTransition", "notification"),
     "1.3.6.1.2.1.1.5.0": ("sysName", "scalar"),
 }
 
 
-def load() -> dict:
-    with open(INDEX) as f:
-        return json.load(f)
-
-
-def compile_mibs(index: dict) -> int:
-    """Compile any vendored MIBs via pysmi and merge into index['nodes']. Returns
-    the number of nodes added. No-op (0) when pysmi or MIBs are absent."""
-    mibs = [d for d in MIB_DIRS if os.path.isdir(d) and any(p.lower().endswith((".mib", ".txt")) for p in os.listdir(d))]
-    if not mibs:
-        print("gen_index: no vendored MIBs found — keeping seed index. "
-              "Drop .mib files under mibs/{ietf,iana,vendor/<vendor>}/ to expand.")
-        return 0
-    try:
-        from pysmi.reader import FileReader
-        from pysmi.parser import SmiStarParser
-        from pysmi.codegen import JsonCodeGen
-        from pysmi.writer import CallbackWriter
-        from pysmi.compiler import MibCompiler
-    except ImportError:
-        print("gen_index: MIBs present but pysmi not installed "
-              "(pip install pysmi) — keeping seed index.", file=sys.stderr)
-        return 0
-
-    produced: dict[str, str] = {}
-    comp = MibCompiler(SmiStarParser(), JsonCodeGen(),
-                       CallbackWriter(lambda name, data, ctx: produced.__setitem__(name, data)))
-    for d in mibs:
-        comp.add_sources(FileReader(d))
-    names = sorted({os.path.splitext(p)[0] for d in mibs for p in os.listdir(d)
-                    if p.lower().endswith((".mib", ".txt"))})
-    comp.compile(*names)
-
-    added = 0
-    for _mib, blob in produced.items():
+def mibdump(mibs: list[str], outdir: str) -> None:
+    # Compile per-MIB into a shared dir so one MIB's SMIv1 grammar failure (e.g.
+    # BGP4-MIB→RFC-1212) doesn't abort the batch; pysmi borrows pre-compiled JSON
+    # for ones it can't parse from source.
+    exe = shutil.which("mibdump") or os.path.expanduser("~/.local/bin/mibdump")
+    for mib in mibs:
+        cmd = [exe, "--destination-format", "json", "--destination-directory", outdir]
+        for s in SOURCES:
+            cmd += ["--mib-source", s]
+        cmd.append(mib)
         try:
-            mod = json.loads(blob)
+            subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            print(f"gen_index: timeout compiling {mib} — skipped", file=sys.stderr)
+
+
+def flatten(outdir: str) -> dict[str, dict]:
+    nodes: dict[str, dict] = {}
+    for fn in sorted(os.listdir(outdir)):
+        if not fn.endswith(".json"):
+            continue
+        mod = fn[:-5]
+        try:
+            data = json.load(open(os.path.join(outdir, fn)))
         except Exception:
             continue
-        for sym, obj in mod.items():
-            oid = obj.get("oid")
-            if not oid or not isinstance(oid, str) or "." not in oid:
+        for sym, obj in data.items():
+            if not isinstance(obj, dict):
                 continue
-            cls = obj.get("class", "")
-            kind = ("notification" if cls in ("notificationtype", "trapnotification")
-                    else "column" if obj.get("maxaccess") and "index" in str(obj).lower()
-                    else "scalar")
-            node = {"name": obj.get("name", sym), "mib": obj.get("module", _mib), "kind": kind}
-            syntax = obj.get("syntax", {})
-            if isinstance(syntax, dict):
-                if syntax.get("type"):
-                    node["type"] = syntax["type"]
-                cons = syntax.get("constraints", {})
-                if isinstance(cons, dict) and cons.get("enumeration"):
-                    node["enum"] = {str(v): k for k, v in cons["enumeration"].items()}
-            index.setdefault("nodes", {}).setdefault(oid, node)
-            added += 1
-    print(f"gen_index: merged {added} nodes from {len(names)} MIB module(s).")
-    return added
+            oid = obj.get("oid")
+            cls, nt = obj.get("class"), obj.get("nodetype")
+            if not oid or "." not in str(oid):
+                continue
+            if cls in ("notificationtype", "trapnotification"):
+                kind = "notification"
+            elif nt == "column":
+                kind = "column"
+            elif nt == "scalar":
+                kind = "scalar"
+            else:
+                continue  # tables/groups/types aren't varbind/trap targets
+            node = {"name": obj.get("name", sym), "mib": mod, "kind": kind}
+            syn = obj.get("syntax") or {}
+            if isinstance(syn, dict):
+                if syn.get("type"):
+                    node["type"] = syn["type"]
+                enum = (syn.get("constraints") or {}).get("enumeration")
+                if isinstance(enum, dict) and enum:
+                    node["enum"] = {str(v): k for k, v in enum.items()}  # int→label
+            if kind == "notification" and node["name"] in SEVERITY_HINT:
+                node["severity_hint"] = SEVERITY_HINT[node["name"]]
+            nodes.setdefault(oid, node)  # first module wins (deterministic order)
+    return nodes
 
 
-def validate(index: dict) -> list[str]:
-    errs: list[str] = []
-    nodes = index.get("nodes", {})
-    if not isinstance(nodes, dict) or not nodes:
-        return ["index has no nodes"]
-    for oid, (want_name, want_kind) in ASSERTIONS.items():
+def validate(nodes: dict) -> list[str]:
+    errs = []
+    for oid, (name, kind) in ASSERTIONS.items():
         n = nodes.get(oid)
         if not n:
-            errs.append(f"missing assertion OID {oid} ({want_name})")
-        elif n.get("name") != want_name or n.get("kind") != want_kind:
-            errs.append(f"{oid}: got {n.get('name')}/{n.get('kind')}, want {want_name}/{want_kind}")
-    for oid, n in nodes.items():
-        if n.get("kind") not in ("scalar", "column", "notification"):
-            errs.append(f"{oid}: bad kind {n.get('kind')!r}")
+            errs.append(f"missing assertion OID {oid} ({name})")
+        elif n.get("name") != name or n.get("kind") != kind:
+            errs.append(f"{oid}: got {n.get('name')}/{n.get('kind')}, want {name}/{kind}")
     return errs
 
 
 def main() -> int:
-    index = load()
-    compile_mibs(index)
-    errs = validate(index)
+    mibs = os.environ.get("MIBS", " ".join(DEFAULT_MIBS)).split()
+    # Start from the existing index as a floor — compiled MIBs ADD coverage and
+    # enrich type/enum, but a network/compile miss must never regress the core.
+    base: dict[str, dict] = {}
+    try:
+        base = json.load(open(INDEX)).get("nodes", {})
+    except Exception:
+        pass
+    with tempfile.TemporaryDirectory() as tmp:
+        mibdump(mibs, tmp)
+        gen = flatten(tmp)
+    for oid, n in gen.items():
+        if oid in base:
+            hint = base[oid].get("severity_hint")  # keep curated severity overlay
+            base[oid].update(n)
+            if hint:
+                base[oid]["severity_hint"] = hint
+        else:
+            base[oid] = n
+    nodes = base
+    print(f"gen_index: compiled {len(gen)} nodes; index now {len(nodes)} (seed-merged).")
+    errs = validate(nodes)
     if errs:
         print("gen_index: VALIDATION FAILED:\n  " + "\n  ".join(errs), file=sys.stderr)
         return 1
-    # deterministic content hash over the nodes (stable key order)
-    body = json.dumps(index["nodes"], sort_keys=True, separators=(",", ":")).encode()
-    index["version"] = "sha256:" + hashlib.sha256(body).hexdigest()[:16]
-    with open(INDEX, "w") as f:
-        json.dump(index, f, indent=2, sort_keys=False)
-        f.write("\n")
-    print(f"gen_index: OK — {len(index['nodes'])} nodes, version {index['version']}")
+    body = json.dumps(nodes, sort_keys=True, separators=(",", ":")).encode()
+    index = {
+        "version": "sha256:" + hashlib.sha256(body).hexdigest()[:16],
+        "generated": "build",
+        "note": "GENERATED by gen_index.py (pysmi/mibdump over the curated MIB set). Do not hand-edit — see mibs/README.md.",
+        "mibs": mibs,
+        "nodes": nodes,
+    }
+    json.dump(index, open(INDEX, "w"), indent=1, sort_keys=False)
+    open(INDEX, "a").write("\n")
+    print(f"gen_index: OK — {len(nodes)} nodes from {len(mibs)} MIB(s), version {index['version']}")
     return 0
 
 

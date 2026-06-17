@@ -1,242 +1,6955 @@
 {
-  "version": "sha256:7cc5ad9b95c088f4",
-  "generated": "2026-06-17",
-  "note": "SEED index migrated from the hand-curated maps in snmptrap.go so OID decode is data-driven, not hardcoded. Expanded by `make mib-index` (pysmi over a vendored MIB tree) \u2014 see mibs/README.md. Schema: docs/design/research/telemetry-normalization-architecture.md \u00a76.1.",
-  "mibs": [
-    "SNMPv2-MIB",
-    "IF-MIB",
-    "BGP4-MIB",
-    "OSPF-TRAP-MIB",
-    "ENTITY-MIB",
-    "CISCO-CONFIG-MAN-MIB"
-  ],
-  "nodes": {
-    "1.3.6.1.6.3.1.1.5.1": {
-      "name": "coldStart",
-      "mib": "SNMPv2-MIB",
-      "kind": "notification",
-      "severity_hint": "info"
-    },
-    "1.3.6.1.6.3.1.1.5.2": {
-      "name": "warmStart",
-      "mib": "SNMPv2-MIB",
-      "kind": "notification",
-      "severity_hint": "info"
-    },
-    "1.3.6.1.6.3.1.1.5.3": {
-      "name": "linkDown",
-      "mib": "IF-MIB",
-      "kind": "notification",
-      "severity_hint": "warning"
-    },
-    "1.3.6.1.6.3.1.1.5.4": {
-      "name": "linkUp",
-      "mib": "IF-MIB",
-      "kind": "notification",
-      "severity_hint": "info"
-    },
-    "1.3.6.1.6.3.1.1.5.5": {
-      "name": "authenticationFailure",
-      "mib": "SNMPv2-MIB",
-      "kind": "notification",
-      "severity_hint": "warning"
-    },
-    "1.3.6.1.2.1.15.7.1": {
-      "name": "bgpEstablished",
-      "mib": "BGP4-MIB",
-      "kind": "notification",
-      "severity_hint": "info"
-    },
-    "1.3.6.1.2.1.15.7.2": {
-      "name": "bgpBackwardTransition",
-      "mib": "BGP4-MIB",
-      "kind": "notification",
-      "severity_hint": "warning"
-    },
-    "1.3.6.1.2.1.15.0.1": {
-      "name": "bgpEstablished",
-      "mib": "BGP4-MIB",
-      "kind": "notification",
-      "severity_hint": "info"
-    },
-    "1.3.6.1.2.1.15.0.2": {
-      "name": "bgpBackwardTransition",
-      "mib": "BGP4-MIB",
-      "kind": "notification",
-      "severity_hint": "warning"
-    },
-    "1.3.6.1.2.1.14.16.2.2": {
-      "name": "ospfNbrStateChange",
-      "mib": "OSPF-TRAP-MIB",
-      "kind": "notification",
-      "severity_hint": "warning"
-    },
-    "1.3.6.1.2.1.14.16.2.16": {
-      "name": "ospfIfStateChange",
-      "mib": "OSPF-TRAP-MIB",
-      "kind": "notification",
-      "severity_hint": "warning"
-    },
-    "1.3.6.1.2.1.47.2.0.1": {
-      "name": "entConfigChange",
-      "mib": "ENTITY-MIB",
-      "kind": "notification",
-      "severity_hint": "notice"
-    },
-    "1.3.6.1.4.1.9.9.43.2.0.1": {
-      "name": "ciscoConfigManEvent",
-      "mib": "CISCO-CONFIG-MAN-MIB",
-      "kind": "notification",
-      "severity_hint": "notice"
-    },
-    "1.3.6.1.2.1.1.1.0": {
-      "name": "sysDescr",
-      "mib": "SNMPv2-MIB",
-      "kind": "scalar",
-      "type": "OCTET STRING"
-    },
-    "1.3.6.1.2.1.1.3.0": {
-      "name": "sysUpTime",
-      "mib": "SNMPv2-MIB",
-      "kind": "scalar",
-      "type": "TimeTicks"
-    },
-    "1.3.6.1.2.1.1.5.0": {
-      "name": "sysName",
-      "mib": "SNMPv2-MIB",
-      "kind": "scalar",
-      "type": "OCTET STRING"
-    },
-    "1.3.6.1.2.1.1.6.0": {
-      "name": "sysLocation",
-      "mib": "SNMPv2-MIB",
-      "kind": "scalar",
-      "type": "OCTET STRING"
-    },
-    "1.3.6.1.2.1.2.2.1.1": {
-      "name": "ifIndex",
-      "mib": "IF-MIB",
-      "kind": "column",
-      "type": "INTEGER",
-      "index": [
-        "ifIndex"
-      ]
-    },
-    "1.3.6.1.2.1.2.2.1.2": {
-      "name": "ifDescr",
-      "mib": "IF-MIB",
-      "kind": "column",
-      "type": "OCTET STRING",
-      "index": [
-        "ifIndex"
-      ]
-    },
-    "1.3.6.1.2.1.2.2.1.7": {
-      "name": "ifAdminStatus",
-      "mib": "IF-MIB",
-      "kind": "column",
-      "type": "INTEGER",
-      "index": [
-        "ifIndex"
-      ],
-      "enum": {
-        "1": "up",
-        "2": "down",
-        "3": "testing"
-      }
-    },
-    "1.3.6.1.2.1.2.2.1.8": {
-      "name": "ifOperStatus",
-      "mib": "IF-MIB",
-      "kind": "column",
-      "type": "INTEGER",
-      "index": [
-        "ifIndex"
-      ],
-      "enum": {
-        "1": "up",
-        "2": "down",
-        "3": "testing",
-        "4": "unknown",
-        "5": "dormant",
-        "6": "notPresent",
-        "7": "lowerLayerDown"
-      }
-    },
-    "1.3.6.1.2.1.31.1.1.1.1": {
-      "name": "ifName",
-      "mib": "IF-MIB",
-      "kind": "column",
-      "type": "OCTET STRING",
-      "index": [
-        "ifIndex"
-      ]
-    },
-    "1.3.6.1.2.1.31.1.1.1.18": {
-      "name": "ifAlias",
-      "mib": "IF-MIB",
-      "kind": "column",
-      "type": "OCTET STRING",
-      "index": [
-        "ifIndex"
-      ]
-    },
-    "1.3.6.1.2.1.15.3.1.2": {
-      "name": "bgpPeerState",
-      "mib": "BGP4-MIB",
-      "kind": "column",
-      "type": "INTEGER",
-      "index": [
-        "bgpPeerRemoteAddr"
-      ],
-      "enum": {
-        "1": "idle",
-        "2": "connect",
-        "3": "active",
-        "4": "opensent",
-        "5": "openconfirm",
-        "6": "established"
-      }
-    },
-    "1.3.6.1.2.1.15.3.1.3": {
-      "name": "bgpPeerAdminStatus",
-      "mib": "BGP4-MIB",
-      "kind": "column",
-      "type": "INTEGER",
-      "index": [
-        "bgpPeerRemoteAddr"
-      ],
-      "enum": {
-        "1": "stop",
-        "2": "start"
-      }
-    },
-    "1.3.6.1.2.1.15.3.1.7": {
-      "name": "bgpPeerRemoteAddr",
-      "mib": "BGP4-MIB",
-      "kind": "column",
-      "type": "IpAddress",
-      "index": [
-        "bgpPeerRemoteAddr"
-      ]
-    },
-    "1.3.6.1.2.1.15.3.1.9": {
-      "name": "bgpPeerRemoteAs",
-      "mib": "BGP4-MIB",
-      "kind": "column",
-      "type": "INTEGER",
-      "index": [
-        "bgpPeerRemoteAddr"
-      ]
-    },
-    "1.3.6.1.2.1.15.3.1.14": {
-      "name": "bgpPeerLastError",
-      "mib": "BGP4-MIB",
-      "kind": "column",
-      "type": "OCTET STRING",
-      "index": [
-        "bgpPeerRemoteAddr"
-      ]
-    }
+ "version": "sha256:c4f956ac10e7e16d",
+ "generated": "build",
+ "note": "GENERATED by gen_index.py (pysmi/mibdump over the curated MIB set). Do not hand-edit \u2014 see mibs/README.md.",
+ "mibs": [
+  "SNMPv2-MIB",
+  "IF-MIB",
+  "BGP4-MIB",
+  "OSPF-MIB",
+  "OSPF-TRAP-MIB",
+  "ISIS-MIB",
+  "ENTITY-MIB",
+  "ENTITY-SENSOR-MIB",
+  "IP-MIB",
+  "TCP-MIB",
+  "UDP-MIB",
+  "HOST-RESOURCES-MIB",
+  "LLDP-MIB",
+  "BRIDGE-MIB",
+  "CISCO-CONFIG-MAN-MIB",
+  "ARISTA-SMI-MIB"
+ ],
+ "nodes": {
+  "1.3.6.1.6.3.1.1.5.1": {
+   "name": "coldStart",
+   "mib": "SNMPv2-MIB",
+   "kind": "notification",
+   "severity_hint": "info"
+  },
+  "1.3.6.1.6.3.1.1.5.2": {
+   "name": "warmStart",
+   "mib": "SNMPv2-MIB",
+   "kind": "notification",
+   "severity_hint": "info"
+  },
+  "1.3.6.1.6.3.1.1.5.3": {
+   "name": "linkDown",
+   "mib": "IF-MIB",
+   "kind": "notification",
+   "severity_hint": "warning"
+  },
+  "1.3.6.1.6.3.1.1.5.4": {
+   "name": "linkUp",
+   "mib": "IF-MIB",
+   "kind": "notification",
+   "severity_hint": "info"
+  },
+  "1.3.6.1.6.3.1.1.5.5": {
+   "name": "authenticationFailure",
+   "mib": "SNMPv2-MIB",
+   "kind": "notification",
+   "severity_hint": "warning"
+  },
+  "1.3.6.1.2.1.15.7.1": {
+   "name": "bgpEstablished",
+   "mib": "BGP4-MIB",
+   "kind": "notification",
+   "severity_hint": "info"
+  },
+  "1.3.6.1.2.1.15.7.2": {
+   "name": "bgpBackwardTransition",
+   "mib": "BGP4-MIB",
+   "kind": "notification",
+   "severity_hint": "warning"
+  },
+  "1.3.6.1.2.1.15.0.1": {
+   "name": "bgpEstablished",
+   "mib": "BGP4-MIB",
+   "kind": "notification",
+   "severity_hint": "info"
+  },
+  "1.3.6.1.2.1.15.0.2": {
+   "name": "bgpBackwardTransition",
+   "mib": "BGP4-MIB",
+   "kind": "notification",
+   "severity_hint": "warning"
+  },
+  "1.3.6.1.2.1.14.16.2.2": {
+   "name": "ospfNbrStateChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification",
+   "severity_hint": "warning"
+  },
+  "1.3.6.1.2.1.14.16.2.16": {
+   "name": "ospfIfStateChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification",
+   "severity_hint": "warning"
+  },
+  "1.3.6.1.2.1.47.2.0.1": {
+   "name": "entConfigChange",
+   "mib": "ENTITY-MIB",
+   "kind": "notification",
+   "severity_hint": "notice"
+  },
+  "1.3.6.1.4.1.9.9.43.2.0.1": {
+   "name": "ciscoConfigManEvent",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "notification",
+   "severity_hint": "notice"
+  },
+  "1.3.6.1.2.1.1.1.0": {
+   "name": "sysDescr",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.1.3.0": {
+   "name": "sysUpTime",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.1.5.0": {
+   "name": "sysName",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.1.6.0": {
+   "name": "sysLocation",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.2.2.1.1": {
+   "name": "ifIndex",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex",
+   "index": [
+    "ifIndex"
+   ]
+  },
+  "1.3.6.1.2.1.2.2.1.2": {
+   "name": "ifDescr",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "DisplayString",
+   "index": [
+    "ifIndex"
+   ]
+  },
+  "1.3.6.1.2.1.2.2.1.7": {
+   "name": "ifAdminStatus",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "index": [
+    "ifIndex"
+   ],
+   "enum": {
+    "2": "down",
+    "3": "testing",
+    "1": "up"
+   }
+  },
+  "1.3.6.1.2.1.2.2.1.8": {
+   "name": "ifOperStatus",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "index": [
+    "ifIndex"
+   ],
+   "enum": {
+    "5": "dormant",
+    "2": "down",
+    "7": "lowerLayerDown",
+    "6": "notPresent",
+    "3": "testing",
+    "4": "unknown",
+    "1": "up"
+   }
+  },
+  "1.3.6.1.2.1.31.1.1.1.1": {
+   "name": "ifName",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "DisplayString",
+   "index": [
+    "ifIndex"
+   ]
+  },
+  "1.3.6.1.2.1.31.1.1.1.18": {
+   "name": "ifAlias",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "DisplayString",
+   "index": [
+    "ifIndex"
+   ]
+  },
+  "1.3.6.1.2.1.15.3.1.2": {
+   "name": "bgpPeerState",
+   "mib": "BGP4-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "index": [
+    "bgpPeerRemoteAddr"
+   ],
+   "enum": {
+    "1": "idle",
+    "2": "connect",
+    "3": "active",
+    "4": "opensent",
+    "5": "openconfirm",
+    "6": "established"
+   }
+  },
+  "1.3.6.1.2.1.15.3.1.3": {
+   "name": "bgpPeerAdminStatus",
+   "mib": "BGP4-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "index": [
+    "bgpPeerRemoteAddr"
+   ],
+   "enum": {
+    "1": "stop",
+    "2": "start"
+   }
+  },
+  "1.3.6.1.2.1.15.3.1.7": {
+   "name": "bgpPeerRemoteAddr",
+   "mib": "BGP4-MIB",
+   "kind": "column",
+   "type": "IpAddress",
+   "index": [
+    "bgpPeerRemoteAddr"
+   ]
+  },
+  "1.3.6.1.2.1.15.3.1.9": {
+   "name": "bgpPeerRemoteAs",
+   "mib": "BGP4-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "index": [
+    "bgpPeerRemoteAddr"
+   ]
+  },
+  "1.3.6.1.2.1.15.3.1.14": {
+   "name": "bgpPeerLastError",
+   "mib": "BGP4-MIB",
+   "kind": "column",
+   "type": "OCTET STRING",
+   "index": [
+    "bgpPeerRemoteAddr"
+   ]
+  },
+  "1.3.6.1.4.1.9.9.43.1.3.1": {
+   "name": "ccmCLICfgRunConfNotifEnable",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.4.1.9.9.43.1.2.2": {
+   "name": "ccmCLIHistoryCmdEntries",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.2.3": {
+   "name": "ccmCLIHistoryCmdEntriesAllowed",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.2.4.1.2": {
+   "name": "ccmCLIHistoryCommand",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.2.4.1.1": {
+   "name": "ccmCLIHistoryCommandIndex",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.2.1": {
+   "name": "ccmCLIHistoryMaxCmdEntries",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.4.1.9.9.43.2.0.2": {
+   "name": "ccmCLIRunningConfigChanged",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.4.1.9.9.43.1.4.1": {
+   "name": "ccmCTID",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "Unsigned64"
+  },
+  "1.3.6.1.4.1.9.9.43.1.4.2": {
+   "name": "ccmCTIDLastChangeTime",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "DateAndTime"
+  },
+  "1.3.6.1.4.1.9.9.43.2.0.3": {
+   "name": "ccmCTIDRolledOver",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.4.1.9.9.43.1.4.4": {
+   "name": "ccmCTIDRolledOverNotifEnable",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.4.1.9.9.43.1.4.3": {
+   "name": "ccmCTIDWhoChanged",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.15": {
+   "name": "ccmHistoryCLICmdEntriesBumped",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.3": {
+   "name": "ccmHistoryEventCommandSource",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "commandLine",
+    "2": "snmp"
+   }
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.17": {
+   "name": "ccmHistoryEventCommandSourceAddrRev1",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.16": {
+   "name": "ccmHistoryEventCommandSourceAddrType",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.10": {
+   "name": "ccmHistoryEventCommandSourceAddress",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.5": {
+   "name": "ccmHistoryEventConfigDestination",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "HistoryEventMedium"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.4": {
+   "name": "ccmHistoryEventConfigSource",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "HistoryEventMedium"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.5": {
+   "name": "ccmHistoryEventEntriesBumped",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.13": {
+   "name": "ccmHistoryEventFile",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.1": {
+   "name": "ccmHistoryEventIndex",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.14": {
+   "name": "ccmHistoryEventRcpUser",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.19": {
+   "name": "ccmHistoryEventServerAddrRev1",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.18": {
+   "name": "ccmHistoryEventServerAddrType",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.12": {
+   "name": "ccmHistoryEventServerAddress",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.9": {
+   "name": "ccmHistoryEventTerminalLocation",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.7": {
+   "name": "ccmHistoryEventTerminalNumber",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.6": {
+   "name": "ccmHistoryEventTerminalType",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "6": "auxiliary",
+    "3": "console",
+    "1": "notApplicable",
+    "4": "terminal",
+    "2": "unknown",
+    "5": "virtual"
+   }
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.8": {
+   "name": "ccmHistoryEventTerminalUser",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.2": {
+   "name": "ccmHistoryEventTime",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.6.1.11": {
+   "name": "ccmHistoryEventVirtualHostName",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.4": {
+   "name": "ccmHistoryMaxEventEntries",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.1": {
+   "name": "ccmHistoryRunningLastChanged",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.2": {
+   "name": "ccmHistoryRunningLastSaved",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.4.1.9.9.43.1.1.3": {
+   "name": "ccmHistoryStartupLastChanged",
+   "mib": "CISCO-CONFIG-MAN-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.97.1.5.2.1.1": {
+   "name": "diffServActionId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.5.2.1.2": {
+   "name": "diffServActionInterface",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.97.1.5.2.1.3": {
+   "name": "diffServActionNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.5.1": {
+   "name": "diffServActionNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.5.2.1.4": {
+   "name": "diffServActionSpecific",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.5.2.1.6": {
+   "name": "diffServActionStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.5.2.1.5": {
+   "name": "diffServActionStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.1": {
+   "name": "diffServAlgDropId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.3": {
+   "name": "diffServAlgDropNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.6.1": {
+   "name": "diffServAlgDropNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.7": {
+   "name": "diffServAlgDropOctets",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.8": {
+   "name": "diffServAlgDropPkts",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.4": {
+   "name": "diffServAlgDropQMeasure",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.5": {
+   "name": "diffServAlgDropQThreshold",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.6": {
+   "name": "diffServAlgDropSpecific",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.12": {
+   "name": "diffServAlgDropStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.11": {
+   "name": "diffServAlgDropStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.2": {
+   "name": "diffServAlgDropType",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "5": "alwaysDrop",
+    "3": "headDrop",
+    "1": "other",
+    "4": "randomDrop",
+    "2": "tailDrop"
+   }
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.9": {
+   "name": "diffServAlgRandomDropOctets",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.97.1.6.2.1.10": {
+   "name": "diffServAlgRandomDropPkts",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.97.1.2.4.1.1": {
+   "name": "diffServClfrElementId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.2.4.1.3": {
+   "name": "diffServClfrElementNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.2.3": {
+   "name": "diffServClfrElementNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.2.4.1.2": {
+   "name": "diffServClfrElementPrecedence",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.2.4.1.4": {
+   "name": "diffServClfrElementSpecific",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.2.4.1.6": {
+   "name": "diffServClfrElementStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.2.4.1.5": {
+   "name": "diffServClfrElementStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.2.2.1.1": {
+   "name": "diffServClfrId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.2.1": {
+   "name": "diffServClfrNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.2.2.1.3": {
+   "name": "diffServClfrStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.2.2.1.2": {
+   "name": "diffServClfrStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.5.5.1.1": {
+   "name": "diffServCountActId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.5.4": {
+   "name": "diffServCountActNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.5.5.1.2": {
+   "name": "diffServCountActOctets",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.97.1.5.5.1.3": {
+   "name": "diffServCountActPkts",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.97.1.5.5.1.5": {
+   "name": "diffServCountActStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.5.5.1.4": {
+   "name": "diffServCountActStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.1.1.1.1": {
+   "name": "diffServDataPathIfDirection",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IfDirection"
+  },
+  "1.3.6.1.2.1.97.1.1.1.1.2": {
+   "name": "diffServDataPathStart",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.1.1.1.4": {
+   "name": "diffServDataPathStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.1.1.1.3": {
+   "name": "diffServDataPathStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.5.3.1.1": {
+   "name": "diffServDscpMarkActDscp",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Dscp"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.3": {
+   "name": "diffServMaxRateAbsolute",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.1": {
+   "name": "diffServMaxRateId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.2": {
+   "name": "diffServMaxRateLevel",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.5": {
+   "name": "diffServMaxRateNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.4": {
+   "name": "diffServMaxRateRelative",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.7": {
+   "name": "diffServMaxRateStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.6": {
+   "name": "diffServMaxRateStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.8.6.1.5": {
+   "name": "diffServMaxRateThreshold",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "BurstSize"
+  },
+  "1.3.6.1.2.1.97.1.3.2.1.3": {
+   "name": "diffServMeterFailNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.3.2.1.1": {
+   "name": "diffServMeterId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.3.1": {
+   "name": "diffServMeterNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.3.2.1.4": {
+   "name": "diffServMeterSpecific",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.3.2.1.6": {
+   "name": "diffServMeterStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.3.2.1.5": {
+   "name": "diffServMeterStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.3.2.1.2": {
+   "name": "diffServMeterSucceedNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.8.4.1.3": {
+   "name": "diffServMinRateAbsolute",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.4.1.1": {
+   "name": "diffServMinRateId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.8.3": {
+   "name": "diffServMinRateNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.8.4.1.2": {
+   "name": "diffServMinRatePriority",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.4.1.4": {
+   "name": "diffServMinRateRelative",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.4.1.6": {
+   "name": "diffServMinRateStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.8.4.1.5": {
+   "name": "diffServMinRateStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.2": {
+   "name": "diffServMultiFieldClfrAddrType",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.7": {
+   "name": "diffServMultiFieldClfrDscp",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "DscpOrAny"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.3": {
+   "name": "diffServMultiFieldClfrDstAddr",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.11": {
+   "name": "diffServMultiFieldClfrDstL4PortMax",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.10": {
+   "name": "diffServMultiFieldClfrDstL4PortMin",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.4": {
+   "name": "diffServMultiFieldClfrDstPrefixLength",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetAddressPrefixLength"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.8": {
+   "name": "diffServMultiFieldClfrFlowId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.1": {
+   "name": "diffServMultiFieldClfrId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.2.5": {
+   "name": "diffServMultiFieldClfrNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.9": {
+   "name": "diffServMultiFieldClfrProtocol",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.5": {
+   "name": "diffServMultiFieldClfrSrcAddr",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.13": {
+   "name": "diffServMultiFieldClfrSrcL4PortMax",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.12": {
+   "name": "diffServMultiFieldClfrSrcL4PortMin",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.6": {
+   "name": "diffServMultiFieldClfrSrcPrefixLength",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "InetAddressPrefixLength"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.15": {
+   "name": "diffServMultiFieldClfrStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.2.6.1.14": {
+   "name": "diffServMultiFieldClfrStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.7.2.1.1": {
+   "name": "diffServQId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.7.2.1.4": {
+   "name": "diffServQMaxRate",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.7.2.1.3": {
+   "name": "diffServQMinRate",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.7.2.1.2": {
+   "name": "diffServQNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.7.1": {
+   "name": "diffServQNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.7.2.1.6": {
+   "name": "diffServQStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.7.2.1.5": {
+   "name": "diffServQStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.1": {
+   "name": "diffServRandomDropId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.4": {
+   "name": "diffServRandomDropMaxThreshBytes",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.5": {
+   "name": "diffServRandomDropMaxThreshPkts",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.2": {
+   "name": "diffServRandomDropMinThreshBytes",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.3": {
+   "name": "diffServRandomDropMinThreshPkts",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.3": {
+   "name": "diffServRandomDropNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.6": {
+   "name": "diffServRandomDropProbMax",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.8": {
+   "name": "diffServRandomDropSamplingRate",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.10": {
+   "name": "diffServRandomDropStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.9": {
+   "name": "diffServRandomDropStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.6.4.1.7": {
+   "name": "diffServRandomDropWeight",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.1": {
+   "name": "diffServSchedulerId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.5": {
+   "name": "diffServSchedulerMaxRate",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.3": {
+   "name": "diffServSchedulerMethod",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.4": {
+   "name": "diffServSchedulerMinRate",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.2": {
+   "name": "diffServSchedulerNext",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.97.1.8.1": {
+   "name": "diffServSchedulerNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.7": {
+   "name": "diffServSchedulerStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.8.2.1.6": {
+   "name": "diffServSchedulerStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.4": {
+   "name": "diffServTBParamBurstSize",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "BurstSize"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.1": {
+   "name": "diffServTBParamId",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.5": {
+   "name": "diffServTBParamInterval",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.4.1": {
+   "name": "diffServTBParamNextFree",
+   "mib": "DIFFSERV-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.3": {
+   "name": "diffServTBParamRate",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.7": {
+   "name": "diffServTBParamStatus",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.6": {
+   "name": "diffServTBParamStorage",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.97.1.4.2.1.2": {
+   "name": "diffServTBParamType",
+   "mib": "DIFFSERV-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.47.1.3.2.1.1": {
+   "name": "entAliasLogicalIndexOrZero",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.47.1.3.2.1.2": {
+   "name": "entAliasMappingIdentifier",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.47.1.3.1.1.1": {
+   "name": "entLPPhysicalIndex",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "PhysicalIndex"
+  },
+  "1.3.6.1.2.1.47.1.4.1": {
+   "name": "entLastChangeTime",
+   "mib": "ENTITY-MIB",
+   "kind": "scalar",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.4": {
+   "name": "entLogicalCommunity",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.7": {
+   "name": "entLogicalContextEngineID",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpEngineIdOrNone"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.8": {
+   "name": "entLogicalContextName",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.2": {
+   "name": "entLogicalDescr",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.1": {
+   "name": "entLogicalIndex",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.5": {
+   "name": "entLogicalTAddress",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "TAddress"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.6": {
+   "name": "entLogicalTDomain",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "TDomain"
+  },
+  "1.3.6.1.2.1.47.1.2.1.1.3": {
+   "name": "entLogicalType",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.14": {
+   "name": "entPhysicalAlias",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.15": {
+   "name": "entPhysicalAssetID",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.3.3.1.1": {
+   "name": "entPhysicalChildIndex",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "PhysicalIndex"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.5": {
+   "name": "entPhysicalClass",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "IANAPhysicalClass"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.4": {
+   "name": "entPhysicalContainedIn",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "PhysicalIndexOrZero"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.2": {
+   "name": "entPhysicalDescr",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.9": {
+   "name": "entPhysicalFirmwareRev",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.8": {
+   "name": "entPhysicalHardwareRev",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.1": {
+   "name": "entPhysicalIndex",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "PhysicalIndex"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.16": {
+   "name": "entPhysicalIsFRU",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.17": {
+   "name": "entPhysicalMfgDate",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "DateAndTime"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.12": {
+   "name": "entPhysicalMfgName",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.13": {
+   "name": "entPhysicalModelName",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.7": {
+   "name": "entPhysicalName",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.6": {
+   "name": "entPhysicalParentRelPos",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.11": {
+   "name": "entPhysicalSerialNum",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.10": {
+   "name": "entPhysicalSoftwareRev",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.19": {
+   "name": "entPhysicalUUID",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "UUIDorZero"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.18": {
+   "name": "entPhysicalUris",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.47.1.1.1.1.3": {
+   "name": "entPhysicalVendorType",
+   "mib": "ENTITY-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.99.1.1.1.5": {
+   "name": "entPhySensorOperStatus",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "EntitySensorStatus"
+  },
+  "1.3.6.1.2.1.99.1.1.1.3": {
+   "name": "entPhySensorPrecision",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "EntitySensorPrecision"
+  },
+  "1.3.6.1.2.1.99.1.1.1.2": {
+   "name": "entPhySensorScale",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "EntitySensorDataScale"
+  },
+  "1.3.6.1.2.1.99.1.1.1.1": {
+   "name": "entPhySensorType",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "EntitySensorDataType"
+  },
+  "1.3.6.1.2.1.99.1.1.1.6": {
+   "name": "entPhySensorUnitsDisplay",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.99.1.1.1.4": {
+   "name": "entPhySensorValue",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "EntitySensorValue"
+  },
+  "1.3.6.1.2.1.99.1.1.1.7": {
+   "name": "entPhySensorValueTimeStamp",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.99.1.1.1.8": {
+   "name": "entPhySensorValueUpdateRate",
+   "mib": "ENTITY-SENSOR-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.25.3.2.1.3": {
+   "name": "hrDeviceDescr",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.25.3.2.1.6": {
+   "name": "hrDeviceErrors",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.25.3.2.1.4": {
+   "name": "hrDeviceID",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "ProductID"
+  },
+  "1.3.6.1.2.1.25.3.2.1.1": {
+   "name": "hrDeviceIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.3.2.1.5": {
+   "name": "hrDeviceStatus",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "5": "down",
+    "2": "running",
+    "4": "testing",
+    "1": "unknown",
+    "3": "warning"
+   }
+  },
+  "1.3.6.1.2.1.25.3.2.1.2": {
+   "name": "hrDeviceType",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.25.3.6.1.1": {
+   "name": "hrDiskStorageAccess",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "readOnly",
+    "1": "readWrite"
+   }
+  },
+  "1.3.6.1.2.1.25.3.6.1.4": {
+   "name": "hrDiskStorageCapacity",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "KBytes"
+  },
+  "1.3.6.1.2.1.25.3.6.1.2": {
+   "name": "hrDiskStorageMedia",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "4": "floppyDisk",
+    "3": "hardDisk",
+    "5": "opticalDiskROM",
+    "7": "opticalDiskRW",
+    "6": "opticalDiskWORM",
+    "1": "other",
+    "8": "ramDisk",
+    "2": "unknown"
+   }
+  },
+  "1.3.6.1.2.1.25.3.6.1.3": {
+   "name": "hrDiskStorageRemoveble",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.25.3.8.1.5": {
+   "name": "hrFSAccess",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "readOnly",
+    "1": "readWrite"
+   }
+  },
+  "1.3.6.1.2.1.25.3.8.1.6": {
+   "name": "hrFSBootable",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.25.3.8.1.1": {
+   "name": "hrFSIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.3.8.1.8": {
+   "name": "hrFSLastFullBackupDate",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "DateAndTime"
+  },
+  "1.3.6.1.2.1.25.3.8.1.9": {
+   "name": "hrFSLastPartialBackupDate",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "DateAndTime"
+  },
+  "1.3.6.1.2.1.25.3.8.1.2": {
+   "name": "hrFSMountPoint",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.3.8.1.3": {
+   "name": "hrFSRemoteMountPoint",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.3.8.1.7": {
+   "name": "hrFSStorageIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.3.8.1.4": {
+   "name": "hrFSType",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.25.2.2": {
+   "name": "hrMemorySize",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "KBytes"
+  },
+  "1.3.6.1.2.1.25.3.4.1.1": {
+   "name": "hrNetworkIfIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.25.3.7.1.5": {
+   "name": "hrPartitionFSIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.3.7.1.3": {
+   "name": "hrPartitionID",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.25.3.7.1.1": {
+   "name": "hrPartitionIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.3.7.1.2": {
+   "name": "hrPartitionLabel",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.3.7.1.4": {
+   "name": "hrPartitionSize",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "KBytes"
+  },
+  "1.3.6.1.2.1.25.3.5.1.2": {
+   "name": "hrPrinterDetectedErrorState",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.25.3.5.1.1": {
+   "name": "hrPrinterStatus",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "idle",
+    "1": "other",
+    "4": "printing",
+    "2": "unknown",
+    "5": "warmup"
+   }
+  },
+  "1.3.6.1.2.1.25.3.3.1.1": {
+   "name": "hrProcessorFrwID",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "ProductID"
+  },
+  "1.3.6.1.2.1.25.3.3.1.2": {
+   "name": "hrProcessorLoad",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.6.3.1.5": {
+   "name": "hrSWInstalledDate",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "DateAndTime"
+  },
+  "1.3.6.1.2.1.25.6.3.1.3": {
+   "name": "hrSWInstalledID",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "ProductID"
+  },
+  "1.3.6.1.2.1.25.6.3.1.1": {
+   "name": "hrSWInstalledIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.6.1": {
+   "name": "hrSWInstalledLastChange",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.25.6.2": {
+   "name": "hrSWInstalledLastUpdateTime",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.25.6.3.1.2": {
+   "name": "hrSWInstalledName",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.6.3.1.4": {
+   "name": "hrSWInstalledType",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "4": "application",
+    "3": "deviceDriver",
+    "2": "operatingSystem",
+    "1": "unknown"
+   }
+  },
+  "1.3.6.1.2.1.25.4.1": {
+   "name": "hrSWOSIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.4.2.1.3": {
+   "name": "hrSWRunID",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "ProductID"
+  },
+  "1.3.6.1.2.1.25.4.2.1.1": {
+   "name": "hrSWRunIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.4.2.1.2": {
+   "name": "hrSWRunName",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.4.2.1.5": {
+   "name": "hrSWRunParameters",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.4.2.1.4": {
+   "name": "hrSWRunPath",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.5.1.1.1": {
+   "name": "hrSWRunPerfCPU",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.5.1.1.2": {
+   "name": "hrSWRunPerfMem",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "KBytes"
+  },
+  "1.3.6.1.2.1.25.4.2.1.7": {
+   "name": "hrSWRunStatus",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "4": "invalid",
+    "3": "notRunnable",
+    "2": "runnable",
+    "1": "running"
+   }
+  },
+  "1.3.6.1.2.1.25.4.2.1.6": {
+   "name": "hrSWRunType",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "4": "application",
+    "3": "deviceDriver",
+    "2": "operatingSystem",
+    "1": "unknown"
+   }
+  },
+  "1.3.6.1.2.1.25.2.3.1.7": {
+   "name": "hrStorageAllocationFailures",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.25.2.3.1.4": {
+   "name": "hrStorageAllocationUnits",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.2.3.1.3": {
+   "name": "hrStorageDescr",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.25.2.3.1.1": {
+   "name": "hrStorageIndex",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.2.3.1.5": {
+   "name": "hrStorageSize",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.2.3.1.2": {
+   "name": "hrStorageType",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.25.2.3.1.6": {
+   "name": "hrStorageUsed",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.1.2": {
+   "name": "hrSystemDate",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "DateAndTime"
+  },
+  "1.3.6.1.2.1.25.1.3": {
+   "name": "hrSystemInitialLoadDevice",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.1.4": {
+   "name": "hrSystemInitialLoadParameters",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "InternationalDisplayString"
+  },
+  "1.3.6.1.2.1.25.1.7": {
+   "name": "hrSystemMaxProcesses",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.25.1.5": {
+   "name": "hrSystemNumUsers",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.25.1.6": {
+   "name": "hrSystemProcesses",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.25.1.1": {
+   "name": "hrSystemUptime",
+   "mib": "HOST-RESOURCES-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.31.1.1.1.17": {
+   "name": "ifConnectorPresent",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.31.1.1.1.19": {
+   "name": "ifCounterDiscontinuityTime",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.31.1.1.1.9": {
+   "name": "ifHCInBroadcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.8": {
+   "name": "ifHCInMulticastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.6": {
+   "name": "ifHCInOctets",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.7": {
+   "name": "ifHCInUcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.13": {
+   "name": "ifHCOutBroadcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.12": {
+   "name": "ifHCOutMulticastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.10": {
+   "name": "ifHCOutOctets",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.11": {
+   "name": "ifHCOutUcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.31.1.1.1.15": {
+   "name": "ifHighSpeed",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.31.1.1.1.3": {
+   "name": "ifInBroadcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.13": {
+   "name": "ifInDiscards",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.14": {
+   "name": "ifInErrors",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.31.1.1.1.2": {
+   "name": "ifInMulticastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.12": {
+   "name": "ifInNUcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.10": {
+   "name": "ifInOctets",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.11": {
+   "name": "ifInUcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.15": {
+   "name": "ifInUnknownProtos",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.9": {
+   "name": "ifLastChange",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.31.1.1.1.14": {
+   "name": "ifLinkUpDownTrapEnable",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "disabled",
+    "1": "enabled"
+   }
+  },
+  "1.3.6.1.2.1.2.2.1.4": {
+   "name": "ifMtu",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.2.1": {
+   "name": "ifNumber",
+   "mib": "IF-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.31.1.1.1.5": {
+   "name": "ifOutBroadcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.19": {
+   "name": "ifOutDiscards",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.20": {
+   "name": "ifOutErrors",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.31.1.1.1.4": {
+   "name": "ifOutMulticastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.18": {
+   "name": "ifOutNUcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.16": {
+   "name": "ifOutOctets",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.21": {
+   "name": "ifOutQLen",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.2.2.1.17": {
+   "name": "ifOutUcastPkts",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.2.2.1.6": {
+   "name": "ifPhysAddress",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "PhysAddress"
+  },
+  "1.3.6.1.2.1.31.1.1.1.16": {
+   "name": "ifPromiscuousMode",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.31.1.4.1.1": {
+   "name": "ifRcvAddressAddress",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "PhysAddress"
+  },
+  "1.3.6.1.2.1.31.1.4.1.2": {
+   "name": "ifRcvAddressStatus",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.31.1.4.1.3": {
+   "name": "ifRcvAddressType",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "nonVolatile",
+    "1": "other",
+    "2": "volatile"
+   }
+  },
+  "1.3.6.1.2.1.2.2.1.22": {
+   "name": "ifSpecific",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "OBJECT IDENTIFIER"
+  },
+  "1.3.6.1.2.1.2.2.1.5": {
+   "name": "ifSpeed",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.31.1.2.1.1": {
+   "name": "ifStackHigherLayer",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.31.1.6": {
+   "name": "ifStackLastChange",
+   "mib": "IF-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.31.1.2.1.2": {
+   "name": "ifStackLowerLayer",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.31.1.2.1.3": {
+   "name": "ifStackStatus",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.31.1.5": {
+   "name": "ifTableLastChange",
+   "mib": "IF-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.31.1.3.1.5": {
+   "name": "ifTestCode",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "OBJECT IDENTIFIER"
+  },
+  "1.3.6.1.2.1.31.1.3.1.1": {
+   "name": "ifTestId",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "TestAndIncr"
+  },
+  "1.3.6.1.2.1.31.1.3.1.6": {
+   "name": "ifTestOwner",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "OwnerString"
+  },
+  "1.3.6.1.2.1.31.1.3.1.4": {
+   "name": "ifTestResult",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "6": "aborted",
+    "7": "failed",
+    "3": "inProgress",
+    "1": "none",
+    "4": "notSupported",
+    "2": "success",
+    "5": "unAbleToRun"
+   }
+  },
+  "1.3.6.1.2.1.31.1.3.1.2": {
+   "name": "ifTestStatus",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "inUse",
+    "1": "notInUse"
+   }
+  },
+  "1.3.6.1.2.1.31.1.3.1.3": {
+   "name": "ifTestType",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "AutonomousType"
+  },
+  "1.3.6.1.2.1.2.2.1.3": {
+   "name": "ifType",
+   "mib": "IF-MIB",
+   "kind": "column",
+   "type": "IANAifType"
+  },
+  "1.3.6.1.2.1.52.1.2.1.20": {
+   "name": "intSrvFlowBestEffort",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.52.1.2.1.15": {
+   "name": "intSrvFlowBurst",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "BurstSize"
+  },
+  "1.3.6.1.2.1.52.1.2.1.4": {
+   "name": "intSrvFlowDestAddr",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.52.1.2.1.6": {
+   "name": "intSrvFlowDestAddrLength",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.52.1.2.1.9": {
+   "name": "intSrvFlowDestPort",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Port"
+  },
+  "1.3.6.1.2.1.52.1.2.1.22": {
+   "name": "intSrvFlowDiscard",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.52.1.2.1.11": {
+   "name": "intSrvFlowFlowId",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.52.1.2.1.13": {
+   "name": "intSrvFlowIfAddr",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.52.1.2.1.12": {
+   "name": "intSrvFlowInterface",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.52.1.2.1.19": {
+   "name": "intSrvFlowMaxTU",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "MessageSize"
+  },
+  "1.3.6.1.2.1.52.1.2.1.18": {
+   "name": "intSrvFlowMinTU",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "MessageSize"
+  },
+  "1.3.6.1.2.1.52.2.1": {
+   "name": "intSrvFlowNewIndex",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "scalar",
+   "type": "TestAndIncr"
+  },
+  "1.3.6.1.2.1.52.1.2.1.1": {
+   "name": "intSrvFlowNumber",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "SessionNumber"
+  },
+  "1.3.6.1.2.1.52.1.2.1.24": {
+   "name": "intSrvFlowOrder",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.52.1.2.1.3": {
+   "name": "intSrvFlowOwner",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "management",
+    "1": "other",
+    "2": "rsvp"
+   }
+  },
+  "1.3.6.1.2.1.52.1.2.1.21": {
+   "name": "intSrvFlowPoliced",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.52.1.2.1.10": {
+   "name": "intSrvFlowPort",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Port"
+  },
+  "1.3.6.1.2.1.52.1.2.1.8": {
+   "name": "intSrvFlowProtocol",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Protocol"
+  },
+  "1.3.6.1.2.1.52.1.2.1.17": {
+   "name": "intSrvFlowQueue",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.52.1.2.1.14": {
+   "name": "intSrvFlowRate",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "BitRate"
+  },
+  "1.3.6.1.2.1.52.1.2.1.5": {
+   "name": "intSrvFlowSenderAddr",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.52.1.2.1.7": {
+   "name": "intSrvFlowSenderAddrLength",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.52.1.2.1.23": {
+   "name": "intSrvFlowService",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "QosService"
+  },
+  "1.3.6.1.2.1.52.1.2.1.25": {
+   "name": "intSrvFlowStatus",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.52.1.2.1.2": {
+   "name": "intSrvFlowType",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "SessionType"
+  },
+  "1.3.6.1.2.1.52.1.2.1.16": {
+   "name": "intSrvFlowWeight",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.52.1.1.1.1": {
+   "name": "intSrvIfAttribAllocatedBits",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "BitRate"
+  },
+  "1.3.6.1.2.1.52.1.1.1.3": {
+   "name": "intSrvIfAttribAllocatedBuffer",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "BurstSize"
+  },
+  "1.3.6.1.2.1.52.1.1.1.4": {
+   "name": "intSrvIfAttribFlows",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.52.1.1.1.2": {
+   "name": "intSrvIfAttribMaxAllocatedBits",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "BitRate"
+  },
+  "1.3.6.1.2.1.52.1.1.1.5": {
+   "name": "intSrvIfAttribPropagationDelay",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.52.1.1.1.6": {
+   "name": "intSrvIfAttribStatus",
+   "mib": "INTEGRATED-SERVICES-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.5.13": {
+   "name": "icmpInAddrMaskReps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.12": {
+   "name": "icmpInAddrMasks",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.3": {
+   "name": "icmpInDestUnreachs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.9": {
+   "name": "icmpInEchoReps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.8": {
+   "name": "icmpInEchos",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.2": {
+   "name": "icmpInErrors",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.1": {
+   "name": "icmpInMsgs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.5": {
+   "name": "icmpInParmProbs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.7": {
+   "name": "icmpInRedirects",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.6": {
+   "name": "icmpInSrcQuenchs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.4": {
+   "name": "icmpInTimeExcds",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.11": {
+   "name": "icmpInTimestampReps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.10": {
+   "name": "icmpInTimestamps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.30.1.1": {
+   "name": "icmpMsgStatsIPVersion",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetVersion"
+  },
+  "1.3.6.1.2.1.5.30.1.3": {
+   "name": "icmpMsgStatsInPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.30.1.4": {
+   "name": "icmpMsgStatsOutPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.30.1.2": {
+   "name": "icmpMsgStatsType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.5.26": {
+   "name": "icmpOutAddrMaskReps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.25": {
+   "name": "icmpOutAddrMasks",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.16": {
+   "name": "icmpOutDestUnreachs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.22": {
+   "name": "icmpOutEchoReps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.21": {
+   "name": "icmpOutEchos",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.15": {
+   "name": "icmpOutErrors",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.14": {
+   "name": "icmpOutMsgs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.18": {
+   "name": "icmpOutParmProbs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.20": {
+   "name": "icmpOutRedirects",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.19": {
+   "name": "icmpOutSrcQuenchs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.17": {
+   "name": "icmpOutTimeExcds",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.24": {
+   "name": "icmpOutTimestampReps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.23": {
+   "name": "icmpOutTimestamps",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.29.1.1": {
+   "name": "icmpStatsIPVersion",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetVersion"
+  },
+  "1.3.6.1.2.1.5.29.1.3": {
+   "name": "icmpStatsInErrors",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.29.1.2": {
+   "name": "icmpStatsInMsgs",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.29.1.5": {
+   "name": "icmpStatsOutErrors",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.5.29.1.4": {
+   "name": "icmpStatsOutMsgs",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.20.1.1": {
+   "name": "ipAdEntAddr",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.4.20.1.4": {
+   "name": "ipAdEntBcastAddr",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.4.20.1.2": {
+   "name": "ipAdEntIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.4.20.1.3": {
+   "name": "ipAdEntNetMask",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.4.20.1.5": {
+   "name": "ipAdEntReasmMaxSize",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.4.34.1.2": {
+   "name": "ipAddressAddr",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.4.34.1.1": {
+   "name": "ipAddressAddrType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.4.34.1.8": {
+   "name": "ipAddressCreated",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.34.1.3": {
+   "name": "ipAddressIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.34.1.9": {
+   "name": "ipAddressLastChanged",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.34.1.6": {
+   "name": "ipAddressOrigin",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "IpAddressOriginTC"
+  },
+  "1.3.6.1.2.1.4.34.1.5": {
+   "name": "ipAddressPrefix",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "RowPointer"
+  },
+  "1.3.6.1.2.1.4.32.1.8": {
+   "name": "ipAddressPrefixAdvPreferredLifetime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.32.1.9": {
+   "name": "ipAddressPrefixAdvValidLifetime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.32.1.7": {
+   "name": "ipAddressPrefixAutonomousFlag",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.4.32.1.1": {
+   "name": "ipAddressPrefixIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.32.1.4": {
+   "name": "ipAddressPrefixLength",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddressPrefixLength"
+  },
+  "1.3.6.1.2.1.4.32.1.6": {
+   "name": "ipAddressPrefixOnLinkFlag",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.4.32.1.5": {
+   "name": "ipAddressPrefixOrigin",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "IpAddressPrefixOriginTC"
+  },
+  "1.3.6.1.2.1.4.32.1.3": {
+   "name": "ipAddressPrefixPrefix",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.4.32.1.2": {
+   "name": "ipAddressPrefixType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.4.34.1.10": {
+   "name": "ipAddressRowStatus",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.4.33": {
+   "name": "ipAddressSpinLock",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "TestAndIncr"
+  },
+  "1.3.6.1.2.1.4.34.1.7": {
+   "name": "ipAddressStatus",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "IpAddressStatusTC"
+  },
+  "1.3.6.1.2.1.4.34.1.11": {
+   "name": "ipAddressStorageType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "StorageType"
+  },
+  "1.3.6.1.2.1.4.34.1.4": {
+   "name": "ipAddressType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "anycast",
+    "3": "broadcast",
+    "1": "unicast"
+   }
+  },
+  "1.3.6.1.2.1.4.37.1.2": {
+   "name": "ipDefaultRouterAddress",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.4.37.1.1": {
+   "name": "ipDefaultRouterAddressType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.4.37.1.3": {
+   "name": "ipDefaultRouterIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.37.1.4": {
+   "name": "ipDefaultRouterLifetime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.37.1.5": {
+   "name": "ipDefaultRouterPreference",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "high",
+    "-1": "low",
+    "0": "medium",
+    "-2": "reserved"
+   }
+  },
+  "1.3.6.1.2.1.4.2": {
+   "name": "ipDefaultTTL",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.4.6": {
+   "name": "ipForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.1": {
+   "name": "ipForwarding",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "1": "forwarding",
+    "2": "notForwarding"
+   }
+  },
+  "1.3.6.1.2.1.4.19": {
+   "name": "ipFragCreates",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.18": {
+   "name": "ipFragFails",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.17": {
+   "name": "ipFragOKs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.46": {
+   "name": "ipIfStatsDiscontinuityTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.31.3.1.43": {
+   "name": "ipIfStatsHCInBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.19": {
+   "name": "ipIfStatsHCInDelivers",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.13": {
+   "name": "ipIfStatsHCInForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.37": {
+   "name": "ipIfStatsHCInMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.35": {
+   "name": "ipIfStatsHCInMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.6": {
+   "name": "ipIfStatsHCInOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.4": {
+   "name": "ipIfStatsHCInReceives",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.45": {
+   "name": "ipIfStatsHCOutBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.24": {
+   "name": "ipIfStatsHCOutForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.41": {
+   "name": "ipIfStatsHCOutMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.39": {
+   "name": "ipIfStatsHCOutMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.33": {
+   "name": "ipIfStatsHCOutOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.21": {
+   "name": "ipIfStatsHCOutRequests",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.31": {
+   "name": "ipIfStatsHCOutTransmits",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.3.1.1": {
+   "name": "ipIfStatsIPVersion",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetVersion"
+  },
+  "1.3.6.1.2.1.4.31.3.1.2": {
+   "name": "ipIfStatsIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.31.3.1.9": {
+   "name": "ipIfStatsInAddrErrors",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.42": {
+   "name": "ipIfStatsInBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.18": {
+   "name": "ipIfStatsInDelivers",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.17": {
+   "name": "ipIfStatsInDiscards",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.12": {
+   "name": "ipIfStatsInForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.7": {
+   "name": "ipIfStatsInHdrErrors",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.36": {
+   "name": "ipIfStatsInMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.34": {
+   "name": "ipIfStatsInMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.8": {
+   "name": "ipIfStatsInNoRoutes",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.5": {
+   "name": "ipIfStatsInOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.3": {
+   "name": "ipIfStatsInReceives",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.11": {
+   "name": "ipIfStatsInTruncatedPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.10": {
+   "name": "ipIfStatsInUnknownProtos",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.44": {
+   "name": "ipIfStatsOutBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.25": {
+   "name": "ipIfStatsOutDiscards",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.23": {
+   "name": "ipIfStatsOutForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.29": {
+   "name": "ipIfStatsOutFragCreates",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.28": {
+   "name": "ipIfStatsOutFragFails",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.27": {
+   "name": "ipIfStatsOutFragOKs",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.26": {
+   "name": "ipIfStatsOutFragReqds",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.40": {
+   "name": "ipIfStatsOutMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.38": {
+   "name": "ipIfStatsOutMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.32": {
+   "name": "ipIfStatsOutOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.20": {
+   "name": "ipIfStatsOutRequests",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.30": {
+   "name": "ipIfStatsOutTransmits",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.16": {
+   "name": "ipIfStatsReasmFails",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.15": {
+   "name": "ipIfStatsReasmOKs",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.14": {
+   "name": "ipIfStatsReasmReqds",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.3.1.47": {
+   "name": "ipIfStatsRefreshRate",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.31.2": {
+   "name": "ipIfStatsTableLastChange",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.5": {
+   "name": "ipInAddrErrors",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.9": {
+   "name": "ipInDelivers",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.8": {
+   "name": "ipInDiscards",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.4": {
+   "name": "ipInHdrErrors",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.3": {
+   "name": "ipInReceives",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.7": {
+   "name": "ipInUnknownProtos",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.22.1.1": {
+   "name": "ipNetToMediaIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.4.22.1.3": {
+   "name": "ipNetToMediaNetAddress",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.4.22.1.2": {
+   "name": "ipNetToMediaPhysAddress",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "PhysAddress"
+  },
+  "1.3.6.1.2.1.4.22.1.4": {
+   "name": "ipNetToMediaType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "dynamic",
+    "2": "invalid",
+    "1": "other",
+    "4": "static"
+   }
+  },
+  "1.3.6.1.2.1.4.35.1.1": {
+   "name": "ipNetToPhysicalIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.35.1.5": {
+   "name": "ipNetToPhysicalLastUpdated",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.35.1.3": {
+   "name": "ipNetToPhysicalNetAddress",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.4.35.1.2": {
+   "name": "ipNetToPhysicalNetAddressType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.4.35.1.4": {
+   "name": "ipNetToPhysicalPhysAddress",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "PhysAddress"
+  },
+  "1.3.6.1.2.1.4.35.1.8": {
+   "name": "ipNetToPhysicalRowStatus",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.4.35.1.7": {
+   "name": "ipNetToPhysicalState",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "delay",
+    "7": "incomplete",
+    "5": "invalid",
+    "4": "probe",
+    "1": "reachable",
+    "2": "stale",
+    "6": "unknown"
+   }
+  },
+  "1.3.6.1.2.1.4.35.1.6": {
+   "name": "ipNetToPhysicalType",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "dynamic",
+    "2": "invalid",
+    "5": "local",
+    "1": "other",
+    "4": "static"
+   }
+  },
+  "1.3.6.1.2.1.4.11": {
+   "name": "ipOutDiscards",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.12": {
+   "name": "ipOutNoRoutes",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.10": {
+   "name": "ipOutRequests",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.16": {
+   "name": "ipReasmFails",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.15": {
+   "name": "ipReasmOKs",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.14": {
+   "name": "ipReasmReqds",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.13": {
+   "name": "ipReasmTimeout",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.4.23": {
+   "name": "ipRoutingDiscards",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.46": {
+   "name": "ipSystemStatsDiscontinuityTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.31.1.1.43": {
+   "name": "ipSystemStatsHCInBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.19": {
+   "name": "ipSystemStatsHCInDelivers",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.13": {
+   "name": "ipSystemStatsHCInForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.37": {
+   "name": "ipSystemStatsHCInMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.35": {
+   "name": "ipSystemStatsHCInMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.6": {
+   "name": "ipSystemStatsHCInOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.4": {
+   "name": "ipSystemStatsHCInReceives",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.45": {
+   "name": "ipSystemStatsHCOutBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.24": {
+   "name": "ipSystemStatsHCOutForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.41": {
+   "name": "ipSystemStatsHCOutMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.39": {
+   "name": "ipSystemStatsHCOutMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.33": {
+   "name": "ipSystemStatsHCOutOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.21": {
+   "name": "ipSystemStatsHCOutRequests",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.31": {
+   "name": "ipSystemStatsHCOutTransmits",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.4.31.1.1.1": {
+   "name": "ipSystemStatsIPVersion",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetVersion"
+  },
+  "1.3.6.1.2.1.4.31.1.1.9": {
+   "name": "ipSystemStatsInAddrErrors",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.42": {
+   "name": "ipSystemStatsInBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.18": {
+   "name": "ipSystemStatsInDelivers",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.17": {
+   "name": "ipSystemStatsInDiscards",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.12": {
+   "name": "ipSystemStatsInForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.7": {
+   "name": "ipSystemStatsInHdrErrors",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.36": {
+   "name": "ipSystemStatsInMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.34": {
+   "name": "ipSystemStatsInMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.8": {
+   "name": "ipSystemStatsInNoRoutes",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.5": {
+   "name": "ipSystemStatsInOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.3": {
+   "name": "ipSystemStatsInReceives",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.11": {
+   "name": "ipSystemStatsInTruncatedPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.10": {
+   "name": "ipSystemStatsInUnknownProtos",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.44": {
+   "name": "ipSystemStatsOutBcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.25": {
+   "name": "ipSystemStatsOutDiscards",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.23": {
+   "name": "ipSystemStatsOutForwDatagrams",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.29": {
+   "name": "ipSystemStatsOutFragCreates",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.28": {
+   "name": "ipSystemStatsOutFragFails",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.27": {
+   "name": "ipSystemStatsOutFragOKs",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.26": {
+   "name": "ipSystemStatsOutFragReqds",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.40": {
+   "name": "ipSystemStatsOutMcastOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.38": {
+   "name": "ipSystemStatsOutMcastPkts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.22": {
+   "name": "ipSystemStatsOutNoRoutes",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.32": {
+   "name": "ipSystemStatsOutOctets",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.20": {
+   "name": "ipSystemStatsOutRequests",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.30": {
+   "name": "ipSystemStatsOutTransmits",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.16": {
+   "name": "ipSystemStatsReasmFails",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.15": {
+   "name": "ipSystemStatsReasmOKs",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.14": {
+   "name": "ipSystemStatsReasmReqds",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.4.31.1.1.47": {
+   "name": "ipSystemStatsRefreshRate",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.28.1.3": {
+   "name": "ipv4InterfaceEnableStatus",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "down",
+    "1": "up"
+   }
+  },
+  "1.3.6.1.2.1.4.28.1.1": {
+   "name": "ipv4InterfaceIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.28.1.2": {
+   "name": "ipv4InterfaceReasmMaxSize",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.4.28.1.4": {
+   "name": "ipv4InterfaceRetransmitTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.27": {
+   "name": "ipv4InterfaceTableLastChange",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.30.1.5": {
+   "name": "ipv6InterfaceEnableStatus",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "down",
+    "1": "up"
+   }
+  },
+  "1.3.6.1.2.1.4.30.1.8": {
+   "name": "ipv6InterfaceForwarding",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "forwarding",
+    "2": "notForwarding"
+   }
+  },
+  "1.3.6.1.2.1.4.30.1.3": {
+   "name": "ipv6InterfaceIdentifier",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Ipv6AddressIfIdentifierTC"
+  },
+  "1.3.6.1.2.1.4.30.1.1": {
+   "name": "ipv6InterfaceIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.30.1.6": {
+   "name": "ipv6InterfaceReachableTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.30.1.2": {
+   "name": "ipv6InterfaceReasmMaxSize",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.30.1.7": {
+   "name": "ipv6InterfaceRetransmitTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.29": {
+   "name": "ipv6InterfaceTableLastChange",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.4.26": {
+   "name": "ipv6IpDefaultHopLimit",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.4.25": {
+   "name": "ipv6IpForwarding",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "1": "forwarding",
+    "2": "notForwarding"
+   }
+  },
+  "1.3.6.1.2.1.4.39.1.10": {
+   "name": "ipv6RouterAdvertCurHopLimit",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.11": {
+   "name": "ipv6RouterAdvertDefaultLifetime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.1": {
+   "name": "ipv6RouterAdvertIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.39.1.7": {
+   "name": "ipv6RouterAdvertLinkMTU",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.5": {
+   "name": "ipv6RouterAdvertManagedFlag",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.4.39.1.3": {
+   "name": "ipv6RouterAdvertMaxInterval",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.4": {
+   "name": "ipv6RouterAdvertMinInterval",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.6": {
+   "name": "ipv6RouterAdvertOtherConfigFlag",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.4.39.1.8": {
+   "name": "ipv6RouterAdvertReachableTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.9": {
+   "name": "ipv6RouterAdvertRetransmitTime",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.4.39.1.12": {
+   "name": "ipv6RouterAdvertRowStatus",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.4.39.1.2": {
+   "name": "ipv6RouterAdvertSendAdverts",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.4.38": {
+   "name": "ipv6RouterAdvertSpinLock",
+   "mib": "IP-MIB",
+   "kind": "scalar",
+   "type": "TestAndIncr"
+  },
+  "1.3.6.1.2.1.4.36.1.3": {
+   "name": "ipv6ScopeZoneIndex3",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.6": {
+   "name": "ipv6ScopeZoneIndex6",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.7": {
+   "name": "ipv6ScopeZoneIndex7",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.9": {
+   "name": "ipv6ScopeZoneIndex9",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.10": {
+   "name": "ipv6ScopeZoneIndexA",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.4": {
+   "name": "ipv6ScopeZoneIndexAdminLocal",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.11": {
+   "name": "ipv6ScopeZoneIndexB",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.12": {
+   "name": "ipv6ScopeZoneIndexC",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.13": {
+   "name": "ipv6ScopeZoneIndexD",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.1": {
+   "name": "ipv6ScopeZoneIndexIfIndex",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.2": {
+   "name": "ipv6ScopeZoneIndexLinkLocal",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.8": {
+   "name": "ipv6ScopeZoneIndexOrganizationLocal",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.4.36.1.5": {
+   "name": "ipv6ScopeZoneIndexSiteLocal",
+   "mib": "IP-MIB",
+   "kind": "column",
+   "type": "InetZoneIndex"
+  },
+  "1.3.6.1.2.1.138.1.10.1.12": {
+   "name": "isisAdjState",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "1": "down",
+    "4": "failed",
+    "2": "initializing",
+    "3": "up"
+   }
+  },
+  "1.3.6.1.2.1.138.0.17": {
+   "name": "isisAdjacencyChange",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.1.3.1.1": {
+   "name": "isisAreaAddr",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.0.12": {
+   "name": "isisAreaMismatch",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.0.4": {
+   "name": "isisAttemptToExceedMaxSequence",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.0.10": {
+   "name": "isisAuthenticationFailure",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.0.9": {
+   "name": "isisAuthenticationTypeFailure",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.13": {
+   "name": "isisCirc3WayEnabled",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.2": {
+   "name": "isisCircAdjChanges",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.3": {
+   "name": "isisCircAdminState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisAdminState"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.9": {
+   "name": "isisCircAuthFails",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.8": {
+   "name": "isisCircAuthTypeFails",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.4": {
+   "name": "isisCircExistState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.6": {
+   "name": "isisCircExtDomain",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.14": {
+   "name": "isisCircExtendedCircID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.6": {
+   "name": "isisCircIDFieldLenMismatches",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.2": {
+   "name": "isisCircIfIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InterfaceIndex"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.1": {
+   "name": "isisCircIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IndexInteger"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.4": {
+   "name": "isisCircInitFails",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.10": {
+   "name": "isisCircLANDesISChanges",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.12": {
+   "name": "isisCircLastUpTime",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.13": {
+   "name": "isisCircLevelCSNPInterval",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.10": {
+   "name": "isisCircLevelDRHelloTimer",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.7": {
+   "name": "isisCircLevelDesIS",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisCircuitID"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.8": {
+   "name": "isisCircLevelHelloMultiplier",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.9": {
+   "name": "isisCircLevelHelloTimer",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.6": {
+   "name": "isisCircLevelID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisCircuitID"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.5": {
+   "name": "isisCircLevelIDOctet",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.4": {
+   "name": "isisCircLevelISPriority",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISPriority"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.1": {
+   "name": "isisCircLevelIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISLevel"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.11": {
+   "name": "isisCircLevelLSPThrottle",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.2": {
+   "name": "isisCircLevelMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisDefaultMetric"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.12": {
+   "name": "isisCircLevelMinLSPRetransInt",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.14": {
+   "name": "isisCircLevelPartSNPInterval",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.7": {
+   "name": "isisCircLevelType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisLevel"
+  },
+  "1.3.6.1.2.1.138.1.4.1.1.3": {
+   "name": "isisCircLevelWideMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisWideMetric"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.7": {
+   "name": "isisCircMaxAreaAddrMismatches",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.10": {
+   "name": "isisCircMeshGroup",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.9": {
+   "name": "isisCircMeshGroupEnabled",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "blocked",
+    "1": "inactive",
+    "3": "set"
+   }
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.3": {
+   "name": "isisCircNumAdj",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.8": {
+   "name": "isisCircPassiveCircuit",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.5": {
+   "name": "isisCircRejAdjs",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.11": {
+   "name": "isisCircSmallHellos",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.3.2.1.5": {
+   "name": "isisCircType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "broadcast",
+    "5": "dA",
+    "2": "ptToPt",
+    "3": "staticIn",
+    "4": "staticOut"
+   }
+  },
+  "1.3.6.1.2.1.138.1.5.2.1.1": {
+   "name": "isisCircuitType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "lanlevel1",
+    "2": "lanlevel2",
+    "3": "p2pcircuit"
+   }
+  },
+  "1.3.6.1.2.1.138.0.3": {
+   "name": "isisCorruptedLSPDetected",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.0.1": {
+   "name": "isisDatabaseOverload",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.10.1.13": {
+   "name": "isisErrorOffset",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.10.1.14": {
+   "name": "isisErrorTLVType",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.0.5": {
+   "name": "isisIDLenMismatch",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.9": {
+   "name": "isisIPRAAdminState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisAdminState"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.2": {
+   "name": "isisIPRADest",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.3": {
+   "name": "isisIPRADestPrefixLen",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressPrefixLength"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.1": {
+   "name": "isisIPRADestType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.8": {
+   "name": "isisIPRAExistState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.12": {
+   "name": "isisIPRAFullMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisFullMetric"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.10": {
+   "name": "isisIPRAMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisDefaultMetric"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.11": {
+   "name": "isisIPRAMetricType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisMetricType"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.6": {
+   "name": "isisIPRANextHop",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.4": {
+   "name": "isisIPRANextHopIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.5": {
+   "name": "isisIPRANextHopType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.13": {
+   "name": "isisIPRASNPAAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.14": {
+   "name": "isisIPRASourceType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "9": "bgp",
+    "2": "direct",
+    "8": "eigrp",
+    "7": "igrp",
+    "5": "isis",
+    "3": "ospfv2",
+    "4": "ospfv3",
+    "10": "other",
+    "6": "rip",
+    "1": "static"
+   }
+  },
+  "1.3.6.1.2.1.138.1.8.1.1.7": {
+   "name": "isisIPRAType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "automatic",
+    "1": "manual"
+   }
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.3": {
+   "name": "isisISAdj3WayState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "down",
+    "3": "failed",
+    "1": "initializing",
+    "0": "up"
+   }
+  },
+  "1.3.6.1.2.1.138.1.6.2.1.1": {
+   "name": "isisISAdjAreaAddrIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.6.2.1.2": {
+   "name": "isisISAdjAreaAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.9": {
+   "name": "isisISAdjHoldTimer",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.6.3.1.3": {
+   "name": "isisISAdjIPAddrAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.138.1.6.3.1.1": {
+   "name": "isisISAdjIPAddrIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.6.3.1.2": {
+   "name": "isisISAdjIPAddrType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.1": {
+   "name": "isisISAdjIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.11": {
+   "name": "isisISAdjLastUpTime",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.7": {
+   "name": "isisISAdjNbrExtendedCircID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.10": {
+   "name": "isisISAdjNeighPriority",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISPriority"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.4": {
+   "name": "isisISAdjNeighSNPAAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.6": {
+   "name": "isisISAdjNeighSysID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisSystemID"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.5": {
+   "name": "isisISAdjNeighSysType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "l1IntermediateSystem",
+    "3": "l1L2IntermediateSystem",
+    "2": "l2IntermediateSystem",
+    "4": "unknown"
+   }
+  },
+  "1.3.6.1.2.1.138.1.6.4.1.1": {
+   "name": "isisISAdjProtSuppProtocol",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisSupportedProtocol"
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.2": {
+   "name": "isisISAdjState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "down",
+    "4": "failed",
+    "2": "initializing",
+    "3": "up"
+   }
+  },
+  "1.3.6.1.2.1.138.1.6.1.1.8": {
+   "name": "isisISAdjUsage",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisLevel"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.8": {
+   "name": "isisLSPAttributes",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned8TC"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.5": {
+   "name": "isisLSPChecksum",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.0.18": {
+   "name": "isisLSPErrorDetected",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.2": {
+   "name": "isisLSPID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisLinkStatePDUID"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.1": {
+   "name": "isisLSPLevel",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISLevel"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.6": {
+   "name": "isisLSPLifetimeRemain",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.7": {
+   "name": "isisLSPPDULength",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.3": {
+   "name": "isisLSPSeq",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.9.2.1.3": {
+   "name": "isisLSPTLVChecksum",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.9.2.1.1": {
+   "name": "isisLSPTLVIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.9.2.1.5": {
+   "name": "isisLSPTLVLen",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned8TC"
+  },
+  "1.3.6.1.2.1.138.1.9.2.1.2": {
+   "name": "isisLSPTLVSeq",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.9.2.1.4": {
+   "name": "isisLSPTLVType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned8TC"
+  },
+  "1.3.6.1.2.1.138.1.9.2.1.6": {
+   "name": "isisLSPTLVValue",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.138.0.14": {
+   "name": "isisLSPTooLargeToPropagate",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.9.1.1.4": {
+   "name": "isisLSPZeroLife",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.1.2.1.1": {
+   "name": "isisManAreaAddr",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.1.2.1.2": {
+   "name": "isisManAreaAddrExistState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.138.0.2": {
+   "name": "isisManualAddressDrops",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.0.6": {
+   "name": "isisMaxAreaAddressesMismatch",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.3.1": {
+   "name": "isisNextCircIndex",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IndexIntegerNextFree"
+  },
+  "1.3.6.1.2.1.138.1.10.1.15": {
+   "name": "isisNotificationAreaAddress",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.10.1.2": {
+   "name": "isisNotificationCircIfIndex",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.10.1.1": {
+   "name": "isisNotificationSysLevelIndex",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisLevel"
+  },
+  "1.3.6.1.2.1.138.0.15": {
+   "name": "isisOrigLSPBuffSizeMismatch",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.0.7": {
+   "name": "isisOwnLSPPurge",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.7": {
+   "name": "isisPacketCountCSNP",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.2": {
+   "name": "isisPacketCountDirection",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "receiving",
+    "1": "sending"
+   }
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.5": {
+   "name": "isisPacketCountESHello",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.3": {
+   "name": "isisPacketCountIIHello",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.4": {
+   "name": "isisPacketCountISHello",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.6": {
+   "name": "isisPacketCountLSP",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.1": {
+   "name": "isisPacketCountLevel",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISLevel"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.8": {
+   "name": "isisPacketCountPSNP",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.3.1.9": {
+   "name": "isisPacketCountUnknown",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.10.1.10": {
+   "name": "isisPduBufferSize",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.10.1.5": {
+   "name": "isisPduFieldLen",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned8TC"
+  },
+  "1.3.6.1.2.1.138.1.10.1.4": {
+   "name": "isisPduFragment",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisPDUHeader"
+  },
+  "1.3.6.1.2.1.138.1.10.1.3": {
+   "name": "isisPduLspId",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisLinkStatePDUID"
+  },
+  "1.3.6.1.2.1.138.1.10.1.8": {
+   "name": "isisPduLspSize",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.10.1.6": {
+   "name": "isisPduMaxAreaAddress",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned8TC"
+  },
+  "1.3.6.1.2.1.138.1.10.1.9": {
+   "name": "isisPduOriginatingBufferSize",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.10.1.7": {
+   "name": "isisPduProtocolVersion",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned8TC"
+  },
+  "1.3.6.1.2.1.138.1.10.1.11": {
+   "name": "isisPduProtocolsSupported",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.138.0.16": {
+   "name": "isisProtocolsSupportedMismatch",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.4": {
+   "name": "isisRAAddrPrefix",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.3": {
+   "name": "isisRAAdminState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisAdminState"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.2": {
+   "name": "isisRAExistState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.1": {
+   "name": "isisRAIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.5": {
+   "name": "isisRAMapType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "explicit",
+    "4": "extractDSP",
+    "3": "extractIDI",
+    "1": "none"
+   }
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.6": {
+   "name": "isisRAMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisDefaultMetric"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.7": {
+   "name": "isisRAMetricType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisMetricType"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.8": {
+   "name": "isisRASNPAAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.9": {
+   "name": "isisRASNPAMask",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.10": {
+   "name": "isisRASNPAPrefix",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisOSINSAddress"
+  },
+  "1.3.6.1.2.1.138.1.7.1.1.11": {
+   "name": "isisRAType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "automatic",
+    "1": "manual"
+   }
+  },
+  "1.3.6.1.2.1.138.1.1.5.1.2": {
+   "name": "isisRedistributeAddrAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.138.1.1.5.1.4": {
+   "name": "isisRedistributeAddrExistState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.138.1.1.5.1.3": {
+   "name": "isisRedistributeAddrPrefixLen",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressPrefixLength"
+  },
+  "1.3.6.1.2.1.138.1.1.5.1.1": {
+   "name": "isisRedistributeAddrType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.138.0.13": {
+   "name": "isisRejectedAdjacency",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.1.6.1.3": {
+   "name": "isisRouterHostName",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "SnmpAdminString"
+  },
+  "1.3.6.1.2.1.138.1.1.6.1.4": {
+   "name": "isisRouterID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.1.6.1.2": {
+   "name": "isisRouterLevel",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISLevel"
+  },
+  "1.3.6.1.2.1.138.1.1.6.1.1": {
+   "name": "isisRouterSysID",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisSystemID"
+  },
+  "1.3.6.1.2.1.138.0.8": {
+   "name": "isisSequenceNumberSkip",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.138.1.1.4.1.4": {
+   "name": "isisSummAddrExistState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.138.1.1.4.1.6": {
+   "name": "isisSummAddrFullMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisFullMetric"
+  },
+  "1.3.6.1.2.1.138.1.1.4.1.5": {
+   "name": "isisSummAddrMetric",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisDefaultMetric"
+  },
+  "1.3.6.1.2.1.138.1.1.4.1.3": {
+   "name": "isisSummAddrPrefixLen",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressPrefixLength"
+  },
+  "1.3.6.1.2.1.138.1.1.4.1.2": {
+   "name": "isisSummAddress",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.138.1.1.4.1.1": {
+   "name": "isisSummAddressType",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.138.1.1.1.8": {
+   "name": "isisSysAdminState",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisAdminState"
+  },
+  "1.3.6.1.2.1.138.1.1.1.3": {
+   "name": "isisSysID",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisSystemID"
+  },
+  "1.3.6.1.2.1.138.1.1.1.9": {
+   "name": "isisSysL2toL1Leaking",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.1": {
+   "name": "isisSysLevelIndex",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISLevel"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.7": {
+   "name": "isisSysLevelMetricStyle",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisMetricStyle"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.3": {
+   "name": "isisSysLevelMinLSPGenInt",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.2": {
+   "name": "isisSysLevelOrigLSPBuffSize",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisLSPBuffSize"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.8": {
+   "name": "isisSysLevelSPFConsiders",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisMetricStyle"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.5": {
+   "name": "isisSysLevelSetOverload",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.6": {
+   "name": "isisSysLevelSetOverloadUntil",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.4": {
+   "name": "isisSysLevelState",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisLevelState"
+  },
+  "1.3.6.1.2.1.138.1.2.1.1.9": {
+   "name": "isisSysLevelTEEnabled",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.1.1.2": {
+   "name": "isisSysLevelType",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisLevel"
+  },
+  "1.3.6.1.2.1.138.1.1.1.10": {
+   "name": "isisSysMaxAge",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.1.1.5": {
+   "name": "isisSysMaxLSPGenInt",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.1.1.4": {
+   "name": "isisSysMaxPathSplits",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.138.1.1.1.13": {
+   "name": "isisSysNotificationEnable",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.138.1.1.1.6": {
+   "name": "isisSysPollESHelloRate",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.1.1.12": {
+   "name": "isisSysProtSupported",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "Bits"
+  },
+  "1.3.6.1.2.1.138.1.1.1.11": {
+   "name": "isisSysReceiveLSPBufferSize",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.7": {
+   "name": "isisSysStatAttmptToExMaxSeqNums",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.4": {
+   "name": "isisSysStatAuthFails",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.3": {
+   "name": "isisSysStatAuthTypeFails",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.2": {
+   "name": "isisSysStatCorrLSPs",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.10": {
+   "name": "isisSysStatIDFieldLenMismatches",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.5": {
+   "name": "isisSysStatLSPDbaseOloads",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.13": {
+   "name": "isisSysStatLSPErrors",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.1": {
+   "name": "isisSysStatLevel",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "IsisISLevel"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.6": {
+   "name": "isisSysStatManAddrDropFromAreas",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.9": {
+   "name": "isisSysStatOwnLSPPurges",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.11": {
+   "name": "isisSysStatPartChanges",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.12": {
+   "name": "isisSysStatSPFRuns",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.5.1.1.8": {
+   "name": "isisSysStatSeqNumSkips",
+   "mib": "ISIS-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.138.1.1.1.1": {
+   "name": "isisSysVersion",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "1": "one",
+    "0": "unknown"
+   }
+  },
+  "1.3.6.1.2.1.138.1.1.1.7": {
+   "name": "isisSysWaitTime",
+   "mib": "ISIS-MIB",
+   "kind": "scalar",
+   "type": "IsisUnsigned16TC"
+  },
+  "1.3.6.1.2.1.138.0.11": {
+   "name": "isisVersionSkew",
+   "mib": "ISIS-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.1.5": {
+   "name": "ospfASBdrRtrStatus",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.7.1.2": {
+   "name": "ospfAddressLessIf",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.14.1.2": {
+   "name": "ospfAdminStat",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Status"
+  },
+  "1.3.6.1.2.1.14.14.1.1": {
+   "name": "ospfAreaAggregateAreaID",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.14.1.6": {
+   "name": "ospfAreaAggregateEffect",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "advertiseMatching",
+    "2": "doNotAdvertiseMatching"
+   }
+  },
+  "1.3.6.1.2.1.14.14.1.7": {
+   "name": "ospfAreaAggregateExtRouteTag",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.14.1.2": {
+   "name": "ospfAreaAggregateLsdbType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "7": "nssaExternalLink",
+    "3": "summaryLink"
+   }
+  },
+  "1.3.6.1.2.1.14.14.1.4": {
+   "name": "ospfAreaAggregateMask",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.14.1.3": {
+   "name": "ospfAreaAggregateNet",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.14.1.5": {
+   "name": "ospfAreaAggregateStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.2.1.5": {
+   "name": "ospfAreaBdrRtrCount",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.1.4": {
+   "name": "ospfAreaBdrRtrStatus",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.2.1.1": {
+   "name": "ospfAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.2.1.8": {
+   "name": "ospfAreaLsaCksumSum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.2.1.7": {
+   "name": "ospfAreaLsaCount",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.20.1.1": {
+   "name": "ospfAreaLsaCountAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.20.1.2": {
+   "name": "ospfAreaLsaCountLsaType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "10": "areaOpaqueLink",
+    "4": "asSummaryLink",
+    "6": "multicastLink",
+    "2": "networkLink",
+    "7": "nssaExternalLink",
+    "1": "routerLink",
+    "3": "summaryLink"
+   }
+  },
+  "1.3.6.1.2.1.14.20.1.3": {
+   "name": "ospfAreaLsaCountNumber",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.2.1.14": {
+   "name": "ospfAreaNssaTranslatorEvents",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.2.1.11": {
+   "name": "ospfAreaNssaTranslatorRole",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "always",
+    "2": "candidate"
+   }
+  },
+  "1.3.6.1.2.1.14.2.1.13": {
+   "name": "ospfAreaNssaTranslatorStabilityInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "PositiveInteger"
+  },
+  "1.3.6.1.2.1.14.2.1.12": {
+   "name": "ospfAreaNssaTranslatorState",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "disabled",
+    "2": "elected",
+    "1": "enabled"
+   }
+  },
+  "1.3.6.1.2.1.14.5.1.1": {
+   "name": "ospfAreaRangeAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.5.1.5": {
+   "name": "ospfAreaRangeEffect",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "advertiseMatching",
+    "2": "doNotAdvertiseMatching"
+   }
+  },
+  "1.3.6.1.2.1.14.5.1.3": {
+   "name": "ospfAreaRangeMask",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.5.1.2": {
+   "name": "ospfAreaRangeNet",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.5.1.4": {
+   "name": "ospfAreaRangeStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.2.1.10": {
+   "name": "ospfAreaStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.2.1.9": {
+   "name": "ospfAreaSummary",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "noAreaSummary",
+    "2": "sendAreaSummary"
+   }
+  },
+  "1.3.6.1.2.1.14.2.1.6": {
+   "name": "ospfAsBdrRtrCount",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.1.25": {
+   "name": "ospfAsLsaCksumSum",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.1.24": {
+   "name": "ospfAsLsaCount",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.19.1.7": {
+   "name": "ospfAsLsdbAdvertisement",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.19.1.5": {
+   "name": "ospfAsLsdbAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.19.1.6": {
+   "name": "ospfAsLsdbChecksum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.19.1.2": {
+   "name": "ospfAsLsdbLsid",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.19.1.3": {
+   "name": "ospfAsLsdbRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.19.1.4": {
+   "name": "ospfAsLsdbSequence",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.19.1.1": {
+   "name": "ospfAsLsdbType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "5": "asExternalLink",
+    "11": "asOpaqueLink"
+   }
+  },
+  "1.3.6.1.2.1.14.2.1.2": {
+   "name": "ospfAuthType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OspfAuthenticationType"
+  },
+  "1.3.6.1.2.1.14.1.14": {
+   "name": "ospfDemandExtensions",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.1.28": {
+   "name": "ospfDiscontinuityTime",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.14.1.13": {
+   "name": "ospfExitOverflowInterval",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "PositiveInteger"
+  },
+  "1.3.6.1.2.1.14.12.1.7": {
+   "name": "ospfExtLsdbAdvertisement",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.12.1.5": {
+   "name": "ospfExtLsdbAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.12.1.6": {
+   "name": "ospfExtLsdbChecksum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.1.11": {
+   "name": "ospfExtLsdbLimit",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.12.1.2": {
+   "name": "ospfExtLsdbLsid",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.12.1.3": {
+   "name": "ospfExtLsdbRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.12.1.4": {
+   "name": "ospfExtLsdbSequence",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.12.1.1": {
+   "name": "ospfExtLsdbType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "5": "asExternalLink"
+   }
+  },
+  "1.3.6.1.2.1.14.1.7": {
+   "name": "ospfExternLsaCksumSum",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.1.6": {
+   "name": "ospfExternLsaCount",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.6.1.5": {
+   "name": "ospfHostAreaID",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.6.1.6": {
+   "name": "ospfHostCfgAreaID",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.6.1.1": {
+   "name": "ospfHostIpAddress",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.6.1.3": {
+   "name": "ospfHostMetric",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Metric"
+  },
+  "1.3.6.1.2.1.14.6.1.4": {
+   "name": "ospfHostStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.6.1.2": {
+   "name": "ospfHostTOS",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "TOSType"
+  },
+  "1.3.6.1.2.1.14.7.1.5": {
+   "name": "ospfIfAdminStat",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Status"
+  },
+  "1.3.6.1.2.1.14.7.1.3": {
+   "name": "ospfIfAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.7.1.16": {
+   "name": "ospfIfAuthKey",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.7.1.20": {
+   "name": "ospfIfAuthType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OspfAuthenticationType"
+  },
+  "1.3.6.1.2.1.14.7.1.14": {
+   "name": "ospfIfBackupDesignatedRouter",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.7.1.24": {
+   "name": "ospfIfBackupDesignatedRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.7.1.19": {
+   "name": "ospfIfDemand",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.7.1.13": {
+   "name": "ospfIfDesignatedRouter",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.7.1.23": {
+   "name": "ospfIfDesignatedRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.7.1.15": {
+   "name": "ospfIfEvents",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.7.1.9": {
+   "name": "ospfIfHelloInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "HelloRange"
+  },
+  "1.3.6.1.2.1.14.7.1.1": {
+   "name": "ospfIfIpAddress",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.7.1.22": {
+   "name": "ospfIfLsaCksumSum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.7.1.21": {
+   "name": "ospfIfLsaCount",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.8.1.2": {
+   "name": "ospfIfMetricAddressLessIf",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.14.8.1.1": {
+   "name": "ospfIfMetricIpAddress",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.8.1.5": {
+   "name": "ospfIfMetricStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.8.1.3": {
+   "name": "ospfIfMetricTOS",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "TOSType"
+  },
+  "1.3.6.1.2.1.14.8.1.4": {
+   "name": "ospfIfMetricValue",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Metric"
+  },
+  "1.3.6.1.2.1.14.7.1.18": {
+   "name": "ospfIfMulticastForwarding",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "blocked",
+    "2": "multicast",
+    "3": "unicast"
+   }
+  },
+  "1.3.6.1.2.1.14.7.1.11": {
+   "name": "ospfIfPollInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "PositiveInteger"
+  },
+  "1.3.6.1.2.1.14.7.1.8": {
+   "name": "ospfIfRetransInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "UpToMaxAge"
+  },
+  "1.3.6.1.2.1.14.7.1.10": {
+   "name": "ospfIfRtrDeadInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "PositiveInteger"
+  },
+  "1.3.6.1.2.1.14.7.1.6": {
+   "name": "ospfIfRtrPriority",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "DesignatedRouterPriority"
+  },
+  "1.3.6.1.2.1.14.7.1.12": {
+   "name": "ospfIfState",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "6": "backupDesignatedRouter",
+    "5": "designatedRouter",
+    "1": "down",
+    "2": "loopback",
+    "7": "otherDesignatedRouter",
+    "4": "pointToPoint",
+    "3": "waiting"
+   }
+  },
+  "1.3.6.1.2.1.14.7.1.17": {
+   "name": "ospfIfStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.7.1.7": {
+   "name": "ospfIfTransitDelay",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "UpToMaxAge"
+  },
+  "1.3.6.1.2.1.14.7.1.4": {
+   "name": "ospfIfType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "broadcast",
+    "2": "nbma",
+    "5": "pointToMultipoint",
+    "3": "pointToPoint"
+   }
+  },
+  "1.3.6.1.2.1.14.2.1.3": {
+   "name": "ospfImportAsExtern",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "importExternal",
+    "2": "importNoExternal",
+    "3": "importNssa"
+   }
+  },
+  "1.3.6.1.2.1.14.17.1.2": {
+   "name": "ospfLocalLsdbAddressLessIf",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.14.17.1.9": {
+   "name": "ospfLocalLsdbAdvertisement",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.17.1.7": {
+   "name": "ospfLocalLsdbAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.17.1.8": {
+   "name": "ospfLocalLsdbChecksum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.17.1.1": {
+   "name": "ospfLocalLsdbIpAddress",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.17.1.4": {
+   "name": "ospfLocalLsdbLsid",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.17.1.5": {
+   "name": "ospfLocalLsdbRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.17.1.6": {
+   "name": "ospfLocalLsdbSequence",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.17.1.3": {
+   "name": "ospfLocalLsdbType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "9": "localOpaqueLink"
+   }
+  },
+  "1.3.6.1.2.1.14.4.1.8": {
+   "name": "ospfLsdbAdvertisement",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.4.1.6": {
+   "name": "ospfLsdbAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.4.1.1": {
+   "name": "ospfLsdbAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.4.1.7": {
+   "name": "ospfLsdbChecksum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.4.1.3": {
+   "name": "ospfLsdbLsid",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.4.1.4": {
+   "name": "ospfLsdbRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.4.1.5": {
+   "name": "ospfLsdbSequence",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.4.1.2": {
+   "name": "ospfLsdbType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "10": "areaOpaqueLink",
+    "5": "asExternalLink",
+    "4": "asSummaryLink",
+    "6": "multicastLink",
+    "2": "networkLink",
+    "7": "nssaExternalLink",
+    "1": "routerLink",
+    "3": "summaryLink"
+   }
+  },
+  "1.3.6.1.2.1.14.1.12": {
+   "name": "ospfMulticastExtensions",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.10.1.10": {
+   "name": "ospfNbmaNbrPermanence",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "dynamic",
+    "2": "permanent"
+   }
+  },
+  "1.3.6.1.2.1.14.10.1.9": {
+   "name": "ospfNbmaNbrStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.10.1.2": {
+   "name": "ospfNbrAddressLessIndex",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "InterfaceIndexOrZero"
+  },
+  "1.3.6.1.2.1.14.10.1.7": {
+   "name": "ospfNbrEvents",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.10.1.11": {
+   "name": "ospfNbrHelloSuppressed",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.10.1.1": {
+   "name": "ospfNbrIpAddr",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.10.1.8": {
+   "name": "ospfNbrLsRetransQLen",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.10.1.4": {
+   "name": "ospfNbrOptions",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.10.1.5": {
+   "name": "ospfNbrPriority",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "DesignatedRouterPriority"
+  },
+  "1.3.6.1.2.1.14.10.1.13": {
+   "name": "ospfNbrRestartHelperAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.10.1.14": {
+   "name": "ospfNbrRestartHelperExitReason",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "completed",
+    "2": "inProgress",
+    "1": "none",
+    "4": "timedOut",
+    "5": "topologyChanged"
+   }
+  },
+  "1.3.6.1.2.1.14.10.1.12": {
+   "name": "ospfNbrRestartHelperStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "helping",
+    "1": "notHelping"
+   }
+  },
+  "1.3.6.1.2.1.14.10.1.3": {
+   "name": "ospfNbrRtrId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.10.1.6": {
+   "name": "ospfNbrState",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "attempt",
+    "1": "down",
+    "6": "exchange",
+    "5": "exchangeStart",
+    "8": "full",
+    "3": "init",
+    "7": "loading",
+    "4": "twoWay"
+   }
+  },
+  "1.3.6.1.2.1.14.1.16": {
+   "name": "ospfOpaqueLsaSupport",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.1.9": {
+   "name": "ospfOriginateNewLsas",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.1.15": {
+   "name": "ospfRFC1583Compatibility",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.1.17": {
+   "name": "ospfReferenceBandwidth",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.1.22": {
+   "name": "ospfRestartAge",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.1.23": {
+   "name": "ospfRestartExitReason",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "3": "completed",
+    "2": "inProgress",
+    "1": "none",
+    "4": "timedOut",
+    "5": "topologyChanged"
+   }
+  },
+  "1.3.6.1.2.1.14.1.19": {
+   "name": "ospfRestartInterval",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.1.21": {
+   "name": "ospfRestartStatus",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "1": "notRestarting",
+    "2": "plannedRestart",
+    "3": "unplannedRestart"
+   }
+  },
+  "1.3.6.1.2.1.14.1.20": {
+   "name": "ospfRestartStrictLsaChecking",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.1.18": {
+   "name": "ospfRestartSupport",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "1": "none",
+    "3": "plannedAndUnplanned",
+    "2": "plannedOnly"
+   }
+  },
+  "1.3.6.1.2.1.14.1.1": {
+   "name": "ospfRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.1.10": {
+   "name": "ospfRxNewLsas",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.2.1.4": {
+   "name": "ospfSpfRuns",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.3.1.1": {
+   "name": "ospfStubAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.3.1.3": {
+   "name": "ospfStubMetric",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "BigMetric"
+  },
+  "1.3.6.1.2.1.14.3.1.5": {
+   "name": "ospfStubMetricType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "comparableCost",
+    "3": "nonComparable",
+    "1": "ospfMetric"
+   }
+  },
+  "1.3.6.1.2.1.14.1.27": {
+   "name": "ospfStubRouterAdvertisement",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "2": "advertise",
+    "1": "doNotAdvertise"
+   }
+  },
+  "1.3.6.1.2.1.14.1.26": {
+   "name": "ospfStubRouterSupport",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.3.1.4": {
+   "name": "ospfStubStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.3.1.2": {
+   "name": "ospfStubTOS",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "TOSType"
+  },
+  "1.3.6.1.2.1.14.1.8": {
+   "name": "ospfTOSSupport",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.1.3": {
+   "name": "ospfVersionNumber",
+   "mib": "OSPF-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "2": "version2"
+   }
+  },
+  "1.3.6.1.2.1.14.9.1.1": {
+   "name": "ospfVirtIfAreaId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.9.1.9": {
+   "name": "ospfVirtIfAuthKey",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.9.1.11": {
+   "name": "ospfVirtIfAuthType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OspfAuthenticationType"
+  },
+  "1.3.6.1.2.1.14.9.1.8": {
+   "name": "ospfVirtIfEvents",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.9.1.5": {
+   "name": "ospfVirtIfHelloInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "HelloRange"
+  },
+  "1.3.6.1.2.1.14.9.1.13": {
+   "name": "ospfVirtIfLsaCksumSum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.9.1.12": {
+   "name": "ospfVirtIfLsaCount",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.9.1.2": {
+   "name": "ospfVirtIfNeighbor",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.9.1.4": {
+   "name": "ospfVirtIfRetransInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "UpToMaxAge"
+  },
+  "1.3.6.1.2.1.14.9.1.6": {
+   "name": "ospfVirtIfRtrDeadInterval",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "PositiveInteger"
+  },
+  "1.3.6.1.2.1.14.9.1.7": {
+   "name": "ospfVirtIfState",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "1": "down",
+    "4": "pointToPoint"
+   }
+  },
+  "1.3.6.1.2.1.14.9.1.10": {
+   "name": "ospfVirtIfStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RowStatus"
+  },
+  "1.3.6.1.2.1.14.9.1.3": {
+   "name": "ospfVirtIfTransitDelay",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "UpToMaxAge"
+  },
+  "1.3.6.1.2.1.14.18.1.9": {
+   "name": "ospfVirtLocalLsdbAdvertisement",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.18.1.7": {
+   "name": "ospfVirtLocalLsdbAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.18.1.8": {
+   "name": "ospfVirtLocalLsdbChecksum",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.18.1.4": {
+   "name": "ospfVirtLocalLsdbLsid",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.18.1.2": {
+   "name": "ospfVirtLocalLsdbNeighbor",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.18.1.5": {
+   "name": "ospfVirtLocalLsdbRouterId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.18.1.6": {
+   "name": "ospfVirtLocalLsdbSequence",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.18.1.1": {
+   "name": "ospfVirtLocalLsdbTransitArea",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.18.1.3": {
+   "name": "ospfVirtLocalLsdbType",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "9": "localOpaqueLink"
+   }
+  },
+  "1.3.6.1.2.1.14.11.1.1": {
+   "name": "ospfVirtNbrArea",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "AreaID"
+  },
+  "1.3.6.1.2.1.14.11.1.6": {
+   "name": "ospfVirtNbrEvents",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.14.11.1.8": {
+   "name": "ospfVirtNbrHelloSuppressed",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "TruthValue"
+  },
+  "1.3.6.1.2.1.14.11.1.3": {
+   "name": "ospfVirtNbrIpAddr",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.11.1.7": {
+   "name": "ospfVirtNbrLsRetransQLen",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.14.11.1.4": {
+   "name": "ospfVirtNbrOptions",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.14.11.1.10": {
+   "name": "ospfVirtNbrRestartHelperAge",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.14.11.1.11": {
+   "name": "ospfVirtNbrRestartHelperExitReason",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "3": "completed",
+    "2": "inProgress",
+    "1": "none",
+    "4": "timedOut",
+    "5": "topologyChanged"
+   }
+  },
+  "1.3.6.1.2.1.14.11.1.9": {
+   "name": "ospfVirtNbrRestartHelperStatus",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "helping",
+    "1": "notHelping"
+   }
+  },
+  "1.3.6.1.2.1.14.11.1.2": {
+   "name": "ospfVirtNbrRtrId",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "RouterID"
+  },
+  "1.3.6.1.2.1.14.11.1.5": {
+   "name": "ospfVirtNbrState",
+   "mib": "OSPF-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "2": "attempt",
+    "1": "down",
+    "6": "exchange",
+    "5": "exchangeStart",
+    "8": "full",
+    "3": "init",
+    "7": "loading",
+    "4": "twoWay"
+   }
+  },
+  "1.3.6.1.2.1.14.16.1.2": {
+   "name": "ospfConfigErrorType",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "2": "areaMismatch",
+    "6": "authFailure",
+    "5": "authTypeMismatch",
+    "1": "badVersion",
+    "9": "deadIntervalMismatch",
+    "12": "duplicateRouterId",
+    "8": "helloIntervalMismatch",
+    "11": "mtuMismatch",
+    "7": "netMaskMismatch",
+    "13": "noError",
+    "10": "optionMismatch",
+    "3": "unknownNbmaNbr",
+    "4": "unknownVirtualNbr"
+   }
+  },
+  "1.3.6.1.2.1.14.16.2.6": {
+   "name": "ospfIfAuthFailure",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.4": {
+   "name": "ospfIfConfigError",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.8": {
+   "name": "ospfIfRxBadPacket",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.15": {
+   "name": "ospfLsdbApproachingOverflow",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.14": {
+   "name": "ospfLsdbOverflow",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.13": {
+   "name": "ospfMaxAgeLsa",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.19": {
+   "name": "ospfNbrRestartHelperStatusChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.17": {
+   "name": "ospfNssaTranslatorStatusChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.12": {
+   "name": "ospfOriginateLsa",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.1.4": {
+   "name": "ospfPacketSrc",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "scalar",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.14.16.1.3": {
+   "name": "ospfPacketType",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "2": "dbDescript",
+    "1": "hello",
+    "5": "lsAck",
+    "3": "lsReq",
+    "4": "lsUpdate",
+    "6": "nullPacket"
+   }
+  },
+  "1.3.6.1.2.1.14.16.2.18": {
+   "name": "ospfRestartStatusChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.1.1": {
+   "name": "ospfSetTrap",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "scalar",
+   "type": "OCTET STRING"
+  },
+  "1.3.6.1.2.1.14.16.2.10": {
+   "name": "ospfTxRetransmit",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.7": {
+   "name": "ospfVirtIfAuthFailure",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.5": {
+   "name": "ospfVirtIfConfigError",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.9": {
+   "name": "ospfVirtIfRxBadPacket",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.1": {
+   "name": "ospfVirtIfStateChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.11": {
+   "name": "ospfVirtIfTxRetransmit",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.20": {
+   "name": "ospfVirtNbrRestartHelperStatusChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.2.1.14.16.2.3": {
+   "name": "ospfVirtNbrStateChange",
+   "mib": "OSPF-TRAP-MIB",
+   "kind": "notification"
+  },
+  "1.3.6.1.6.3.10.2.1.2": {
+   "name": "snmpEngineBoots",
+   "mib": "SNMP-FRAMEWORK-MIB",
+   "kind": "scalar",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.6.3.10.2.1.1": {
+   "name": "snmpEngineID",
+   "mib": "SNMP-FRAMEWORK-MIB",
+   "kind": "scalar",
+   "type": "SnmpEngineID"
+  },
+  "1.3.6.1.6.3.10.2.1.4": {
+   "name": "snmpEngineMaxMessageSize",
+   "mib": "SNMP-FRAMEWORK-MIB",
+   "kind": "scalar",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.6.3.10.2.1.3": {
+   "name": "snmpEngineTime",
+   "mib": "SNMP-FRAMEWORK-MIB",
+   "kind": "scalar",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.11.30": {
+   "name": "snmpEnableAuthenTraps",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "2": "disabled",
+    "1": "enabled"
+   }
+  },
+  "1.3.6.1.2.1.11.6": {
+   "name": "snmpInASNParseErrs",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.4": {
+   "name": "snmpInBadCommunityNames",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.5": {
+   "name": "snmpInBadCommunityUses",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.10": {
+   "name": "snmpInBadValues",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.3": {
+   "name": "snmpInBadVersions",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.12": {
+   "name": "snmpInGenErrs",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.16": {
+   "name": "snmpInGetNexts",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.15": {
+   "name": "snmpInGetRequests",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.18": {
+   "name": "snmpInGetResponses",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.9": {
+   "name": "snmpInNoSuchNames",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.1": {
+   "name": "snmpInPkts",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.11": {
+   "name": "snmpInReadOnlys",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.17": {
+   "name": "snmpInSetRequests",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.8": {
+   "name": "snmpInTooBigs",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.13": {
+   "name": "snmpInTotalReqVars",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.14": {
+   "name": "snmpInTotalSetVars",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.19": {
+   "name": "snmpInTraps",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.22": {
+   "name": "snmpOutBadValues",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.24": {
+   "name": "snmpOutGenErrs",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.26": {
+   "name": "snmpOutGetNexts",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.25": {
+   "name": "snmpOutGetRequests",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.28": {
+   "name": "snmpOutGetResponses",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.21": {
+   "name": "snmpOutNoSuchNames",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.2": {
+   "name": "snmpOutPkts",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.27": {
+   "name": "snmpOutSetRequests",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.20": {
+   "name": "snmpOutTooBigs",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.29": {
+   "name": "snmpOutTraps",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.11.32": {
+   "name": "snmpProxyDrops",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.6.3.1.1.6.1": {
+   "name": "snmpSetSerialNo",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "TestAndIncr"
+  },
+  "1.3.6.1.2.1.11.31": {
+   "name": "snmpSilentDrops",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.6.3.1.1.4.3": {
+   "name": "snmpTrapEnterprise",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "OBJECT IDENTIFIER"
+  },
+  "1.3.6.1.6.3.1.1.4.1": {
+   "name": "snmpTrapOID",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "OBJECT IDENTIFIER"
+  },
+  "1.3.6.1.2.1.1.4": {
+   "name": "sysContact",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.1.1": {
+   "name": "sysDescr",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.1.6": {
+   "name": "sysLocation",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.1.5": {
+   "name": "sysName",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.1.9.1.3": {
+   "name": "sysORDescr",
+   "mib": "SNMPv2-MIB",
+   "kind": "column",
+   "type": "DisplayString"
+  },
+  "1.3.6.1.2.1.1.9.1.2": {
+   "name": "sysORID",
+   "mib": "SNMPv2-MIB",
+   "kind": "column",
+   "type": "OBJECT IDENTIFIER"
+  },
+  "1.3.6.1.2.1.1.9.1.1": {
+   "name": "sysORIndex",
+   "mib": "SNMPv2-MIB",
+   "kind": "column",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.1.8": {
+   "name": "sysORLastChange",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.1.9.1.4": {
+   "name": "sysORUpTime",
+   "mib": "SNMPv2-MIB",
+   "kind": "column",
+   "type": "TimeStamp"
+  },
+  "1.3.6.1.2.1.1.2": {
+   "name": "sysObjectID",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "OBJECT IDENTIFIER"
+  },
+  "1.3.6.1.2.1.1.7": {
+   "name": "sysServices",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "INTEGER"
+  },
+  "1.3.6.1.2.1.1.3": {
+   "name": "sysUpTime",
+   "mib": "SNMPv2-MIB",
+   "kind": "scalar",
+   "type": "TimeTicks"
+  },
+  "1.3.6.1.2.1.6.5": {
+   "name": "tcpActiveOpens",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.7": {
+   "name": "tcpAttemptFails",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.13.1.2": {
+   "name": "tcpConnLocalAddress",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.6.13.1.3": {
+   "name": "tcpConnLocalPort",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.6.13.1.4": {
+   "name": "tcpConnRemAddress",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.6.13.1.5": {
+   "name": "tcpConnRemPort",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.6.13.1.1": {
+   "name": "tcpConnState",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "8": "closeWait",
+    "1": "closed",
+    "10": "closing",
+    "12": "deleteTCB",
+    "5": "established",
+    "6": "finWait1",
+    "7": "finWait2",
+    "9": "lastAck",
+    "2": "listen",
+    "4": "synReceived",
+    "3": "synSent",
+    "11": "timeWait"
+   }
+  },
+  "1.3.6.1.2.1.6.19.1.2": {
+   "name": "tcpConnectionLocalAddress",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.6.19.1.1": {
+   "name": "tcpConnectionLocalAddressType",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.6.19.1.3": {
+   "name": "tcpConnectionLocalPort",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.6.19.1.8": {
+   "name": "tcpConnectionProcess",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.6.19.1.5": {
+   "name": "tcpConnectionRemAddress",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.6.19.1.4": {
+   "name": "tcpConnectionRemAddressType",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.6.19.1.6": {
+   "name": "tcpConnectionRemPort",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.6.19.1.7": {
+   "name": "tcpConnectionState",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "INTEGER",
+   "enum": {
+    "8": "closeWait",
+    "1": "closed",
+    "10": "closing",
+    "12": "deleteTCB",
+    "5": "established",
+    "6": "finWait1",
+    "7": "finWait2",
+    "9": "lastAck",
+    "2": "listen",
+    "4": "synReceived",
+    "3": "synSent",
+    "11": "timeWait"
+   }
+  },
+  "1.3.6.1.2.1.6.9": {
+   "name": "tcpCurrEstab",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Gauge32"
+  },
+  "1.3.6.1.2.1.6.8": {
+   "name": "tcpEstabResets",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.17": {
+   "name": "tcpHCInSegs",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.6.18": {
+   "name": "tcpHCOutSegs",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.6.14": {
+   "name": "tcpInErrs",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.10": {
+   "name": "tcpInSegs",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.20.1.2": {
+   "name": "tcpListenerLocalAddress",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.6.20.1.1": {
+   "name": "tcpListenerLocalAddressType",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.6.20.1.3": {
+   "name": "tcpListenerLocalPort",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.6.20.1.4": {
+   "name": "tcpListenerProcess",
+   "mib": "TCP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.6.4": {
+   "name": "tcpMaxConn",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.6.15": {
+   "name": "tcpOutRsts",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.11": {
+   "name": "tcpOutSegs",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.6": {
+   "name": "tcpPassiveOpens",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.12": {
+   "name": "tcpRetransSegs",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.6.1": {
+   "name": "tcpRtoAlgorithm",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "INTEGER",
+   "enum": {
+    "2": "constant",
+    "1": "other",
+    "5": "rfc2988",
+    "3": "rsre",
+    "4": "vanj"
+   }
+  },
+  "1.3.6.1.2.1.6.3": {
+   "name": "tcpRtoMax",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.6.2": {
+   "name": "tcpRtoMin",
+   "mib": "TCP-MIB",
+   "kind": "scalar",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.7.7.1.7": {
+   "name": "udpEndpointInstance",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.7.7.1.2": {
+   "name": "udpEndpointLocalAddress",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.7.7.1.1": {
+   "name": "udpEndpointLocalAddressType",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.7.7.1.3": {
+   "name": "udpEndpointLocalPort",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.7.7.1.8": {
+   "name": "udpEndpointProcess",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "Unsigned32"
+  },
+  "1.3.6.1.2.1.7.7.1.5": {
+   "name": "udpEndpointRemoteAddress",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "InetAddress"
+  },
+  "1.3.6.1.2.1.7.7.1.4": {
+   "name": "udpEndpointRemoteAddressType",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "InetAddressType"
+  },
+  "1.3.6.1.2.1.7.7.1.6": {
+   "name": "udpEndpointRemotePort",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "InetPortNumber"
+  },
+  "1.3.6.1.2.1.7.8": {
+   "name": "udpHCInDatagrams",
+   "mib": "UDP-MIB",
+   "kind": "scalar",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.7.9": {
+   "name": "udpHCOutDatagrams",
+   "mib": "UDP-MIB",
+   "kind": "scalar",
+   "type": "Counter64"
+  },
+  "1.3.6.1.2.1.7.1": {
+   "name": "udpInDatagrams",
+   "mib": "UDP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.7.3": {
+   "name": "udpInErrors",
+   "mib": "UDP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.7.5.1.1": {
+   "name": "udpLocalAddress",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "IpAddress"
+  },
+  "1.3.6.1.2.1.7.5.1.2": {
+   "name": "udpLocalPort",
+   "mib": "UDP-MIB",
+   "kind": "column",
+   "type": "Integer32"
+  },
+  "1.3.6.1.2.1.7.2": {
+   "name": "udpNoPorts",
+   "mib": "UDP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
+  },
+  "1.3.6.1.2.1.7.4": {
+   "name": "udpOutDatagrams",
+   "mib": "UDP-MIB",
+   "kind": "scalar",
+   "type": "Counter32"
   }
+ }
 }
