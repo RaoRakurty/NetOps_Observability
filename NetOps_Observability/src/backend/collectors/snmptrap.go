@@ -33,9 +33,12 @@ import (
 // dropped, and an authPriv v3 trap that fails HMAC verification is refused
 // rather than indexed.
 
-// TrapVarbind is one decoded variable-binding (OID + rendered value).
+// TrapVarbind is one decoded variable-binding (OID + rendered value). Name is the
+// resolved object name (e.g. ifOperStatus) when the OID is well-known, so the UI
+// shows "ifOperStatus=down(2)" instead of a raw 1.3.6.1.2.1.2.2.1.8.x.
 type TrapVarbind struct {
 	OID   string `json:"oid"`
+	Name  string `json:"name,omitempty"`
 	Value string `json:"value"`
 }
 
@@ -74,9 +77,34 @@ var genericTrapMeta = []struct {
 	{"egpNeighborLoss", "warning"},
 }
 
+// wellKnownTraps maps common standard + enterprise trap OIDs to a name + severity
+// so the operator sees the trap meaning, not a raw OID. Curated (not a full MIB
+// compiler — see CLAUDE.md): the high-value traps a NOC actually receives.
+var wellKnownTraps = map[string]struct{ name, severity string }{
+	// IF-MIB linkDown/linkUp also published at the SNMPv2-MIB generic prefix.
+	"1.3.6.1.6.3.1.1.5.1": {"coldStart", "info"},
+	"1.3.6.1.6.3.1.1.5.2": {"warmStart", "info"},
+	"1.3.6.1.6.3.1.1.5.3": {"linkDown", "warning"},
+	"1.3.6.1.6.3.1.1.5.4": {"linkUp", "info"},
+	"1.3.6.1.6.3.1.1.5.5": {"authenticationFailure", "warning"},
+	// BGP4-MIB
+	"1.3.6.1.2.1.15.7.1": {"bgpEstablished", "info"},
+	"1.3.6.1.2.1.15.7.2": {"bgpBackwardTransition", "warning"},
+	// OSPF-TRAP-MIB (a few high-value ones)
+	"1.3.6.1.2.1.14.16.2.2":  {"ospfNbrStateChange", "warning"},
+	"1.3.6.1.2.1.14.16.2.16": {"ospfIfStateChange", "warning"},
+	// ENTITY-MIB / config change
+	"1.3.6.1.2.1.47.2.0.1":     {"entConfigChange", "notice"},
+	"1.3.6.1.4.1.9.9.43.2.0.1": {"ciscoConfigManEvent", "notice"},
+}
+
 // trapMeta resolves a trap OID (dotted) to a friendly name + severity. Standard
-// SNMPv2-MIB traps are recognized; everything else is enterprise-specific notice.
+// SNMPv2-MIB + curated enterprise traps are recognized; everything else is
+// enterprise-specific notice.
 func trapMeta(oid string) (name, severity string) {
+	if m, ok := wellKnownTraps[oid]; ok {
+		return m.name, m.severity
+	}
 	const stdPrefix = "1.3.6.1.6.3.1.1.5."
 	if strings.HasPrefix(oid, stdPrefix) {
 		if n := atoiSafe(oid[len(stdPrefix):]); n >= 1 && n <= len(genericTrapMeta) {
@@ -85,6 +113,51 @@ func trapMeta(oid string) (name, severity string) {
 		}
 	}
 	return "enterpriseSpecific", "notice"
+}
+
+// varbindObjects maps common column OIDs (without the trailing row index) to an
+// object name + optional enum decoder, so a varbind renders as "ifOperStatus=
+// down(2)" rather than "1.3.6.1.2.1.2.2.1.8.5=2".
+var varbindObjects = []struct {
+	prefix string
+	name   string
+	enum   map[string]string
+}{
+	{"1.3.6.1.2.1.2.2.1.1.", "ifIndex", nil},
+	{"1.3.6.1.2.1.2.2.1.2.", "ifDescr", nil},
+	{"1.3.6.1.2.1.2.2.1.7.", "ifAdminStatus", map[string]string{"1": "up", "2": "down", "3": "testing"}},
+	{"1.3.6.1.2.1.2.2.1.8.", "ifOperStatus", map[string]string{"1": "up", "2": "down", "3": "testing", "4": "unknown", "5": "dormant", "6": "notPresent", "7": "lowerLayerDown"}},
+	{"1.3.6.1.2.1.31.1.1.1.1.", "ifName", nil},
+	{"1.3.6.1.2.1.31.1.1.1.18.", "ifAlias", nil},
+	{"1.3.6.1.2.1.15.3.1.2.", "bgpPeerState", map[string]string{"1": "idle", "2": "connect", "3": "active", "4": "opensent", "5": "openconfirm", "6": "established"}},
+	{"1.3.6.1.2.1.15.3.1.7.", "bgpPeerRemoteAddr", nil},
+}
+
+// varbindExact maps scalar OIDs (with the .0 instance) to a name.
+var varbindExact = map[string]string{
+	"1.3.6.1.2.1.1.1.0": "sysDescr",
+	"1.3.6.1.2.1.1.3.0": "sysUpTime",
+	"1.3.6.1.2.1.1.5.0": "sysName",
+	"1.3.6.1.2.1.1.6.0": "sysLocation",
+}
+
+// resolveVarbind returns the object name (or "" if unknown) and a value possibly
+// decorated with an enum label, for a varbind OID + raw value.
+func resolveVarbind(oid, value string) (name, dispValue string) {
+	if n, ok := varbindExact[oid]; ok {
+		return n, value
+	}
+	for _, o := range varbindObjects {
+		if strings.HasPrefix(oid, o.prefix) {
+			if o.enum != nil {
+				if lbl, ok := o.enum[value]; ok {
+					return o.name, fmt.Sprintf("%s(%s)", lbl, value)
+				}
+			}
+			return o.name, value
+		}
+	}
+	return "", value
 }
 
 func atoiSafe(s string) int {
@@ -162,7 +235,9 @@ func parseVarbinds(vbList []byte) []TrapVarbind {
 		if err != nil {
 			continue
 		}
-		out = append(out, TrapVarbind{OID: oidString(decodeOID(oidRaw)), Value: valStr(valTag, valRaw)})
+		oid := oidString(decodeOID(oidRaw))
+		name, val := resolveVarbind(oid, valStr(valTag, valRaw))
+		out = append(out, TrapVarbind{OID: oid, Name: name, Value: val})
 	}
 	return out
 }
@@ -193,7 +268,11 @@ func finalizeTrap(ev *TrapEvent, vbs []TrapVarbind) {
 		parts = append(parts, ev.TrapOID)
 	}
 	for _, vb := range kept {
-		parts = append(parts, vb.OID+"="+vb.Value)
+		key := vb.Name
+		if key == "" {
+			key = vb.OID
+		}
+		parts = append(parts, key+"="+vb.Value)
 	}
 	ev.Message = strings.Join(parts, " ")
 }
