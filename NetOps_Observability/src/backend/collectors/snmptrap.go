@@ -87,9 +87,13 @@ var wellKnownTraps = map[string]struct{ name, severity string }{
 	"1.3.6.1.6.3.1.1.5.3": {"linkDown", "warning"},
 	"1.3.6.1.6.3.1.1.5.4": {"linkUp", "info"},
 	"1.3.6.1.6.3.1.1.5.5": {"authenticationFailure", "warning"},
-	// BGP4-MIB
+	// BGP4-MIB — both the SNMPv2 notification OIDs (.7.x) and the v1-trap form
+	// devices actually emit (enterprise bgp .0. specific-trap): bgpEstablished=1,
+	// bgpBackwardTransition=2.
 	"1.3.6.1.2.1.15.7.1": {"bgpEstablished", "info"},
 	"1.3.6.1.2.1.15.7.2": {"bgpBackwardTransition", "warning"},
+	"1.3.6.1.2.1.15.0.1": {"bgpEstablished", "info"},
+	"1.3.6.1.2.1.15.0.2": {"bgpBackwardTransition", "warning"},
 	// OSPF-TRAP-MIB (a few high-value ones)
 	"1.3.6.1.2.1.14.16.2.2":  {"ospfNbrStateChange", "warning"},
 	"1.3.6.1.2.1.14.16.2.16": {"ospfIfStateChange", "warning"},
@@ -130,7 +134,10 @@ var varbindObjects = []struct {
 	{"1.3.6.1.2.1.31.1.1.1.1.", "ifName", nil},
 	{"1.3.6.1.2.1.31.1.1.1.18.", "ifAlias", nil},
 	{"1.3.6.1.2.1.15.3.1.2.", "bgpPeerState", map[string]string{"1": "idle", "2": "connect", "3": "active", "4": "opensent", "5": "openconfirm", "6": "established"}},
+	{"1.3.6.1.2.1.15.3.1.3.", "bgpPeerAdminStatus", map[string]string{"1": "stop", "2": "start"}},
 	{"1.3.6.1.2.1.15.3.1.7.", "bgpPeerRemoteAddr", nil},
+	{"1.3.6.1.2.1.15.3.1.9.", "bgpPeerRemoteAs", nil},
+	{"1.3.6.1.2.1.15.3.1.14.", "bgpPeerLastError", nil},
 }
 
 // varbindExact maps scalar OIDs (with the .0 instance) to a name.
