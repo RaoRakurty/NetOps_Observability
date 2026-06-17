@@ -230,6 +230,11 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         return None
     tag = str(ev.get("appname") or "").upper()
     msg = str(ev.get("message") or "")
+    # Fold the VRL-parsed facility + mnemonic (#31 envelope) into the classification
+    # token so vendor logs whose appname isn't telling still classify off the
+    # structured fields. ctoken ⊇ tag, so every previously-matched event still
+    # matches identically — this only ADDS coverage, never changes existing output.
+    ctoken = (tag + " " + str(ev.get("facility") or "") + " " + str(ev.get("event_type") or "")).upper()
     ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
     observer = Observer(
@@ -243,7 +248,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
     # with a nil appname; Cisco IOS uses %CLNS-5-ADJCHANGE. Checked before the
     # generic ADJCHANGE branch so CLNS isn't misfiled as "routing". Device-scoped,
     # peer = the IS-IS system-id (the shared adjacency identity, mirrors the catalog).
-    if "ISISADJACENCYCHANGE" in msg.upper() or ("CLNS" in tag and "ADJ" in tag):
+    if "ISISADJACENCYCHANGE" in msg.upper() or ("CLNS" in ctoken and "ADJ" in ctoken):
         sysid_m = re.search(r"\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\b", msg)
         peer = sysid_m.group(1) if sysid_m else ""
         tgt_m = re.search(r"to state\s+(\w+)", msg, re.IGNORECASE)
@@ -265,8 +270,8 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             attrs={"peer": peer, "state": state, "tag": tag or "isisAdjacencyChange"},
         )
 
-    if "ADJCHANGE" in tag or "ADJCHG" in tag:
-        proto = "bgp" if "BGP" in tag else "ospf" if "OSPF" in tag else "routing"
+    if "ADJCHANGE" in ctoken or "ADJCHG" in ctoken:
+        proto = "bgp" if "BGP" in ctoken else "ospf" if "OSPF" in ctoken else "routing"
         peer_m = _IP_RE.search(msg)
         peer = peer_m.group(1) if peer_m else ""
         state = _state_of(msg)
@@ -287,7 +292,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             attrs={"peer": peer, "state": state, "tag": tag},
         )
 
-    if ("LINK" in tag or "LINEPROTO" in tag) and "UPDOWN" in tag:
+    if ("LINK" in ctoken or "LINEPROTO" in ctoken) and "UPDOWN" in ctoken:
         if_m = _IF_RE.search(msg)
         ifname = if_m.group(1) if if_m else "unknown"
         state = _state_of(msg)
@@ -310,7 +315,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
     # LLDP neighbor change — cEOS %LLDP-5-NEIGHBOR_NEW/REMOVED; SR Linux emits
     # "remotePeerAdded/remotePeerRemoved" in the message with a nil appname.
     # Interface-scoped: a vanished neighbor cross-checks the IS-IS/BGP adjacency.
-    if ("LLDP" in tag and "NEIGHBOR" in tag) or "REMOTEPEER" in msg.upper():
+    if ("LLDP" in ctoken and "NEIGHBOR" in ctoken) or "REMOTEPEER" in msg.upper():
         if_m = re.search(r"on interface\s+([A-Za-z][\w/.\-]*)", msg, re.IGNORECASE) or _IF_RE.search(msg)
         ifname = if_m.group(1) if if_m else "unknown"
         if re.search(r"\b(?:removed|deleted|aged)\b", msg, re.IGNORECASE):

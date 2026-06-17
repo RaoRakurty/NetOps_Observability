@@ -271,3 +271,20 @@ def test_same_peer_token_on_both_ends_supports_grounding():
     assert a is not None and b is not None
     shared = set(a.entity_tokens) & set(b.entity_tokens)
     assert "10.0.0.9" in shared
+
+
+def test_syslog_classifies_via_parsed_facility_event_type():
+    # #31/#32: a vendor log whose appname isn't telling, but the VRL parsed
+    # facility + event_type — still classifies off the structured envelope fields,
+    # not the raw text. Proves the tag→ctoken broadening (additive, no regression).
+    bgp = syslog_control_signal({
+        "hostname": "leaf1", "appname": "rsyslogd", "facility": "BGP", "event_type": "adjchange",
+        "message": "peer 10.0.0.5 new state Idle", "timestamp": T0.isoformat(),
+    }, "", T0)
+    assert bgp is not None and bgp.kind == "bgp_adjacency_change" and bgp.attrs["state"] == "down"
+
+    link = syslog_control_signal({
+        "hostname": "leaf1", "appname": "x", "facility": "LINK", "event_type": "updown",
+        "message": "Interface Ethernet3, changed state to down", "timestamp": T0.isoformat(),
+    }, "", T0)
+    assert link is not None and link.kind == "link_state_change"
