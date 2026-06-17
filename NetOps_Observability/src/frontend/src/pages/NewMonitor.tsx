@@ -108,8 +108,8 @@ export default function NewMonitor() {
       <div className="form-head">
         <span className="form-head-icon"><Icon name="alerts" size={18} /></span>
         <div>
-          <h2>New Monitor</h2>
-          <p className="form-sub">Guided creation of an alerting monitor. Every template is backed by telemetry this platform collects.</p>
+          <h2>Create Monitor</h2>
+          <p className="form-sub">Guided creation of an alerting monitor from supported telemetry signals — every template is backed by telemetry this platform already collects.</p>
         </div>
       </div>
 
