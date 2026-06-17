@@ -48,7 +48,7 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
         <span style={{ ...muted, fontSize: 12 }}>· {p.agent}</span>
         <span style={{ marginLeft: "auto", fontSize: 12, ...muted }}>Confidence: <b style={{ color: "var(--fg)" }}>{CONF_LABEL[p.confidence] ?? p.confidence}</b></span>
       </div>
-      <div style={{ fontSize: 13.5, marginTop: 6, color: "var(--fg)", lineHeight: 1.45 }}>{p.reason}</div>
+      <div style={{ fontSize: 13, marginTop: 6, color: "var(--fg)", lineHeight: 1.45 }}>{p.reason}</div>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px", fontSize: 12.5, marginTop: 7 }}>
         {row("Current latency", `${p.current.latency_p95_5m} ms (last 5 min)`)}
         {row("Typical", `~${p.baseline.latency_p50} ms`)}

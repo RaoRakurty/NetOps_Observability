@@ -163,10 +163,10 @@ export default function Correlations() {
 
   return (
     <div className="card">
-      <h2 style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.015em", lineHeight: 1.15, margin: "0 0 5px", color: "var(--fg)" }}>
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.015em", lineHeight: 1.15, margin: "0 0 5px", color: "var(--fg)" }}>
         Root Cause Analysis
       </h2>
-      <p style={{ fontSize: 13.5, color: "var(--muted)", marginTop: 0, lineHeight: 1.55 }}>
+      <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 0, lineHeight: 1.55 }}>
         Each row is a possible issue, built from related evidence on the same path or
         boundary. An issue is only marked <b>Confirmed</b> when independent evidence agrees
         across at least two kinds of evidence — everything weaker says exactly what's missing

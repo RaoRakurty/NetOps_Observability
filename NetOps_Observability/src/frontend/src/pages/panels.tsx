@@ -155,7 +155,7 @@ function MetricGauge({
               offsetCenter: [0, "-4%"],
               formatter: v === null ? "—" : `{v|${Math.round(v)}}{u|${unit}}`,
               rich: {
-                v: { fontSize: 38, fontWeight: 800, color: dark ? "#e7ebf3" : "#161d29" },
+                v: { fontSize: 34, fontWeight: 800, color: dark ? "#e7ebf3" : "#161d29" },
                 u: { fontSize: 16, color: dark ? "#9aa6bf" : "#586173", padding: [0, 0, 6, 2] },
               },
             },
