@@ -502,46 +502,51 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* Flyout overlay */
 .nav-flyout {
   position: fixed; left: calc(var(--sidebar-w) + 4px); z-index: 70;
-  min-width: 240px; max-height: 72vh; overflow-y: auto;
+  min-width: 224px; max-height: 74vh; overflow-y: auto;
   background: var(--rail-bg-2); border: 1px solid var(--rail-border);
-  border-radius: var(--r-3); box-shadow: var(--shadow-pop); padding: var(--sp-2);
+  border-radius: var(--r-3); box-shadow: var(--shadow-pop); padding: 6px;
   animation: flyin 0.12s ease-out;
 }
 @keyframes flyin { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .nav-flyout { animation: none; } }
+/* Flyout hierarchy — dense + EVEN: only the section title + group labels use the
+   display face; every navigable leaf/sub-item shares ONE legible body font + a
+   stepped left-indent (10 → 18 → 32px) so the tier reads at a glance. */
 .nav-flyout-head {
   font-family: "Space Grotesk", var(--font-sans, sans-serif);
-  font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em;
-  color: var(--rail-fg); padding: 4px 8px 8px; margin-bottom: var(--sp-1);
+  font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em;
+  color: var(--rail-fg); padding: 3px 8px 6px; margin-bottom: 4px;
   border-bottom: 2px solid var(--mod, var(--rail-accent));
 }
-.nav-flyout-body { display: flex; flex-direction: column; gap: 2px; }
+.nav-flyout-body { display: flex; flex-direction: column; gap: 1px; }
 .nav-flyout-item {
-  display: flex; align-items: center; height: 31px; padding: 0 10px;
+  display: flex; align-items: center; height: 26px; padding: 0 10px 0 18px;
   background: transparent; border: 0; border-radius: var(--r-1);
-  color: var(--rail-fg); font-size: 13px; font-weight: 500; letter-spacing: -0.003em; text-align: left;
+  color: var(--rail-fg); font-family: var(--font-sans, system-ui); font-size: 12.5px; font-weight: 500; text-align: left;
   white-space: nowrap; cursor: pointer;
 }
 .nav-flyout-item:hover { background: var(--rail-hover); }
 .nav-flyout-item:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
 .nav-flyout-item.active { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 28%, transparent); color: var(--rail-active-fg, #fff); }
-/* a leaf that owns sub-categories reads as a heading (bigger), its sub-items smaller */
-.nav-flyout-item.has-sub { font-family: "Space Grotesk", var(--font-sans, sans-serif); height: 32px; font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; margin-top: 2px; }
+/* a leaf that owns sub-categories reads as a sub-heading (same font, weight only,
+   so the level stays even) — its sub-items indent one step deeper. */
+.nav-flyout-item.has-sub { font-weight: 650; margin-top: 3px; }
 .nav-flyout-subitem {
-  display: flex; align-items: center; height: 26px; padding: 0 10px 0 26px;
+  display: flex; align-items: center; height: 23px; padding: 0 10px 0 32px;
   background: transparent; border: 0; border-radius: var(--r-1);
-  color: var(--rail-fg-muted, var(--rail-fg)); font-size: 12px; font-weight: 500; text-align: left;
+  color: var(--rail-fg-muted, var(--rail-fg)); font-family: var(--font-sans, system-ui); font-size: 12px; font-weight: 500; text-align: left;
   white-space: nowrap; cursor: pointer; position: relative;
 }
-.nav-flyout-subitem::before { content: ""; position: absolute; left: 15px; top: 50%; width: 5px; height: 5px;
-  transform: translateY(-50%); border-radius: 50%; background: currentColor; opacity: .45; }
+.nav-flyout-subitem::before { content: ""; position: absolute; left: 21px; top: 50%; width: 4px; height: 4px;
+  transform: translateY(-50%); border-radius: 50%; background: currentColor; opacity: .5; }
 .nav-flyout-subitem:hover { background: var(--rail-hover); color: var(--rail-fg); }
 .nav-flyout-subitem:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
-/* labelled group divider (e.g. "Developer") */
+/* labelled group divider (tier-1, e.g. "Monitors") — display face, flush-left so
+   the indented items below read as its children. */
 .nav-flyout-group {
   font-family: "Space Grotesk", var(--font-sans, sans-serif);
-  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
-  color: var(--rail-accent, var(--accent)); padding: 10px 10px 4px; margin-top: 4px;
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--rail-accent, var(--accent)); padding: 7px 8px 3px; margin-top: 3px;
   border-top: 1px solid var(--rail-border);
 }
 
