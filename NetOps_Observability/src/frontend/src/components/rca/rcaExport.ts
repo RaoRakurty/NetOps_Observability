@@ -188,16 +188,22 @@ function topoGraphSvg(g: TopoGraph): string {
     `<marker id="ahg-${st}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${st === "faint" ? "#b7c0d0" : EDGE[st]}"/></marker>`).join("");
   let parts = "";
 
-  // edges — curved bezier source-right → target-left, dashed when degraded/down.
+  // edges — straight connector trimmed to each icon's EDGE along the true edge
+  // direction (not just horizontally), so arrowheads never overlap the device
+  // icons whether the edge runs across, down, or diagonally.
   for (const e of g.edges) {
     const from = byId.get(e.from), to = byId.get(e.to);
     if (!from || !to) continue;
     const { col, legend } = edgeStateColor(e.state);
-    const x1 = cx(from) + ICON / 2 + 3, y1 = cy(from), x2 = cx(to) - ICON / 2 - 5, y2 = cy(to);
-    const mx = (x1 + x2) / 2, dash = legend === "good" ? "" : ` stroke-dasharray="7 5"`;
-    parts += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="${legend === "good" ? 2.2 : 3}"${dash} marker-end="url(#ahg-${legend})"/>`;
+    const fx = cx(from), fy = cy(from), tx = cx(to), ty = cy(to);
+    const dx = tx - fx, dy = ty - fy, dist = Math.hypot(dx, dy) || 1;
+    const ux = dx / dist, uy = dy / dist, r = ICON / 2 + 4;
+    const x1 = fx + ux * r, y1 = fy + uy * r;            // start at source icon edge
+    const x2 = tx - ux * (r + 7), y2 = ty - uy * (r + 7); // stop short for the arrowhead
+    const dash = legend === "good" ? "" : ` stroke-dasharray="7 5"`;
+    parts += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="${legend === "good" ? 2.2 : 3}"${dash} marker-end="url(#ahg-${legend})"/>`;
     if (e.label) {
-      const lx = mx, ly = (y1 + y2) / 2 - 8, lbl = clip(e.label, 28), tw = lbl.length * 5.4 + 12;
+      const lx = (x1 + x2) / 2, ly = (y1 + y2) / 2 - 7, lbl = clip(e.label, 28), tw = lbl.length * 5.4 + 12;
       parts += `<rect x="${lx - tw / 2}" y="${ly - 10}" width="${tw}" height="15" rx="7.5" fill="#fff" stroke="${col}"/>`;
       parts += `<text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="9" font-weight="800" fill="${col}">${esc(lbl)}</text>`;
     }
