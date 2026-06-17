@@ -315,7 +315,7 @@ export function CorrelationDetail({ id }: { id: string }) {
   // Deterministic-replay control — a platform/debug tool, surfaced only in Debug View.
   const replayPanel = (
     <div>
-      <h3 style={{ margin: "0 0 10px", fontSize: 12, letterSpacing: ".04em", textTransform: "uppercase", color: "#667085" }}>
+      <h3 style={{ margin: "0 0 10px", fontSize: 12, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--muted)" }}>
         Determinism replay
       </h3>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -331,7 +331,7 @@ export function CorrelationDetail({ id }: { id: string }) {
         )}
       </div>
       {replay && !replay.clean && (
-        <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 12, color: "#697386" }}>
+        <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>
           {replay.differences.map((d) => <div key={d}>· {d}</div>)}
           {!replay.engine_pin_match && (
             <div style={{ marginTop: 4 }}>Engine pin mismatch: built by an older engine — expected evolution, not corruption.</div>

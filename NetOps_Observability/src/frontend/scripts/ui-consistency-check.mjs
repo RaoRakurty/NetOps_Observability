@@ -32,6 +32,10 @@ const HEX = /#[0-9a-fA-F]{3,8}\b/g;
 const HEX_OK = [
   /styles\.css$/, /theme\/prefs\.ts$/, /theme\/charts\.ts$/, /ConnectorLogos\.tsx$/, /Icon\.tsx$/, /icons?\//i,
   /panels\.tsx$/, /Topology\.tsx$/, /Dashboard\.tsx$/, /\.css$/, // viz + decorative
+  // Fixed-palette by design (NOT app-theme surfaces): the RCA PDF/print export is a
+  // standalone light document with its own professional palette; the device terminal
+  // uses xterm's own colour scheme. Theme tokens would be wrong in both.
+  /rca\/rcaExport\.ts$/, /DeviceTerminal\.tsx$/,
 ];
 
 // Canonical type scale (px). Everything else is drift — near-duplicate sizes
@@ -52,8 +56,14 @@ for (const f of files) {
   // hardcoded colors inside .tsx/.ts components (inline styles) — should be tokens
   if (/\.tsx?$/.test(f) && !HEX_OK.some((r) => r.test(f))) {
     lines.forEach((ln, i) => {
-      const m = ln.match(HEX);
-      if (m && /style|background|color|fill|stroke|border/i.test(ln)) {
+      // Strip token-with-fallback hexes — var(--x, #abc) and cssVar("--x", "#abc")
+      // are the CORRECT, theme-aware pattern (the hex is only a defensive fallback),
+      // not a hardcode. Only a hex with NO governing token is a real violation.
+      const cleaned = ln
+        .replace(/var\(\s*--[\w-]+\s*,\s*#[0-9a-fA-F]{3,8}/g, "var(--t")
+        .replace(/cssVar\(\s*["']--[\w-]+["']\s*,\s*["']#[0-9a-fA-F]{3,8}/g, "cssVar(t");
+      const m = cleaned.match(HEX);
+      if (m && /style|background|color|fill|stroke|border/i.test(cleaned)) {
         out.push(`  HEX   ${rel}:${i + 1}  hardcoded ${m.join(",")} in a component — prefer var(--token)`);
         tsxHex++;
       }
