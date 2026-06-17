@@ -428,8 +428,18 @@ function KpiStrip() {
   const objs = (c?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
   const devs = new Set<string>(), sites = new Set<string>();
   for (const o of objs) {
-    try { const a = JSON.parse(o.affected || "{}"); (a.devices ?? []).forEach((d: string) => devs.add(d)); (a.sites ?? []).forEach((x: string) => sites.add(x)); } catch { /* ignore */ }
+    try {
+      const a = JSON.parse(o.affected || "{}");
+      (a.devices ?? []).forEach((d: string) => { if (!mentionsInternal(d)) devs.add(d); });
+      (a.sites ?? []).forEach((x: string) => { if (!mentionsInternal(x)) sites.add(x); });
+      // path endpoints are devices too ("wan-r2 → 10.0.0.2"); skip platform infra
+      (a.paths ?? []).forEach((p: string) => p.split(/->|→/).forEach((n: string) => { const d = n.trim(); if (d && !mentionsInternal(d)) devs.add(d); }));
+    } catch { /* ignore */ }
   }
+  // Also count devices currently driving the health score (CPU/errors/etc.) — they
+  // ARE impacted even if no graded RCA names them yet, so the strip isn't a flat 0
+  // when the only correlated objects are internal/self-monitoring.
+  for (const cn of (h?.contributions ?? [])) if (cn.entity && !mentionsInternal(cn.entity)) devs.add(cn.entity);
   const insufficient = !h || h.coverage_status === "INSUFFICIENT_TELEMETRY" || h.score == null;
   const scoreColor = BAND_VAR[h?.band ?? ""] ?? "var(--fg-subtle)";
   const live = (h?.signal_classes_live ?? []).length, stale = (h?.stale_inputs ?? []).length;
