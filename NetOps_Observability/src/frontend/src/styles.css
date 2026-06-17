@@ -2532,6 +2532,12 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
 .fp-kpistrip-cell { flex: 1 1 110px; padding: 11px 16px; border-left: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .fp-kpistrip-cell:first-child { border-left: none; }
+/* clickable cells drill through to detail — inherit colour, no underline, a
+   subtle hover lift so the strip reads as live + navigable. */
+a.fp-kpistrip-cell { text-decoration: none; color: inherit; cursor: pointer; transition: background .12s ease; position: relative; }
+a.fp-kpistrip-cell:hover { background: var(--surface-3, rgba(127,127,127,.08)); }
+a.fp-kpistrip-cell.clk::after { content: "›"; position: absolute; top: 8px; right: 12px; color: var(--fg-subtle); font-size: 14px; opacity: 0; transition: opacity .12s ease; }
+a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 .fp-kpistrip-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 30px;
   line-height: 34px; font-weight: 700; letter-spacing: -0.02em; }
 .fp-kpistrip-l { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-subtle); margin-top: 4px; }

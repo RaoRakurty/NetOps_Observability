@@ -103,8 +103,8 @@ function Panel({ title, action, state = "ok", note, hint, to, children }: {
 function Tag({ tone, children }: { tone: string; children: ReactNode }) {
   return <span className="fp-tag" style={{ color: tone, border: `1px solid ${tone}` }}>{children}</span>;
 }
-function Kpi({ n, l }: { n: ReactNode; l: string }) {
-  return <div className="fp-kpi"><div className="fp-kpi-n">{n}</div><div className="fp-kpi-l">{l}</div></div>;
+function Kpi({ n, l, tone }: { n: ReactNode; l: string; tone?: string }) {
+  return <div className="fp-kpi"><div className="fp-kpi-n" style={tone ? { color: tone } : undefined}>{n}</div><div className="fp-kpi-l">{l}</div></div>;
 }
 
 // ── Panel 2 — Top Active Issues ─────────────────────────────────────────────
@@ -202,10 +202,10 @@ function RcaCoverage() {
   return (
     <Panel title="RCA coverage" to="monitoring/correlations">
       <div className="fp-kpis">
-        <Kpi n={data.open} l="RCA candidates" />
-        <Kpi n={data.open_confirmed} l="confirmed" />
-        <Kpi n={data.open_suspected} l="suspected" />
-        <Kpi n={data.signatures_matched} l="signatures" />
+        <Kpi n={data.open} l="RCA candidates" tone="var(--accent)" />
+        <Kpi n={data.open_confirmed} l="confirmed" tone={data.open_confirmed > 0 ? "var(--crit)" : undefined} />
+        <Kpi n={data.open_suspected} l="suspected" tone={data.open_suspected > 0 ? "var(--warn)" : undefined} />
+        <Kpi n={data.signatures_matched} l="signatures" tone={data.signatures_matched > 0 ? "var(--ok)" : undefined} />
       </div>
     </Panel>
   );
@@ -234,7 +234,9 @@ function WhatChanged() {
 
 // ── Panel 9 — Impact ────────────────────────────────────────────────────────
 function ImpactSummary() {
-  const { data, err } = usePoll(() => api.correlations(100, 86400, "open"));
+  // 30-day window to match the KPI strip + RCA coverage — a graded object older
+  // than 24h must still count as impact (a narrower window silently emptied this).
+  const { data, err } = usePoll(() => api.correlations(120, 2592000, "open"));
   if (err) return <Panel title="Impact" state="degraded" />;
   const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
   const devices = new Set<string>(); const sites = new Set<string>();
@@ -432,21 +434,28 @@ function KpiStrip() {
   const scoreColor = BAND_VAR[h?.band ?? ""] ?? "var(--fg-subtle)";
   const live = (h?.signal_classes_live ?? []).length, stale = (h?.stale_inputs ?? []).length;
   const confirmed = s?.open_confirmed ?? 0, suspected = s?.open_suspected ?? 0;
-  const cell = (label: string, value: ReactNode, tone?: string, sub?: string) => (
-    <div className="fp-kpistrip-cell">
-      <div className="fp-kpistrip-n" style={tone ? { color: tone } : undefined}>{value}</div>
-      <div className="fp-kpistrip-l">{label}</div>
-      {sub ? <div className="fp-kpistrip-sub">{sub}</div> : <div className="fp-kpistrip-sub">&nbsp;</div>}
-    </div>
-  );
+  // each cell drills through to its detail surface (hash route; the SPA router
+  // handles it). `to` makes it a link with a hover affordance.
+  const cell = (label: string, value: ReactNode, tone?: string, sub?: string, to?: string) => {
+    const inner = (
+      <>
+        <div className="fp-kpistrip-n" style={tone ? { color: tone } : undefined}>{value}</div>
+        <div className="fp-kpistrip-l">{label}</div>
+        {sub ? <div className="fp-kpistrip-sub">{sub}</div> : <div className="fp-kpistrip-sub">&nbsp;</div>}
+      </>
+    );
+    return to
+      ? <a className="fp-kpistrip-cell clk" href={`#/${to}`}>{inner}</a>
+      : <div className="fp-kpistrip-cell">{inner}</div>;
+  };
   return (
     <div className="fp-kpistrip">
-      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""))}
-      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA")}
-      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates")}
-      {cell("Impacted sites", sites.size || "—")}
-      {cell("Impacted devices", devs.size || "—")}
-      {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes")}
+      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered")}
+      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations")}
+      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations")}
+      {cell("Impacted sites", sites.size || "—", undefined, undefined, "infrastructure/topology")}
+      {cell("Impacted devices", devs.size || "—", undefined, undefined, "infrastructure/topology")}
+      {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "monitoring/triggered")}
     </div>
   );
 }
