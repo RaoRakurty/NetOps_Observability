@@ -112,8 +112,9 @@ export const NAV: NavSection[] = [
       { id: "reports", label: "Reports", render: () => <Reports /> },
     ],
   },
-  // Monitoring — monitor definitions, creation, triggered (live) state, quality,
-  // and Event Management (events · incidents · anomalies).
+  // Monitoring — monitor definitions, creation, triggered (live) state, quality.
+  // (Event Management is its own top-level object below — clicking Monitoring
+  // shows only monitor definitions, never event/incident/anomaly objects.)
   {
     id: "monitoring",
     label: "Monitoring",
@@ -123,10 +124,19 @@ export const NAV: NavSection[] = [
       { id: "new", label: "New Monitor", render: () => <NewMonitor /> },
       { id: "triggered", label: "Triggered", render: () => <Alerts /> },
       { id: "quality", label: "Quality", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
-      { id: "events", label: "Events", group: "Event Management", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
-      { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
-      { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
-      { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
+    ],
+  },
+  // Event Management — the event/incident/anomaly/correlation objects, split out
+  // of Monitoring so each top-level object owns only its own hierarchy.
+  {
+    id: "events",
+    label: "Event Management",
+    icon: "incident",
+    children: [
+      { id: "events", label: "Events", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
+      { id: "incidents", label: "Incidents", render: () => <Incidents /> },
+      { id: "anomalies", label: "Anomalies", render: () => <Findings /> },
+      { id: "correlations", label: "Correlations", render: () => <Correlations /> },
     ],
   },
   // Incident Response — coordinate response across chat/collaboration tools, and
@@ -165,12 +175,11 @@ export const NAV: NavSection[] = [
     // traffic get there → how is it collected.
     children: [
       { id: "devices", label: "Devices", group: "Inventory", render: () => <Devices /> },
-      { id: "datasources", label: "Data Sources", group: "Inventory", render: () => <DataSources /> },
       // Dashboards — the device-monitoring board suite (see
       // docs/design/device-monitoring-dashboards.md).
       { id: "monitoring", label: "Device Monitoring", group: "Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
       { id: "ifperf", label: "Interface Performance", group: "Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
-      { id: "bgpospf", label: "BGP / OSPF Overview", group: "Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
+      { id: "bgpospf", label: "Protocol Monitoring", group: "Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
       { id: "troubleshooting", label: "Troubleshooting", group: "Dashboards", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
@@ -178,10 +187,6 @@ export const NAV: NavSection[] = [
       // hop-by-hop active paths (Flow Trace) and overlay circuits (Tunnels).
       { id: "flowtrace", label: "Flow Trace", group: "Paths & Overlays", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
       { id: "tunnels", label: "Tunnels", group: "Paths & Overlays", render: () => <Tunnels /> },
-      // Collection — the plumbing that feeds everything above.
-      // Collectors = shared poller-engine status (fleet aggregate) → platform owner only.
-      { id: "collectors", label: "Collectors", group: "Collection", platformOnly: true, render: () => <Collectors /> },
-      { id: "snmp", label: "SNMP Profile Manager", group: "Collection", render: () => <SnmpProfileManager /> },
     ],
   },
   // Security — vulnerability, threat and compliance posture across the fleet.
@@ -261,6 +266,11 @@ export const NAV: NavSection[] = [
     footer: true,
     children: [
       { id: "settings", label: "Settings", render: () => <Settings /> },
+      // Data Collection — moved out of Infrastructure (kept it uncrowded): the
+      // sources + the poller plumbing that feed telemetry.
+      { id: "datasources", label: "Data Sources", group: "Data Collection", render: () => <DataSources /> },
+      { id: "collectors", label: "Collectors", group: "Data Collection", platformOnly: true, render: () => <Collectors /> },
+      { id: "snmp", label: "SNMP Profile Manager", group: "Data Collection", render: () => <SnmpProfileManager /> },
       // Identity & Access — consolidates Users · Roles · Security Settings,
       // split into Global (platform-wide) and Tenants (per tenant, configured
       // independently). The tenant registry + per-tenant drill-in live inside it.

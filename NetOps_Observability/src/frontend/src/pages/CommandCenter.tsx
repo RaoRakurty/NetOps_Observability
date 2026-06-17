@@ -207,7 +207,7 @@ function ExpandPanel({ it }: { it: ActionItem }) {
         </div>
       </div>
       <div className="cc-actions">
-        <a className="cc-btn cc-btn-primary" href={`#/monitoring/correlations`}>Open RCA</a>
+        <a className="cc-btn cc-btn-primary" href={`#/events/correlations`}>Open RCA</a>
         <a className="cc-btn" href="#/infrastructure/topology">View topology</a>
         {it.owner === "Missing" && <button className="cc-btn" type="button">Assign owner</button>}
         {it.ticket === "Ticket needed" && <button className="cc-btn cc-btn-warn" type="button">Create ticket</button>}
@@ -291,11 +291,11 @@ export default function CommandCenter() {
           </div>
         </div>
         <div className="cc-kpis">
-          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not raw alerts" href="#/monitoring/correlations" />
-          <CcKpi n={critical} label="Critical" interp="confirmed impact or high blast radius" tone={critical ? "var(--crit)" : undefined} href="#/monitoring/correlations?tier=confirmed" />
+          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not raw alerts" href="#/events/correlations" />
+          <CcKpi n={critical} label="Critical" interp="confirmed impact or high blast radius" tone={critical ? "var(--crit)" : undefined} href="#/events/correlations?tier=confirmed" />
           <CcKpi n={untriaged} label="Untriaged" interp="correlated, RCA not yet run" tone={untriaged ? "var(--warn)" : undefined} />
-          <CcKpi n={suspected} label="Suspected RCA" interp="impact not confirmed" tone={suspected ? "var(--warn)" : undefined} href="#/monitoring/correlations?tier=suspected" />
-          <CcKpi n={confirmed} label="Confirmed RCA" interp="≥2 evidence streams align" tone={confirmed ? "var(--crit)" : undefined} href="#/monitoring/correlations?tier=confirmed" />
+          <CcKpi n={suspected} label="Suspected RCA" interp="impact not confirmed" tone={suspected ? "var(--warn)" : undefined} href="#/events/correlations?tier=suspected" />
+          <CcKpi n={confirmed} label="Confirmed RCA" interp="≥2 evidence streams align" tone={confirmed ? "var(--crit)" : undefined} href="#/events/correlations?tier=confirmed" />
           <CcKpi n={ownerMissing} label="Owner missing" interp="needs assignment" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} />
           <CcKpi n={blocked} label="RCA blocked" interp="missing evidence streams" tone={blocked ? "var(--warn)" : "var(--ok)"} />
           <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" interp="confirmed → ITSM" href="#/incident/integrations" />

@@ -166,11 +166,11 @@ function TopIssues() {
     return <Panel title="Top active issues" state="inactive" note="No active correlated issues." hint="A good sign — nothing needs attention right now." />;
   }
   return (
-    <Panel title="Top active issues" action={<a href="#/monitoring/correlations">all →</a>}>
+    <Panel title="Top active issues" action={<a href="#/events/correlations">all →</a>}>
       {items.map((o) => {
         const tone = VERDICT_VAR[o.verdict_tier] ?? "var(--fg-subtle)";
         return (
-          <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("monitoring/correlations")}>
+          <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("events/correlations")}>
             <Tag tone={tone}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</Tag>
             <span className="fp-row-t">{upProto(signatureNocTitle(o.top_hypothesis))}</span>
             {o.verdict_tier === "suspected" && <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", letterSpacing: 0.04 }}>not confirmed</span>}
@@ -192,7 +192,7 @@ function RecommendedAction() {
   const { data: health } = usePoll(() => api.healthScore("global"));
   if (err) return <Panel title="Recommended action" state="degraded" />;
   const row = (verb: string, tone: string, text: string) => (
-    <Panel title="Recommended action" to="monitoring/correlations">
+    <Panel title="Recommended action" to="events/correlations">
       <div className="fp-row" style={{ borderLeftColor: tone, cursor: "default" }}>
         <Tag tone={tone}>{verb}</Tag>
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{text}</span>
@@ -235,7 +235,7 @@ function RcaCoverage() {
   // "candidates" = open correlation objects incl. undetermined; confirmed/suspected
   // are the graded subset. Calling the raw count "open issues" overstated it.
   return (
-    <Panel title="RCA coverage" to="monitoring/correlations">
+    <Panel title="RCA coverage" to="events/correlations">
       <div className="fp-kpis">
         <Kpi n={data.open} l="RCA candidates" tone="var(--accent)" />
         <Kpi n={data.open_confirmed} l="confirmed" tone={data.open_confirmed > 0 ? "var(--crit)" : undefined} />
@@ -253,7 +253,7 @@ function WhatChanged() {
   const items: FeedItem[] = data?.items ?? [];
   if (items.length === 0) return <Panel title="What changed" state="inactive" note="No changes in the last 24h." hint="Topology, inventory, and alert-state changes appear here." />;
   return (
-    <Panel title="What changed" to="monitoring/events">
+    <Panel title="What changed" to="events/events">
       <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 280, overflowY: "auto" }}>
         {items.map((it) => (
           <div key={it.signal_id} style={{ display: "flex", gap: 9, fontSize: 12.5, alignItems: "baseline" }}>
@@ -405,7 +405,7 @@ function RcaPathPanel() {
   if (!top || !tl) return <Panel title="RCA path view" state="inactive" note="No issue to locate yet."
     hint="When an issue is suspected or confirmed, its path and likely fault location appear here." />;
   return (
-    <Panel title="RCA path view" to="monitoring/correlations">
+    <Panel title="RCA path view" to="events/correlations">
       <RcaPathView timeline={tl} seams={seams} owner={top.owner} />
     </Panel>
   );
@@ -446,7 +446,7 @@ function InternalMonitoringChecks() {
   const { data } = usePoll(() => api.correlations(120, 2592000, "open"));
   const internal = (data?.data ?? []).filter((o) => isInternalStackAffected(o.affected));
   return (
-    <Panel title="Internal monitoring checks" action={<a href="#/monitoring/correlations" onClick={(e) => { e.preventDefault(); navigate("monitoring/correlations"); }}>view →</a>}>
+    <Panel title="Internal monitoring checks" action={<a href="#/events/correlations" onClick={(e) => { e.preventDefault(); navigate("events/correlations"); }}>view →</a>}>
       <div style={{ fontSize: 12.5, color: "var(--fg-muted)" }}>
         <b className="fp-num" style={{ fontSize: 18, color: "var(--fg)" }}>{internal.length}</b> internal self-monitoring object{internal.length === 1 ? "" : "s"}
       </div>
@@ -522,8 +522,8 @@ function KpiStrip() {
   return (
     <div className="fp-kpistrip">
       {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered", "health")}
-      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations?tier=confirmed", "confirmed")}
-      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations?tier=suspected", "suspected")}
+      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "events/correlations?tier=confirmed", "confirmed")}
+      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "events/correlations?tier=suspected", "suspected")}
       {cell("Impacted sites", sites.size, undefined, sites.size ? undefined : "none tagged", "infrastructure/topology", "sites")}
       {cell("Impacted devices", devs.size, undefined, undefined, "infrastructure/topology", "devices")}
       {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "monitoring/triggered")}
@@ -564,7 +564,7 @@ function TopIssueSpotlight() {
   const tail = confirmed ? "" : " · needs independent confirmation";
   const sentence = `${confirmed ? "Confirmed" : "Suspected"} ${sig} on ${device}${phrases.length ? " — " + phrases.join(" · ") : ""}${tail}`;
   return (
-    <a className="fp-panel-link" href="#/monitoring/correlations" style={{ display: "block" }}>
+    <a className="fp-panel-link" href="#/events/correlations" style={{ display: "block" }}>
       <div className="fp-spot" style={{ borderLeft: `4px solid ${tone}` }}>
         <Tag tone={tone}>{confirmed ? "CONFIRMED" : "SUSPECTED"}</Tag>
         <span className="fp-spot-text">{sentence}</span>
