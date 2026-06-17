@@ -16,8 +16,11 @@ function HopTable({ hops }: { hops: Hop[] }) {
   const cols: Column<Hop>[] = [
     { key: "ttl", header: "Hop", width: "56px", sortable: true, sortValue: (h) => h.ttl, render: (h) => `${h.ttl}` },
     { key: "ip", header: "Router", sortable: true, text: (h) => h.ip || "*", render: (h) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{h.ip || "* (no reply)"}</span> },
-    { key: "rtt", header: "RTT", align: "right", sortable: true, sortValue: (h) => h.rtt_ms, render: (h) => (h.ip ? `${h.rtt_ms.toFixed(1)} ms` : "—") },
-    { key: "loss", header: "Loss", align: "right", sortable: true, sortValue: (h) => h.loss_pct, render: (h) => (h.ip ? `${h.loss_pct.toFixed(0)}%` : "—") },
+    // rtt_ms / loss_pct can be absent on a hop (no reply, or a prober that doesn't
+    // measure per-hop loss) — guard against undefined.toFixed(), which throws and
+    // white-screens the whole Flow Trace page.
+    { key: "rtt", header: "RTT", align: "right", sortable: true, sortValue: (h) => h.rtt_ms ?? -1, render: (h) => (h.ip && h.rtt_ms != null ? `${h.rtt_ms.toFixed(1)} ms` : "—") },
+    { key: "loss", header: "Loss", align: "right", sortable: true, sortValue: (h) => h.loss_pct ?? -1, render: (h) => (h.ip && h.loss_pct != null ? `${h.loss_pct.toFixed(0)}%` : "—") },
   ];
   return <DataTable<Hop> rows={hops} columns={cols} rowKey={(h) => `${h.ttl}-${h.ip}`} height={Math.min(420, 44 + hops.length * 28)} ariaLabel="Path hops" initialSort={{ key: "ttl", dir: "asc" }} />;
 }
