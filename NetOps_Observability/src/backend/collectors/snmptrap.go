@@ -63,122 +63,35 @@ type TrapEvent struct {
 // .1..6; the snmpTrapOID.0 varbind that names a v2/v3 trap is 1.3.6.1.6.3.1.1.4.1.0.
 var snmpTrapOIDDot = "1.3.6.1.6.3.1.1.4.1.0"
 
-// genericTrapMeta maps the v1 generic-trap number AND the equivalent v2 trap OID
-// suffix (1.3.6.1.6.3.1.1.5.N) to a name + severity.
-var genericTrapMeta = []struct {
-	name     string
-	severity string
-}{
-	{"coldStart", "info"},
-	{"warmStart", "info"},
-	{"linkDown", "warning"},
-	{"linkUp", "info"},
-	{"authenticationFailure", "warning"},
-	{"egpNeighborLoss", "warning"},
-}
-
-// wellKnownTraps maps common standard + enterprise trap OIDs to a name + severity
-// so the operator sees the trap meaning, not a raw OID. Curated (not a full MIB
-// compiler — see CLAUDE.md): the high-value traps a NOC actually receives.
-var wellKnownTraps = map[string]struct{ name, severity string }{
-	// IF-MIB linkDown/linkUp also published at the SNMPv2-MIB generic prefix.
-	"1.3.6.1.6.3.1.1.5.1": {"coldStart", "info"},
-	"1.3.6.1.6.3.1.1.5.2": {"warmStart", "info"},
-	"1.3.6.1.6.3.1.1.5.3": {"linkDown", "warning"},
-	"1.3.6.1.6.3.1.1.5.4": {"linkUp", "info"},
-	"1.3.6.1.6.3.1.1.5.5": {"authenticationFailure", "warning"},
-	// BGP4-MIB — both the SNMPv2 notification OIDs (.7.x) and the v1-trap form
-	// devices actually emit (enterprise bgp .0. specific-trap): bgpEstablished=1,
-	// bgpBackwardTransition=2.
-	"1.3.6.1.2.1.15.7.1": {"bgpEstablished", "info"},
-	"1.3.6.1.2.1.15.7.2": {"bgpBackwardTransition", "warning"},
-	"1.3.6.1.2.1.15.0.1": {"bgpEstablished", "info"},
-	"1.3.6.1.2.1.15.0.2": {"bgpBackwardTransition", "warning"},
-	// OSPF-TRAP-MIB (a few high-value ones)
-	"1.3.6.1.2.1.14.16.2.2":  {"ospfNbrStateChange", "warning"},
-	"1.3.6.1.2.1.14.16.2.16": {"ospfIfStateChange", "warning"},
-	// ENTITY-MIB / config change
-	"1.3.6.1.2.1.47.2.0.1":     {"entConfigChange", "notice"},
-	"1.3.6.1.4.1.9.9.43.2.0.1": {"ciscoConfigManEvent", "notice"},
-}
-
-// trapMeta resolves a trap OID (dotted) to a friendly name + severity. Standard
-// SNMPv2-MIB + curated enterprise traps are recognized; everything else is
-// enterprise-specific notice.
+// trapMeta resolves a trap OID (dotted) to a friendly name + severity via the
+// MIB-backed OID index (oidindex.go — generated from a vendored MIB tree). Unknown
+// OIDs read as enterpriseSpecific/notice; add the vendor MIB + `make mib-index` to
+// decode them (mibs/README.md). Replaces the old hand-curated wellKnownTraps map.
 func trapMeta(oid string) (name, severity string) {
-	if m, ok := wellKnownTraps[oid]; ok {
-		return m.name, m.severity
-	}
-	const stdPrefix = "1.3.6.1.6.3.1.1.5."
-	if strings.HasPrefix(oid, stdPrefix) {
-		if n := atoiSafe(oid[len(stdPrefix):]); n >= 1 && n <= len(genericTrapMeta) {
-			m := genericTrapMeta[n-1]
-			return m.name, m.severity
+	if n, _, ok := lookupOID(oid); ok && n.Name != "" {
+		sev := n.SeverityHint
+		if sev == "" {
+			sev = "notice"
 		}
+		return n.Name, sev
 	}
 	return "enterpriseSpecific", "notice"
 }
 
-// varbindObjects maps common column OIDs (without the trailing row index) to an
-// object name + optional enum decoder, so a varbind renders as "ifOperStatus=
-// down(2)" rather than "1.3.6.1.2.1.2.2.1.8.5=2".
-var varbindObjects = []struct {
-	prefix string
-	name   string
-	enum   map[string]string
-}{
-	{"1.3.6.1.2.1.2.2.1.1.", "ifIndex", nil},
-	{"1.3.6.1.2.1.2.2.1.2.", "ifDescr", nil},
-	{"1.3.6.1.2.1.2.2.1.7.", "ifAdminStatus", map[string]string{"1": "up", "2": "down", "3": "testing"}},
-	{"1.3.6.1.2.1.2.2.1.8.", "ifOperStatus", map[string]string{"1": "up", "2": "down", "3": "testing", "4": "unknown", "5": "dormant", "6": "notPresent", "7": "lowerLayerDown"}},
-	{"1.3.6.1.2.1.31.1.1.1.1.", "ifName", nil},
-	{"1.3.6.1.2.1.31.1.1.1.18.", "ifAlias", nil},
-	{"1.3.6.1.2.1.15.3.1.2.", "bgpPeerState", map[string]string{"1": "idle", "2": "connect", "3": "active", "4": "opensent", "5": "openconfirm", "6": "established"}},
-	{"1.3.6.1.2.1.15.3.1.3.", "bgpPeerAdminStatus", map[string]string{"1": "stop", "2": "start"}},
-	{"1.3.6.1.2.1.15.3.1.7.", "bgpPeerRemoteAddr", nil},
-	{"1.3.6.1.2.1.15.3.1.9.", "bgpPeerRemoteAs", nil},
-	{"1.3.6.1.2.1.15.3.1.14.", "bgpPeerLastError", nil},
-}
-
-// varbindExact maps scalar OIDs (with the .0 instance) to a name.
-var varbindExact = map[string]string{
-	"1.3.6.1.2.1.1.1.0": "sysDescr",
-	"1.3.6.1.2.1.1.3.0": "sysUpTime",
-	"1.3.6.1.2.1.1.5.0": "sysName",
-	"1.3.6.1.2.1.1.6.0": "sysLocation",
-}
-
 // resolveVarbind returns the object name (or "" if unknown) and a value possibly
-// decorated with an enum label, for a varbind OID + raw value.
+// decorated with an enum label, resolved via the MIB-backed OID index. Replaces
+// the old hand-curated varbindObjects/varbindExact maps.
 func resolveVarbind(oid, value string) (name, dispValue string) {
-	if n, ok := varbindExact[oid]; ok {
-		return n, value
+	n, _, ok := lookupOID(oid)
+	if !ok || n.Name == "" {
+		return "", value
 	}
-	for _, o := range varbindObjects {
-		if strings.HasPrefix(oid, o.prefix) {
-			if o.enum != nil {
-				if lbl, ok := o.enum[value]; ok {
-					return o.name, fmt.Sprintf("%s(%s)", lbl, value)
-				}
-			}
-			return o.name, value
+	if n.Enum != nil {
+		if lbl, found := n.Enum[value]; found {
+			return n.Name, fmt.Sprintf("%s(%s)", lbl, value)
 		}
 	}
-	return "", value
-}
-
-func atoiSafe(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return -1
-		}
-		n = n*10 + int(c-'0')
-	}
-	if s == "" {
-		return -1
-	}
-	return n
+	return n.Name, value
 }
 
 func oidString(arcs []int) string {

@@ -1,0 +1,242 @@
+{
+  "version": "sha256:7cc5ad9b95c088f4",
+  "generated": "2026-06-17",
+  "note": "SEED index migrated from the hand-curated maps in snmptrap.go so OID decode is data-driven, not hardcoded. Expanded by `make mib-index` (pysmi over a vendored MIB tree) \u2014 see mibs/README.md. Schema: docs/design/research/telemetry-normalization-architecture.md \u00a76.1.",
+  "mibs": [
+    "SNMPv2-MIB",
+    "IF-MIB",
+    "BGP4-MIB",
+    "OSPF-TRAP-MIB",
+    "ENTITY-MIB",
+    "CISCO-CONFIG-MAN-MIB"
+  ],
+  "nodes": {
+    "1.3.6.1.6.3.1.1.5.1": {
+      "name": "coldStart",
+      "mib": "SNMPv2-MIB",
+      "kind": "notification",
+      "severity_hint": "info"
+    },
+    "1.3.6.1.6.3.1.1.5.2": {
+      "name": "warmStart",
+      "mib": "SNMPv2-MIB",
+      "kind": "notification",
+      "severity_hint": "info"
+    },
+    "1.3.6.1.6.3.1.1.5.3": {
+      "name": "linkDown",
+      "mib": "IF-MIB",
+      "kind": "notification",
+      "severity_hint": "warning"
+    },
+    "1.3.6.1.6.3.1.1.5.4": {
+      "name": "linkUp",
+      "mib": "IF-MIB",
+      "kind": "notification",
+      "severity_hint": "info"
+    },
+    "1.3.6.1.6.3.1.1.5.5": {
+      "name": "authenticationFailure",
+      "mib": "SNMPv2-MIB",
+      "kind": "notification",
+      "severity_hint": "warning"
+    },
+    "1.3.6.1.2.1.15.7.1": {
+      "name": "bgpEstablished",
+      "mib": "BGP4-MIB",
+      "kind": "notification",
+      "severity_hint": "info"
+    },
+    "1.3.6.1.2.1.15.7.2": {
+      "name": "bgpBackwardTransition",
+      "mib": "BGP4-MIB",
+      "kind": "notification",
+      "severity_hint": "warning"
+    },
+    "1.3.6.1.2.1.15.0.1": {
+      "name": "bgpEstablished",
+      "mib": "BGP4-MIB",
+      "kind": "notification",
+      "severity_hint": "info"
+    },
+    "1.3.6.1.2.1.15.0.2": {
+      "name": "bgpBackwardTransition",
+      "mib": "BGP4-MIB",
+      "kind": "notification",
+      "severity_hint": "warning"
+    },
+    "1.3.6.1.2.1.14.16.2.2": {
+      "name": "ospfNbrStateChange",
+      "mib": "OSPF-TRAP-MIB",
+      "kind": "notification",
+      "severity_hint": "warning"
+    },
+    "1.3.6.1.2.1.14.16.2.16": {
+      "name": "ospfIfStateChange",
+      "mib": "OSPF-TRAP-MIB",
+      "kind": "notification",
+      "severity_hint": "warning"
+    },
+    "1.3.6.1.2.1.47.2.0.1": {
+      "name": "entConfigChange",
+      "mib": "ENTITY-MIB",
+      "kind": "notification",
+      "severity_hint": "notice"
+    },
+    "1.3.6.1.4.1.9.9.43.2.0.1": {
+      "name": "ciscoConfigManEvent",
+      "mib": "CISCO-CONFIG-MAN-MIB",
+      "kind": "notification",
+      "severity_hint": "notice"
+    },
+    "1.3.6.1.2.1.1.1.0": {
+      "name": "sysDescr",
+      "mib": "SNMPv2-MIB",
+      "kind": "scalar",
+      "type": "OCTET STRING"
+    },
+    "1.3.6.1.2.1.1.3.0": {
+      "name": "sysUpTime",
+      "mib": "SNMPv2-MIB",
+      "kind": "scalar",
+      "type": "TimeTicks"
+    },
+    "1.3.6.1.2.1.1.5.0": {
+      "name": "sysName",
+      "mib": "SNMPv2-MIB",
+      "kind": "scalar",
+      "type": "OCTET STRING"
+    },
+    "1.3.6.1.2.1.1.6.0": {
+      "name": "sysLocation",
+      "mib": "SNMPv2-MIB",
+      "kind": "scalar",
+      "type": "OCTET STRING"
+    },
+    "1.3.6.1.2.1.2.2.1.1": {
+      "name": "ifIndex",
+      "mib": "IF-MIB",
+      "kind": "column",
+      "type": "INTEGER",
+      "index": [
+        "ifIndex"
+      ]
+    },
+    "1.3.6.1.2.1.2.2.1.2": {
+      "name": "ifDescr",
+      "mib": "IF-MIB",
+      "kind": "column",
+      "type": "OCTET STRING",
+      "index": [
+        "ifIndex"
+      ]
+    },
+    "1.3.6.1.2.1.2.2.1.7": {
+      "name": "ifAdminStatus",
+      "mib": "IF-MIB",
+      "kind": "column",
+      "type": "INTEGER",
+      "index": [
+        "ifIndex"
+      ],
+      "enum": {
+        "1": "up",
+        "2": "down",
+        "3": "testing"
+      }
+    },
+    "1.3.6.1.2.1.2.2.1.8": {
+      "name": "ifOperStatus",
+      "mib": "IF-MIB",
+      "kind": "column",
+      "type": "INTEGER",
+      "index": [
+        "ifIndex"
+      ],
+      "enum": {
+        "1": "up",
+        "2": "down",
+        "3": "testing",
+        "4": "unknown",
+        "5": "dormant",
+        "6": "notPresent",
+        "7": "lowerLayerDown"
+      }
+    },
+    "1.3.6.1.2.1.31.1.1.1.1": {
+      "name": "ifName",
+      "mib": "IF-MIB",
+      "kind": "column",
+      "type": "OCTET STRING",
+      "index": [
+        "ifIndex"
+      ]
+    },
+    "1.3.6.1.2.1.31.1.1.1.18": {
+      "name": "ifAlias",
+      "mib": "IF-MIB",
+      "kind": "column",
+      "type": "OCTET STRING",
+      "index": [
+        "ifIndex"
+      ]
+    },
+    "1.3.6.1.2.1.15.3.1.2": {
+      "name": "bgpPeerState",
+      "mib": "BGP4-MIB",
+      "kind": "column",
+      "type": "INTEGER",
+      "index": [
+        "bgpPeerRemoteAddr"
+      ],
+      "enum": {
+        "1": "idle",
+        "2": "connect",
+        "3": "active",
+        "4": "opensent",
+        "5": "openconfirm",
+        "6": "established"
+      }
+    },
+    "1.3.6.1.2.1.15.3.1.3": {
+      "name": "bgpPeerAdminStatus",
+      "mib": "BGP4-MIB",
+      "kind": "column",
+      "type": "INTEGER",
+      "index": [
+        "bgpPeerRemoteAddr"
+      ],
+      "enum": {
+        "1": "stop",
+        "2": "start"
+      }
+    },
+    "1.3.6.1.2.1.15.3.1.7": {
+      "name": "bgpPeerRemoteAddr",
+      "mib": "BGP4-MIB",
+      "kind": "column",
+      "type": "IpAddress",
+      "index": [
+        "bgpPeerRemoteAddr"
+      ]
+    },
+    "1.3.6.1.2.1.15.3.1.9": {
+      "name": "bgpPeerRemoteAs",
+      "mib": "BGP4-MIB",
+      "kind": "column",
+      "type": "INTEGER",
+      "index": [
+        "bgpPeerRemoteAddr"
+      ]
+    },
+    "1.3.6.1.2.1.15.3.1.14": {
+      "name": "bgpPeerLastError",
+      "mib": "BGP4-MIB",
+      "kind": "column",
+      "type": "OCTET STRING",
+      "index": [
+        "bgpPeerRemoteAddr"
+      ]
+    }
+  }
+}
