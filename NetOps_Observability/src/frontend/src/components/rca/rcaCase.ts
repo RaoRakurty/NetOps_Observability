@@ -1,6 +1,7 @@
 import { CorrTimeline, CorrObject, Seam } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
+import type { TopoGraph } from "./topoGraph";
 
 // rcaCase.ts — the data contract for the RCA workspace + the adapter that maps a
 // real correlation object/timeline into it. The workspace component is pure
@@ -44,7 +45,12 @@ export interface RcaCase {
   summary: string;
   why: WhyLine[];
   impact: KV[];
+  // legacy compact chain (EXAMPLE_CASE + buildRcaCase fallback). When `topoGraph`
+  // is set, the PDF renders the rich shared graph instead and this is a fallback.
   topology?: { nodes: TopoNode[]; edges: TopoEdge[] };
+  // the SAME positioned graph the on-screen RcaTopology draws (built by
+  // buildTopoGraph) — wired in by CorrelationDetail so the PDF matches the page.
+  topoGraph?: TopoGraph;
   evidence: EvidenceCard[];
   ladder: LadderStep[];
   timelineTicks: string[];

@@ -5,6 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
 import RcaTopology from "../components/rca/RcaTopology";
 import { buildRcaCase } from "../components/rca/rcaCase";
+import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected } from "../components/rca/labels";
 
@@ -275,11 +276,17 @@ export function CorrelationDetail({ id }: { id: string }) {
     return { recommendedSteps: (topHyp?.verdict?.first_steps ?? []) as string[], recommendedOwner: (topHyp?.verdict?.owner ?? "") as string };
   }, [obj]);
 
-  // Map the real correlation object/timeline → the workspace data contract.
-  const rcaCase = useMemo(
-    () => (timeline && obj ? buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps) : null),
-    [timeline, obj, seams, recommendedOwner, recommendedSteps],
-  );
+  // Map the real correlation object/timeline → the workspace data contract, and
+  // attach the SAME positioned graph the on-screen topology draws (buildTopoGraph)
+  // so the exported PDF renders an identical Network-Path picture. showStamp=false
+  // keeps the print to the loss-only labels (the STAMP overlay is interactive-only).
+  const rcaCase = useMemo(() => {
+    if (!timeline || !obj) return null;
+    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps);
+    const graph = buildTopoGraph(timeline, seams, view, false, probePaths, deviceByIp);
+    if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
+    return c;
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, probePaths, deviceByIp]);
 
   if (err) return <div className="empty">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty">Loading…</div>;

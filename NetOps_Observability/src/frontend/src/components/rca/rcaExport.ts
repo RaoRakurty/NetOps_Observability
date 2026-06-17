@@ -1,5 +1,6 @@
 import type { RcaCase, RcaPill, KV, Tone } from "./rcaCase";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
+import type { TopoGraph, TopoGraphNode, EdgeState } from "./topoGraph";
 
 // rcaExport — generates an elegant, light-themed, print-ready RCA report and
 // opens it for the browser's "Save as PDF". No PDF dependency: a self-contained
@@ -141,6 +142,102 @@ function topoSvg(topo: RcaCase["topology"]): string {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 720)}px;display:block;margin:6px auto" role="img" aria-label="Causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
 }
 
+// EdgeState → the legend's light-theme edge colour (good/warn/bad). A down or
+// suspected-down segment reads as the "bad" red; degraded as amber; unknown as a
+// faint grey; healthy as green. Mirrors the on-screen stateColor mapping into the
+// print palette so the report and the page agree.
+function edgeStateColor(s: EdgeState): { col: string; legend: "good" | "warn" | "bad" | "faint" } {
+  if (s === "confirmed_down" || s === "suspected_down") return { col: EDGE.bad, legend: "bad" };
+  if (s === "degraded") return { col: EDGE.warn, legend: "warn" };
+  if (s === "unknown") return { col: "#b7c0d0", legend: "faint" };
+  return { col: EDGE.good, legend: "good" };
+}
+
+// topoGraphSvg — print-safe rendering of the SHARED RcaTopology graph (the SAME
+// positioned nodes/edges the on-screen React-Flow canvas draws, built by
+// buildTopoGraph). It reuses the live x/y layout, normalized + scaled to fit the
+// report width; node TYPE = shape (data.kind), health = colour (data.tone, a
+// theme-neutral tone legible on white); edges carry the state colour + are dashed
+// when degraded/down, with the same metric labels. No scripts (CSP-safe).
+function topoGraphSvg(g: TopoGraph): string {
+  const nodes = g.nodes;
+  if (nodes.length === 0) return "";
+  const byId = new Map<string, TopoGraphNode>(nodes.map((n) => [n.id, n]));
+
+  // node footprint in source (canvas) units, then scale to the report width.
+  const ICON = 46;            // rendered icon size (px)
+  const SRC_ICON = 56;        // on-canvas shape size the positions are spaced for
+  const NW = 132, ROWGAP = 104, PADX = 14, PADTOP = 14, FOOT = 30;
+  const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  // map source x-span across columns of width NW; keep relative spacing. A single
+  // column collapses to one position (avoid div-by-zero).
+  const spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+  const cols = Math.max(1, Math.round(spanX / 168) + 1);   // ~COL_HOP spacing
+  const rows = Math.max(1, Math.round(spanY / ROWGAP) + 1);
+  const innerW = cols * NW + (cols - 1) * 58;
+  const cx = (n: TopoGraphNode) => PADX + NW / 2 + ((n.x - minX) / spanX) * (innerW - NW);
+  const cy = (n: TopoGraphNode) => PADTOP + ICON / 2 + ((n.y - minY) / spanY) * ((rows - 1) * ROWGAP);
+  const W = PADX * 2 + innerW;
+  const H = PADTOP + (rows - 1) * ROWGAP + ICON + FOOT + 34;
+  const s = ICON / 100;
+  void SRC_ICON;
+
+  const markers = ["good", "warn", "bad", "faint"].map((st) =>
+    `<marker id="ahg-${st}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${st === "faint" ? "#b7c0d0" : EDGE[st]}"/></marker>`).join("");
+  let parts = "";
+
+  // edges — curved bezier source-right → target-left, dashed when degraded/down.
+  for (const e of g.edges) {
+    const from = byId.get(e.from), to = byId.get(e.to);
+    if (!from || !to) continue;
+    const { col, legend } = edgeStateColor(e.state);
+    const x1 = cx(from) + ICON / 2 + 3, y1 = cy(from), x2 = cx(to) - ICON / 2 - 5, y2 = cy(to);
+    const mx = (x1 + x2) / 2, dash = legend === "good" ? "" : ` stroke-dasharray="7 5"`;
+    parts += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="${legend === "good" ? 2.2 : 3}"${dash} marker-end="url(#ahg-${legend})"/>`;
+    if (e.label) {
+      const lx = mx, ly = (y1 + y2) / 2 - 8, lbl = clip(e.label, 28), tw = lbl.length * 5.4 + 12;
+      parts += `<rect x="${lx - tw / 2}" y="${ly - 10}" width="${tw}" height="15" rx="7.5" fill="#fff" stroke="${col}"/>`;
+      parts += `<text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="9" font-weight="800" fill="${col}">${esc(lbl)}</text>`;
+    }
+  }
+
+  // nodes — device-type shape (data.kind) + label + sub + badge/chips.
+  for (const n of nodes) {
+    const d = n.data, x = cx(n), y = cy(n);
+    const stroke = d.tone, fill = d.tone + "1f";   // faint tone wash (print-safe)
+    parts += `<g transform="translate(${x - ICON / 2},${y - ICON / 2}) scale(${s})">${shapeInner(d.kind, fill, stroke)}</g>`;
+    parts += `<text x="${x}" y="${y + ICON / 2 + 13}" text-anchor="middle" font-size="11.5" font-weight="800" fill="#172033"${d.mono ? ' font-family="ui-monospace,monospace"' : ""}>${esc(clip(d.label, 18))}</text>`;
+    let oy = y + ICON / 2 + 25;
+    if (d.sub) { parts += `<text x="${x}" y="${oy}" text-anchor="middle" font-size="9" fill="#697386">${esc(clip(d.sub, 30))}</text>`; oy += 12; }
+    if (d.badge) {
+      const tw = d.badge.length * 5.2 + 12;
+      parts += `<rect x="${x - tw / 2}" y="${oy - 9}" width="${tw}" height="14" rx="7" fill="${d.tone}1f" stroke="${d.tone}"/>`;
+      parts += `<text x="${x}" y="${oy + 1}" text-anchor="middle" font-size="8.5" font-weight="800" fill="${d.tone}">${esc(d.badge)}</text>`;
+      oy += 17;
+    }
+    for (const chip of (d.chips ?? []).slice(0, 3)) {
+      const cw = chip.length * 5 + 12;
+      parts += `<rect x="${x - cw / 2}" y="${oy - 9}" width="${cw}" height="13" rx="6" fill="${d.tone}14" stroke="${d.tone}66"/>`;
+      parts += `<text x="${x}" y="${oy + 0.5}" text-anchor="middle" font-size="8" font-weight="600" fill="#3a4252">${esc(clip(chip, 28))}</text>`;
+      oy += 15;
+    }
+  }
+
+  // legend — Healthy / Degraded / Down, matching the on-screen state colours.
+  const leg: [keyof typeof EDGE | "faint", string][] = [["good", "Healthy"], ["warn", "Degraded"], ["bad", "Down / fault"]];
+  let lx = PADX, legend = ""; const legendY = H - 10;
+  for (const [st, lbl] of leg) {
+    const col = st === "faint" ? "#b7c0d0" : EDGE[st];
+    legend += `<line x1="${lx}" y1="${legendY}" x2="${lx + 18}" y2="${legendY}" stroke="${col}" stroke-width="3"${st === "good" ? "" : ` stroke-dasharray="7 5"`}/>`;
+    legend += `<text x="${lx + 24}" y="${legendY + 3.5}" font-size="9" fill="#697386">${lbl}</text>`;
+    lx += 24 + lbl.length * 5.4 + 22;
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${Math.min(W, 720)}px;display:block;margin:6px auto" role="img" aria-label="Network path and causal topology"><defs>${markers}</defs>${parts}${legend}</svg>`;
+}
+
 function reportHtml(d: RcaCase, objId: string): string {
   const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 
@@ -219,7 +316,7 @@ function reportHtml(d: RcaCase, objId: string): string {
   ${block("Case", kvRows(d.aside))}
   ${block("Executive summary", `<p class="body">${esc(d.summary)}</p>${why}`)}
   ${block("Impact & blast radius", kvRows(d.impact))}
-  ${block("Causal topology", topoSvg(d.topology))}
+  ${block("Network path & causal topology", d.topoGraph ? topoGraphSvg(d.topoGraph) : topoSvg(d.topology))}
   ${block("Evidence matrix", evidence)}
   ${block("Confidence ladder", ladder)}
   ${block("Hypothesis ranking", hypotheses)}
