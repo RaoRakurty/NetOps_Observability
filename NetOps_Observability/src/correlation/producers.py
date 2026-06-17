@@ -407,12 +407,26 @@ def _trap_varbind(ev: dict, *oid_prefixes: str) -> str:
     return ""
 
 
+def _trap_varbind_byname(ev: dict, *name_substrs: str) -> str:
+    """First varbind whose RESOLVED name contains one of the substrings. The MIB
+    index now names varbinds, so a vendor's peer/interface column matches by its
+    object name without hardcoding its enterprise OID (e.g. Arista's BGP peer
+    column resolves to a name containing 'peer')."""
+    for vb in ev.get("varbinds") or []:
+        nm = str(vb.get("name") or "").lower()
+        if nm and any(s in nm for s in name_substrs):
+            return str(vb.get("value") or "")
+    return ""
+
+
 def _trap_interface(ev: dict) -> str:
     """Affected interface identity from the trap varbinds: prefer ifName/ifDescr
-    (matches the metric entity model device:ifName); fall back to ifIndex."""
+    (matches the metric entity model device:ifName); fall back to ifIndex, then to
+    any vendor varbind whose resolved name looks interface-ish."""
     return (_trap_varbind(ev, _VB_IFNAME)
             or _trap_varbind(ev, _VB_IFDESCR)
             or _trap_varbind(ev, _VB_IFINDEX)
+            or _trap_varbind_byname(ev, "ifname", "ifdescr", "interfacename", "intfname")
             or "unknown")
 
 
@@ -487,6 +501,50 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
             entity_tokens=tokens, metric_name="bgp_adjacency",
             attrs={"peer": peer, "state": state, "trap_oid": oid,
                    "authenticated": authed},
+        )
+
+    # Generic vendor classification via the normalized event_type (envelope, #32).
+    # Catches vendor BGP/link/restart traps the standard-OID checks above miss
+    # (e.g. Arista arista_bgp4_v2_backward_transition) — vendor-agnostic, keyed off
+    # the MIB-decoded event_type, not a per-vendor OID hardcode. Same Signal shapes.
+    etype = str(ev.get("event_type") or "").lower()
+    if "bgp" in etype and any(k in etype for k in ("backward", "transition", "established", "neighbor", "fsm", "state")):
+        established = "establish" in etype
+        state = "up" if established else "down"
+        peer = (_trap_varbind(ev, _VB_BGP_PEER_ADDR)
+                or _trap_varbind_byname(ev, "peerremoteaddr", "peeraddr", "remoteaddr", "peer"))
+        entity_id = f"{device}:{peer}" if peer else device
+        tokens = (device, peer) if peer else (device,)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="bgp_adjacency_change",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=entity_id,
+            severity=Severity.WARN if established else Severity.HIGH,
+            native_id=f"{device}|trap_bgp|{peer or '?'}|{state}|{ts_ms}",
+            entity_tokens=tokens, metric_name="bgp_adjacency",
+            attrs={"peer": peer, "state": state, "trap_oid": oid, "event_type": etype, "authenticated": authed},
+        )
+    if "link" in etype and ("down" in etype or "up" in etype):
+        state = "down" if "down" in etype else "up"
+        iface = _trap_interface(ev)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="link_state_change",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.INTERFACE, entity_id=f"{device}:{iface}",
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{device}|trap_link|{iface}|{state}|{ts_ms}",
+            entity_tokens=(device, iface), metric_name="link_state",
+            attrs={"interface": iface, "state": state, "trap_oid": oid, "event_type": etype, "authenticated": authed},
+        )
+    if "start" in etype and ("cold" in etype or "warm" in etype):
+        kind_type = "cold" if "cold" in etype else "warm"
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_restart",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=device, severity=Severity.HIGH,
+            native_id=f"{device}|trap_restart|{kind_type}|{ts_ms}",
+            entity_tokens=(device,), metric_name="device_restart",
+            attrs={"restart": kind_type, "trap_oid": oid, "event_type": etype, "authenticated": authed},
         )
 
     return None  # unclassified — searchable in OpenSearch, no RCA signal

@@ -92,6 +92,20 @@ class TrapClassifyTest(unittest.TestCase):
         ev = trap(trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="enterpriseSpecific", varbinds=[])
         self.assertIsNone(trap_control_signal(ev, "", NOW))
 
+    def test_vendor_bgp_trap_classifies_via_event_type(self):
+        # Arista BGP trap: non-standard OID the standard checks miss, but the
+        # NormalizedEvent envelope (#32) carries event_type → generic classify.
+        ev = trap(
+            trap_oid="1.3.6.1.4.1.30065.4.1.0.2", trap_name="aristaBgp4V2BackwardTransitionNotification",
+            event_type="arista_bgp4_v2_backward_transition",
+            varbinds=[{"oid": "1.3.6.1.4.1.30065.4.1.1.2.5", "name": "aristaBgp4V2PeerRemoteAddr", "value": "192.168.100.5"}],
+        )
+        sig = trap_control_signal(ev, "", NOW)
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.kind, "bgp_adjacency_change")
+        self.assertEqual(sig.attrs["state"], "down")
+        self.assertEqual(sig.entity_id, "leaf1:192.168.100.5")  # peer via resolved varbind name
+
     def test_missing_device_no_signal(self):
         self.assertIsNone(trap_control_signal(trap(device="", host=""), "", NOW))
 
