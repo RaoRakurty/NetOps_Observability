@@ -21,15 +21,16 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
   const obj = corrObject({ verdict_tier: "suspected", state: "open", signal_count: 1 });
   const c = buildRcaCase(tl, obj, {}, "NetOps", []);
 
-  it("titles it as a possible routing issue (no overclaim)", () => {
-    expect(c.title).toBe("Possible routing issue");
+  it("titles it factually by observed condition (no speculative 'Possible …')", () => {
+    expect(c.title).toBe("Routing adjacency change");
+    expect(c.title).not.toMatch(/^Possible/);
   });
 
-  it("status pills say NOT CONFIRMED · Low · Open", () => {
+  it("status pills say NOT CONFIRMED · Low · Under review", () => {
     const texts = c.pills.map((p) => p.text);
     expect(texts).toContain("NOT CONFIRMED");
     expect(texts).toContain("Confidence: Low");
-    expect(texts).toContain("State: Open");
+    expect(texts).toContain("RCA state: Under review");
     expect(texts).not.toContain("✓ CONFIRMED");
   });
 

@@ -83,30 +83,32 @@ export function signatureName(id: string): string {
 // vocabulary (NOT the technical signature name, and never the raw id). Debug View
 // uses signatureName()/the raw id instead.
 const SIG_NOC_TITLE: Record<string, string> = {
-  "sig.ent.middle-mile.dia-egress-latency": "Possible WAN/provider issue",
-  "sig.ent.wan-edge.bgp-peer-flap": "Possible routing issue",
-  "sig.ent.access.local-link-fault": "Possible local link issue",
-  "sig.ent.wan-edge.congestion": "Possible WAN/provider issue",
-  "sig.ent.wan-edge.routing-instability": "Possible routing issue",
-  "sig.ent.middle-mile.physical-degradation": "Possible WAN/provider issue",
-  "sig.ent.internet.dns-impairment": "Possible WAN/provider issue",
-  "sig.ent.cloud.region-degradation": "Possible WAN/provider issue",
-  "sig.ent.wan-edge.tunnel-mtu-blackhole": "Possible routing issue",
+  "sig.ent.middle-mile.dia-egress-latency": "Middle-mile latency increase",
+  "sig.ent.wan-edge.bgp-peer-flap": "Routing adjacency change",
+  "sig.ent.access.local-link-fault": "Link state change",
+  "sig.ent.wan-edge.congestion": "WAN edge congestion",
+  "sig.ent.wan-edge.routing-instability": "Routing instability",
+  "sig.ent.middle-mile.physical-degradation": "Middle-mile path degradation",
+  "sig.ent.internet.dns-impairment": "DNS resolution impairment",
+  "sig.ent.cloud.region-degradation": "Cloud region degradation",
+  "sig.ent.wan-edge.tunnel-mtu-blackhole": "Path MTU blackhole",
 };
 // Dominant evidence plane → NOC headline when no signature has matched.
+// Titles describe the OBSERVED condition factually — the NOT CONFIRMED / Confidence
+// badges carry the verdict, not the title (no speculative "Possible …" hedging).
 export const PLANE_NOC_TITLE: Record<string, string> = {
-  active_probe: "Possible path slowdown",
-  device_telemetry: "Possible device health issue",
-  control_plane: "Possible routing issue",
-  passive_flow: "Possible traffic issue",
+  active_probe: "Path performance change",
+  device_telemetry: "Device health change",
+  control_plane: "Routing adjacency change",
+  passive_flow: "Traffic flow change",
 };
 export function signatureNocTitle(id: string): string {
   if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
-  if (/dia|middle-mile|cloud|internet|provider|congestion/.test(id)) return "Possible WAN/provider issue";
-  if (/bgp|ospf|isis|routing/.test(id)) return "Possible routing issue";
-  if (/link|access/.test(id)) return "Possible local link issue";
-  if (/device|resource|cpu|mem|hardware/.test(id)) return "Possible device health issue";
-  return "Possible network issue";
+  if (/dia|middle-mile|cloud|internet|provider|congestion/.test(id)) return "WAN / provider path change";
+  if (/bgp|ospf|isis|routing/.test(id)) return "Routing adjacency change";
+  if (/link|access/.test(id)) return "Link state change";
+  if (/device|resource|cpu|mem|hardware/.test(id)) return "Device health change";
+  return "Network change observed";
 }
 
 // signal kind → (humanized label, modality, expected source).

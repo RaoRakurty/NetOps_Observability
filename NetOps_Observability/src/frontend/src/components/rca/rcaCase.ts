@@ -60,7 +60,7 @@ export const EXAMPLE_CASE: RcaCase = {
   subtitle: "Example case · LAN + SD-WAN + BGP + Cloud application evidence",
   pills: [
     { tone: "green", text: "✓ CONFIRMED" }, { tone: "blue", text: "Confidence: High" },
-    { tone: "orange", text: "State: Recovering" }, { tone: "red", text: "Impact: Checkout API degraded" },
+    { tone: "orange", text: "RCA state: Recovering" }, { tone: "red", text: "Impact: Checkout API degraded" },
   ],
   decision: { tone: "confirmed", text: "Open incident and assign to NetOps / ISP escalation. Independent evidence confirms the BGP adjacency change caused SD-WAN path degradation and application impact." },
   observedAt: "2026-06-16 19:25:55 UTC",
@@ -222,15 +222,18 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   }
   device = device ? entityLabel(device) : "";
 
-  let title = timeline.top_hypothesis !== "undetermined" ? signatureNocTitle(timeline.top_hypothesis) : (PLANE_NOC_TITLE[dominant] ?? "Possible network issue");
-  if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) title = "Possible device/routing issue";
+  let title = timeline.top_hypothesis !== "undetermined" ? signatureNocTitle(timeline.top_hypothesis) : (PLANE_NOC_TITLE[dominant] ?? "Network change observed");
+  if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) title = "Device & routing change";
 
   const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";
   // lifecycle (user state model): active → recovering (clears seen, still open) →
-  // recovered (object closed). Drives the State badge + the MONITOR decision.
+  // recovered (object closed). Drives the RCA-state badge + the MONITOR decision.
   const hasClears = timeline.signals.some((s) => s.kind.endsWith("_clear"));
   const lifecycle: "active" | "recovering" | "recovered" = obj.state !== "open" ? "recovered" : hasClears ? "recovering" : "active";
-  const stateText = lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : "Open";
+  // RCA-state badge — the lifecycle of the investigation, not the raw object state:
+  // an open, unconfirmed object is "Under review" (gathering evidence); confirmed +
+  // open is an "Open incident"; cleared → Recovering → Recovered.
+  const rcaState = lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : confirmed ? "Open incident" : "Under review";
   const verdictTone: Tone = confirmed ? "green" : suspected ? "orange" : "gray";
 
   // ticket decision → exact global NOC phrase (consistent wording across the app).
@@ -384,7 +387,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     pills: [
       { tone: verdictTone, text: confirmed ? "✓ CONFIRMED" : "NOT CONFIRMED" },
       { tone: "blue", text: `Confidence: ${confidence}` },
-      { tone: "orange", text: `State: ${stateText}` },
+      { tone: "orange", text: `RCA state: ${rcaState}` },
     ],
     decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
     observedAt: (timeline.window_start || "").replace("T", " ").slice(0, 19) + " UTC",
