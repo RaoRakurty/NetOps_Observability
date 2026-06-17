@@ -4,6 +4,7 @@ import DataTable, { Column } from "../components/DataTable";
 import { EmptyHint } from "../components/board/panels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import { humanizeSyslog } from "../lib/syslog";
+import { LogTime, LogSource, LogLevel, LogMessage } from "../lib/logfmt";
 
 // Events — a unified event stream. Merges the
 // signals we already collect into one time-sorted feed: syslog (OpenSearch),
@@ -22,15 +23,6 @@ const parseTs = (o: Record<string, any>): number => {
   const t = pick(o, ["@timestamp", "timestamp", "ts", "time", "fired_at"]);
   const n = Date.parse(t);
   return Number.isFinite(n) ? n : 0;
-};
-
-// Normalize the various syslog severity spellings to our sev tone buckets.
-const sevTone = (s: string): "" | "good" | "warn" | "bad" => {
-  const x = (s || "").toLowerCase();
-  if (["critical", "crit", "emergency", "emerg", "alert", "error", "err", "1", "2", "3"].includes(x)) return "bad";
-  if (["warning", "warn", "4"].includes(x)) return "warn";
-  if (["notice", "info", "informational", "5", "6"].includes(x)) return "";
-  return "";
 };
 
 export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {}) {
@@ -92,18 +84,18 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
 
   const [sel, setSel] = useState<Ev | null>(null);
   const cols = useMemo<Column<Ev>[]>(() => [
-    { key: "ts", header: "Time", width: "160px", sortable: true, sortValue: (e) => e.ts, render: (e) => (e.ts ? new Date(e.ts).toLocaleString() : "—") },
+    { key: "ts", header: "Time", width: "176px", sortable: true, sortValue: (e) => e.ts, render: (e) => <LogTime ts={e.ts} /> },
     { key: "type", header: "Type", width: "84px", sortable: true, text: (e) => e.type, render: (e) => <span className="badge accent-badge">{e.type}</span> },
-    { key: "severity", header: "Severity", width: "104px", sortable: true, text: (e) => e.severity, render: (e) => <span className={`badge ${sevTone(e.severity)}`}>{e.severity}</span> },
-    { key: "source", header: "Source", width: "180px", sortable: true, text: (e) => e.source, render: (e) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{e.source}</span> },
+    { key: "severity", header: "Severity", width: "108px", sortable: true, text: (e) => e.severity, render: (e) => <LogLevel level={e.severity} /> },
+    { key: "source", header: "Source", width: "180px", sortable: true, text: (e) => e.source, render: (e) => <LogSource source={e.source} /> },
     {
       key: "message", header: "Event", sortable: false, render: (e) => {
         const f = e.type === "syslog" ? humanizeSyslog(e.message) : null;
         const text = f ? f.summary : e.message;
         return (
-          <span title={e.message} style={{ display: "inline-flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text}</span>
-            {f?.subsystem && <span style={{ color: "var(--fg-subtle)", fontSize: 11, fontFamily: "var(--font-mono)", flex: "none" }}>{f.subsystem}</span>}
+          <span style={{ display: "inline-flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+            <LogMessage text={text} />
+            {f?.subsystem && <span className="lf-source" style={{ fontSize: 11, flex: "none", opacity: .85 }}>{f.subsystem}</span>}
           </span>
         );
       },
@@ -152,14 +144,14 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
         <div className="ev-detail-scrim" onClick={() => setSel(null)}>
           <aside className="ev-detail" onClick={(e) => e.stopPropagation()}>
             <header className="ev-detail-h">
-              <span className={`badge ${sevTone(sel.severity)}`}>{sel.severity}</span>
+              <LogLevel level={sel.severity} />
               <span className="badge accent-badge">{sel.type}</span>
               <button className="ev-detail-x" onClick={() => setSel(null)} aria-label="Close">×</button>
             </header>
             <dl className="ev-detail-grid">
-              <dt>Time</dt><dd className="ev-mono">{sel.ts ? new Date(sel.ts).toLocaleString() : "Unknown"}</dd>
+              <dt>Time</dt><dd><LogTime ts={sel.ts} /></dd>
               <dt>Type</dt><dd>{sel.type === "syslog" ? "Syslog (raw signal)" : sel.type === "trap" ? "SNMP trap" : "Active alert"}</dd>
-              <dt>Source</dt><dd className="ev-mono">{sel.source || "Unknown"}</dd>
+              <dt>Source</dt><dd><LogSource source={sel.source} /></dd>
               <dt>Linked to</dt><dd style={{ color: "var(--fg-muted)" }}>Pending correlation</dd>
             </dl>
             {(() => {
@@ -175,7 +167,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
               ) : null;
             })()}
             <div className="ev-detail-msg-l">Raw message</div>
-            <pre className="ev-detail-msg">{sel.message}</pre>
+            <pre className="ev-detail-msg"><LogMessage text={sel.message} clamp={false} /></pre>
           </aside>
         </div>
       )}

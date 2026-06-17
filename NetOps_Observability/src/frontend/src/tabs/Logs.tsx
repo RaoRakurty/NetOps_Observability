@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, ExportFmt } from "../services/api";
-import { severityClass, severityColor, severityRank } from "../theme/severity";
+import { severityColor, severityRank } from "../theme/severity";
+import { LogTime, LogSource, LogLevel, LogMessage, LogJson } from "../lib/logfmt";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import { useAuth } from "../hooks/useAuth";
@@ -230,7 +231,6 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     }
   };
 
-  const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
   const columns = useMemo<Column<Line>[]>(() => [
     {
       key: "sel", width: 30,
@@ -241,22 +241,22 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       ),
     },
     {
-      key: "ts", header: "Time", width: 168, sortable: true,
+      key: "ts", header: "Time", width: 176, sortable: true,
       sortValue: (l) => new Date(l.ts).getTime() || 0,
-      render: (l) => <span style={mono}>{new Date(l.ts).toLocaleString()}</span>,
+      render: (l) => <LogTime ts={l.ts} />,
     },
     {
       key: "source", header: "Source", width: 168, sortable: true, text: (l) => l.source,
-      render: (l) => <span style={mono} title={l.source}>{l.source}</span>,
+      render: (l) => <LogSource source={l.source} />,
     },
     {
-      key: "level", header: "Level", width: 92, sortable: true,
+      key: "level", header: "Level", width: 100, sortable: true,
       text: (l) => l.level, sortValue: (l) => severityRank(l.level),
-      render: (l) => <span className={`badge ${severityClass(l.level)}`}>{l.level || "—"}</span>,
+      render: (l) => <LogLevel level={l.level} />,
     },
     {
       key: "message", header: "Message", text: (l) => l.message,
-      render: (l) => <span style={mono} title={l.message}>{l.message}</span>,
+      render: (l) => <LogMessage text={l.message} />,
     },
   ], [selected, allSelected]);
 
@@ -390,54 +390,35 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
 // Inspector (shell-v2) or inline (v1): the headline fields plus the raw source
 // pretty-printed (the value of having OpenSearch behind the search box).
 export function LogLineDetailBody({ line: l }: { line: { ts: string; source: string; level: string; message: string; index: string; raw: Record<string, any> } }) {
-  const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
+  const lbl = (s: string) => (
+    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>{s}</div>
+  );
   const row = (k: string, v: React.ReactNode) => (
     <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)", minWidth: 72 }}>{k}</span>
       <span style={{ wordBreak: "break-word" }}>{v}</span>
     </div>
   );
-  let pretty = "";
-  try {
-    pretty = JSON.stringify(l.raw ?? {}, null, 2);
-  } catch {
-    pretty = String(l.raw);
-  }
+  // Same token vocabulary as the table row — the colour pattern carries through.
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <span className={`badge ${severityClass(l.level)}`}>{l.level || "log"}</span>
-        <span style={mono}>{l.source}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <LogLevel level={l.level} />
+        <LogSource source={l.source} />
       </div>
       <div>
-        {row("Time", <span style={mono}>{new Date(l.ts).toLocaleString()}</span>)}
-        {row("Index", <span style={mono}>{l.index}</span>)}
+        {row("Time", <LogTime ts={l.ts} />)}
+        {row("Index", <span className="lf-source" style={{ color: "var(--muted)" }}>{l.index}</span>)}
       </div>
       <div>
-        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-          Message
+        {lbl("Message")}
+        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}><LogMessage text={l.message} clamp={false} /></div>
+      </div>
+      <div>
+        {lbl("Document")}
+        <div style={{ padding: 8, background: "var(--surface-2, rgba(127,127,127,.08))", borderRadius: 6, maxHeight: 320, overflow: "auto" }}>
+          <LogJson value={l.raw} />
         </div>
-        <div style={{ ...mono, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{l.message}</div>
-      </div>
-      <div>
-        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-          Document
-        </div>
-        <pre
-          style={{
-            ...mono,
-            margin: 0,
-            padding: 8,
-            background: "var(--surface-2, rgba(127,127,127,.08))",
-            borderRadius: 6,
-            maxHeight: 320,
-            overflow: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {pretty}
-        </pre>
       </div>
     </div>
   );

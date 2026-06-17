@@ -550,6 +550,44 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border-top: 1px solid var(--rail-border);
 }
 
+/* ===== Log formatting (logfmt.tsx) — Dynatrace/ThousandEyes-style log fields =====
+   Mild, desaturated token palette so the eye lands on the *data* (time, numbers,
+   IPs, keys, state words) without the row turning into a rainbow. Theme-aware. */
+:root {
+  --lf-time: #64748b; --lf-time-strong: #334155;
+  --lf-source: #0f766e; --lf-num: #a16207; --lf-ip: #1d4ed8; --lf-mac: #0e7490;
+  --lf-str: #15803d; --lf-key: #7c3aed; --lf-oid: #9333ea; --lf-state: #b91c1c;
+}
+:root[data-theme="dark"], :root[data-theme="oled"],
+:root[data-theme="indigo"], :root[data-theme="graphite"] {
+  --lf-time: #7d8aa0; --lf-time-strong: #d3dbe8;
+  --lf-source: #4db6ac; --lf-num: #e0b974; --lf-ip: #93b4f5; --lf-mac: #7fd0d6;
+  --lf-str: #86c79b; --lf-key: #c4a7f0; --lf-oid: #c4a7f0; --lf-state: #f0a3a3;
+}
+.lf-time, .lf-source, .lf-msg, .lf-level, .lf-json {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.lf-time { color: var(--lf-time); font-size: 12px; white-space: nowrap; letter-spacing: -0.01em; }
+.lf-time-date { opacity: .72; }
+.lf-time-clock { color: var(--lf-time-strong); }
+.lf-time-ms { opacity: .55; }
+.lf-source { color: var(--lf-source); font-size: 12px; }
+.lf-msg { font-size: 12.5px; color: var(--fg); line-height: 1.5; }
+.lf-clamp { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-num { color: var(--lf-num); } .lf-ip { color: var(--lf-ip); } .lf-mac { color: var(--lf-mac); }
+.lf-str { color: var(--lf-str); } .lf-key { color: var(--lf-key); } .lf-oid { color: var(--lf-oid); }
+.lf-state { color: var(--lf-state); font-weight: 600; }
+.lf-level { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em; }
+.lf-level-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.lf-crit, .lf-err { color: var(--bad, #dc2626); }
+.lf-warn { color: var(--warn, #d97706); }
+.lf-notice { color: var(--accent, #2563eb); }
+.lf-info { color: var(--muted, #64748b); }
+.lf-debug { color: var(--muted, #94a3b8); opacity: .8; }
+.lf-json { font-size: 12px; line-height: 1.5; margin: 0; white-space: pre-wrap; word-break: break-word;
+  color: var(--fg-muted, #94a3b8); }
+
 /* ----- Top bar ----- */
 .topbar {
   grid-area: topbar;
@@ -2784,7 +2822,7 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 @media (max-width: 1180px) { .cc-kpis { grid-template-columns: repeat(4, 1fr); } }
 .cc-kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; text-decoration: none; color: inherit; display: block; transition: background .12s, border-color .12s; }
 a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
-.cc-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 30px; font-weight: 650; line-height: 1.05; letter-spacing: -0.02em; color: var(--fg); }
+.cc-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 40px; font-weight: 680; line-height: 1.02; letter-spacing: -0.025em; color: var(--fg); }
 .cc-kpi-l { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-subtle); margin-top: 6px; }
 .cc-kpi-i { font-size: 11.5px; color: var(--fg-muted); margin-top: 3px; line-height: 1.35; }
 .cc-decision { margin-top: 13px; padding: 10px 13px; border-radius: 9px; background: var(--accent-soft); border: 1px solid var(--accent-soft-2, var(--border)); border-left: 3px solid var(--accent);
