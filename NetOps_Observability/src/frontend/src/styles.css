@@ -508,22 +508,23 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 @keyframes flyin { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .nav-flyout { animation: none; } }
 .nav-flyout-head {
-  font-size: 15px; font-weight: 700; letter-spacing: -0.01em;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em;
   color: var(--rail-fg); padding: 4px 8px 8px; margin-bottom: var(--sp-1);
   border-bottom: 2px solid var(--mod, var(--rail-accent));
 }
 .nav-flyout-body { display: flex; flex-direction: column; gap: 2px; }
 .nav-flyout-item {
-  display: flex; align-items: center; height: 30px; padding: 0 10px;
+  display: flex; align-items: center; height: 31px; padding: 0 10px;
   background: transparent; border: 0; border-radius: var(--r-1);
-  color: var(--rail-fg); font-size: 13px; font-weight: 500; text-align: left;
+  color: var(--rail-fg); font-size: 13px; font-weight: 500; letter-spacing: -0.003em; text-align: left;
   white-space: nowrap; cursor: pointer;
 }
 .nav-flyout-item:hover { background: var(--rail-hover); }
 .nav-flyout-item:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
-.nav-flyout-item.active { background: color-mix(in srgb, var(--mod, #818cf8) 28%, transparent); color: #fff; }
+.nav-flyout-item.active { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 28%, transparent); color: var(--rail-active-fg, #fff); }
 /* a leaf that owns sub-categories reads as a heading (bigger), its sub-items smaller */
-.nav-flyout-item.has-sub { height: 32px; font-size: 14px; font-weight: 700; letter-spacing: -0.01em; margin-top: 2px; }
+.nav-flyout-item.has-sub { font-family: "Space Grotesk", var(--font-sans, sans-serif); height: 32px; font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; margin-top: 2px; }
 .nav-flyout-subitem {
   display: flex; align-items: center; height: 26px; padding: 0 10px 0 26px;
   background: transparent; border: 0; border-radius: var(--r-1);
@@ -2834,3 +2835,18 @@ a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
 .report-launch-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 16px; font-weight: 650; color: var(--fg); letter-spacing: -0.01em; }
 .report-launch-sub { font-size: 13px; color: var(--fg-muted); }
 .report-launch-go { font-weight: 600; font-size: 13px; color: var(--accent); white-space: nowrap; }
+
+/* Event detail inspector (Events tab — rows now clickable, #25) */
+.ev-detail-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.42); display: flex; justify-content: flex-end; }
+.ev-detail { width: min(520px, 92vw); height: 100%; overflow-y: auto; background: var(--glass-bg-strong, var(--surface)); border-left: 1px solid var(--border);
+  backdrop-filter: blur(18px) saturate(120%); -webkit-backdrop-filter: blur(18px) saturate(120%); box-shadow: -12px 0 40px rgba(0,0,0,.45); padding: 16px 18px; }
+.ev-detail-h { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.ev-detail-x { margin-left: auto; border: 0; background: transparent; color: var(--fg-muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.ev-detail-x:hover { color: var(--fg); }
+.ev-detail-grid { display: grid; grid-template-columns: 96px 1fr; gap: 7px 12px; margin: 0 0 16px; font-size: 12.5px; }
+.ev-detail-grid dt { color: var(--fg-subtle); text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; font-weight: 700; align-self: center; }
+.ev-detail-grid dd { margin: 0; color: var(--fg); }
+.ev-mono { font-family: var(--font-mono, monospace); font-size: 12px; }
+.ev-detail-msg-l { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle); margin-bottom: 6px; }
+.ev-detail-msg { font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.55; color: var(--fg-muted); white-space: pre-wrap; word-break: break-word;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 12px; margin: 0; }

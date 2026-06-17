@@ -89,6 +89,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
     );
   }, [events, typeFilter, q]);
 
+  const [sel, setSel] = useState<Ev | null>(null);
   const cols = useMemo<Column<Ev>[]>(() => [
     { key: "ts", header: "Time", width: "160px", sortable: true, sortValue: (e) => e.ts, render: (e) => (e.ts ? new Date(e.ts).toLocaleString() : "—") },
     { key: "type", header: "Type", width: "84px", sortable: true, text: (e) => e.type, render: (e) => <span className="badge accent-badge">{e.type}</span> },
@@ -122,10 +123,29 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
           ) : filtered.length === 0 ? (
             <EmptyHint kind="logs" />
           ) : (
-            <DataTable<Ev> rows={filtered} columns={cols} rowKey={(e) => `${e.ts}-${e.type}-${e.source}-${e.message.slice(0, 40)}`} height={520} ariaLabel="Event stream" initialSort={{ key: "ts", dir: "desc" }} />
+            <DataTable<Ev> rows={filtered} columns={cols} rowKey={(e) => `${e.ts}-${e.type}-${e.source}-${e.message.slice(0, 40)}`} height={520} ariaLabel="Event stream" initialSort={{ key: "ts", dir: "desc" }} onRowClick={(e) => setSel(e)} />
           )}
         </Panel>
       </Group>
+      {sel && (
+        <div className="ev-detail-scrim" onClick={() => setSel(null)}>
+          <aside className="ev-detail" onClick={(e) => e.stopPropagation()}>
+            <header className="ev-detail-h">
+              <span className={`badge ${sevTone(sel.severity)}`}>{sel.severity}</span>
+              <span className="badge accent-badge">{sel.type}</span>
+              <button className="ev-detail-x" onClick={() => setSel(null)} aria-label="Close">×</button>
+            </header>
+            <dl className="ev-detail-grid">
+              <dt>Time</dt><dd className="ev-mono">{sel.ts ? new Date(sel.ts).toLocaleString() : "Unknown"}</dd>
+              <dt>Type</dt><dd>{sel.type === "syslog" ? "Syslog (raw signal)" : sel.type === "trap" ? "SNMP trap" : "Active alert"}</dd>
+              <dt>Source</dt><dd className="ev-mono">{sel.source || "Unknown"}</dd>
+              <dt>Linked to</dt><dd style={{ color: "var(--fg-muted)" }}>Pending correlation</dd>
+            </dl>
+            <div className="ev-detail-msg-l">Raw message</div>
+            <pre className="ev-detail-msg">{sel.message}</pre>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }
