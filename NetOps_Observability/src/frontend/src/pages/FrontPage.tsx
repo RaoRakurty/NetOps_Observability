@@ -44,6 +44,41 @@ const VERDICT_NOC: Record<string, string> = { confirmed: "Confirmed", suspected:
 const SEV_VAR: Record<string, string> = { crit: "var(--crit)", high: "var(--crit)", warn: "var(--warn)", info: "var(--fg-subtle)" };
 const CONF_LABEL: Record<string, string> = { low: "Low", medium_low: "Medium-low", medium: "Medium", high: "High" };
 
+// upProto — normalize protocol/provider acronyms to their canonical casing so the
+// operator reads "BGP", "ISP", "AWS", not "bgp / isp / aws". Word-by-word, so it
+// never mangles device names (wan-r2, lan-sw1 are left alone).
+const PROTO_CASE: Record<string, string> = {
+  bgp: "BGP", ospf: "OSPF", isis: "IS-IS", "is-is": "IS-IS", lldp: "LLDP", cdp: "CDP",
+  bfd: "BFD", ldp: "LDP", mpls: "MPLS", vrf: "VRF", vpn: "VPN", dns: "DNS", isp: "ISP",
+  aws: "AWS", azure: "Azure", gcp: "GCP", tgw: "TGW", sdwan: "SD-WAN", "sd-wan": "SD-WAN",
+  mtu: "MTU", vlan: "VLAN", dhcp: "DHCP", nat: "NAT", qos: "QoS", http: "HTTP", https: "HTTPS",
+  tcp: "TCP", udp: "UDP", sla: "SLA", api: "API", wan: "WAN", lan: "LAN", dc: "DC", dia: "DIA",
+  icmp: "ICMP", stamp: "STAMP", snmp: "SNMP", gnmi: "gNMI", netflow: "NetFlow", ipfix: "IPFIX",
+};
+function upProto(s: string): string {
+  return s.replace(/[A-Za-z][A-Za-z-]*/g, (w) => PROTO_CASE[w.toLowerCase()] ?? w);
+}
+
+// Spark — tiny dependency-free sparkline so each KPI tells its recent STORY, not a
+// static number. Fed by a real client-side rolling history (no fabricated data).
+function Spark({ pts, color }: { pts: number[]; color: string }) {
+  const v = pts.filter((n) => Number.isFinite(n));
+  if (v.length < 3) return <div style={{ height: 16, marginTop: 5 }} />; // reserve space; build a trend first
+  const w = 64, h = 16, min = Math.min(...v), max = Math.max(...v), span = max - min || 1, step = w / (v.length - 1);
+  const d = v.map((n, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${(h - ((n - min) / span) * h).toFixed(1)}`).join(" ");
+  const lastY = h - ((v[v.length - 1] - min) / span) * h;
+  return (
+    <svg width={w} height={h} style={{ display: "block", marginTop: 5, overflow: "visible" }} aria-hidden>
+      <path d={d} fill="none" stroke={color} strokeWidth={1.5} opacity={0.9} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={w} cy={lastY} r={1.9} fill={color} />
+    </svg>
+  );
+}
+// KPI history persists (localStorage) so the trend is populated on reload — these
+// are real observed samples accumulated each poll, capped to the recent window.
+const KPI_HIST_KEY = "netops.fp.kpihist";
+function loadKpiHist(): Record<string, number[]> { try { return JSON.parse(localStorage.getItem(KPI_HIST_KEY) || "{}"); } catch { return {}; } }
+
 type PanelState = "ok" | "inactive" | "degraded";
 
 function usePoll<T>(fn: () => Promise<T>, ms = 20000): { data: T | null; err: boolean } {
@@ -137,9 +172,9 @@ function TopIssues() {
         return (
           <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("monitoring/correlations")}>
             <Tag tone={tone}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</Tag>
-            <span className="fp-row-t">{signatureNocTitle(o.top_hypothesis)}</span>
+            <span className="fp-row-t">{upProto(signatureNocTitle(o.top_hypothesis))}</span>
             {o.verdict_tier === "suspected" && <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", letterSpacing: 0.04 }}>not confirmed</span>}
-            {o.owner && <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--fg-muted)" }}>{ownerLabel(o.owner)}</span>}
+            {o.owner && <span className="fp-owner" style={{ marginLeft: "auto" }}>{upProto(ownerLabel(o.owner))}</span>}
           </div>
         );
       })}
@@ -223,7 +258,7 @@ function WhatChanged() {
         {items.map((it) => (
           <div key={it.signal_id} style={{ display: "flex", gap: 9, fontSize: 12.5, alignItems: "baseline" }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: SEV_VAR[it.severity] ?? "var(--fg-subtle)", flexShrink: 0, marginTop: 4 }} />
-            <span style={{ color: "var(--fg)", minWidth: 0 }}>{it.title}</span>
+            <span style={{ color: "var(--fg)", minWidth: 0 }}>{upProto(it.title)}</span>
             <span className="fp-num" style={{ marginLeft: "auto", color: "var(--fg-muted)", whiteSpace: "nowrap" }}>{it.ts.slice(11, 16)}</span>
           </div>
         ))}
@@ -254,8 +289,8 @@ function ImpactSummary() {
   return (
     <Panel title="Impact" action={<a href="#/infrastructure/topology">topology →</a>}>
       <div className="fp-kpis">
-        <Kpi n={devices.size || "—"} l="devices affected" />
-        <Kpi n={sites.size || "—"} l="sites" />
+        <Kpi n={devices.size} l="devices affected" />
+        <Kpi n={sites.size} l="sites" />
         <Kpi n={objs.length} l="open issues" />
       </div>
     </Panel>
@@ -444,14 +479,40 @@ function KpiStrip() {
   const scoreColor = BAND_VAR[h?.band ?? ""] ?? "var(--fg-subtle)";
   const live = (h?.signal_classes_live ?? []).length, stale = (h?.stale_inputs ?? []).length;
   const confirmed = s?.open_confirmed ?? 0, suspected = s?.open_suspected ?? 0;
-  // each cell drills through to its detail surface (hash route; the SPA router
-  // handles it). `to` makes it a link with a hover affordance.
-  const cell = (label: string, value: ReactNode, tone?: string, sub?: string, to?: string) => {
+
+  // Rolling KPI history — one real sample appended per poll, persisted so the
+  // trend is populated on reload. Powers the per-cell sparkline + delta.
+  const [hist, setHist] = useState<Record<string, number[]>>(loadKpiHist);
+  useEffect(() => {
+    if (!h && !s && !c) return;
+    setHist((cur) => {
+      const next = { ...cur };
+      const push = (k: string, v: number) => { next[k] = (next[k] ?? []).concat(v).slice(-24); };
+      push("health", insufficient ? NaN : (h?.score ?? NaN));
+      push("confirmed", confirmed); push("suspected", suspected); push("sites", sites.size); push("devices", devs.size);
+      try { localStorage.setItem(KPI_HIST_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [h, s, c]);
+  const deltaOf = (k: string): number | null => {
+    const a = (hist[k] ?? []).filter(Number.isFinite);
+    return a.length >= 3 ? a[a.length - 1] - a[0] : null;
+  };
+
+  // each cell drills through to its detail surface; `histKey` adds the sparkline +
+  // delta so the cell tells a story ("Health 20 ▼ −14") rather than a flat number.
+  const cell = (label: string, value: ReactNode, tone?: string, sub?: string, to?: string, histKey?: string) => {
+    const dl = histKey ? deltaOf(histKey) : null;
     const inner = (
       <>
-        <div className="fp-kpistrip-n" style={tone ? { color: tone } : undefined}>{value}</div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+          <div className="fp-kpistrip-n" style={tone ? { color: tone } : undefined}>{value}</div>
+          {dl != null && dl !== 0 && <span className="fp-kpidelta">{dl > 0 ? "▲" : "▼"}{Math.abs(dl)}</span>}
+        </div>
         <div className="fp-kpistrip-l">{label}</div>
         {sub ? <div className="fp-kpistrip-sub">{sub}</div> : <div className="fp-kpistrip-sub">&nbsp;</div>}
+        {histKey && <Spark pts={hist[histKey] ?? []} color={tone || "var(--accent)"} />}
       </>
     );
     return to
@@ -460,11 +521,11 @@ function KpiStrip() {
   };
   return (
     <div className="fp-kpistrip">
-      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered")}
-      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations?tier=confirmed")}
-      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations?tier=suspected")}
-      {cell("Impacted sites", sites.size || "—", undefined, undefined, "infrastructure/topology")}
-      {cell("Impacted devices", devs.size || "—", undefined, undefined, "infrastructure/topology")}
+      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered", "health")}
+      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations?tier=confirmed", "confirmed")}
+      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations?tier=suspected", "suspected")}
+      {cell("Impacted sites", sites.size, undefined, sites.size ? undefined : "none tagged", "infrastructure/topology", "sites")}
+      {cell("Impacted devices", devs.size, undefined, undefined, "infrastructure/topology", "devices")}
       {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "monitoring/triggered")}
     </div>
   );
@@ -489,7 +550,7 @@ function TopIssueSpotlight() {
   let affected: Record<string, string[]> = {};
   try { affected = JSON.parse(top.affected || "{}"); } catch { /* ignore */ }
   const device = affected.devices?.[0] || (affected.interfaces?.[0]?.split(":")[0]) || "the network";
-  const sig = top.top_hypothesis !== "undetermined" ? signatureName(top.top_hypothesis).toLowerCase() : "network issue";
+  const sig = top.top_hypothesis !== "undetermined" ? upProto(signatureName(top.top_hypothesis).toLowerCase()) : "network issue";
   const phrases: string[] = [];
   if (tl) {
     const seen = new Set<string>();
@@ -507,7 +568,10 @@ function TopIssueSpotlight() {
       <div className="fp-spot" style={{ borderLeft: `4px solid ${tone}` }}>
         <Tag tone={tone}>{confirmed ? "CONFIRMED" : "SUSPECTED"}</Tag>
         <span className="fp-spot-text">{sentence}</span>
-        <span style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 13, whiteSpace: "nowrap" }}>open →</span>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
+          {top.owner && <span className="fp-owner">{upProto(ownerLabel(top.owner))}</span>}
+          <span style={{ color: "var(--accent)", fontSize: 13 }}>open →</span>
+        </span>
       </div>
     </a>
   );

@@ -1725,9 +1725,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --surface: #14131c; --surface-2: #1b1928; --overlay: #221f33;
   --border: #2a2740; --border-strong: #3a3658;
   --fg-muted: #C9C6DA; --fg-subtle: #8b88a0;
-  --accent: #8B7CFF; --accent-soft: rgba(139,124,255,0.18); --accent-soft-2: rgba(139,124,255,0.12);
+  --accent: #8B7CFF; --accent-bright: #A99BFF; --accent-2: #6D5DFC;
+  --accent-grad: linear-gradient(135deg, #8B7CFF 0%, #6D5DFC 100%);
+  --accent-soft: rgba(139,124,255,0.18); --accent-soft-2: rgba(139,124,255,0.12); --accent-ring: rgba(139,124,255,0.40);
   --glass-bg: rgba(20,19,28,0.66); --glass-bg-strong: rgba(26,24,38,0.92); --glass-border: rgba(160,156,190,0.16);
-  --glass-tint-a: rgba(139,124,255,0.20);
+  --glass-tint-a: rgba(139,124,255,0.20); --glass-tint-b: rgba(139,124,255,0.10);
+  /* nav rail / topbar glass follows the theme (violet), not the chrome preset */
+  --rail-bg: #0e0d16; --rail-bg-2: #161420; --rail-fg-muted: #aaa6c4;
+  --rail-accent: #A99BFF; --rail-glass: rgba(139,124,255,0.15); --rail-active-bg: rgba(139,124,255,0.22);
 }
 /* GRAPHITE — austere monochrome instrument: steel-neutral accent, colour reserved
    for status. */
@@ -1736,13 +1741,22 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --surface: #171b21; --surface-2: #1d222a; --overlay: #232932;
   --border: #2b313b; --border-strong: #3a4250;
   --fg-muted: #AAB1BB; --fg-subtle: #79828e;
-  --accent: #9BB0C7; --accent-soft: rgba(155,176,199,0.16); --accent-soft-2: rgba(155,176,199,0.10);
+  --accent: #9BB0C7; --accent-bright: #B6C5D6; --accent-2: #7c92a8;
+  --accent-grad: linear-gradient(135deg, #9BB0C7 0%, #7c92a8 100%);
+  --accent-soft: rgba(155,176,199,0.16); --accent-soft-2: rgba(155,176,199,0.10); --accent-ring: rgba(155,176,199,0.38);
   --glass-bg: rgba(23,27,33,0.82); --glass-bg-strong: rgba(28,33,40,0.94); --glass-border: rgba(150,162,178,0.18);
-  --glass-tint-a: rgba(155,176,199,0.14);
+  --glass-tint-a: rgba(155,176,199,0.14); --glass-tint-b: rgba(155,176,199,0.08);
+  --rail-bg: #12141a; --rail-bg-2: #1a1d24; --rail-fg-muted: #a2a8b2;
+  --rail-accent: #B6C5D6; --rail-glass: rgba(155,176,199,0.12); --rail-active-bg: rgba(155,176,199,0.20);
 }
 /* WHITE — clean report/case-file: inherits the light base; ink-indigo accent. */
 :root[data-theme="white"] {
-  --accent: #5B45F0; --accent-soft: rgba(91,69,240,0.10); --accent-soft-2: rgba(91,69,240,0.07);
+  --accent: #5B45F0; --accent-bright: #6D5DFC; --accent-2: #4435c4;
+  --accent-grad: linear-gradient(135deg, #5B45F0 0%, #4435c4 100%);
+  --accent-soft: rgba(91,69,240,0.10); --accent-soft-2: rgba(91,69,240,0.07); --accent-ring: rgba(91,69,240,0.34);
+  --glass-tint-a: rgba(91,69,240,0.12); --glass-tint-b: rgba(91,69,240,0.07);
+  /* rail stays dark (light canvas + dark rail) but glows ink, not navy */
+  --rail-accent: #A99BFF; --rail-glass: rgba(91,69,240,0.16); --rail-active-bg: rgba(91,69,240,0.22);
 }
 
 /* A couple of light-mode hardcodes that need a dark counterpart. */
@@ -2489,7 +2503,10 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
    light / dark / OLED all hold. Empty states read as deliberate instrument
    readings, never errors. (docs/design/front-page.md)
    ════════════════════════════════════════════════════════════════════════ */
-.fp { display: flex; flex-direction: column; gap: var(--sp-4, 16px); }
+.fp { display: flex; flex-direction: column; gap: 10px; }
+/* owner / fault-domain chip — prominent, accent-tinted (who owns this) */
+.fp-owner { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 6px;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-soft-2, var(--accent-soft)); white-space: nowrap; }
 
 /* masthead */
 .fp-masthead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
@@ -2504,20 +2521,20 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
 @keyframes fp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* columns */
-.fp-cols { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
-.fp-col { display: flex; flex-direction: column; gap: 14px; min-width: 300px; }
+.fp-cols { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.fp-col { display: flex; flex-direction: column; gap: 10px; min-width: 300px; }
 
 /* panel chrome */
 .fp-panel { background: var(--panel, var(--surface-2)); border: 1px solid var(--border);
   border-radius: 10px; box-shadow: var(--shadow-1); padding: 0; display: flex; flex-direction: column;
   min-width: 0; overflow: hidden; animation: fp-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
-.fp-panel-h { display: flex; align-items: center; gap: 8px; padding: 11px 15px 10px;
+.fp-panel-h { display: flex; align-items: center; gap: 8px; padding: 9px 13px 7px;
   border-bottom: 1px solid var(--border); }
 .fp-panel-t { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--fg-muted); }
 .fp-panel-meta { margin-left: auto; font-size: 12px; color: var(--fg-muted); }
 .fp-panel-meta a { color: var(--accent); text-decoration: none; }
-.fp-panel-b { padding: 13px 15px; display: flex; flex-direction: column; gap: 9px; }
+.fp-panel-b { padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; }
 .fp-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   padding: 1px 6px; border-radius: 4px; }
 @keyframes fp-rise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
@@ -2538,10 +2555,10 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
 
 /* KPI tiles */
 .fp-kpis { display: flex; gap: 8px; flex-wrap: wrap; }
-.fp-kpi { flex: 1; min-width: 78px; padding: 8px 10px; border: 1px solid var(--border);
+.fp-kpi { flex: 1; min-width: 74px; padding: 6px 9px; border: 1px solid var(--border);
   border-radius: 8px; background: var(--surface, transparent); }
-.fp-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 27px;
-  font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.fp-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 22px;
+  font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
 .fp-kpi-l { margin-top: 2px; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-subtle); }
 
 /* rows (issues / changes / capacity) */
@@ -2567,7 +2584,7 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
 /* NOC top KPI strip — dense operational state above the fold. */
 .fp-kpistrip { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 10px;
   background: var(--panel, var(--surface-2)); box-shadow: var(--shadow-1); overflow: hidden; }
-.fp-kpistrip-cell { flex: 1 1 110px; padding: 11px 16px; border-left: 1px solid var(--border);
+.fp-kpistrip-cell { flex: 1 1 110px; padding: 8px 13px; border-left: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .fp-kpistrip-cell:first-child { border-left: none; }
 /* clickable cells drill through to detail — inherit colour, no underline, a
@@ -2576,10 +2593,11 @@ a.fp-kpistrip-cell { text-decoration: none; color: inherit; cursor: pointer; tra
 a.fp-kpistrip-cell:hover { background: var(--surface-3, rgba(127,127,127,.08)); }
 a.fp-kpistrip-cell.clk::after { content: "›"; position: absolute; top: 8px; right: 12px; color: var(--fg-subtle); font-size: 14px; opacity: 0; transition: opacity .12s ease; }
 a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
-.fp-kpistrip-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 30px;
-  line-height: 34px; font-weight: 700; letter-spacing: -0.02em; }
+.fp-kpistrip-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 26px;
+  line-height: 30px; font-weight: 700; letter-spacing: -0.02em; }
 .fp-kpistrip-l { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-subtle); margin-top: 4px; }
 .fp-kpistrip-sub { font-size: 12px; color: var(--fg-muted); }
+.fp-kpidelta { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--fg-subtle); letter-spacing: -0.02em; }
 /* spotlight headline — the product sentence */
 .fp-spot { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px;
   padding: 12px 16px; background: var(--panel, var(--surface-2)); box-shadow: var(--shadow-1); }
