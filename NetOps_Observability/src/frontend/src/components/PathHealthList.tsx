@@ -44,7 +44,7 @@ function PathHealthCard({ p }: { p: PathHealthItem }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={badge}>{st.label}</span>
-        <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, overflowWrap: "anywhere" }}>{p.dst}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, overflowWrap: "anywhere" }}>{p.dst}</span>
         <span style={{ ...muted, fontSize: 12 }}>· {p.agent}</span>
         <span style={{ marginLeft: "auto", fontSize: 12, ...muted }}>Confidence: <b style={{ color: "var(--fg)" }}>{CONF_LABEL[p.confidence] ?? p.confidence}</b></span>
       </div>

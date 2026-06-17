@@ -21,7 +21,7 @@ const isInternalStackObject = (o: CorrObject): boolean => isInternalStackAffecte
 // grounded edges, the per-hypothesis evidence accounting (what's missing, not
 // just what matched), and a one-click deterministic replay with drift report.
 
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 13 };
+const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 13 };
 
 const TIER_CLASS: Record<string, string> = {
   confirmed: "sev-critical",   // strongest claim → strongest visual weight
@@ -316,7 +316,7 @@ export function CorrelationDetail({ id }: { id: string }) {
         )}
       </div>
       {replay && !replay.clean && (
-        <div style={{ marginTop: 8, fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#697386" }}>
+        <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 12, color: "#697386" }}>
           {replay.differences.map((d) => <div key={d}>· {d}</div>)}
           {!replay.engine_pin_match && (
             <div style={{ marginTop: 4 }}>Engine pin mismatch: built by an older engine — expected evolution, not corruption.</div>

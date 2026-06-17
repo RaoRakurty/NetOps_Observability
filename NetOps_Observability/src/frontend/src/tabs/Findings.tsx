@@ -12,7 +12,7 @@ import Logs from "./Logs";
 // #45 §11) with a "View logs" pivot into the bottom drawer; v1 falls back to an
 // inline detail card.
 
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
 
 export default function Findings() {
   const [items, setItems] = useState<Finding[]>([]);

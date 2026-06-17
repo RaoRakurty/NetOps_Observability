@@ -96,7 +96,7 @@ export default function Incidents() {
       render: (i) => <span style={{ fontSize: 12 }}>{ticketCell(i)}</span> },
     { key: "last_seen", header: "Last seen", width: 170, sortable: true,
       sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
-      render: (i) => <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{fmt(i.last_seen_at)}</span> },
+      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmt(i.last_seen_at)}</span> },
   ], []);
 
   // v1 fallback: render the selected incident's detail inline (shell-v2 uses the
@@ -298,7 +298,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
               paddingLeft: 8,
             }}
           >
-            <span style={{ fontFamily: "ui-monospace, monospace", color: "var(--muted)", minWidth: 150 }}>
+            <span style={{ fontFamily: "var(--font-mono)", color: "var(--muted)", minWidth: 150 }}>
               {fmt(ev.at)}
             </span>
             {ev.kind === "sync" ? (
@@ -310,7 +310,7 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
                 <span>{renderSync(ev)}</span>
                 {ev.correlation_id && (
                   <span
-                    style={{ marginLeft: "auto", fontFamily: "ui-monospace, monospace", color: "var(--muted)", opacity: 0.7 }}
+                    style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", color: "var(--muted)", opacity: 0.7 }}
                     title="Correlation id — grep this across logs to trace the sync end-to-end"
                   >
                     {ev.correlation_id}

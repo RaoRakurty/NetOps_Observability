@@ -34,7 +34,13 @@ const HEX_OK = [
   /panels\.tsx$/, /Topology\.tsx$/, /Dashboard\.tsx$/, /\.css$/, // viz + decorative
 ];
 
-let deny = 0, tsxHex = 0;
+// Canonical type scale (px). Everything else is drift — near-duplicate sizes
+// erode the hierarchy. 66 = the single hero score. Keep this in sync with the
+// documented scale.
+const FONT_SCALE = new Set([10, 10.5, 11, 11.5, 12, 12.5, 13, 14, 16, 18, 20, 22, 26, 30, 34, 66]);
+const FONT_OK = [/styles\.css$/, /\.css$/]; // CSS may define the scale + a few one-offs; focus the check on component inline sizes
+let deny = 0, tsxHex = 0, fontDrift = 0;
+const fontHist = {};
 const out = [];
 for (const f of files) {
   const rel = f.slice(SRC.length);
@@ -53,9 +59,28 @@ for (const f of files) {
       }
     });
   }
+  // font-size drift — any size off the canonical scale (component inline + css)
+  lines.forEach((ln, i) => {
+    const sizes = [...ln.matchAll(/font-?[sS]ize:\s*["']?\s*([0-9]+(?:\.[0-9]+)?)\s*(px)?/g)].map((x) => parseFloat(x[1]));
+    for (const s of sizes) {
+      if (!Number.isFinite(s)) continue;
+      fontHist[s] = (fontHist[s] || 0) + 1;
+      if (!FONT_SCALE.has(s) && !FONT_OK.some((r) => r.test(f))) {
+        out.push(`  FONT  ${rel}:${i + 1}  ${s}px off the type scale — snap to ${nearestScale(s)}px`);
+        fontDrift++;
+      }
+    }
+  });
+}
+
+function nearestScale(s) {
+  return [...FONT_SCALE].reduce((a, b) => (Math.abs(b - s) < Math.abs(a - s) ? b : a));
 }
 
 console.log("UI consistency check\n====================");
 if (out.length) console.log(out.join("\n"));
-console.log(`\n${deny} off-standard literal(s), ${tsxHex} hardcoded color(s) in components, across ${files.length} files.`);
-process.exit(deny > 0 ? 1 : 0); // DENY (known bugs) fails; tsx hex is advisory
+const offScale = Object.keys(fontHist).map(Number).filter((s) => !FONT_SCALE.has(s)).sort((a, b) => a - b);
+console.log(`\nFont-size histogram (px → count): ${Object.keys(fontHist).map(Number).sort((a, b) => a - b).map((s) => `${s}:${fontHist[s]}`).join("  ")}`);
+console.log(`Off-scale sizes: ${offScale.join(", ") || "none"}`);
+console.log(`\n${deny} off-standard literal(s) · ${tsxHex} hardcoded component color(s) · ${fontDrift} off-scale font-size use(s) · ${files.length} files.`);
+process.exit(deny > 0 ? 1 : 0); // DENY (known bugs) fails; hex + font drift are advisory

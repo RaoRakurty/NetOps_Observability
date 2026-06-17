@@ -305,7 +305,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="PromQL, e.g. rate(device_if_in_octets[5m]) * 8"
-            style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
           />
           <button disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
           <button
@@ -325,7 +325,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
       </div>
 
       <div className="card">
-        <h2 style={{ fontFamily: "ui-monospace, monospace", fontSize: 14 }}>{query}</h2>
+        <h2 style={{ fontFamily: "var(--font-mono)", fontSize: 14 }}>{query}</h2>
         {series.length === 0 ? (
           <div className="empty">
             {busy ? "Loading…" : (

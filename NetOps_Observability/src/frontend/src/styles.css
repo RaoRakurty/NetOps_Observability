@@ -180,7 +180,9 @@
 
   /* — type families (spec §7) — */
   --font-ui:   "Inter", "Geist", -apple-system, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  /* IBM Plex Mono IS bundled (main.tsx) — JetBrains Mono was not, so the token
+     fell back to OS mono everywhere. Use the bundled elegant mono app-wide. */
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
   /* — per-module / per-category color taxonomy (spec §9.1) —
      Each module carries its own accent hue, grouped into 4 zone families so the

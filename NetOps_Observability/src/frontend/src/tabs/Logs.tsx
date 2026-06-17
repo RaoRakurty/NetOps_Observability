@@ -228,7 +228,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     }
   };
 
-  const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+  const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
   const columns = useMemo<Column<Line>[]>(() => [
     {
       key: "sel", width: 30,
@@ -279,7 +279,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder='*  or  level:error  or  src_addr:10.0.0.5'
-            style={{ fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
           />
           <select value={signal} onChange={(e) => setSignal(e.target.value as any)}>
             {signals.map((s) => (
@@ -388,7 +388,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
 // Inspector (shell-v2) or inline (v1): the headline fields plus the raw source
 // pretty-printed (the value of having OpenSearch behind the search box).
 export function LogLineDetailBody({ line: l }: { line: { ts: string; source: string; level: string; message: string; index: string; raw: Record<string, any> } }) {
-  const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
+  const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12 };
   const row = (k: string, v: React.ReactNode) => (
     <div style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}>
       <span style={{ color: "var(--muted)", minWidth: 72 }}>{k}</span>

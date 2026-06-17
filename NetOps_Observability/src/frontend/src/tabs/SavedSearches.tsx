@@ -68,7 +68,7 @@ export default function SavedSearches() {
             {items.map((o) => (
               <tr key={o.id}>
                 <td>{o.name}</td>
-                <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                <td style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
                   {o.body?.query ?? "*"}
                 </td>
                 <td>{o.body?.signal || "all"}</td>
