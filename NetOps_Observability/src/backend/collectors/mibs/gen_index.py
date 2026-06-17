@@ -45,14 +45,25 @@ DEFAULT_MIBS = [
     "ARISTA-BGP4V2-TC-MIB", "ARISTA-ENTITY-SENSOR-MIB", "ARISTA-VRF-MIB",
     "ARISTA-NEXTHOP-GROUP-MIB", "ARISTA-MLAG-MIB", "ARISTA-REDUNDANCY-MIB",
     "ARISTA-BRIDGING-MIB", "ARISTA-MAC-ACCOUNTING-MIB",
+    # Cisco (enterprise 9) — IOS/NX-OS. High-value object + notification MIBs.
+    "CISCO-SMI", "CISCO-TC", "CISCO-PROCESS-MIB", "CISCO-ENVMON-MIB",
+    "CISCO-ENTITY-FRU-CONTROL-MIB", "CISCO-SYSLOG-MIB", "CISCO-BGP4-MIB",
+    "CISCO-OSPF-MIB", "OLD-CISCO-INTERFACES-MIB", "CISCO-MEMORY-POOL-MIB",
+    # Juniper (enterprise 2636) — Junos.
+    "JUNIPER-SMI", "JUNIPER-MIB", "JUNIPER-CHASSIS-DEFINES-MIB",
+    "JUNIPER-IF-MIB", "BGP4-V2-MIB-JUNIPER", "JUNIPER-CFGMGMT-MIB",
+    # Nokia SR OS (enterprise 6527) — TiMetra.
+    "TIMETRA-GLOBAL-MIB", "TIMETRA-CHASSIS-MIB", "TIMETRA-BGP-MIB",
+    "TIMETRA-LOG-MIB", "TIMETRA-SYSTEM-MIB",
 ]
 # mibdump source order: vendored dirs (offline, authoritative) → public mirror →
-# LibreNMS comprehensive vendor mirror (@mib@ is the module-name placeholder).
+# LibreNMS comprehensive vendor mirror, including the per-vendor subdirs (@mib@ is
+# the module-name placeholder; mibdump tries each source until a module resolves).
+_LNMS = "https://raw.githubusercontent.com/librenms/librenms/master/mibs"
 SOURCES = ["file://" + d for d in VENDOR_LOCAL if os.path.isdir(d)] + [
     "https://mibs.pysnmp.com/asn1/@mib@",
-    "https://raw.githubusercontent.com/librenms/librenms/master/mibs/@mib@",
-    "https://raw.githubusercontent.com/librenms/librenms/master/mibs/arista/@mib@",
-]
+    f"{_LNMS}/@mib@",
+] + [f"{_LNMS}/{v}/@mib@" for v in ("arista", "cisco", "juniper", "nokia", "dell", "fortinet")]
 
 # MIBs carry no universal severity; seed the well-known IETF notifications.
 SEVERITY_HINT = {
