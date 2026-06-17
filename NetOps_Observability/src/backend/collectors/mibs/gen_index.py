@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,14 @@ STD_OVERLAY = {
                                    "enum": {"1": "other", "2": "invalid", "3": "learned", "4": "self", "5": "mgmt"}},
     "1.3.6.1.2.1.17.4.3.1.1": {"name": "dot1dTpFdbAddress", "mib": "BRIDGE-MIB", "kind": "column", "type": "MacAddress"},
     "1.3.6.1.2.1.17.4.3.1.2": {"name": "dot1dTpFdbPort", "mib": "BRIDGE-MIB", "kind": "column", "type": "INTEGER"},
+    # ARISTA-BRIDGE-EXT-MIB (30065.3.2) objects + module node now come from the REAL
+    # MIB via the net-snmp pass (correct OIDs). Only the 30065.3.2.0.x enterprise
+    # traps stay anchored here: the module defines NO NOTIFICATION-TYPE, so these
+    # v1-form traps have no name in any MIB. Named from the module's sole documented
+    # purpose ("host move information"; aristaDot1qTpFdbNumMoves = "number of times a
+    # MAC changed ports"). net-snmp can't supply them — no compiler can.
+    "1.3.6.1.4.1.30065.3.2.0.1": {"name": "aristaBridgeExtMacMove", "mib": "ARISTA-BRIDGE-EXT-MIB", "kind": "notification", "severity_hint": "warning"},
+    "1.3.6.1.4.1.30065.3.2.0.2": {"name": "aristaBridgeExtMacMove", "mib": "ARISTA-BRIDGE-EXT-MIB", "kind": "notification", "severity_hint": "warning"},
 }
 ASSERTIONS = {  # regression guard — mirrors collectors/oidindex_test.go
     "1.3.6.1.2.1.2.2.1.8": ("ifOperStatus", "column"),
@@ -144,6 +153,62 @@ def flatten(outdir: str) -> dict[str, dict]:
     return nodes
 
 
+# ── net-snmp compile path (for MIBs pysmi can't parse) ────────────────────────
+# pysmi 2.0 fails on the SMIv1 RFC-1212 OBJECT-TYPE macro, which blocks the entire
+# bridge-MIB family (BRIDGE/P-BRIDGE/Q-BRIDGE + vendor extensions). net-snmp's
+# snmptranslate parses SMIv1 correctly, so we compile the vendored MIB tree with it
+# and extract the high-value subtrees with REAL, authoritative OIDs (no hand-anchors).
+VENDORED = os.path.join(HERE, "vendored")
+NETSNMP_ROOTS = (
+    "1.3.6.1.2.1.17",         # dot1dBridge / dot1q / p-bridge (FDB/MAC tables)
+    "1.3.6.1.4.1.30065.3.2",  # ARISTA-BRIDGE-EXT-MIB (MAC-move tracking)
+)
+_TZ_RE = re.compile(r'"([^"]+)"\s+"([\d.]+)"')
+
+
+def netsnmp_nodes() -> dict:
+    """Compile the vendored MIB tree with net-snmp and extract nodes under the
+    target subtrees (real OIDs/types/enums). Returns {} if snmptranslate or the
+    tree is absent — so the build still works where net-snmp isn't installed."""
+    exe = shutil.which("snmptranslate")
+    if not exe or not os.path.isdir(VENDORED):
+        print("gen_index: net-snmp/vendored tree absent — skipping SMIv1 pass.", file=sys.stderr)
+        return {}
+    try:
+        tz = subprocess.run([exe, "-M", VENDORED, "-m", "ALL", "-Tz"],
+                            capture_output=True, text=True, timeout=120).stdout
+    except Exception:
+        return {}
+    by_oid = {m.group(1): m.group(2) for m in _TZ_RE.finditer(tz)}  # name→oid
+    name_of = {v: k for k, v in by_oid.items()}                      # oid→name
+    out: dict[str, dict] = {}
+    for name, oid in by_oid.items():
+        if not any(oid == r or oid.startswith(r + ".") for r in NETSNMP_ROOTS):
+            continue
+        try:
+            td = subprocess.run([exe, "-M", VENDORED, "-m", "ALL", "-Td", oid],
+                                capture_output=True, text=True, timeout=30).stdout
+        except Exception:
+            continue
+        if "NOTIFICATION-TYPE" in td:
+            kind = "notification"
+        elif "OBJECT-TYPE" in td:
+            kind = "column" if name_of.get(oid.rsplit(".", 1)[0], "").endswith("Entry") else "scalar"
+        else:
+            continue  # OBJECT IDENTIFIER / module-identity / conformance group
+        node = {"name": name, "mib": (re.search(r"--\s*FROM\s+([A-Z0-9-]+)", td) or [None, ""])[1], "kind": kind}
+        msyn = re.search(r"SYNTAX\s+(\w+)(.*)", td)
+        if msyn:
+            node["type"] = msyn.group(1)
+            enum = dict(re.findall(r"(\w+)\((\d+)\)", msyn.group(2)))
+            if enum:
+                node["enum"] = {v: k for k, v in enum.items()}  # int→label
+        if kind == "notification" and name in SEVERITY_HINT:
+            node["severity_hint"] = SEVERITY_HINT[name]
+        out[oid] = node
+    return out
+
+
 def validate(nodes: dict) -> list[str]:
     errs = []
     for oid, (name, kind) in ASSERTIONS.items():
@@ -160,10 +225,11 @@ def main() -> int:
     # Start from the existing index as a floor — compiled MIBs ADD coverage and
     # enrich type/enum, but a network/compile miss must never regress the core.
     base: dict[str, dict] = {}
-    try:
-        base = json.load(open(INDEX)).get("nodes", {})
-    except Exception:
-        pass
+    if not os.environ.get("CLEAN"):  # CLEAN=1 → rebuild from scratch (purge stale)
+        try:
+            base = json.load(open(INDEX)).get("nodes", {})
+        except Exception:
+            pass
     with tempfile.TemporaryDirectory() as tmp:
         mibdump(mibs, tmp)
         gen = flatten(tmp)
@@ -175,10 +241,14 @@ def main() -> int:
                 base[oid]["severity_hint"] = hint
         else:
             base[oid] = n
+    # net-snmp pass: authoritative for the SMIv1 bridge family pysmi can't compile.
+    ns = netsnmp_nodes()
+    for oid, n in ns.items():
+        base[oid] = n  # override — real compiled MIB beats pysmi/overlay
     for oid, n in STD_OVERLAY.items():
-        base.setdefault(oid, n)  # anchor standard OIDs whose MIB won't compile
+        base.setdefault(oid, n)  # only fills genuinely-undefined OIDs (e.g. v1 traps)
     nodes = base
-    print(f"gen_index: compiled {len(gen)} nodes; index now {len(nodes)} (seed+overlay-merged).")
+    print(f"gen_index: pysmi={len(gen)} net-snmp={len(ns)} nodes; index now {len(nodes)}.")
     errs = validate(nodes)
     if errs:
         print("gen_index: VALIDATION FAILED:\n  " + "\n  ".join(errs), file=sys.stderr)
@@ -187,7 +257,7 @@ def main() -> int:
     index = {
         "version": "sha256:" + hashlib.sha256(body).hexdigest()[:16],
         "generated": "build",
-        "note": "GENERATED by gen_index.py (pysmi/mibdump over the curated MIB set). Do not hand-edit — see mibs/README.md.",
+        "note": "GENERATED by gen_index.py (pysmi/mibdump for the MIB set + net-snmp/snmptranslate over the vendored tree for SMIv1 modules pysmi can't parse). Do not hand-edit — see mibs/README.md.",
         "mibs": mibs,
         "nodes": nodes,
     }

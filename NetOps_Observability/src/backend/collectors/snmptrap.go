@@ -169,6 +169,8 @@ func familyFor(etype string) (category, family string) {
 		return "platform_health", "restart"
 	case strings.Contains(etype, "auth"):
 		return "security", "auth_fail"
+	case strings.Contains(etype, "mac") || strings.Contains(etype, "fdb") || strings.Contains(etype, "bridge") || strings.Contains(etype, "move"):
+		return "layer2", "mac_fdb"
 	}
 	return "", ""
 }
@@ -243,9 +245,12 @@ func deriveEnvelope(ev *TrapEvent) {
 
 	// operator-friendly summary
 	if ev.Family == "mac_fdb" {
-		vlabel := vendorTitle(ev.Vendor)
-		ev.Summary = fmt.Sprintf("%sLayer-2 FDB trap for MAC %s on VLAN/FDB %s, bridge port %s",
-			vlabel, ev.Fields["mac"], ev.Fields["vlan"], ev.Fields["bridge_port"])
+		kind := "Layer-2 FDB"
+		if strings.Contains(ev.EventType, "move") || strings.Contains(ev.TrapName, "Move") {
+			kind = "MAC-move"
+		}
+		ev.Summary = fmt.Sprintf("%s%s trap for MAC %s on VLAN/FDB %s, bridge port %s",
+			vendorTitle(ev.Vendor), kind, ev.Fields["mac"], ev.Fields["vlan"], ev.Fields["bridge_port"])
 	} else if decoded {
 		ev.Summary = strings.TrimSpace(vendorTitle(ev.Vendor) + ev.TrapName)
 	}

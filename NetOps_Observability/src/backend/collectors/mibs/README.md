@@ -48,6 +48,17 @@ manifest resolves. Add a vendor by listing its modules in `gen_index.py`
 covers Cisco/Juniper/Nokia/Arista/Fortinet). Arista (30065) is proven end-to-end;
 Cisco/Juniper/Nokia are the same list-and-`make` step.
 
+**Two compilers (why).** pysmi 2.0 is the primary compiler (fetches from the
+mirrors, no local files), but it **cannot parse the SMIv1 `RFC-1212` `OBJECT-TYPE`
+macro**, which blocks the entire bridge-MIB family (BRIDGE/P-BRIDGE/Q-BRIDGE +
+vendor extensions like ARISTA-BRIDGE-EXT-MIB). For those, the generator runs a
+**net-snmp `snmptranslate` pass over the vendored tree in `mibs/vendored/`** (the
+real `.mib` files), which parses SMIv1 correctly and is authoritative for its
+subtrees (`NETSNMP_ROOTS`). To add an SMIv1-family module: drop it + its IMPORTS
+closure into `mibs/vendored/`, add its root to `NETSNMP_ROOTS`, `make mib-index`.
+The tiny `STD_OVERLAY` now holds **only** OIDs no compiler can supply — e.g. the
+Arista `30065.3.2.0.x` v1-form traps, which carry no `NOTIFICATION-TYPE` in any MIB.
+
 **Version matching.** MIBs evolve across NOS versions (new OIDs appear; rarely
 semantics shift). The rigorous model: a device's `sysObjectID` + `sysDescr` →
 vendor + model + **NOS version** → the version-appropriate MIB set. Current stance

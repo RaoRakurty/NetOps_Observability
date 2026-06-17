@@ -81,10 +81,11 @@ func TestDeriveEnvelope(t *testing.T) {
 }
 
 func TestDeriveEnvelope_FDBPartialDecode(t *testing.T) {
-	// The owner's real trap: undecoded Arista enterprise OID, but a STANDARD
-	// Q-BRIDGE FDB varbind → partially_decoded with MAC/VLAN extracted.
+	// A genuinely-unmapped enterprise trap, but a STANDARD Q-BRIDGE FDB varbind →
+	// partially_decoded with MAC/VLAN extracted (the partial-decode fallback path;
+	// the owner's real 30065.3.2.0.2 now fully decodes — see TestTrapMeta_FromIndex).
 	ev := &TrapEvent{
-		TrapOID: "1.3.6.1.4.1.30065.3.2.0.2", TrapName: "enterpriseSpecific", Host: "10.70.245.120",
+		TrapOID: "1.3.6.1.4.1.30065.9.9.0.1", TrapName: "enterpriseSpecific", Host: "10.70.245.120",
 		Varbinds: []TrapVarbind{
 			{OID: "1.3.6.1.2.1.1.3.0", Name: "sysUpTime", Value: "31264099"},
 			{OID: "1.3.6.1.2.1.17.7.1.2.2.1.2.1007.170.193.171.178.78.11", Value: "2"},
@@ -120,6 +121,7 @@ func TestTrapMeta_FromIndex(t *testing.T) {
 		{"1.3.6.1.2.1.15.0.2", "bgpBackwardTransition", "warning"}, // v1-form BGP
 		{"1.3.6.1.2.1.15.7.1", "bgpEstablished", "info"},
 		{"1.3.6.1.4.1.30065.4.1.0.2", "aristaBgp4V2BackwardTransitionNotification", "notice"}, // Arista MIB vendored
+		{"1.3.6.1.4.1.30065.3.2.0.2", "aristaBridgeExtMacMove", "warning"},                   // Arista bridge-ext (overlay-anchored)
 	} {
 		name, sev := trapMeta(tc.oid)
 		if name != tc.name || sev != tc.sev {
