@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, FlowFilters } from "../services/api";
-import { chartBase, axisStyle, areaGradient, paletteColor } from "../theme/charts";
+import { chartBase, axisStyle, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
@@ -175,8 +175,7 @@ function TopNView({
             series: [
               {
                 type: "bar",
-                data: rows.map((r) => Number(r.bytes_total)),
-                itemStyle: { color: paletteColor(0), borderRadius: [0, 3, 3, 0] },
+                data: rows.map((r, i) => ({ value: Number(r.bytes_total), itemStyle: { color: paletteColor(i), borderRadius: [0, 3, 3, 0] } })),
                 barMaxWidth: 16,
               },
             ],
@@ -310,9 +309,9 @@ function FlowsSection({ q }: { q: FlowQuery }) {
                   type: "line",
                   showSymbol: false,
                   smooth: true,
-                  lineStyle: { color: paletteColor(0), width: 2 },
-                  itemStyle: { color: paletteColor(0) },
-                  areaStyle: { color: areaGradient(0) },
+                  lineStyle: { color: colorForMetric("traffic bytes"), width: 2 },
+                  itemStyle: { color: colorForMetric("traffic bytes") },
+                  areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: hexToRgba(colorForMetric("traffic bytes"), 0.45) }, { offset: 1, color: hexToRgba(colorForMetric("traffic bytes"), 0) }] } },
                   data: ts.map((r) => [r.bucket, r.bytes_total]),
                 },
                 {
@@ -321,8 +320,8 @@ function FlowsSection({ q }: { q: FlowQuery }) {
                   yAxisIndex: 1,
                   showSymbol: false,
                   smooth: true,
-                  lineStyle: { color: paletteColor(1), width: 2 },
-                  itemStyle: { color: paletteColor(1) },
+                  lineStyle: { color: colorForMetric("packets"), width: 2 },
+                  itemStyle: { color: colorForMetric("packets") },
                   data: ts.map((r) => [r.bucket, r.packets_total]),
                 },
               ],

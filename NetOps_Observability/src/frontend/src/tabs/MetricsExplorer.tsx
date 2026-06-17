@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../services/api";
-import { chartBase, axisStyle, paletteColor } from "../theme/charts";
+import { chartBase, axisStyle, paletteColor, colorForMetric } from "../theme/charts";
 
 // Native Metrics Explorer — a Grafana-style surface that renders charts
 // in-app (ECharts) over the Go /api/metrics/* proxy. Instead of leading with
@@ -246,16 +246,20 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
         ...axisStyle,
         axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtVal(v, unit) },
       },
-      series: series.map((s, i) => ({
-        name: label(s.metric),
-        type: "line",
-        showSymbol: false,
-        smooth: true,
-        lineStyle: { color: paletteColor(i), width: 2 },
-        itemStyle: { color: paletteColor(i) },
-        areaStyle: { color: paletteColor(i), opacity: 0.12 },
-        data: s.values.map(([t, v]) => [t * 1000, Number(v)]),
-      })),
+      series: series.map((s, i) => {
+        // single series → colour by what the metric means; multi → categorical palette
+        const c = series.length === 1 ? colorForMetric(label(s.metric)) : paletteColor(i);
+        return {
+          name: label(s.metric),
+          type: "line",
+          showSymbol: false,
+          smooth: true,
+          lineStyle: { color: c, width: 2 },
+          itemStyle: { color: c },
+          areaStyle: { color: c, opacity: 0.12 },
+          data: s.values.map(([t, v]) => [t * 1000, Number(v)]),
+        };
+      }),
     };
   }, [series, unit]);
 
