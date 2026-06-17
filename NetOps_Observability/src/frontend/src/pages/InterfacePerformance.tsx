@@ -16,10 +16,10 @@ function deviceFromHash(): string {
   try { return decodeURIComponent(seg); } catch { return seg; }
 }
 
-export default function InterfacePerformance({ rangeMinutes = 60 }: { rangeMinutes?: number } = {}) {
+export default function InterfacePerformance({ rangeMinutes = 60, initialDevice }: { rangeMinutes?: number; initialDevice?: string } = {}) {
   const m = rangeMinutes;
   const [devices, setDevices] = useState<Device[]>([]);
-  const [device, setDevice] = useState<string>(() => deviceFromHash());
+  const [device, setDevice] = useState<string>(() => initialDevice || deviceFromHash());
   const [iface, setIface] = useState<string>("");
 
   // Device list for the picker (label by name, value = the metric `device` label

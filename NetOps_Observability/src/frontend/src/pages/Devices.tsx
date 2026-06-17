@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Device, Alert } from "../services/api";
 import { takeDrill } from "../theme/drill";
-import DeviceDetail, { DeviceDetailBody } from "./DeviceDetail";
+import DeviceDetailPage from "./DeviceDetailPage";
 import DeviceTerminal from "./DeviceTerminal";
-import Logs from "../tabs/Logs";
 import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
-import { useWorkspace } from "../context/workspace";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -102,31 +100,11 @@ export default function Devices() {
   const [q, setQ] = useState("");
   const [detail, setDetail] = useState<Device | null>(null);
   const [term, setTerm] = useState<Device | null>(null);
-  const ws = useWorkspace();
 
-  // Selecting a device pivots into the dockable Inspector (shell-v2) with its
-  // context + actions (Connect, and a "View logs" NOC pivot that opens the
-  // device's logs in the bottom drawer). In v1 it falls back to the modal.
-  const openDevice = (d: Device) => {
-    if (!ws.enabled) { setDetail(d); return; }
-    ws.openInspector(
-      <DeviceDetailBody
-        device={d}
-        actions={
-          <>
-            {sshEnabled && <button className="btn" onClick={() => setTerm(d)}>Connect</button>}
-            <button
-              className="btn"
-              onClick={() => ws.openDrawer(<Logs initialQuery={`host:"${d.name || d.id}"`} initialSignal="syslog" rangeMinutes={60} />, { title: `Logs · ${d.id}` })}
-            >
-              View logs
-            </button>
-          </>
-        }
-      />,
-      { title: d.name || d.id, subtitle: d.address },
-    );
-  };
+  // Selecting a device opens the full-page detail view (Overview · Interfaces ·
+  // Routing) — the reference design's graph rows need full width, which the narrow
+  // inspector couldn't carry.
+  const openDevice = (d: Device) => setDetail(d);
 
   useEffect(() => {
     const d = takeDrill().devices;
@@ -384,7 +362,7 @@ export default function Devices() {
         )}
       </div>
 
-      {detail && <DeviceDetail device={detail} onClose={() => setDetail(null)} />}
+      {detail && <DeviceDetailPage device={detail} onClose={() => setDetail(null)} />}
       {term && <DeviceTerminal device={term} onClose={() => setTerm(null)} />}
     </>
   );
