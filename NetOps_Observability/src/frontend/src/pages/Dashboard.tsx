@@ -1,161 +1,76 @@
-import { useState } from "react";
-import { PANELS, PANEL_CATEGORIES, PanelCategory, PanelDef } from "./panels";
+import { useEffect, useState } from "react";
+import { PANELS } from "./panels";
 import { useShell } from "../context/shell";
 import Icon from "../components/Icon";
-import { Group, PanelZoom } from "../components/board/panels";
 import { Modal } from "../components/ui";
 
-// Board-section hues (content-safe; severity bands avoided) — gives Overview
-// the same collapsible, hue-tinted Group chrome as the Device Monitoring suite.
-const CATEGORY_HUE: Record<PanelCategory, string> = {
-  "Health & KPIs": "#2d6be0",
-  Alerts: "#ec4899",
-  Resources: "#0ea5e9",
-  Traffic: "#14b8a6",
-  Inventory: "#8b5cf6",
-  Topology: "#5b8db8",
-};
+// My Dashboard — a fixed, dense, demo-ready operations board (rebuilt fresh).
+// Not a build-your-own canvas: a curated single-screen story over the signals THIS
+// tool collects (fleet health → resources → traffic/flows → WAN/sites → events &
+// incidents → topology), every panel wired to its live source via the panel
+// registry (panels.tsx). The "twist" is ours: numbered section eyebrows with an
+// accent rule, a tight 12-col grid, and per-section hues from the Correlix palette.
 
-// Operations Overview — a modular, Zabbix-style board. The layout is a
-// list of panels the user composes themselves: add from the panel library,
-// resize (column span), and remove. Layout persists in localStorage so it
-// survives reloads. Each panel (see panels.tsx) fetches its own live data.
+type Cell = [type: string, span: number];
+type Section = { id: string; label: string; caption: string; hue: string; cells: Cell[] };
 
-type Item = { key: string; type: string; span: number };
-
-// Bumped to v4: denser, fuller default board (more panels, smaller spans) so
-// the Overview reads like a packed NOC wall rather than a sparse page. Older
-// custom layouts are superseded once on upgrade.
-const LS_KEY = "netops.overview.layout.v5"; // v5: + live WAN-interfaces panel
-
-// A rich, dense default in NOC reading order: top-line KPIs, then what's wrong
-// right now (severity), resource gauges, a traffic row, an inventory/health row,
-// the alert + incident streams side by side, and the topology.
-const DEFAULT_LAYOUT: Item[] = [
-  { key: "d-kpis", type: "kpis", span: 12 },
-  { key: "d-sev", type: "alerts-severity", span: 12 },
-  { key: "d-cpu", type: "gauge-cpu", span: 3 },
-  { key: "d-mem", type: "gauge-mem", span: 3 },
-  { key: "d-sto", type: "gauge-storage", span: 3 },
-  { key: "d-net", type: "gauge-network", span: 3 },
-  { key: "d-wan", type: "wan-interfaces", span: 8 },
-  { key: "d-traffic", type: "traffic", span: 8 },
-  { key: "d-tophosts", type: "top-hosts", span: 4 },
-  { key: "d-proto", type: "flows-proto", span: 4 },
-  { key: "d-tunnels", type: "tunnels-health", span: 4 },
-  { key: "d-vendor", type: "devices-vendor", span: 4 },
-  { key: "d-avail", type: "site-availability", span: 4 },
-  { key: "d-perf", type: "stack-performance", span: 8 },
-  { key: "d-alerts", type: "active-alerts", span: 6 },
-  { key: "d-incidents", type: "incidents", span: 6 },
-  { key: "d-topo", type: "topology", span: 12 },
+// Curated layout. Each cell.type MUST exist in PANELS (registry = the wiring); a
+// missing type is skipped so the board never renders a dead panel.
+const SECTIONS: Section[] = [
+  { id: "health", label: "Service health", caption: "fleet posture at a glance", hue: "#3b82f6",
+    cells: [["kpis", 12], ["site-availability", 4], ["stack-performance", 8]] },
+  { id: "resources", label: "Resource saturation", caption: "where headroom is thinning", hue: "#8b5cf6",
+    cells: [["gauge-cpu", 3], ["gauge-mem", 3], ["gauge-storage", 3], ["gauge-network", 3]] },
+  { id: "traffic", label: "Traffic & flows", caption: "what's moving across the fabric", hue: "#06b6d4",
+    cells: [["traffic", 8], ["top-hosts", 4], ["flows-proto", 4], ["tunnels-health", 4], ["devices-vendor", 4]] },
+  { id: "wan", label: "WAN & interfaces", caption: "edge + per-interface live state", hue: "#14b8a6",
+    cells: [["wan-interfaces", 12]] },
+  { id: "events", label: "Events & incidents", caption: "what needs a human", hue: "#ec4899",
+    cells: [["alerts-severity", 12], ["active-alerts", 6], ["incidents", 6]] },
+  { id: "topology", label: "Topology", caption: "how it's wired together", hue: "#22c55e",
+    cells: [["topology", 12]] },
 ];
-
-const SPANS = [3, 4, 6, 8, 12];
-
-function loadLayout(): Item[] {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Item[];
-      // Drop any panel types that no longer exist in the registry.
-      const valid = parsed.filter((i) => PANELS[i.type]);
-      if (valid.length) return valid;
-    }
-  } catch {
-    /* fall through to default */
-  }
-  return DEFAULT_LAYOUT;
-}
-
-function uid(): string {
-  return "p" + Date.now().toString(36) + Math.floor(Math.random() * 1e5).toString(36);
-}
 
 export default function Dashboard() {
   const { navigate } = useShell();
-  const [items, setItems] = useState<Item[]>(loadLayout);
-  const [picking, setPicking] = useState(false);
-  const [zoom, setZoom] = useState<Item | null>(null);
+  const [zoom, setZoom] = useState<string | null>(null);
+  const [now, setNow] = useState(() => new Date());
+  // light heartbeat so the "as of" clock reads live during a demo (panels own their
+  // own refresh; this is just the header timestamp).
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 30_000); return () => clearInterval(t); }, []);
 
-  const persist = (next: Item[]) => {
-    setItems(next);
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(next));
-    } catch {
-      /* ignore quota errors */
-    }
-  };
-
-  const add = (type: string) => {
-    const def = PANELS[type];
-    persist([...items, { key: uid(), type, span: def.defaultSpan }]);
-    setPicking(false);
-  };
-  const remove = (key: string) => persist(items.filter((i) => i.key !== key));
-  const resize = (key: string) =>
-    persist(
-      items.map((i) =>
-        i.key === key ? { ...i, span: SPANS[(SPANS.indexOf(i.span) + 1) % SPANS.length] } : i,
-      ),
-    );
-  const reset = () => {
-    try {
-      localStorage.removeItem(LS_KEY);
-    } catch {
-      /* ignore */
-    }
-    setItems(DEFAULT_LAYOUT);
-  };
-
+  let n = 0;
   return (
-    <div className="ov">
-      <div className="ov-head">
-        <h1 className="ov-title">
-          Operations Overview <span>real-time NOC</span>
-        </h1>
-        <div className="ov-actions">
-          <button className="dash-btn accent" onClick={() => setPicking((p) => !p)}>
-            + Add panel
-          </button>
-          <button className="dash-btn" onClick={reset} title="Restore the default layout">
-            Reset
-          </button>
+    <div className="mydash">
+      <div className="mydash-head">
+        <div>
+          <div className="mydash-eyebrow">Operations</div>
+          <h1 className="mydash-title">Dashboard</h1>
+        </div>
+        <div className="mydash-head-meta">
+          <span className="mydash-live"><span className="mydash-live-dot" /> Live</span>
+          <span className="mydash-asof">as of {now.toLocaleTimeString()}</span>
         </div>
       </div>
 
-      {picking && (
-        <div className="panel-picker">
-          {PANEL_CATEGORIES.map(({ category, types }) => (
-            <div className="panel-picker-group" key={category}>
-              <div className="panel-picker-label">{category}</div>
-              <div className="panel-picker-items">
-                {types.map((type) => (
-                  <button key={type} onClick={() => add(type)}>
-                    + {(PANELS[type] as PanelDef).title}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {items.length === 0 && (
-        <div className="panel panel-empty">
-          No panels — click “+ Add panel” to build your overview.
-        </div>
-      )}
-      {PANEL_CATEGORIES.map(({ category }) => {
-        const inCat = items.filter((i) => PANELS[i.type]?.category === category);
-        if (inCat.length === 0) return null;
+      {SECTIONS.map((s) => {
+        const cells = s.cells.filter(([type]) => PANELS[type]);
+        if (cells.length === 0) return null;
+        n += 1;
+        const idx = String(n).padStart(2, "0");
         return (
-          <Group key={category} title={category} hue={CATEGORY_HUE[category] ?? "#818cf8"}>
-            <div className="ov-grid">
-              {inCat.map((item) => {
-                const def = PANELS[item.type];
+          <section className="mydash-sec" key={s.id} style={{ ["--sec" as string]: s.hue } as React.CSSProperties}>
+            <div className="mydash-sec-h">
+              <span className="mydash-sec-n">{idx}</span>
+              <h2 className="mydash-sec-t">{s.label}</h2>
+              <span className="mydash-sec-cap">{s.caption}</span>
+              <span className="mydash-sec-rule" />
+            </div>
+            <div className="ov-grid mydash-grid">
+              {cells.map(([type, span], i) => {
+                const def = PANELS[type];
                 return (
-                  <div className={`panel col-${item.span}`} key={item.key}>
+                  <div className={`panel col-${span}`} key={`${type}-${i}`}>
                     <div className="panel-tools">
                       <h3
                         className={def.drill ? "panel-title-link" : undefined}
@@ -167,13 +82,7 @@ export default function Dashboard() {
                         {def.drill && <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />}
                       </h3>
                       <div className="panel-tools-btns">
-                        <button onClick={() => setZoom(item)} title="Enlarge" aria-label="Enlarge panel">⤢</button>
-                        <button onClick={() => resize(item.key)} title="Resize" aria-label="Resize panel">
-                          <Icon name="maximize" size={13} />
-                        </button>
-                        <button onClick={() => remove(item.key)} title="Remove" aria-label="Remove panel">
-                          <Icon name="close" size={13} />
-                        </button>
+                        <button onClick={() => setZoom(type)} title="Enlarge" aria-label="Enlarge panel">⤢</button>
                       </div>
                     </div>
                     {def.render()}
@@ -181,14 +90,13 @@ export default function Dashboard() {
                 );
               })}
             </div>
-          </Group>
+          </section>
         );
       })}
-      {zoom && PANELS[zoom.type] && (
-        <Modal title={PANELS[zoom.type].title} wide onClose={() => setZoom(null)}>
-          <PanelZoom.Provider value={true}>
-            <div className="panel-zoom-body">{PANELS[zoom.type].render()}</div>
-          </PanelZoom.Provider>
+
+      {zoom && PANELS[zoom] && (
+        <Modal title={PANELS[zoom].title} wide onClose={() => setZoom(null)}>
+          <div className="panel-zoom-body">{PANELS[zoom].render()}</div>
         </Modal>
       )}
     </div>
