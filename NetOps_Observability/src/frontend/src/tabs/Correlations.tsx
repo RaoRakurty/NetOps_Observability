@@ -8,6 +8,7 @@ import { buildRcaCase } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected } from "../components/rca/labels";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
 // entity is our own infra) are hidden by default and revealed via a toggle for
@@ -161,58 +162,72 @@ export default function Correlations() {
 
   const selected = !ws.enabled && sel ? items.find((o) => o.correlation_id === sel) : undefined;
 
+  const rConfirmed = visible.filter((o) => o.verdict_tier === "confirmed").length;
+  const rSuspected = visible.filter((o) => o.verdict_tier === "suspected").length;
+  const rUndet = visible.filter((o) => o.verdict_tier === "undetermined").length;
   return (
-    <div className="card">
-      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.015em", lineHeight: 1.15, margin: "0 0 5px", color: "var(--fg)" }}>
-        Root Cause Analysis
-      </h2>
-      <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 0, lineHeight: 1.55 }}>
-        Each row is a possible issue, built from related evidence on the same path or
-        boundary. An issue is only marked <b>Confirmed</b> when independent evidence agrees
-        across at least two kinds of evidence — everything weaker says exactly what's missing
-        to confirm it.
-      </p>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <select value={state} onChange={(e) => setState(e.target.value)}>
-          <option value="">All states</option>
-          <option value="open">Open</option>
-          <option value="closed">Resolved</option>
-        </select>
-        <select value={tier} onChange={(e) => setTier(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="confirmed">Confirmed</option>
-          <option value="suspected">Suspected</option>
-          <option value="undetermined">Not confirmed</option>
-        </select>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--muted)", marginLeft: "auto" }}>
-          <input type="checkbox" checked={showInternal} onChange={(e) => setShowInternal(e.target.checked)} />
-          Show internal/stack{hiddenInternal > 0 && !showInternal ? ` (${hiddenInternal} hidden)` : ""}
-        </label>
+    <div className="dm-board cc-board">
+      <NocHeader
+        title="RCA Candidates"
+        subtitle="Evidence-linked correlation groups. A root cause is confirmed only when independent evidence agrees across at least two signal classes — weaker candidates say exactly what's missing."
+        chips={<><Chip label={`${visible.length} candidates`} /><LiveChip detail="correlation engine" /></>}
+      >
+        <NocKpis cols={4}>
+          <NocKpi n={visible.length} label="Candidates" interp="correlation groups" />
+          <NocKpi n={rConfirmed} label="Confirmed" interp="≥2 evidence streams" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={rSuspected} label="Suspected" interp="impact not confirmed" tone={rSuspected ? "var(--warn)" : undefined} />
+          <NocKpi n={rUndet} label="Not confirmed" interp="gathering evidence" />
+        </NocKpis>
+      </NocHeader>
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Candidate queue</h3>
+          <span className="cc-panel-meta">{visible.length} · click a row for the RCA workspace</span>
+        </div>
+        <div style={{ padding: "11px 13px" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <select value={state} onChange={(e) => setState(e.target.value)}>
+              <option value="">All states</option>
+              <option value="open">Open</option>
+              <option value="closed">Resolved</option>
+            </select>
+            <select value={tier} onChange={(e) => setTier(e.target.value)}>
+              <option value="">All statuses</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="suspected">Suspected</option>
+              <option value="undetermined">Not confirmed</option>
+            </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--muted)", marginLeft: "auto" }}>
+              <input type="checkbox" checked={showInternal} onChange={(e) => setShowInternal(e.target.checked)} />
+              Show internal/stack{hiddenInternal > 0 && !showInternal ? ` (${hiddenInternal} hidden)` : ""}
+            </label>
+          </div>
+          {visible.length === 0 ? (
+            <div className="empty">
+              {items.length > 0
+                ? "No customer-network issues in this range. Internal stack/self-monitoring objects are hidden — tick “Show internal/stack” to see them."
+                : "No issues in this time range. One appears when related evidence — or a single high-severity sign — shows up across your network."}
+            </div>
+          ) : (
+            <DataTable<CorrObject>
+              rows={visible}
+              columns={columns}
+              rowKey={(o) => o.correlation_id}
+              height="58vh"
+              ariaLabel="RCA candidates"
+              resizable
+              onRowClick={select}
+              rowClassName={(o) => (sel === o.correlation_id ? "dtv-selected" : "")}
+              initialSort={{ key: "created_at", dir: "desc" }}
+            />
+          )}
+          {selected && (
+            <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <CorrelationDetail id={selected.correlation_id} />
+            </div>
+          )}
+        </div>
       </div>
-      {visible.length === 0 ? (
-        <div className="empty">
-          {items.length > 0
-            ? "No customer-network issues in this range. Internal stack/self-monitoring objects are hidden — tick “Show internal/stack” to see them."
-            : "No issues in this time range. One appears when related evidence — or a single high-severity sign — shows up across your network."}
-        </div>
-      ) : (
-        <DataTable<CorrObject>
-          rows={visible}
-          columns={columns}
-          rowKey={(o) => o.correlation_id}
-          height="58vh"
-          ariaLabel="Correlations"
-          resizable
-          onRowClick={select}
-          rowClassName={(o) => (sel === o.correlation_id ? "dtv-selected" : "")}
-          initialSort={{ key: "created_at", dir: "desc" }}
-        />
-      )}
-      {selected && (
-        <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>
-          <CorrelationDetail id={selected.correlation_id} />
-        </div>
-      )}
     </div>
   );
 }
