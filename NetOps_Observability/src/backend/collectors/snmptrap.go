@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,88 @@ type TrapEvent struct {
 	Authenticated bool          `json:"authenticated"` // v3 auth verified (v1/v2c are spoofable → false)
 	Message       string        `json:"message"`
 	Varbinds      []TrapVarbind `json:"varbinds,omitempty"`
+
+	// NormalizedEvent envelope (#32) — vendor-agnostic structure every trap emits,
+	// so Events/Correlation read parsed fields instead of re-decoding raw OIDs.
+	// Design: docs/design/research/telemetry-normalization-architecture.md §3.
+	Vendor           string `json:"vendor,omitempty"`            // from the enterprise OID arc
+	EventType        string `json:"event_type,omitempty"`        // normalized leaf (trap name → snake)
+	MessageKey       string `json:"message_key,omitempty"`       // stable dedup identity (never raw text)
+	ParserStatus     string `json:"parser_status,omitempty"`     // decoded | partial | raw_only
+	EnrichmentStatus string `json:"enrichment_status,omitempty"` // inventory_matched | inventory_missing
+}
+
+// vendorFromOID returns the vendor for an enterprise OID via the shared
+// enterpriseVendor map (vendor.go) — stable identity from the IANA PEN arc, not a
+// parse hack. "" for the standard tree or an unknown enterprise number.
+func vendorFromOID(oid string) string {
+	const p = "1.3.6.1.4.1."
+	if !strings.HasPrefix(oid, p) {
+		return ""
+	}
+	ent := oid[len(p):]
+	if i := strings.IndexByte(ent, '.'); i >= 0 {
+		ent = ent[:i]
+	}
+	n, err := strconv.Atoi(ent)
+	if err != nil {
+		return ""
+	}
+	return enterpriseVendor[n]
+}
+
+// camelToSnake normalizes a MIB object name to a stable lower_snake event token
+// (aristaBgp4V2BackwardTransitionNotification → arista_bgp4_v2_backward_transition,
+// linkDown → link_down), stripping the trailing Notification/Trap noise.
+func camelToSnake(s string) string {
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "Notification"), "Trap")
+	var b strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r + 32)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// deriveEnvelope fills the NormalizedEvent envelope from the already-decoded trap.
+// Vendor-agnostic: it works for any trap, decoded or raw.
+func deriveEnvelope(ev *TrapEvent) {
+	ev.Vendor = vendorFromOID(ev.TrapOID)
+	if ev.TrapName != "" && ev.TrapName != "enterpriseSpecific" {
+		ev.EventType = camelToSnake(ev.TrapName)
+		ev.ParserStatus = "decoded"
+	} else {
+		ev.EventType = "enterprise_specific"
+		ev.ParserStatus = "raw_only"
+	}
+	if ev.Device != "" {
+		ev.EnrichmentStatus = "inventory_matched"
+	} else {
+		ev.EnrichmentStatus = "inventory_missing"
+	}
+	// message_key: stable identity = signal:device|src:mib:event_type (never raw text)
+	who := ev.Device
+	if who == "" {
+		who = ev.Host
+	}
+	mib := ""
+	if n, _, ok := lookupOID(ev.TrapOID); ok {
+		mib = n.MIB
+	}
+	parts := []string{"snmptrap", who, mib, ev.EventType}
+	clean := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			clean = append(clean, p)
+		}
+	}
+	ev.MessageKey = strings.Join(clean, ":")
 }
 
 // snmpTrapOIDPrefix = 1.3.6.1.6.3.1.1.5 — the SNMPv2-MIB generic traps live at
@@ -697,6 +780,7 @@ func (r *trapReceiver) forwardLoop(ctx context.Context) {
 }
 
 func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *TrapEvent) {
+	deriveEnvelope(ev) // fill the NormalizedEvent envelope (#32) just before emit
 	body, err := json.Marshal(ev)
 	if err != nil {
 		return

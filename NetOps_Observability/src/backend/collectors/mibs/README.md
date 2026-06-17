@@ -40,6 +40,24 @@ MIBs change rarely, so a backend rebuild per MIB batch is acceptable (the design
 rejects a runtime MIB compiler as a §6 violation). No trap-receiver code changes —
 only data.
 
+## Multi-vendor coverage + software-version ↔ MIB matching (#34)
+
+**General, not one trap.** Decode is vendor-agnostic: any OID whose MIB is in the
+manifest resolves. Add a vendor by listing its modules in `gen_index.py`
+`DEFAULT_MIBS` and ensuring a `--mib-source` reaches them (the LibreNMS mirror
+covers Cisco/Juniper/Nokia/Arista/Fortinet). Arista (30065) is proven end-to-end;
+Cisco/Juniper/Nokia are the same list-and-`make` step.
+
+**Version matching.** MIBs evolve across NOS versions (new OIDs appear; rarely
+semantics shift). The rigorous model: a device's `sysObjectID` + `sysDescr` →
+vendor + model + **NOS version** → the version-appropriate MIB set. Current stance
+(pragmatic, matches LibreNMS/Telegraf): ship the **latest** vendor MIBs — OID→name
+decode is overwhelmingly version-stable/backward-compatible, and newer MIBs are a
+superset. The next layer (tracked #34): record each MIB's `REVISION`/`LAST-UPDATED`
+in the index meta, organize `vendor/<vendor>/<nos-train>/` where a version actually
+diverges, and select the MIB set by the device's detected version. Until then,
+decode is "best known definition," and an un-vendored OID stays honestly raw.
+
 ## Index schema (`index/oididx.json`)
 
 `nodes[oid] = { name, mib, kind: scalar|column|notification, type?, enum?{val:label},
