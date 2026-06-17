@@ -834,7 +834,7 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, visibleDevices(s.discovery.Devices(), claims))
+		writeJSON(w, http.StatusOK, withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
 	case http.MethodPost:
 		// SR-003: creating a device is a write — gate it. Previously any
 		// authenticated principal (incl. read-only) could create/overwrite devices.
@@ -897,6 +897,9 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 		if !ok || !canSeeDevice(d, tenant, cross) {
 			http.NotFound(w, r)
 			return
+		}
+		if d.Type == "" {
+			d.Type = inferDeviceType(d)
 		}
 		writeJSON(w, http.StatusOK, d)
 	case http.MethodDelete:

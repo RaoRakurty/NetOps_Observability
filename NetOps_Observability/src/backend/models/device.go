@@ -13,6 +13,10 @@ type Device struct {
 	Vendor            string            `json:"vendor,omitempty"`
 	Model             string            `json:"model,omitempty"`
 	OS                string            `json:"os,omitempty"`
+	// Type — router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic.
+	// SNMP-inferred from vendor/model/sysDescr (InferDeviceType), operator-overridable
+	// via labels["device_type"]. Populated on-read by the devices API.
+	Type string `json:"type,omitempty"`
 	PreferredProtocol string            `json:"preferred_protocol,omitempty"`
 	CredentialRef     string            `json:"credential_ref,omitempty"`
 	TenantID          string            `json:"tenant_id,omitempty"` // owning tenant ("" = global/shared)

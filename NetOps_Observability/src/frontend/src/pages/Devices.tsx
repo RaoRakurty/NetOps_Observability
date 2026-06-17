@@ -74,11 +74,26 @@ const SOURCE_META: Record<string, { label: string; tone: string }> = {
 const sourceLabel = (s: string) => SOURCE_META[s]?.label ?? (s || "—");
 const sourceTone = (s: string) => SOURCE_META[s]?.tone ?? "";
 
+// Functional device type (SNMP-inferred, backend) → label + colour. Distinct hues
+// so the column scans at a glance; "generic" stays muted (unclassified).
+const TYPE_META: Record<string, { label: string; color: string }> = {
+  router: { label: "Router", color: "#3b82f6" },
+  switch: { label: "Switch", color: "#22c55e" },
+  firewall: { label: "Firewall", color: "#ef4444" },
+  "load-balancer": { label: "Load balancer", color: "#a855f7" },
+  ap: { label: "Access point", color: "#06b6d4" },
+  wlc: { label: "WLC", color: "#14b8a6" },
+  "cloud-gw": { label: "Cloud GW", color: "#f59e0b" },
+  generic: { label: "Generic", color: "var(--muted)" },
+};
+const typeMeta = (t?: string) => TYPE_META[(t || "generic")] ?? { label: t || "—", color: "var(--muted)" };
+
 type Filter = "all" | Health;
 
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [sites, setSites] = useState<Map<string, string>>(new Map()); // device id → site/location
   const [sshEnabled, setSshEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -120,9 +135,14 @@ export default function Devices() {
 
   const load = async () => {
     try {
-      const [list, al] = await Promise.all([api.devices(), api.alerts().catch(() => [])]);
+      const [list, al, locs] = await Promise.all([
+        api.devices(),
+        api.alerts().catch(() => []),
+        api.deviceLocations().catch(() => ({ devices: [] as { id: string; site?: string }[] })),
+      ]);
       setDevices(list ?? []);
       setAlerts(al ?? []);
+      setSites(new Map((locs?.devices ?? []).filter((r) => r.site).map((r) => [r.id, r.site as string])));
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -198,12 +218,25 @@ export default function Devices() {
       text: (d) => d.name ?? "", render: (d) => <span title={d.name || ""}>{d.name || "—"}</span>,
     },
     {
-      key: "address", header: "Address", width: 160,
+      key: "address", header: "IP address", width: 148,
       text: (d) => d.address,
       render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{d.address}</span>,
     },
     {
-      key: "vendor", header: "Vendor", width: "13%", sortable: true,
+      key: "type", header: "Type", width: "12%", sortable: true,
+      text: (d) => typeMeta(d.type).label, sortValue: (d) => d.type || "~",
+      render: (d) => {
+        const m = typeMeta(d.type);
+        return (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={`Device type: ${m.label} (SNMP-inferred)`}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: m.color, flex: "none" }} />
+            <span>{m.label}</span>
+          </span>
+        );
+      },
+    },
+    {
+      key: "vendor", header: "Manufacturer", width: "12%", sortable: true,
       text: (d) => d.vendor ?? "", sortValue: (d) => (d.vendor || "~").toLowerCase(),
       render: (d) => {
         const v = (d.vendor || "").trim() || "Unknown";
@@ -216,21 +249,31 @@ export default function Devices() {
       },
     },
     {
-      key: "model", header: "Model", width: "12%",
-      text: (d) => d.model ?? "", render: (d) => <span title={d.model || ""}>{d.model || "—"}</span>,
+      key: "location", header: "Location", width: "13%", sortable: true,
+      text: (d) => sites.get(d.id) ?? "", sortValue: (d) => sites.get(d.id) ?? "~",
+      render: (d) => {
+        const site = sites.get(d.id);
+        return site
+          ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={site}><span aria-hidden style={{ color: "var(--muted)" }}>◍</span>{site}</span>
+          : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
+      },
     },
     {
-      key: "source", header: "Source", width: 96,
+      key: "model", header: "Description", width: "14%",
+      text: (d) => d.model ?? d.os ?? "", render: (d) => <span title={d.model || d.os || ""} style={{ color: "var(--fg-muted)" }}>{d.model || d.os || "—"}</span>,
+    },
+    {
+      key: "source", header: "Source", width: 88,
       text: (d) => sourceLabel(d.source),
       render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
     },
     {
-      key: "last_seen", header: "Last seen", width: 110, sortable: true,
+      key: "last_seen", header: "Polled", width: 100, sortable: true,
       sortValue: (d) => new Date(d.last_seen).getTime() || 0,
       sev: (d) => healthSev(health.get(d.id) ?? "up"),
       render: (d) => <span title={new Date(d.last_seen).toLocaleString()}>{relTime(d.last_seen)}</span>,
     },
-  ], [health]);
+  ], [health, sites]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button

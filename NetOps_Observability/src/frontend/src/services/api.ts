@@ -8,6 +8,7 @@ export type Device = {
   vendor?: string;
   model?: string;
   os?: string;
+  type?: string; // router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic (SNMP-inferred)
   preferred_protocol?: string;
   credential_ref?: string;
   labels?: Record<string, string>;
