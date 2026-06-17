@@ -137,8 +137,10 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const src = h._source || {};
       const ts =
         src["@timestamp"] || src.timestamp || src.ts || src.time_received_ns || new Date().toISOString();
+      // Prefer the normalized operator summary (traps/syslog now carry it) over
+      // the raw body, so the row reads "Arista Layer-2 FDB trap …" not a raw OID.
       const message =
-        src.message || src.msg || JSON.stringify(src);
+        src.summary || src.message || src.msg || JSON.stringify(src);
       // Flow records enter via the collector's stdout, so they carry its
       // container name — show the flow's real source host (src_addr) instead.
       const flowHost = src.src_addr ? String(src.src_addr) : "";

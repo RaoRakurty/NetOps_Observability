@@ -58,7 +58,7 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
         }
         for (const h of traps?.hits?.hits ?? []) {
           const s = h._source || {};
-          out.push({ ts: parseTs(s), type: "trap", severity: pick(s, ["severity", "ifOperStatus", "level"], "notice"), source: pick(s, ["device.ip", "device_ip", "host", "agent"], "—"), message: pick(s, ["snmpTrapName", "snmptrapname", "message", "content"], "SNMP trap") });
+          out.push({ ts: parseTs(s), type: "trap", severity: pick(s, ["normalized_severity", "severity", "level"], "notice"), source: pick(s, ["device", "device.ip", "device_ip", "host", "agent"], "—"), message: pick(s, ["summary", "trap_name", "snmpTrapName", "message", "content"], "SNMP trap") });
         }
         for (const a of (alerts as any[]) ?? []) {
           if (a.resolved_at) continue;
