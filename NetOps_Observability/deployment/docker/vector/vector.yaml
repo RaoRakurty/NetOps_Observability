@@ -233,6 +233,45 @@ transforms:
         }
       }
 
+      # ── Structured-body parsers (#31): turn the vendor log body into canonical
+      # normalized fields (subsystem/facility/event_type/summary + embedded
+      # severity) so Events/RCA read structure, not raw text. Infallible: every
+      # parse uses the (_, err) form and falls back — a parser miss never drops the
+      # event. parser_status makes coverage observable (no silent failure).
+      .parser_status = "unparsed"
+      embedded_sev = 99
+      if vendor != "fortinet" {
+        # Cisco IOS/IOS-XE + NX-OS + Arista EOS converge on %FAC-SEV-MNEMONIC: text
+        cm, cmerr = parse_regex(msg, r'%(?P<facility>[A-Z][A-Z0-9_]+)-(?P<sev>[0-7])-(?P<mnemonic>[A-Z0-9_]+):\s*(?P<text>.*)')
+        if cmerr == null {
+          .facility = cm.facility
+          .event_type = downcase(string(cm.mnemonic) ?? "")
+          .summary = cm.text
+          embedded_sev = to_int(cm.sev) ?? 6
+          .parser_id = "ios_style.v1"
+          .parser_status = "parsed"
+        } else if match(msg, r'\|\d+\|\d+\|\d+\|') {
+          # Nokia SR Linux: <lvlword>|<pid>|<tid>|<seq>|<subsys>||<S>: <text>
+          sm, smerr = parse_regex(msg, r'\w+\|\d+\|\d+\|\d+\|(?P<subsys>[^|]*)\|[^|]*\|(?P<sevchar>[A-Z]):\s*(?P<text>.*)')
+          if smerr == null {
+            .vendor = "nokia"
+            .subsystem = strip_whitespace(string(sm.subsys) ?? "")
+            .summary = strip_whitespace(string(sm.text) ?? "")
+            sc = string(sm.sevchar) ?? ""
+            embedded_sev = if sc == "C" { 2 } else if sc == "E" { 3 } else if sc == "W" { 4 } else if sc == "N" { 5 } else if sc == "I" { 6 } else { 7 }
+            .parser_id = "srlinux.v1"
+            .parser_status = "parsed"
+          }
+        }
+      }
+
+      # Severity reconcile: the body's embedded level overrides the syslog PRI when
+      # stronger (lower RFC5424 number wins) — e.g. PRI=notice + body "W:" → warning.
+      sysv = downcase(string(.severity) ?? "info")
+      sysint = if sysv == "emergency" || sysv == "alert" || sysv == "critical" || sysv == "crit" { 2 } else if sysv == "error" || sysv == "err" { 3 } else if sysv == "warning" || sysv == "warn" { 4 } else if sysv == "notice" { 5 } else if sysv == "debug" { 7 } else { 6 }
+      eff = if embedded_sev < sysint { embedded_sev } else { sysint }
+      .normalized_severity = if eff <= 2 { "critical" } else if eff == 3 { "error" } else if eff == 4 { "warning" } else if eff == 5 { "notice" } else { "info" }
+
   # SNMP traps — the receiver already decoded the PDU into structured fields
   # (trap_oid, trap_name, severity, varbinds, snmp_version, device/host). Here we
   # just stamp the tenant the same way syslog does: match the device id (or the
