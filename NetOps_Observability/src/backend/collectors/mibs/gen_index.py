@@ -36,12 +36,15 @@ VENDOR_LOCAL = [os.path.join(HERE, d) for d in ("ietf", "iana")] + [
 DEFAULT_MIBS = [
     "SNMPv2-MIB", "IF-MIB", "BGP4-MIB", "OSPF-MIB", "OSPF-TRAP-MIB", "ISIS-MIB",
     "ENTITY-MIB", "ENTITY-SENSOR-MIB", "IP-MIB", "TCP-MIB", "UDP-MIB",
-    "HOST-RESOURCES-MIB", "LLDP-MIB", "BRIDGE-MIB", "CISCO-CONFIG-MAN-MIB",
+    "HOST-RESOURCES-MIB", "LLDP-MIB", "BRIDGE-MIB", "Q-BRIDGE-MIB",
+    "P-BRIDGE-MIB", "RSTP-MIB", "DISMAN-EVENT-MIB", "CISCO-CONFIG-MAN-MIB",
     # Arista (enterprise 30065) — the lab's spines/leaves. Modules from the
-    # LibreNMS mirror (SOURCES below). The dedicated trap subtree may need Arista's
-    # own site; these cover interface/BGP/entity/sensor objects + notifications.
+    # LibreNMS mirror (SOURCES below). Cover interface/BGP/entity/sensor/bridging
+    # objects + their notification subtrees.
     "ARISTA-SMI-MIB", "ARISTA-GENERAL-MIB", "ARISTA-IF-MIB", "ARISTA-BGP4V2-MIB",
     "ARISTA-BGP4V2-TC-MIB", "ARISTA-ENTITY-SENSOR-MIB", "ARISTA-VRF-MIB",
+    "ARISTA-NEXTHOP-GROUP-MIB", "ARISTA-MLAG-MIB", "ARISTA-REDUNDANCY-MIB",
+    "ARISTA-BRIDGING-MIB", "ARISTA-MAC-ACCOUNTING-MIB",
 ]
 # mibdump source order: vendored dirs (offline, authoritative) → public mirror →
 # LibreNMS comprehensive vendor mirror (@mib@ is the module-name placeholder).
@@ -57,6 +60,16 @@ SEVERITY_HINT = {
     "bgpBackwardTransition": "warning", "ospfNbrStateChange": "warning",
     "ospfIfStateChange": "warning", "coldStart": "info", "warmStart": "info",
     "linkUp": "info", "bgpEstablished": "info", "entConfigChange": "notice",
+}
+# Standard OIDs whose MIB won't compile from source here (SMIv1 grammar, e.g.
+# Q-BRIDGE-MIB→RFC-1212) but which are stable IETF definitions — anchored so the
+# common L2/MAC varbinds resolve by name. Compiled MIBs override these if present.
+STD_OVERLAY = {
+    "1.3.6.1.2.1.17.7.1.2.2.1.2": {"name": "dot1qTpFdbPort", "mib": "Q-BRIDGE-MIB", "kind": "column", "type": "INTEGER"},
+    "1.3.6.1.2.1.17.7.1.2.2.1.3": {"name": "dot1qTpFdbStatus", "mib": "Q-BRIDGE-MIB", "kind": "column", "type": "INTEGER",
+                                   "enum": {"1": "other", "2": "invalid", "3": "learned", "4": "self", "5": "mgmt"}},
+    "1.3.6.1.2.1.17.4.3.1.1": {"name": "dot1dTpFdbAddress", "mib": "BRIDGE-MIB", "kind": "column", "type": "MacAddress"},
+    "1.3.6.1.2.1.17.4.3.1.2": {"name": "dot1dTpFdbPort", "mib": "BRIDGE-MIB", "kind": "column", "type": "INTEGER"},
 }
 ASSERTIONS = {  # regression guard — mirrors collectors/oidindex_test.go
     "1.3.6.1.2.1.2.2.1.8": ("ifOperStatus", "column"),
@@ -151,8 +164,10 @@ def main() -> int:
                 base[oid]["severity_hint"] = hint
         else:
             base[oid] = n
+    for oid, n in STD_OVERLAY.items():
+        base.setdefault(oid, n)  # anchor standard OIDs whose MIB won't compile
     nodes = base
-    print(f"gen_index: compiled {len(gen)} nodes; index now {len(nodes)} (seed-merged).")
+    print(f"gen_index: compiled {len(gen)} nodes; index now {len(nodes)} (seed+overlay-merged).")
     errs = validate(nodes)
     if errs:
         print("gen_index: VALIDATION FAILED:\n  " + "\n  ".join(errs), file=sys.stderr)

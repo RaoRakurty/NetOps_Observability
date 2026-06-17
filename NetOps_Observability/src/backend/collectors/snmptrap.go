@@ -62,11 +62,17 @@ type TrapEvent struct {
 	// NormalizedEvent envelope (#32) — vendor-agnostic structure every trap emits,
 	// so Events/Correlation read parsed fields instead of re-decoding raw OIDs.
 	// Design: docs/design/research/telemetry-normalization-architecture.md §3.
-	Vendor           string `json:"vendor,omitempty"`            // from the enterprise OID arc
-	EventType        string `json:"event_type,omitempty"`        // normalized leaf (trap name → snake)
-	MessageKey       string `json:"message_key,omitempty"`       // stable dedup identity (never raw text)
-	ParserStatus     string `json:"parser_status,omitempty"`     // decoded | partial | raw_only
-	EnrichmentStatus string `json:"enrichment_status,omitempty"` // inventory_matched | inventory_missing
+	Vendor           string            `json:"vendor,omitempty"`            // from the enterprise OID arc
+	EventType        string            `json:"event_type,omitempty"`        // normalized leaf (trap name → snake)
+	Category         string            `json:"category,omitempty"`          // taxonomy tier-1 (layer2/control_plane/…)
+	Family           string            `json:"family,omitempty"`            // taxonomy tier-2 (mac_fdb/bgp/…)
+	Summary          string            `json:"summary,omitempty"`           // operator-friendly one-liner
+	MessageKey       string            `json:"message_key,omitempty"`       // stable dedup identity (never raw text)
+	ParserStatus     string            `json:"parser_status,omitempty"`     // decoded | partially_decoded | raw_only
+	EnrichmentStatus string            `json:"enrichment_status,omitempty"` // inventory_matched | inventory_missing
+	UptimeSeconds    float64           `json:"sys_uptime_seconds,omitempty"`
+	UptimeHuman      string            `json:"sys_uptime_human,omitempty"`
+	Fields           map[string]string `json:"fields,omitempty"` // extracted typed context (vlan/mac/port…)
 }
 
 // vendorFromOID returns the vendor for an enterprise OID via the shared
@@ -109,13 +115,107 @@ func camelToSnake(s string) string {
 
 // deriveEnvelope fills the NormalizedEvent envelope from the already-decoded trap.
 // Vendor-agnostic: it works for any trap, decoded or raw.
+// dot1q/dot1d forwarding-DB column prefix — the well-known IETF L2 MAC table.
+// Its row index encodes (vlan/fdb-id, 6 MAC bytes), so even when the *trap* OID is
+// an undecoded vendor enterprise OID, this standard varbind yields real L2 context.
+const fdbColPrefix = "1.3.6.1.2.1.17.7.1.2.2.1." // dot1qTpFdbEntry.<col>.<fdbId>.<mac6>
+
+// extractFDB pulls (vlan/fdb-id, MAC) from a dot1qTpFdb* varbind OID suffix.
+func extractFDB(oid string) (vlan, mac string, ok bool) {
+	if !strings.HasPrefix(oid, fdbColPrefix) {
+		return "", "", false
+	}
+	arcs := strings.Split(oid[len(fdbColPrefix):], ".") // <col>.<fdbId>.<m1..m6>
+	if len(arcs) < 8 {
+		return "", "", false
+	}
+	mb := make([]string, 6)
+	for i, a := range arcs[2:8] {
+		n, err := strconv.Atoi(a)
+		if err != nil || n < 0 || n > 255 {
+			return "", "", false
+		}
+		mb[i] = fmt.Sprintf("%02X", n)
+	}
+	return arcs[1], strings.Join(mb, ":"), true
+}
+
+// uptimeHuman renders sysUpTime seconds as "3d 14h 50m".
+func uptimeHuman(sec float64) string {
+	s := int64(sec)
+	d, h, m := s/86400, (s%86400)/3600, (s%3600)/60
+	if d > 0 {
+		return fmt.Sprintf("%dd %dh %dm", d, h, m)
+	}
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+// familyFor maps a decoded event_type token to a (category, family) taxonomy pair
+// for the high-value families (interim until the shared taxonomy data file lands).
+func familyFor(etype string) (category, family string) {
+	switch {
+	case strings.Contains(etype, "bgp"):
+		return "control_plane", "bgp"
+	case strings.Contains(etype, "ospf"):
+		return "control_plane", "ospf"
+	case strings.Contains(etype, "isis"):
+		return "control_plane", "isis"
+	case strings.Contains(etype, "link"):
+		return "data_plane", "link_state"
+	case strings.Contains(etype, "coldstart") || strings.Contains(etype, "warmstart") || strings.Contains(etype, "restart"):
+		return "platform_health", "restart"
+	case strings.Contains(etype, "auth"):
+		return "security", "auth_fail"
+	}
+	return "", ""
+}
+
+// deriveEnvelope fills the NormalizedEvent envelope from the decoded trap. Vendor-
+// agnostic; produces partially_decoded (not raw_only) whenever a standard varbind
+// or L2/MAC structure is decodable even if the vendor trap OID itself isn't.
 func deriveEnvelope(ev *TrapEvent) {
 	ev.Vendor = vendorFromOID(ev.TrapOID)
-	if ev.TrapName != "" && ev.TrapName != "enterpriseSpecific" {
+	decoded := ev.TrapName != "" && ev.TrapName != "enterpriseSpecific"
+	if decoded {
 		ev.EventType = camelToSnake(ev.TrapName)
-		ev.ParserStatus = "decoded"
+		ev.Category, ev.Family = familyFor(ev.EventType)
 	} else {
 		ev.EventType = "enterprise_specific"
+	}
+
+	anyVarbind := false
+	for _, vb := range ev.Varbinds {
+		if vb.Name != "" {
+			anyVarbind = true
+		}
+		if vb.Name == "sysUpTime" || strings.HasPrefix(vb.OID, "1.3.6.1.2.1.1.3") || strings.HasPrefix(vb.OID, "1.3.6.1.6.3.1.1.4.1") {
+			if t, err := strconv.ParseFloat(vb.Value, 64); err == nil && t > 0 {
+				ev.UptimeSeconds = t / 100.0
+				ev.UptimeHuman = uptimeHuman(ev.UptimeSeconds)
+			}
+		}
+		if vlan, mac, ok := extractFDB(vb.OID); ok {
+			if ev.Fields == nil {
+				ev.Fields = map[string]string{}
+			}
+			ev.Fields["vlan"], ev.Fields["mac"], ev.Fields["bridge_port"] = vlan, mac, vb.Value
+			ev.Category, ev.Family = "layer2", "mac_fdb"
+			anyVarbind = true
+			if !decoded {
+				ev.EventType = "l2_fdb_event"
+			}
+		}
+	}
+
+	switch {
+	case decoded:
+		ev.ParserStatus = "decoded"
+	case anyVarbind || len(ev.Fields) > 0:
+		ev.ParserStatus = "partially_decoded"
+	default:
 		ev.ParserStatus = "raw_only"
 	}
 	if ev.Device != "" {
@@ -123,23 +223,41 @@ func deriveEnvelope(ev *TrapEvent) {
 	} else {
 		ev.EnrichmentStatus = "inventory_missing"
 	}
-	// message_key: stable identity = signal:device|src:mib:event_type (never raw text)
+
 	who := ev.Device
 	if who == "" {
 		who = ev.Host
 	}
-	mib := ""
-	if n, _, ok := lookupOID(ev.TrapOID); ok {
-		mib = n.MIB
-	}
-	parts := []string{"snmptrap", who, mib, ev.EventType}
-	clean := parts[:0]
-	for _, p := range parts {
+	// message_key: stable dedup identity (never raw text). Discriminator keeps
+	// distinct L2 objects distinct: snmptrap:<vendor>:<src>:<trap_oid>[:vlanN:mac].
+	parts := []string{"snmptrap"}
+	for _, p := range []string{ev.Vendor, who, ev.TrapOID} {
 		if p != "" {
-			clean = append(clean, p)
+			parts = append(parts, p)
 		}
 	}
-	ev.MessageKey = strings.Join(clean, ":")
+	if ev.Fields["vlan"] != "" && ev.Fields["mac"] != "" {
+		parts = append(parts, "vlan"+ev.Fields["vlan"], strings.ToLower(ev.Fields["mac"]))
+	}
+	ev.MessageKey = strings.Join(parts, ":")
+
+	// operator-friendly summary
+	if ev.Family == "mac_fdb" {
+		vlabel := vendorTitle(ev.Vendor)
+		ev.Summary = fmt.Sprintf("%sLayer-2 FDB trap for MAC %s on VLAN/FDB %s, bridge port %s",
+			vlabel, ev.Fields["mac"], ev.Fields["vlan"], ev.Fields["bridge_port"])
+	} else if decoded {
+		ev.Summary = strings.TrimSpace(vendorTitle(ev.Vendor) + ev.TrapName)
+	}
+}
+
+// vendorLabel returns a capitalized vendor prefix ("Arista ") or "" for use in
+// summaries.
+func vendorTitle(v string) string {
+	if v == "" {
+		return ""
+	}
+	return strings.ToUpper(v[:1]) + v[1:] + " "
 }
 
 // snmpTrapOIDPrefix = 1.3.6.1.6.3.1.1.5 — the SNMPv2-MIB generic traps live at

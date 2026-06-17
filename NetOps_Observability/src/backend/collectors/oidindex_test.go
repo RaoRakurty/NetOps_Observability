@@ -1,6 +1,9 @@
 package collectors
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Locks the MIB-index contract: the seed must resolve the OIDs the old curated
 // maps did (regression guard for the #26 cutover), enum-decode columns, handle the
@@ -63,7 +66,7 @@ func TestDeriveEnvelope(t *testing.T) {
 	if ev.ParserStatus != "decoded" || ev.EnrichmentStatus != "inventory_matched" {
 		t.Errorf("status = %q/%q", ev.ParserStatus, ev.EnrichmentStatus)
 	}
-	if ev.MessageKey != "snmptrap:spine1:ARISTA-BGP4V2-MIB:arista_bgp4_v2_backward_transition" {
+	if ev.MessageKey != "snmptrap:arista:spine1:1.3.6.1.4.1.30065.4.1.0.2" {
 		t.Errorf("message_key = %q", ev.MessageKey)
 	}
 	// undecoded enterprise trap, no inventory match → honest raw_only / missing
@@ -72,8 +75,42 @@ func TestDeriveEnvelope(t *testing.T) {
 	if ev2.ParserStatus != "raw_only" || ev2.EnrichmentStatus != "inventory_missing" {
 		t.Errorf("undecoded status = %q/%q, want raw_only/inventory_missing", ev2.ParserStatus, ev2.EnrichmentStatus)
 	}
-	if ev2.MessageKey != "snmptrap:10.0.0.9:enterprise_specific" {
+	if ev2.MessageKey != "snmptrap:10.0.0.9:1.3.6.1.4.1.99999.1" {
 		t.Errorf("undecoded message_key = %q", ev2.MessageKey)
+	}
+}
+
+func TestDeriveEnvelope_FDBPartialDecode(t *testing.T) {
+	// The owner's real trap: undecoded Arista enterprise OID, but a STANDARD
+	// Q-BRIDGE FDB varbind → partially_decoded with MAC/VLAN extracted.
+	ev := &TrapEvent{
+		TrapOID: "1.3.6.1.4.1.30065.3.2.0.2", TrapName: "enterpriseSpecific", Host: "10.70.245.120",
+		Varbinds: []TrapVarbind{
+			{OID: "1.3.6.1.2.1.1.3.0", Name: "sysUpTime", Value: "31264099"},
+			{OID: "1.3.6.1.2.1.17.7.1.2.2.1.2.1007.170.193.171.178.78.11", Value: "2"},
+		},
+	}
+	deriveEnvelope(ev)
+	if ev.Vendor != "arista" {
+		t.Errorf("vendor = %q, want arista", ev.Vendor)
+	}
+	if ev.ParserStatus != "partially_decoded" {
+		t.Errorf("parser_status = %q, want partially_decoded", ev.ParserStatus)
+	}
+	if ev.Category != "layer2" || ev.Family != "mac_fdb" {
+		t.Errorf("category/family = %q/%q, want layer2/mac_fdb", ev.Category, ev.Family)
+	}
+	if ev.Fields["mac"] != "AA:C1:AB:B2:4E:0B" || ev.Fields["vlan"] != "1007" || ev.Fields["bridge_port"] != "2" {
+		t.Errorf("fields = %v, want mac AA:C1:AB:B2:4E:0B / vlan 1007 / port 2", ev.Fields)
+	}
+	if ev.UptimeHuman == "" || ev.UptimeSeconds <= 0 {
+		t.Errorf("uptime not parsed: %q / %v", ev.UptimeHuman, ev.UptimeSeconds)
+	}
+	if !strings.Contains(ev.MessageKey, "vlan1007") || !strings.Contains(ev.MessageKey, "aa:c1:ab:b2:4e:0b") {
+		t.Errorf("message_key = %q", ev.MessageKey)
+	}
+	if !strings.Contains(ev.Summary, "AA:C1:AB:B2:4E:0B") || !strings.Contains(ev.Summary, "1007") {
+		t.Errorf("summary = %q", ev.Summary)
 	}
 }
 
