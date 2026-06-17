@@ -243,13 +243,20 @@ export default function Topology() {
     // overlay tunnels (real latency/status) on top, if endpoints resolve.
     const idByName: Record<string, string> = {};
     for (const d of devices) {
-      idByName[(d.name || "").toLowerCase()] = d.id;
-      idByName[(d.address || "").toLowerCase()] = d.id;
+      // NEVER index an empty key — a device with a blank name/address would make
+      // idByName[""] resolve, and any tunnel with an unknown end (see below) would
+      // then draw a bogus edge to it (this is what put a phantom DMZ-FW↔leaf link
+      // on the map: the dmz-fw tunnel has no remote, so "" matched a leaf).
+      if (d.name) idByName[d.name.toLowerCase()] = d.id;
+      if (d.address) idByName[d.address.toLowerCase()] = d.id;
       idByName[d.id.toLowerCase()] = d.id;
     }
     for (const t of tunnels) {
-      const a = idByName[(t.local_device || t.local_addr || "").toLowerCase()];
-      const b = idByName[(t.remote_device || t.remote_addr || "").toLowerCase()];
+      const lkey = (t.local_device || t.local_addr || "").toLowerCase();
+      const rkey = (t.remote_device || t.remote_addr || "").toLowerCase();
+      if (!lkey || !rkey) continue; // a tunnel with an unresolved end can't be drawn
+      const a = idByName[lkey];
+      const b = idByName[rkey];
       if (!a || !b || a === b) continue;
       const ms = Number(t.latency_ms) || 0;
       const down = String(t.status).toLowerCase() === "down";
