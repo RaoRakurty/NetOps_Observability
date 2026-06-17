@@ -6,7 +6,7 @@
 import { ReactNode, createContext, useContext, useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../../services/api";
-import { chartBase, axisStyle, areaGradient, paletteColor } from "../../theme/charts";
+import { chartBase, axisStyle, paletteColor, colorForMetric, hexToRgba } from "../../theme/charts";
 import { cssVar } from "../../theme/tokens";
 import Icon from "../Icon";
 import { Modal, Stat, StatTone } from "../ui";
@@ -197,17 +197,24 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
             grid: { left: 6, right: 16, top: series.length > 1 ? 30 : 12, bottom: 6, containLabel: true },
             xAxis: { type: "time", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, hideOverlap: true } },
             yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtY(v) } },
-            series: series.slice(0, 14).map((s, i) => ({
-              name: seriesLabel(s, labelKeys),
-              type: "line",
-              step: stepped ? "end" : undefined,
-              showSymbol: false,
-              smooth: !stepped,
-              lineStyle: { color: paletteColor(i), width: 2 },
-              itemStyle: { color: paletteColor(i) },
-              areaStyle: series.length === 1 ? { color: areaGradient(i) } : undefined,
-              data: s.values.map(([t, v]) => [t * 1000, Number(v)]),
-            })),
+            series: series.slice(0, 14).map((s, i) => {
+              // single-series → colour by what the metric MEANS (consistent app-wide);
+              // multi-series → the distinct categorical palette.
+              const c = series.length === 1 ? colorForMetric(title) : paletteColor(i);
+              return {
+                name: seriesLabel(s, labelKeys),
+                type: "line",
+                step: stepped ? "end" : undefined,
+                showSymbol: false,
+                smooth: !stepped,
+                lineStyle: { color: c, width: 2 },
+                itemStyle: { color: c },
+                areaStyle: series.length === 1
+                  ? { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: hexToRgba(c, 0.45) }, { offset: 1, color: hexToRgba(c, 0) }] } }
+                  : undefined,
+                data: s.values.map(([t, v]) => [t * 1000, Number(v)]),
+              };
+            }),
           }}
         />
         )}</Zoomable>
@@ -242,7 +249,7 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys, 
             tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, formatter: (ps: any) => { const p = Array.isArray(ps) ? ps[0] : ps; return `${p.name}<br/><b>${fmtX(p.value)}</b>`; } },
             xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtX(v) } },
             yAxis: { type: "category", inverse: true, data: rows.map((r) => r.label), ...axisStyle, splitLine: { show: false } },
-            series: [{ type: "bar", data: rows.map((r) => r.value), itemStyle: { color: paletteColor(0), borderRadius: [0, 3, 3, 0] }, barMaxWidth: 16 }],
+            series: [{ type: "bar", barMaxWidth: 16, data: rows.map((r, i) => ({ value: r.value, itemStyle: { color: paletteColor(i), borderRadius: [0, 3, 3, 0] } })) }],
           }}
         />
         )}</Zoomable>
@@ -277,7 +284,7 @@ export function BarPanel({ title, rows, fmtX, loading, err, danger, dataKind = "
             yAxis: { type: "category", inverse: true, data: rows.map((r) => r.label), ...axisStyle, splitLine: { show: false } },
             series: [{
               type: "bar", barMaxWidth: 16,
-              data: rows.map((r) => ({ value: r.value, itemStyle: { color: (danger || r.danger) ? cssVar("--crit", "#ef4444") : paletteColor(0), borderRadius: [0, 3, 3, 0] } })),
+              data: rows.map((r, i) => ({ value: r.value, itemStyle: { color: (danger || r.danger) ? cssVar("--crit", "#ef4444") : paletteColor(i), borderRadius: [0, 3, 3, 0] } })),
             }],
           }}
         />

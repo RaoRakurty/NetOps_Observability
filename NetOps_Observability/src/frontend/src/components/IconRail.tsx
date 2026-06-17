@@ -124,6 +124,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         className={`rail-item${active ? " active" : ""}`}
         style={{ ["--mod" as string]: hueFor(s.id) } as React.CSSProperties}
         aria-current={active ? "page" : undefined}
+        title={s.label}
         onClick={onActivate}
         onMouseEnter={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
         onFocus={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
@@ -131,7 +132,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         onBlur={scheduleClose}
       >
         <span className="rail-icon">
-          <Icon name={s.icon} size={16} />
+          <Icon name={s.icon} size={19} />
         </span>
         <span className="rail-label">{s.label}</span>
       </button>

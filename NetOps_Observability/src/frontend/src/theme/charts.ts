@@ -16,6 +16,32 @@ export const CHART_PALETTE = [
   "#14b8a6", // teal
 ];
 
+// colorForMetric — the design pattern that ends the "everything is purple" problem.
+// A single metric always gets the SAME hue across the whole app (learnable), and
+// different metric families get DIFFERENT hues by meaning. Semantic keywords first
+// (so traffic is always cyan, errors always red, latency always amber…), then a
+// stable hash into the palette so any unmatched metric still gets a distinct,
+// consistent colour rather than the brand indigo every time.
+const METRIC_HUES: [RegExp, string][] = [
+  [/error|discard|drop|fail|deny|reject|crit/i, "#ef4444"], // red
+  [/loss|miss/i, "#ec4899"],                                // pink
+  [/latency|rtt|delay|jitter|response/i, "#f59e0b"],        // amber
+  [/traffic|throughput|bandwidth|bits|bps|octet|byte|\btx\b|\brx\b/i, "#06b6d4"], // cyan
+  [/packet|pps|flow|session|conn/i, "#0ea5e9"],             // sky
+  [/cpu|load|util/i, "#8b5cf6"],                            // violet
+  [/mem|heap|buffer/i, "#4f46e5"],                          // indigo
+  [/temp|fan|power|env|heat/i, "#f97316"],                  // orange
+  [/up\b|avail|health|online|reach|ok\b/i, "#10b981"],      // emerald
+  [/disk|storage|queue|depth/i, "#14b8a6"],                 // teal
+];
+export function colorForMetric(name: string): string {
+  const n = name || "";
+  for (const [re, c] of METRIC_HUES) if (re.test(n)) return c;
+  let h = 0;
+  for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) | 0;
+  return CHART_PALETTE[Math.abs(h) % CHART_PALETTE.length];
+}
+
 import { cssVar } from "./tokens";
 
 // Axis/grid chrome resolves from the semantic tokens at chart-build time, so

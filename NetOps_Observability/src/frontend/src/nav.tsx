@@ -218,7 +218,7 @@ export const NAV: NavSection[] = [
   {
     id: "explain",
     label: "Explain",
-    icon: "analytics",
+    icon: "key", // access-reasoning layer (Access Explorer) — a key reads as "access", not another chart
     children: [
       { id: "access", label: "Access Explorer", render: () => <AccessExplorer /> },
     ],

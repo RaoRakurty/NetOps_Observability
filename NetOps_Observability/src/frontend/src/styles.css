@@ -347,6 +347,29 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* ===== Icon-only rail (Dynatrace/ThousandEyes-style) =====
+   Colourful per-section icons (always lit, not just on hover/active); the label
+   "appears on hover" via the existing flyout (section name + children) + a native
+   title tooltip. Narrow 64px rail; everything centers. Scoped to .shell-v2 so
+   these win the cascade over the labelled-rail defaults above. */
+.shell.shell-v2 { --sidebar-w: 64px; }
+.shell-v2 .rail-icon { color: var(--mod, var(--rail-accent)); width: 22px; }
+/* bolder stroke so the colourful glyphs read crisply at rail size */
+.shell-v2 .rail-icon svg, .shell-v2 .rail-brand-mark svg, .shell-v2 .rail-util-icon svg { stroke-width: 2; }
+.shell-v2 .rail-item { justify-content: center; padding: 8px 0; gap: 0; min-height: 38px; border-radius: var(--r-2); margin: 0 7px; width: auto; }
+.shell-v2 .rail-item:hover { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 20%, transparent); }
+.shell-v2 .rail-item.active { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 16%, transparent); }
+.shell-v2 .rail-label, .shell-v2 .rail-group-label, .shell-v2 .rail-brand-name,
+.shell-v2 .rail-account-id, .shell-v2 .rail-util-icon span { display: none; }
+.shell-v2 .rail-main { padding: var(--sp-1) 0; }
+.shell-v2 .rail-group { align-items: center; }
+.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 2px 0 var(--sp-2); }
+.shell-v2 .rail-util { padding: var(--sp-1) 0; align-items: center; }
+.shell-v2 .rail-util-row { justify-content: center; }
+.shell-v2 .rail-util-icon { flex-direction: column; }
+.shell-v2 .rail-account, .shell-v2 .rail-foot-zone { align-items: center; }
+.shell-v2 .rail-account-btn { justify-content: center; gap: 0; padding: 6px 0; }
+
 /* Utility cluster at the foot — Support · Help · Account (replaces top-right). */
 .rail-util {
   display: flex; flex-direction: column; padding: var(--sp-1) 8px;
