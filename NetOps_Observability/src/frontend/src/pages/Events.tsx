@@ -3,6 +3,7 @@ import { api } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { EmptyHint } from "../components/board/panels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { humanizeSyslog } from "../lib/syslog";
 
 // Events — a unified event stream. Merges the
 // signals we already collect into one time-sorted feed: syslog (OpenSearch),
@@ -95,7 +96,18 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
     { key: "type", header: "Type", width: "84px", sortable: true, text: (e) => e.type, render: (e) => <span className="badge accent-badge">{e.type}</span> },
     { key: "severity", header: "Severity", width: "104px", sortable: true, text: (e) => e.severity, render: (e) => <span className={`badge ${sevTone(e.severity)}`}>{e.severity}</span> },
     { key: "source", header: "Source", width: "180px", sortable: true, text: (e) => e.source, render: (e) => <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{e.source}</span> },
-    { key: "message", header: "Event", sortable: false, render: (e) => <span title={e.message}>{e.message}</span> },
+    {
+      key: "message", header: "Event", sortable: false, render: (e) => {
+        const f = e.type === "syslog" ? humanizeSyslog(e.message) : null;
+        const text = f ? f.summary : e.message;
+        return (
+          <span title={e.message} style={{ display: "inline-flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text}</span>
+            {f?.subsystem && <span style={{ color: "var(--fg-subtle)", fontSize: 11, fontFamily: "var(--font-mono)", flex: "none" }}>{f.subsystem}</span>}
+          </span>
+        );
+      },
+    },
   ], []);
 
   return (
@@ -150,6 +162,18 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
               <dt>Source</dt><dd className="ev-mono">{sel.source || "Unknown"}</dd>
               <dt>Linked to</dt><dd style={{ color: "var(--fg-muted)" }}>Pending correlation</dd>
             </dl>
+            {(() => {
+              const f = sel.type === "syslog" ? humanizeSyslog(sel.message) : null;
+              return f && f.summary && f.summary !== sel.message ? (
+                <>
+                  <div className="ev-detail-msg-l">Message</div>
+                  <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5, marginBottom: 14 }}>
+                    {f.severity && <span className="cc-badge" style={{ color: "var(--warn)", borderColor: "var(--warn)", marginRight: 8 }}>{f.severity}</span>}
+                    {f.summary}
+                  </div>
+                </>
+              ) : null;
+            })()}
             <div className="ev-detail-msg-l">Raw message</div>
             <pre className="ev-detail-msg">{sel.message}</pre>
           </aside>
