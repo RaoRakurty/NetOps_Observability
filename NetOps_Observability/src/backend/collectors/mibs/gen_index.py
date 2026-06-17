@@ -37,7 +37,11 @@ DEFAULT_MIBS = [
     "SNMPv2-MIB", "IF-MIB", "BGP4-MIB", "OSPF-MIB", "OSPF-TRAP-MIB", "ISIS-MIB",
     "ENTITY-MIB", "ENTITY-SENSOR-MIB", "IP-MIB", "TCP-MIB", "UDP-MIB",
     "HOST-RESOURCES-MIB", "LLDP-MIB", "BRIDGE-MIB", "CISCO-CONFIG-MAN-MIB",
-    "ARISTA-SMI-MIB",
+    # Arista (enterprise 30065) — the lab's spines/leaves. Modules from the
+    # LibreNMS mirror (SOURCES below). The dedicated trap subtree may need Arista's
+    # own site; these cover interface/BGP/entity/sensor objects + notifications.
+    "ARISTA-SMI-MIB", "ARISTA-GENERAL-MIB", "ARISTA-IF-MIB", "ARISTA-BGP4V2-MIB",
+    "ARISTA-BGP4V2-TC-MIB", "ARISTA-ENTITY-SENSOR-MIB", "ARISTA-VRF-MIB",
 ]
 # mibdump source order: vendored dirs (offline, authoritative) → public mirror →
 # LibreNMS comprehensive vendor mirror (@mib@ is the module-name placeholder).

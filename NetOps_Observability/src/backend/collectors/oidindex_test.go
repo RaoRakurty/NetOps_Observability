@@ -26,9 +26,13 @@ func TestLookupOID_ColumnPrefixAndScalar(t *testing.T) {
 	if !ok || s.Name != "sysName" || suf != "" {
 		t.Fatalf("sysName scalar lookup = %q suffix=%q ok=%v", s.Name, suf, ok)
 	}
-	// un-vendored enterprise OID (Arista) is honestly unresolved until its MIB lands
-	if _, _, ok := lookupOID("1.3.6.1.4.1.30065.4.1.0.2"); ok {
-		t.Fatal("expected Arista enterprise OID to be unresolved in the seed index")
+	// Arista BGP trap now decodes (ARISTA-BGP4V2-MIB vendored into the index)
+	if a, _, ok := lookupOID("1.3.6.1.4.1.30065.4.1.0.2"); !ok || a.Name != "aristaBgp4V2BackwardTransitionNotification" {
+		t.Fatalf("Arista BGP backward-transition trap = %q ok=%v, want aristaBgp4V2BackwardTransitionNotification", a.Name, ok)
+	}
+	// a genuinely un-vendored enterprise OID stays honestly unresolved (raw)
+	if _, _, ok := lookupOID("1.3.6.1.4.1.99999.7.1"); ok {
+		t.Fatal("expected un-vendored enterprise OID to be unresolved")
 	}
 }
 
@@ -51,7 +55,7 @@ func TestTrapMeta_FromIndex(t *testing.T) {
 		{"1.3.6.1.6.3.1.1.5.3", "linkDown", "warning"},
 		{"1.3.6.1.2.1.15.0.2", "bgpBackwardTransition", "warning"}, // v1-form BGP
 		{"1.3.6.1.2.1.15.7.1", "bgpEstablished", "info"},
-		{"1.3.6.1.4.1.30065.4.1.0.2", "enterpriseSpecific", "notice"}, // not yet vendored
+		{"1.3.6.1.4.1.30065.4.1.0.2", "aristaBgp4V2BackwardTransitionNotification", "notice"}, // Arista MIB vendored
 	} {
 		name, sev := trapMeta(tc.oid)
 		if name != tc.name || sev != tc.sev {
