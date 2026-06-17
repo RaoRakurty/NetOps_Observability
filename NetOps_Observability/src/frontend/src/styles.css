@@ -2817,3 +2817,16 @@ a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
 .cc-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cc-btn-primary { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .cc-btn-warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); color: var(--warn); }
+
+/* Reports — self-guided launcher box (clickable card → guided wizard). #19 */
+.report-launch { display: flex; align-items: center; gap: 16px; width: 100%; text-align: left; cursor: pointer;
+  padding: 20px 22px; border-radius: 14px; border: 1px solid var(--border); background: var(--glass-bg, var(--surface-2));
+  backdrop-filter: blur(12px) saturate(115%); -webkit-backdrop-filter: blur(12px) saturate(115%); box-shadow: var(--shadow-1);
+  transition: border-color .14s, box-shadow .14s, transform .14s; margin-bottom: 14px; }
+.report-launch:hover { border-color: var(--accent); box-shadow: var(--shadow-2); transform: translateY(-1px); }
+.report-launch-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: 0 0 auto;
+  border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 26px; line-height: 1; }
+.report-launch-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.report-launch-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 16px; font-weight: 650; color: var(--fg); letter-spacing: -0.01em; }
+.report-launch-sub { font-size: 13px; color: var(--fg-muted); }
+.report-launch-go { font-weight: 600; font-size: 13px; color: var(--accent); white-space: nowrap; }

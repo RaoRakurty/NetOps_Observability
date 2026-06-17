@@ -332,10 +332,20 @@ export default function Reports() {
 
   return (
     <>
+      {!editingId && (
+        <button type="button" className="report-launch" onClick={() => setWizard(true)}>
+          <span className="report-launch-icon" aria-hidden>+</span>
+          <span className="report-launch-body">
+            <span className="report-launch-title">Create a report</span>
+            <span className="report-launch-sub">Guided setup — pick an outcome, schedule and recipients. We assemble the rest.</span>
+          </span>
+          <span className="report-launch-go">Start →</span>
+        </button>
+      )}
+      {editingId && (
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ margin: 0 }}>{editingId ? "Edit report" : "New report"}</h2>
-          {!editingId && <button type="button" className="dash-btn accent" onClick={() => setWizard(true)}>Guided setup</button>}
+          <h2 style={{ margin: 0 }}>Edit report</h2>
         </div>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8 }}>
           Choose what to report, when to send it, who receives it, and which formats to produce.
@@ -440,6 +450,7 @@ export default function Reports() {
           </div>
         </form>
       </div>
+      )}
 
       <div className="card">
         <h2>Reports ({items.length})</h2>
