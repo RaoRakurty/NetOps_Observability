@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import { api, Alert, MetricTile, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
+import { api, Alert, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
 import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
@@ -15,18 +15,6 @@ import { usePrefs } from "../theme/prefs";
 import { useShell } from "../context/shell";
 import { setDrill } from "../theme/drill";
 import Topology from "../tabs/Topology";
-
-// Map a KPI tile title to its drilldown destination (and optional one-shot
-// filter the destination page consumes). Keeps the Overview's headline numbers
-// clickable: a count is only useful if you can jump to what it counts.
-function kpiDestination(title: string): { route: string; drill?: Record<string, string> } | null {
-  const t = title.toLowerCase();
-  if (t.includes("down")) return { route: "infrastructure/devices", drill: { devices: "down" } };
-  if (t.includes("threat") || t.includes("critical")) return { route: "alerts/active" };
-  if (t.includes("site")) return { route: "topology/map" };
-  if (t.includes("device")) return { route: "infrastructure/devices" };
-  return null;
-}
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -72,6 +60,16 @@ function nowWindow(seconds: number, step = 60): [number, number, number] {
 
 function Empty({ msg }: { msg: string }) {
   return <div className="panel-empty">{msg}</div>;
+}
+
+// seriesLabel picks the most identifying label off a metric's label set, in the
+// order that reads best for an operator: interface (device·ifName) → device
+// (device·index) → synthetic-probe target (dst) → generic. Shared by every
+// per-series panel so labelling is consistent across the board.
+function seriesLabel(m: Record<string, string>): string {
+  if (m.ifName) return m.device ? `${m.device}·${m.ifName}` : m.ifName;
+  if (m.device) return m.index ? `${m.device}·${m.index}` : m.device;
+  return m.dst || m.instance || m.mount || m.peer || "series";
 }
 
 // ---- gauge ("wheel") panels ------------------------------------------------
@@ -164,6 +162,204 @@ function MetricGauge({
         ],
       }}
     />
+  );
+}
+
+// ---- saturation time-series panels (replaces the radial gauges) ------------
+// The "Top Jobs / Auxiliary Storage Pools" treatment from the reference boards:
+// a compact multi-series area chart over a short window — a real trend, not a
+// single instantaneous wheel. One series per source (device / mount / interface),
+// top-N by current value, with a headline current+peak summary so the card still
+// reads at NOC distance. Source-agnostic: any PromQL that yields one-or-more
+// series works; a single aggregate query just draws one line.
+function MetricArea({
+  query,
+  unit = "%",
+  summary = "avg", // headline aggregate across series: avg (for %) or sum (counts)
+  goodHigh = false,
+  fmt,
+  windowSec = 1800,
+  step = 30,
+}: {
+  query: string;
+  unit?: string;
+  summary?: "avg" | "sum";
+  goodHigh?: boolean; // true => high is good (color flips)
+  fmt?: (v: number) => string;
+  windowSec?: number;
+  step?: number;
+}) {
+  usePrefs(); // re-render on theme flip (chart chrome resolves from tokens)
+  const res = usePolled(() => {
+    const [s, e, st] = nowWindow(windowSec, step);
+    return api.metricsQueryRange(query, s, e, st);
+  });
+  const raw = res?.data?.result ?? [];
+  if (res && raw.length === 0)
+    return <Empty msg="No telemetry yet (enable SNMP metrics)." />;
+
+  type S = { name: string; data: [number, number][]; last: number };
+  const series: S[] = raw
+    .map((s) => {
+      const data = (s.values ?? []).map((v) => [v[0] * 1000, Number(v[1])] as [number, number]);
+      let last = 0;
+      for (let i = data.length - 1; i >= 0; i--) if (Number.isFinite(data[i][1])) { last = data[i][1]; break; }
+      return { name: seriesLabel(s.metric), data, last };
+    })
+    .sort((a, b) => b.last - a.last);
+
+  const fmtv = fmt ?? ((v: number) => `${Math.round(v)}${unit}`);
+  const lasts = series.map((s) => s.last);
+  const total = lasts.reduce((a, b) => a + b, 0);
+  const current = summary === "sum" ? total : total / (lasts.length || 1);
+  let peak = 0;
+  for (const s of series) for (const p of s.data) if (Number.isFinite(p[1]) && p[1] > peak) peak = p[1];
+
+  // headline color tracks the saturation band (only meaningful for %)
+  const t = unit === "%" ? (goodHigh ? 100 - current : current) / 100 : 0;
+  const headColor = unit !== "%" ? "var(--fg)" : t < 0.7 ? "var(--good)" : t < 0.9 ? "var(--warn)" : "var(--bad)";
+
+  const top = series.slice(0, 8);
+  const echSeries = top.map((s, i) => ({
+    name: s.name,
+    type: "line" as const,
+    smooth: true,
+    showSymbol: false,
+    lineStyle: { width: 1.5, color: paletteColor(i) },
+    itemStyle: { color: paletteColor(i) },
+    areaStyle: { color: areaGradient(i), opacity: top.length > 1 ? 0.55 : 0.9 },
+    data: s.data,
+  }));
+
+  return (
+    <div className="sat-panel">
+      <div className="sat-head">
+        <span className="sat-now" style={{ color: headColor }}>{res ? fmtv(current) : "—"}</span>
+        <span className="sat-sub">peak {fmtv(peak)}{series.length > 1 ? ` · ${series.length} src` : ""}</span>
+      </div>
+      <ReactECharts
+        notMerge
+        style={{ height: 134 }}
+        option={{
+          ...chartBase,
+          grid: { left: 2, right: 8, top: 6, bottom: 2, containLabel: true },
+          tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtv(v) },
+          legend: { show: false },
+          xAxis: { type: "time", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 11 } },
+          yAxis: {
+            type: "value",
+            ...axisStyle,
+            max: unit === "%" ? 100 : undefined,
+            axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 11, formatter: (v: number) => fmtv(v) },
+          },
+          series: echSeries,
+        }}
+      />
+    </div>
+  );
+}
+
+// ---- Top-N horizontal bar --------------------------------------------------
+// The reference boards' "Avg Request duration by country (Top 20)" treatment:
+// rank entities by a single instant value, colour each bar by its severity band.
+// The correct answer for "which N are worst" — you can't trend 2000 ports, but
+// you can rank them. (USE-method: rank utilisation/errors, don't gauge each.)
+function TopNBar({
+  query,
+  unit = "%",
+  n = 8,
+  fmt,
+  warn = 70,
+  danger = 90,
+  goodHigh = false,
+}: {
+  query: string;
+  unit?: string;
+  n?: number;
+  fmt?: (v: number) => string;
+  warn?: number;
+  danger?: number;
+  goodHigh?: boolean;
+}) {
+  usePrefs();
+  const res = usePolled(() => api.metricsQuery(query), 15000);
+  const rows = (res?.data?.result ?? [])
+    .map((x) => ({ name: seriesLabel(x.metric), v: Number(x.value?.[1]) }))
+    .filter((r) => Number.isFinite(r.v) && r.v > 0)
+    .sort((a, b) => b.v - a.v)
+    .slice(0, n);
+  if (res && rows.length === 0) return <Empty msg="Nothing above zero in this window." />;
+  if (!res) return <div className="panel-empty">…</div>;
+
+  const fmtv = fmt ?? ((v: number) => `${Math.round(v)}${unit}`);
+  const band = (v: number) => {
+    const t = goodHigh ? -v : v;
+    const w = goodHigh ? -warn : warn;
+    const d = goodHigh ? -danger : danger;
+    return t >= d ? "#f43f5e" : t >= w ? "#f59e0b" : "#06b6d4";
+  };
+  // ECharts horizontal bar: category Y (reversed so the largest sits on top).
+  const names = rows.map((r) => r.name).reverse();
+  const data = rows.map((r) => ({ value: r.v, itemStyle: { color: band(r.v), borderRadius: [0, 3, 3, 0] } })).reverse();
+  return (
+    <ReactECharts
+      notMerge
+      style={{ height: Math.max(120, rows.length * 24 + 24) }}
+      option={{
+        ...chartBase,
+        grid: { left: 4, right: 56, top: 6, bottom: 4, containLabel: true },
+        tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v: number) => fmtv(v) },
+        xAxis: { type: "value", ...axisStyle, splitLine: { show: false }, axisLabel: { show: false }, axisTick: { show: false }, axisLine: { show: false } },
+        yAxis: { type: "category", ...axisStyle, data: names, axisTick: { show: false }, axisLine: { show: false }, axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 12 } },
+        series: [
+          {
+            type: "bar",
+            data,
+            barWidth: 14,
+            label: { show: true, position: "right", formatter: (p: any) => fmtv(p.value), fontSize: 12, color: cssVar("--fg-muted", "#667085") },
+          },
+        ],
+      }}
+    />
+  );
+}
+
+// ---- status grid -----------------------------------------------------------
+// One cell per entity (BGP peer / OSPF neighbour / device), coloured by state —
+// the canonical NOC "wall": the eye finds the red cell instantly, and N peers'
+// health is visible at once where a single count only says *that* something is
+// down, not *which*.
+function StatusGrid({
+  query,
+  classify,
+  okLabel = "up",
+}: {
+  query: string;
+  classify: (v: number) => "ok" | "warn" | "bad"; // state value → band
+  okLabel?: string;
+}) {
+  usePrefs();
+  const res = usePolled(() => api.metricsQuery(query), 15000);
+  const cells = (res?.data?.result ?? [])
+    .map((x) => ({ name: seriesLabel(x.metric), st: classify(Number(x.value?.[1])) }))
+    .sort((a, b) => (a.st === b.st ? a.name.localeCompare(b.name) : a.st === "bad" ? -1 : b.st === "bad" ? 1 : a.st === "warn" ? -1 : 1));
+  if (res && cells.length === 0) return <Empty msg="No sessions reported yet." />;
+  if (!res) return <div className="panel-empty">…</div>;
+  const ok = cells.filter((c) => c.st === "ok").length;
+  const bad = cells.filter((c) => c.st === "bad").length;
+  return (
+    <div className="status-wrap">
+      <div className="status-summary">
+        <span className="status-ok">{ok}</span>
+        <span className="status-slash">/ {cells.length} {okLabel}</span>
+        {bad > 0 && <span className="status-bad">{bad} down</span>}
+      </div>
+      <div className="status-grid">
+        {cells.map((c, i) => (
+          <span key={`${c.name}-${i}`} className={`sgc ${c.st}`} title={`${c.name} — ${c.st === "ok" ? okLabel : c.st === "bad" ? "down" : "transient"}`} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -460,41 +656,117 @@ function StackPerformance() {
   );
 }
 
+// ---- KPI strip -------------------------------------------------------------
+// The reference boards' header strip: dense small boxes, big numbers, a trend
+// sparkline behind each (a number with no trend is an anti-pattern — USE method
+// is about direction, not a snapshot). The KPIs themselves are the research-
+// backed NetOps set: reachability, fleet/interface up%, throughput, control-
+// plane health, path latency — the questions a NOC asks first. Tenant-scoped
+// device/alert/site counts come from the backend (authoritative, RLS-correct);
+// the network-wide health %s are computed from the metric plane with a spark.
+
+type Band = "good" | "warn" | "bad" | "accent";
+const BAND_HEX: Record<Band, string> = { good: "#10b981", warn: "#f59e0b", bad: "#f43f5e", accent: "#4f46e5" };
+
+type KpiSpec = {
+  key: string;
+  label: string;
+  query: string;
+  fmt: (v: number) => string;
+  band: (v: number) => Band;
+  drill: string;
+};
+
+// Ordered most-important-first (research blueprint §4). Each is a single scalar
+// PromQL with a short range, so we get both the headline number and a sparkline.
+const KPI_SPECS: KpiSpec[] = [
+  { key: "reach", label: "Reachability", query: "100 * sum(collector_targets_reachable) / (sum(collector_targets) > 0)", fmt: (v) => `${v.toFixed(1)}%`, band: (v) => (v >= 99 ? "good" : v >= 95 ? "warn" : "bad"), drill: "infrastructure/devices" },
+  { key: "ifup", label: "Interfaces up", query: "100 * count(device_if_oper_status == 1) / (count(device_if_admin_status == 1) > 0)", fmt: (v) => `${v.toFixed(1)}%`, band: (v) => (v >= 98 ? "good" : v >= 90 ? "warn" : "bad"), drill: "infrastructure/ifperf" },
+  { key: "thru", label: "Throughput", query: "sum(rate(device_if_in_octets[5m]) * 8) + sum(rate(device_if_out_octets[5m]) * 8)", fmt: (v) => fmtBps(v), band: () => "accent", drill: "explore/flows" },
+  { key: "bgp", label: "BGP established", query: "100 * count(device_bgp_peer_state == 6) / (count(device_bgp_peer_state) > 0)", fmt: (v) => `${Math.round(v)}%`, band: (v) => (v >= 100 ? "good" : v >= 90 ? "warn" : "bad"), drill: "infrastructure/devices" },
+  { key: "rtt", label: "Path RTT", query: "avg(probe_rtt_ms)", fmt: (v) => `${v.toFixed(1)}ms`, band: (v) => (v < 50 ? "good" : v < 150 ? "warn" : "bad"), drill: "explore/metrics" },
+  { key: "cpu", label: "Peak CPU", query: "max(device_cpu_percent)", fmt: (v) => `${Math.round(v)}%`, band: (v) => (v < 70 ? "good" : v < 90 ? "warn" : "bad"), drill: "explore/metrics" },
+];
+
+// A tiny areaspark — no axes, no chrome, just the shape of the last 30 minutes.
+function Spark({ data, color }: { data: [number, number][]; color: string }) {
+  if (data.length < 2) return <div style={{ height: 26 }} />;
+  return (
+    <ReactECharts
+      style={{ height: 26 }}
+      option={{
+        backgroundColor: "transparent",
+        grid: { left: 0, right: 0, top: 3, bottom: 0 },
+        xAxis: { type: "time", show: false },
+        yAxis: { type: "value", show: false, scale: true },
+        tooltip: { show: false },
+        series: [{ type: "line", data, smooth: true, showSymbol: false, lineStyle: { width: 1.5, color }, areaStyle: { color: hexToRgba(color, 0.16) } }],
+      }}
+    />
+  );
+}
+
 function KpiTiles() {
   const { navigate } = useShell();
   const tiles = usePolled(() => api.metricTiles(), 15000) ?? [];
-  if (tiles.length === 0) return <Empty msg="Waiting for metrics…" />;
+  const computed = usePolled(async () => {
+    const [s, e, st] = nowWindow(1800, 60);
+    const results = await Promise.all(
+      KPI_SPECS.map((spec) => api.metricsQueryRange(spec.query, s, e, st).catch(() => undefined)),
+    );
+    return KPI_SPECS.map((spec, i) => {
+      const pts = (results[i]?.data?.result?.[0]?.values ?? [])
+        .map((v) => [v[0] * 1000, Number(v[1])] as [number, number])
+        .filter((p) => Number.isFinite(p[1]));
+      const latest = pts.length ? pts[pts.length - 1][1] : null;
+      return { spec, latest, spark: pts };
+    });
+  }, 15000);
+
+  const tileBy = (title: string) => tiles.find((t) => t.title.toLowerCase() === title.toLowerCase());
+  const go = (route: string, drill?: Record<string, string>) => () => {
+    if (drill) setDrill(drill);
+    navigate(route);
+  };
+
+  // tenant-scoped count tiles (no spark — they're authoritative counters)
+  const countTile = (title: string, label: string, okWhenZero: boolean, dest: { route: string; drill?: Record<string, string> }) => {
+    const m = tileBy(title);
+    const n = m ? Number(String(m.value).replace(/[^\d.-]/g, "")) : null;
+    const band: Band = m == null ? "accent" : okWhenZero ? (n === 0 ? "good" : "bad") : "accent";
+    return { kind: "count" as const, key: title, label, value: m?.value ?? "—", band, dest };
+  };
+
+  const counts = [
+    countTile("Devices Down", "Devices down", true, { route: "infrastructure/devices", drill: { devices: "down" } }),
+    countTile("Critical Threats", "Critical alerts", true, { route: "alerts/active" }),
+    countTile("Devices", "Devices", false, { route: "infrastructure/devices" }),
+    countTile("Sites", "Sites", false, { route: "topology/map" }),
+  ];
+
+  if (tiles.length === 0 && !computed) return <Empty msg="Waiting for metrics…" />;
+
   return (
-    <div className="stat-grid">
-      {tiles.map((m: MetricTile) => {
-        // Color the tile by status: red when something is down/threatening,
-        // green when explicitly all-clear, accent otherwise.
-        const cls =
-          m.trend === "critical" ? "s-bad"
-          : m.trend === "all up" || m.trend === "clear" ? "s-good"
-          : "s-accent";
-        const dest = kpiDestination(m.title);
-        const go = dest
-          ? () => {
-              if (dest.drill) setDrill(dest.drill);
-              navigate(dest.route);
-            }
-          : undefined;
+    <div className="kpi-grid">
+      {/* network-health KPIs with trend sparklines */}
+      {(computed ?? []).map(({ spec, latest, spark }) => {
+        const band: Band = latest == null ? "accent" : spec.band(latest);
         return (
-          <div
-            className={`stat ${cls}${go ? " stat-link" : ""}`}
-            key={m.title}
-            onClick={go}
-            role={go ? "button" : undefined}
-            title={go ? "View details" : undefined}
-            style={go ? { cursor: "pointer" } : undefined}
-          >
-            <span className="stat-label">{m.title}</span>
-            <span className="stat-value">{m.value}</span>
-            {m.trend && <span className="stat-sub">{m.trend}</span>}
+          <div key={spec.key} className={`kpi k-${band} kpi-link`} role="button" title="View details" onClick={go(spec.drill)}>
+            <span className="kpi-label">{spec.label}</span>
+            <span className="kpi-num">{latest == null ? "—" : spec.fmt(latest)}</span>
+            <Spark data={spark} color={BAND_HEX[band]} />
           </div>
         );
       })}
+      {/* tenant-scoped count tiles */}
+      {counts.map((c) => (
+        <div key={c.key} className={`kpi k-${c.band} kpi-link`} role="button" title="View details" onClick={go(c.dest.route, c.dest.drill)}>
+          <span className="kpi-label">{c.label}</span>
+          <span className="kpi-num">{c.value}</span>
+          <div style={{ height: 26 }} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -607,7 +879,7 @@ function RecentIncidents() {
 
 // ---- registry --------------------------------------------------------------
 
-export type PanelCategory = "Health & KPIs" | "Resources" | "Alerts" | "Traffic" | "Inventory" | "Topology";
+export type PanelCategory = "Health & KPIs" | "Resources" | "Interfaces" | "Routing" | "Active measurement" | "Alerts" | "Traffic" | "Inventory" | "Topology";
 
 export type PanelDef = {
   type: string;
@@ -626,6 +898,22 @@ export const PANELS: Record<string, PanelDef> = {
   "gauge-mem": { type: "gauge-mem", title: "Memory", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="avg(device_mem_percent or (100 * device_mem_used_bytes / (device_mem_used_bytes + device_mem_free_bytes)) or (100 * (device_mem_total_kb - device_mem_available_kb) / device_mem_total_kb))" />, drill: "explore/metrics" },
   "gauge-storage": { type: "gauge-storage", title: "Storage", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(device_storage_used) / sum(device_storage_size)" />, drill: "explore/metrics" },
   "gauge-network": { type: "gauge-network", title: "Bandwidth utilization", defaultSpan: 3, category: "Resources", render: () => <MetricGauge query="100 * sum(rate(device_if_in_octets[5m]) * 8) / (sum(device_if_speed * 1000000) > 0)" />, drill: "explore/metrics" },
+  // Saturation trend panels (the "Top Jobs" treatment — per-device trend, not a wheel).
+  "sat-cpu": { type: "sat-cpu", title: "CPU utilization", defaultSpan: 3, category: "Resources", render: () => <MetricArea query="max by (device) (device_cpu_percent)" unit="%" />, drill: "explore/metrics" },
+  "sat-mem": { type: "sat-mem", title: "Memory utilization", defaultSpan: 3, category: "Resources", render: () => <MetricArea query="max by (device) (device_mem_percent)" unit="%" />, drill: "explore/metrics" },
+  "sat-storage": { type: "sat-storage", title: "Storage used", defaultSpan: 3, category: "Resources", render: () => <MetricArea query="100 * sum by (device) (device_storage_used) / (sum by (device) (device_storage_size) > 0)" unit="%" />, drill: "explore/metrics" },
+  "sat-temp": { type: "sat-temp", title: "Temperature", defaultSpan: 3, category: "Resources", render: () => <MetricArea query="max by (device) (device_temp_celsius)" unit="°C" fmt={(v) => `${Math.round(v)}°C`} /> },
+  // Errors & quality (USE-Errors): rank the worst, separate errors from discards.
+  "if-util-topn": { type: "if-util-topn", title: "Interface utilization — Top 10", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(10, 100 * (rate(device_if_in_octets[5m]) * 8) / (device_if_speed * 1000000 > 0))" unit="%" n={10} warn={70} danger={90} />, drill: "infrastructure/ifperf" },
+  "if-errors-topn": { type: "if-errors-topn", title: "Interface errors — Top 8", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(8, sum by (device, ifName) (rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m])))" unit="/s" fmt={(v) => `${v.toFixed(2)}/s`} warn={0.1} danger={1} />, drill: "infrastructure/ifperf" },
+  "if-discards-topn": { type: "if-discards-topn", title: "Interface discards — Top 8", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(8, sum by (device, ifName) (rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m])))" unit="/s" fmt={(v) => `${v.toFixed(2)}/s`} warn={0.1} danger={1} />, drill: "infrastructure/ifperf" },
+  // Control-plane (routing) status — which peer/adjacency, not just a count.
+  "bgp-peers": { type: "bgp-peers", title: "BGP peers", defaultSpan: 6, category: "Routing", render: () => <StatusGrid query="device_bgp_peer_state" classify={(v) => (v >= 6 ? "ok" : v <= 2 ? "bad" : "warn")} okLabel="established" />, drill: "infrastructure/devices" },
+  "ospf-nbrs": { type: "ospf-nbrs", title: "OSPF / IS-IS adjacencies", defaultSpan: 6, category: "Routing", render: () => <StatusGrid query="device_ospf_nbr_state or device_isis_adj_state" classify={(v) => (v >= 8 ? "ok" : v <= 1 ? "bad" : "warn")} okLabel="full" />, drill: "infrastructure/devices" },
+  // Active measurement (RED-analogue): latency/jitter/loss as trends, not gauges.
+  "probe-rtt": { type: "probe-rtt", title: "Path RTT", defaultSpan: 4, category: "Active measurement", render: () => <MetricArea query="probe_rtt_ms" unit="ms" fmt={(v) => `${v.toFixed(1)}ms`} windowSec={3600} />, drill: "explore/metrics" },
+  "probe-jitter": { type: "probe-jitter", title: "Path jitter (PDV)", defaultSpan: 4, category: "Active measurement", render: () => <MetricArea query="probe_pdv_ms" unit="ms" fmt={(v) => `${v.toFixed(2)}ms`} windowSec={3600} />, drill: "explore/metrics" },
+  "probe-loss": { type: "probe-loss", title: "Path packet loss", defaultSpan: 4, category: "Active measurement", render: () => <MetricArea query="probe_loss_pct" unit="%" fmt={(v) => `${v.toFixed(1)}%`} windowSec={3600} />, drill: "explore/metrics" },
   "wan-interfaces": { type: "wan-interfaces", title: "WAN interfaces — live", defaultSpan: 8, category: "Traffic", render: () => <WanInterfaces />, drill: "infrastructure/ifperf" },
   "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity />, drill: "alerts/active" },
   "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts />, drill: "alerts/active" },
@@ -641,7 +929,10 @@ export const PANELS: Record<string, PanelDef> = {
 // Category groups for the "Add panel" picker, in display order.
 export const PANEL_CATEGORIES: { category: PanelCategory; types: string[] }[] = [
   { category: "Health & KPIs", types: ["kpis", "site-availability", "stack-performance"] },
-  { category: "Resources", types: ["gauge-cpu", "gauge-mem", "gauge-storage", "gauge-network"] },
+  { category: "Resources", types: ["sat-cpu", "sat-mem", "sat-storage", "sat-temp", "gauge-cpu", "gauge-mem", "gauge-storage", "gauge-network"] },
+  { category: "Interfaces", types: ["if-util-topn", "if-errors-topn", "if-discards-topn"] },
+  { category: "Routing", types: ["bgp-peers", "ospf-nbrs"] },
+  { category: "Active measurement", types: ["probe-rtt", "probe-jitter", "probe-loss"] },
   { category: "Alerts", types: ["alerts-severity", "active-alerts", "incidents"] },
   { category: "Traffic", types: ["wan-interfaces", "traffic", "top-hosts", "flows-proto", "tunnels-health"] },
   { category: "Inventory", types: ["devices-vendor"] },

@@ -16,15 +16,25 @@ type Section = { id: string; label: string; caption: string; hue: string; cells:
 
 // Curated layout. Each cell.type MUST exist in PANELS (registry = the wiring); a
 // missing type is skipped so the board never renders a dead panel.
+// Section order follows a NOC ops blueprint (FCAPS for ordering, USE for the
+// per-resource panels, RED for active measurement): fleet health → saturation →
+// traffic/flows → interfaces → errors → routing → path quality → events →
+// topology. Every cell is a wired registry panel; a missing type is skipped.
 const SECTIONS: Section[] = [
   { id: "health", label: "Service health", caption: "fleet posture at a glance", hue: "#3b82f6",
-    cells: [["kpis", 12], ["site-availability", 4], ["stack-performance", 8]] },
+    cells: [["kpis", 12]] },
   { id: "resources", label: "Resource saturation", caption: "where headroom is thinning", hue: "#8b5cf6",
-    cells: [["gauge-cpu", 3], ["gauge-mem", 3], ["gauge-storage", 3], ["gauge-network", 3]] },
+    cells: [["sat-cpu", 3], ["sat-mem", 3], ["sat-storage", 3], ["sat-temp", 3]] },
   { id: "traffic", label: "Traffic & flows", caption: "what's moving across the fabric", hue: "#06b6d4",
     cells: [["traffic", 8], ["top-hosts", 4], ["flows-proto", 4], ["tunnels-health", 4], ["devices-vendor", 4]] },
   { id: "wan", label: "WAN & interfaces", caption: "edge + per-interface live state", hue: "#14b8a6",
-    cells: [["wan-interfaces", 12]] },
+    cells: [["wan-interfaces", 6], ["if-util-topn", 6]] },
+  { id: "errors", label: "Errors & quality", caption: "where the link is taking damage", hue: "#f97316",
+    cells: [["if-errors-topn", 6], ["if-discards-topn", 6]] },
+  { id: "routing", label: "Control-plane", caption: "is routing converged & stable", hue: "#0ea5e9",
+    cells: [["bgp-peers", 6], ["ospf-nbrs", 6]] },
+  { id: "path", label: "Path quality", caption: "experienced latency, jitter & loss", hue: "#a855f7",
+    cells: [["probe-rtt", 4], ["probe-jitter", 4], ["probe-loss", 4]] },
   { id: "events", label: "Events & incidents", caption: "what needs a human", hue: "#ec4899",
     cells: [["alerts-severity", 12], ["active-alerts", 6], ["incidents", 6]] },
   { id: "topology", label: "Topology", caption: "how it's wired together", hue: "#22c55e",

@@ -655,6 +655,46 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: linear-gradient(90deg, color-mix(in srgb, var(--sec, var(--accent)) 45%, transparent), transparent); }
 .mydash-grid { gap: 10px; }
 
+/* ----- KPI strip: dense small boxes, big numbers, trend spark ----- */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.kpi { position: relative; display: flex; flex-direction: column; gap: 1px;
+  padding: 9px 11px 6px; border: 1px solid var(--panel-border, var(--border));
+  border-radius: 9px; background: var(--panel, var(--surface)); min-width: 0;
+  border-left: 3px solid var(--kpi-accent, var(--accent)); transition: border-color .12s ease, box-shadow .12s ease; }
+.kpi.kpi-link { cursor: pointer; }
+.kpi.kpi-link:hover { box-shadow: 0 4px 14px rgba(16, 24, 40, 0.10); border-color: color-mix(in srgb, var(--kpi-accent, var(--accent)) 55%, var(--border)); }
+.kpi-label { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-num { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 30px; font-weight: 720;
+  line-height: 1.04; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--kpi-accent, var(--fg));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi.k-good   { --kpi-accent: var(--good); }
+.kpi.k-warn   { --kpi-accent: var(--warn); }
+.kpi.k-bad    { --kpi-accent: var(--bad); }
+.kpi.k-accent { --kpi-accent: var(--accent); }
+
+/* ----- saturation trend panels (replace the radial gauges) ----- */
+.sat-panel { display: flex; flex-direction: column; height: 100%; }
+.sat-head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 2px; }
+.sat-now { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 26px; font-weight: 720;
+  letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.sat-sub { font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+
+/* ----- status grid (BGP peers / OSPF adjacencies / device health) ----- */
+.status-wrap { display: flex; flex-direction: column; gap: 8px; }
+.status-summary { display: flex; align-items: baseline; gap: 7px; font-size: 12px; color: var(--fg-muted); }
+.status-summary .status-ok { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 24px;
+  font-weight: 720; color: var(--good); line-height: 1; font-variant-numeric: tabular-nums; }
+.status-summary .status-slash { font-variant-numeric: tabular-nums; }
+.status-summary .status-bad { margin-left: auto; color: var(--bad); font-weight: 650;
+  background: color-mix(in srgb, var(--bad) 12%, transparent); border-radius: 5px; padding: 1px 7px; }
+.status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14px, 1fr)); gap: 4px; }
+.status-grid .sgc { aspect-ratio: 1; border-radius: 3px; min-height: 14px; transition: transform .1s ease; }
+.status-grid .sgc:hover { transform: scale(1.18); }
+.status-grid .sgc.ok { background: var(--good); }
+.status-grid .sgc.warn { background: var(--warn); }
+.status-grid .sgc.bad { background: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 28%, transparent); }
+
 /* ----- Top bar ----- */
 .topbar {
   grid-area: topbar;
