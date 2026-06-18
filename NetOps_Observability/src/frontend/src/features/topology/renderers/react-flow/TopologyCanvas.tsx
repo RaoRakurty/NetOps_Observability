@@ -320,7 +320,7 @@ function CanvasInner() {
             >
               <Background variant={BackgroundVariant.Dots} gap={26} size={1} color="var(--border)" />
               <Controls showInteractive={false} />
-              <TopologyMiniMap />
+              <TopologyMiniMap nodeCount={rfNodes.length} />
             </ReactFlow>
 
             <TopologyLegend overlay={overlay} />

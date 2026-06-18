@@ -214,21 +214,25 @@ func nodeKind(d DeviceFact) string {
 	case "fortinet", "fortigate", "palo alto", "paloalto", "palo-alto", "panw", "checkpoint", "check point":
 		return KindFirewall
 	}
-	// Name hint: an explicit "fw"/"firewall"/"lb" token in the hostname.
+	// Name hint: explicit role tokens in the hostname.
 	name := strings.ToLower(d.Name)
 	switch {
 	case strings.Contains(name, "firewall") || hasToken(name, "fw"):
 		return KindFirewall
 	case hasToken(name, "lb") || hasToken(name, "slb"):
 		return KindLoadBalancer
+	case hasToken(name, "rtr") || hasToken(name, "router") || routerSuffix(name):
+		return KindRouter
 	}
 	return KindSwitch
 }
 
 // kindFromKeyword resolves a role/type string to a NodeKind, or "" if unknown.
+// "wan"/"edge" roles map to router: a WAN/edge node is a routed boundary device,
+// not an access switch (this is what makes wan-r2's role=wan render as a router).
 func kindFromKeyword(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "router":
+	case "router", "wan", "edge", "wan-edge", "border-router":
 		return KindRouter
 	case "switch":
 		return KindSwitch
@@ -243,6 +247,27 @@ func kindFromKeyword(s string) string {
 	default:
 		return ""
 	}
+}
+
+// routerSuffix matches a hostname whose last token is r<digits> (e.g. "wan-r2",
+// "core-r1") — a common router naming convention.
+func routerSuffix(name string) bool {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	})
+	if len(parts) == 0 {
+		return false
+	}
+	last := parts[len(parts)-1]
+	if len(last) < 2 || last[0] != 'r' {
+		return false
+	}
+	for _, c := range last[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // hasToken reports whether tok appears as a hyphen/dot/underscore-delimited token

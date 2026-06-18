@@ -264,11 +264,14 @@ func TestProjectNodeKindInference(t *testing.T) {
 		{ID: "edge-fw", Name: "edge-fw", Type: "generic", LastSeen: now}, // name token only
 		{ID: "leaf1", Name: "leaf1", Type: "switch", Vendor: "arista", LastSeen: now},
 		{ID: "core-rtr", Name: "core-rtr", Type: "router", LastSeen: now},
-		{ID: "software-sw", Name: "software", Type: "generic", LastSeen: now}, // must NOT match "fw"
+		{ID: "wan-r2", Name: "wan-r2", Type: "switch", Role: "wan", Vendor: "arista", LastSeen: now}, // role=wan → router
+		{ID: "core-r1", Name: "core-r1", Type: "generic", LastSeen: now},                             // r<n> suffix → router
+		{ID: "software-sw", Name: "software", Type: "generic", LastSeen: now},                        // must NOT match "fw"
 	}})
 	want := map[string]string{
 		"dmz-fw": KindFirewall, "pa1": KindFirewall, "edge-fw": KindFirewall,
-		"leaf1": KindSwitch, "core-rtr": KindRouter, "software-sw": KindSwitch,
+		"leaf1": KindSwitch, "core-rtr": KindRouter, "wan-r2": KindRouter,
+		"core-r1": KindRouter, "software-sw": KindSwitch,
 	}
 	for id, k := range want {
 		n, ok := findNode(v, id)

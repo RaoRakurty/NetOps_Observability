@@ -15,8 +15,12 @@ import {
   nodeTooltip,
 } from "../../../utils/topologyHealth";
 
-const CARD_W = 188;
-const CARD_MIN_H = 52;
+// FIXED card geometry. Both dimensions are constants (not min-height) and are
+// also declared on the React-Flow node (see topologyToReactFlow) so RF never
+// re-measures the card — together with a constant border width, hover/spotlight
+// can change colour/shadow/opacity but NEVER the box, so a node can't shake.
+export const CARD_W = 188;
+export const CARD_H = 56;
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
@@ -81,7 +85,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
     : unhealthy
       ? healthColor
       : `color-mix(in srgb, ${accent} 70%, var(--border))`;
-  const borderWidth = spotlight ? 2 : 1.5;
+  // CONSTANT border width — spotlight is conveyed by colour + shadow only. A
+  // changing border width would resize the (border-box) card by ~1px and make the
+  // node shake under the cursor; keeping it fixed removes that entirely.
+  const borderWidth = 2;
   const shadow = dim
     ? "none"
     : spotlight
@@ -102,7 +109,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       style={{
         position: "relative",
         width: CARD_W,
-        minHeight: CARD_MIN_H,
+        height: CARD_H,
         boxSizing: "border-box",
         padding: "13px 14px",
         borderRadius: 14,

@@ -14,6 +14,7 @@ import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
 import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
+import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 
 /** Transient UI state — kept SEPARATE from the domain graph (rerender rule). */
 export type TopologyUIState = {
@@ -162,6 +163,12 @@ export function topologyToReactFlow(
         id: n.id,
         type: NODE_TYPE_FOR_KIND[n.kind] ?? "deviceNode",
         position: positions[n.id] ?? { x: 0, y: 0 },
+        // Declared dimensions = the card's FIXED size, so React Flow never
+        // re-measures the node when the array is rebuilt on hover (the device
+        // card renders at exactly CARD_W × CARD_H). This is what keeps a hovered
+        // node from shaking as spotlight recomputes.
+        width: CARD_W,
+        height: CARD_H,
         data: { node: n, emphasis, showLabel, overlay: ui.overlay, metricsLine: metricsLine(n.metrics) },
         zIndex: 1,
         selectable: true,

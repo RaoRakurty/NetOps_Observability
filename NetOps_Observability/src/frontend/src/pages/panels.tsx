@@ -14,7 +14,7 @@ import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../them
 import { usePrefs } from "../theme/prefs";
 import { useShell } from "../context/shell";
 import { setDrill } from "../theme/drill";
-import Topology from "../tabs/Topology";
+import TopologyCanvas from "../features/topology/renderers/react-flow/TopologyCanvas";
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -772,9 +772,11 @@ function KpiTiles() {
 }
 
 function TopologyPanel() {
+  // The single topology surface (Canvas) embedded in the Overview board. Given a
+  // fixed height since the Canvas fills its container; drill opens the full view.
   return (
-    <div style={{ maxHeight: 420, overflow: "auto" }}>
-      <Topology />
+    <div style={{ height: 420, overflow: "hidden" }}>
+      <TopologyCanvas />
     </div>
   );
 }
@@ -923,7 +925,7 @@ export const PANELS: Record<string, PanelDef> = {
   "flows-proto": { type: "flows-proto", title: "Traffic by protocol", defaultSpan: 4, category: "Traffic", render: () => <FlowsByProto />, drill: "explore/flows" },
   "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth />, drill: "topology/tunnels" },
   "devices-vendor": { type: "devices-vendor", title: "Devices by vendor", defaultSpan: 4, category: "Inventory", render: () => <DevicesByVendor />, drill: "infrastructure/devices" },
-  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel />, drill: "topology/map" },
+  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel />, drill: "topology-canvas" },
 };
 
 // Category groups for the "Add panel" picker, in display order.
