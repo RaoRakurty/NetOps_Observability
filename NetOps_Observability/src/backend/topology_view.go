@@ -91,9 +91,11 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	// fraction of ifSpeed — the same canonical formula the health scorer uses
 	// (rate(octets)*8 / speed_mbps*1e6). Left nil when VictoriaMetrics is
 	// unreachable so edges stay honestly "unknown" rather than fabricated.
-	operStatus := s.qVecBy2(mctx, `max by (device, interface) (device_if_oper_status)`, "device", "interface")
-	inUtil := s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")
-	outUtil := s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")
+	// Re-key by (device, canonIface(ifName)) so abbreviated LLDP/CDP port-ids
+	// (e.g. "Et1") match full SNMP ifNames ("Ethernet1") on lookup.
+	operStatus := canonIfaceMap(s.qVecBy2(mctx, `max by (device, interface) (device_if_oper_status)`, "device", "interface"))
+	inUtil := canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface"))
+	outUtil := canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface"))
 
 	in := topology.Input{
 		Mode:     mode,
@@ -177,8 +179,8 @@ func toLinkFacts(links []topoLink, operStatus, inUtil, outUtil map[[2]string]flo
 //     projection) when no endpoint reported oper-status. An unresolved target
 //     ("ext:<sysname>") carries no metrics, so only the local side contributes.
 func resolveLinkMetric(l topoLink, operStatus, inUtil, outUtil map[[2]string]float64) (util float64, hasUtil bool, status string) {
-	src := [2]string{l.Source, l.LocalPort}
-	dst := [2]string{l.Target, l.RemotePort}
+	src := [2]string{l.Source, canonIface(l.LocalPort)}
+	dst := [2]string{l.Target, canonIface(l.RemotePort)}
 
 	for _, m := range []map[[2]string]float64{inUtil, outUtil} {
 		for _, k := range [][2]string{src, dst} {
@@ -214,6 +216,86 @@ func resolveLinkMetric(l topoLink, operStatus, inUtil, outUtil map[[2]string]flo
 		status = "up"
 	}
 	return util, hasUtil, status
+}
+
+// ifaceAlias maps a vendor interface-type spelling (long forms AND the few
+// abbreviations that aren't a prefix of their long name) to a canonical token.
+// Short forms that already prefix their long name (gi, te, fa, …) fall through
+// to themselves, so both ends of the alias collapse to the same token.
+var ifaceAlias = map[string]string{
+	"ethernet":                  "et",
+	"eth":                       "et",
+	"gigabitethernet":           "gi",
+	"gige":                      "gi",
+	"gig":                       "gi",
+	"tengigabitethernet":        "te",
+	"tengige":                   "te",
+	"twentyfivegige":            "twe",
+	"twentyfivegigabitethernet": "twe",
+	"fortygigabitethernet":      "fo",
+	"fortygige":                 "fo",
+	"fiftygige":                 "fi",
+	"hundredgige":               "hu",
+	"hundredgigabitethernet":    "hu",
+	"fastethernet":              "fa",
+	"portchannel":               "po",
+	"bundleether":               "be", // IOS-XR Bundle-Ether → BE
+	"management":                "ma",
+	"mgmt":                      "ma",
+	"loopback":                  "lo",
+	"vlan":                      "vl",
+	"tunnel":                    "tu",
+	"serial":                    "se",
+}
+
+// canonIface normalizes an interface/port name so abbreviated LLDP/CDP port-ids
+// and full SNMP ifNames resolve to the same key. It lowercases, splits the
+// alphabetic type prefix from the numeric port part (at the first digit),
+// canonicalizes the prefix via ifaceAlias, and strips punctuation from the
+// prefix only — the numeric part (slots/slashes/dots) is preserved so distinct
+// ports never collapse. Unknown prefixes are kept verbatim (still matches when
+// both ends spell it the same). Empty in → empty out.
+//
+// Examples: "Ethernet1"→"et1", "Et1"→"et1", "GigabitEthernet0/1"→"gi0/1",
+// "Gi0/1"→"gi0/1", "ethernet-1/1"→"et1/1", "ge-0/0/0"→"ge0/0/0".
+func canonIface(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	// Split at the first digit: everything before is the type prefix.
+	d := strings.IndexFunc(s, func(r rune) bool { return r >= '0' && r <= '9' })
+	prefix, rest := s, ""
+	if d >= 0 {
+		prefix, rest = s[:d], s[d:]
+	}
+	// Keep only letters in the prefix (drops hyphens: "port-channel"→"portchannel").
+	prefix = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r
+		}
+		return -1
+	}, prefix)
+	if c, ok := ifaceAlias[prefix]; ok {
+		prefix = c
+	}
+	return prefix + rest
+}
+
+// canonIfaceMap re-keys a (device, ifName) metric map by (device, canonIface),
+// keeping the max value when two raw ifNames canonicalize to the same port.
+func canonIfaceMap(m map[[2]string]float64) map[[2]string]float64 {
+	if m == nil {
+		return nil
+	}
+	out := make(map[[2]string]float64, len(m))
+	for k, v := range m {
+		nk := [2]string{k[0], canonIface(k[1])}
+		if cur, ok := out[nk]; !ok || v > cur {
+			out[nk] = v
+		}
+	}
+	return out
 }
 
 func toAlertFacts(alerts []models.Alert) []topology.AlertFact {
