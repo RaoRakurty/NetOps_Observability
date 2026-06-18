@@ -1,10 +1,10 @@
-// layoutPresets.ts — map each layout_intent to ELK tuning. Deterministic layered
+// layoutPresets.ts — map each layout_type to ELK tuning. Deterministic layered
 // layouts only; NEVER force layout for physical/routed topology (PDF §12).
 
-import type { LayoutIntent } from "../api/topologyTypes";
+import type { LayoutType } from "../api/topologyTypes";
 import type { LayoutPreset } from "./layoutTypes";
 
-const PRESETS: Record<LayoutIntent, LayoutPreset> = {
+const PRESETS: Record<LayoutType, LayoutPreset> = {
   // spine/leaf reads best top-to-bottom with generous layer spacing for bundles.
   spine_leaf: { intent: "spine_leaf", direction: "DOWN", layerSpacing: 120, nodeSpacing: 70 },
   campus: { intent: "campus", direction: "DOWN", layerSpacing: 110, nodeSpacing: 64 },
@@ -18,6 +18,6 @@ const PRESETS: Record<LayoutIntent, LayoutPreset> = {
   wan_geo: { intent: "wan_geo", direction: "DOWN", layerSpacing: 120, nodeSpacing: 80 },
 };
 
-export function presetFor(intent: LayoutIntent): LayoutPreset {
-  return PRESETS[intent] ?? PRESETS.spine_leaf;
+export function presetFor(layoutType: LayoutType): LayoutPreset {
+  return PRESETS[layoutType] ?? PRESETS.spine_leaf;
 }

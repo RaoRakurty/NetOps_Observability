@@ -35,19 +35,19 @@ const EMPTY_UI: TopologyUIState = {
   searchMatches: new Set(),
 };
 
-/** Precompute the compact metrics strip shown on a node card. */
-function metricsLine(metrics: Record<string, number | string>): string | undefined {
-  const order: [string, string][] = [
-    ["cpu", "CPU"],
-    ["mem", "MEM"],
-    ["links", "Links"],
-    ["alerts", "Alerts"],
+/** Precompute the compact metrics strip shown on a node card. Skill metric keys. */
+function metricsLine(metrics: Record<string, number | string> | undefined): string | undefined {
+  if (!metrics) return undefined;
+  const order: [string, string, boolean][] = [
+    ["cpu_pct", "CPU", true],
+    ["mem_pct", "MEM", true],
+    ["link_count", "Links", false],
+    ["alert_count", "Alerts", false],
   ];
   const parts: string[] = [];
-  for (const [key, label] of order) {
+  for (const [key, label, pctish] of order) {
     const v = metrics[key];
     if (v === undefined || v === null || v === "") continue;
-    const pctish = key === "cpu" || key === "mem";
     parts.push(`${label} ${v}${pctish ? "%" : ""}`);
   }
   return parts.length ? parts.join(" · ") : undefined;
@@ -72,7 +72,7 @@ export function topologyToReactFlow(
     if (spotlightActive) emphasis = inFocus ? "spotlight" : "dim";
 
     const unhealthy = n.health === "critical" || n.health === "warning";
-    const critical = n.ownership?.criticality === "critical";
+    const critical = n.criticality === "critical";
     const showLabel =
       ui.showAllLabels ||
       ui.selection.nodeId === n.id ||

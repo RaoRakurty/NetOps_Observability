@@ -27,7 +27,7 @@ function PathHighlightEdgeBase(props: EdgeProps) {
   const edge = data?.edge;
 
   let width = 3.2;
-  if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization);
+  if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization_pct);
 
   return (
     <EdgeBody
@@ -38,7 +38,7 @@ function PathHighlightEdgeBase(props: EdgeProps) {
       glow
       style={{ animation: "topoPathDash 1s linear infinite" }}
       decoration={
-        overlay === "errors" && (edge?.errors ?? 0) > 0
+        overlay === "interface_errors" && (edge?.errors ?? 0) > 0
           ? (geom) => <ErrorMarker x={geom.labelX} y={geom.labelY} />
           : undefined
       }

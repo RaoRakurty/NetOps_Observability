@@ -62,7 +62,7 @@ function UnresolvedNodeBase(props: NodeProps) {
           style={{
             fontSize: 10,
             fontWeight: 700,
-            letterSpacing: 0.6,
+            letterSpacing: ".04em",
             textTransform: "uppercase",
             color: SLATE,
           }}
@@ -72,7 +72,7 @@ function UnresolvedNodeBase(props: NodeProps) {
         {showLabel && node.label && (
           <span
             style={{
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: 600,
               color: "var(--fg-muted)",
               overflow: "hidden",
@@ -90,7 +90,7 @@ function UnresolvedNodeBase(props: NodeProps) {
         title={`Confidence ${confidencePct(node.confidence)}`}
         style={{
           marginLeft: "auto",
-          fontSize: 9,
+          fontSize: 10,
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           color: "var(--fg-subtle)",

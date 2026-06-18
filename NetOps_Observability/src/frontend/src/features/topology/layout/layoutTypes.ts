@@ -1,8 +1,8 @@
 // layoutTypes.ts — layout vocabulary shared by the ELK service, presets and the
-// saved-layout store. Layout is computed from layout_intent; operators may pin
+// saved-layout store. Layout is computed from view.layout_type; operators may pin
 // positions, but pins live OUTSIDE the domain graph (PDF §12 "saved layout rule").
 
-import type { LayoutIntent } from "../api/topologyTypes";
+import type { LayoutType } from "../api/topologyTypes";
 
 export type Direction = "DOWN" | "RIGHT";
 
@@ -12,9 +12,9 @@ export type NodePosition = { x: number; y: number };
 /** Result of a layout pass: node id → position. Edge routing is left to React Flow. */
 export type LayoutResult = Record<string, NodePosition>;
 
-/** Per-intent ELK tuning. */
+/** Per-layout-type ELK tuning. */
 export type LayoutPreset = {
-  intent: LayoutIntent;
+  intent: LayoutType;
   direction: Direction;
   /** elk.layered.spacing.nodeNodeBetweenLayers */
   layerSpacing: number;

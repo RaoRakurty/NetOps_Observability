@@ -46,7 +46,7 @@ function BundledEdgeBase(props: EdgeProps) {
   // Outer track is deliberately thick (the "bundle"); inner is a thin highlight,
   // creating the double-stroke read. Utilization overlay scales the outer track.
   let outer = Math.max(t.width + 3, 4.5);
-  if (overlay === "utilization") outer = utilizationWidth(outer, edge?.utilization);
+  if (overlay === "utilization") outer = utilizationWidth(outer, edge?.utilization_pct);
   const inner = Math.max(1, outer - 3);
 
   const count = edge?.bundle_count ?? 2;
@@ -132,7 +132,7 @@ function BundledEdgeBase(props: EdgeProps) {
                 {count} members · {edgeEvidenceSummary(edge)}
               </div>
               <div style={{ color: "var(--fg-muted)" }}>
-                Util {edge.utilization ?? 0}% · Err {edge.errors ?? 0} · seen {edge.time.last_seen}
+                Util {edge.utilization_pct ?? 0}% · Err {edge.errors ?? 0} · seen {edge.last_seen ?? "—"}
               </div>
             </div>
           )}

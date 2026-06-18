@@ -23,7 +23,7 @@ function nodeFields(node: TopologyNode): { field: string; value: string }[] {
     { field: "role", value: lc(node.role) },
     { field: "zone", value: lc(node.zone) },
     { field: "health", value: lc(node.health) },
-    { field: "owner", value: lc(node.ownership?.owner) },
+    { field: "owner", value: lc(node.owner) },
   ];
   for (const [k, v] of Object.entries(node.tags ?? {})) {
     fields.push({ field: `tag:${k}`, value: lc(v) });

@@ -16,7 +16,7 @@ const elk = new ELK();
 const cache = new Map<string, LayoutResult>();
 
 function viewKey(view: TopologyView): string {
-  return [view.view_id, view.mode, view.layout_intent, view.nodes.length, view.edges.length].join("|");
+  return [view.view_id, view.mode, view.layout_type, view.nodes.length, view.edges.length].join("|");
 }
 
 /**
@@ -28,7 +28,7 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
   const hit = cache.get(key);
   if (hit) return hit;
 
-  const preset = presetFor(view.layout_intent);
+  const preset = presetFor(view.layout_type);
 
   // If every node is pinned (e.g. geo/saved), short-circuit ELK entirely.
   if (view.nodes.length > 0 && view.nodes.every((n) => n.coordinates)) {

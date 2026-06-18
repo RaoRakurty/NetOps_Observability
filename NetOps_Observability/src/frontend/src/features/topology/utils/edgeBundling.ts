@@ -3,7 +3,8 @@
 // returned untouched. Bundling is a view transform, not a graph mutation — the
 // underlying member links still live in the facts/evidence (PDF §16).
 
-import type { TopologyView, TopologyEdge, EvidenceRef } from "../api/topologyTypes";
+import type { TopologyView, TopologyEdge, EvidenceRef, Health } from "../api/topologyTypes";
+import { statusToHealth } from "./topologyHealth";
 
 /** Unordered node-pair key so A→B and B→A bundle together. */
 function pairKey(e: TopologyEdge): string {
@@ -29,11 +30,12 @@ function mergeEvidence(refs: EvidenceRef[]): EvidenceRef[] {
  *   - id           = first member's id,
  *   - bundle_id    = "×N",
  *   - bundle_count = N,
- *   - evidence     = merged (deduped) across members,
- *   - utilization  = summed across members (undefined if no member carried it),
- *   - confidence   = max across members,
- *   - status       = worst (critical > warning > unknown > ok),
- *   - direction    = "bi" if any member is bidirectional.
+ *   - evidence       = merged (deduped) across members,
+ *   - utilization_pct = summed across members (undefined if no member carried it),
+ *   - confidence     = max across members,
+ *   - status         = worst (by health band: critical > warning > maintenance >
+ *                      unknown > ok),
+ *   - direction      = "bi" if any member is bidirectional.
  * Single edges pass through unchanged (object identity preserved).
  */
 export function bundleParallelEdges(view: TopologyView): TopologyView {
@@ -44,9 +46,17 @@ export function bundleParallelEdges(view: TopologyView): TopologyView {
     groups.get(k)!.push(e);
   }
 
-  const statusRank: Record<string, number> = { critical: 3, warning: 2, unknown: 1, ok: 0 };
+  // Rank an edge status by the health band it maps to (worst-wins).
+  const healthRank: Record<Health, number> = {
+    critical: 4,
+    warning: 3,
+    maintenance: 2,
+    unknown: 1,
+    ok: 0,
+  };
+  const statusRank = (s: TopologyEdge["status"]): number => healthRank[statusToHealth(s)];
   const worse = (a: TopologyEdge["status"], b: TopologyEdge["status"]) =>
-    (statusRank[a] ?? 1) >= (statusRank[b] ?? 1) ? a : b;
+    statusRank(a) >= statusRank(b) ? a : b;
 
   const edges: TopologyEdge[] = [];
   for (const members of groups.values()) {
@@ -63,7 +73,7 @@ export function bundleParallelEdges(view: TopologyView): TopologyView {
     const evidence: EvidenceRef[] = [];
 
     for (const m of members) {
-      if (m.utilization != null) util = (util ?? 0) + m.utilization;
+      if (m.utilization_pct != null) util = (util ?? 0) + m.utilization_pct;
       confidence = Math.max(confidence, m.confidence);
       status = worse(status, m.status);
       if (m.direction === "bi") bi = true;
@@ -74,7 +84,7 @@ export function bundleParallelEdges(view: TopologyView): TopologyView {
       ...head,
       status,
       confidence,
-      utilization: util,
+      utilization_pct: util,
       direction: bi ? "bi" : head.direction,
       evidence: mergeEvidence(evidence),
       bundle_id: `×${members.length}`,

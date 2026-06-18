@@ -56,7 +56,7 @@ export default function EvidencePanel({
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
           {evidence.map((ev, i) => (
             <li
-              key={`${ev.raw_ref}-${i}`}
+              key={`${ev.raw_ref ?? ev.source}-${i}`}
               style={{
                 border: "1px solid var(--border)",
                 borderRadius: 6,
@@ -107,11 +107,15 @@ export default function EvidencePanel({
                 </span>
               </div>
 
-              <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.4 }}>{ev.summary}</div>
-
-              <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 4 }}>
-                {formatWhen(ev.observed_at)}
+              <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.4 }}>
+                {ev.summary ?? ev.detail ?? ""}
               </div>
+
+              {ev.observed_at ? (
+                <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 4 }}>
+                  {formatWhen(ev.observed_at)}
+                </div>
+              ) : null}
 
               {ev.ignored_reason ? (
                 <div

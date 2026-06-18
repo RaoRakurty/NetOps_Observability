@@ -14,10 +14,12 @@ import {
   confidencePct,
 } from "../../../utils/topologyHealth";
 
-const CARD_W = 200;
+const CARD_W = 188;
 const CARD_MIN_H = 88;
 
-/** Small health ring (track + colored arc-ish ring) with an accessible glyph. */
+const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+
+/** Small health ring/badge (top-right) with an accessible glyph — never a fill. */
 function HealthRing({ health }: { health: RFNodeData["node"]["health"] }) {
   const color = HEALTH_COLOR[health];
   const tint = HEALTH_TINT[health];
@@ -36,7 +38,7 @@ function HealthRing({ health }: { health: RFNodeData["node"]["health"] }) {
         border: `2px solid ${color}`,
         background: tint,
         color,
-        fontSize: 9,
+        fontSize: 10,
         fontWeight: 700,
         lineHeight: 1,
       }}
@@ -80,15 +82,19 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
 
   const spotlight = emphasis === "spotlight";
   const dim = emphasis === "dim";
-  const opacity = dim ? 0.32 : spotlight ? 1 : 0.92;
-  const borderColor = spotlight ? "var(--accent)" : "var(--border)";
+  const opacity = dim ? 0.3 : spotlight ? 1 : 0.95;
+
+  const healthColor = HEALTH_COLOR[node.health];
+  // spotlight gets a stronger, role/health-tinted border + elevated shadow.
+  const borderColor = spotlight ? accent : "var(--border)";
+  const borderWidth = spotlight ? 1.5 : 1;
   const shadow = dim
     ? "none"
     : spotlight
-      ? "0 8px 24px rgba(0,0,0,0.22)"
+      ? `0 10px 28px rgba(0,0,0,0.26), 0 0 0 1px ${healthColor}33`
       : "0 1px 3px rgba(0,0,0,0.10)";
 
-  // ── compact mode: icon + dot + truncated hostname only ───────────────────────
+  // ── compact mode: icon + health dot + truncated hostname only ────────────────
   if (compact) {
     return (
       <div
@@ -96,12 +102,12 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
           display: "inline-flex",
           alignItems: "center",
           gap: 8,
-          maxWidth: 160,
+          maxWidth: 168,
           padding: "8px 12px",
           borderRadius: 14,
           background: "var(--panel)",
-          border: `1px solid ${borderColor}`,
-          borderLeft: `4px solid ${accent}`,
+          border: `${borderWidth}px solid ${borderColor}`,
+          borderLeft: `3px solid ${accent}`,
           boxShadow: shadow,
           opacity,
           color: "var(--fg)",
@@ -113,8 +119,9 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         <HealthDot health={node.health} />
         <span
           style={{
-            fontSize: 12,
+            fontSize: 13,
             fontWeight: 600,
+            color: "var(--fg)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -130,7 +137,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
 
   // ── full mode ───────────────────────────────────────────────────────────────
   const row2 = [node.vendor, node.model].filter(Boolean).join(" · ");
-  const row3 = [node.site, node.role, node.ownership?.owner].filter(Boolean).join(" · ");
+  const row3 = [node.site, node.role, node.owner].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -139,11 +146,11 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         width: CARD_W,
         minHeight: CARD_MIN_H,
         boxSizing: "border-box",
-        padding: "10px 12px 12px 14px",
+        padding: "11px 13px 13px 14px",
         borderRadius: 14,
         background: "var(--panel)",
-        border: `1px solid ${borderColor}`,
-        borderLeft: `4px solid ${accent}`,
+        border: `${borderWidth}px solid ${borderColor}`,
+        borderLeft: `3px solid ${accent}`,
         boxShadow: shadow,
         opacity,
         color: "var(--fg)",
@@ -153,14 +160,15 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
 
-      {/* row1 — icon + hostname + health ring */}
+      {/* row1 — icon + hostname (dominant) + health badge */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ display: "inline-flex", color: accent, flex: "0 0 auto" }}>{icon}</span>
         <span
           style={{
             fontSize: 13,
             fontWeight: 600,
-            lineHeight: 1.2,
+            lineHeight: 1.25,
+            color: "var(--fg)",
             flex: "1 1 auto",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -172,12 +180,13 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         <HealthRing health={node.health} />
       </div>
 
-      {/* row2 — vendor / model */}
+      {/* row2 — vendor · model (primary meta, legible) */}
       {row2 && (
         <div
           style={{
-            marginTop: 4,
+            marginTop: 6,
             fontSize: 11,
+            lineHeight: 1.35,
             color: "var(--fg-muted)",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -192,9 +201,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       {row3 && (
         <div
           style={{
-            marginTop: 2,
+            marginTop: 3,
             fontSize: 11,
-            color: "var(--fg-subtle)",
+            lineHeight: 1.35,
+            color: "var(--fg-muted)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -208,10 +218,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       {metricsLine && (
         <div
           style={{
-            marginTop: 6,
+            marginTop: 7,
             fontSize: 10,
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            letterSpacing: ".01em",
+            fontFamily: MONO,
             color: "var(--fg-subtle)",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -229,11 +239,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
           position: "absolute",
           right: 8,
           bottom: 6,
-          fontSize: 9,
-          fontFamily:
-            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          fontSize: 10,
+          fontFamily: MONO,
           color: "var(--fg-subtle)",
-          opacity: 0.75,
+          opacity: 0.8,
         }}
       >
         {confidencePct(node.confidence)}

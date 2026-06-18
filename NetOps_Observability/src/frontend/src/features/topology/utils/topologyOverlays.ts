@@ -5,7 +5,7 @@
 
 import type { TopologyView, TopologyOverlay, OverlayKind } from "../api/topologyTypes";
 
-/** Human label + description for every overlay kind (all 9). */
+/** Human label + description for every overlay kind (all 10). */
 export const OVERLAY_META: Record<OverlayKind, { label: string; description: string }> = {
   health: {
     label: "Health",
@@ -15,8 +15,8 @@ export const OVERLAY_META: Record<OverlayKind, { label: string; description: str
     label: "Utilization",
     description: "Link utilization 0–100% mapped to edge width.",
   },
-  errors: {
-    label: "Errors & discards",
+  interface_errors: {
+    label: "Interface errors",
     description: "Per-link error / discard rate highlighting troubled paths.",
   },
   routing_changes: {
@@ -26,6 +26,10 @@ export const OVERLAY_META: Record<OverlayKind, { label: string; description: str
   config_drift: {
     label: "Config drift",
     description: "Devices whose running config diverged from intent / golden config.",
+  },
+  syslog: {
+    label: "Syslog",
+    description: "Devices and links with recent syslog activity in the window.",
   },
   flow: {
     label: "Flow dependencies",
@@ -49,11 +53,12 @@ export const OVERLAY_META: Record<OverlayKind, { label: string; description: str
 const OVERLAY_ORDER: OverlayKind[] = [
   "health",
   "utilization",
-  "errors",
+  "interface_errors",
   "flow",
   "rca_evidence",
   "routing_changes",
   "config_drift",
+  "syslog",
   "golden_path_delta",
   "historical_diff",
 ];
@@ -65,30 +70,28 @@ function meta(kind: OverlayKind): TopologyOverlay {
 
 /**
  * Derive which overlays this view can actually render:
- *   - health        → always available,
- *   - utilization   → any edge has a non-null utilization,
- *   - errors        → any edge has a truthy errors value,
- *   - flow          → any dependency edge exists,
- *   - rca_evidence  → any evidence (view- or object-level) is used_by_rca,
- *   - others        → availability passed through from view.overlays (the builder
- *                     marks them available when it attached the data).
+ *   - health           → always available,
+ *   - utilization      → any edge has a non-null utilization_pct,
+ *   - interface_errors → any edge has a truthy errors value,
+ *   - flow             → any dependency edge exists,
+ *   - rca_evidence     → any node/edge evidence is used_by_rca,
+ *   - others           → availability passed through from view.overlays (the builder
+ *                        lists the kind when it attached the data).
  * Returns the overlays in OVERLAY_ORDER.
  */
 export function availableOverlays(view: TopologyView): TopologyOverlay[] {
   const edges = view.edges ?? [];
-  const passthrough = new Map<OverlayKind, boolean>();
-  for (const o of view.overlays ?? []) passthrough.set(o.kind, o.available);
+  const passthrough = new Set<OverlayKind>(view.overlays ?? []);
 
   const evidencePools = [
-    ...(view.evidence ?? []),
     ...edges.flatMap((e) => e.evidence ?? []),
     ...(view.nodes ?? []).flatMap((n) => n.evidence ?? []),
   ];
 
   const derived: Partial<Record<OverlayKind, boolean>> = {
     health: true,
-    utilization: edges.some((e) => e.utilization != null),
-    errors: edges.some((e) => e.errors != null && e.errors > 0),
+    utilization: edges.some((e) => e.utilization_pct != null),
+    interface_errors: edges.some((e) => e.errors != null && e.errors > 0),
     flow: edges.some((e) => e.relationship === "dependency"),
     rca_evidence: evidencePools.some((ev) => ev?.used_by_rca === true),
   };
@@ -96,7 +99,7 @@ export function availableOverlays(view: TopologyView): TopologyOverlay[] {
   return OVERLAY_ORDER.map((kind) => {
     const o = meta(kind);
     const available =
-      derived[kind] !== undefined ? Boolean(derived[kind]) : passthrough.get(kind) ?? false;
+      derived[kind] !== undefined ? Boolean(derived[kind]) : passthrough.has(kind);
     return { ...o, available };
   });
 }

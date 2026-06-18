@@ -39,7 +39,7 @@ function buildIndex(view: TopologyView): Indexed[] {
       node.model,
       node.site,
       node.role,
-      node.ownership?.owner,
+      node.owner,
       node.health,
       node.zone,
       ...ports,

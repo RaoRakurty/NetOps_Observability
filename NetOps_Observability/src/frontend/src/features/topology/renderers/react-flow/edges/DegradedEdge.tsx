@@ -7,8 +7,7 @@ import { memo } from "react";
 import type { ReactNode } from "react";
 import type { RFEdgeData } from "../rfTypes";
 import { EdgeBody, utilizationWidth, EdgeLabelCard } from "./TopologyEdge";
-import { HEALTH_COLOR, HEALTH_GLYPH } from "../../../utils/topologyHealth";
-import type { Health } from "../../../api/topologyTypes";
+import { HEALTH_COLOR, HEALTH_GLYPH, statusToHealth } from "../../../utils/topologyHealth";
 
 /** Small diamond + glyph at mid-path so degradation reads beyond color. */
 function WarningGlyph({ x, y, color, glyph }: { x: number; y: number; color: string; glyph: string }): ReactNode {
@@ -46,13 +45,14 @@ function DegradedEdgeBase(props: EdgeProps) {
   const emphasis = data?.emphasis ?? "normal";
   const overlay = data?.overlay;
   const edge = data?.edge;
-  const status: Health = edge?.status ?? "warning";
-  const color = HEALTH_COLOR[status];
-  const glyph = HEALTH_GLYPH[status];
+  // edge.status is an EdgeStatus ("down"/"degraded"/…); map to a Health band.
+  const health = statusToHealth(edge?.status ?? "warning");
+  const color = HEALTH_COLOR[health];
+  const glyph = HEALTH_GLYPH[health];
 
   // Unhealthy links are always at least 'normal' weight so they don't disappear.
   let width = emphasis === "strong" ? 3 : 2;
-  if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization);
+  if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization_pct);
 
   return (
     <EdgeBody

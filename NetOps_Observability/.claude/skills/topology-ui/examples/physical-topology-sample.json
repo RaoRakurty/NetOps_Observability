@@ -1,0 +1,93 @@
+{
+  "view_id": "dal-dc1-physical",
+  "mode": "explore",
+  "layout_type": "spine_leaf",
+  "generated_at": "2026-06-18T00:00:00Z",
+  "nodes": [
+    {
+      "id": "spine1",
+      "label": "spine1",
+      "kind": "switch",
+      "role": "spine",
+      "vendor": "Nokia",
+      "model": "SR Linux",
+      "site": "DAL-DC1",
+      "rack": "R1",
+      "mgmt_ip": "10.0.0.11",
+      "health": "warning",
+      "owner": "NetOps",
+      "confidence": 0.98,
+      "first_seen": "2026-06-17T00:00:00Z",
+      "last_seen": "2026-06-18T00:00:00Z",
+      "change_state": "unchanged",
+      "metrics": {
+        "cpu_pct": 42,
+        "mem_pct": 68,
+        "link_count": 12,
+        "alert_count": 2
+      },
+      "evidence": [
+        {
+          "source": "snmp",
+          "confidence": 0.98
+        }
+      ]
+    },
+    {
+      "id": "leaf1",
+      "label": "leaf1",
+      "kind": "switch",
+      "role": "leaf",
+      "vendor": "Nokia",
+      "model": "SR Linux",
+      "site": "DAL-DC1",
+      "rack": "R2",
+      "mgmt_ip": "10.0.0.21",
+      "health": "ok",
+      "owner": "NetOps",
+      "confidence": 0.98,
+      "first_seen": "2026-06-17T00:00:00Z",
+      "last_seen": "2026-06-18T00:00:00Z",
+      "change_state": "unchanged",
+      "metrics": {
+        "cpu_pct": 35,
+        "mem_pct": 61,
+        "link_count": 8,
+        "alert_count": 0
+      },
+      "evidence": [
+        {
+          "source": "snmp",
+          "confidence": 0.98
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "leaf1:e1-1--spine1:e1-11",
+      "source": "leaf1",
+      "target": "spine1",
+      "source_port": "Ethernet1/1",
+      "target_port": "Ethernet1/11",
+      "relationship": "connected_to",
+      "protocol": "lldp",
+      "status": "up",
+      "utilization_pct": 63,
+      "confidence": 0.98,
+      "first_seen": "2026-06-17T00:00:00Z",
+      "last_seen": "2026-06-18T00:00:00Z",
+      "change_state": "unchanged",
+      "evidence": [
+        {
+          "source": "lldp",
+          "confidence": 0.98,
+          "detail": "bidirectional LLDP match"
+        }
+      ]
+    }
+  ],
+  "groups": [],
+  "overlays": ["health", "utilization"],
+  "legend": {}
+}

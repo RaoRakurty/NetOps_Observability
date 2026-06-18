@@ -1,0 +1,11 @@
+{
+  "view_id": "path-client-to-app",
+  "mode": "path_trace",
+  "layout_type": "left_to_right_path",
+  "generated_at": "2026-06-18T00:00:00Z",
+  "nodes": [],
+  "edges": [],
+  "groups": [],
+  "overlays": ["health", "routing_changes", "interface_errors"],
+  "legend": {}
+}

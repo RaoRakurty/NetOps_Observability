@@ -35,7 +35,7 @@ import { edgeTypes } from "./edges";
 import { WORKFLOWS, workflowById } from "../../workflows";
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
-import { pathEdgeIds } from "../../graph/graphAlgorithms";
+import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
 import {
   TopologyToolbar,
   TopologySearch,
@@ -62,6 +62,10 @@ function CanvasInner() {
   const [density, setDensity] = useState<Density>("operator");
   const [positions, setPositions] = useState<LayoutResult>({});
   const [laidOutKey, setLaidOutKey] = useState<string>("");
+  // Hover state is transient and SEPARATE from click-selection: hover spotlights
+  // first-degree neighbours (skill design-tokens) without opening the drawer.
+  const [hoverNode, setHoverNode] = useState<string | undefined>();
+  const [hoverEdge, setHoverEdge] = useState<string | undefined>();
 
   const workflow = workflowById(mode);
   const view = workflow?.view;
@@ -89,28 +93,34 @@ function CanvasInner() {
   useEffect(() => {
     setSelection({});
     setSearchMatches(new Set());
+    setHoverNode(undefined);
+    setHoverEdge(undefined);
   }, [mode]);
 
-  // Spotlight = selection-driven, else the workflow's default (Investigate/PathTrace
-  // pre-spotlight their RCA/trace path; Explore stays calm).
+  // Spotlight priority: a click-selection wins (and opens the drawer); else a hover
+  // spotlights first-degree neighbours (no drawer); else the workflow's default
+  // (Investigate/PathTrace pre-spotlight their RCA/trace path; Explore stays calm).
   const spotlight = useMemo(() => {
     if (!view) return EMPTY_SPOTLIGHT;
     if (selection.edgeId) {
       const e = view.edges.find((x) => x.id === selection.edgeId);
-      return {
-        nodes: new Set(e ? [e.source, e.target] : []),
-        edges: new Set(e ? [e.id] : []),
-      };
+      return { nodes: new Set(e ? [e.source, e.target] : []), edges: new Set(e ? [e.id] : []) };
     }
-    if (workflow?.computeSpotlight) return workflow.computeSpotlight(view, selection);
+    if (selection.nodeId && workflow?.computeSpotlight) return workflow.computeSpotlight(view, selection);
+    if (hoverNode) {
+      const nodes = firstDegree(view, hoverNode);
+      return { nodes, edges: edgesWithin(view, nodes) };
+    }
+    if (workflow?.computeSpotlight) return workflow.computeSpotlight(view, {});
     return EMPTY_SPOTLIGHT;
-  }, [view, workflow, selection]);
+  }, [view, workflow, selection, hoverNode]);
 
   // Derive React Flow nodes/edges. Pure, memoized on the inputs that matter.
   const derived = useMemo(() => {
     if (!view) return { nodes: [] as Node<RFNodeData>[], edges: [] as Edge<RFEdgeData>[] };
     const strongEdges = new Set<string>(spotlight.edges);
     if (selection.edgeId) strongEdges.add(selection.edgeId);
+    if (hoverEdge) strongEdges.add(hoverEdge);
     if (view.path && (mode === "investigate" || mode === "path_trace")) {
       for (const id of pathEdgeIds(view, view.path)) strongEdges.add(id);
     }
@@ -122,7 +132,7 @@ function CanvasInner() {
       showAllLabels,
       searchMatches,
     });
-  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode]);
+  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge]);
 
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFNodeData>>([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge<RFEdgeData>>([]);
@@ -149,6 +159,10 @@ function CanvasInner() {
     setSelection({ edgeId: ed.id });
   }, []);
   const onPaneClick = useCallback(() => setSelection({}), []);
+  const onNodeMouseEnter = useCallback<NodeMouseHandler>((_e, n) => setHoverNode(n.id), []);
+  const onNodeMouseLeave = useCallback(() => setHoverNode(undefined), []);
+  const onEdgeMouseEnter = useCallback<EdgeMouseHandler>((_e, ed) => setHoverEdge(ed.id), []);
+  const onEdgeMouseLeave = useCallback(() => setHoverEdge(undefined), []);
 
   const onPick = useCallback(
     (nodeId: string) => {
@@ -199,6 +213,10 @@ function CanvasInner() {
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
+              onNodeMouseEnter={onNodeMouseEnter}
+              onNodeMouseLeave={onNodeMouseLeave}
+              onEdgeMouseEnter={onEdgeMouseEnter}
+              onEdgeMouseLeave={onEdgeMouseLeave}
               minZoom={0.2}
               maxZoom={2.4}
               proOptions={{ hideAttribution: true }}

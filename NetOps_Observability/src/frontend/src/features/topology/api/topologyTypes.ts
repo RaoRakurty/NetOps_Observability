@@ -1,11 +1,16 @@
-// topologyTypes.ts — the RESOLVED, renderer-agnostic topology graph contract.
+// topologyTypes.ts — the CANONICAL, renderer-agnostic topology contract.
 //
-// This is the moat (PDF §7): a time-aware, evidence-backed graph that can be drawn
-// by many renderers. The Graph API returns a TopologyView; it NEVER returns React
-// Flow nodes. Each renderer has its own adapter (topologyToReactFlow / topologyToSigma
-// / topologyToDeckLayers) that maps THIS contract into renderer-specific objects.
+// SINGLE SOURCE OF TRUTH = the skill contract (.claude/skills/topology-ui/
+// topology-contract.json). Field names are FLAT and match that schema exactly:
+// node.{first_seen,last_seen,change_state,owner,rack,mgmt_ip,health,metrics},
+// edge.{protocol,utilization_pct,status,first_seen,...}, view.layout_type,
+// overlays as a string[]. There is intentionally NO competing nested model.
 //
-// Nothing here imports @xyflow/react, sigma, or deck.gl. Keep it that way.
+// Fields the UI needs but the wire contract doesn't define (path, per-evidence
+// summary, bundle details, coordinates, resolved flag) are marked DERIVED/
+// ENRICHMENT below — produced by adapters, never authored as canonical API data.
+//
+// Nothing here imports @xyflow/react, sigma, or deck.gl.
 
 import type { EvidenceRef, TopologySource } from "../graph/topologyFactTypes";
 
@@ -13,7 +18,6 @@ export type { EvidenceRef, TopologySource };
 
 // ── enums ───────────────────────────────────────────────────────────────────
 
-/** Operator workflow the view was built for (PDF §9). */
 export type WorkflowMode =
   | "explore"
   | "investigate"
@@ -23,8 +27,8 @@ export type WorkflowMode =
   | "dependency"
   | "executive_geo";
 
-/** Layout intent the View Builder requests of the Layout Service (PDF §5, §12). */
-export type LayoutIntent =
+/** Value of view.layout_type (skill example: "spine_leaf"). */
+export type LayoutType =
   | "spine_leaf"
   | "campus"
   | "wan_geo"
@@ -33,7 +37,6 @@ export type LayoutIntent =
   | "dependency"
   | "cloud_grouped";
 
-/** Device/entity class — drives the node renderer + icon. */
 export type NodeKind =
   | "switch"
   | "router"
@@ -46,170 +49,148 @@ export type NodeKind =
   | "group"
   | "unresolved";
 
-/** Health band. Color is NEVER the only signal — pair with icon/label/text. */
-export type Health = "ok" | "warning" | "critical" | "unknown";
+/** Health — 5 states incl. `maintenance` (skill design-tokens.md / contract enum). */
+export type Health = "ok" | "warning" | "critical" | "unknown" | "maintenance";
 
-/** Time-diff state of an object across the selected window (PDF §14). */
-export type ChangeState = "added" | "removed" | "changed" | "unchanged";
+/** change_state — incl. `stale` (skill time-diff-golden-path.md). */
+export type ChangeState = "added" | "removed" | "changed" | "unchanged" | "stale" | "unknown";
 
-/** Relationship an edge encodes. */
+/** Edge link status (skill example uses "up"). Mapped to Health for colour. */
+export type EdgeStatus = "up" | "down" | "degraded" | "warning" | "maintenance" | "unknown";
+
+/** Edge relationship (skill example: "connected_to"). */
 export type EdgeRelationship =
-  | "l2_link" // LLDP/CDP physical adjacency
+  | "connected_to" // L2/physical adjacency (LLDP/CDP)
   | "routed_adjacency" // BGP-LS / IS-IS / OSPF
   | "path_hop" // a hop on a traced A→B path
-  | "dependency" // flow/observed dependency (dashed, lower confidence)
+  | "dependency" // flow/observed dependency
   | "containment" // cloud/group membership
   | "inferred"; // derived, not directly observed
 
-/** Visual treatment hint chosen by the adapter from relationship + confidence. */
+/** Visual treatment hint chosen by the adapter (not a wire field). */
 export type EdgeVariant = "topology" | "path" | "inferred" | "degraded" | "bundled";
+
+/** Overlay kinds (skill topology-context.md). Note `interface_errors`, `syslog`. */
+export type OverlayKind =
+  | "health"
+  | "utilization"
+  | "interface_errors"
+  | "routing_changes"
+  | "config_drift"
+  | "syslog"
+  | "flow"
+  | "rca_evidence"
+  | "golden_path_delta"
+  | "historical_diff";
 
 export type GroupType = "site" | "pod" | "rack" | "cluster" | "zone" | "region" | "vpc" | "app";
 
-// ── shared sub-shapes ─────────────────────────────────────────────────────────
-
-export type Ownership = {
-  team?: string;
-  owner?: string;
-  business_service?: string;
-  criticality?: "low" | "medium" | "high" | "critical";
-};
-
-/** first_seen / last_seen / valid window + diff context carried by node & edge. */
-export type TimeMeta = {
-  first_seen: string;
-  last_seen: string;
-  valid_from?: string;
-  valid_to?: string;
-  change_state: ChangeState;
-};
-
-// ── nodes ─────────────────────────────────────────────────────────────────────
+// ── node ──────────────────────────────────────────────────────────────────────
 
 export type TopologyNode = {
+  // ── canonical (flat, skill contract) ──
   id: string;
   label: string;
   kind: NodeKind;
-  role?: string; // spine | leaf | core | distribution | access | border | edge …
+  role?: string;
   vendor?: string;
   model?: string;
   site?: string;
-  zone?: string;
-  /** Membership in a TopologyGroup (compound layout). */
-  group_id?: string;
-  ownership?: Ownership;
+  rack?: string;
+  mgmt_ip?: string;
   health: Health;
-  /** 0..1 — how confident we are this node exists / is correctly resolved. */
+  owner?: string;
   confidence: number;
-  /** False when the node is an unresolved remote neighbour (render muted). */
-  resolved: boolean;
+  first_seen?: string;
+  last_seen?: string;
+  change_state?: ChangeState;
+  /** Skill metric keys: cpu_pct, mem_pct, link_count, alert_count, … */
+  metrics?: Record<string, number | string>;
   evidence: EvidenceRef[];
-  time: TimeMeta;
-  /** Overlay inputs (cpu/mem/links/alerts/util…). Strings or numbers. */
-  metrics: Record<string, number | string>;
-  tags: Record<string, string>;
-  /** Optional pinned coordinate (saved operator layout / geo). Layout fills the rest. */
+  // ── derived / UI enrichment (not canonical API) ──
+  zone?: string;
+  group_id?: string;
+  /** Derived: false for unresolved remote neighbours (render muted). */
+  resolved?: boolean;
+  criticality?: "low" | "medium" | "high" | "critical";
+  tags?: Record<string, string>;
+  /** Pinned coordinate (saved operator layout / geo). Layout fills the rest. */
   coordinates?: { x: number; y: number };
 };
 
-// ── edges ─────────────────────────────────────────────────────────────────────
+// ── edge ──────────────────────────────────────────────────────────────────────
 
 export type TopologyEdge = {
+  // ── canonical (flat, skill contract) ──
   id: string;
-  source: string; // TopologyNode.id
-  target: string; // TopologyNode.id
-  relationship: EdgeRelationship;
-  /** The dominant source that established this edge. */
-  protocol_source: TopologySource;
+  source: string;
+  target: string;
   source_port?: string;
   target_port?: string;
-  status: Health;
-  /** 0..1. Bidirectional LLDP/CDP high; one-way / flow-only lower. */
+  relationship: EdgeRelationship;
+  protocol?: TopologySource;
+  status?: EdgeStatus;
+  utilization_pct?: number;
   confidence: number;
-  /** REQUIRED & NON-EMPTY: never draw a link without evidence (PDF §3, rule 6). */
+  first_seen?: string;
+  last_seen?: string;
+  change_state?: ChangeState;
+  /** REQUIRED & NON-EMPTY: never draw a link without evidence. */
   evidence: EvidenceRef[];
-  time: TimeMeta;
-  /** 0..100 link utilization for the utilization overlay (edge width). */
-  utilization?: number;
-  /** error/discard rate for the errors overlay. */
-  errors?: number;
-  /** Bundles parallel links (2x100G / LAG-10) — collapsed until expanded. */
-  bundle_id?: string;
-  /** How many physical members a bundle represents. */
+  // ── derived / UI enrichment (not canonical API) ──
+  errors?: number; // interface_errors overlay input
+  bundle_id?: string; // collapsed parallel links (LAG / "4x100G")
   bundle_count?: number;
   direction?: "uni" | "bi";
 };
 
-// ── groups ─────────────────────────────────────────────────────────────────────
+// ── group ──────────────────────────────────────────────────────────────────────
 
 export type TopologyGroup = {
   id: string;
   label: string;
   group_type: GroupType;
   children: string[]; // node ids
-  health_rollup: Health;
+  health: Health; // rollup
   collapsed: boolean;
-  layout_policy?: LayoutIntent;
-  ownership?: Ownership;
-  evidence: EvidenceRef[];
+  owner?: string;
 };
 
 // ── overlays ────────────────────────────────────────────────────────────────────
 
-export type OverlayKind =
-  | "health"
-  | "utilization"
-  | "errors"
-  | "routing_changes"
-  | "config_drift"
-  | "flow"
-  | "rca_evidence"
-  | "golden_path_delta"
-  | "historical_diff";
-
-/**
- * An overlay is descriptive metadata; the overlay renderer turns graph attributes
- * into visual state WITHOUT mutating the domain graph (PDF §16, Overlays rule).
- */
+/** Rich overlay descriptor — DERIVED by availableOverlays() from the view; the
+ *  canonical view.overlays is a plain OverlayKind[] (skill example). */
 export type TopologyOverlay = {
   kind: OverlayKind;
   label: string;
-  /** True if this view actually carries the data this overlay needs. */
   available: boolean;
   description?: string;
 };
 
-// ── the view ────────────────────────────────────────────────────────────────────
+// ── view ────────────────────────────────────────────────────────────────────────
 
 export type TopologyView = {
+  // ── canonical (skill contract) ──
   view_id: string;
-  topology_id: string;
   mode: WorkflowMode;
-  scope: {
-    tenant_id: string;
-    site?: string;
-    app?: string;
-    path_id?: string;
-    incident_id?: string;
-  };
+  scope?: { tenant_id?: string; site?: string; app?: string; path_id?: string; incident_id?: string };
+  layout_type: LayoutType;
   generated_at: string;
-  time_range: { from: string; to: string };
-  layout_intent: LayoutIntent;
   nodes: TopologyNode[];
   edges: TopologyEdge[];
   groups: TopologyGroup[];
-  overlays: TopologyOverlay[];
-  /** Flat evidence index for the view (in addition to per-object evidence). */
-  evidence: EvidenceRef[];
-  renderer_hints: {
-    preferred: "react_flow" | "sigma" | "deck_geo";
-    max_detail_level: number;
-  };
-  /** For path_trace / investigate: the ordered node ids of the highlighted path. */
+  /** Canonical overlays are a plain string list (skill example: ["health","utilization"]). */
+  overlays: OverlayKind[];
+  legend?: Record<string, unknown>;
+  // ── derived / UI enrichment (allowed; not canonical API) ──
+  topology_id?: string;
+  time_range?: { from: string; to: string };
+  /** Ordered node ids of the highlighted path (path_trace / investigate). */
   path?: string[];
+  renderer_hints?: { preferred: "react_flow" | "sigma" | "deck_geo"; max_detail_level: number };
 };
 
-// ── selection (kept SEPARATE from node/edge arrays for rerender perf, PDF §13) ──
+// ── selection (kept SEPARATE from node/edge arrays for rerender perf) ──
 
 export type TopologySelection = {
   nodeId?: string;

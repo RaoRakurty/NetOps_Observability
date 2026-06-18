@@ -44,7 +44,7 @@ export function EdgeLabelCard({ edge }: { edge: TopologyEdgeModel }): ReactNode 
     edge.source_port || edge.target_port
       ? `${edge.source_port ?? ""} → ${edge.target_port ?? ""}`
       : `${edge.source} → ${edge.target}`;
-  const metaLine = `Util ${edge.utilization ?? 0}% · Err ${edge.errors ?? 0} · seen ${edge.time.last_seen}`;
+  const metaLine = `Util ${edge.utilization_pct ?? 0}% · Err ${edge.errors ?? 0} · seen ${edge.last_seen ?? "—"}`;
   return (
     <div
       style={{
@@ -189,7 +189,7 @@ function TopologyEdgeBase(props: EdgeProps) {
   const color = emphasis === "strong" ? "var(--accent)" : "var(--border)";
 
   let width = t.width;
-  if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization);
+  if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization_pct);
 
   return (
     <EdgeBody
@@ -198,7 +198,7 @@ function TopologyEdgeBase(props: EdgeProps) {
       width={width}
       glow={emphasis === "strong"}
       decoration={
-        overlay === "errors" && (edge?.errors ?? 0) > 0
+        overlay === "interface_errors" && (edge?.errors ?? 0) > 0
           ? (geom) => <ErrorMarker x={geom.labelX} y={geom.labelY} />
           : undefined
       }

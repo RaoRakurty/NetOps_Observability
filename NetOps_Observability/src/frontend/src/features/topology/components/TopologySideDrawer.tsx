@@ -9,7 +9,14 @@ import type {
   TopologyEdge,
   ChangeState,
 } from "../api/topologyTypes";
-import { HEALTH_COLOR, HEALTH_GLYPH, HEALTH_LABEL, edgeEvidenceSummary } from "../utils/topologyHealth";
+import {
+  HEALTH_COLOR,
+  HEALTH_GLYPH,
+  HEALTH_LABEL,
+  edgeEvidenceSummary,
+  statusToHealth,
+} from "../utils/topologyHealth";
+import type { Health } from "../api/topologyTypes";
 import ConfidencePanel from "./ConfidencePanel";
 import EvidencePanel from "./EvidencePanel";
 
@@ -18,9 +25,11 @@ const CHANGE_LABEL: Record<ChangeState, string> = {
   removed: "Removed in window",
   changed: "Changed in window",
   unchanged: "Unchanged",
+  stale: "Stale (not re-observed)",
+  unknown: "Unknown",
 };
 
-function HealthBadge({ health }: { health: TopologyNode["health"] }) {
+function HealthBadge({ health }: { health: Health }) {
   const color = HEALTH_COLOR[health];
   return (
     <span
@@ -64,11 +73,11 @@ function MetaRow({ label, value }: { label: string; value?: string }) {
 }
 
 function NodeBody({ node }: { node: TopologyNode }) {
-  const metrics = Object.entries(node.metrics);
+  const metrics = Object.entries(node.metrics ?? {});
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>{node.label}</h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{node.label}</h2>
         <HealthBadge health={node.health} />
       </div>
       <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
@@ -78,13 +87,15 @@ function NodeBody({ node }: { node: TopologyNode }) {
       <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
         <MetaRow label="Vendor" value={node.vendor} />
         <MetaRow label="Model" value={node.model} />
+        <MetaRow label="Mgmt IP" value={node.mgmt_ip} />
         <MetaRow label="Site" value={node.site} />
+        <MetaRow label="Rack" value={node.rack} />
         <MetaRow label="Zone" value={node.zone} />
-        <MetaRow label="Owner" value={node.ownership?.owner} />
-        <MetaRow label="Team" value={node.ownership?.team} />
-        <MetaRow label="Service" value={node.ownership?.business_service} />
-        <MetaRow label="Criticality" value={node.ownership?.criticality} />
-        <MetaRow label="Change" value={CHANGE_LABEL[node.time.change_state]} />
+        <MetaRow label="Owner" value={node.owner} />
+        <MetaRow label="Criticality" value={node.criticality} />
+        <MetaRow label="First seen" value={node.first_seen} />
+        <MetaRow label="Last seen" value={node.last_seen} />
+        <MetaRow label="Change" value={node.change_state ? CHANGE_LABEL[node.change_state] : undefined} />
       </div>
 
       {metrics.length > 0 ? (
@@ -135,14 +146,15 @@ function NodeBody({ node }: { node: TopologyNode }) {
 function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
   const src = view.nodes.find((n) => n.id === edge.source);
   const dst = view.nodes.find((n) => n.id === edge.target);
-  const color = HEALTH_COLOR[edge.status];
+  const health = statusToHealth(edge.status);
+  const color = HEALTH_COLOR[health];
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>
           {(src?.label ?? edge.source)} → {(dst?.label ?? edge.target)}
         </h2>
-        <HealthBadge health={edge.status} />
+        <HealthBadge health={health} />
       </div>
       <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
         {edgeEvidenceSummary(edge)}
@@ -155,24 +167,25 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
         <MetaRow label="Status" value={edge.status} />
         <MetaRow
           label="Utilization"
-          value={edge.utilization != null ? `${edge.utilization}%` : undefined}
+          value={edge.utilization_pct != null ? `${edge.utilization_pct}%` : undefined}
         />
         <MetaRow label="Errors" value={edge.errors != null ? String(edge.errors) : undefined} />
+        <MetaRow label="Last seen" value={edge.last_seen} />
         <MetaRow
           label="Bundle"
           value={edge.bundle_count && edge.bundle_count > 1 ? `${edge.bundle_count}× members` : undefined}
         />
       </div>
 
-      {(edge.utilization != null || edge.errors != null) ? (
+      {(edge.utilization_pct != null || edge.errors != null) ? (
         <section style={{ marginBottom: 4 }}>
           <div style={sectionTitle}>Link</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {edge.utilization != null ? (
+            {edge.utilization_pct != null ? (
               <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", padding: "7px 9px" }}>
                 <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase" }}>Utilization</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color, fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
-                  {edge.utilization}%
+                  {edge.utilization_pct}%
                 </div>
               </div>
             ) : null}

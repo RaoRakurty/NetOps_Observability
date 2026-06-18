@@ -27,7 +27,9 @@ function clamp01(n: number | undefined): number {
 }
 
 function normalizeHealth(h: Health | undefined): Health {
-  return h === "ok" || h === "warning" || h === "critical" ? h : "unknown";
+  return h === "ok" || h === "warning" || h === "critical" || h === "maintenance"
+    ? h
+    : "unknown";
 }
 
 /**
@@ -60,7 +62,7 @@ export function normalizeView(v: TopologyView): TopologyView {
     .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
     .map((e) => ({
       ...e,
-      status: normalizeHealth(e.status),
+      status: e.status ?? "unknown",
       confidence: clamp01(e.confidence),
       evidence: e.evidence,
     }));
@@ -71,7 +73,6 @@ export function normalizeView(v: TopologyView): TopologyView {
     edges,
     groups: Array.isArray(v.groups) ? v.groups : [],
     overlays: Array.isArray(v.overlays) ? v.overlays : [],
-    evidence: Array.isArray(v.evidence) ? v.evidence : [],
   };
 }
 
@@ -120,11 +121,9 @@ export function factsToView(
       confidence: 0.5,
       resolved: false,
       evidence: [],
-      time: {
-        first_seen: time.observed_at,
-        last_seen: time.observed_at,
-        change_state: "unchanged",
-      },
+      first_seen: time.observed_at,
+      last_seen: time.observed_at,
+      change_state: "unchanged",
       metrics: {},
       tags: {},
     };
@@ -153,17 +152,15 @@ export function factsToView(
         source: fact.subject,
         target: fact.object,
         relationship: "inferred",
-        protocol_source: fact.source,
+        protocol: fact.source,
         source_port: fact.source_interface,
         target_port: fact.target_interface,
-        status: "unknown",
+        status: "up",
         confidence: base,
         evidence: [ev],
-        time: {
-          first_seen: fact.observed_at,
-          last_seen: fact.observed_at,
-          change_state: "unchanged",
-        },
+        first_seen: fact.observed_at,
+        last_seen: fact.observed_at,
+        change_state: "unchanged",
       });
     }
   }
@@ -175,12 +172,11 @@ export function factsToView(
     scope: meta.scope ?? { tenant_id: "unknown" },
     generated_at: meta.generated_at ?? "",
     time_range: meta.time_range ?? { from: "", to: "" },
-    layout_intent: meta.layout_intent ?? "spine_leaf",
+    layout_type: meta.layout_type ?? "spine_leaf",
     nodes: [...nodeMap.values()],
     edges: [...edgeMap.values()],
     groups: meta.groups ?? [],
     overlays: meta.overlays ?? [],
-    evidence: meta.evidence ?? [],
     renderer_hints: meta.renderer_hints ?? { preferred: "react_flow", max_detail_level: 3 },
     path: meta.path,
   };

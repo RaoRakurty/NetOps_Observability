@@ -9,16 +9,17 @@ import { HEALTH_COLOR, HEALTH_GLYPH, HEALTH_LABEL } from "../utils/topologyHealt
 const OVERLAY_NOTE: Record<OverlayKind, string> = {
   health: "Node rings show health; edges keep their relationship style.",
   utilization: "Edge width scales with link utilization.",
-  errors: "Edges thicken / redden with error & discard rate.",
+  interface_errors: "Edges thicken / redden with error & discard rate.",
   routing_changes: "Highlighted edges changed routing in the window.",
   config_drift: "Flagged nodes drifted from intended config.",
+  syslog: "Nodes flagged by syslog activity in the window.",
   flow: "Dashed edges are flow-observed dependencies (lower confidence).",
   rca_evidence: "Thick accent edges were used by the active RCA.",
   golden_path_delta: "Compares the live path against the golden path.",
   historical_diff: "Added / removed / changed objects vs the prior snapshot.",
 };
 
-const HEALTH_ORDER: Health[] = ["ok", "warning", "critical", "unknown"];
+const HEALTH_ORDER: Health[] = ["ok", "warning", "critical", "maintenance", "unknown"];
 
 function Swatch({ color, glyph, label }: { color: string; glyph: string; label: string }) {
   return (
