@@ -697,6 +697,25 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .status-grid .sgc.warn { background: var(--warn); }
 .status-grid .sgc.bad { background: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 28%, transparent); }
 
+/* ===== Correlix Topology Operating Canvas (Phase 1) ===== */
+.topo-root { display: flex; flex-direction: column; height: 100%; min-height: calc(100vh - 150px); }
+.topo-stage { position: relative; flex: 1 1 auto; min-height: 560px; border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; background: var(--surface); margin-top: 10px; }
+.topo-stage .react-flow { background: transparent; }
+.topo-stage .react-flow__attribution { display: none; }
+/* search docks top-left over the canvas; path panel docks bottom-left */
+.topo-search-dock { position: absolute; top: 12px; left: 12px; z-index: 6; width: 320px; max-width: 60%; }
+.topo-path-dock { position: absolute; bottom: 14px; left: 14px; z-index: 6; width: 340px; max-width: 70%;
+  max-height: 46%; overflow: auto; }
+/* placeholder workflows */
+.topo-placeholder { display: grid; place-items: center; height: 100%; padding: 24px; }
+.topo-placeholder-card { max-width: 520px; text-align: center; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 14px; padding: 28px 30px; box-shadow: 0 8px 28px rgba(16,24,40,0.08); }
+.topo-placeholder-eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--accent); }
+.topo-placeholder-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 20px; font-weight: 680; margin: 6px 0 10px; }
+.topo-placeholder-body { font-size: 14px; color: var(--fg-muted); margin: 0 0 12px; }
+.topo-placeholder-note { font-size: 12px; color: var(--fg-subtle); line-height: 1.55; margin: 0; }
+
 /* ----- Top bar ----- */
 .topbar {
   grid-area: topbar;

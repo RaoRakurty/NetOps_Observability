@@ -1,0 +1,23 @@
+// layoutPresets.ts — map each layout_intent to ELK tuning. Deterministic layered
+// layouts only; NEVER force layout for physical/routed topology (PDF §12).
+
+import type { LayoutIntent } from "../api/topologyTypes";
+import type { LayoutPreset } from "./layoutTypes";
+
+const PRESETS: Record<LayoutIntent, LayoutPreset> = {
+  // spine/leaf reads best top-to-bottom with generous layer spacing for bundles.
+  spine_leaf: { intent: "spine_leaf", direction: "DOWN", layerSpacing: 120, nodeSpacing: 70 },
+  campus: { intent: "campus", direction: "DOWN", layerSpacing: 110, nodeSpacing: 64 },
+  // path views are a left-to-right ribbon.
+  path_first: { intent: "path_first", direction: "RIGHT", layerSpacing: 150, nodeSpacing: 56 },
+  // incident: root cause → affected path → blast radius, left to right.
+  incident: { intent: "incident", direction: "RIGHT", layerSpacing: 140, nodeSpacing: 64 },
+  dependency: { intent: "dependency", direction: "RIGHT", layerSpacing: 130, nodeSpacing: 60 },
+  cloud_grouped: { intent: "cloud_grouped", direction: "DOWN", layerSpacing: 110, nodeSpacing: 72 },
+  // geo is positioned by coordinates, not ELK; fall back to a calm layered grid.
+  wan_geo: { intent: "wan_geo", direction: "DOWN", layerSpacing: 120, nodeSpacing: 80 },
+};
+
+export function presetFor(intent: LayoutIntent): LayoutPreset {
+  return PRESETS[intent] ?? PRESETS.spine_leaf;
+}

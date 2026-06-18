@@ -16,6 +16,7 @@ import DataSources from "./pages/DataSources";
 import NetworkPath from "./pages/NetworkPath";
 import Reports from "./pages/Reports";
 import Topology from "./tabs/Topology";
+import TopologyCanvas from "./features/topology/renderers/react-flow/TopologyCanvas";
 import Collectors from "./tabs/Collectors";
 import SnmpProfileManager from "./tabs/SnmpProfileManager";
 import Alerts from "./tabs/Alerts";
@@ -174,6 +175,9 @@ export const NAV: NavSection[] = [
       { id: "bgpospf", label: "Protocol Monitoring", group: "Dashboards", render: (c) => <BgpOspf rangeMinutes={c.rangeMinutes} /> },
       { id: "troubleshooting", label: "Troubleshooting", group: "Dashboards", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
       { id: "topology", label: "Device Topology Map", group: "Maps", render: () => <Topology /> },
+      // Correlix Topology Operating Canvas (Phase 1: React Flow + ELK). Evidence-
+      // backed, renderer-agnostic; see docs/Correlix_Topology_Operating_Canvas_Guide.
+      { id: "topology-canvas", label: "Topology Canvas", group: "Maps", render: () => <TopologyCanvas /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
       // Paths & overlays — how traffic actually traverses the network:
       // hop-by-hop active paths (Flow Trace) and overlay circuits (Tunnels).
