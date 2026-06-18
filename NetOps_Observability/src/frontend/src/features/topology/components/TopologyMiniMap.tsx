@@ -14,14 +14,21 @@ export default function TopologyMiniMap() {
       nodeColor={(n: Node) =>
         HEALTH_COLOR[((n.data as { node?: { health?: Health } })?.node?.health ?? "unknown") as Health]
       }
-      nodeStrokeWidth={2}
-      maskColor="var(--panel)"
+      nodeStrokeColor="transparent"
+      nodeStrokeWidth={0}
+      nodeBorderRadius={3}
+      // translucent mask so the whole map reads at a glance with the viewport
+      // highlighted — not opaque green squares floating on a white box.
+      maskColor="color-mix(in srgb, var(--surface) 76%, transparent)"
+      maskStrokeColor="var(--accent)"
+      maskStrokeWidth={2}
       style={{
-        background: "var(--surface)",
+        background: "var(--panel)",
         border: "1px solid var(--border)",
-        borderRadius: 8,
-        width: 150,
-        height: 100,
+        borderRadius: 10,
+        boxShadow: "0 2px 10px rgba(16,24,40,0.16)",
+        width: 168,
+        height: 112,
       }}
     />
   );

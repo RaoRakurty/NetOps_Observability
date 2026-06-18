@@ -82,17 +82,24 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
 
   const spotlight = emphasis === "spotlight";
   const dim = emphasis === "dim";
-  const opacity = dim ? 0.3 : spotlight ? 1 : 0.95;
+  const opacity = dim ? 0.32 : 1; // normal cards are fully opaque — no wash-out
 
   const healthColor = HEALTH_COLOR[node.health];
-  // spotlight gets a stronger, role/health-tinted border + elevated shadow.
-  const borderColor = spotlight ? accent : "var(--border)";
-  const borderWidth = spotlight ? 1.5 : 1;
+  const unhealthy = node.health === "critical" || node.health === "warning" || node.health === "maintenance";
+  // BRIGHT, COLOURED border: every card carries its role accent (or its health
+  // colour when unhealthy) so it reads solid — not a faint grey that dissolves
+  // into the canvas. Spotlight intensifies it further.
+  const borderColor = spotlight
+    ? accent
+    : unhealthy
+      ? healthColor
+      : `color-mix(in srgb, ${accent} 70%, var(--border))`;
+  const borderWidth = spotlight ? 2 : 1.5;
   const shadow = dim
     ? "none"
     : spotlight
-      ? `0 10px 28px rgba(0,0,0,0.26), 0 0 0 1px ${healthColor}33`
-      : "0 1px 3px rgba(0,0,0,0.10)";
+      ? `0 12px 30px rgba(16,24,40,0.30), 0 0 0 1px ${healthColor}55`
+      : "0 3px 10px rgba(16,24,40,0.13), 0 1px 2px rgba(16,24,40,0.09)";
 
   // ── compact mode: icon + health dot + truncated hostname only ────────────────
   if (compact) {

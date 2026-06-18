@@ -66,6 +66,7 @@ function CanvasInner() {
   // first-degree neighbours (skill design-tokens) without opening the drawer.
   const [hoverNode, setHoverNode] = useState<string | undefined>();
   const [hoverEdge, setHoverEdge] = useState<string | undefined>();
+  const [fullscreen, setFullscreen] = useState(false);
 
   const workflow = workflowById(mode);
   const view = workflow?.view;
@@ -152,6 +153,20 @@ function CanvasInner() {
     }
   }, [laidOutKey, rfNodes.length, rf]);
 
+  // Fullscreen: toggle a class on the root and re-fit; Escape exits.
+  useEffect(() => {
+    const t = setTimeout(() => rf.fitView({ padding: 0.2, duration: 260 }), 80);
+    return () => clearTimeout(t);
+  }, [fullscreen, rf]);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
+
   const onNodeClick = useCallback<NodeMouseHandler>((_e, n) => {
     setSelection({ nodeId: n.id });
   }, []);
@@ -180,7 +195,7 @@ function CanvasInner() {
   );
 
   return (
-    <div className="topo-root">
+    <div className={`topo-root${fullscreen ? " topo-fullscreen" : ""}`}>
       <TopologyToolbar
         onFit={() => rf.fitView({ padding: 0.2, duration: 320 })}
         onZoomIn={() => rf.zoomIn({ duration: 200 })}
@@ -195,6 +210,14 @@ function CanvasInner() {
       </TopologyToolbar>
 
       <div className="topo-stage">
+        <button
+          className="topo-fs-btn"
+          onClick={() => setFullscreen((f) => !f)}
+          title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}
+          aria-label={fullscreen ? "Exit full screen" : "Full screen"}
+        >
+          {fullscreen ? "⤡ Exit" : "⤢ Full screen"}
+        </button>
         {!view ? (
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />
         ) : (
