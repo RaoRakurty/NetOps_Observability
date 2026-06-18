@@ -242,6 +242,28 @@ func (s *server) qVecBy(ctx context.Context, query, key string) (map[string]floa
 	return out, true
 }
 
+// qVecBy2 is qVecBy keyed by two labels, taking the max value seen per (k1,k2)
+// pair. Returns nil (not an empty map) when the query fails, so callers can
+// treat "unreachable" and "no series" identically (both yield no lookups).
+func (s *server) qVecBy2(ctx context.Context, query, k1, k2 string) map[[2]string]float64 {
+	samples, err := s.vmInstant(ctx, query)
+	if err != nil {
+		return nil
+	}
+	out := map[[2]string]float64{}
+	for _, sm := range samples {
+		a, b := sm.Labels[k1], sm.Labels[k2]
+		if a == "" || b == "" {
+			continue
+		}
+		k := [2]string{a, b}
+		if v, seen := out[k]; !seen || sm.Value > v {
+			out[k] = sm.Value
+		}
+	}
+	return out
+}
+
 // fetchAvailabilityClass: admin-up interfaces that are oper-down, per device.
 func (s *server) fetchAvailabilityClass(ctx context.Context, site string) healthClassResult {
 	res := healthClassResult{Class: "availability"}

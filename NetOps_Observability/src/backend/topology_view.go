@@ -85,6 +85,16 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	cpu, _ := s.qVecBy(mctx, `max by (device) (device_cpu_percent)`, "device")
 	mem, _ := s.qVecBy(mctx, `max by (device) (device_mem_percent)`, "device")
 
+	// ── per-interface link metrics (best-effort): oper status + utilization ──
+	// Keyed by (device, interface=ifName). Status comes from ifOperStatus
+	// (1=up, others=down). Utilization is the link's busier direction as a
+	// fraction of ifSpeed — the same canonical formula the health scorer uses
+	// (rate(octets)*8 / speed_mbps*1e6). Left nil when VictoriaMetrics is
+	// unreachable so edges stay honestly "unknown" rather than fabricated.
+	operStatus := s.qVecBy2(mctx, `max by (device, interface) (device_if_oper_status)`, "device", "interface")
+	inUtil := s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")
+	outUtil := s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")
+
 	in := topology.Input{
 		Mode:     mode,
 		TenantID: tenant,
@@ -92,7 +102,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
 		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
 		Devices:  toDeviceFacts(devs, cpu, mem),
-		Links:    toLinkFacts(links),
+		Links:    toLinkFacts(links, operStatus, inUtil, outUtil),
 		Alerts:   toAlertFacts(alerts),
 	}
 
@@ -131,10 +141,10 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64) []topology
 	return out
 }
 
-func toLinkFacts(links []topoLink) []topology.LinkFact {
+func toLinkFacts(links []topoLink, operStatus, inUtil, outUtil map[[2]string]float64) []topology.LinkFact {
 	out := make([]topology.LinkFact, 0, len(links))
 	for _, l := range links {
-		out = append(out, topology.LinkFact{
+		lf := topology.LinkFact{
 			Source:        l.Source,
 			Target:        l.Target,
 			SourceName:    l.SourceName,
@@ -147,9 +157,63 @@ func toLinkFacts(links []topoLink) []topology.LinkFact {
 			Resolved:      l.Resolved,
 			Bidirectional: l.Bidirectional,
 			LastSeen:      time.UnixMilli(l.LastSeen),
-		})
+		}
+		lf.Utilization, lf.HasUtil, lf.Status = resolveLinkMetric(l, operStatus, inUtil, outUtil)
+		out = append(out, lf)
 	}
 	return out
+}
+
+// resolveLinkMetric folds per-interface oper-status and utilization (keyed by
+// device+ifName) onto a single link. Pure (no I/O) so it is unit-testable.
+//
+// Honesty rules (zero-trust on telemetry — never invent a healthy reading):
+//   - Utilization is the BUSIEST observation across both endpoints and both
+//     directions, expressed as a percentage of link speed. HasUtil is true only
+//     when at least one endpoint actually reported a sample, so "0%" (measured
+//     idle) stays distinct from "unmeasured".
+//   - Status is "down" if any endpoint's interface is oper-down, "up" only when
+//     an endpoint is confirmed up and none is down, and "" (→ "unknown" in the
+//     projection) when no endpoint reported oper-status. An unresolved target
+//     ("ext:<sysname>") carries no metrics, so only the local side contributes.
+func resolveLinkMetric(l topoLink, operStatus, inUtil, outUtil map[[2]string]float64) (util float64, hasUtil bool, status string) {
+	src := [2]string{l.Source, l.LocalPort}
+	dst := [2]string{l.Target, l.RemotePort}
+
+	for _, m := range []map[[2]string]float64{inUtil, outUtil} {
+		for _, k := range [][2]string{src, dst} {
+			if k[1] == "" {
+				continue // no port to key on
+			}
+			if v, ok := m[k]; ok {
+				if frac := v * 100; frac > util {
+					util = frac
+				}
+				hasUtil = true
+			}
+		}
+	}
+
+	anyUp, anyDown := false, false
+	for _, k := range [][2]string{src, dst} {
+		if k[1] == "" {
+			continue
+		}
+		if v, ok := operStatus[k]; ok {
+			if v == 1 {
+				anyUp = true
+			} else {
+				anyDown = true
+			}
+		}
+	}
+	switch {
+	case anyDown:
+		status = "down"
+	case anyUp:
+		status = "up"
+	}
+	return util, hasUtil, status
 }
 
 func toAlertFacts(alerts []models.Alert) []topology.AlertFact {
