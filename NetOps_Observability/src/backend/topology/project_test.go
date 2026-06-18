@@ -254,6 +254,33 @@ func TestProjectPathTraceComputed(t *testing.T) {
 	}
 }
 
+// nodeKind honors role → type → vendor → name, so a Fortinet firewall whose
+// SNMP type is "generic" still renders as a firewall, not a switch.
+func TestProjectNodeKindInference(t *testing.T) {
+	now := baseNow()
+	v := Project(Input{Now: now, Devices: []DeviceFact{
+		{ID: "dmz-fw", Name: "dmz-fw", Type: "generic", Role: "firewall", Vendor: "fortinet", LastSeen: now},
+		{ID: "pa1", Name: "pa1", Type: "generic", Vendor: "palo alto", LastSeen: now},
+		{ID: "edge-fw", Name: "edge-fw", Type: "generic", LastSeen: now}, // name token only
+		{ID: "leaf1", Name: "leaf1", Type: "switch", Vendor: "arista", LastSeen: now},
+		{ID: "core-rtr", Name: "core-rtr", Type: "router", LastSeen: now},
+		{ID: "software-sw", Name: "software", Type: "generic", LastSeen: now}, // must NOT match "fw"
+	}})
+	want := map[string]string{
+		"dmz-fw": KindFirewall, "pa1": KindFirewall, "edge-fw": KindFirewall,
+		"leaf1": KindSwitch, "core-rtr": KindRouter, "software-sw": KindSwitch,
+	}
+	for id, k := range want {
+		n, ok := findNode(v, id)
+		if !ok {
+			t.Fatalf("node %s missing", id)
+		}
+		if n.Kind != k {
+			t.Errorf("%s: kind=%s want %s", id, n.Kind, k)
+		}
+	}
+}
+
 // A completely empty input still yields a well-formed view (no nil slices/panics).
 func TestProjectEmptyInput(t *testing.T) {
 	v := Project(Input{Now: baseNow()})

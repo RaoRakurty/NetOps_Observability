@@ -117,7 +117,7 @@ func Project(in Input) View {
 		n := Node{
 			ID:          d.ID,
 			Label:       displayName(d),
-			Kind:        nodeKind(d.Type),
+			Kind:        nodeKind(d),
 			Role:        d.Role,
 			Vendor:      d.Vendor,
 			Model:       d.Model,
@@ -197,10 +197,37 @@ func displayName(d DeviceFact) string {
 	return d.ID
 }
 
-// nodeKind maps the backend device type to a contract NodeKind. Unknown types
-// fall back to "switch" (a neutral box) rather than guessing a role.
-func nodeKind(t string) string {
-	switch strings.ToLower(strings.TrimSpace(t)) {
+// nodeKind maps a device to a contract NodeKind. It trusts an explicit operator
+// role first, then the SNMP-inferred type, then falls back to vendor/name hints
+// — because type inference often yields "generic" for firewall/SP gear, which
+// would otherwise mis-render a Fortinet firewall as a plain switch. Only when no
+// signal resolves does it default to "switch" (a neutral box, never a guess).
+func nodeKind(d DeviceFact) string {
+	if k := kindFromKeyword(d.Role); k != "" {
+		return k
+	}
+	if k := kindFromKeyword(d.Type); k != "" {
+		return k
+	}
+	// Vendor hint: dedicated firewall/SD-WAN-security vendors → firewall.
+	switch strings.ToLower(strings.TrimSpace(d.Vendor)) {
+	case "fortinet", "fortigate", "palo alto", "paloalto", "palo-alto", "panw", "checkpoint", "check point":
+		return KindFirewall
+	}
+	// Name hint: an explicit "fw"/"firewall"/"lb" token in the hostname.
+	name := strings.ToLower(d.Name)
+	switch {
+	case strings.Contains(name, "firewall") || hasToken(name, "fw"):
+		return KindFirewall
+	case hasToken(name, "lb") || hasToken(name, "slb"):
+		return KindLoadBalancer
+	}
+	return KindSwitch
+}
+
+// kindFromKeyword resolves a role/type string to a NodeKind, or "" if unknown.
+func kindFromKeyword(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "router":
 		return KindRouter
 	case "switch":
@@ -214,8 +241,21 @@ func nodeKind(t string) string {
 	case "cloud-gw", "cloud", "cloud-gateway":
 		return KindCloud
 	default:
-		return KindSwitch
+		return ""
 	}
+}
+
+// hasToken reports whether tok appears as a hyphen/dot/underscore-delimited token
+// in name (so "dmz-fw" matches "fw" but "software" does not).
+func hasToken(name, tok string) bool {
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	}) {
+		if part == tok {
+			return true
+		}
+	}
+	return false
 }
 
 // deviceHealth derives health + change_state HONESTLY:
