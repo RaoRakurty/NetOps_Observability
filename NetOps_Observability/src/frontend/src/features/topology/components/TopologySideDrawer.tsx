@@ -7,6 +7,7 @@ import type {
   TopologySelection,
   TopologyNode,
   TopologyEdge,
+  TopologyGroup,
   ChangeState,
 } from "../api/topologyTypes";
 import {
@@ -15,6 +16,7 @@ import {
   HEALTH_LABEL,
   edgeEvidenceSummary,
   statusToHealth,
+  rollupHealth,
 } from "../utils/topologyHealth";
 import type { Health } from "../api/topologyTypes";
 import ConfidencePanel from "./ConfidencePanel";
@@ -207,19 +209,90 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
   );
 }
 
+function GroupBody({
+  group,
+  view,
+  collapsed,
+  onToggleGroup,
+}: {
+  group: TopologyGroup;
+  view: TopologyView;
+  collapsed: boolean;
+  onToggleGroup?: (id: string) => void;
+}) {
+  const members = group.children
+    .map((id) => view.nodes.find((n) => n.id === id))
+    .filter(Boolean) as TopologyNode[];
+  const worst = rollupHealth(members);
+  const critical = members.filter((m) => m.health === "critical").length;
+  const warning = members.filter((m) => m.health === "warning").length;
+  const links = view.edges.filter((e) => group.children.includes(e.source) || group.children.includes(e.target)).length;
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{group.label}</h2>
+        <HealthBadge health={worst} />
+      </div>
+      <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
+        {group.group_type} · {members.length} nodes
+      </div>
+
+      <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
+        <MetaRow label="Nodes" value={String(members.length)} />
+        <MetaRow label="Critical" value={critical ? String(critical) : undefined} />
+        <MetaRow label="Warning" value={warning ? String(warning) : undefined} />
+        <MetaRow label="Links" value={String(links)} />
+        <MetaRow label="Owner" value={group.owner} />
+        <MetaRow label="State" value={collapsed ? "Collapsed" : "Expanded"} />
+      </div>
+
+      <section style={{ marginBottom: 12 }}>
+        <button
+          type="button"
+          onClick={() => onToggleGroup?.(group.id)}
+          style={{
+            width: "100%", padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            color: "var(--fg)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 7,
+          }}
+        >
+          {collapsed ? "Expand group" : "Collapse group"}
+        </button>
+      </section>
+
+      <section>
+        <div style={sectionTitle}>Members</div>
+        <div style={{ display: "grid", gap: 4 }}>
+          {members.map((m) => (
+            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--fg)" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: HEALTH_COLOR[m.health], flex: "0 0 auto" }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.label}</span>
+              <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--fg-subtle)" }}>{m.role ?? m.kind}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
 export default function TopologySideDrawer({
   view,
   selection,
   onClose,
+  collapsedGroups,
+  onToggleGroup,
 }: {
   view: TopologyView;
   selection: TopologySelection;
   onClose: () => void;
+  collapsedGroups?: Set<string>;
+  onToggleGroup?: (id: string) => void;
 }) {
   const node = selection.nodeId ? view.nodes.find((n) => n.id === selection.nodeId) : undefined;
   const edge = !node && selection.edgeId ? view.edges.find((e) => e.id === selection.edgeId) : undefined;
+  const group = !node && !edge && selection.groupId ? view.groups.find((g) => g.id === selection.groupId) : undefined;
 
-  if (!node && !edge) return null;
+  if (!node && !edge && !group) return null;
 
   return (
     <aside
@@ -268,7 +341,18 @@ export default function TopologySideDrawer({
       </div>
 
       <div style={{ padding: "4px 16px 20px" }}>
-        {node ? <NodeBody node={node} /> : edge ? <EdgeBody edge={edge} view={view} /> : null}
+        {node ? (
+          <NodeBody node={node} />
+        ) : edge ? (
+          <EdgeBody edge={edge} view={view} />
+        ) : group ? (
+          <GroupBody
+            group={group}
+            view={view}
+            collapsed={collapsedGroups?.has(group.id) ?? false}
+            onToggleGroup={onToggleGroup}
+          />
+        ) : null}
       </div>
     </aside>
   );

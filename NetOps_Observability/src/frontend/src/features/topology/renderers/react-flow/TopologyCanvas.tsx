@@ -29,7 +29,9 @@ import type { OverlayKind, TopologySelection, WorkflowMode } from "../../api/top
 import { layoutView } from "../../layout/elkLayout";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { topologyToReactFlow } from "./topologyToReactFlow";
-import type { RFNodeData, RFEdgeData } from "./rfTypes";
+import type { RFNodeData, RFEdgeData, RFGroupData } from "./rfTypes";
+
+type AnyNodeData = RFNodeData | RFGroupData;
 import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { WORKFLOWS, workflowById } from "../../workflows";
@@ -67,6 +69,7 @@ function CanvasInner() {
   const [hoverNode, setHoverNode] = useState<string | undefined>();
   const [hoverEdge, setHoverEdge] = useState<string | undefined>();
   const [fullscreen, setFullscreen] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const workflow = workflowById(mode);
   const view = workflow?.view;
@@ -96,7 +99,39 @@ function CanvasInner() {
     setSearchMatches(new Set());
     setHoverNode(undefined);
     setHoverEdge(undefined);
+    setCollapsedGroups(new Set());
   }, [mode]);
+
+  // node → group lookup, for collapse hiding + search-to-expand.
+  const nodeGroup = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const g of view?.groups ?? []) for (const c of g.children) m.set(c, g.id);
+    return m;
+  }, [view]);
+
+  const onToggleGroup = useCallback((groupId: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  // Search-to-expand: if a matched node sits inside a collapsed group, reveal it.
+  useEffect(() => {
+    if (searchMatches.size === 0 || collapsedGroups.size === 0) return;
+    let changed = false;
+    const next = new Set(collapsedGroups);
+    for (const id of searchMatches) {
+      const g = nodeGroup.get(id);
+      if (g && next.has(g)) {
+        next.delete(g);
+        changed = true;
+      }
+    }
+    if (changed) setCollapsedGroups(next);
+  }, [searchMatches, nodeGroup, collapsedGroups]);
 
   // Spotlight priority: a click-selection wins (and opens the drawer); else a hover
   // spotlights first-degree neighbours (no drawer); else the workflow's default
@@ -118,7 +153,7 @@ function CanvasInner() {
 
   // Derive React Flow nodes/edges. Pure, memoized on the inputs that matter.
   const derived = useMemo(() => {
-    if (!view) return { nodes: [] as Node<RFNodeData>[], edges: [] as Edge<RFEdgeData>[] };
+    if (!view) return { nodes: [] as Node<AnyNodeData>[], edges: [] as Edge<RFEdgeData>[] };
     const strongEdges = new Set<string>(spotlight.edges);
     if (selection.edgeId) strongEdges.add(selection.edgeId);
     if (hoverEdge) strongEdges.add(hoverEdge);
@@ -132,10 +167,12 @@ function CanvasInner() {
       overlay,
       showAllLabels,
       searchMatches,
+      collapsedGroups,
+      onToggleGroup,
     });
-  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge]);
+  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge, collapsedGroups, onToggleGroup]);
 
-  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFNodeData>>([]);
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<AnyNodeData>>([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge<RFEdgeData>>([]);
 
   useEffect(() => {
@@ -168,7 +205,9 @@ function CanvasInner() {
   }, [fullscreen]);
 
   const onNodeClick = useCallback<NodeMouseHandler>((_e, n) => {
-    setSelection({ nodeId: n.id });
+    // group nodes select as a group (drawer shows aggregate); devices select as nodes.
+    if (n.type === "groupNode") setSelection({ groupId: n.id });
+    else setSelection({ nodeId: n.id });
   }, []);
   const onEdgeClick = useCallback<EdgeMouseHandler>((_e, ed) => {
     setSelection({ edgeId: ed.id });
@@ -258,8 +297,14 @@ function CanvasInner() {
               </div>
             )}
 
-            {(selection.nodeId || selection.edgeId) && (
-              <TopologySideDrawer view={view} selection={selection} onClose={() => setSelection({})} />
+            {(selection.nodeId || selection.edgeId || selection.groupId) && (
+              <TopologySideDrawer
+                view={view}
+                selection={selection}
+                onClose={() => setSelection({})}
+                collapsedGroups={collapsedGroups}
+                onToggleGroup={onToggleGroup}
+              />
             )}
           </>
         )}

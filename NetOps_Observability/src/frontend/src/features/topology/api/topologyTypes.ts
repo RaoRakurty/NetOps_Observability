@@ -195,4 +195,5 @@ export type TopologyView = {
 export type TopologySelection = {
   nodeId?: string;
   edgeId?: string;
+  groupId?: string;
 };

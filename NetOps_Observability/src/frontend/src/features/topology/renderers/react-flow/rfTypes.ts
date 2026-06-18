@@ -6,10 +6,25 @@
 // is `normal`/`muted`; only selected, neighbour, path, unhealthy, changed or
 // searched objects become `spotlight`/`strong`, and unrelated objects `dim`.
 
-import type { TopologyNode, TopologyEdge, OverlayKind } from "../../api/topologyTypes";
+import type { TopologyNode, TopologyEdge, TopologyGroup, OverlayKind, Health } from "../../api/topologyTypes";
 
 export type NodeEmphasis = "normal" | "spotlight" | "dim";
 export type EdgeEmphasis = "muted" | "normal" | "strong";
+
+/** Aggregate stats shown on a group container/collapsed node. */
+export type GroupCounts = { total: number; critical: number; warning: number; links: number };
+
+/** `data` payload on a group React Flow node (container when expanded, aggregate
+ *  when collapsed). Groups are TopologyGroups — distinct from device nodes. */
+export type RFGroupData = {
+  group: TopologyGroup;
+  collapsed: boolean;
+  emphasis: NodeEmphasis;
+  counts: GroupCounts;
+  health: Health;
+  /** Toggle collapse/expand — injected by the canvas (stable ref). */
+  onToggle?: (groupId: string) => void;
+};
 
 /** `data` payload on every React Flow node. */
 export type RFNodeData = {
