@@ -697,6 +697,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/timeseries", s.handleFlowsTimeseries)
 	mux.HandleFunc("/api/flows/services", s.handleFlowsServices) // #69 P2: flow traffic per service
 	mux.HandleFunc("/api/topology/links", s.handleTopologyLinks) // LLDP-discovered adjacencies
+	mux.HandleFunc("/api/topology/view", s.handleTopologyView)   // resolved renderer-agnostic TopologyView
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed

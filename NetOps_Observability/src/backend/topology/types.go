@@ -1,0 +1,228 @@
+package topology
+
+import "time"
+
+// types.go — the canonical, renderer-agnostic topology contract, in Go.
+//
+// The OUTPUT types (View/Node/Edge/Group/EvidenceRef) mirror the single source of
+// truth — `.claude/skills/topology-ui/topology-contract.json` and its TypeScript
+// twin `features/topology/api/topologyTypes.ts` — field-for-field, json tags
+// included, so the frontend consumes the projection with no translation. Only the
+// flat CANONICAL fields are emitted here; the UI's DERIVED/enrichment fields
+// (per-evidence summary, bundle details, coordinates) are computed in the adapter,
+// never authored by the backend.
+//
+// The INPUT types (Input/DeviceFact/LinkFact/AlertFact/PathFact) are the
+// dependency-injected telemetry bundle. They are deliberately decoupled from the
+// rest of the backend (no models.* import) so this package stays a pure,
+// stdlib-only leaf that is fully unit-testable with mock telemetry. The package
+// main handler does the gather + translate; the projection logic stays pure.
+
+// ── enums (string-valued, matching the contract) ─────────────────────────────
+
+// Health — 5 states incl. "maintenance" (contract enum).
+const (
+	HealthOK          = "ok"
+	HealthWarning     = "warning"
+	HealthCritical    = "critical"
+	HealthUnknown     = "unknown"
+	HealthMaintenance = "maintenance"
+)
+
+// change_state — incl. "stale" (skill time-diff-golden-path.md).
+const (
+	ChangeUnchanged = "unchanged"
+	ChangeStale     = "stale"
+	ChangeUnknown   = "unknown"
+)
+
+// Node kinds (contract NodeKind).
+const (
+	KindSwitch       = "switch"
+	KindRouter       = "router"
+	KindFirewall     = "firewall"
+	KindLoadBalancer = "load_balancer"
+	KindServer       = "server"
+	KindCloud        = "cloud"
+	KindUnresolved   = "unresolved"
+)
+
+// Edge relationships (contract EdgeRelationship).
+const (
+	RelConnectedTo     = "connected_to"     // L2/physical adjacency (LLDP/CDP)
+	RelRoutedAdjacency = "routed_adjacency" // BGP-LS / IS-IS / OSPF
+)
+
+// Workflow modes (contract WorkflowMode).
+const (
+	ModeExplore     = "explore"
+	ModeInvestigate = "investigate"
+	ModePathTrace   = "path_trace"
+	ModeDependency  = "dependency"
+)
+
+// ── output: evidence ─────────────────────────────────────────────────────────
+
+// EvidenceRef is one piece of evidence backing a node or edge. CANONICAL fields
+// per the contract are source + confidence (+ optional detail). No node/edge is
+// rendered without at least one of these (the "no edge without evidence" rule).
+type EvidenceRef struct {
+	Source     string  `json:"source"`                // TopologySource: lldp|cdp|bgp_ls|snmp|trace|metric…
+	Confidence float64 `json:"confidence"`            // 0..1
+	Detail     string  `json:"detail,omitempty"`      // human-readable one-liner
+	ObservedAt string  `json:"observed_at,omitempty"` // RFC3339 (derived, but cheap & useful)
+}
+
+// ── output: node ─────────────────────────────────────────────────────────────
+
+type Node struct {
+	ID          string             `json:"id"`
+	Label       string             `json:"label"`
+	Kind        string             `json:"kind"`
+	Role        string             `json:"role,omitempty"`
+	Vendor      string             `json:"vendor,omitempty"`
+	Model       string             `json:"model,omitempty"`
+	Site        string             `json:"site,omitempty"`
+	Rack        string             `json:"rack,omitempty"`
+	MgmtIP      string             `json:"mgmt_ip,omitempty"`
+	Health      string             `json:"health"`
+	Owner       string             `json:"owner,omitempty"`
+	Confidence  float64            `json:"confidence"`
+	FirstSeen   string             `json:"first_seen,omitempty"`
+	LastSeen    string             `json:"last_seen,omitempty"`
+	ChangeState string             `json:"change_state,omitempty"`
+	Metrics     map[string]float64 `json:"metrics,omitempty"`
+	Evidence    []EvidenceRef      `json:"evidence"`
+	// derived enrichment the backend can safely supply
+	Resolved bool   `json:"resolved"`
+	GroupID  string `json:"group_id,omitempty"`
+}
+
+// ── output: edge ─────────────────────────────────────────────────────────────
+
+type Edge struct {
+	ID           string        `json:"id"`
+	Source       string        `json:"source"`
+	Target       string        `json:"target"`
+	SourcePort   string        `json:"source_port,omitempty"`
+	TargetPort   string        `json:"target_port,omitempty"`
+	Relationship string        `json:"relationship"`
+	Protocol     string        `json:"protocol,omitempty"`
+	Status       string        `json:"status,omitempty"`
+	Utilization  float64       `json:"utilization_pct,omitempty"`
+	Confidence   float64       `json:"confidence"`
+	FirstSeen    string        `json:"first_seen,omitempty"`
+	LastSeen     string        `json:"last_seen,omitempty"`
+	ChangeState  string        `json:"change_state,omitempty"`
+	Evidence     []EvidenceRef `json:"evidence"`
+}
+
+// ── output: group ────────────────────────────────────────────────────────────
+
+type Group struct {
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	GroupType string   `json:"group_type"` // site|pod|rack|cluster|zone|region|vpc|app
+	Children  []string `json:"children"`
+	Health    string   `json:"health"`
+	Collapsed bool     `json:"collapsed"`
+	Owner     string   `json:"owner,omitempty"`
+}
+
+// ── output: view ─────────────────────────────────────────────────────────────
+
+type Scope struct {
+	TenantID   string `json:"tenant_id,omitempty"`
+	Site       string `json:"site,omitempty"`
+	PathID     string `json:"path_id,omitempty"`
+	IncidentID string `json:"incident_id,omitempty"`
+}
+
+type View struct {
+	ViewID      string   `json:"view_id"`
+	Mode        string   `json:"mode"`
+	Scope       Scope    `json:"scope"`
+	LayoutType  string   `json:"layout_type"`
+	GeneratedAt string   `json:"generated_at"` // RFC3339
+	Nodes       []Node   `json:"nodes"`
+	Edges       []Edge   `json:"edges"`
+	Groups      []Group  `json:"groups"`
+	Overlays    []string `json:"overlays"`
+	// derived enrichment: ordered node ids of the highlighted path (path_trace).
+	Path []string `json:"path,omitempty"`
+}
+
+// ── input: the DI'd telemetry bundle ─────────────────────────────────────────
+
+// DeviceFact is one managed device, already tenant-scoped by the caller.
+type DeviceFact struct {
+	ID       string
+	Name     string
+	Vendor   string
+	Model    string
+	Type     string // router|switch|firewall|load-balancer|cloud-gw|generic (backend device type)
+	Role     string
+	Site     string
+	Rack     string
+	MgmtIP   string
+	Owner    string
+	LastSeen time.Time
+	// Metrics — set Has* to distinguish "0%" from "unknown" (zero-trust honesty).
+	CPUPct float64
+	HasCPU bool
+	MemPct float64
+	HasMem bool
+}
+
+// LinkFact is one deduped, undirected adjacency (output of the link normalizer).
+type LinkFact struct {
+	Source     string // local managed device id
+	Target     string // managed device id, or "ext:<sysname>" for an unresolved neighbour
+	SourceName string
+	TargetName string
+	LocalPort  string
+	RemotePort string
+	Protocol   string // "lldp"|"cdp"|"bgp_ls"; "+"-joined when several confirm
+	IGP        string // bgp_ls IGP origin
+	Area       string
+	Metric     uint32 // IGP/TE cost (0 = unknown → SPF treats as 1)
+	// Utilization — set HasUtil to distinguish "0%" from "unmeasured".
+	Utilization   float64
+	HasUtil       bool
+	Status        string // up|down|degraded|warning|maintenance|unknown ("" → unknown)
+	Resolved      bool   // target is a managed device
+	Bidirectional bool
+	LastSeen      time.Time
+}
+
+// AlertFact is one active alert affecting a device (drives node health).
+type AlertFact struct {
+	DeviceID string
+	Severity string // critical|warning|info…
+	Summary  string
+	FiredAt  time.Time
+}
+
+// PathFact is a measured A→B path (traceroute), as an ordered list of device ids.
+type PathFact struct {
+	ID   string
+	Hops []string
+}
+
+// Input is everything the projection needs. All slices are tenant-scoped by the
+// caller; the projection trusts the scoping but validates shape (zero-trust on
+// content — empty/degenerate facts are dropped, never panicked on).
+type Input struct {
+	Mode     string
+	TenantID string
+	Now      time.Time
+	Devices  []DeviceFact
+	Links    []LinkFact
+	Alerts   []AlertFact
+	Paths    []PathFact
+	// SrcID/DstID — optional path_trace endpoints; when set (and no measured path
+	// is supplied) the projection computes the IGP-weighted shortest path.
+	SrcID      string
+	DstID      string
+	StaleAfter time.Duration // a device unseen longer than this → change_state=stale (0 → 24h default)
+}

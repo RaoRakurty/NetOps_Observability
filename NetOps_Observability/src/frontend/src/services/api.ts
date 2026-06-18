@@ -1054,6 +1054,15 @@ export const api = {
   deleteRule: (name: string) =>
     request<void>(`/api/rules?name=${encodeURIComponent(name)}`, { method: "DELETE" }),
   credentials: () => request<Record<string, boolean>>("/api/credentials"),
+  // Topology Operating Canvas: resolved, renderer-agnostic TopologyView for a
+  // workflow mode. Typed `unknown` to keep services/api.ts decoupled from the
+  // feature's contract types; the topology API client casts + normalizes it.
+  topologyView: (mode: string, params?: { src?: string; dst?: string }) => {
+    const qs = new URLSearchParams({ mode });
+    if (params?.src) qs.set("src", params.src);
+    if (params?.dst) qs.set("dst", params.dst);
+    return request<unknown>(`/api/topology/view?${qs.toString()}`);
+  },
   refreshDiscovery: () =>
     request<{ status: string }>("/api/discovery/refresh", { method: "POST" }),
 

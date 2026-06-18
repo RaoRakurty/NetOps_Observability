@@ -1,18 +1,22 @@
 // topologyApi.ts — the topology API client.
 //
-// STUB: today this serves mock TopologyViews. The real backend is a Go graph-
-// projection service that resolves identities, scores confidence, windows by time
-// and returns a resolved TopologyView. When it lands, fetchTopologyView becomes a
-// real call:
+// The real backend is a Go graph-projection service that resolves identities,
+// scores confidence, windows by time and returns a resolved TopologyView:
 //
 //     GET /api/topology/view?mode=<WorkflowMode>&...   →   TopologyView (JSON)
 //
 // The contract is immovable: the API returns a renderer-agnostic TopologyView and
 // NEVER React Flow nodes. The client always runs the response through normalizeView
 // so the UI gets a safe, evidence-backed graph regardless of backend bugs.
+//
+// GRACEFUL DEGRADATION: if the endpoint errors, or returns an EMPTY graph (e.g.
+// collectors are off, or a mode the backend doesn't yet project with real data),
+// we fall back to the matching mock view so the canvas always renders something
+// meaningful instead of a blank screen.
 
 import type { TopologyView, WorkflowMode } from "./topologyTypes";
 import { normalizeView } from "../utils/topologyMapper";
+import { api } from "../../../services/api";
 import {
   physicalTopology,
   pathTopology,
@@ -43,13 +47,30 @@ function mockForMode(mode: WorkflowMode): TopologyView {
 /**
  * Fetch the resolved TopologyView for a workflow mode.
  *
- * Stubbed against mocks for now (wrapped in Promise.resolve so the signature is
- * already the async one the real client will use). Will become
  *   GET /api/topology/view?mode=… → TopologyView
- * The response is always normalized before reaching the renderer.
+ *
+ * The response is always normalized before reaching the renderer. On any error
+ * (or an empty graph) the matching mock view is used so the canvas never blanks.
  */
+/** Modes the Go projection serves with real data; others stay mock-only. */
+const REAL_MODES: ReadonlySet<WorkflowMode> = new Set<WorkflowMode>([
+  "explore",
+  "investigate",
+  "path_trace",
+  "dependency",
+]);
+
 export async function fetchTopologyView(mode: WorkflowMode): Promise<TopologyView> {
-  return Promise.resolve(normalizeView(mockForMode(mode)));
+  if (!REAL_MODES.has(mode)) return normalizeView(mockForMode(mode));
+  try {
+    const raw = (await api.topologyView(mode)) as TopologyView;
+    const view = normalizeView(raw);
+    if (view.nodes.length > 0) return view;
+    // Empty real graph (collectors off / no inventory) → show the mock instead.
+    return normalizeView(mockForMode(mode));
+  } catch {
+    return normalizeView(mockForMode(mode));
+  }
 }
 
 /** Catalogue of operator workflows for the mode switcher (PDF §9). */
