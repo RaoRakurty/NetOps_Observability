@@ -139,6 +139,20 @@ export function hasEvidence(evidence: EvidenceRef[] | undefined): boolean {
   return Array.isArray(evidence) && evidence.length > 0;
 }
 
+/** Why an unresolved node exists (skill §2). Maps tags.reason → operator copy. */
+export const UNRESOLVED_REASON: Record<string, string> = {
+  unmatched_remote_chassis: "Remote chassis ID not in inventory",
+  unmatched_remote_hostname: "Remote hostname not in inventory",
+  inferred_neighbor: "Inferred neighbour — one-way discovery",
+  flow_only: "Flow-only dependency — no inventory/path evidence",
+  missing_inventory_match: "No inventory match",
+};
+
+export function unresolvedReason(tags: Record<string, string> | undefined): string {
+  const r = tags?.reason;
+  return (r && UNRESOLVED_REASON[r]) || "Unresolved remote neighbour";
+}
+
 /** One-line edge summary for hover, e.g. "bidirectional LLDP · confidence 98%". */
 export function edgeEvidenceSummary(edge: TopologyEdge): string {
   const src = edge.protocol ? SOURCE_LABEL[edge.protocol] : "topology";

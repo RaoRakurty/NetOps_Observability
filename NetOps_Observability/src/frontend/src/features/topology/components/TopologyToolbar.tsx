@@ -36,6 +36,8 @@ export default function TopologyToolbar({
   onToggleLabels,
   density,
   onDensityChange,
+  onResetLayout,
+  layoutPinned,
   children,
 }: {
   onFit: () => void;
@@ -45,6 +47,8 @@ export default function TopologyToolbar({
   onToggleLabels: () => void;
   density: Density;
   onDensityChange: (d: Density) => void;
+  onResetLayout?: () => void;
+  layoutPinned?: boolean;
   children?: React.ReactNode;
 }) {
   return (
@@ -120,6 +124,28 @@ export default function TopologyToolbar({
         >
           Labels
         </button>
+
+        {onResetLayout && (
+          <button
+            type="button"
+            onClick={onResetLayout}
+            disabled={!layoutPinned}
+            title={layoutPinned ? "Reset to automatic (ELK) layout" : "No pinned positions"}
+            style={{
+              border: "1px solid var(--border)",
+              background: "var(--surface)",
+              color: layoutPinned ? "var(--fg-muted)" : "var(--fg-subtle)",
+              borderRadius: 6,
+              padding: "5px 10px",
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: layoutPinned ? "pointer" : "default",
+              opacity: layoutPinned ? 1 : 0.55,
+            }}
+          >
+            Reset layout
+          </button>
+        )}
 
         <div style={{ display: "inline-flex", gap: 4 }}>
           <button type="button" onClick={onZoomOut} title="Zoom out" aria-label="Zoom out" style={iconBtn}>

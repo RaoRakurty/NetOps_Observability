@@ -17,6 +17,7 @@ import {
   edgeEvidenceSummary,
   statusToHealth,
   rollupHealth,
+  unresolvedReason,
 } from "../utils/topologyHealth";
 import type { Health } from "../api/topologyTypes";
 import ConfidencePanel from "./ConfidencePanel";
@@ -74,10 +75,55 @@ function MetaRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
+const UNRESOLVED_ACTIONS = ["Resolve inventory", "Map alias", "Mark expected", "Ignore"];
+
+function UnresolvedBlock({ node }: { node: TopologyNode }) {
+  const rawId = node.tags?.raw_chassis ?? node.tags?.raw_id ?? node.label;
+  const suggested = node.tags?.suggested_match;
+  const missing = node.evidence.map((e) => e.missing_evidence_if_any).filter(Boolean)[0];
+  return (
+    <section
+      style={{
+        marginBottom: 14,
+        border: "1px dashed var(--border)",
+        borderRadius: 8,
+        background: "var(--surface)",
+        padding: "10px 11px",
+      }}
+    >
+      <div style={{ ...sectionTitle, marginBottom: 6 }}>Unresolved — why it's here</div>
+      <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 8 }}>{unresolvedReason(node.tags)}</div>
+      <div style={{ display: "grid", gap: 2, marginBottom: 8 }}>
+        <MetaRow label="Raw ID" value={rawId} />
+        <MetaRow label="Suggested" value={suggested} />
+        <MetaRow label="Missing" value={missing} />
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {UNRESOLVED_ACTIONS.map((a) => (
+          <button
+            key={a}
+            type="button"
+            title={`${a} (Phase 2 stub — resolution backend lands later)`}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: "4px 9px", cursor: "pointer",
+              color: "var(--fg-muted)", background: "var(--panel)",
+              border: "1px solid var(--border)", borderRadius: 6,
+            }}
+          >
+            {a}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function NodeBody({ node }: { node: TopologyNode }) {
   const metrics = Object.entries(node.metrics ?? {});
+  const unresolved = node.resolved === false || node.kind === "unresolved";
   return (
     <>
+      {unresolved && <UnresolvedBlock node={node} />}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "var(--fg)" }}>{node.label}</h2>
         <HealthBadge health={node.health} />

@@ -448,7 +448,7 @@ export const physicalTopology: TopologyView = {
           missing_evidence_if_any: "no reverse LLDP / SNMP from the remote chassis 00:1c:73:aa:bb:cc",
         },
       ],
-      tags: { reason: "unmatched_remote_chassis" },
+      tags: { reason: "unmatched_remote_chassis", raw_chassis: "00:1c:73:aa:bb:cc", suggested_match: "tor-spare-7 (NetBox, 60% name match)" },
     },
     {
       id: "unresolved-neigh-2",
@@ -473,7 +473,7 @@ export const physicalTopology: TopologyView = {
           missing_evidence_if_any: "no SNMP sysName / NetBox record for advertised neighbour",
         },
       ],
-      tags: { reason: "unmatched_remote_chassis" },
+      tags: { reason: "unmatched_remote_hostname", raw_id: "fcs-edge?", suggested_match: "fcs-edge-2 (hostname fuzzy match)" },
     },
   ],
   edges: [

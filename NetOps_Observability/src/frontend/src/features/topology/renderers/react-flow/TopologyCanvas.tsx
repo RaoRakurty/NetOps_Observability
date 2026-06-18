@@ -22,12 +22,14 @@ import {
   type Edge,
   type NodeMouseHandler,
   type EdgeMouseHandler,
+  type OnNodeDrag,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import type { OverlayKind, TopologySelection, WorkflowMode } from "../../api/topologyTypes";
 import { layoutView } from "../../layout/elkLayout";
 import type { LayoutResult } from "../../layout/layoutTypes";
+import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
 import type { RFNodeData, RFEdgeData, RFGroupData } from "./rfTypes";
 
@@ -64,6 +66,9 @@ function CanvasInner() {
   const [density, setDensity] = useState<Density>("operator");
   const [positions, setPositions] = useState<LayoutResult>({});
   const [laidOutKey, setLaidOutKey] = useState<string>("");
+  // pure ELK result (for "reset layout") + whether any operator pin is active.
+  const elkPositions = useRef<LayoutResult>({});
+  const [layoutPinned, setLayoutPinned] = useState(false);
   // Hover state is transient and SEPARATE from click-selection: hover spotlights
   // first-degree neighbours (skill design-tokens) without opening the drawer.
   const [hoverNode, setHoverNode] = useState<string | undefined>();
@@ -74,6 +79,9 @@ function CanvasInner() {
   const workflow = workflowById(mode);
   const view = workflow?.view;
   const showAllLabels = labelsToggle || density === "engineer";
+  // saved-layout key: invalidated when the view, layout type, or node cardinality
+  // (a proxy for topology generation) changes.
+  const layoutKey = view ? `${view.view_id}:${view.layout_type}:${view.nodes.length}` : "";
 
   // (Re)compute ELK layout only when the active view changes. Cached in elkLayout.
   useEffect(() => {
@@ -83,15 +91,38 @@ function CanvasInner() {
       return;
     }
     layoutView(view).then((pos) => {
-      if (alive) {
-        setPositions(pos);
-        setLaidOutKey(view.view_id);
-      }
+      if (!alive) return;
+      elkPositions.current = pos;
+      // operator pins override ELK for the nodes they cover (skill §3).
+      const saved = loadSavedLayout(layoutKey);
+      const pinCount = Object.keys(saved).length;
+      setLayoutPinned(pinCount > 0);
+      setPositions(pinCount > 0 ? { ...pos, ...saved } : pos);
+      setLaidOutKey(view.view_id);
     });
     return () => {
       alive = false;
     };
-  }, [view]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, layoutKey]);
+
+  // Persist a dragged node and keep it pinned for this session.
+  const onNodeDragStop = useCallback<OnNodeDrag<Node<AnyNodeData>>>(
+    (_e, n) => {
+      if (!layoutKey) return;
+      saveNodePosition(layoutKey, n.id, n.position);
+      setPositions((p) => ({ ...p, [n.id]: n.position }));
+      setLayoutPinned(true);
+    },
+    [layoutKey],
+  );
+
+  const onResetLayout = useCallback(() => {
+    if (layoutKey) clearSavedLayout(layoutKey);
+    setPositions({ ...elkPositions.current });
+    setLayoutPinned(false);
+    setTimeout(() => rf.fitView({ padding: 0.2, duration: 300 }), 40);
+  }, [layoutKey, rf]);
 
   // Reset transient selection when the workflow changes.
   useEffect(() => {
@@ -243,6 +274,8 @@ function CanvasInner() {
         onToggleLabels={() => setLabelsToggle((v) => !v)}
         density={density}
         onDensityChange={setDensity}
+        onResetLayout={onResetLayout}
+        layoutPinned={layoutPinned}
       >
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
         {view && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
@@ -275,6 +308,7 @@ function CanvasInner() {
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
+              onNodeDragStop={onNodeDragStop}
               onNodeMouseEnter={onNodeMouseEnter}
               onNodeMouseLeave={onNodeMouseLeave}
               onEdgeMouseEnter={onEdgeMouseEnter}

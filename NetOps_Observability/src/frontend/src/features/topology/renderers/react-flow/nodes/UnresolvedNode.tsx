@@ -6,7 +6,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { RFNodeData } from "../rfTypes";
-import { HEALTH_COLOR, confidencePct } from "../../../utils/topologyHealth";
+import { HEALTH_COLOR, confidencePct, unresolvedReason } from "../../../utils/topologyHealth";
 
 const SLATE = HEALTH_COLOR.unknown;
 
@@ -78,10 +78,25 @@ function UnresolvedNodeBase(props: NodeProps) {
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              maxWidth: 130,
+              maxWidth: 150,
             }}
           >
             {node.label}
+          </span>
+        )}
+        {showLabel && (
+          <span
+            title={unresolvedReason(node.tags)}
+            style={{
+              fontSize: 10,
+              color: "var(--fg-subtle)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              maxWidth: 150,
+            }}
+          >
+            {unresolvedReason(node.tags)}
           </span>
         )}
       </div>
