@@ -49,24 +49,6 @@ function HealthRing({ health }: { health: RFNodeData["node"]["health"] }) {
   );
 }
 
-/** Tiny dot used in compact mode. */
-function HealthDot({ health }: { health: RFNodeData["node"]["health"] }) {
-  return (
-    <span
-      title={HEALTH_LABEL[health]}
-      aria-label={HEALTH_LABEL[health]}
-      style={{
-        width: 8,
-        height: 8,
-        borderRadius: "50%",
-        flex: "0 0 auto",
-        background: HEALTH_COLOR[health],
-        boxShadow: `0 0 0 2px ${HEALTH_TINT[health]}`,
-      }}
-    />
-  );
-}
-
 export type NodeCardProps = {
   data: RFNodeData;
   icon: ReactNode;
@@ -78,8 +60,7 @@ export type NodeCardProps = {
  * their own icon + accent, so the anatomy stays identical and data-driven.
  */
 function NodeCardBase({ data, icon, accent }: NodeCardProps) {
-  const { node, emphasis, showLabel, metricsLine } = data;
-  const compact = !showLabel;
+  const { node, emphasis, metricsLine } = data;
   // Uniform face: every node shows ONLY its hostname (+ icon + health) so cards
   // read identically regardless of how much metadata each carries. All the
   // varying detail (vendor/model/site/role/owner/mgmt-IP/metrics) lives in the
@@ -107,53 +88,14 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       ? `0 12px 30px rgba(16,24,40,0.30), 0 0 0 1px ${healthColor}55`
       : "0 3px 10px rgba(16,24,40,0.13), 0 1px 2px rgba(16,24,40,0.09)";
 
-  // ── compact mode: icon + health dot + truncated hostname only ────────────────
-  if (compact) {
-    return (
-      <div
-        title={tip}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
-          maxWidth: 168,
-          padding: "8px 12px",
-          borderRadius: 14,
-          background: "var(--panel)",
-          border: `${borderWidth}px solid ${borderColor}`,
-          borderLeft: `3px solid ${accent}`,
-          boxShadow: shadow,
-          opacity,
-          color: "var(--fg)",
-        }}
-      >
-        <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
-        <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-        <span style={{ display: "inline-flex", color: accent, flex: "0 0 auto" }}>{icon}</span>
-        <HealthDot health={node.health} />
-        <span
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: "var(--fg)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {node.label}
-        </span>
-        <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
-        <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
-      </div>
-    );
-  }
-
-  // ── full mode ───────────────────────────────────────────────────────────────
-  // Uniform face: icon + hostname + health ring + a faint confidence chip. NO
-  // vendor/site/role/metric rows on the card itself — those varied node-to-node
-  // (a populated border-router towered over a bare leaf) and broke the visual
-  // grid. They're in `tip` (hover) and the side drawer (click) instead.
+  // ── ONE uniform, FIXED-SIZE card ─────────────────────────────────────────────
+  // Emphasis (hover/spotlight/dim) tunes opacity / border-colour / shadow ONLY —
+  // never geometry. The card kept a fixed `width` + `box-sizing: border-box`, so a
+  // 1.5→2px border or a dim/spotlight swap leaves the OUTER box unchanged. This is
+  // load-bearing: if the card resized on hover, its edge would slide past the
+  // cursor, fire mouseleave→mouseenter repeatedly, and the node would visibly
+  // shake. The layout already reserves a 200px-wide cell per node, so the 188px
+  // card fits with margin (no overlap). Detail lives in `tip` + the side drawer.
   return (
     <div
       title={tip}
@@ -186,7 +128,9 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
             fontSize: 13,
             fontWeight: 600,
             lineHeight: 1.25,
-            color: "var(--fg)",
+            // Bright label — pure white on dark canvases, dark ink on light ones
+            // (theme-aware token). Hostname must read crisply, not tinted/muted.
+            color: "var(--topo-node-fg, var(--fg))",
             flex: "1 1 auto",
             overflow: "hidden",
             textOverflow: "ellipsis",

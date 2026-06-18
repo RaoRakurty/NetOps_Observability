@@ -698,6 +698,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .status-grid .sgc.bad { background: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 28%, transparent); }
 
 /* ===== Correlix Topology Operating Canvas (Phase 1) ===== */
+/* Topology node hostname colour. Defaults to the theme foreground (dark ink on
+   the light canvas); on dark canvases it goes pure white so labels read crisply
+   against the dark stage rather than as a muted off-white. */
+:root { --topo-node-fg: var(--fg); }
+:root[data-theme="dark"], :root[data-theme="oled"],
+:root[data-theme="indigo"], :root[data-theme="graphite"] { --topo-node-fg: #ffffff; }
+
 .topo-root { display: flex; flex-direction: column; height: 100%; min-height: calc(100vh - 150px); }
 .topo-stage { position: relative; flex: 1 1 auto; min-height: 560px; border: 1px solid var(--border);
   border-radius: 12px; overflow: hidden; background: var(--surface); margin-top: 10px; }

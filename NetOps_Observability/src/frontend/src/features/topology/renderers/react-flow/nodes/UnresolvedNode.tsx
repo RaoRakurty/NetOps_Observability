@@ -27,7 +27,7 @@ function UnknownIcon() {
 
 function UnresolvedNodeBase(props: NodeProps) {
   const data = props.data as unknown as RFNodeData;
-  const { node, emphasis, showLabel } = data;
+  const { node, emphasis } = data;
 
   const dim = emphasis === "dim";
   const spotlight = emphasis === "spotlight";
@@ -81,7 +81,10 @@ function UnresolvedNodeBase(props: NodeProps) {
         >
           Unresolved
         </span>
-        {showLabel && node.label && (
+        {/* Always render the id label (the reason stays in the hover tooltip).
+            Showing/hiding rows on hover changed the card's height, which made the
+            node grow under the cursor and shake (mouseleave→enter loop). */}
+        {node.label && (
           <span
             style={{
               fontSize: 13,
@@ -94,21 +97,6 @@ function UnresolvedNodeBase(props: NodeProps) {
             }}
           >
             {node.label}
-          </span>
-        )}
-        {showLabel && (
-          <span
-            title={unresolvedReason(node.tags)}
-            style={{
-              fontSize: 10,
-              color: "var(--fg-subtle)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              maxWidth: 150,
-            }}
-          >
-            {unresolvedReason(node.tags)}
           </span>
         )}
       </div>
