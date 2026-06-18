@@ -668,6 +668,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .kpi-num { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 30px; font-weight: 720;
   line-height: 1.04; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--kpi-accent, var(--fg));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-numrow { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.kpi-sub { font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi.k-good   { --kpi-accent: var(--good); }
 .kpi.k-warn   { --kpi-accent: var(--warn); }
 .kpi.k-bad    { --kpi-accent: var(--bad); }

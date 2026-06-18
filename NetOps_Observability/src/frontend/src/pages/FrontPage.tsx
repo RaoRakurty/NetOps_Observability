@@ -1,4 +1,4 @@
-import { Component, ReactNode, useEffect, useState } from "react";
+import { Component, CSSProperties, ReactNode, useEffect, useState } from "react";
 import { api, CorrObject, FeedItem, CorrTimeline, Seam } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
@@ -502,25 +502,30 @@ function KpiStrip() {
 
   // each cell drills through to its detail surface; `histKey` adds the sparkline +
   // delta so the cell tells a story ("Health 20 ▼ −14") rather than a flat number.
+  // Same dense-card design as My Dashboard's KPI strip (.kpi/.kpi-grid): a small
+  // box per KPI, big number tinted by its accent, label, sub, and the recent
+  // sparkline. The per-cell accent rides on the --kpi-accent custom property.
   const cell = (label: string, value: ReactNode, tone?: string, sub?: string, to?: string, histKey?: string) => {
     const dl = histKey ? deltaOf(histKey) : null;
+    const accent = tone || "var(--accent)";
     const inner = (
       <>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-          <div className="fp-kpistrip-n" style={tone ? { color: tone } : undefined}>{value}</div>
+        <span className="kpi-label">{label}</span>
+        <div className="kpi-numrow">
+          <span className="kpi-num">{value}</span>
           {dl != null && dl !== 0 && <span className="fp-kpidelta">{dl > 0 ? "▲" : "▼"}{Math.abs(dl)}</span>}
         </div>
-        <div className="fp-kpistrip-l">{label}</div>
-        {sub ? <div className="fp-kpistrip-sub">{sub}</div> : <div className="fp-kpistrip-sub">&nbsp;</div>}
-        {histKey && <Spark pts={hist[histKey] ?? []} color={tone || "var(--accent)"} />}
+        {sub ? <span className="kpi-sub">{sub}</span> : <span className="kpi-sub">&nbsp;</span>}
+        {histKey ? <Spark pts={hist[histKey] ?? []} color={tone || "var(--accent)"} /> : <div style={{ height: 26 }} />}
       </>
     );
+    const style = { ["--kpi-accent"]: accent } as CSSProperties;
     return to
-      ? <a className="fp-kpistrip-cell clk" href={`#/${to}`}>{inner}</a>
-      : <div className="fp-kpistrip-cell">{inner}</div>;
+      ? <a className="kpi kpi-link" style={style} href={`#/${to}`}>{inner}</a>
+      : <div className="kpi" style={style}>{inner}</div>;
   };
   return (
-    <div className="fp-kpistrip">
+    <div className="kpi-grid">
       {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered", "health")}
       {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations?tier=confirmed", "confirmed")}
       {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations?tier=suspected", "suspected")}
