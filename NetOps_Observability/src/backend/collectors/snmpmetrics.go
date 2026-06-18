@@ -2,7 +2,9 @@ package collectors
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +69,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	samples := 0
 	meBuilt, meSent := 0, 0 // metric-event lane observability (built vs sent)
 	var lastErr string
+	ifaddr := map[string]map[string]string{} // deviceID → (interface IP → ifName), for topology enrichment
 
 	for _, tg := range targets {
 		addr := withPort(tg.Address, 161)
@@ -150,6 +153,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 		// without ENTITY-MIB yield nothing.
 		lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
+		// Topology enrichment: interface IP → ifName (reuses the ifName map already
+		// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
+		// links (interface IPs) resolve to real port names + join to metrics.
+		if ifNames != nil {
+			if m := ipIfNameMap(dctx, addr, creds, ifNames); len(m) > 0 {
+				ifaddr[tg.ID] = m
+			}
+		}
 		cancel()
 		samples += len(lines)
 		if len(lines) > 0 {
@@ -159,6 +170,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		// (best-effort, separate from the VM path above).
 		meBuilt += len(events)
 		meSent += forwardMetricEvents(ctx, events)
+	}
+
+	// Publish the merged interface-address map (replace; TTL self-expires if the
+	// collector dies). Read by the topology API to enrich BGP-LS links.
+	if len(ifaddr) > 0 {
+		if b, err := json.Marshal(ifaddr); err == nil {
+			_ = redisSetEX(ctx, ifAddrKey, string(b), 1800)
+		}
 	}
 
 	emitMetrics(ctx, strings.Join([]string{
@@ -206,7 +225,29 @@ var (
 	ifNameOID  = []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 1}  // IF-MIB::ifName
 	ifDescrOID = []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 2}      // IF-MIB::ifDescr
 	ifAliasOID = []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 18} // IF-MIB::ifAlias (operator circuit ID)
+	// ipAdEntIfIndex (IP-MIB ipAddrTable): index = the interface's IPv4 address,
+	// value = its ifIndex. Maps interface IP → ifName, the bridge BGP-LS needs
+	// (its link descriptors identify interfaces by IP, not name) so a Logical-
+	// topology link can show real port names + join to interface metrics.
+	ipAdEntIfIndexOID = []int{1, 3, 6, 1, 2, 1, 4, 20, 1, 2}
 )
+
+// ipIfNameMap walks ipAddrTable and resolves each interface IPv4 to its ifName via
+// the already-walked ifIndex→ifName map (no extra ifName walk). Best-effort: a
+// device with no ipAddrTable yields an empty map.
+func ipIfNameMap(ctx context.Context, addr string, creds snmpCreds, ifNames map[string]string) map[string]string {
+	rows, err := snmpWalkColumn(ctx, addr, creds, ipAdEntIfIndexOID)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(rows))
+	for ip, v := range rows {
+		if name := ifNames[strconv.FormatInt(valueInt(v), 10)]; name != "" {
+			out[ip] = name
+		}
+	}
+	return out
+}
 
 // ifAliasMap walks ifAlias keyed by ifIndex — the operator-assigned interface
 // description / circuit ID (RFC 2863). Unlike ifName/ifDescr it is the human's

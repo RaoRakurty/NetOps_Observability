@@ -71,6 +71,10 @@ const (
 	topoLinksKeyLLDP  = "netops:topology:lldp"
 	topoLinksKeyCDP   = "netops:topology:cdp"
 	topoLinksKeyBGPLS = "netops:topology:bgpls"
+	// ifAddrKey holds deviceID → (interface IP → ifName), published by the SNMP
+	// metrics collector, for enriching topology links (esp. BGP-LS, which keys
+	// interfaces by IP). TTL-expiring like the link keys.
+	ifAddrKey = "netops:topology:ifaddr"
 )
 
 type lldpCollector struct {

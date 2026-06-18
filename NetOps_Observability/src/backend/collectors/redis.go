@@ -163,3 +163,21 @@ func FetchTopologyLinks(ctx context.Context) ([]LLDPNeighbor, error) {
 	}
 	return out, nil
 }
+
+// FetchIfAddrMap reads the interface-address map (deviceID → interface IP → ifName)
+// published by the SNMP metrics collector. Empty map when absent (collector off /
+// Redis down) — enrichment is best-effort, never an error.
+func FetchIfAddrMap(ctx context.Context) (map[string]map[string]string, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", ifAddrKey)
+	if err != nil || raw == "" {
+		return map[string]map[string]string{}, nil
+	}
+	out := map[string]map[string]string{}
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out, nil
+}

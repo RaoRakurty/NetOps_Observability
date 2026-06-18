@@ -72,13 +72,19 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 	// labelled tier-inference. Not an error condition.
 	neighbors, _ := collectors.FetchTopologyLinks(r.Context())
 
-	links := normalizeLLDP(neighbors, ownedID, byName, byAddr)
+	// Interface-address map (deviceID → interface IP → ifName), published by the
+	// SNMP metrics collector. Lets BGP-LS links (whose descriptors identify
+	// interfaces by IP, not name) show real port names. Best-effort: empty when
+	// the collector is off / Redis is down — enrichment simply no-ops.
+	ifaddr, _ := collectors.FetchIfAddrMap(r.Context())
+
+	links := normalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": topoSources(links)})
 }
 
 // normalizeLLDP turns raw directed half-links into deduped undirected topology
 // links, scoped to the owned device set. Pure (unit-tested) — no I/O.
-func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr map[string]string) []topoLink {
+func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr map[string]string, ifaddr map[string]map[string]string) []topoLink {
 	// key (sorted endpoints) → link, so A→B and B→A collapse and mark bidirectional.
 	merged := map[string]*topoLink{}
 	order := []string{}
@@ -130,6 +136,23 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 			continue // self-loop guard
 		}
 
+		// Port enrichment. BGP-LS link descriptors identify interfaces by IP, not
+		// name (LocalPort/RemPort carry IPv4 interface addresses); resolve them to
+		// real ifNames via the per-device interface-address map so the link reads
+		// like an LLDP/CDP one and can join to interface metrics. No-op for other
+		// protocols and when the map lacks the device/IP.
+		localPort, remPort := n.LocalPort, n.RemPort
+		if proto == "bgp_ls" {
+			if nm := ifNameForIP(ifaddr, src, localPort); nm != "" {
+				localPort = nm
+			}
+			if resolved {
+				if nm := ifNameForIP(ifaddr, tgtID, remPort); nm != "" {
+					remPort = nm
+				}
+			}
+		}
+
 		key := linkKey(src, tgtID)
 		if ex, dup := merged[key]; dup {
 			ex.Bidirectional = true
@@ -137,8 +160,8 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 				ex.LastSeen = n.TS
 			}
 			// fill a missing remote-port from the reverse direction's local port
-			if ex.RemotePort == "" && n.LocalPort != "" && ex.Source != src {
-				ex.RemotePort = n.LocalPort
+			if ex.RemotePort == "" && localPort != "" && ex.Source != src {
+				ex.RemotePort = localPort
 			}
 			// union the source protocols: a link confirmed by several observers
 			// (e.g. "bgp_ls+lldp") is the strongest topology evidence. Carry over
@@ -155,7 +178,7 @@ func normalizeLLDP(neighbors []collectors.LLDPNeighbor, ownedID, byName, byAddr 
 		l := &topoLink{
 			Source: src, Target: tgtID,
 			SourceName: ownedID[src], TargetName: targetName,
-			LocalPort: n.LocalPort, RemotePort: n.RemPort,
+			LocalPort: localPort, RemotePort: remPort,
 			SourceProto: proto, IGP: n.IGP, Area: n.Area,
 			Resolved: resolved, LastSeen: n.TS,
 		}
@@ -210,6 +233,21 @@ func resolveIdentity(name string, byName, byAddr map[string]string, addrs ...str
 		}
 	}
 	return "", false
+}
+
+// ifNameForIP resolves an interface IPv4 address to its ifName for a given device,
+// using the SNMP-published interface-address map. "" when the device, the IP, or
+// the whole map is absent (best-effort enrichment, never an error). The candidate
+// is only treated as an IP — a value that's already a port name is left untouched
+// by the caller via the empty-string return.
+func ifNameForIP(ifaddr map[string]map[string]string, deviceID, ip string) string {
+	if ifaddr == nil || deviceID == "" || ip == "" {
+		return ""
+	}
+	if m := ifaddr[deviceID]; m != nil {
+		return m[strings.TrimSpace(ip)]
+	}
+	return ""
 }
 
 // addProto unions a source-protocol token into a "+"-joined set, keeping a stable
