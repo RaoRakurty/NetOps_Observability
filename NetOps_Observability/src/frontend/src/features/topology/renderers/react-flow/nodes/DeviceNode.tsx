@@ -12,10 +12,11 @@ import {
   HEALTH_GLYPH,
   HEALTH_LABEL,
   confidencePct,
+  nodeTooltip,
 } from "../../../utils/topologyHealth";
 
 const CARD_W = 188;
-const CARD_MIN_H = 88;
+const CARD_MIN_H = 52;
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
@@ -79,6 +80,11 @@ export type NodeCardProps = {
 function NodeCardBase({ data, icon, accent }: NodeCardProps) {
   const { node, emphasis, showLabel, metricsLine } = data;
   const compact = !showLabel;
+  // Uniform face: every node shows ONLY its hostname (+ icon + health) so cards
+  // read identically regardless of how much metadata each carries. All the
+  // varying detail (vendor/model/site/role/owner/mgmt-IP/metrics) lives in the
+  // hover tooltip; the full record is one click away in the side drawer.
+  const tip = nodeTooltip(node, metricsLine);
 
   const spotlight = emphasis === "spotlight";
   const dim = emphasis === "dim";
@@ -105,6 +111,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
   if (compact) {
     return (
       <div
+        title={tip}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -143,17 +150,19 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
   }
 
   // ── full mode ───────────────────────────────────────────────────────────────
-  const row2 = [node.vendor, node.model].filter(Boolean).join(" · ");
-  const row3 = [node.site, node.role, node.owner].filter(Boolean).join(" · ");
-
+  // Uniform face: icon + hostname + health ring + a faint confidence chip. NO
+  // vendor/site/role/metric rows on the card itself — those varied node-to-node
+  // (a populated border-router towered over a bare leaf) and broke the visual
+  // grid. They're in `tip` (hover) and the side drawer (click) instead.
   return (
     <div
+      title={tip}
       style={{
         position: "relative",
         width: CARD_W,
         minHeight: CARD_MIN_H,
         boxSizing: "border-box",
-        padding: "11px 13px 13px 14px",
+        padding: "13px 14px",
         borderRadius: 14,
         background: "var(--panel)",
         border: `${borderWidth}px solid ${borderColor}`,
@@ -162,13 +171,15 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         opacity,
         color: "var(--fg)",
         fontFamily: "inherit",
+        display: "flex",
+        alignItems: "center",
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
 
-      {/* row1 — icon + hostname (dominant) + health badge */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* icon + hostname (dominant) + health badge — one consistent row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
         <span style={{ display: "inline-flex", color: accent, flex: "0 0 auto" }}>{icon}</span>
         <span
           style={{
@@ -187,69 +198,17 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         <HealthRing health={node.health} />
       </div>
 
-      {/* row2 — vendor · model (primary meta, legible) */}
-      {row2 && (
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: 11,
-            lineHeight: 1.35,
-            color: "var(--fg-muted)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {row2}
-        </div>
-      )}
-
-      {/* row3 — site · role · owner */}
-      {row3 && (
-        <div
-          style={{
-            marginTop: 3,
-            fontSize: 11,
-            lineHeight: 1.35,
-            color: "var(--fg-muted)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {row3}
-        </div>
-      )}
-
-      {/* row4 — metrics strip (mono, faint) */}
-      {metricsLine && (
-        <div
-          style={{
-            marginTop: 7,
-            fontSize: 10,
-            letterSpacing: ".01em",
-            fontFamily: MONO,
-            color: "var(--fg-subtle)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {metricsLine}
-        </div>
-      )}
-
       {/* confidence chip — bottom-right, faint */}
       <span
         title={`Confidence ${confidencePct(node.confidence)}`}
         style={{
           position: "absolute",
           right: 8,
-          bottom: 6,
-          fontSize: 10,
+          bottom: 4,
+          fontSize: 9,
           fontFamily: MONO,
           color: "var(--fg-subtle)",
-          opacity: 0.8,
+          opacity: 0.75,
         }}
       >
         {confidencePct(node.confidence)}

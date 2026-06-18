@@ -34,8 +34,20 @@ function UnresolvedNodeBase(props: NodeProps) {
   // muted even when "normal"
   const opacity = dim ? 0.3 : spotlight ? 0.85 : 0.6;
 
+  // Hover tooltip — parity with device nodes: the face stays minimal, the detail
+  // (reason / raw id / suggested match) surfaces on hover. Empty fields skipped.
+  const tip = [
+    `Unresolved — ${unresolvedReason(node.tags)}`,
+    node.label && `Raw ID: ${node.label}`,
+    node.tags?.suggested_match && `Suggested: ${node.tags.suggested_match}`,
+    `Confidence: ${confidencePct(node.confidence)}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   return (
     <div
+      title={tip}
       style={{
         display: "inline-flex",
         alignItems: "center",

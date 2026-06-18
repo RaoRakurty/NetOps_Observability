@@ -5,7 +5,7 @@
 // Rule: color is never the only signal (pair with glyph/label); use rings/badges,
 // never a full red/orange node fill.
 
-import type { Health, EdgeStatus, TopologySource, EvidenceRef, TopologyEdge, EdgeVariant } from "../api/topologyTypes";
+import type { Health, EdgeStatus, TopologySource, EvidenceRef, TopologyEdge, EdgeVariant, TopologyNode } from "../api/topologyTypes";
 
 /** Calm, premium NOC palette. `maintenance` reads as intentional (sky), not alarm. */
 export const HEALTH_COLOR: Record<Health, string> = {
@@ -151,6 +151,28 @@ export const UNRESOLVED_REASON: Record<string, string> = {
 export function unresolvedReason(tags: Record<string, string> | undefined): string {
   const r = tags?.reason;
   return (r && UNRESOLVED_REASON[r]) || "Unresolved remote neighbour";
+}
+
+/**
+ * Multi-line hover tooltip for a device node. The node FACE stays uniform
+ * (hostname only — every node reads the same regardless of how much metadata it
+ * carries); the varying detail lives here so it surfaces on hover. Empty fields
+ * are skipped so a sparse node yields a short tip, never blank "label:" rows.
+ */
+export function nodeTooltip(node: TopologyNode, metricsLine?: string): string {
+  const lines: string[] = [node.label, HEALTH_LABEL[node.health]];
+  const add = (label: string, value?: string) => {
+    const v = (value ?? "").trim();
+    if (v) lines.push(`${label}: ${v}`);
+  };
+  add("Vendor / model", [node.vendor, node.model].filter(Boolean).join(" · "));
+  add("Role", node.role);
+  add("Site / rack", [node.site, node.rack].filter(Boolean).join(" · "));
+  add("Owner", node.owner);
+  add("Mgmt IP", node.mgmt_ip);
+  if (metricsLine) lines.push(metricsLine);
+  add("Confidence", confidencePct(node.confidence));
+  return lines.join("\n");
 }
 
 /** One-line edge summary for hover, e.g. "bidirectional LLDP · confidence 98%". */
