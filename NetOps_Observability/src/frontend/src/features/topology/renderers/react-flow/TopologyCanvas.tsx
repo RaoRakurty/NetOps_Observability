@@ -45,7 +45,6 @@ import {
   TopologySearch,
   TopologySideDrawer,
   TopologyLegend,
-  TopologyMiniMap,
   OverlaySelector,
   MapWorkflowSelector,
   PathAnalysisPanel,
@@ -320,7 +319,6 @@ function CanvasInner() {
             >
               <Background variant={BackgroundVariant.Dots} gap={26} size={1} color="var(--border)" />
               <Controls showInteractive={false} />
-              <TopologyMiniMap nodeCount={rfNodes.length} />
             </ReactFlow>
 
             <TopologyLegend overlay={overlay} />

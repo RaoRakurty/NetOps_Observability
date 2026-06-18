@@ -7,5 +7,4 @@ export { default as TopologyLegend } from "./TopologyLegend";
 export { default as OverlaySelector } from "./OverlaySelector";
 export { default as MapWorkflowSelector } from "./MapWorkflowSelector";
 export { default as TopologySearch } from "./TopologySearch";
-export { default as TopologyMiniMap } from "./TopologyMiniMap";
 export { default as TopologyToolbar } from "./TopologyToolbar";
