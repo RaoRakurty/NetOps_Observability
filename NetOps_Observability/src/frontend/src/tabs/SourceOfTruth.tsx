@@ -27,10 +27,10 @@ const labelStyle = { display: "block", fontSize: 12, color: "var(--muted)", marg
 type Direction = "write" | "read" | "both" | "none";
 
 const DIRECTIONS: { v: Direction; label: string; help: string }[] = [
-  { v: "none", label: "No automatic sync", help: "The inventory stays available (browse it here, use its site/geo intent) but discovery neither pushes nor pulls devices. Best when you already run an external source of truth and will sync it through its own API. (Default)" },
-  { v: "write", label: "Devices → Inventory", help: "One-way: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. Choose this to build inventory from scratch — SNMP discovery seeds it." },
-  { v: "read", label: "Inventory → Devices", help: "One-way: the inventory is the source of truth; its devices appear in Infrastructure. Discovery does not push anything up." },
-  { v: "both", label: "Two-way sync", help: "Read inventory devices in AND push discovered devices up. Records are de-duplicated by IP / serial / name." },
+  { v: "none", label: "Off", help: "No automatic sync. The inventory stays available (browse it here, use its site/geo intent) but discovery neither pushes nor pulls devices. Best when you already run an external source of truth and will sync it through its own API. (Default)" },
+  { v: "write", label: "Push", help: "One-way, Devices → Inventory: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. Choose this to build inventory from scratch — SNMP discovery seeds it." },
+  { v: "read", label: "Pull", help: "One-way, Inventory → Devices: the inventory is the source of truth; its devices appear in Infrastructure. Discovery does not push anything up." },
+  { v: "both", label: "Bidirectional", help: "Two-way: read inventory devices in AND push discovered devices up. Records are de-duplicated by IP / serial / name." },
 ];
 
 function DirectionPicker({ value, onChange }: { value: Direction; onChange: (v: Direction) => void }) {
