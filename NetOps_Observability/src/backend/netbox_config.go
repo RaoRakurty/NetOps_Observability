@@ -30,6 +30,10 @@ type netboxConfig struct {
 	//   "read"  — NetBox → platform only (NetBox is the authoritative intent
 	//             SoT; the reconciler does not push discovered devices up).
 	//   "both"  — bidirectional (read intent + reconcile discoveries up).
+	//   "none"  — automatic device sync OFF: NetBox stays available (embedded
+	//             console, geo intent) but discovery neither pushes nor pulls
+	//             devices. For a customer who already runs an external SoT we'll
+	//             sync via that SoT's API instead of auto-populating NetBox.
 	// Empty normalizes to "write" (see netboxDirection).
 	Direction string `json:"direction,omitempty"`
 	// Managed is derived (not persisted): true when the connection is the
@@ -154,13 +158,16 @@ func (c netboxConfig) public() publicNetboxConfig {
 // "write": devices flow up to NetBox only, and NetBox is never read back as a
 // device source — so a synced device cannot reappear in the inventory as a
 // duplicate. Operators who run NetBox as the authoritative intent SoT set
-// "read" (or "both" for bidirectional).
+// "read" (or "both" for bidirectional); "none" turns automatic device sync off
+// entirely (NetBox stays available, but discovery neither pushes nor pulls).
 func netboxDirection(c netboxConfig) string {
 	switch strings.ToLower(strings.TrimSpace(c.Direction)) {
 	case "read":
 		return "read"
 	case "both":
 		return "both"
+	case "none", "off":
+		return "none"
 	default:
 		return "write"
 	}

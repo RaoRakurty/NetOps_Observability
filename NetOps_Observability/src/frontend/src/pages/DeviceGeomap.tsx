@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { cssVar } from "../theme/tokens";
 import { registerMap } from "echarts/core";
-import { api, DeviceLocationRow, GeomapResponse, GeoSite } from "../services/api";
+import { api, DeviceLocationRow, GeomapResponse, GeoSite, SiteRow } from "../services/api";
 import { StatStrip, Stat, Segmented } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
@@ -221,10 +221,159 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
   );
 }
 
+// SitesManager — Infrastructure → Maps → "Sites": create and curate the internal
+// Source-of-Truth sites (name + status + WGS-84 coordinates). This is the editable
+// data behind the DEFAULT (internal) SoT provider — declare a site here, then give
+// devices a `site` label matching its slug and they roll up into its map bubble.
+// When an external SoT (NetBox) is the active authority the list is READ-ONLY: its
+// sites are managed in that console, so we show them but disable editing here.
+function SitesManager({ onChanged }: { onChanged: () => void }) {
+  const [sites, setSites] = useState<SiteRow[]>([]);
+  const [active, setActive] = useState<string>("internal");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [add, setAdd] = useState({ name: "", status: "", lat: "", lng: "" });
+  const [drafts, setDrafts] = useState<Record<string, { name: string; status: string; lat: string; lng: string }>>({});
+
+  const load = async () => {
+    try { const r = await api.sites(); setSites(r.sites); setActive(r.active || "internal"); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const editable = active === "internal";
+
+  // coordsOf parses a {lat,lng} pair: both blank → site has no coordinates (valid);
+  // either filled → both must be finite decimals. Returns undefined on error (caller
+  // sets err) and {} when intentionally cleared.
+  const coordsOf = (lat: string, lng: string): { lat?: number; lng?: number } | undefined => {
+    const hasLat = lat.trim() !== "", hasLng = lng.trim() !== "";
+    if (!hasLat && !hasLng) return {};
+    const la = parseFloat(lat), ln = parseFloat(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return undefined;
+    return { lat: la, lng: ln };
+  };
+
+  const create = async () => {
+    const name = add.name.trim();
+    if (!name) { setErr("Site name is required."); return; }
+    const c = coordsOf(add.lat, add.lng);
+    if (c === undefined) { setErr("Enter both latitude and longitude as decimals (WGS 84), or leave both blank."); return; }
+    setBusy("__add__");
+    try {
+      await api.saveSite({ name, status: add.status.trim() || undefined, ...c });
+      setAdd({ name: "", status: "", lat: "", lng: "" }); setErr(null); await load(); onChanged();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  const beginEdit = (s: SiteRow) =>
+    setDrafts({ ...drafts, [s.slug]: { name: s.name, status: s.status ?? "", lat: s.has_coords ? String(s.lat) : "", lng: s.has_coords ? String(s.lng) : "" } });
+  const cancelEdit = (slug: string) => { const next = { ...drafts }; delete next[slug]; setDrafts(next); };
+
+  const update = async (slug: string) => {
+    const d = drafts[slug];
+    if (!d.name.trim()) { setErr("Site name is required."); return; }
+    const c = coordsOf(d.lat, d.lng);
+    if (c === undefined) { setErr("Enter both latitude and longitude as decimals (WGS 84), or leave both blank."); return; }
+    setBusy(slug);
+    try {
+      await api.updateSite(slug, { name: d.name.trim(), status: d.status.trim() || undefined, ...c });
+      cancelEdit(slug); setErr(null); await load(); onChanged();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  const remove = async (s: SiteRow) => {
+    if (!window.confirm(`Delete site "${s.name}"? Devices labelled with its slug fall back to unplaced.`)) return;
+    setBusy(s.slug);
+    try { await api.deleteSite(s.slug); setErr(null); await load(); onChanged(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
+        Sites
+        <span className="badge" style={{ fontSize: 10 }}>{editable ? "Internal source of truth" : `Managed by ${active}`}</span>
+      </h3>
+      {editable ? (
+        <p className="mini-meta">
+          Declare a site with decimal latitude/longitude (WGS 84). Give a device the <code>site</code> label matching the
+          site's slug (shown below) and it folds into that site's map bubble, inheriting these coordinates. Leave
+          coordinates blank to register a site that isn't yet on the map.
+        </p>
+      ) : (
+        <p className="mini-meta">
+          An external Source of Truth ({active}) is the active authority, so its sites are read-only here — manage them in
+          its console under <a className="board-empty-link" href="#/automation/sot">Automation → Source of Truth</a>. Turn the
+          external connector off to manage sites in the platform again.
+        </p>
+      )}
+      {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
+      <table className="loc-editor">
+        <thead><tr><th>Site</th><th>Slug</th><th>Status</th><th>Latitude</th><th>Longitude</th><th /></tr></thead>
+        <tbody>
+          {sites.map((s) => {
+            const d = drafts[s.slug];
+            if (editable && d) {
+              return (
+                <tr key={s.slug}>
+                  <td><input value={d.name} onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, name: e.target.value } })} /></td>
+                  <td className="mono mini-meta">{s.slug}</td>
+                  <td><input value={d.status} placeholder="active" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, status: e.target.value } })} /></td>
+                  <td><input value={d.lat} placeholder="32.78" inputMode="decimal" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, lat: e.target.value } })} /></td>
+                  <td><input value={d.lng} placeholder="-96.80" inputMode="decimal" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, lng: e.target.value } })} /></td>
+                  <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                    <button className="dash-btn accent" disabled={busy === s.slug} onClick={() => update(s.slug)}>Save</button>
+                    <button className="dash-btn" style={{ marginLeft: 6 }} disabled={busy === s.slug} onClick={() => cancelEdit(s.slug)}>Cancel</button>
+                  </td>
+                </tr>
+              );
+            }
+            return (
+              <tr key={s.slug}>
+                <td><b>{s.name}</b></td>
+                <td className="mono mini-meta">{s.slug}</td>
+                <td>{s.status || <span className="mini-meta">—</span>}</td>
+                <td colSpan={2}>
+                  {s.has_coords ? <span className="mono">{s.lat.toFixed(4)}, {s.lng.toFixed(4)}</span> : <span style={{ color: "var(--warn)" }}>not set</span>}
+                </td>
+                <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                  {editable && (
+                    <>
+                      <button className="dash-btn" disabled={busy === s.slug} onClick={() => beginEdit(s)}>Edit</button>
+                      <button className="dash-btn" style={{ marginLeft: 6, color: "var(--bad)" }} disabled={busy === s.slug} onClick={() => remove(s)}>Delete</button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+          {editable && (
+            <tr>
+              <td><input value={add.name} placeholder="e.g. Dallas Branch" onChange={(e) => setAdd({ ...add, name: e.target.value })} /></td>
+              <td className="mini-meta">{add.name.trim() ? "auto" : ""}</td>
+              <td><input value={add.status} placeholder="active" onChange={(e) => setAdd({ ...add, status: e.target.value })} /></td>
+              <td><input value={add.lat} placeholder="32.78" inputMode="decimal" onChange={(e) => setAdd({ ...add, lat: e.target.value })} /></td>
+              <td><input value={add.lng} placeholder="-96.80" inputMode="decimal" onChange={(e) => setAdd({ ...add, lng: e.target.value })} /></td>
+              <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                <button className="dash-btn accent" disabled={busy === "__add__"} onClick={create}>Add site</button>
+              </td>
+            </tr>
+          )}
+          {sites.length === 0 && !editable && <tr><td colSpan={6} className="mini-meta">The external Source of Truth lists no sites.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function DeviceGeomap() {
   const [data, setData] = useState<GeomapResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [view, setView] = useState<"map" | "locations">("map");
+  const [view, setView] = useState<"map" | "sites" | "locations">("map");
   const [bump, setBump] = useState(0); // re-fetch signal after a location edit
 
   useEffect(() => {
@@ -275,11 +424,12 @@ export default function DeviceGeomap() {
               ? "The geomap places devices from intent data: Source-of-Truth sites with latitude/longitude, or locations you set per device right here. GeoIP is never used."
               : `Could not read sites from the Source of Truth${data.error ? `: ${data.error}` : ""}.`}
           </p>
-          <div style={{ marginTop: 12, display: "flex", gap: 14, justifyContent: "center" }}>
-            <button className="dash-btn accent" onClick={() => setView("locations")}>Set device locations</button>
-            <a className="board-empty-link" href="#/automation/sot">Open Source of Truth →</a>
+          <div style={{ marginTop: 12, display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
+            <button className="dash-btn accent" onClick={() => setView("sites")}>Declare sites</button>
+            <button className="dash-btn" onClick={() => setView("locations")}>Set device locations</button>
           </div>
         </div>
+        {view === "sites" && <div style={{ marginTop: 14 }}><SitesManager onChanged={() => setBump((b) => b + 1)} /></div>}
         {view === "locations" && <div style={{ marginTop: 14 }}><LocationsEditor onChanged={() => setBump((b) => b + 1)} /></div>}
       </div>
     );
@@ -288,9 +438,11 @@ export default function DeviceGeomap() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <Segmented value={view} ariaLabel="Geomap view"
-        options={[{ value: "map", label: "Map" }, { value: "locations", label: "Set locations" }]}
+        options={[{ value: "map", label: "Map" }, { value: "sites", label: "Sites" }, { value: "locations", label: "Set locations" }]}
         onChange={setView} />
-      {view === "locations" ? (
+      {view === "sites" ? (
+        <SitesManager onChanged={() => setBump((b) => b + 1)} />
+      ) : view === "locations" ? (
         <LocationsEditor onChanged={() => setBump((b) => b + 1)} />
       ) : (
       <>

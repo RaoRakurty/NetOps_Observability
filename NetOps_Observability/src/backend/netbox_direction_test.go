@@ -10,6 +10,9 @@ func TestNetboxDirectionNormalize(t *testing.T) {
 		" read": "read",
 		"Read":  "read",
 		"both":  "both",
+		"none":  "none", // automatic sync off
+		"off":   "none", // alias
+		"NONE":  "none",
 		"junk":  "write", // unknown falls back to the safe default
 	}
 	for in, want := range cases {
@@ -34,5 +37,10 @@ func TestNetboxDirectionGates(t *testing.T) {
 	b := netboxConfig{Direction: "both"}
 	if !netboxWritesDevices(b) || !netboxReadsDevices(b) {
 		t.Errorf("both mode gates wrong")
+	}
+	// none: automatic sync off — neither reads nor writes.
+	n := netboxConfig{Direction: "none"}
+	if netboxWritesDevices(n) || netboxReadsDevices(n) {
+		t.Errorf("none mode: want writes=false reads=false, got writes=%v reads=%v", netboxWritesDevices(n), netboxReadsDevices(n))
 	}
 }

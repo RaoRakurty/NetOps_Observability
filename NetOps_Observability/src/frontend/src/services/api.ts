@@ -77,8 +77,9 @@ export type NetboxConfig = {
   managed: boolean; // bundled internal NetBox — URL/token auto-wired
   token?: string; // write-only
   // Sync direction: "write" = devices → NetBox only (default; NetBox never read
-  // back, no duplicates), "read" = NetBox → platform (intent SoT), "both".
-  direction?: "write" | "read" | "both";
+  // back, no duplicates), "read" = NetBox → platform (intent SoT), "both",
+  // "none" = automatic device sync off (NetBox available, but no auto push/pull).
+  direction?: "write" | "read" | "both" | "none";
 };
 
 // Result of the device→NetBox write-through reconciler.
@@ -1147,6 +1148,16 @@ export const api = {
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/location`, { method: "PUT", body: JSON.stringify(body) }),
   clearDeviceLocation: (id: string) =>
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/location`, { method: "DELETE" }),
+
+  // Internal Source-of-Truth sites (the default SoT provider). `active` reports
+  // which provider currently answers ("internal" | "netbox").
+  sites: () => request<SitesResponse>("/api/sites"),
+  saveSite: (body: SiteInput) =>
+    request<SiteRow>("/api/sites", { method: "POST", body: JSON.stringify(body) }),
+  updateSite: (slug: string, body: SiteInput) =>
+    request<SiteRow>(`/api/sites/${encodeURIComponent(slug)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteSite: (slug: string) =>
+    request<{ ok: boolean }>(`/api/sites/${encodeURIComponent(slug)}`, { method: "DELETE" }),
   flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
@@ -2057,6 +2068,15 @@ export type GeomapResponse = {
   geo_enabled: boolean; reason?: string; error?: string;
   sites?: GeoSite[]; placed?: number; unplaced?: number;
 };
+
+// Internal SoT sites (the default provider's editable data).
+export type SiteRow = {
+  slug: string; name: string; status?: string;
+  lat: number; lng: number; has_coords: boolean;
+  updated_by?: string; updated_at?: string;
+};
+export type SitesResponse = { sites: SiteRow[]; active: "internal" | "netbox" | string };
+export type SiteInput = { slug?: string; name: string; status?: string; lat?: number; lng?: number };
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };

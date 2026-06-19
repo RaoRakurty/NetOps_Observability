@@ -24,13 +24,16 @@ const labelStyle = { display: "block", fontSize: 12, color: "var(--muted)", marg
 // DirectionPicker controls how devices flow between the platform and the
 // inventory. Default "write" keeps it one-directional (platform → inventory),
 // so synced devices never reappear in Infrastructure → Devices as duplicates.
-const DIRECTIONS: { v: "write" | "read" | "both"; label: string; help: string }[] = [
-  { v: "write", label: "Devices → Inventory", help: "One-way: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. (Recommended)" },
+type Direction = "write" | "read" | "both" | "none";
+
+const DIRECTIONS: { v: Direction; label: string; help: string }[] = [
+  { v: "write", label: "Devices → Inventory", help: "One-way: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. Best when you're building inventory from scratch — SNMP discovery seeds it. (Recommended)" },
   { v: "read", label: "Inventory → Devices", help: "One-way: the inventory is the source of truth; its devices appear in Infrastructure. Discovery does not push anything up." },
   { v: "both", label: "Two-way sync", help: "Read inventory devices in AND push discovered devices up. Records are de-duplicated by IP / serial / name." },
+  { v: "none", label: "No automatic sync", help: "The inventory stays available (browse it here, use its site/geo intent) but discovery neither pushes nor pulls devices. Use this when you already run an external source of truth and will sync it through its own API." },
 ];
 
-function DirectionPicker({ value, onChange }: { value: "write" | "read" | "both"; onChange: (v: "write" | "read" | "both") => void }) {
+function DirectionPicker({ value, onChange }: { value: Direction; onChange: (v: Direction) => void }) {
   const cur = DIRECTIONS.find((d) => d.v === value) ?? DIRECTIONS[0];
   return (
     <div style={{ marginTop: 12 }}>
@@ -72,7 +75,7 @@ export default function SourceOfTruth() {
   const [urlV, setUrlV] = useState("");
   const [tokenV, setTokenV] = useState("");
   const [interval, setIntervalV] = useState(60);
-  const [direction, setDirection] = useState<"write" | "read" | "both">("write");
+  const [direction, setDirection] = useState<Direction>("write");
 
   const load = async () => {
     try {
@@ -109,7 +112,7 @@ export default function SourceOfTruth() {
     try {
       const s = await api.netboxSyncNow();
       setSyncStat(s);
-      setMsg(`Pushed to NetBox: ${s.created} created, ${s.present} already present.`);
+      setMsg(`Pushed to inventory: ${s.created} created, ${s.present} already present.`);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -314,9 +317,9 @@ export default function SourceOfTruth() {
           <button className="btn" disabled={refreshing} onClick={refresh} title="Poll the inventory now (inventory → Infrastructure → Devices)">
             <Icon name="refresh" size={14} /> {refreshing ? "…" : "Sync devices"}
           </button>
-          {cfg?.enabled && (
-            <button className="btn" disabled={pushing} onClick={pushToNetbox} title="Push discovered devices INTO NetBox as the source of truth (runs automatically every 5 min)">
-              <Icon name="arrow-up-right" size={14} /> {pushing ? "…" : "Push to NetBox"}
+          {cfg?.enabled && (cfg.direction === "write" || cfg.direction === "both") && (
+            <button className="btn" disabled={pushing} onClick={pushToNetbox} title="Push discovered devices INTO the inventory (runs automatically every 5 min)">
+              <Icon name="arrow-up-right" size={14} /> {pushing ? "…" : "Push to inventory"}
             </button>
           )}
         </div>
