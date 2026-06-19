@@ -205,7 +205,7 @@ func (c ldapConfig) public() publicLDAPConfig {
 // handleLDAPConfig: GET/PUT /api/auth/ldap/config (admin-gated). GET returns the
 // redacted effective config; PUT validates and persists.
 func (s *server) handleLDAPConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -246,7 +246,7 @@ type ldapTestResult struct {
 // connectivity + the service bind; with {username,password} it runs a full
 // authentication and previews the resolved DN, groups and assigned role.
 func (s *server) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -486,7 +486,7 @@ func (c tacacsConfig) public() publicTACACSConfig {
 
 // handleTACACSConfig: GET/PUT /api/auth/tacacs/config (admin-gated).
 func (s *server) handleTACACSConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -522,7 +522,7 @@ type tacacsTestResult struct {
 // checks TCP connectivity; with {username,password} it runs a full PAP auth and
 // previews the assigned role.
 func (s *server) handleTACACSTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	if r.Method != http.MethodPost {

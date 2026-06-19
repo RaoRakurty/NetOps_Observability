@@ -252,7 +252,7 @@ func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
 // redacted effective config plus whether the provider is ready; PUT validates,
 // persists, rebuilds the live provider and returns the redacted config + ready.
 func (s *server) handleOIDCConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {

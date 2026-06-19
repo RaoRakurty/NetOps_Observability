@@ -92,7 +92,7 @@ func (s *copilotConfigStore) set(c copilotConfig) copilotConfig {
 	if c.Key == "" {
 		c.Key = s.cfg.Key
 	}
-	s.cfg = c // in-memory stays plaintext
+	s.cfg = c                                                      // in-memory stays plaintext
 	if sealed, err := mapCopilot(c, sealFn(s.vault)); err == nil { // encrypt at rest
 		if b, err := json.MarshalIndent(sealed, "", "  "); err == nil {
 			_ = kvSave(s.path, b)
@@ -117,7 +117,7 @@ func (s *copilotConfigStore) apiKey() string {
 // (whether the feature is enabled and whether a key is present) WITHOUT ever
 // exposing the key itself, so the UI can show "configured, waiting for key".
 func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {

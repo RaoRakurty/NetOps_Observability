@@ -163,6 +163,38 @@ Any violation = INVALID OUTPUT.
 
 ---
 
+## 3a. TENANT / ORG ISOLATION (MANDATORY — every feature, no exceptions)
+
+Isolation is NOT organic — it is a build-time requirement. Every tenant/org gets a
+unique view of every feature. A data-returning surface that does not scope by the
+caller's tenant is a CROSS-TENANT LEAK and INVALID OUTPUT. When building or
+changing ANY feature that stores or returns data:
+
+1. **Scope by the principal, default-closed.** Derive `principalTenant(claims)` →
+   `(tenant, cross)` and filter every list/get/search/aggregate by it. A non-cross
+   caller must NEVER receive another tenant's rows. Cross-tenant resource access by
+   id returns **404** (never reveal another tenant's id), cross-tenant write/delete
+   is refused.
+2. **Stamp the owner from the token, never the request body.** On create/update set
+   `TenantID` from the authenticated principal; ignore any tenant in the payload.
+3. **Pick the right gate.** Per-tenant data → `requirePerm` + tenant filter.
+   Platform-GLOBAL plumbing (auth providers, LLM keys, token policy, notification
+   channels, stack config) → `requirePlatformAdmin` / `requireCrossTenant` — a
+   tenant/org admin holds full `administration:admin`, so a scope-blind
+   `requireAdmin` on platform-global config is a privilege leak.
+4. **Storage layer enforces it.** PG tables: add the `tenant_iso` FORCE-RLS policy
+   migration AND query via `withTenant`. ClickHouse: inject `chTenantScope`.
+   OpenSearch: per-tenant index + `osTenantFilter`. VictoriaMetrics: device/tenant
+   label filter. File/kv & in-memory stores: key/filter by tenant in the store
+   itself (no unscoped "list all"). Org isolation is DERIVED from tenant isolation
+   (org = its tenants; `reachesTenant` bounds cross-org reach) — keep it that way.
+5. **Ship an isolation test with the feature (REQUIRED).** A cross-org test
+   (`org_isolation_test.go` is the template) asserting: own-only list, cross-tenant
+   get/put/delete → 404, `as_tenant` into another org ignored. No feature is
+   complete without it (extends §11 TESTING RULES).
+
+---
+
 ## 4. PLUGIN SYSTEM RULES (PLUG-AND-PLAY)
 
 Plugins MUST be isolated.

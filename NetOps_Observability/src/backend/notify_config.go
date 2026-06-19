@@ -75,7 +75,7 @@ type notifyConfig struct {
 }
 
 type notifyConfigStore struct {
-	mu  sync.RWMutex
+	mu   sync.RWMutex
 	path string
 	cfg  notifyConfig
 	srv  *server
@@ -267,7 +267,7 @@ func (s *notifyConfigStore) publicSMTP() publicSMTP {
 }
 
 func (s *server) handleSMTPConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -305,7 +305,7 @@ func (s *server) handleSMTPConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSMTPTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	s.notifyCfg.mu.RLock()
@@ -342,7 +342,7 @@ func (s *notifyConfigStore) publicTwilio() publicTwilio {
 }
 
 func (s *server) handleTwilioConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -377,7 +377,7 @@ func (s *server) handleTwilioConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleTwilioTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	s.notifyCfg.mu.RLock()
@@ -413,7 +413,7 @@ func (s *notifyConfigStore) publicNtfy() publicNtfy {
 }
 
 func (s *server) handleNtfyConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -451,7 +451,7 @@ func (s *server) handleNtfyConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	s.notifyCfg.mu.RLock()
@@ -498,7 +498,7 @@ func (s *notifyConfigStore) slackIncidentTarget() (url, minSeverity string, ok b
 }
 
 func (s *server) handleSlackConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -533,7 +533,7 @@ func (s *server) handleSlackConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSlackTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	s.notifyCfg.mu.RLock()
@@ -567,7 +567,7 @@ func (s *notifyConfigStore) publicPagerDuty() publicPagerDuty {
 }
 
 func (s *server) handlePagerDutyConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
@@ -602,7 +602,7 @@ func (s *server) handlePagerDutyConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handlePagerDutyTest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	s.notifyCfg.mu.RLock()

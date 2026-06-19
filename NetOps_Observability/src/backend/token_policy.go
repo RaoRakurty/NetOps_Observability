@@ -150,7 +150,7 @@ func (s *tokenPolicyStore) set(c tokenPolicyConfig) (tokenPolicyConfig, error) {
 // the effective lifetimes plus the [min,max,recommended] bounds so the UI can
 // validate + show guidance; PUT clamps + persists.
 func (s *server) handleTokenPolicy(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	bounds := map[string]any{
