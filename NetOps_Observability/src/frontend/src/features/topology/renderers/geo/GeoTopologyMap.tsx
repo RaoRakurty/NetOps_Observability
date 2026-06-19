@@ -20,6 +20,8 @@ import { cssVar } from "../../../../theme/tokens";
 import { HEALTH_COLOR, HEALTH_LABEL } from "../../utils/topologyHealth";
 import { topologyToEchartsGeo, type GeoModel } from "./topologyToEchartsGeo";
 import { TopologySideDrawer } from "../../components";
+import { normalizeView } from "../../utils/topologyMapper";
+import { api } from "../../../../services/api";
 import type { TopologyView, TopologySelection, Health } from "../../api/topologyTypes";
 
 // Lazily register the world basemap once (shared global ECharts map registry).
@@ -154,19 +156,47 @@ type GeoClickParams = {
   data?: { _site?: GeoModel["sites"][number]; _circuit?: GeoModel["circuits"][number] };
 };
 
+/** A geo node is "placed" (plottable) when it carries coordinates. */
+function hasPlacedSite(v: TopologyView): boolean {
+  return v.nodes.some((n) => n.coordinates);
+}
+
 export default function GeoTopologyMap({ view }: { view: TopologyView }) {
   const [ready, setReady] = useState(false);
   const [selection, setSelection] = useState<TopologySelection>({});
+  // Real data first: the backend executive_geo projection. Fall back to the
+  // passed-in sample (and say so) when the SoT has no sited sites configured.
+  const [activeView, setActiveView] = useState<TopologyView>(view);
+  const [isSample, setIsSample] = useState(true);
+
   useEffect(() => {
     let alive = true;
     ensureWorldMap().then(() => { if (alive) setReady(true); });
     return () => { alive = false; };
   }, []);
 
-  // Clear any open inspector when the underlying view changes.
-  useEffect(() => { setSelection({}); }, [view]);
+  // Fetch the real geo projection; adopt it only when it actually has placed
+  // sites, otherwise keep the labeled sample (graceful degradation).
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const real = normalizeView((await api.topologyView("executive_geo")) as TopologyView);
+        if (alive && hasPlacedSite(real)) {
+          setActiveView(real);
+          setIsSample(false);
+        }
+      } catch {
+        /* keep the sample */
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
 
-  const model = useMemo(() => topologyToEchartsGeo(view), [view]);
+  // Clear any open inspector when the underlying view changes.
+  useEffect(() => { setSelection({}); }, [activeView]);
+
+  const model = useMemo(() => topologyToEchartsGeo(activeView), [activeView]);
   const option = useMemo(() => buildOption(model), [model]);
 
   const onEvents = useMemo(
@@ -205,13 +235,18 @@ export default function GeoTopologyMap({ view }: { view: TopologyView }) {
         onEvents={onEvents}
       />
       <GeoLegend />
+      {isSample && (
+        <div className="topo-geo-sample" title="No SoT-placed sites found — showing sample data">
+          Sample data · set site coordinates in the <a href="#/automation/sot">Source of Truth</a> for live geo
+        </div>
+      )}
       {model.unplaced > 0 && (
         <div className="topo-geo-note">
           {model.unplaced} node{model.unplaced === 1 ? "" : "s"} not placed (no coordinates) — set them in the Source of Truth.
         </div>
       )}
       {(selection.nodeId || selection.edgeId) && (
-        <TopologySideDrawer view={view} selection={selection} onClose={() => setSelection({})} />
+        <TopologySideDrawer view={activeView} selection={selection} onClose={() => setSelection({})} />
       )}
     </div>
   );

@@ -58,6 +58,7 @@ const REAL_MODES: ReadonlySet<WorkflowMode> = new Set<WorkflowMode>([
   "investigate",
   "path_trace",
   "dependency",
+  "executive_geo",
 ]);
 
 export async function fetchTopologyView(mode: WorkflowMode): Promise<TopologyView> {

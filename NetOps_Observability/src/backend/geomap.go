@@ -212,9 +212,10 @@ func netboxDeviceTokens(d netboxDeviceSite) []string {
 // (`lookup`, the device_locations layer) places it, with devices sharing a
 // site label folding into one bubble. Pure — unit-tested.
 func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]string,
-	lookup func([]string) (DeviceLocation, bool), now time.Time) (rows []geoSite, unplaced int) {
+	lookup func([]string) (DeviceLocation, bool), now time.Time) (rows []geoSite, unplaced int, deviceSite map[string]string) {
 	bySlug := map[string]*geoSite{}
 	order := []string{}
+	deviceSite = map[string]string{}
 	for _, s := range sites {
 		if s.Slug == "" {
 			continue
@@ -236,6 +237,7 @@ func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]
 		} else {
 			g.Down++
 		}
+		deviceSite[d.ID] = g.Slug // record which bubble each device folded into
 	}
 	for _, d := range devices {
 		toks := deviceIdentities(d)
@@ -275,42 +277,37 @@ func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]
 	for _, slug := range order {
 		rows = append(rows, *bySlug[slug])
 	}
-	return rows, unplaced
+	return rows, unplaced, deviceSite
 }
 
-// handleGeomap serves GET /api/geomap.
-func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
-		return
-	}
-	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-	if !ok {
-		return
-	}
+// geomapResolve gathers the geo surfaces' shared inputs: site rows joined with
+// inventory health, the device→site slug map (SAME placement precedence as the
+// rows, so circuits and bubbles can never disagree), and the unplaced device
+// count. enabled is false (with a reason) when no intent source is configured, or
+// the SoT fetch fails with nothing cached. Both /api/geomap and the executive_geo
+// topology projection call this so they share one source of truth.
+func (s *server) geomapResolve(ctx context.Context, claims jwtClaims) (rows []geoSite, deviceSite map[string]string, unplaced int, enabled bool, reason, errMsg string) {
 	cfg := s.netboxCfg.effective()
 	sotEnabled := cfg.Enabled && cfg.URL != "" && cfg.Token != ""
 	// The map renders from EITHER intent source: SoT sites and/or the operator
 	// location annotations. Onboarding empty-state only when neither exists.
 	if !sotEnabled && s.deviceLocations.Empty() {
-		writeJSON(w, http.StatusOK, map[string]any{"geo_enabled": false, "reason": "sot"})
-		return
+		return nil, nil, 0, false, "sot", ""
 	}
 
 	s.geoSites.mu.Lock()
 	if sotEnabled && time.Since(s.geoSites.at) > geoSiteCacheTTL {
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		client := &http.Client{Timeout: 10 * time.Second}
-		sites, err := fetchNetboxSites(ctx, client, cfg)
+		sites, err := fetchNetboxSites(fctx, client, cfg)
 		// Device→site assignments resolve placement in write-only mode (where
 		// NetBox isn't read back into the inventory). Best-effort: a failure
 		// here just falls back to inventory `site` labels.
-		assign, aerr := fetchNetboxDeviceSites(ctx, client, cfg)
+		assign, aerr := fetchNetboxDeviceSites(fctx, client, cfg)
 		cancel()
 		if err != nil && len(s.geoSites.sites) == 0 {
 			s.geoSites.mu.Unlock()
-			writeJSON(w, http.StatusOK, map[string]any{"geo_enabled": false, "reason": "fetch", "error": err.Error()})
-			return
+			return nil, nil, 0, false, "fetch", err.Error()
 		}
 		if err == nil {
 			s.geoSites.sites, s.geoSites.at = sites, time.Now()
@@ -324,7 +321,29 @@ func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
 	s.geoSites.mu.Unlock()
 
 	devices := visibleDevices(s.discovery.Devices(), claims)
-	rows, unplaced := buildGeomap(sites, devices, assign, s.deviceLocations.Lookup, time.Now())
+	rows, unplaced, deviceSite = buildGeomap(sites, devices, assign, s.deviceLocations.Lookup, time.Now())
+	return rows, deviceSite, unplaced, true, "", ""
+}
+
+// handleGeomap serves GET /api/geomap.
+func (s *server) handleGeomap(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	rows, _, unplaced, enabled, reason, errMsg := s.geomapResolve(r.Context(), claims)
+	if !enabled {
+		resp := map[string]any{"geo_enabled": false, "reason": reason}
+		if errMsg != "" {
+			resp["error"] = errMsg
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	placed := 0
 	for _, g := range rows {
 		placed += g.Devices

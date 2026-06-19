@@ -25,7 +25,7 @@ func TestBuildGeomap(t *testing.T) {
 		{ID: "d", Labels: map[string]string{}, LastSeen: now},                                       // unplaced
 		{ID: "e", Labels: map[string]string{"site": "ghost"}, LastSeen: now},                        // site absent from SoT
 	}
-	rows, unplaced := buildGeomap(sites, devices, nil, nil, now)
+	rows, unplaced, _ := buildGeomap(sites, devices, nil, nil, now)
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 site rows, got %d: %+v", len(rows), rows)
 	}
@@ -49,7 +49,7 @@ func TestBuildGeomap(t *testing.T) {
 }
 
 func TestBuildGeomapEmpty(t *testing.T) {
-	rows, unplaced := buildGeomap(nil, nil, nil, nil, time.Now())
+	rows, unplaced, _ := buildGeomap(nil, nil, nil, nil, time.Now())
 	if len(rows) != 0 || unplaced != 0 {
 		t.Fatalf("expected empty result, got %v / %d", rows, unplaced)
 	}
@@ -66,7 +66,7 @@ func TestBuildGeomapWriteOnlyAssignment(t *testing.T) {
 		{ID: "snmp-leaf1", Name: "leaf1", Address: "10.70.0.1", LastSeen: now}, // no site label
 	}
 	assign := map[string]string{"ip:10.70.0.1": "dallas"} // from NetBox device assignment
-	rows, unplaced := buildGeomap(sites, devices, assign, nil, now)
+	rows, unplaced, _ := buildGeomap(sites, devices, assign, nil, now)
 	if len(rows) != 1 || rows[0].Devices != 1 || rows[0].Up != 1 {
 		t.Fatalf("assignment-based placement failed: %+v", rows)
 	}
@@ -90,10 +90,10 @@ func TestBuildGeomapManualAnnotations(t *testing.T) {
 		{ID: "e", Name: "nowhere", Address: "10.0.0.5", LastSeen: now},
 	}
 	locs := map[string]DeviceLocation{
-		"ip:10.0.0.1": {Site: "ShouldNotWin", Lat: 1, Lng: 1},          // SoT placement must win for leaf1
+		"ip:10.0.0.1": {Site: "ShouldNotWin", Lat: 1, Lng: 1}, // SoT placement must win for leaf1
 		"ip:10.0.0.2": {Site: "Branch-A", Lat: 40.7, Lng: -74.0},
 		"ip:10.0.0.3": {Site: "Branch-A", Lat: 40.7, Lng: -74.0},
-		"ip:10.0.0.4": {Lat: 51.5, Lng: -0.1},                          // no label → pins by device name
+		"ip:10.0.0.4": {Lat: 51.5, Lng: -0.1}, // no label → pins by device name
 	}
 	lookup := func(tokens []string) (DeviceLocation, bool) {
 		for _, tok := range tokens {
@@ -103,7 +103,7 @@ func TestBuildGeomapManualAnnotations(t *testing.T) {
 		}
 		return DeviceLocation{}, false
 	}
-	rows, unplaced := buildGeomap(sites, devices, nil, lookup, now)
+	rows, unplaced, _ := buildGeomap(sites, devices, nil, lookup, now)
 	if unplaced != 1 {
 		t.Fatalf("unplaced = %d, want 1 (only 'nowhere')", unplaced)
 	}

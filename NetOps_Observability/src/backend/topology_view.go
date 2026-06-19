@@ -27,7 +27,8 @@ import (
 // frontend mode switcher degrades gracefully.
 func topologyModeOrDefault(m string) string {
 	switch m {
-	case topology.ModeExplore, topology.ModeInvestigate, topology.ModePathTrace, topology.ModeDependency:
+	case topology.ModeExplore, topology.ModeInvestigate, topology.ModePathTrace,
+		topology.ModeDependency, topology.ModeExecutiveGeo:
 		return m
 	default:
 		return topology.ModeExplore
@@ -97,6 +98,16 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	inUtil := canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface"))
 	outUtil := canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface"))
 
+	linkFacts := toLinkFacts(links, operStatus, inUtil, outUtil)
+
+	// Executive geo is a SITE-level projection: it aggregates the same evidence-
+	// bearing device links into WAN circuits between SoT-placed sites. It needs
+	// the links + site placement, not the device-level node facts.
+	if mode == topology.ModeExecutiveGeo {
+		writeJSON(w, http.StatusOK, s.projectGeoView(r.Context(), claims, tenant, linkFacts))
+		return
+	}
+
 	in := topology.Input{
 		Mode:     mode,
 		TenantID: tenant,
@@ -104,11 +115,62 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
 		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
 		Devices:  toDeviceFacts(devs, cpu, mem),
-		Links:    toLinkFacts(links, operStatus, inUtil, outUtil),
+		Links:    linkFacts,
 		Alerts:   toAlertFacts(alerts),
 	}
 
 	writeJSON(w, http.StatusOK, topology.Project(in))
+}
+
+// projectGeoView builds the executive_geo View from SoT site placement + the
+// deduped device links. When no geo intent source is configured it returns a
+// well-formed EMPTY view, so the frontend falls back to the labeled sample (same
+// graceful-degradation contract as every other not-yet-real surface).
+func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant string, links []topology.LinkFact) topology.View {
+	now := time.Now()
+	empty := topology.View{
+		ViewID:      "geo-" + tenant,
+		Mode:        topology.ModeExecutiveGeo,
+		Scope:       topology.Scope{TenantID: tenant},
+		LayoutType:  "wan_geo",
+		GeneratedAt: now.UTC().Format(time.RFC3339),
+		Nodes:       []topology.Node{},
+		Edges:       []topology.Edge{},
+		Groups:      []topology.Group{},
+		Overlays:    []string{"health", "utilization"},
+	}
+
+	rows, deviceSite, _, enabled, _, _ := s.geomapResolve(ctx, claims)
+	if !enabled {
+		return empty
+	}
+
+	sites := make([]topology.GeoSiteFact, 0, len(rows))
+	for _, g := range rows {
+		src := "netbox"
+		if g.Status == "manual" || strings.HasPrefix(g.Slug, "loc:") {
+			src = "manual"
+		}
+		sites = append(sites, topology.GeoSiteFact{
+			Slug:      g.Slug,
+			Name:      g.Name,
+			Lat:       g.Lat,
+			Lng:       g.Lng,
+			HasCoords: g.HasCoords,
+			Devices:   g.Devices,
+			Up:        g.Up,
+			Down:      g.Down,
+			Status:    g.Status,
+			Source:    src,
+		})
+	}
+	return topology.ProjectGeo(topology.GeoInput{
+		TenantID:   tenant,
+		Now:        now,
+		Sites:      sites,
+		Links:      links,
+		DeviceSite: deviceSite,
+	})
 }
 
 // toDeviceFacts translates inventory + metric vectors into projection input. The

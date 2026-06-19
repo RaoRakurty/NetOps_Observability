@@ -44,6 +44,7 @@ const (
 	KindLoadBalancer = "load_balancer"
 	KindServer       = "server"
 	KindCloud        = "cloud"
+	KindSite         = "site" // a geographic site (executive_geo projection)
 	KindUnresolved   = "unresolved"
 )
 
@@ -55,10 +56,21 @@ const (
 
 // Workflow modes (contract WorkflowMode).
 const (
-	ModeExplore     = "explore"
-	ModeInvestigate = "investigate"
-	ModePathTrace   = "path_trace"
-	ModeDependency  = "dependency"
+	ModeExplore      = "explore"
+	ModeInvestigate  = "investigate"
+	ModePathTrace    = "path_trace"
+	ModeDependency   = "dependency"
+	ModeExecutiveGeo = "executive_geo"
+)
+
+// Edge link status (contract EdgeStatus). "" → "unknown" at the boundary.
+const (
+	StatusUp          = "up"
+	StatusDown        = "down"
+	StatusDegraded    = "degraded"
+	StatusWarning     = "warning"
+	StatusMaintenance = "maintenance"
+	StatusUnknown     = "unknown"
 )
 
 // ── output: evidence ─────────────────────────────────────────────────────────
@@ -96,6 +108,18 @@ type Node struct {
 	// derived enrichment the backend can safely supply
 	Resolved bool   `json:"resolved"`
 	GroupID  string `json:"group_id,omitempty"`
+	// Coordinates is geographic placement {x:lng, y:lat} in decimal WGS-84. It is
+	// normally a UI-derived field — EXCEPT for the executive_geo projection, where
+	// the coordinate IS the intent data (it lives in the Source of Truth and cannot
+	// be derived in the adapter), so the backend authors it here. Omitted (nil) for
+	// every other mode. Matches TopologyNode.coordinates on the TS side.
+	Coordinates *Coord `json:"coordinates,omitempty"`
+}
+
+// Coord is a geographic coordinate: X = longitude, Y = latitude (decimal WGS-84).
+type Coord struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 // ── output: edge ─────────────────────────────────────────────────────────────
