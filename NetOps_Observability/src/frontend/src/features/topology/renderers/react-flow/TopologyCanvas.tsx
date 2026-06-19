@@ -37,11 +37,14 @@ type AnyNodeData = RFNodeData | RFGroupData;
 import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { WORKFLOWS, workflowById } from "../../workflows";
-import { enterpriseScaleTopology } from "../../mock/index";
+import { enterpriseScaleTopology, geoWanTopology } from "../../mock/index";
 
 // Phase 4 WebGL overview — heavy (sigma + graphology layout). Lazy-loaded so it
 // only enters the bundle when the operator opens the overview.
 const SigmaTopologyView = lazy(() => import("../sigma/SigmaTopologyView"));
+// Phase 5 geographic / WAN map — heavy (echarts world basemap). Lazy-loaded so
+// it only enters the bundle when the operator opens the geo view.
+const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
@@ -80,9 +83,10 @@ function CanvasInner() {
   const [hoverEdge, setHoverEdge] = useState<string | undefined>();
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  // Renderer toggle: the scoped React Flow canvas vs. the WebGL enterprise
-  // overview (Phase 4). Orthogonal to the workflow mode.
-  const [overview, setOverview] = useState(false);
+  // Renderer toggle: the scoped React Flow canvas (default) vs. the WebGL
+  // enterprise overview (Phase 4) vs. the geographic / WAN map (Phase 5).
+  // Orthogonal to the workflow mode.
+  const [renderer, setRenderer] = useState<"canvas" | "overview" | "geo">("canvas");
 
   const workflow = workflowById(mode);
   const view = workflow?.view;
@@ -292,13 +296,16 @@ function CanvasInner() {
         layoutPinned={layoutPinned}
       >
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
-        {view && !overview && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
+        {view && renderer === "canvas" && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
         <div className="topo-render-toggle" role="tablist" aria-label="Renderer">
-          <button role="tab" aria-selected={!overview} className={overview ? "" : "on"} onClick={() => setOverview(false)}>
+          <button role="tab" aria-selected={renderer === "canvas"} className={renderer === "canvas" ? "on" : ""} onClick={() => setRenderer("canvas")}>
             Canvas
           </button>
-          <button role="tab" aria-selected={overview} className={overview ? "on" : ""} onClick={() => setOverview(true)}>
+          <button role="tab" aria-selected={renderer === "overview"} className={renderer === "overview" ? "on" : ""} onClick={() => setRenderer("overview")}>
             Overview
+          </button>
+          <button role="tab" aria-selected={renderer === "geo"} className={renderer === "geo" ? "on" : ""} onClick={() => setRenderer("geo")}>
+            Geo
           </button>
         </div>
       </TopologyToolbar>
@@ -312,9 +319,13 @@ function CanvasInner() {
         >
           {fullscreen ? "⤡ Exit" : "⤢ Full screen"}
         </button>
-        {overview ? (
+        {renderer === "overview" ? (
           <Suspense fallback={<div className="topo-sigma-loading">Loading enterprise overview…</div>}>
             <SigmaTopologyView view={enterpriseScaleTopology} />
+          </Suspense>
+        ) : renderer === "geo" ? (
+          <Suspense fallback={<div className="topo-geo-loading">Loading geographic map…</div>}>
+            <GeoTopologyMap view={geoWanTopology} />
           </Suspense>
         ) : !view ? (
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />

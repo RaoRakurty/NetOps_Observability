@@ -1,18 +1,19 @@
-// ExecutiveGeoWorkflow — PLACEHOLDER (Phase 5).
+// ExecutiveGeoWorkflow — the executive geo / WAN view.
 //
-// The executive geo / WAN view. Will render sites and WAN circuits on a real map
-// via MapLibre GL JS + deck.gl (see renderers/geo). Carries the geo view so the
-// selector can preview it, but has no spotlight logic until Phase 5.
+// The geographic map is a RENDERER, not a node-link layout: it lives behind the
+// "Geo" renderer toggle (top-right of the canvas), which mounts GeoTopologyMap
+// (ECharts world basemap, sites + WAN circuits). This workflow descriptor carries
+// NO `view` on purpose — its geo data has geographic coordinates the ELK/React-Flow
+// canvas can't lay out, so selecting this mode in the Canvas renderer shows a
+// placeholder that points the operator at the Geo toggle.
 
 import type { WorkflowDef } from "./workflowTypes";
-import { geoWanTopology } from "../mock/index";
 
 export const ExecutiveGeoWorkflow: WorkflowDef = {
   id: "executive_geo",
   label: "Executive / Geo",
-  blurb: "Sites and WAN circuits on a geographic map via MapLibre + deck.gl (Phase 5).",
+  blurb: "Sites and WAN circuits on a geographic world map. Switch the renderer to “Geo” (top-right) to open it.",
   implemented: false,
-  view: geoWanTopology,
 };
 
 export default ExecutiveGeoWorkflow;

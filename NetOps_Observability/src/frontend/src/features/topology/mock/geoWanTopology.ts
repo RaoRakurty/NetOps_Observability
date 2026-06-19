@@ -1,12 +1,14 @@
-// geoWanTopology.ts — PLACEHOLDER mock TopologyView ("executive_geo"/wan_geo).
+// geoWanTopology.ts — sample TopologyView for the "executive_geo" / wan_geo mode.
 //
-// ~6 site nodes each with pinned coordinates {x,y} (normalized 0..1, lon/lat-ish),
-// connected by WAN circuit edges (manual/snmp). Coordinates let a layout drop pins
-// instead of running ELK.
+// ~6 site nodes pinned to REAL geographic coordinates { x: longitude, y: latitude }
+// (decimal WGS-84), connected by WAN circuit edges (manual/snmp). The Phase-5 geo
+// renderer (GeoTopologyMap, ECharts world basemap) plots x/y straight onto the geo
+// coordinate system.
 //
-// NOTE: this is a placeholder. The REAL geo renderer (MapLibre / deck.gl world map
-// with great-circle WAN arcs) is a later phase (renderer_hints.preferred:
-// "deck_geo"). This dataset just lets the geo overlay + pin UI be built first.
+// This is the sample dataset the executive_geo mode falls back to until the backend
+// projects site-level geo from the Source of Truth (every not-yet-real mode shows
+// its matching mock — see topologyApi.fetchTopologyView). The renderer itself is
+// real; only the data is sample.
 //
 // FLAT canonical contract (api/topologyTypes.ts).
 
@@ -30,8 +32,8 @@ export const geoWanTopology: TopologyView = {
       health: "ok",
       confidence: 0.95,
       resolved: true,
-      // x/y are normalized 0..1 stand-ins for lon/lat; the geo renderer reprojects.
-      coordinates: { x: 0.29, y: 0.36 },
+      // longitude, latitude (decimal WGS-84) — New York.
+      coordinates: { x: -74.0, y: 40.71 },
       first_seen: "2026-01-01T00:00:00Z",
       last_seen: "2026-06-18T01:00:00Z",
       change_state: "unchanged",
@@ -57,7 +59,7 @@ export const geoWanTopology: TopologyView = {
       health: "ok",
       confidence: 0.95,
       resolved: true,
-      coordinates: { x: 0.13, y: 0.4 },
+      coordinates: { x: -122.42, y: 37.77 }, // San Francisco
       first_seen: "2026-01-01T00:00:00Z",
       last_seen: "2026-06-18T01:00:00Z",
       change_state: "unchanged",
@@ -83,7 +85,7 @@ export const geoWanTopology: TopologyView = {
       health: "warning",
       confidence: 0.93,
       resolved: true,
-      coordinates: { x: 0.24, y: 0.35 },
+      coordinates: { x: -87.63, y: 41.88 }, // Chicago
       first_seen: "2026-01-01T00:00:00Z",
       last_seen: "2026-06-18T01:00:00Z",
       change_state: "unchanged",
@@ -109,7 +111,7 @@ export const geoWanTopology: TopologyView = {
       health: "ok",
       confidence: 0.9,
       resolved: true,
-      coordinates: { x: 0.49, y: 0.31 },
+      coordinates: { x: -0.13, y: 51.51 }, // London
       first_seen: "2026-02-01T00:00:00Z",
       last_seen: "2026-06-18T01:00:00Z",
       change_state: "unchanged",
@@ -135,7 +137,7 @@ export const geoWanTopology: TopologyView = {
       health: "ok",
       confidence: 0.9,
       resolved: true,
-      coordinates: { x: 0.52, y: 0.32 },
+      coordinates: { x: 8.68, y: 50.11 }, // Frankfurt
       first_seen: "2026-03-01T00:00:00Z",
       last_seen: "2026-06-18T01:00:00Z",
       change_state: "unchanged",
@@ -161,7 +163,7 @@ export const geoWanTopology: TopologyView = {
       health: "ok",
       confidence: 0.89,
       resolved: true,
-      coordinates: { x: 0.77, y: 0.58 },
+      coordinates: { x: 103.82, y: 1.35 }, // Singapore
       first_seen: "2026-03-01T00:00:00Z",
       last_seen: "2026-06-18T01:00:00Z",
       change_state: "unchanged",
@@ -309,6 +311,6 @@ export const geoWanTopology: TopologyView = {
   groups: [],
   overlays: ["health", "utilization"],
   legend: {},
-  // Placeholder renders in react_flow via pinned coords; the real world-map view will use "deck_geo".
-  renderer_hints: { preferred: "react_flow", max_detail_level: 1 },
+  // The geo renderer (ECharts world map) plots the pinned lon/lat directly.
+  renderer_hints: { preferred: "deck_geo", max_detail_level: 1 },
 };
