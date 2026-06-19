@@ -147,10 +147,6 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 
 	sites := make([]topology.GeoSiteFact, 0, len(rows))
 	for _, g := range rows {
-		src := "netbox"
-		if g.Status == "manual" || strings.HasPrefix(g.Slug, "loc:") {
-			src = "manual"
-		}
 		sites = append(sites, topology.GeoSiteFact{
 			Slug:      g.Slug,
 			Name:      g.Name,
@@ -161,7 +157,7 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 			Up:        g.Up,
 			Down:      g.Down,
 			Status:    g.Status,
-			Source:    src,
+			Source:    g.Source, // "internal" | "netbox" | "manual"
 		})
 	}
 	return topology.ProjectGeo(topology.GeoInput{

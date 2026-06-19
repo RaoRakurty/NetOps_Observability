@@ -61,6 +61,7 @@ type server struct {
 	notifyCfg        *notifyConfigStore
 	contactPoints    *contactPointStore
 	deviceLocations  *deviceLocationStore
+	sites            *sitesStore // internal SoT sites (default provider)
 	reports          *reportScheduler
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
@@ -361,6 +362,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("device locations store: %v", err)
 	}
+	sites, err := newSitesStore(envOr("SITES_FILE", "/data/sites.json"))
+	if err != nil {
+		log.Fatalf("sites store: %v", err)
+	}
 	contactPoints, err := newContactPointStore(envOr("CONTACT_POINTS_FILE", "/data/contact_points.json"))
 	if err != nil {
 		log.Fatalf("contact point store: %v", err)
@@ -390,6 +395,7 @@ func newServer() *server {
 		audit:            audit,
 		contactPoints:    contactPoints,
 		deviceLocations:  deviceLocations,
+		sites:            sites,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -690,6 +696,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/fanout", s.handleFlowsFanout)
 	mux.HandleFunc("/api/probe/paths", s.handleProbePaths)
 	mux.HandleFunc("/api/geomap", s.handleGeomap)
+	mux.HandleFunc("/api/sites", s.handleSites)     // internal SoT sites: GET list / POST upsert
+	mux.HandleFunc("/api/sites/", s.handleSiteByID) // /api/sites/{slug}: PUT / DELETE
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
 	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)

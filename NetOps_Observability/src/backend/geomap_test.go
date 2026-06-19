@@ -9,14 +9,10 @@ import (
 
 func TestBuildGeomap(t *testing.T) {
 	now := time.Now()
-	f := func(v float64) *float64 { return &v }
-	sites := []netboxSite{
-		{Name: "Dallas DC", Slug: "dallas", Latitude: f(32.78), Longitude: f(-96.80),
-			Status: &struct {
-				Value string `json:"value"`
-			}{Value: "active"}},
-		{Name: "Discovered", Slug: "discovered"}, // no coordinates
-		{Slug: ""},                               // malformed — skipped
+	sites := []SoTSite{
+		{Name: "Dallas DC", Slug: "dallas", Lat: 32.78, Lng: -96.80, HasCoords: true, Status: "active", Source: "netbox"},
+		{Name: "Discovered", Slug: "discovered", Source: "netbox"}, // no coordinates
+		{Slug: ""}, // malformed — skipped
 	}
 	devices := []models.Device{
 		{ID: "a", Labels: map[string]string{"site": "dallas"}, LastSeen: now.Add(-time.Minute)},     // up
@@ -60,8 +56,7 @@ func TestBuildGeomapEmpty(t *testing.T) {
 // keyed by identity token.
 func TestBuildGeomapWriteOnlyAssignment(t *testing.T) {
 	now := time.Now()
-	f := func(v float64) *float64 { return &v }
-	sites := []netboxSite{{Name: "Dallas", Slug: "dallas", Latitude: f(32.78), Longitude: f(-96.80)}}
+	sites := []SoTSite{{Name: "Dallas", Slug: "dallas", Lat: 32.78, Lng: -96.80, HasCoords: true, Source: "netbox"}}
 	devices := []models.Device{
 		{ID: "snmp-leaf1", Name: "leaf1", Address: "10.70.0.1", LastSeen: now}, // no site label
 	}
@@ -80,8 +75,7 @@ func TestBuildGeomapWriteOnlyAssignment(t *testing.T) {
 // bubble, label-less annotations pin under the device name, SoT still wins.
 func TestBuildGeomapManualAnnotations(t *testing.T) {
 	now := time.Now()
-	fp := func(v float64) *float64 { return &v }
-	sites := []netboxSite{{Name: "HQ", Slug: "hq", Latitude: fp(32.7), Longitude: fp(-96.8)}}
+	sites := []SoTSite{{Name: "HQ", Slug: "hq", Lat: 32.7, Lng: -96.8, HasCoords: true, Source: "netbox"}}
 	devices := []models.Device{
 		{ID: "a", Name: "leaf1", Address: "10.0.0.1", Labels: map[string]string{"site": "hq"}, LastSeen: now},
 		{ID: "b", Name: "leaf2", Address: "10.0.0.2", LastSeen: now},

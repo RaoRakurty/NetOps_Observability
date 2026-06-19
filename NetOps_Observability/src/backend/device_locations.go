@@ -302,25 +302,41 @@ func sotSiteFor(d models.Device, assign map[string]string) string {
 	return ""
 }
 
-// geoAssignments returns the cached NetBox device→site map (may be nil when
-// the SoT is disabled — callers treat that as "no SoT assignment").
+// geoAssignments returns the active provider's device→site map (NetBox keeps one
+// for write-only mode; the internal provider places by Device.Labels["site"], so
+// it returns nil — callers treat nil as "no external assignment").
 func (s *server) geoAssignments() map[string]string {
-	s.geoSites.mu.Lock()
-	defer s.geoSites.mu.Unlock()
-	return s.geoSites.assign
+	if nb := (&netboxProvider{s: s}); nb.Configured() {
+		s.geoSites.mu.Lock()
+		defer s.geoSites.mu.Unlock()
+		return s.geoSites.assign
+	}
+	return nil
 }
 
-// geoSiteSlugs returns the slugs of SoT sites the geomap can actually render.
-// A device whose `site` label names a site the SoT doesn't list (e.g. a label
-// stamped by a discovery source) is NOT SoT-placed — it must stay editable in
-// the location layer or it could never appear on the map.
+// geoSiteSlugs returns the slugs of SoT sites the geomap can actually render,
+// from the ACTIVE provider. A device whose `site` label names a site the provider
+// doesn't list (e.g. a label stamped by a discovery source) is NOT SoT-placed —
+// it must stay editable in the location layer or it could never appear on the map.
 func (s *server) geoSiteSlugs() map[string]bool {
-	s.geoSites.mu.Lock()
-	defer s.geoSites.mu.Unlock()
-	out := make(map[string]bool, len(s.geoSites.sites))
-	for _, site := range s.geoSites.sites {
-		if site.Slug != "" {
-			out[site.Slug] = true
+	if nb := (&netboxProvider{s: s}); nb.Configured() {
+		s.geoSites.mu.Lock()
+		defer s.geoSites.mu.Unlock()
+		out := make(map[string]bool, len(s.geoSites.sites))
+		for _, site := range s.geoSites.sites {
+			if site.Slug != "" {
+				out[site.Slug] = true
+			}
+		}
+		return out
+	}
+	out := map[string]bool{}
+	if s.sites == nil {
+		return out
+	}
+	for _, st := range s.sites.All() {
+		if st.Slug != "" {
+			out[st.Slug] = true
 		}
 	}
 	return out

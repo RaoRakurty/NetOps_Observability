@@ -266,17 +266,25 @@ func circuitConfidence(ag *circuitAgg) float64 {
 	return c
 }
 
+// placementSource maps a provider source to a valid evidence TopologySource.
+// Only NetBox is a distinct wire source; internal/operator-declared sites are
+// "manual" (operator intent inside the platform).
 func placementSource(s string) string {
-	if s == "manual" {
-		return "manual"
+	if s == "netbox" {
+		return "netbox"
 	}
-	return "netbox"
+	return "manual"
 }
 
 func placementDetail(s GeoSiteFact) string {
-	where := "Source of Truth"
-	if s.Source == "manual" {
-		where = "operator location annotation"
+	where := "the Source of Truth"
+	switch s.Source {
+	case "netbox":
+		where = "the Source of Truth (NetBox)"
+	case "internal":
+		where = "the Source of Truth (this platform)"
+	case "manual":
+		where = "an operator location annotation"
 	}
 	if s.HasCoords {
 		return "Site placement from " + where + " (decimal WGS-84)"

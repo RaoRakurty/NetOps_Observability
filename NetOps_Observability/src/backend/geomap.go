@@ -45,6 +45,10 @@ type geoSite struct {
 	Devices   int     `json:"devices"`
 	Up        int     `json:"up"`
 	Down      int     `json:"down"`
+	// Source is the SoT provider that supplied this site ("internal"|"netbox"|
+	// "manual"). In-memory only (drives the geo projection's evidence source); not
+	// part of the /api/geomap wire response.
+	Source string `json:"-"`
 }
 
 // netboxSite is the subset of /api/dcim/sites/ we read.
@@ -211,7 +215,7 @@ func netboxDeviceTokens(d netboxDeviceSite) []string {
 // (write-only mode) — wins; otherwise an operator location annotation
 // (`lookup`, the device_locations layer) places it, with devices sharing a
 // site label folding into one bubble. Pure — unit-tested.
-func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]string,
+func buildGeomap(sites []SoTSite, devices []models.Device, assign map[string]string,
 	lookup func([]string) (DeviceLocation, bool), now time.Time) (rows []geoSite, unplaced int, deviceSite map[string]string) {
 	bySlug := map[string]*geoSite{}
 	order := []string{}
@@ -220,12 +224,9 @@ func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]
 		if s.Slug == "" {
 			continue
 		}
-		g := &geoSite{Name: s.Name, Slug: s.Slug}
-		if s.Status != nil {
-			g.Status = s.Status.Value
-		}
-		if s.Latitude != nil && s.Longitude != nil {
-			g.Lat, g.Lng, g.HasCoords = *s.Latitude, *s.Longitude, true
+		g := &geoSite{
+			Name: s.Name, Slug: s.Slug, Status: s.Status,
+			Lat: s.Lat, Lng: s.Lng, HasCoords: s.HasCoords, Source: s.Source,
 		}
 		bySlug[s.Slug] = g
 		order = append(order, s.Slug)
@@ -264,7 +265,7 @@ func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]
 				key := "loc:" + strings.ToLower(name)
 				g := bySlug[key]
 				if g == nil {
-					g = &geoSite{Name: name, Slug: key, Status: "manual", Lat: l.Lat, Lng: l.Lng, HasCoords: true}
+					g = &geoSite{Name: name, Slug: key, Status: "manual", Lat: l.Lat, Lng: l.Lng, HasCoords: true, Source: "manual"}
 					bySlug[key] = g
 					order = append(order, key)
 				}
@@ -287,42 +288,53 @@ func buildGeomap(sites []netboxSite, devices []models.Device, assign map[string]
 // the SoT fetch fails with nothing cached. Both /api/geomap and the executive_geo
 // topology projection call this so they share one source of truth.
 func (s *server) geomapResolve(ctx context.Context, claims jwtClaims) (rows []geoSite, deviceSite map[string]string, unplaced int, enabled bool, reason, errMsg string) {
-	cfg := s.netboxCfg.effective()
-	sotEnabled := cfg.Enabled && cfg.URL != "" && cfg.Token != ""
-	// The map renders from EITHER intent source: SoT sites and/or the operator
+	p := s.activeSoT()
+	sites, err := p.Sites(ctx)
+	if err != nil {
+		// Only an external provider errors (e.g. NetBox unreachable, nothing
+		// cached). The internal provider never errors.
+		return nil, nil, 0, false, "fetch", err.Error()
+	}
+	assign, _ := p.DeviceSites(ctx)
+
+	// The map renders from EITHER intent source: declared sites and/or operator
 	// location annotations. Onboarding empty-state only when neither exists.
-	if !sotEnabled && s.deviceLocations.Empty() {
+	if len(sites) == 0 && s.deviceLocations.Empty() {
 		return nil, nil, 0, false, "sot", ""
 	}
-
-	s.geoSites.mu.Lock()
-	if sotEnabled && time.Since(s.geoSites.at) > geoSiteCacheTTL {
-		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		client := &http.Client{Timeout: 10 * time.Second}
-		sites, err := fetchNetboxSites(fctx, client, cfg)
-		// Device→site assignments resolve placement in write-only mode (where
-		// NetBox isn't read back into the inventory). Best-effort: a failure
-		// here just falls back to inventory `site` labels.
-		assign, aerr := fetchNetboxDeviceSites(fctx, client, cfg)
-		cancel()
-		if err != nil && len(s.geoSites.sites) == 0 {
-			s.geoSites.mu.Unlock()
-			return nil, nil, 0, false, "fetch", err.Error()
-		}
-		if err == nil {
-			s.geoSites.sites, s.geoSites.at = sites, time.Now()
-			if aerr == nil {
-				s.geoSites.assign = assign
-			}
-		}
-	}
-	sites := s.geoSites.sites
-	assign := s.geoSites.assign
-	s.geoSites.mu.Unlock()
 
 	devices := visibleDevices(s.discovery.Devices(), claims)
 	rows, unplaced, deviceSite = buildGeomap(sites, devices, assign, s.deviceLocations.Lookup, time.Now())
 	return rows, deviceSite, unplaced, true, "", ""
+}
+
+// fetch returns the NetBox site list + device→site map, memoized in geoSites
+// (60s TTL). On a fetch error with nothing cached it returns the error so the
+// caller can surface an honest "couldn't reach the SoT" state; with stale cache
+// it returns the cache and no error.
+func (p *netboxProvider) fetch(ctx context.Context) (sites []netboxSite, assign map[string]string, err error) {
+	cfg := p.s.netboxCfg.effective()
+	p.s.geoSites.mu.Lock()
+	defer p.s.geoSites.mu.Unlock()
+	if time.Since(p.s.geoSites.at) > geoSiteCacheTTL {
+		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		client := &http.Client{Timeout: 10 * time.Second}
+		fetched, ferr := fetchNetboxSites(fctx, client, cfg)
+		// Device→site assignments resolve placement in write-only mode (where
+		// NetBox isn't read back into the inventory). Best-effort.
+		fassign, aerr := fetchNetboxDeviceSites(fctx, client, cfg)
+		cancel()
+		if ferr != nil && len(p.s.geoSites.sites) == 0 {
+			return nil, nil, ferr
+		}
+		if ferr == nil {
+			p.s.geoSites.sites, p.s.geoSites.at = fetched, time.Now()
+			if aerr == nil {
+				p.s.geoSites.assign = fassign
+			}
+		}
+	}
+	return p.s.geoSites.sites, p.s.geoSites.assign, nil
 }
 
 // handleGeomap serves GET /api/geomap.
