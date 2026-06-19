@@ -42,10 +42,11 @@ function DirectionPicker({ value, onChange }: { value: Direction; onChange: (v: 
         {DIRECTIONS.map((d) => (
           <button
             key={d.v}
-            className={`btn${d.v === value ? " btn-primary" : ""}`}
+            className={`btn${d.v === value ? " accent" : ""}`}
             style={{ fontSize: 12 }}
             onClick={() => onChange(d.v)}
             type="button"
+            aria-pressed={d.v === value}
           >
             {d.label}
           </button>
@@ -374,7 +375,7 @@ export default function SourceOfTruth() {
             automatically, no URL or token to paste.
           </p>
           <button
-            className="btn primary"
+            className="btn accent"
             onClick={() => {
               setMode("managed");
               setWizard(true);
