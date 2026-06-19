@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sshpass -p rao123 ssh rao@10.70.245.120:*\\)\rBash\\(curl -s -X PATCH http://localhost:8000/api/seams/:*)"
+    ]
+  }
+}

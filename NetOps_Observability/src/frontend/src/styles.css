@@ -710,6 +710,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border-radius: 12px; overflow: hidden; background: var(--surface); margin-top: 10px; }
 .topo-stage .react-flow { background: transparent; }
 .topo-stage .react-flow__attribution { display: none; }
+/* Edge info-labels render into React Flow's edgelabel layer, which defaults to
+   z-index:auto — so the open-group "shade" box (z 0) and device cards (z 1/2)
+   paint over the label and it reads as hidden under the shade. Lift the whole
+   label layer above the node layers. Labels stay pointer-events:none, so this
+   never blocks clicking the card underneath. */
+.topo-stage .react-flow__edgelabel-renderer { z-index: 6; }
 /* search docks top-left over the canvas; path panel docks bottom-left */
 .topo-search-dock { position: absolute; top: 12px; left: 12px; z-index: 6; width: 320px; max-width: 60%; }
 .topo-path-dock { position: absolute; bottom: 14px; left: 14px; z-index: 6; width: 340px; max-width: 70%;
