@@ -202,7 +202,7 @@ func (s *server) handleDeviceLocation(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		resp := map[string]any{"set": false}
-		if slug := sotSiteFor(d, s.geoAssignments()); slug != "" && s.geoSiteSlugs()[slug] {
+		if slug := sotSiteFor(d, s.geoAssignments()); slug != "" && s.geoSiteSlugs(tenant, cross)[slug] {
 			resp["sot_site"] = slug
 		}
 		if l, ok := s.deviceLocations.Lookup(tokens); ok {
@@ -255,8 +255,9 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	tenant, cross := principalTenant(claims)
 	assign := s.geoAssignments()
-	resolvable := s.geoSiteSlugs()
+	resolvable := s.geoSiteSlugs(tenant, cross)
 	type row struct {
 		ID     string  `json:"id"`
 		Name   string  `json:"name"`
@@ -315,10 +316,11 @@ func (s *server) geoAssignments() map[string]string {
 }
 
 // geoSiteSlugs returns the slugs of SoT sites the geomap can actually render,
-// from the ACTIVE provider. A device whose `site` label names a site the provider
-// doesn't list (e.g. a label stamped by a discovery source) is NOT SoT-placed —
-// it must stay editable in the location layer or it could never appear on the map.
-func (s *server) geoSiteSlugs() map[string]bool {
+// from the ACTIVE provider, SCOPED to the (tenant, cross) principal. A device
+// whose `site` label names a site the provider doesn't list (e.g. a label stamped
+// by a discovery source) is NOT SoT-placed — it must stay editable in the location
+// layer or it could never appear on the map.
+func (s *server) geoSiteSlugs(tenant string, cross bool) map[string]bool {
 	if nb := (&netboxProvider{s: s}); nb.Configured() {
 		s.geoSites.mu.Lock()
 		defer s.geoSites.mu.Unlock()
@@ -334,7 +336,7 @@ func (s *server) geoSiteSlugs() map[string]bool {
 	if s.sites == nil {
 		return out
 	}
-	for _, st := range s.sites.All() {
+	for _, st := range s.sites.All(tenant, cross) {
 		if st.Slug != "" {
 			out[st.Slug] = true
 		}

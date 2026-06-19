@@ -25,16 +25,17 @@ type SoTSite struct {
 	Source string
 }
 
-// SoTProvider supplies operator INTENT. Every method is tenant-scoped by the
-// caller and MUST be safe on an empty provider (zero values, never panic).
+// SoTProvider supplies operator INTENT. Sites/DeviceSites are TENANT-SCOPED: a
+// non-cross principal must only ever receive its own tenant's intent. Every method
+// MUST be safe on an empty provider (zero values, never panic).
 type SoTProvider interface {
 	Name() string
-	// Sites returns declared sites (with coordinates when set).
-	Sites(ctx context.Context) ([]SoTSite, error)
+	// Sites returns the declared sites VISIBLE to the (tenant, cross) principal.
+	Sites(ctx context.Context, tenant string, cross bool) ([]SoTSite, error)
 	// DeviceSites maps a device identity token → site slug. May be nil when
 	// placement is carried on the device itself (the internal provider reads
 	// Device.Labels["site"], so it returns nil here).
-	DeviceSites(ctx context.Context) (map[string]string, error)
+	DeviceSites(ctx context.Context, tenant string, cross bool) (map[string]string, error)
 	// Configured reports whether this provider is the active authority.
 	Configured() bool
 }
@@ -57,16 +58,16 @@ type internalProvider struct {
 
 func (p *internalProvider) Name() string     { return "internal" }
 func (p *internalProvider) Configured() bool { return true } // always available
-func (p *internalProvider) DeviceSites(context.Context) (map[string]string, error) {
+func (p *internalProvider) DeviceSites(context.Context, string, bool) (map[string]string, error) {
 	// Placement lives on the device (Labels["site"]); buildGeomap reads it directly.
 	return nil, nil
 }
 
-func (p *internalProvider) Sites(context.Context) ([]SoTSite, error) {
+func (p *internalProvider) Sites(_ context.Context, tenant string, cross bool) ([]SoTSite, error) {
 	if p.sites == nil {
 		return nil, nil
 	}
-	rows := p.sites.All()
+	rows := p.sites.All(tenant, cross) // tenant-scoped: no cross-tenant leakage
 	out := make([]SoTSite, 0, len(rows))
 	for _, st := range rows {
 		out = append(out, st.toSoT())
@@ -90,7 +91,11 @@ func (p *netboxProvider) Configured() bool {
 	return cfg.Enabled && cfg.URL != "" && cfg.Token != ""
 }
 
-func (p *netboxProvider) Sites(ctx context.Context) ([]SoTSite, error) {
+// NetBox is a single shared external instance; its site list is not tenant-tagged,
+// so tenant/cross are accepted for interface parity but not used to filter here
+// (device counts ARE tenant-scoped downstream via visibleDevices). Per-tenant
+// external SoT isolation is a future provider concern.
+func (p *netboxProvider) Sites(ctx context.Context, _ string, _ bool) ([]SoTSite, error) {
 	sites, _, err := p.fetch(ctx)
 	if err != nil {
 		return nil, err
@@ -112,7 +117,7 @@ func (p *netboxProvider) Sites(ctx context.Context) ([]SoTSite, error) {
 	return out, nil
 }
 
-func (p *netboxProvider) DeviceSites(ctx context.Context) (map[string]string, error) {
+func (p *netboxProvider) DeviceSites(ctx context.Context, _ string, _ bool) (map[string]string, error) {
 	_, assign, err := p.fetch(ctx)
 	return assign, err
 }

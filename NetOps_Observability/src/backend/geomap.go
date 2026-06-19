@@ -288,14 +288,15 @@ func buildGeomap(sites []SoTSite, devices []models.Device, assign map[string]str
 // the SoT fetch fails with nothing cached. Both /api/geomap and the executive_geo
 // topology projection call this so they share one source of truth.
 func (s *server) geomapResolve(ctx context.Context, claims jwtClaims) (rows []geoSite, deviceSite map[string]string, unplaced int, enabled bool, reason, errMsg string) {
+	tenant, cross := principalTenant(claims)
 	p := s.activeSoT()
-	sites, err := p.Sites(ctx)
+	sites, err := p.Sites(ctx, tenant, cross)
 	if err != nil {
 		// Only an external provider errors (e.g. NetBox unreachable, nothing
 		// cached). The internal provider never errors.
 		return nil, nil, 0, false, "fetch", err.Error()
 	}
-	assign, _ := p.DeviceSites(ctx)
+	assign, _ := p.DeviceSites(ctx, tenant, cross)
 
 	// The map renders from EITHER intent source: declared sites and/or operator
 	// location annotations. Onboarding empty-state only when neither exists.
