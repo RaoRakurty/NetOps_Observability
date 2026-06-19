@@ -48,6 +48,7 @@ import {
   OverlaySelector,
   MapWorkflowSelector,
   PathAnalysisPanel,
+  CapacityPanel,
 } from "../../components";
 
 type Density = "executive" | "operator" | "engineer" | "incident";
@@ -123,13 +124,15 @@ function CanvasInner() {
     setTimeout(() => rf.fitView({ padding: 0.2, duration: 300 }), 40);
   }, [layoutKey, rf]);
 
-  // Reset transient selection when the workflow changes.
+  // Reset transient selection when the workflow changes. Capacity opens on the
+  // utilization overlay (its whole point); other modes default to health.
   useEffect(() => {
     setSelection({});
     setSearchMatches(new Set());
     setHoverNode(undefined);
     setHoverEdge(undefined);
     setCollapsedGroups(new Set());
+    setOverlay(mode === "capacity" ? "utilization" : "health");
   }, [mode]);
 
   // node → group lookup, for collapse hiding + search-to-expand.
@@ -326,6 +329,12 @@ function CanvasInner() {
             {(mode === "path_trace" || mode === "investigate") && (
               <div className="topo-path-dock">
                 <PathAnalysisPanel view={view} />
+              </div>
+            )}
+
+            {mode === "capacity" && (
+              <div className="topo-path-dock">
+                <CapacityPanel view={view} />
               </div>
             )}
 

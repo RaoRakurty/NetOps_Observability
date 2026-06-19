@@ -7,5 +7,6 @@ export { physicalTopology } from "./physicalTopology";
 export { pathTopology } from "./pathTopology";
 export { incidentTopology } from "./incidentTopology";
 export { cloudTopology } from "./cloudTopology";
+export { capacityTopology } from "./capacityTopology";
 export { enterpriseOverviewTopology } from "./enterpriseOverviewTopology";
 export { geoWanTopology } from "./geoWanTopology";
