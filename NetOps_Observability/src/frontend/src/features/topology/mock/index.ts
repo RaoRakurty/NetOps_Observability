@@ -9,4 +9,5 @@ export { incidentTopology } from "./incidentTopology";
 export { cloudTopology } from "./cloudTopology";
 export { capacityTopology } from "./capacityTopology";
 export { enterpriseOverviewTopology } from "./enterpriseOverviewTopology";
+export { enterpriseScaleTopology, makeEnterpriseScale } from "./enterpriseScaleTopology";
 export { geoWanTopology } from "./geoWanTopology";

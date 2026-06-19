@@ -165,7 +165,13 @@ export function EdgeBody({
             style={{
               position: "absolute",
               transform: `translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
-              pointerEvents: "all",
+              // pointer-events MUST stay off: this card pops up on hover at the
+              // edge midpoint — right under the cursor. If it captured the pointer
+              // it would steal the hover from the edge's interaction path, fire
+              // mouseleave→mouseenter in a loop, and the canvas would visibly
+              // shake whenever the cursor skims an edge in "empty" space. The
+              // label is informational (no clicks), so it never needs the pointer.
+              pointerEvents: "none",
             }}
             className="nodrag nopan"
           >

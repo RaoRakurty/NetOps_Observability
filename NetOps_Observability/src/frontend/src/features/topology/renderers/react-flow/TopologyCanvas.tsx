@@ -8,7 +8,7 @@
 // elkLayout) — never recomputed on every render; the RF node/edge arrays are derived
 // via useMemo and only rebuilt when the view, layout, or UI state actually change.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -37,6 +37,11 @@ type AnyNodeData = RFNodeData | RFGroupData;
 import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { WORKFLOWS, workflowById } from "../../workflows";
+import { enterpriseScaleTopology } from "../../mock/index";
+
+// Phase 4 WebGL overview — heavy (sigma + graphology layout). Lazy-loaded so it
+// only enters the bundle when the operator opens the overview.
+const SigmaTopologyView = lazy(() => import("../sigma/SigmaTopologyView"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
@@ -75,6 +80,9 @@ function CanvasInner() {
   const [hoverEdge, setHoverEdge] = useState<string | undefined>();
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Renderer toggle: the scoped React Flow canvas vs. the WebGL enterprise
+  // overview (Phase 4). Orthogonal to the workflow mode.
+  const [overview, setOverview] = useState(false);
 
   const workflow = workflowById(mode);
   const view = workflow?.view;
@@ -170,18 +178,21 @@ function CanvasInner() {
   // spotlights first-degree neighbours (no drawer); else the workflow's default
   // (Investigate/PathTrace pre-spotlight their RCA/trace path; Explore stays calm).
   const spotlight = useMemo(() => {
-    if (!view) return EMPTY_SPOTLIGHT;
+    if (!view) return { ...EMPTY_SPOTLIGHT, soft: false };
     if (selection.edgeId) {
       const e = view.edges.find((x) => x.id === selection.edgeId);
-      return { nodes: new Set(e ? [e.source, e.target] : []), edges: new Set(e ? [e.id] : []) };
+      return { nodes: new Set(e ? [e.source, e.target] : []), edges: new Set(e ? [e.id] : []), soft: false };
     }
-    if (selection.nodeId && workflow?.computeSpotlight) return workflow.computeSpotlight(view, selection);
+    if (selection.nodeId && workflow?.computeSpotlight) return { ...workflow.computeSpotlight(view, selection), soft: false };
     if (hoverNode) {
       const nodes = firstDegree(view, hoverNode);
-      return { nodes, edges: edgesWithin(view, nodes) };
+      // SOFT spotlight: a passing hover brightens the node + its neighbours but must
+      // NOT dim every other card — that all-at-once dim/undim on each graze is what
+      // read as a "shake". Heavy dim is reserved for a deliberate click-selection.
+      return { nodes, edges: edgesWithin(view, nodes), soft: true };
     }
-    if (workflow?.computeSpotlight) return workflow.computeSpotlight(view, {});
-    return EMPTY_SPOTLIGHT;
+    if (workflow?.computeSpotlight) return { ...workflow.computeSpotlight(view, {}), soft: false };
+    return { ...EMPTY_SPOTLIGHT, soft: false };
   }, [view, workflow, selection, hoverNode]);
 
   // Derive React Flow nodes/edges. Pure, memoized on the inputs that matter.
@@ -196,6 +207,7 @@ function CanvasInner() {
     return topologyToReactFlow(view, positions, {
       selection,
       spotlight: spotlight.nodes,
+      spotlightSoft: spotlight.soft,
       strongEdges,
       overlay,
       showAllLabels,
@@ -280,7 +292,15 @@ function CanvasInner() {
         layoutPinned={layoutPinned}
       >
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
-        {view && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
+        {view && !overview && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
+        <div className="topo-render-toggle" role="tablist" aria-label="Renderer">
+          <button role="tab" aria-selected={!overview} className={overview ? "" : "on"} onClick={() => setOverview(false)}>
+            Canvas
+          </button>
+          <button role="tab" aria-selected={overview} className={overview ? "on" : ""} onClick={() => setOverview(true)}>
+            Overview
+          </button>
+        </div>
       </TopologyToolbar>
 
       <div className="topo-stage">
@@ -292,7 +312,11 @@ function CanvasInner() {
         >
           {fullscreen ? "⤡ Exit" : "⤢ Full screen"}
         </button>
-        {!view ? (
+        {overview ? (
+          <Suspense fallback={<div className="topo-sigma-loading">Loading enterprise overview…</div>}>
+            <SigmaTopologyView view={enterpriseScaleTopology} />
+          </Suspense>
+        ) : !view ? (
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />
         ) : (
           <>

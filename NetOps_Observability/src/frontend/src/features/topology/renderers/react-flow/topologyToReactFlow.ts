@@ -16,11 +16,21 @@ import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
 import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 
+/** Invisible hover/click band around each edge (React Flow default is 20px). */
+const EDGE_INTERACTION_WIDTH = 12;
+
 /** Transient UI state — kept SEPARATE from the domain graph (rerender rule). */
 export type TopologyUIState = {
   selection: TopologySelection;
   /** Node ids to spotlight (selected + neighbours / path / search / unhealthy). */
   spotlight: Set<string>;
+  /**
+   * SOFT spotlight (a transient hover): brighten the in-focus set but leave every
+   * other node/edge at its normal weight — never dim the rest. Dimming the whole
+   * canvas on each hover graze is what reads as a "shake". A deliberate
+   * click-selection leaves this false, so it still dims for real focus.
+   */
+  spotlightSoft?: boolean;
   /** Edge ids to force-strong (path edges, selected edge). */
   strongEdges: Set<string>;
   overlay: OverlayKind;
@@ -152,7 +162,9 @@ export function topologyToReactFlow(
     .map((n) => {
       const inFocus = focus.has(n.id);
       let emphasis: NodeEmphasis = "normal";
-      if (spotlightActive) emphasis = inFocus ? "spotlight" : "dim";
+      // A soft (hover) spotlight lifts the focus set but keeps everyone else normal;
+      // only a hard focus (click / search) dims the out-of-focus cards.
+      if (spotlightActive) emphasis = inFocus ? "spotlight" : ui.spotlightSoft ? "normal" : "dim";
 
       const unhealthy = n.health === "critical" || n.health === "warning";
       const critical = n.criticality === "critical";
@@ -201,6 +213,8 @@ export function topologyToReactFlow(
     if (onPath || ui.selection.edgeId === e.id) emphasis = "strong";
     else if (!spotlightActive) emphasis = "normal";
     else if (bothFocused) emphasis = "strong";
+    // soft hover: leave the rest of the links at full weight (don't mute the graph).
+    else if (ui.spotlightSoft) emphasis = "normal";
 
     const showLabel = ui.showAllLabels || emphasis === "strong" || ui.selection.edgeId === e.id;
 
@@ -209,6 +223,11 @@ export function topologyToReactFlow(
       source: s,
       target: t,
       type: EDGE_TYPE_FOR_VARIANT[variant] ?? "topologyEdge",
+      // Tighten React Flow's invisible hover/click band (default 20px). A topology
+      // criss-crosses the gaps between devices with edges, so a wide band makes
+      // "empty" space hover-reactive; 12px keeps the line easy to hit without the
+      // cursor lighting up edges it's merely passing near.
+      interactionWidth: EDGE_INTERACTION_WIDTH,
       data: { edge: e, emphasis, overlay: ui.overlay, showLabel },
     });
   }

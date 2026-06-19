@@ -80,7 +80,11 @@ function BundledEdgeBase(props: EdgeProps) {
           style={{
             position: "absolute",
             transform: `translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
-            pointerEvents: "all",
+            // Non-interactive: the always-on count chip + the hover detail sit at
+            // the edge midpoint. Capturing the pointer here would steal the hover
+            // from the edge underneath and oscillate mouseleave/enter (canvas
+            // shake). Both are read-only, so they never need pointer events.
+            pointerEvents: "none",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",

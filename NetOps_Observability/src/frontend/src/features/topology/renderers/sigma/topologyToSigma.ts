@@ -1,22 +1,30 @@
-// Placeholder adapter. The Sigma.js/cosmos.gl WebGL overview renderer (1,000+
-// nodes) is Phase 4; this proves the adapter boundary exists and the domain
-// graph stays renderer-agnostic.
+// Sigma adapter — maps a renderer-agnostic TopologyView into the node/edge shape
+// a graphology graph (and therefore Sigma's WebGL renderer) consumes. Phase 4.
 //
-// Nothing here imports sigma/graphology/cosmos — when Phase 4 lands, only this
-// file changes; the domain TopologyView contract does not.
+// Stays renderer-agnostic at the contract boundary: it reads only TopologyView
+// fields and emits plain attribute bags. Visual enrichment that needs the WHOLE
+// graph (degree-based sizing, FA2 positions) happens in sigmaGraph.ts; here we
+// carry the per-node facts the renderer colours/clusters/labels by.
 
 import type { TopologyView } from "../../api/topologyTypes";
+import type { Health, NodeKind, EdgeStatus } from "../../api/topologyTypes";
 
+export type SigmaNodeAttrs = {
+  label: string;
+  health: Health;
+  kind: NodeKind;
+  /** Cluster key for grouping/colour-by-site (site → group → kind fallback). */
+  cluster: string;
+};
+export type SigmaEdgeAttrs = {
+  status: EdgeStatus;
+  relationship: string;
+};
 export type SigmaGraphData = {
-  nodes: { key: string; attributes: Record<string, unknown> }[];
-  edges: { key: string; source: string; target: string; attributes: Record<string, unknown> }[];
+  nodes: { key: string; attributes: SigmaNodeAttrs }[];
+  edges: { key: string; source: string; target: string; attributes: SigmaEdgeAttrs }[];
 };
 
-/**
- * Map a renderer-agnostic TopologyView into the minimal node/edge shape a
- * Sigma/graphology graph consumes. Real-shaped but intentionally minimal: the
- * Phase-4 renderer will enrich attributes (size, color ramps, LOD) here.
- */
 export function topologyToSigma(view: TopologyView): SigmaGraphData {
   return {
     nodes: view.nodes.map((n) => ({
@@ -24,6 +32,8 @@ export function topologyToSigma(view: TopologyView): SigmaGraphData {
       attributes: {
         label: n.label,
         health: n.health,
+        kind: n.kind,
+        cluster: n.site ?? n.group_id ?? n.kind,
       },
     })),
     edges: view.edges.map((e) => ({
@@ -31,8 +41,8 @@ export function topologyToSigma(view: TopologyView): SigmaGraphData {
       source: e.source,
       target: e.target,
       attributes: {
+        status: e.status ?? "unknown",
         relationship: e.relationship,
-        status: e.status,
       },
     })),
   };
