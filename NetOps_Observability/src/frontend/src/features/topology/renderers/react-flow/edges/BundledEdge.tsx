@@ -11,8 +11,7 @@ import {
 } from "@xyflow/react";
 import { memo } from "react";
 import type { RFEdgeData } from "../rfTypes";
-import { utilizationWidth, EMPHASIS_TREATMENT } from "./TopologyEdge";
-import { edgeEvidenceSummary } from "../../../utils/topologyHealth";
+import { utilizationWidth, EMPHASIS_TREATMENT, EdgeLabelCard } from "./TopologyEdge";
 
 function BundledEdgeBase(props: EdgeProps) {
   const {
@@ -111,35 +110,9 @@ function BundledEdgeBase(props: EdgeProps) {
           >
             {chip}
           </span>
-          {data?.showLabel && edge && (
-            <div
-              style={{
-                background: "var(--panel)",
-                border: "1px solid var(--border)",
-                borderRadius: 7,
-                padding: "5px 8px",
-                boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
-                fontSize: 11,
-                lineHeight: 1.45,
-                color: "var(--fg)",
-                fontVariantNumeric: "tabular-nums",
-                whiteSpace: "nowrap",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>
-                {edge.source_port || edge.target_port
-                  ? `${edge.source_port ?? ""} → ${edge.target_port ?? ""}`
-                  : `${edge.source} → ${edge.target}`}
-              </div>
-              <div style={{ color: "var(--fg-muted)" }}>
-                {count} members · {edgeEvidenceSummary(edge)}
-              </div>
-              <div style={{ color: "var(--fg-muted)" }}>
-                Util {edge.utilization_pct ?? 0}% · Err {edge.errors ?? 0} · seen {edge.last_seen ?? "—"}
-              </div>
-            </div>
-          )}
+          {/* Compact "where it goes" line; member count is the chip above, full
+              detail (members · util · errors · evidence) is in the click drawer. */}
+          {data?.showLabel && edge && <EdgeLabelCard edge={edge} />}
         </div>
       </EdgeLabelRenderer>
     </>

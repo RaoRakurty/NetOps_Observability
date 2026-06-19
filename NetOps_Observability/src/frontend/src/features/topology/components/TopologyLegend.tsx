@@ -57,7 +57,9 @@ function EdgeStyle({ label, render }: { label: string; render: React.ReactNode }
 }
 
 export default function TopologyLegend({ overlay }: { overlay: OverlayKind }) {
-  const [open, setOpen] = useState(true);
+  // Collapsed by default: the canvas should open clean. Operators expand the
+  // legend on demand rather than having it cover the lower-left on every visit.
+  const [open, setOpen] = useState(false);
 
   return (
     <div

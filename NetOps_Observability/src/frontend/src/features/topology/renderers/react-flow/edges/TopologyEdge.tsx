@@ -14,7 +14,6 @@ import {
 import { memo } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { RFEdgeData } from "../rfTypes";
-import { edgeEvidenceSummary } from "../../../utils/topologyHealth";
 import type { TopologyEdge as TopologyEdgeModel } from "../../../api/topologyTypes";
 
 // ── emphasis → base stroke treatment (PDF §11) ──────────────────────────────────
@@ -38,33 +37,38 @@ export function utilizationWidth(base: number, utilization: number | undefined):
   return Math.max(base, scaled);
 }
 
-/** Two/three-line hover/selected label card. Quiet, tabular, 11px (PDF §11). */
+/**
+ * Compact single-line edge label: just *where the link goes* (ports if known,
+ * else the target node). Intentionally NOT a detail dump — util/errors/evidence/
+ * confidence live in the side drawer that opens when you click the edge or its
+ * devices. A high-degree node (spine) can carry many highlighted links at once;
+ * a one-line chip stays small and won't stack into an unreadable pile the way
+ * the old three-line card did. (PDF §11 — calm by default.)
+ */
 export function EdgeLabelCard({ edge }: { edge: TopologyEdgeModel }): ReactNode {
-  const portLine =
+  // "Where it goes": prefer the port pair, fall back to the far-end device.
+  const text =
     edge.source_port || edge.target_port
-      ? `${edge.source_port ?? ""} → ${edge.target_port ?? ""}`
-      : `${edge.source} → ${edge.target}`;
-  const metaLine = `Util ${edge.utilization_pct ?? 0}% · Err ${edge.errors ?? 0} · seen ${edge.last_seen ?? "—"}`;
+      ? `${edge.source_port ?? "·"} → ${edge.target_port ?? "·"}`
+      : `→ ${edge.target}`;
   return (
     <div
       style={{
         background: "var(--panel)",
         border: "1px solid var(--border)",
-        borderRadius: 7,
-        padding: "5px 8px",
-        boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
-        fontSize: 11,
-        lineHeight: 1.45,
-        color: "var(--fg)",
+        borderRadius: 6,
+        padding: "2px 6px",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.16)",
+        fontSize: 10.5,
+        lineHeight: 1.3,
+        color: "var(--fg-muted)",
         fontVariantNumeric: "tabular-nums",
         whiteSpace: "nowrap",
         fontFamily:
           "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
       }}
     >
-      <div style={{ fontWeight: 600 }}>{portLine}</div>
-      <div style={{ color: "var(--fg-muted)" }}>{edgeEvidenceSummary(edge)}</div>
-      <div style={{ color: "var(--fg-muted)" }}>{metaLine}</div>
+      {text}
     </div>
   );
 }
