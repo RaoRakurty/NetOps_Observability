@@ -4,16 +4,16 @@ import "testing"
 
 func TestNetboxDirectionNormalize(t *testing.T) {
 	cases := map[string]string{
-		"":      "write", // default: devices → NetBox only
+		"":      "none", // default: automatic sync OFF until opted in
+		"none":  "none",
+		"off":   "none", // alias
+		"NONE":  "none",
 		"write": "write",
 		"WRITE": "write",
 		" read": "read",
 		"Read":  "read",
 		"both":  "both",
-		"none":  "none", // automatic sync off
-		"off":   "none", // alias
-		"NONE":  "none",
-		"junk":  "write", // unknown falls back to the safe default
+		"junk":  "none", // unknown falls back to the safe default
 	}
 	for in, want := range cases {
 		if got := netboxDirection(netboxConfig{Direction: in}); got != want {
@@ -23,8 +23,13 @@ func TestNetboxDirectionNormalize(t *testing.T) {
 }
 
 func TestNetboxDirectionGates(t *testing.T) {
-	// write (default): writes up, never reads back.
-	w := netboxConfig{}
+	// default (empty → none): no sync in either direction.
+	def := netboxConfig{}
+	if netboxWritesDevices(def) || netboxReadsDevices(def) {
+		t.Errorf("default mode: want writes=false reads=false, got writes=%v reads=%v", netboxWritesDevices(def), netboxReadsDevices(def))
+	}
+	// write: writes up, never reads back.
+	w := netboxConfig{Direction: "write"}
 	if !netboxWritesDevices(w) || netboxReadsDevices(w) {
 		t.Errorf("write mode: want writes=true reads=false, got writes=%v reads=%v", netboxWritesDevices(w), netboxReadsDevices(w))
 	}

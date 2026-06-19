@@ -74,7 +74,7 @@ func TestNetboxSyncerReconcile(t *testing.T) {
 		{ID: "snmp-10.0.0.1", Name: "leaf1", Address: "10.0.0.1", Vendor: "Arista", Model: "7050", Source: "snmp"},
 		{ID: "snmp-10.0.0.2", Name: "leaf2", Address: "10.0.0.2", Source: "snmp"}, // no vendor/model → Unknown
 	}
-	cfg := func() netboxConfig { return netboxConfig{Enabled: true, URL: srv.URL, Token: "t"} }
+	cfg := func() netboxConfig { return netboxConfig{Enabled: true, URL: srv.URL, Token: "t", Direction: "write"} }
 	s := newNetboxSyncer(cfg, func() []models.Device { return devs })
 
 	st, err := s.SyncOnce(context.Background())

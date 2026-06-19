@@ -24,17 +24,19 @@ type netboxConfig struct {
 	Token       string `json:"token,omitempty"`
 	IntervalSec int    `json:"interval_sec"` // poll cadence; 0 → default 60s
 	// Direction controls which way devices flow between the platform and NetBox:
-	//   "write" — devices → NetBox only (NetBox is a downstream documentation
-	//             mirror; it is NEVER read back as a device source, so synced
-	//             devices can't reappear in the inventory). DEFAULT.
-	//   "read"  — NetBox → platform only (NetBox is the authoritative intent
-	//             SoT; the reconciler does not push discovered devices up).
-	//   "both"  — bidirectional (read intent + reconcile discoveries up).
 	//   "none"  — automatic device sync OFF: NetBox stays available (embedded
 	//             console, geo intent) but discovery neither pushes nor pulls
 	//             devices. For a customer who already runs an external SoT we'll
 	//             sync via that SoT's API instead of auto-populating NetBox.
-	// Empty normalizes to "write" (see netboxDirection).
+	//             DEFAULT — opt-in before any data flows into the inventory.
+	//   "write" — devices → NetBox only (NetBox is a downstream documentation
+	//             mirror; it is NEVER read back as a device source, so synced
+	//             devices can't reappear in the inventory). Building inventory
+	//             from scratch off SNMP discovery.
+	//   "read"  — NetBox → platform only (NetBox is the authoritative intent
+	//             SoT; the reconciler does not push discovered devices up).
+	//   "both"  — bidirectional (read intent + reconcile discoveries up).
+	// Empty normalizes to "none" (see netboxDirection).
 	Direction string `json:"direction,omitempty"`
 	// Managed is derived (not persisted): true when the connection is the
 	// platform-bundled internal NetBox (auto-wired URL+token), so the UI needs no
@@ -106,7 +108,7 @@ func (s *netboxConfigStore) effective() netboxConfig {
 func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	in.URL = strings.TrimRight(strings.TrimSpace(in.URL), "/")
 	in.Managed = false                 // never persisted; derived in effective()
-	in.Direction = netboxDirection(in) // normalize ("" → "write")
+	in.Direction = netboxDirection(in) // normalize ("" → "none")
 	if in.URL != "" {
 		u, err := url.Parse(in.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -147,7 +149,7 @@ type publicNetboxConfig struct {
 	IntervalSec int    `json:"interval_sec"`
 	TokenSet    bool   `json:"token_set"`
 	Managed     bool   `json:"managed"`   // bundled internal NetBox (no URL/token needed)
-	Direction   string `json:"direction"` // "write" | "read" | "both" (normalized)
+	Direction   string `json:"direction"` // "none" | "write" | "read" | "both" (normalized)
 }
 
 func (c netboxConfig) public() publicNetboxConfig {
@@ -155,21 +157,21 @@ func (c netboxConfig) public() publicNetboxConfig {
 }
 
 // netboxDirection normalizes the configured sync direction. The default is
-// "write": devices flow up to NetBox only, and NetBox is never read back as a
-// device source — so a synced device cannot reappear in the inventory as a
-// duplicate. Operators who run NetBox as the authoritative intent SoT set
-// "read" (or "both" for bidirectional); "none" turns automatic device sync off
-// entirely (NetBox stays available, but discovery neither pushes nor pulls).
+// "none": automatic device sync is OFF until an operator opts in, so a fresh
+// install never auto-populates the bundled inventory off discovery (NetBox's
+// product role is still being decided; don't push data into it by default).
+// Operators choose "write" (devices → NetBox only; never read back, no
+// duplicates), "read" (NetBox is the authoritative intent SoT), or "both".
 func netboxDirection(c netboxConfig) string {
 	switch strings.ToLower(strings.TrimSpace(c.Direction)) {
+	case "write":
+		return "write"
 	case "read":
 		return "read"
 	case "both":
 		return "both"
-	case "none", "off":
+	default: // "", "none", "off", or anything unknown → safe default: no sync
 		return "none"
-	default:
-		return "write"
 	}
 }
 

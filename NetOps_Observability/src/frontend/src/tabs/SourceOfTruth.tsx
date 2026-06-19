@@ -22,15 +22,15 @@ function sotStatus(c: NetboxConfig | null): Status {
 const labelStyle = { display: "block", fontSize: 12, color: "var(--muted)", margin: "10px 0 4px" } as const;
 
 // DirectionPicker controls how devices flow between the platform and the
-// inventory. Default "write" keeps it one-directional (platform → inventory),
-// so synced devices never reappear in Infrastructure → Devices as duplicates.
+// inventory. Default "none" keeps automatic sync OFF until an operator opts in,
+// so a fresh install never auto-populates the inventory off discovery.
 type Direction = "write" | "read" | "both" | "none";
 
 const DIRECTIONS: { v: Direction; label: string; help: string }[] = [
-  { v: "write", label: "Devices → Inventory", help: "One-way: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. Best when you're building inventory from scratch — SNMP discovery seeds it. (Recommended)" },
+  { v: "none", label: "No automatic sync", help: "The inventory stays available (browse it here, use its site/geo intent) but discovery neither pushes nor pulls devices. Best when you already run an external source of truth and will sync it through its own API. (Default)" },
+  { v: "write", label: "Devices → Inventory", help: "One-way: discovered devices are pushed to the inventory. The inventory is a downstream record and is never read back, so nothing is duplicated. Choose this to build inventory from scratch — SNMP discovery seeds it." },
   { v: "read", label: "Inventory → Devices", help: "One-way: the inventory is the source of truth; its devices appear in Infrastructure. Discovery does not push anything up." },
   { v: "both", label: "Two-way sync", help: "Read inventory devices in AND push discovered devices up. Records are de-duplicated by IP / serial / name." },
-  { v: "none", label: "No automatic sync", help: "The inventory stays available (browse it here, use its site/geo intent) but discovery neither pushes nor pulls devices. Use this when you already run an external source of truth and will sync it through its own API." },
 ];
 
 function DirectionPicker({ value, onChange }: { value: Direction; onChange: (v: Direction) => void }) {
@@ -75,7 +75,7 @@ export default function SourceOfTruth() {
   const [urlV, setUrlV] = useState("");
   const [tokenV, setTokenV] = useState("");
   const [interval, setIntervalV] = useState(60);
-  const [direction, setDirection] = useState<Direction>("write");
+  const [direction, setDirection] = useState<Direction>("none");
 
   const load = async () => {
     try {
@@ -85,7 +85,7 @@ export default function SourceOfTruth() {
       setEnabled(r.config.enabled);
       setUrlV(r.config.managed ? "" : r.config.url);
       setIntervalV(r.config.interval_sec || 60);
-      setDirection(r.config.direction || "write");
+      setDirection(r.config.direction || "none");
     } catch (e) {
       setErr((e as Error).message);
     }
