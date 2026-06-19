@@ -13,9 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -84,98 +82,31 @@ func siteSlug(in string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// sitesStore is built on the default-closed tenantKV primitive (CLAUDE.md §3a):
+// tenant scoping is inherited from the store, not re-implemented here.
 type sitesStore struct {
-	mu    sync.RWMutex
-	path  string
-	items map[string]Site // (tenant\x00slug) → site
+	kv *tenantKV[Site]
 }
-
-// siteKey composes the tenant-scoped storage key so the same slug can exist in
-// different tenants without collision.
-func siteKey(tenant, slug string) string { return tenant + "\x00" + slug }
 
 func newSitesStore(path string) (*sitesStore, error) {
 	if path == "" {
 		path = "/data/sites.json"
 	}
-	s := &sitesStore{path: path, items: make(map[string]Site)}
-	if err := s.load(); err != nil {
+	kv, err := newTenantKV[Site](path,
+		func(s Site) string { return s.TenantID },
+		func(s Site) string { return s.Slug })
+	if err != nil {
 		return nil, err
 	}
-	return s, nil
+	return &sitesStore{kv: kv}, nil
 }
 
-func (s *sitesStore) load() error {
-	b, err := kvLoad(s.path)
-	if err != nil {
-		return nil // absent store → empty
-	}
-	var list []Site
-	if err := json.Unmarshal(b, &list); err != nil {
-		return err
-	}
-	for _, st := range list {
-		if st.Slug != "" {
-			s.items[siteKey(st.TenantID, st.Slug)] = st
-		}
-	}
-	return nil
-}
+// All returns the sites VISIBLE to the (tenant, cross) principal (own tenant only
+// for a non-cross caller). Get/Delete are likewise scoped — see tenantKV.
+func (s *sitesStore) All(tenant string, cross bool) []Site { return s.kv.All(tenant, cross) }
 
-func (s *sitesStore) flushLocked() error {
-	list := make([]Site, 0, len(s.items))
-	for _, st := range s.items {
-		list = append(list, st)
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].TenantID != list[j].TenantID {
-			return list[i].TenantID < list[j].TenantID
-		}
-		return list[i].Slug < list[j].Slug
-	})
-	b, err := json.Marshal(list)
-	if err != nil {
-		return err
-	}
-	return kvSave(s.path, b)
-}
-
-// visible reports whether a principal scoped to (tenant, cross) may see a site.
-func siteVisible(st Site, tenant string, cross bool) bool {
-	return cross || st.TenantID == tenant
-}
-
-// All returns the sites VISIBLE to the (tenant, cross) principal, sorted. A
-// non-cross caller sees ONLY its own tenant's sites (zero cross-tenant leakage).
-func (s *sitesStore) All(tenant string, cross bool) []Site {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]Site, 0, len(s.items))
-	for _, st := range s.items {
-		if siteVisible(st, tenant, cross) {
-			out = append(out, st)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
-	return out
-}
-
-// Get returns a site only if the (tenant, cross) principal may see it.
 func (s *sitesStore) Get(tenant string, cross bool, slug string) (Site, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if st, ok := s.items[siteKey(tenant, slug)]; ok {
-		return st, true
-	}
-	if cross {
-		// Platform owner: a slug may live under any tenant — find the first match.
-		for _, st := range s.items {
-			if st.Slug == slug {
-				return st, true
-			}
-		}
-	}
-	return Site{}, false
+	return s.kv.Get(tenant, cross, slug)
 }
 
 // Upsert validates and stores a site. The caller stamps st.TenantID from the
@@ -185,32 +116,18 @@ func (s *sitesStore) Upsert(st Site) (Site, error) {
 		return Site{}, err
 	}
 	st.UpdatedAt = time.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.items[siteKey(st.TenantID, st.Slug)] = st
-	if err := s.flushLocked(); err != nil {
+	if err := s.kv.Upsert(st); err != nil {
 		return Site{}, err
 	}
 	return st, nil
 }
 
-// Delete removes a site within the caller's tenant (cross may delete any tenant's).
+// Delete removes a site within the caller's scope (cross may delete any tenant's).
 func (s *sitesStore) Delete(tenant string, cross bool, slug string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.items[siteKey(tenant, slug)]; ok {
-		delete(s.items, siteKey(tenant, slug))
-		return s.flushLocked()
+	if !s.kv.Delete(tenant, cross, slug) {
+		return errors.New("no such site")
 	}
-	if cross {
-		for k, st := range s.items {
-			if st.Slug == slug {
-				delete(s.items, k)
-				return s.flushLocked()
-			}
-		}
-	}
-	return errors.New("no such site")
+	return nil
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
