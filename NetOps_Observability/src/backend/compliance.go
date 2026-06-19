@@ -1,16 +1,24 @@
 package main
 
 // compliance.go — Compliance Monitoring (build-order #14): drift between the
-// declared intent (NetBox source of truth) and the observed/operator inventory,
-// plus management-plane policy baselines — all agentless, computed from data
-// the platform already holds (no config pull yet; that's a later phase).
+// declared intent (the active Source-of-Truth provider) and the observed/operator
+// inventory, plus management-plane policy baselines — all agentless, computed from
+// data the platform already holds (no config pull yet; that's a later phase).
+//
+// The SoT is a ROLE, not a product (docs/design/sot-provider-model.md): drift
+// pairs against whichever provider is active. The provider declares the
+// Device.Source label its records carry via DeviceRecordSource() — "netbox" for an
+// external NetBox read back into the inventory, "" for the internal provider (the
+// inventory IS the authority, so there is nothing to drift device fields against).
+// Drift stays NetBox-agnostic: a future ServiceNow/Infoblox provider just reports
+// its own source label and the same pairing runs unchanged.
 //
 // Two check classes:
 //
-//   - drift  — pair every NetBox record against the non-NetBox record(s) for
+//   - drift  — pair every SoT-declared record against the observed record(s) for
 //     the same physical device (matched mgmt-IP → serial → name, the same
 //     identity chain the discovery de-dup uses) and diff the fields an
-//     operator declares in NetBox: registration, name, mgmt IP, serial,
+//     operator declares in the SoT: registration, name, mgmt IP, serial,
 //     platform (vs the OS parsed out of SNMP sysDescr).
 //   - policy — baselines that need no source of truth: SNMPv1/v2c in use,
 //     weak SNMPv3 parameters, fleet OS-version consensus outliers (the
@@ -18,7 +26,7 @@ package main
 //     (reuses the #13 advisory feed when provisioned).
 //
 // Checks that lack their data source are reported as INACTIVE with the reason
-// (NetBox not connected, no credential profiles, feed not provisioned) — an
+// (no external SoT records, no credential profiles, feed not provisioned) — an
 // unrun check is "cannot assess", never "compliant". Same honesty rule as the
 // Vulnerability Management board.
 
@@ -103,24 +111,29 @@ var complianceChecks = []complianceCheck{
 // raw is the per-source inventory (drift pairing). resolveCred and vulnMatch
 // are nil-able seams: nil means that data source isn't available, and the
 // dependent checks report inactive instead of silently passing.
+// sotSource is the active provider's declared-record Device.Source label
+// (SoTProvider.DeviceRecordSource()): records carrying it are the declared intent,
+// every other record is observed. "" means no declared records exist (internal
+// provider, or an external one not read back) → drift checks stay inactive.
 func evaluateCompliance(
 	merged, raw []models.Device,
-	sotConfigured bool,
+	sotSource string,
 	resolveCred func(string) (SNMPCredential, bool),
 	vulnMatch func(vendor, product, version string) []vulnEntry,
 ) complianceResult {
 	var findings []complianceFinding
 
-	// ── drift: pair NetBox records with non-NetBox records ──────────────────
+	// ── drift: pair SoT-declared records against the observed records ────────
+	driftable := sotSource != ""
 	var sot, observed []models.Device
 	for _, d := range raw {
-		if d.Source == "netbox" {
+		if driftable && d.Source == sotSource {
 			sot = append(sot, d)
 		} else {
 			observed = append(observed, d)
 		}
 	}
-	if sotConfigured {
+	if driftable {
 		findings = append(findings, evalDrift(sot, observed)...)
 	}
 
@@ -224,8 +237,8 @@ func evaluateCompliance(
 	for _, c := range complianceChecks {
 		c.Findings = counts[c.ID]
 		switch {
-		case c.Class == "drift" && !sotConfigured:
-			c.Reason = "Source of Truth not connected — configure it under Automation → Source of Truth"
+		case c.Class == "drift" && !driftable:
+			c.Reason = "No declared inventory to compare against — the internal Source of Truth is itself the authority. Connect an external SoT (Automation → Source of Truth) in read or two-way mode to detect drift against declared intent."
 		case (c.ID == ckSnmpVersion || c.ID == ckSnmpV3Weak) && !credAssigned:
 			c.Reason = "no devices reference an SNMP credential profile"
 		case c.ID == ckOSConsensus && !consensusRan:
@@ -269,8 +282,8 @@ func deviceDisplayName(d models.Device) string {
 	return d.Address
 }
 
-// evalDrift pairs each NetBox record to the observed/operator records for the
-// same physical device and diffs the declared fields. Match precedence mirrors
+// evalDrift pairs each SoT-declared record to the observed/operator records for
+// the same physical device and diffs the declared fields. Match precedence mirrors
 // deviceKey (mgmt IP → serial → normalized name); a field is only diffed when
 // the pair matched on a DIFFERENT field (a name-matched pair can't have name
 // drift by construction).
@@ -292,14 +305,14 @@ func evalDrift(sot, observed []models.Device) []complianceFinding {
 	for _, o := range observed {
 		nb, matchedOn := matchSot(o, byIP, bySerial, byName)
 		if matchedOn == "" {
-			// NetBox is configured (caller gates on that) — unregistered is
-			// drift even when the SoT is empty.
+			// The SoT supplies declared records (caller gates on that) — a device
+			// absent from them is drift even when the SoT is otherwise empty.
 			out = append(out, complianceFinding{
 				Check: ckSotRegistered, Title: "Device not registered in Source of Truth", Class: "drift",
 				Severity: "medium", Framework: "NIST CSF ID.AM-1",
 				DeviceID: o.ID, DeviceName: deviceDisplayName(o),
-				Observed: o.Source + " inventory", Intended: "NetBox device record",
-				Detail: "Discovered/operator inventory has this device but the Source of Truth does not. Enable the reconciler under Automation → Source of Truth, or register it in NetBox.",
+				Observed: o.Source + " inventory", Intended: "Source-of-Truth record",
+				Detail: "Discovered/operator inventory has this device but the Source of Truth does not. Register it in your Source of Truth, or enable two-way sync under Automation → Source of Truth.",
 			})
 			continue
 		}
@@ -339,8 +352,8 @@ func evalDrift(sot, observed []models.Device) []complianceFinding {
 	return out
 }
 
-// matchSot finds the NetBox counterpart for an observed record, returning what
-// the pair matched on ("ip", "serial", "name") or "" when unregistered.
+// matchSot finds the SoT-declared counterpart for an observed record, returning
+// what the pair matched on ("ip", "serial", "name") or "" when unregistered.
 func matchSot(o models.Device, byIP, bySerial, byName map[string]models.Device) (models.Device, string) {
 	if ip := strings.TrimSpace(o.Address); ip != "" {
 		if nb, ok := byIP[ip]; ok {
@@ -361,12 +374,12 @@ func matchSot(o models.Device, byIP, bySerial, byName map[string]models.Device) 
 }
 
 // platformDrift compares the OS actually running (parsed from the observed
-// record's sysDescr) with the platform declared in NetBox. Platform names are
+// record's sysDescr) with the platform declared in the SoT. Platform names are
 // free-form ("Cisco IOS-XE", "IOS XE 17", "Arista EOS"), so both sides reduce
 // to a vendor-stripped, digit-stripped product token before comparing —
 // "Cisco IOS-XE 17" and ParseOS's "ios_xe" both become "iosxe".
 func platformDrift(o, nb models.Device) (complianceFinding, bool) {
-	intended := strings.TrimSpace(nb.OS) // NetBox source maps Platform → OS
+	intended := strings.TrimSpace(nb.OS) // SoT record maps Platform → OS
 	vendor := o.Vendor
 	if vendor == "" {
 		vendor = nb.Vendor
@@ -544,14 +557,17 @@ func (s *server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 	limit := intQuery(r, "limit", 500, 1, 2000)
 
 	raw := visibleDevices(s.discovery.RawDevices(), claims)
-	cfg := s.netboxCfg.effective()
-	sotConfigured := cfg.Enabled && cfg.URL != "" && cfg.Token != ""
+	// Drift pairs against whichever SoT provider is active (internal | netbox | …),
+	// not a NetBox-specific flag. The provider names the Device.Source its declared
+	// records carry; "" means none exist → drift inactive.
+	sotp := s.activeSoT()
+	sotSource := sotp.DeviceRecordSource()
 
 	var vulnMatch func(vendor, product, version string) []vulnEntry
 	if s.vulns.ensure() {
 		vulnMatch = s.vulns.match
 	}
-	res := evaluateCompliance(merged, raw, sotConfigured, s.snmpCreds.Resolve, vulnMatch)
+	res := evaluateCompliance(merged, raw, sotSource, s.snmpCreds.Resolve, vulnMatch)
 
 	affected := map[string]bool{}
 	drift, policy, high := 0, 0, 0
@@ -584,7 +600,9 @@ func (s *server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"compliance_enabled": true,
-		"sot":                map[string]any{"configured": sotConfigured},
+		// configured = drift has declared records to compare against (an external
+		// SoT read into the inventory); provider = the active SoT role-holder.
+		"sot": map[string]any{"configured": sotSource != "", "provider": sotp.Name()},
 		"summary": map[string]any{
 			"devices": res.Physical, "affected": affectedN, "compliant": res.Physical - affectedN,
 			"findings": total, "drift": drift, "policy": policy, "high": high,

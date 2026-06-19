@@ -4,12 +4,13 @@ import { StatStrip, Stat, InfoTip } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import { Group, Panel } from "../components/board/panels";
 
-// Compliance Monitoring (build-order #14) — drift between the Source of Truth
-// (NetBox intent) and the observed inventory, plus management-plane policy
-// baselines (SNMP version/strength, fleet golden OS version, known-exploited
-// CVE exposure). All agentless: computed from data the platform already holds.
-// Checks whose data source isn't connected render as INACTIVE with the reason
-// — an unrun check is "cannot assess", never "compliant".
+// Compliance Monitoring (build-order #14) — drift between the active Source of
+// Truth (the internal inventory by default, or an external CMDB when connected)
+// and the observed inventory, plus management-plane policy baselines (SNMP
+// version/strength, fleet golden OS version, known-exploited CVE exposure). All
+// agentless: computed from data the platform already holds. Checks whose data
+// source isn't connected render as INACTIVE with the reason — an unrun check is
+// "cannot assess", never "compliant".
 
 const sevTone = (s: string): "" | "good" | "warn" | "bad" => {
   if (s === "high") return "bad";
@@ -143,9 +144,11 @@ export default function ComplianceMonitoring() {
         </StatStrip>
         {!resp.sot?.configured && (
           <p className="mini-meta" style={{ margin: 0 }}>
-            Source of Truth is not connected — intent-drift checks are inactive.{" "}
-            <InfoTip label="?">Connect NetBox under Automation → Source of Truth to compare the observed
-            inventory against declared intent (registration, name, management IP, serial, platform).</InfoTip>
+            No external declared inventory to compare against — intent-drift checks are inactive
+            {resp.sot?.provider === "internal" ? " (the internal inventory is itself the Source of Truth)" : ""}.{" "}
+            <InfoTip label="?">Connect an external Source of Truth under Automation → Source of Truth, in
+            read or two-way mode, to compare the observed inventory against declared intent (registration,
+            name, management IP, serial, platform). Policy checks below run regardless.</InfoTip>
           </p>
         )}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

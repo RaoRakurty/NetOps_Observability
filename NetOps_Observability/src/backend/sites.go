@@ -29,6 +29,9 @@ type Site struct {
 	Lat       float64   `json:"lat"`
 	Lng       float64   `json:"lng"`
 	HasCoords bool      `json:"has_coords"`
+	// Owner is operator-declared ownership intent (team / on-call / business unit
+	// responsible for the site) — the ownership seam projected through SoTSite.Owner.
+	Owner     string    `json:"owner,omitempty"`
 	UpdatedBy string    `json:"updated_by,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -42,6 +45,9 @@ func (s Site) validate() error {
 	}
 	if len(s.Name) > 120 {
 		return errors.New("site name too long (max 120)")
+	}
+	if len(s.Owner) > 120 {
+		return errors.New("site owner too long (max 120)")
 	}
 	if s.HasCoords {
 		if s.Lat < -90 || s.Lat > 90 {
@@ -58,7 +64,7 @@ func (s Site) validate() error {
 func (s Site) toSoT() SoTSite {
 	return SoTSite{
 		Slug: s.Slug, Name: s.Name, Status: s.Status,
-		Lat: s.Lat, Lng: s.Lng, HasCoords: s.HasCoords, Source: "internal",
+		Lat: s.Lat, Lng: s.Lng, HasCoords: s.HasCoords, Owner: s.Owner, Source: "internal",
 	}
 }
 
@@ -239,6 +245,7 @@ func (s *server) decodeSite(w http.ResponseWriter, r *http.Request, claims jwtCl
 		Slug   string   `json:"slug"`
 		Name   string   `json:"name"`
 		Status string   `json:"status"`
+		Owner  string   `json:"owner"`
 		Lat    *float64 `json:"lat"`
 		Lng    *float64 `json:"lng"`
 	}
@@ -258,6 +265,7 @@ func (s *server) decodeSite(w http.ResponseWriter, r *http.Request, claims jwtCl
 		Slug:      slug,
 		Name:      strings.TrimSpace(req.Name),
 		Status:    strings.TrimSpace(req.Status),
+		Owner:     strings.TrimSpace(req.Owner),
 		UpdatedBy: claims.Sub,
 	}
 	if req.Lat != nil && req.Lng != nil {

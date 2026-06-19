@@ -232,8 +232,8 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
   const [active, setActive] = useState<string>("internal");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [add, setAdd] = useState({ name: "", status: "", lat: "", lng: "" });
-  const [drafts, setDrafts] = useState<Record<string, { name: string; status: string; lat: string; lng: string }>>({});
+  const [add, setAdd] = useState({ name: "", status: "", owner: "", lat: "", lng: "" });
+  const [drafts, setDrafts] = useState<Record<string, { name: string; status: string; owner: string; lat: string; lng: string }>>({});
 
   const load = async () => {
     try { const r = await api.sites(); setSites(r.sites); setActive(r.active || "internal"); setErr(null); }
@@ -261,14 +261,14 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
     if (c === undefined) { setErr("Enter both latitude and longitude as decimals (WGS 84), or leave both blank."); return; }
     setBusy("__add__");
     try {
-      await api.saveSite({ name, status: add.status.trim() || undefined, ...c });
-      setAdd({ name: "", status: "", lat: "", lng: "" }); setErr(null); await load(); onChanged();
+      await api.saveSite({ name, status: add.status.trim() || undefined, owner: add.owner.trim() || undefined, ...c });
+      setAdd({ name: "", status: "", owner: "", lat: "", lng: "" }); setErr(null); await load(); onChanged();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   };
 
   const beginEdit = (s: SiteRow) =>
-    setDrafts({ ...drafts, [s.slug]: { name: s.name, status: s.status ?? "", lat: s.has_coords ? String(s.lat) : "", lng: s.has_coords ? String(s.lng) : "" } });
+    setDrafts({ ...drafts, [s.slug]: { name: s.name, status: s.status ?? "", owner: s.owner ?? "", lat: s.has_coords ? String(s.lat) : "", lng: s.has_coords ? String(s.lng) : "" } });
   const cancelEdit = (slug: string) => { const next = { ...drafts }; delete next[slug]; setDrafts(next); };
 
   const update = async (slug: string) => {
@@ -278,7 +278,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
     if (c === undefined) { setErr("Enter both latitude and longitude as decimals (WGS 84), or leave both blank."); return; }
     setBusy(slug);
     try {
-      await api.updateSite(slug, { name: d.name.trim(), status: d.status.trim() || undefined, ...c });
+      await api.updateSite(slug, { name: d.name.trim(), status: d.status.trim() || undefined, owner: d.owner.trim() || undefined, ...c });
       cancelEdit(slug); setErr(null); await load(); onChanged();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
@@ -313,7 +313,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
       )}
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
       <table className="loc-editor">
-        <thead><tr><th>Site</th><th>Slug</th><th>Status</th><th>Latitude</th><th>Longitude</th><th /></tr></thead>
+        <thead><tr><th>Site</th><th>Slug</th><th>Status</th><th>Owner</th><th>Latitude</th><th>Longitude</th><th /></tr></thead>
         <tbody>
           {sites.map((s) => {
             const d = drafts[s.slug];
@@ -323,6 +323,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
                   <td><input value={d.name} onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, name: e.target.value } })} /></td>
                   <td className="mono mini-meta">{s.slug}</td>
                   <td><input value={d.status} placeholder="active" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, status: e.target.value } })} /></td>
+                  <td><input value={d.owner} placeholder="NetEng NOC" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, owner: e.target.value } })} /></td>
                   <td><input value={d.lat} placeholder="32.78" inputMode="decimal" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, lat: e.target.value } })} /></td>
                   <td><input value={d.lng} placeholder="-96.80" inputMode="decimal" onChange={(e) => setDrafts({ ...drafts, [s.slug]: { ...d, lng: e.target.value } })} /></td>
                   <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
@@ -337,6 +338,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
                 <td><b>{s.name}</b></td>
                 <td className="mono mini-meta">{s.slug}</td>
                 <td>{s.status || <span className="mini-meta">—</span>}</td>
+                <td>{s.owner || <span className="mini-meta">—</span>}</td>
                 <td colSpan={2}>
                   {s.has_coords ? <span className="mono">{s.lat.toFixed(4)}, {s.lng.toFixed(4)}</span> : <span style={{ color: "var(--warn)" }}>not set</span>}
                 </td>
@@ -356,6 +358,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
               <td><input value={add.name} placeholder="e.g. Dallas Branch" onChange={(e) => setAdd({ ...add, name: e.target.value })} /></td>
               <td className="mini-meta">{add.name.trim() ? "auto" : ""}</td>
               <td><input value={add.status} placeholder="active" onChange={(e) => setAdd({ ...add, status: e.target.value })} /></td>
+              <td><input value={add.owner} placeholder="NetEng NOC" onChange={(e) => setAdd({ ...add, owner: e.target.value })} /></td>
               <td><input value={add.lat} placeholder="32.78" inputMode="decimal" onChange={(e) => setAdd({ ...add, lat: e.target.value })} /></td>
               <td><input value={add.lng} placeholder="-96.80" inputMode="decimal" onChange={(e) => setAdd({ ...add, lng: e.target.value })} /></td>
               <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
@@ -363,7 +366,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
               </td>
             </tr>
           )}
-          {sites.length === 0 && !editable && <tr><td colSpan={6} className="mini-meta">The external Source of Truth lists no sites.</td></tr>}
+          {sites.length === 0 && !editable && <tr><td colSpan={7} className="mini-meta">The external Source of Truth lists no sites.</td></tr>}
         </tbody>
       </table>
     </div>

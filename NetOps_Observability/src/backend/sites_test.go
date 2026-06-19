@@ -65,7 +65,7 @@ func TestSitesStoreCRUD(t *testing.T) {
 		t.Fatal("new store should be empty")
 	}
 
-	if _, err := s.Upsert(Site{TenantID: tn, Slug: "nyc", Name: "New York", Lat: 40.7, Lng: -74, HasCoords: true}); err != nil {
+	if _, err := s.Upsert(Site{TenantID: tn, Slug: "nyc", Name: "New York", Lat: 40.7, Lng: -74, HasCoords: true, Owner: "NetEng NOC"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if _, err := s.Upsert(Site{TenantID: tn, Slug: "lon", Name: "London"}); err != nil {
@@ -75,6 +75,13 @@ func TestSitesStoreCRUD(t *testing.T) {
 	got, ok := s.Get(tn, false, "nyc")
 	if !ok || got.Name != "New York" || !got.HasCoords || got.Lat != 40.7 {
 		t.Fatalf("get nyc = %+v ok=%v", got, ok)
+	}
+	// Ownership intent persists and projects through the provider contract.
+	if got.Owner != "NetEng NOC" {
+		t.Fatalf("owner = %q, want \"NetEng NOC\"", got.Owner)
+	}
+	if so := got.toSoT(); so.Owner != "NetEng NOC" {
+		t.Fatalf("SoTSite.Owner = %q, want projected owner", so.Owner)
 	}
 	if got.UpdatedAt.IsZero() {
 		t.Error("UpdatedAt not stamped")
@@ -167,6 +174,11 @@ func TestInternalProviderSites(t *testing.T) {
 	p := &internalProvider{sites: s}
 	if p.Name() != "internal" || !p.Configured() {
 		t.Fatalf("internal provider name/configured wrong")
+	}
+	// Internal inventory IS the authority — no separate declared record to drift
+	// against, so it contributes no drift source label.
+	if src := p.DeviceRecordSource(); src != "" {
+		t.Fatalf("internal DeviceRecordSource = %q, want \"\"", src)
 	}
 	if ds, _ := p.DeviceSites(context.Background(), "acme", false); ds != nil {
 		t.Fatalf("internal DeviceSites should be nil (placement via labels), got %+v", ds)

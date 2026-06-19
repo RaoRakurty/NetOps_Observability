@@ -158,14 +158,15 @@ func TestEvaluateComplianceChecksAndGaps(t *testing.T) {
 		return SNMPCredential{}, false
 	}
 
-	// SoT off + no vuln feed → drift and KEV checks inactive, with reasons.
-	res := evaluateCompliance(merged, merged, false, resolve, nil)
+	// No declared SoT records (sotSource "") + no vuln feed → drift and KEV
+	// checks inactive, with reasons.
+	res := evaluateCompliance(merged, merged, "", resolve, nil)
 	status := map[string]complianceCheck{}
 	for _, c := range res.Checks {
 		status[c.ID] = c
 	}
 	if status[ckSotRegistered].Active || status[ckSotRegistered].Reason == "" {
-		t.Fatalf("SoT check must be inactive with a reason when NetBox is unconfigured: %+v", status[ckSotRegistered])
+		t.Fatalf("SoT check must be inactive with a reason when no declared records exist: %+v", status[ckSotRegistered])
 	}
 	if status[ckKEV].Active {
 		t.Fatalf("KEV check must be inactive without a feed")
@@ -184,7 +185,7 @@ func TestEvaluateComplianceChecksAndGaps(t *testing.T) {
 		}
 		return nil
 	}
-	res = evaluateCompliance(merged, merged, false, resolve, match)
+	res = evaluateCompliance(merged, merged, "", resolve, match)
 	got := findingsByCheck(res.Findings)
 	if len(got[ckKEV]) != 1 || got[ckKEV][0].Severity != "high" {
 		t.Fatalf("kev findings = %+v, want one high", got[ckKEV])
@@ -206,7 +207,7 @@ func TestEvaluateCompliancePhysicalAggregation(t *testing.T) {
 	resolve := func(ref string) (SNMPCredential, bool) {
 		return SNMPCredential{Name: "lab", Version: "v3", SecurityLevel: "authPriv", AuthProtocol: "SHA256", PrivProtocol: "AES256"}, ref == "lab"
 	}
-	res := evaluateCompliance(merged, merged, false, resolve, nil)
+	res := evaluateCompliance(merged, merged, "", resolve, nil)
 	if res.Physical != 1 {
 		t.Fatalf("physical = %d, want 1", res.Physical)
 	}
@@ -228,7 +229,7 @@ func TestEvaluateComplianceDriftEndToEnd(t *testing.T) {
 		{ID: "netbox-1", Name: "core-1", Address: "10.0.0.1", Vendor: "cisco", OS: "Cisco IOS XE Software, Version 17.09.04a"},
 		{ID: "manual-1", Name: "rogue", Address: "10.0.0.50"},
 	}
-	res := evaluateCompliance(merged, raw, true, nil, nil)
+	res := evaluateCompliance(merged, raw, "netbox", nil, nil)
 	got := findingsByCheck(res.Findings)
 	if len(got[ckSotRegistered]) != 1 || got[ckSotRegistered][0].DeviceName != "rogue" {
 		t.Fatalf("registered findings = %+v", got[ckSotRegistered])
@@ -240,5 +241,37 @@ func TestEvaluateComplianceDriftEndToEnd(t *testing.T) {
 	// check id: sot-platform sorts before sot-registered.
 	if res.Findings[0].Check != ckSotPlatform {
 		t.Fatalf("sort: first finding = %s", res.Findings[0].Check)
+	}
+}
+
+// Drift is provider-agnostic: the declared records are whichever Device.Source
+// the active provider reports, NOT a hardcoded "netbox". A future ServiceNow
+// provider whose records carry Source "servicenow" must drift identically, and
+// the same records become observed (not declared) when sotSource doesn't match.
+func TestEvaluateComplianceProviderAgnostic(t *testing.T) {
+	declared := models.Device{ID: "snow-1", Name: "core-1", Address: "10.0.0.1", Source: "servicenow", Labels: map[string]string{}}
+	rogue := obsDev("static-1", "rogue", "10.0.0.50", "", "", "")
+	raw := []models.Device{declared, rogue}
+	merged := []models.Device{
+		{ID: "snow-1", Name: "core-1", Address: "10.0.0.1"},
+		{ID: "static-1", Name: "rogue", Address: "10.0.0.50"},
+	}
+
+	// sotSource = the provider's own label → declared/observed partition works.
+	got := findingsByCheck(evaluateCompliance(merged, raw, "servicenow", nil, nil).Findings)
+	if len(got[ckSotRegistered]) != 1 || got[ckSotRegistered][0].DeviceName != "rogue" {
+		t.Fatalf("servicenow-sourced SoT: registered findings = %+v, want one for rogue", got[ckSotRegistered])
+	}
+
+	// Empty sotSource (internal authority) → no record is "declared", so even the
+	// servicenow-sourced record is treated as observed and NO drift fires.
+	res := evaluateCompliance(merged, raw, "", nil, nil)
+	if n := len(findingsByCheck(res.Findings)[ckSotRegistered]); n != 0 {
+		t.Fatalf("internal SoT: drift must be inactive, got %d registered findings", n)
+	}
+	for _, c := range res.Checks {
+		if c.Class == "drift" && (c.Active || c.Reason == "") {
+			t.Fatalf("internal SoT: drift check %s must be inactive with a reason: %+v", c.ID, c)
+		}
 	}
 }

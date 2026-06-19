@@ -21,6 +21,12 @@ type SoTSite struct {
 	Lat       float64
 	Lng       float64
 	HasCoords bool
+	// Owner is operator-declared ownership intent (team / on-call / business unit
+	// responsible for the site). The wire can't supply it; the SoT can. This is the
+	// ownership seam (Phase 3) — providers populate it when they carry it (internal
+	// sites store today; ServiceNow/NetBox tenancy later), and consumers route
+	// ownership through here rather than re-deriving it per surface. Empty = unset.
+	Owner string
 	// Source labels the evidence the projection attaches: "internal" | "netbox".
 	Source string
 }
@@ -38,6 +44,16 @@ type SoTProvider interface {
 	DeviceSites(ctx context.Context, tenant string, cross bool) (map[string]string, error)
 	// Configured reports whether this provider is the active authority.
 	Configured() bool
+	// DeviceRecordSource is the Device.Source value under which this provider's
+	// DECLARED device records appear in the inventory, used by drift detection to
+	// pair declared intent against the observed inventory. Returns "" when the
+	// provider carries NO separate declared records — the internal provider IS the
+	// inventory, so there is nothing to drift device fields against; an external
+	// provider that isn't read back into the inventory (e.g. NetBox in write-only
+	// mode) likewise returns "". Drift checks stay inactive (honest "cannot assess")
+	// rather than flooding false "unregistered" findings when no declared records
+	// exist. See compliance.go.
+	DeviceRecordSource() string
 }
 
 // activeSoT resolves the authority: an enabled+configured external provider wins,
@@ -58,6 +74,11 @@ type internalProvider struct {
 
 func (p *internalProvider) Name() string     { return "internal" }
 func (p *internalProvider) Configured() bool { return true } // always available
+
+// The internal inventory is itself the authority — there is no separate declared
+// device record to pair against, so device-field drift is not applicable.
+func (p *internalProvider) DeviceRecordSource() string { return "" }
+
 func (p *internalProvider) DeviceSites(context.Context, string, bool) (map[string]string, error) {
 	// Placement lives on the device (Labels["site"]); buildGeomap reads it directly.
 	return nil, nil
@@ -120,4 +141,16 @@ func (p *netboxProvider) Sites(ctx context.Context, _ string, _ bool) ([]SoTSite
 func (p *netboxProvider) DeviceSites(ctx context.Context, _ string, _ bool) (map[string]string, error) {
 	_, assign, err := p.fetch(ctx)
 	return assign, err
+}
+
+// DeviceRecordSource is "netbox" only when NetBox device records are actually
+// READ BACK into the inventory (direction read/both). In write-only or no-sync
+// mode NetBox is never read as a device source, so the inventory holds no
+// "netbox"-sourced records — returning "" keeps drift inactive instead of
+// flagging every observed device as "unregistered" against an empty SoT.
+func (p *netboxProvider) DeviceRecordSource() string {
+	if p.s == nil || p.s.netboxCfg == nil || !netboxReadsDevices(p.s.netboxCfg.effective()) {
+		return ""
+	}
+	return "netbox"
 }

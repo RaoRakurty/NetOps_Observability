@@ -627,7 +627,7 @@ export type ComplianceGap = {
 
 export type ComplianceResponse = {
   compliance_enabled: boolean;
-  sot?: { configured: boolean };
+  sot?: { configured: boolean; provider?: string };
   summary?: {
     devices: number;
     affected: number;
@@ -2073,10 +2073,11 @@ export type GeomapResponse = {
 export type SiteRow = {
   slug: string; name: string; status?: string;
   lat: number; lng: number; has_coords: boolean;
+  owner?: string; // operator-declared ownership intent (team / on-call / BU)
   updated_by?: string; updated_at?: string;
 };
 export type SitesResponse = { sites: SiteRow[]; active: "internal" | "netbox" | string };
-export type SiteInput = { slug?: string; name: string; status?: string; lat?: number; lng?: number };
+export type SiteInput = { slug?: string; name: string; status?: string; owner?: string; lat?: number; lng?: number };
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };
