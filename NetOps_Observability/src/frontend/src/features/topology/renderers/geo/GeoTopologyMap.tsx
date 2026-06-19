@@ -17,9 +17,10 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { registerMap } from "echarts/core";
 import { cssVar } from "../../../../theme/tokens";
-import { HEALTH_COLOR } from "../../utils/topologyHealth";
+import { HEALTH_COLOR, HEALTH_LABEL } from "../../utils/topologyHealth";
 import { topologyToEchartsGeo, type GeoModel } from "./topologyToEchartsGeo";
-import type { TopologyView } from "../../api/topologyTypes";
+import { TopologySideDrawer } from "../../components";
+import type { TopologyView, TopologySelection, Health } from "../../api/topologyTypes";
 
 // Lazily register the world basemap once (shared global ECharts map registry).
 let worldRegistered = false;
@@ -129,16 +130,54 @@ function buildOption(model: GeoModel) {
   };
 }
 
+/** Compact, calm geo legend: health bands + the circuit width cue. */
+function GeoLegend() {
+  const bands: Health[] = ["ok", "warning", "critical", "unknown"];
+  return (
+    <div className="topo-geo-legend">
+      {bands.map((h) => (
+        <span key={h} className="topo-geo-legend-item">
+          <span className="topo-geo-legend-dot" style={{ background: HEALTH_COLOR[h] }} />
+          {HEALTH_LABEL[h]}
+        </span>
+      ))}
+      <span className="topo-geo-legend-sep" />
+      <span className="topo-geo-legend-item">
+        <span className="topo-geo-legend-line" /> circuit · thicker = busier
+      </span>
+    </div>
+  );
+}
+
+// ECharts click param: only the bits we read (the data payload we attached).
+type GeoClickParams = {
+  data?: { _site?: GeoModel["sites"][number]; _circuit?: GeoModel["circuits"][number] };
+};
+
 export default function GeoTopologyMap({ view }: { view: TopologyView }) {
   const [ready, setReady] = useState(false);
+  const [selection, setSelection] = useState<TopologySelection>({});
   useEffect(() => {
     let alive = true;
     ensureWorldMap().then(() => { if (alive) setReady(true); });
     return () => { alive = false; };
   }, []);
 
+  // Clear any open inspector when the underlying view changes.
+  useEffect(() => { setSelection({}); }, [view]);
+
   const model = useMemo(() => topologyToEchartsGeo(view), [view]);
   const option = useMemo(() => buildOption(model), [model]);
+
+  const onEvents = useMemo(
+    () => ({
+      click: (p: GeoClickParams) => {
+        if (p.data?._site) setSelection({ nodeId: p.data._site.id });
+        else if (p.data?._circuit) setSelection({ edgeId: p.data._circuit.id });
+      },
+    }),
+    [],
+  );
 
   if (!ready) {
     return <div className="topo-geo-loading">Loading basemap…</div>;
@@ -159,11 +198,20 @@ export default function GeoTopologyMap({ view }: { view: TopologyView }) {
 
   return (
     <div className="topo-geo-wrap">
-      <ReactECharts option={option} style={{ height: "100%", width: "100%" }} notMerge />
+      <ReactECharts
+        option={option}
+        style={{ height: "100%", width: "100%" }}
+        notMerge
+        onEvents={onEvents}
+      />
+      <GeoLegend />
       {model.unplaced > 0 && (
         <div className="topo-geo-note">
           {model.unplaced} node{model.unplaced === 1 ? "" : "s"} not placed (no coordinates) — set them in the Source of Truth.
         </div>
+      )}
+      {(selection.nodeId || selection.edgeId) && (
+        <TopologySideDrawer view={view} selection={selection} onClose={() => setSelection({})} />
       )}
     </div>
   );
