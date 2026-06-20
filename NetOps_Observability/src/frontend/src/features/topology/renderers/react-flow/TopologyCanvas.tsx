@@ -26,7 +26,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import type { OverlayKind, TopologySelection, WorkflowMode } from "../../api/topologyTypes";
+import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
+import { fetchTopologyView, fetchTopologyGraph, type TopologyCoverage } from "../../api/topologyApi";
 import { layoutView } from "../../layout/elkLayout";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
@@ -88,8 +89,36 @@ function CanvasInner() {
   // Orthogonal to the workflow mode.
   const [renderer, setRenderer] = useState<"canvas" | "overview" | "geo">("canvas");
 
+  // Data source: "live" = the per-mode projection (GET /api/topology/view); other
+  // value "persisted" = the reconciler-maintained graph with stable ids + stale +
+  // coverage (GET /api/topology/graph, #77). The fetched view overrides the
+  // workflow's bundled sample; on an empty/errored fetch the fetcher returns the
+  // mock so the canvas never blanks.
+  const [source, setSource] = useState<"live" | "persisted">("live");
+  const [fetched, setFetched] = useState<TopologyView | null>(null);
+  const [coverage, setCoverage] = useState<TopologyCoverage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (source === "persisted") {
+        const r = await fetchTopologyGraph();
+        if (!alive) return;
+        setFetched(r.view);
+        setCoverage(r.coverage ?? null);
+      } else {
+        const v = await fetchTopologyView(mode);
+        if (!alive) return;
+        setFetched(v);
+        setCoverage(null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [mode, source]);
+
   const workflow = workflowById(mode);
-  const view = workflow?.view;
+  const view = fetched ?? workflow?.view;
   const showAllLabels = labelsToggle || density === "engineer";
   // saved-layout key: invalidated when the view, layout type, or node cardinality
   // (a proxy for topology generation) changes.
@@ -296,6 +325,23 @@ function CanvasInner() {
         layoutPinned={layoutPinned}
       >
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
+        {/* Data source: live per-mode projection vs the persistent reconciled graph. */}
+        <div className="topo-render-toggle" role="tablist" aria-label="Data source">
+          <button role="tab" aria-selected={source === "live"} className={source === "live" ? "on" : ""} onClick={() => setSource("live")} title="Live per-mode projection (recomputed each load)">
+            Live
+          </button>
+          <button role="tab" aria-selected={source === "persisted"} className={source === "persisted" ? "on" : ""} onClick={() => setSource("persisted")} title="Persistent reconciled graph: stable ids, freshness and coverage">
+            Persisted
+          </button>
+        </div>
+        {source === "persisted" && coverage && (
+          <span className="topo-coverage" title="Coverage of the persistent graph">
+            {coverage.nodes} nodes · {coverage.edges} edges
+            {coverage.stale_nodes + coverage.stale_edges > 0 && (
+              <span className="topo-coverage-stale"> · {coverage.stale_nodes + coverage.stale_edges} stale</span>
+            )}
+          </span>
+        )}
         {view && renderer === "canvas" && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
         <div className="topo-render-toggle" role="tablist" aria-label="Renderer">
           <button role="tab" aria-selected={renderer === "canvas"} className={renderer === "canvas" ? "on" : ""} onClick={() => setRenderer("canvas")}>

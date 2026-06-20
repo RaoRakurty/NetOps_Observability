@@ -74,6 +74,34 @@ export async function fetchTopologyView(mode: WorkflowMode): Promise<TopologyVie
   }
 }
 
+/** Coverage summary returned alongside the persistent graph (#77). */
+export type TopologyCoverage = {
+  nodes: number;
+  edges: number;
+  stale_nodes: number;
+  stale_edges: number;
+  resolved_edges: number;
+};
+
+/**
+ * Fetch the PERSISTENT topology graph (GET /api/topology/graph): the reconciler-
+ * maintained spine with stable ids + first_seen/last_seen + stale (carried as each
+ * node/edge's change_state) + live health/util enrichment, plus a coverage summary.
+ * Mode-agnostic (the whole tenant graph). Same graceful degradation as the live
+ * view: an empty/errored graph falls back to the physical mock so the canvas never
+ * blanks.
+ */
+export async function fetchTopologyGraph(): Promise<{ view: TopologyView; coverage?: TopologyCoverage }> {
+  try {
+    const raw = (await api.topologyGraph()) as TopologyView & { coverage?: TopologyCoverage };
+    const view = normalizeView(raw);
+    if (view.nodes.length > 0) return { view, coverage: raw.coverage };
+    return { view: normalizeView(physicalTopology) };
+  } catch {
+    return { view: normalizeView(physicalTopology) };
+  }
+}
+
 /** Catalogue of operator workflows for the mode switcher (PDF §9). */
 export function listWorkflowMeta(): {
   id: WorkflowMode;

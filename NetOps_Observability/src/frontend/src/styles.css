@@ -723,6 +723,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* renderer toggle: Canvas ⇄ Overview (WebGL) */
 .topo-render-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px;
   background: var(--panel); border: 1px solid var(--border); }
+.topo-coverage { font-size: 11px; font-weight: 600; color: var(--muted);
+  font-variant-numeric: tabular-nums; padding: 0 6px; white-space: nowrap; }
+.topo-coverage-stale { color: var(--warn); }
 .topo-render-toggle button { font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
   padding: 4px 11px; border-radius: 6px; border: 0; background: transparent; color: var(--fg-muted); }
 .topo-render-toggle button.on { background: var(--accent); color: #fff; }
