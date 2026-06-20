@@ -61,7 +61,8 @@ type server struct {
 	notifyCfg        *notifyConfigStore
 	contactPoints    *contactPointStore
 	deviceLocations  *deviceLocationStore
-	sites            *sitesStore // internal SoT sites (default provider)
+	sites            *sitesStore      // internal SoT sites (default provider)
+	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
 	reports          *reportScheduler
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
@@ -366,6 +367,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("sites store: %v", err)
 	}
+	deviceSites, err := newDeviceSiteStore(envOr("DEVICE_SITES_FILE", "/data/device_sites.json"))
+	if err != nil {
+		log.Fatalf("device sites store: %v", err)
+	}
 	contactPoints, err := newContactPointStore(envOr("CONTACT_POINTS_FILE", "/data/contact_points.json"))
 	if err != nil {
 		log.Fatalf("contact point store: %v", err)
@@ -396,6 +401,7 @@ func newServer() *server {
 		contactPoints:    contactPoints,
 		deviceLocations:  deviceLocations,
 		sites:            sites,
+		deviceSites:      deviceSites,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -885,6 +891,11 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.URL.Path, "/location") {
 		s.handleDeviceLocation(w, r)
+		return
+	}
+	// Operator device→site binding: /api/devices/{id}/site (get/set/clear).
+	if strings.HasSuffix(r.URL.Path, "/site") {
+		s.handleDeviceSite(w, r)
 		return
 	}
 	id := r.URL.Path[len("/api/devices/"):]

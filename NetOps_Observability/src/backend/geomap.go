@@ -242,14 +242,19 @@ func buildGeomap(sites []SoTSite, devices []models.Device, assign map[string]str
 	}
 	for _, d := range devices {
 		toks := deviceIdentities(d)
-		slug := d.Labels["site"]
-		if slug == "" && assign != nil {
+		// Explicit device→site assignment (operator binding or NetBox map) is
+		// first-class intent and wins over a discovery-stamped inventory label.
+		var slug string
+		if assign != nil {
 			for _, tok := range toks {
-				if s, ok := assign[tok]; ok {
+				if s, ok := assign[tok]; ok && s != "" {
 					slug = s
 					break
 				}
 			}
+		}
+		if slug == "" {
+			slug = d.Labels["site"]
 		}
 		if g := bySlug[slug]; slug != "" && g != nil {
 			count(g, d)

@@ -63,13 +63,14 @@ func (s *server) activeSoT() SoTProvider {
 	if nb := (&netboxProvider{s: s}); nb.Configured() {
 		return nb
 	}
-	return &internalProvider{sites: s.sites}
+	return &internalProvider{sites: s.sites, deviceSites: s.deviceSites}
 }
 
 // ── internal provider: the platform itself (DEFAULT) ─────────────────────────────
 
 type internalProvider struct {
-	sites *sitesStore
+	sites       *sitesStore
+	deviceSites *deviceSiteStore
 }
 
 func (p *internalProvider) Name() string     { return "internal" }
@@ -79,9 +80,14 @@ func (p *internalProvider) Configured() bool { return true } // always available
 // device record to pair against, so device-field drift is not applicable.
 func (p *internalProvider) DeviceRecordSource() string { return "" }
 
-func (p *internalProvider) DeviceSites(context.Context, string, bool) (map[string]string, error) {
-	// Placement lives on the device (Labels["site"]); buildGeomap reads it directly.
-	return nil, nil
+// DeviceSites returns operator device→site bindings (tenant-scoped). Placement
+// can also come from a discovery-stamped Device.Labels["site"]; an explicit
+// operator binding wins (buildGeomap checks `assign` before the label).
+func (p *internalProvider) DeviceSites(_ context.Context, tenant string, cross bool) (map[string]string, error) {
+	if p.deviceSites == nil {
+		return nil, nil
+	}
+	return p.deviceSites.Assignments(tenant, cross), nil
 }
 
 func (p *internalProvider) Sites(_ context.Context, tenant string, cross bool) ([]SoTSite, error) {

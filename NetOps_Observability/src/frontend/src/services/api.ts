@@ -1149,6 +1149,15 @@ export const api = {
   clearDeviceLocation: (id: string) =>
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/location`, { method: "DELETE" }),
 
+  // Operator device→site binding (the internal SoT provider's editable intent):
+  // assign a device to a DECLARED site by slug; coords resolve live from the site.
+  deviceSite: (id: string) =>
+    request<{ site: string }>(`/api/devices/${encodeURIComponent(id)}/site`),
+  setDeviceSite: (id: string, site: string) =>
+    request<{ ok: boolean; site: string }>(`/api/devices/${encodeURIComponent(id)}/site`, { method: "PUT", body: JSON.stringify({ site }) }),
+  clearDeviceSite: (id: string) =>
+    request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/site`, { method: "DELETE" }),
+
   // Internal Source-of-Truth sites (the default SoT provider). `active` reports
   // which provider currently answers ("internal" | "netbox").
   sites: () => request<SitesResponse>("/api/sites"),

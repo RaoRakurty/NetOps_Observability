@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, Device, Alert } from "../services/api";
+import { api, Device, Alert, DeviceLocationRow, SiteRow } from "../services/api";
 import { takeDrill } from "../theme/drill";
 import DeviceDetailPage from "./DeviceDetailPage";
 import DeviceTerminal from "./DeviceTerminal";
@@ -91,7 +91,9 @@ type Filter = "all" | Health;
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [sites, setSites] = useState<Map<string, string>>(new Map()); // device id → site/location
+  const [locs, setLocs] = useState<Map<string, DeviceLocationRow>>(new Map()); // device id → resolved placement
+  const [siteOptions, setSiteOptions] = useState<SiteRow[]>([]); // declared SoT sites (assignable)
+  const [sotProvider, setSotProvider] = useState<string>("internal"); // active SoT authority
   const [sshEnabled, setSshEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -113,15 +115,30 @@ export default function Devices() {
 
   const load = async () => {
     try {
-      const [list, al, locs] = await Promise.all([
+      const [list, al, locRes, siteRes] = await Promise.all([
         api.devices(),
         api.alerts().catch(() => []),
-        api.deviceLocations().catch(() => ({ devices: [] as { id: string; site?: string }[] })),
+        api.deviceLocations().catch(() => ({ devices: [] as DeviceLocationRow[] })),
+        api.sites().catch(() => ({ sites: [] as SiteRow[], active: "internal" })),
       ]);
       setDevices(list ?? []);
       setAlerts(al ?? []);
-      setSites(new Map((locs?.devices ?? []).filter((r) => r.site).map((r) => [r.id, r.site as string])));
+      setLocs(new Map((locRes?.devices ?? []).map((r) => [r.id, r])));
+      setSiteOptions([...(siteRes?.sites ?? [])].sort((a, b) => a.name.localeCompare(b.name)));
+      setSotProvider(siteRes?.active ?? "internal");
       setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  // Assign / clear a device's declared site (operator intent). Coordinates resolve
+  // live from the site definition; an empty slug clears the binding.
+  const assignSite = async (id: string, slug: string) => {
+    try {
+      if (slug) await api.setDeviceSite(id, slug);
+      else await api.clearDeviceSite(id);
+      await load();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -171,6 +188,12 @@ export default function Devices() {
     () => devices.filter((d) => filter === "all" || health.get(d.id) === filter),
     [devices, filter, health],
   );
+
+  // Declared-site lookup (slug → display name) + whether the site column is
+  // editable. Only the INTERNAL SoT provider's sites are editable here; when an
+  // external CMDB (NetBox) is the authority, placement is read-only.
+  const siteName = useMemo(() => new Map(siteOptions.map((s) => [s.slug, s.name])), [siteOptions]);
+  const editableSites = sotProvider === "internal" && siteOptions.length > 0;
 
   // Map device health → the sacred severity ramp so a stale/down heartbeat tints
   // its "Last seen" cell (warn = degraded, crit = down).
@@ -227,14 +250,18 @@ export default function Devices() {
       },
     },
     {
-      key: "location", header: "Location", width: "13%", sortable: true,
-      text: (d) => sites.get(d.id) ?? "", sortValue: (d) => sites.get(d.id) ?? "~",
-      render: (d) => {
-        const site = sites.get(d.id);
-        return site
-          ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={site}><span aria-hidden style={{ color: "var(--muted)" }}>◍</span>{site}</span>
-          : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
-      },
+      key: "location", header: "Site", width: "15%", sortable: true,
+      text: (d) => siteText(locs.get(d.id), siteName),
+      sortValue: (d) => siteText(locs.get(d.id), siteName) || "~",
+      render: (d) => (
+        <SiteCell
+          row={locs.get(d.id)}
+          options={siteOptions}
+          editable={editableSites}
+          siteName={siteName}
+          onAssign={(slug) => assignSite(d.id, slug)}
+        />
+      ),
     },
     {
       key: "model", header: "Description", width: "14%",
@@ -251,7 +278,7 @@ export default function Devices() {
       sev: (d) => healthSev(health.get(d.id) ?? "up"),
       render: (d) => <span title={new Date(d.last_seen).toLocaleString()}>{relTime(d.last_seen)}</span>,
     },
-  ], [health, sites]);
+  ], [health, locs, siteOptions, editableSites, siteName]);
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
@@ -365,6 +392,61 @@ export default function Devices() {
       {detail && <DeviceDetailPage device={detail} onClose={() => setDetail(null)} />}
       {term && <DeviceTerminal device={term} onClose={() => setTerm(null)} />}
     </>
+  );
+}
+
+// siteText is the device's resolved site as plain text (for filtering / sorting):
+// a declared site's display name, else the raw label, else empty.
+function siteText(row: DeviceLocationRow | undefined, siteName: Map<string, string>): string {
+  const slug = row?.site ?? "";
+  if (!slug) return "";
+  return siteName.get(slug) ?? slug;
+}
+
+// SiteCell renders the device→site assignment: an inline declared-site picker
+// when the internal SoT provider is the authority, otherwise read-only text.
+// `row.source` distinguishes a declared-site placement ("sot") from a free-form
+// manual location ("manual"); the picker binds to a declared site by slug.
+function SiteCell({
+  row, options, editable, siteName, onAssign,
+}: {
+  row: DeviceLocationRow | undefined;
+  options: SiteRow[];
+  editable: boolean;
+  siteName: Map<string, string>;
+  onAssign: (slug: string) => void;
+}) {
+  const slug = row?.site ?? "";
+  const isDeclared = !!slug && siteName.has(slug);
+  const label = siteText(row, siteName);
+
+  if (!editable) {
+    return label
+      ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={label}><span aria-hidden style={{ color: "var(--muted)" }}>◍</span>{label}</span>
+      : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
+  }
+
+  // A manual (non-declared) location is shown as a hint after the picker so the
+  // operator can see existing placement without it masquerading as a declared site.
+  const manualHint = !isDeclared && row?.source === "manual" && label;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+      <span aria-hidden style={{ color: isDeclared ? "var(--accent, var(--muted))" : "var(--muted)" }}>◍</span>
+      <select
+        className="form-input"
+        aria-label="Assign site"
+        title={isDeclared ? `Site: ${label}` : "Assign this device to a site"}
+        value={isDeclared ? slug : ""}
+        onChange={(e) => onAssign(e.target.value)}
+        style={{ height: 28, padding: "2px 6px", fontSize: 12, maxWidth: 150 }}
+      >
+        <option value="">— Unassigned —</option>
+        {options.map((s) => (
+          <option key={s.slug} value={s.slug}>{s.name}</option>
+        ))}
+      </select>
+      {manualHint && <span style={{ color: "var(--fg-subtle, var(--muted))", fontSize: 11 }} title={`Manual location: ${label}`}>· {label}</span>}
+    </span>
   );
 }
 

@@ -202,7 +202,7 @@ func (s *server) handleDeviceLocation(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		resp := map[string]any{"set": false}
-		if slug := sotSiteFor(d, s.geoAssignments()); slug != "" && s.geoSiteSlugs(tenant, cross)[slug] {
+		if slug := sotSiteFor(d, s.geoAssignments(tenant, cross)); slug != "" && s.geoSiteSlugs(tenant, cross)[slug] {
 			resp["sot_site"] = slug
 		}
 		if l, ok := s.deviceLocations.Lookup(tokens); ok {
@@ -256,7 +256,7 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	assign := s.geoAssignments()
+	assign := s.geoAssignments(tenant, cross)
 	resolvable := s.geoSiteSlugs(tenant, cross)
 	type row struct {
 		ID     string  `json:"id"`
@@ -288,31 +288,33 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"devices": rows})
 }
 
-// sotSiteFor resolves a device's NetBox site slug (inventory label first,
-// then the NetBox device→site assignment map) — the same precedence the
-// geomap join uses.
+// sotSiteFor resolves a device's SoT site slug using the SAME precedence the
+// geomap join uses: an explicit device→site assignment (operator binding, or the
+// NetBox device→site map) wins, then a discovery-stamped inventory label. The
+// explicit assignment is first-class intent and must override a stale label.
 func sotSiteFor(d models.Device, assign map[string]string) string {
-	if slug := d.Labels["site"]; slug != "" {
-		return slug
-	}
 	for _, tok := range deviceIdentities(d) {
-		if s, ok := assign[tok]; ok {
+		if s, ok := assign[tok]; ok && s != "" {
 			return s
 		}
 	}
-	return ""
+	return d.Labels["site"]
 }
 
-// geoAssignments returns the active provider's device→site map (NetBox keeps one
-// for write-only mode; the internal provider places by Device.Labels["site"], so
-// it returns nil — callers treat nil as "no external assignment").
-func (s *server) geoAssignments() map[string]string {
+// geoAssignments returns the active provider's device→site map, SCOPED to the
+// (tenant, cross) principal: NetBox's assignment map when NetBox is the authority,
+// otherwise the internal operator bindings. Callers treat nil as "no explicit
+// assignment" and fall back to the device's inventory label.
+func (s *server) geoAssignments(tenant string, cross bool) map[string]string {
 	if nb := (&netboxProvider{s: s}); nb.Configured() {
 		s.geoSites.mu.Lock()
 		defer s.geoSites.mu.Unlock()
 		return s.geoSites.assign
 	}
-	return nil
+	if s.deviceSites == nil {
+		return nil
+	}
+	return s.deviceSites.Assignments(tenant, cross)
 }
 
 // geoSiteSlugs returns the slugs of SoT sites the geomap can actually render,
