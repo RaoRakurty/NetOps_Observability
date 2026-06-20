@@ -69,6 +69,7 @@ type server struct {
 	incMetrics       *incidentMetrics
 	seams            *pgSeamStore          // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services         *pgServiceStore       // service catalog #69 §2 P2 (nil on file backend)
+	topology         topologyGraphStore    // persistent topology graph #77 (in-memory or pg)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -415,6 +416,7 @@ func newServer() *server {
 	// Postgres only, like incidents; the bootstrap loop starts in main().
 	srv.seams = newSeamStore()
 	srv.services = newServiceStore()
+	srv.topology = newTopologyStore() // persistent topology graph (#77); reconciler starts in main()
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
@@ -513,6 +515,7 @@ func main() {
 	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
 	// replica converges here (no-op for the single-writer file backend).
 	srv.startCredCacheReload(ctx)
+	srv.startTopologyReconciler(ctx) // #77: keep the persistent topology graph fresh
 
 	mux := http.NewServeMux()
 	srv.routes(mux)
@@ -713,6 +716,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/services", s.handleFlowsServices) // #69 P2: flow traffic per service
 	mux.HandleFunc("/api/topology/links", s.handleTopologyLinks) // LLDP-discovered adjacencies
 	mux.HandleFunc("/api/topology/view", s.handleTopologyView)   // resolved renderer-agnostic TopologyView
+	mux.HandleFunc("/api/topology/graph", s.handleTopologyGraph) // persistent reconciled graph (stable ids + stale)
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed

@@ -35,6 +35,29 @@ func topologyModeOrDefault(m string) string {
 	}
 }
 
+// gatherTopoLinks builds the deduped, evidence-bearing adjacency set for a device
+// slice: it constructs the same id/name/address resolution maps /links and /view
+// use, fetches the raw LLDP/CDP/BGP-LS neighbours + interface-address map, and runs
+// the shared normalizer. Extracted so /api/topology/view, /links and the persistent
+// reconciler all derive links identically and can never disagree.
+func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []topoLink {
+	ownedID := make(map[string]string, len(devs))
+	byName := make(map[string]string, len(devs))
+	byAddr := make(map[string]string, len(devs))
+	for _, d := range devs {
+		ownedID[d.ID] = d.Name
+		if d.Name != "" {
+			byName[strings.ToLower(strings.TrimSpace(d.Name))] = d.ID
+		}
+		if d.Address != "" {
+			byAddr[strings.TrimSpace(d.Address)] = d.ID
+		}
+	}
+	neighbors, _ := collectors.FetchTopologyLinks(ctx)
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
+	return normalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+}
+
 func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
@@ -48,25 +71,9 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	mode := topologyModeOrDefault(strings.TrimSpace(r.URL.Query().Get("mode")))
 	tenant, _ := principalTenant(claims) // "" for a platform-owner all-tenants view
 
-	// ── inventory + tenant-scoped resolution maps (identical to /links) ──
+	// ── inventory + deduped, evidence-bearing links (same normalizer as /links) ──
 	devs := visibleDevices(s.discovery.Devices(), claims)
-	ownedID := make(map[string]string, len(devs))
-	byName := make(map[string]string, len(devs))
-	byAddr := make(map[string]string, len(devs))
-	for _, d := range devs {
-		ownedID[d.ID] = d.Name
-		if d.Name != "" {
-			byName[strings.ToLower(strings.TrimSpace(d.Name))] = d.ID
-		}
-		if d.Address != "" {
-			byAddr[strings.TrimSpace(d.Address)] = d.ID
-		}
-	}
-
-	// ── deduped, evidence-bearing links (same normalizer as /links) ──
-	neighbors, _ := collectors.FetchTopologyLinks(r.Context())
-	ifaddr, _ := collectors.FetchIfAddrMap(r.Context())
-	links := normalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+	links := s.gatherTopoLinks(r.Context(), devs)
 
 	// ── active alerts, scoped to devices the caller can see (same rule as /alerts) ──
 	alerts := s.alerts.Active()
