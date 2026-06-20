@@ -8,6 +8,10 @@
 > default, **Postgres** with `STORE_BACKEND=postgres` — same methods, same API
 > (see *Storage backend* below).
 >
+> **➜ For the org/tenant hierarchy + isolation model (as-built), see
+> [design/org-tenant-model.md](design/org-tenant-model.md) — the canonical
+> current-state reference.**
+>
 > **As-built quick map**
 > - Local auth + RBAC: `auth.go`, `rbac.go`, `identity_handlers.go`, `users.go`
 > - Rotating refresh tokens: `refresh.go` (single-use, 7d, replay → revoke lineage)
