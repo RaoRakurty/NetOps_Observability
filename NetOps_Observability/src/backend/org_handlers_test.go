@@ -23,8 +23,11 @@ func TestOrgHTTPLifecycle(t *testing.T) {
 	if err := json.Unmarshal(b, &org); err != nil {
 		t.Fatal(err)
 	}
-	if org.ID != "acme-corp" || org.HomeRegion != "eu-central" {
+	if org.Slug != "acme-corp" || org.HomeRegion != "eu-central" {
 		t.Fatalf("unexpected org: %+v", org)
+	}
+	if org.ID == "acme-corp" || !isOrgID(org.ID) {
+		t.Fatalf("org id should be opaque (org_…), not the slug: %+v", org)
 	}
 
 	// unknown region rejected
@@ -66,8 +69,10 @@ func TestOrgHTTPLifecycle(t *testing.T) {
 	if err := json.Unmarshal(b, &tn); err != nil {
 		t.Fatal(err)
 	}
-	if tn.OrgID != "acme-corp" {
-		t.Errorf("tenant org = %q, want acme-corp", tn.OrgID)
+	// org_id slug is resolved to the opaque org id at the boundary; the tenant
+	// stores the opaque id, not the slug.
+	if tn.OrgID == "acme-corp" || !isOrgID(tn.OrgID) {
+		t.Errorf("tenant org = %q, want the opaque org_ id (resolved from slug acme-corp)", tn.OrgID)
 	}
 
 	// tenant create with unknown org is rejected
@@ -134,7 +139,7 @@ func TestOrgHTTPAuthz(t *testing.T) {
 	if err := json.Unmarshal(b, &orgs); err != nil {
 		t.Fatal(err)
 	}
-	if len(orgs) != 1 || orgs[0].ID != "acme-corp" {
+	if len(orgs) != 1 || orgs[0].Slug != "acme-corp" {
 		t.Fatalf("alice should see only acme-corp, got %s", b)
 	}
 
@@ -150,8 +155,9 @@ func TestOrgHTTPAuthz(t *testing.T) {
 	if err := json.Unmarshal(b, &me); err != nil {
 		t.Fatal(err)
 	}
-	if me.OrgID != "acme-corp" || me.PlatformAdmin {
-		t.Errorf("alice /me org_id=%q platform_admin=%v, want acme-corp/false", me.OrgID, me.PlatformAdmin)
+	// alice's org is the opaque acme-corp id (not the slug, not the platform owner).
+	if !isOrgID(me.OrgID) || me.OrgID == "acme-corp" || me.PlatformAdmin {
+		t.Errorf("alice /me org_id=%q platform_admin=%v, want opaque acme-corp id / false", me.OrgID, me.PlatformAdmin)
 	}
 	_, b = do(t, srv, "GET", "/api/auth/me", admin, nil)
 	_ = json.Unmarshal(b, &me)

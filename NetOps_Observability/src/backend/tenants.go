@@ -39,7 +39,27 @@ type Tenant struct {
 	// tenant's OWN users are unaffected (they always see their own data). Default
 	// false (zero value) = operator-visible, preserving existing behavior.
 	OperatorRestricted bool      `json:"operator_restricted,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	// Status is the lifecycle state of the tenant (ABAC-ready; surfaced in
+	// TenantContext). Default "active"; a future suspend/archive flow flips it,
+	// and policy can deny access to a non-active tenant. Blank is read as active
+	// for tenants created before this field existed.
+	Status    string    `json:"status,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Tenant lifecycle states.
+const (
+	TenantStatusActive    = "active"
+	TenantStatusSuspended = "suspended"
+)
+
+// status returns the tenant's lifecycle state, defaulting a blank (legacy) value
+// to active so existing tenants behave unchanged.
+func (t Tenant) status() string {
+	if t.Status == "" {
+		return TenantStatusActive
+	}
+	return t.Status
 }
 
 type tenantStore struct {
@@ -113,12 +133,12 @@ func (s *tenantStore) List() []Tenant {
 	return out
 }
 
-func (s *tenantStore) Get(id string) (Tenant, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	t, ok := s.tenants[id]
-	return t, ok
-}
+// Get resolves a tenant by id OR slug — the legacy compatibility resolver. New
+// code holds the opaque tenant id; this keeps the many slug-keyed call sites
+// (scope parents, bindings, seed/demo data) working until they migrate. It is
+// RESOLUTION only — authorization still happens on the resolved tenant's opaque
+// ID, never on the slug. See Resolve (the canonical boundary name).
+func (s *tenantStore) Get(ref string) (Tenant, bool) { return s.Resolve(ref) }
 
 // restrictedIDs returns the (lower-cased) ids of tenants the platform operator may
 // NOT view (OperatorRestricted). Used to exclude their telemetry from the
@@ -137,8 +157,7 @@ func (s *tenantStore) restrictedIDs() []string {
 
 // SetRegion assigns a tenant to a data-residency region (blank = inherit the
 // org's home_region). Validated against the known region set.
-func (s *tenantStore) SetRegion(id, region string) (Tenant, error) {
-	id = strings.ToLower(strings.TrimSpace(id))
+func (s *tenantStore) SetRegion(ref, region string) (Tenant, error) {
 	reg := strings.ToLower(strings.TrimSpace(region))
 	if reg != "" {
 		if _, err := normalizeRegion(reg); err != nil {
@@ -147,12 +166,12 @@ func (s *tenantStore) SetRegion(id, region string) (Tenant, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t, ok := s.tenants[id]
+	t, ok := s.resolveLocked(ref) // id or slug
 	if !ok {
 		return Tenant{}, errors.New("tenant not found")
 	}
 	t.Region = reg
-	s.tenants[id] = t
+	s.tenants[t.ID] = t
 	if err := s.flushLocked(); err != nil {
 		return Tenant{}, err
 	}
@@ -161,33 +180,41 @@ func (s *tenantStore) SetRegion(id, region string) (Tenant, error) {
 
 // SetOperatorRestricted toggles a tenant's operator-visibility (compliance). The
 // global tenant can never be restricted (it IS the platform/operator namespace).
-func (s *tenantStore) SetOperatorRestricted(id string, restricted bool) (Tenant, error) {
-	id = strings.ToLower(strings.TrimSpace(id))
-	if id == TenantGlobal {
-		return Tenant{}, errors.New("the global tenant cannot be operator-restricted")
-	}
+func (s *tenantStore) SetOperatorRestricted(ref string, restricted bool) (Tenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t, ok := s.tenants[id]
+	t, ok := s.resolveLocked(ref) // id or slug
 	if !ok {
 		return Tenant{}, errors.New("tenant not found")
 	}
+	if t.ID == TenantGlobal {
+		return Tenant{}, errors.New("the global tenant cannot be operator-restricted")
+	}
 	t.OperatorRestricted = restricted
-	s.tenants[id] = t
+	s.tenants[t.ID] = t
 	if err := s.flushLocked(); err != nil {
 		return Tenant{}, err
 	}
 	return t, nil
 }
 
-func (s *tenantStore) Create(name, note, isolationMode, orgID string) (Tenant, error) {
+// Create makes a new tenant. The id is an OPAQUE, IMMUTABLE, cryptographically-
+// random key (mintTenantID) — never derived from the name/slug, so the security
+// boundary is stable across renames and not guessable. The slug is a human handle:
+// taken from `slug` if supplied, else derived from the display name, and validated
+// to the full contract either way (untrusted input). Slugs are globally unique.
+func (s *tenantStore) Create(name, slug, note, isolationMode, orgID string) (Tenant, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Tenant{}, errors.New("tenant name required")
 	}
-	id := slugify(name)
-	if id == "" {
-		return Tenant{}, errors.New("tenant name must contain letters or digits")
+	cand := strings.TrimSpace(slug)
+	if cand == "" {
+		cand = slugFromName(name)
+	}
+	cleanSlug, err := validateSlug(cand)
+	if err != nil {
+		return Tenant{}, err
 	}
 	mode, err := normalizeIsolationMode(isolationMode)
 	if err != nil {
@@ -199,16 +226,68 @@ func (s *tenantStore) Create(name, note, isolationMode, orgID string) (Tenant, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.tenants[id]; ok {
-		return Tenant{}, errors.New("tenant already exists")
+	if s.slugTakenLocked(cleanSlug) {
+		return Tenant{}, errors.New("tenant slug already exists")
 	}
-	t := Tenant{ID: id, Name: name, Slug: id, Note: note, OrgID: org, IsolationMode: mode, CreatedAt: time.Now().UTC()}
+	id := mintTenantID()
+	for {
+		if _, ok := s.tenants[id]; !ok {
+			break
+		}
+		id = mintTenantID() // astronomically unlikely; guard anyway
+	}
+	t := Tenant{ID: id, Name: name, Slug: cleanSlug, Note: note, OrgID: org, IsolationMode: mode, Status: TenantStatusActive, CreatedAt: time.Now().UTC()}
 	s.tenants[id] = t
 	if err := s.flushLocked(); err != nil {
 		delete(s.tenants, id)
 		return Tenant{}, err
 	}
 	return t, nil
+}
+
+// slugTakenLocked reports whether a tenant slug is already in use (globally
+// unique). Checks both the Slug field and the id map key — legacy tenants have
+// id==slug, so a new slug must also not collide with an existing readable id.
+// Caller holds the write lock.
+func (s *tenantStore) slugTakenLocked(slug string) bool {
+	if _, ok := s.tenants[slug]; ok {
+		return true
+	}
+	for _, t := range s.tenants {
+		if t.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// Resolve maps an UNTRUSTED id-or-slug reference to the canonical tenant. This is
+// the compatibility resolver: a ref is tried as an id first (opaque t_ id, the
+// global sentinel, or a legacy id==slug), then as a slug. Callers MUST resolve
+// before authorizing — never authorize on the raw slug.
+func (s *tenantStore) Resolve(ref string) (Tenant, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.resolveLocked(ref)
+}
+
+// resolveLocked is Resolve's lock-free core, so write methods (Set*/Delete) can
+// resolve an id-or-slug ref to the canonical record while already holding the
+// write lock. Caller must hold s.mu (read or write).
+func (s *tenantStore) resolveLocked(ref string) (Tenant, bool) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if ref == "" {
+		return Tenant{}, false
+	}
+	if t, ok := s.tenants[ref]; ok {
+		return t, true
+	}
+	for _, t := range s.tenants {
+		if t.Slug == ref {
+			return t, true
+		}
+	}
+	return Tenant{}, false
 }
 
 // orgOf returns the org a tenant belongs to, treating blank as the Global org
@@ -256,15 +335,16 @@ func (s *tenantStore) CountByOrg(orgID string) int {
 	return n
 }
 
-func (s *tenantStore) Delete(id string) error {
-	if id == TenantGlobal {
-		return errors.New("cannot delete the Global tenant")
-	}
+func (s *tenantStore) Delete(ref string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.tenants[id]; !ok {
+	t, ok := s.resolveLocked(ref) // id or slug
+	if !ok {
 		return errors.New("no such tenant")
 	}
-	delete(s.tenants, id)
+	if t.ID == TenantGlobal {
+		return errors.New("cannot delete the Global tenant")
+	}
+	delete(s.tenants, t.ID)
 	return s.flushLocked()
 }

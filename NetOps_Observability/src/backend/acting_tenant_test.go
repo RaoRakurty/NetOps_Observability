@@ -36,7 +36,8 @@ func TestWithActingTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTenantStore: %v", err)
 	}
-	if _, err := ts.Create("Acme", "", "", ""); err != nil {
+	acme, err := ts.Create("Acme", "acme", "", "", "")
+	if err != nil {
 		t.Fatalf("create tenant: %v", err)
 	}
 	s := &server{tenants: ts}
@@ -50,8 +51,10 @@ func TestWithActingTenant(t *testing.T) {
 		return s.withActingTenant(r, owner)
 	}
 
-	if c := req("acme"); c.actingTenant != "acme" {
-		t.Errorf("owner→acme: actingTenant=%q, want acme", c.actingTenant)
+	// A slug in the header resolves to the opaque tenant id (the override is keyed
+	// on the id, never the slug).
+	if c := req("acme"); c.actingTenant != acme.ID {
+		t.Errorf("owner→acme: actingTenant=%q, want %s", c.actingTenant, acme.ID)
 	}
 	// "global" means the default Global (cross-tenant) view — NOT a narrowing.
 	if c := req("global"); c.actingTenant != "" {

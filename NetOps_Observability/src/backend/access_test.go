@@ -6,21 +6,40 @@ import (
 	"testing"
 )
 
-// seedOrgTenants creates an org with two tenants for reachability tests.
-func seedOrgTenants(t *testing.T, s *server) {
+// seededIDs carries the OPAQUE ids minted for the reachability fixture, so tests
+// assert on the canonical ids (not the slugs). Slugs ("acme-corp", "acme-prod",
+// …) remain usable as references — they resolve to these ids — but results the
+// system returns (reachable sets, principalTenant, audit event tenants) are keyed
+// by the opaque id.
+type seededIDs struct {
+	org      string // opaque org id (slug "acme-corp")
+	acmeProd string // opaque tenant id (slug "acme-prod")
+	acmeDev  string // opaque tenant id (slug "acme-dev")
+	globex   string // opaque tenant id (slug "globex"), in the Global org
+}
+
+// seedOrgTenants creates an org with two tenants for reachability tests and
+// returns their opaque ids. Tenants are created under the opaque org id so the
+// org-membership (ListByOrg) is canonical.
+func seedOrgTenants(t *testing.T, s *server) seededIDs {
 	t.Helper()
-	if _, err := s.orgs.Create("Acme Corp", "", "", ""); err != nil {
+	org, err := s.orgs.Create("Acme Corp", "acme-corp", "", "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.tenants.Create("Acme Prod", "", "", "acme-corp"); err != nil {
+	prod, err := s.tenants.Create("Acme Prod", "acme-prod", "", "", org.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.tenants.Create("Acme Dev", "", "", "acme-corp"); err != nil {
+	dev, err := s.tenants.Create("Acme Dev", "acme-dev", "", "", org.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.tenants.Create("Globex", "", "", ""); err != nil { // global org
+	glob, err := s.tenants.Create("Globex", "globex", "", "", "") // global org
+	if err != nil {
 		t.Fatal(err)
 	}
+	return seededIDs{org: org.ID, acmeProd: prod.ID, acmeDev: dev.ID, globex: glob.ID}
 }
 
 // TestReachMultiTenant: a principal bound to two tenants reaches both, no more.
@@ -98,7 +117,7 @@ func TestDenyWins(t *testing.T) {
 // only for a tenant it reaches; behaviour-preserving for single-tenant users.
 func TestSwitcherNonOwner(t *testing.T) {
 	s := newPBACTestServer(t)
-	seedOrgTenants(t, s)
+	seed := seedOrgTenants(t, s)
 	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
@@ -108,12 +127,12 @@ func TestSwitcherNonOwner(t *testing.T) {
 	}
 	c := jwtClaims{Sub: "sre", Role: "operator", Tenant: "acme-prod"}
 
-	// Switch to a reachable tenant → effective tenant rewritten, resolved scope is
-	// that tenant (still scoped, never cross).
+	// Switch to a reachable tenant via its SLUG → effective tenant rewritten to the
+	// opaque id (still scoped, never cross).
 	r := httptest.NewRequest("GET", "/x?as_tenant=globex", nil)
 	got := s.withActingTenant(r, c)
-	if tn, cross := principalTenant(got); tn != "globex" || cross {
-		t.Errorf("switch to reachable tenant: scope=(%q,%v), want (globex,false)", tn, cross)
+	if tn, cross := principalTenant(got); tn != seed.globex || cross {
+		t.Errorf("switch to reachable tenant: scope=(%q,%v), want (%s,false)", tn, cross, seed.globex)
 	}
 	// Switch to an unreachable tenant → ignored (stays home).
 	r2 := httptest.NewRequest("GET", "/x?as_tenant=acme-dev", nil)

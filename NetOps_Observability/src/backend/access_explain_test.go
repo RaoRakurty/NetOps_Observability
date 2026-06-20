@@ -6,7 +6,7 @@ import "testing"
 // that grants it — and reflects deny-wins.
 func TestExplainAccess(t *testing.T) {
 	s := newPBACTestServer(t)
-	seedOrgTenants(t, s) // org acme-corp{acme-prod,acme-dev} + globex
+	seed := seedOrgTenants(t, s) // org acme-corp{acme-prod,acme-dev} + globex
 	if _, err := s.users.CreateFull(User{Username: "sre", Role: "operator", TenantID: "acme-prod"}, "Passw0rd!2345"); err != nil {
 		t.Fatal(err)
 	}
@@ -19,17 +19,19 @@ func TestExplainAccess(t *testing.T) {
 	if exp.AllTenants {
 		t.Error("sre is not the platform owner")
 	}
+	// Reaches are keyed by the OPAQUE tenant id; the granting binding's ScopeID is
+	// the raw (slug) scope it was created with.
 	reach := map[string][]GrantReason{}
 	for _, r := range exp.Reaches {
 		reach[r.TenantID] = r.GrantedBy
 	}
-	if len(reach["acme-prod"]) == 0 || reach["acme-prod"][0].ScopeID != scopeTenant("acme-prod") {
-		t.Errorf("acme-prod should be granted by its tenant binding, got %+v", reach["acme-prod"])
+	if len(reach[seed.acmeProd]) == 0 || reach[seed.acmeProd][0].ScopeID != scopeTenant("acme-prod") {
+		t.Errorf("acme-prod should be granted by its tenant binding, got %+v", reach[seed.acmeProd])
 	}
-	if len(reach["globex"]) == 0 {
+	if len(reach[seed.globex]) == 0 {
 		t.Error("globex reach should be explained by a binding")
 	}
-	if _, ok := reach["acme-dev"]; ok {
+	if _, ok := reach[seed.acmeDev]; ok {
 		t.Error("sre must not reach acme-dev")
 	}
 }

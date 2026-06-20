@@ -37,11 +37,11 @@ func (s *server) orgOfScope(scopeID string) string {
 	st, slug := parseScope(scopeID)
 	switch st {
 	case scopeTypeOrg:
-		return slug
+		return s.canonicalOrgID(slug)
 	case scopeTypeTenant:
 		if s.tenants != nil {
 			if t, ok := s.tenants.Get(slug); ok {
-				return orgOf(t)
+				return s.canonicalOrgID(orgOf(t))
 			}
 		}
 		return OrgGlobal

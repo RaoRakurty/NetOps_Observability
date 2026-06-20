@@ -119,12 +119,15 @@ func TestTenantStore(t *testing.T) {
 	if err := ts.Delete(TenantGlobal); err == nil {
 		t.Error("expected refusal deleting Global tenant")
 	}
-	tn, err := ts.Create("Acme Corp", "isolated", "", "")
+	tn, err := ts.Create("Acme Corp", "", "isolated", "", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if tn.ID != "acme-corp" {
-		t.Errorf("slug = %q, want acme-corp", tn.ID)
+	if tn.Slug != "acme-corp" {
+		t.Errorf("slug = %q, want acme-corp", tn.Slug)
+	}
+	if tn.ID == "acme-corp" || !isTenantID(tn.ID) {
+		t.Errorf("id = %q, want an opaque t_ id (not the slug)", tn.ID)
 	}
 	if err := ts.Delete(tn.ID); err != nil {
 		t.Errorf("delete custom tenant: %v", err)

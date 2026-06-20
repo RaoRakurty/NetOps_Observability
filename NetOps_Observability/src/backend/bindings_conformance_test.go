@@ -111,10 +111,10 @@ func TestBindingSyncOnRoleChange(t *testing.T) {
 // TestScopeAncestor proves ancestor-or-self traversal over the derived tree.
 func TestScopeAncestor(t *testing.T) {
 	s := newPBACTestServer(t)
-	if _, err := s.orgs.Create("Acme Corp", "", "", ""); err != nil {
+	if _, err := s.orgs.Create("Acme Corp", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.tenants.Create("Acme Prod", "", "", "acme-corp"); err != nil {
+	if _, err := s.tenants.Create("Acme Prod", "", "", "", "acme-corp"); err != nil {
 		t.Fatal(err)
 	}
 	tenantScope := scopeTenant("acme-prod")

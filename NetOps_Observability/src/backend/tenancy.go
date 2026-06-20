@@ -99,19 +99,24 @@ func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
 	if v == "" || v == actingAll || v == TenantGlobal {
 		return c
 	}
+	// `v` is UNTRUSTED (id or slug from a header/query). Resolve it to the
+	// canonical opaque tenant id; the override is keyed on the id, never the slug.
+	t, ok := s.tenants.Resolve(v)
+	if !ok {
+		return c // fail closed: an unresolvable reference is ignored
+	}
 	if isPlatformOwner(c) {
-		if _, ok := s.tenants.Get(v); ok {
-			c.actingTenant = v
-		}
+		c.actingTenant = t.ID
 		return c
 	}
 	// Non-owner: honor the selection only if the principal is actually bound to a
-	// scope that reaches this tenant (and the tenant exists). We rewrite the
-	// EFFECTIVE tenant (not actingTenant) so principalTenant — which ignores
-	// actingTenant for non-owners as a hard invariant — resolves to the target.
-	// A single-tenant user only reaches its own tenant, so this is a no-op for them.
-	if _, ok := s.tenants.Get(v); ok && s.reachesTenant(c.Sub, v) {
-		c.Tenant = v
+	// scope that reaches this tenant. We rewrite the EFFECTIVE tenant (not
+	// actingTenant) so principalTenant — which ignores actingTenant for non-owners
+	// as a hard invariant — resolves to the target. The reach check is against the
+	// opaque tenant id, never the slug. A single-tenant user only reaches its own
+	// tenant, so this is a no-op for them.
+	if s.reachesTenant(c.Sub, t.ID) {
+		c.Tenant = t.ID
 	}
 	return c
 }

@@ -77,17 +77,49 @@ func (s *server) scopeParent(scopeID string) string {
 	}
 }
 
+// canonicalScopeID resolves the tenant/org identifier inside a scope id to its
+// opaque canonical id (org_…/t_…). This is the "resolve before authorize"
+// compatibility bridge: a legacy slug-based scope (tenant:acme-prod) and the
+// opaque-id form (tenant:t_ab…) both canonicalize to the SAME string, so the
+// reach comparison unifies them. It NEVER authorizes on a slug — it only
+// normalizes both sides to the opaque id before the string compare. platform and
+// unresolvable scopes pass through unchanged (fail-closed: an unknown ref stays
+// itself and simply won't match a real canonical scope).
+//
+// Cost: a tenant/org Resolve is an O(1) id-map hit for the opaque-id common case;
+// only a legacy slug falls back to an O(n) scan. (Phase 2: add a slug→id index.)
+func (s *server) canonicalScopeID(scopeID string) string {
+	typ, rest := parseScope(scopeID)
+	switch typ {
+	case scopeTypeTenant:
+		if s.tenants != nil {
+			if t, ok := s.tenants.Resolve(rest); ok {
+				return scopeTenant(t.ID)
+			}
+		}
+	case scopeTypeOrg:
+		if s.orgs != nil {
+			if o, ok := s.orgs.Resolve(rest); ok {
+				return scopeOrg(o.ID)
+			}
+		}
+	}
+	return scopeID
+}
+
 // scopeAncestorOrSelf reports whether `ancestor` is the same as, or an ancestor
 // of, `descendant` in the containment tree. This is the ONLY traversal the
-// authorization path performs (bounded by tree depth ≤ 4 + a hard cap).
+// authorization path performs (bounded by tree depth ≤ 4 + a hard cap). Both
+// endpoints (and every walked parent) are canonicalized to opaque ids first, so a
+// slug-based scope and its opaque-id equivalent compare equal (legacy compat).
 func (s *server) scopeAncestorOrSelf(ancestor, descendant string) bool {
-	ancestor = strings.TrimSpace(ancestor)
-	cur := strings.TrimSpace(descendant)
+	ancestor = s.canonicalScopeID(strings.TrimSpace(ancestor))
+	cur := s.canonicalScopeID(strings.TrimSpace(descendant))
 	for i := 0; cur != "" && i < 8; i++ { // i<8 is a cycle backstop; real depth ≤ 4
 		if strings.EqualFold(cur, ancestor) {
 			return true
 		}
-		cur = s.scopeParent(cur)
+		cur = s.canonicalScopeID(s.scopeParent(cur))
 	}
 	return false
 }

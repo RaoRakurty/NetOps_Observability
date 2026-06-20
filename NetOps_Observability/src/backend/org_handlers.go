@@ -22,7 +22,11 @@ import (
 )
 
 type createOrgRequest struct {
-	Name          string `json:"name"`
+	Name string `json:"name"`
+	// Slug is the optional human URL handle. Blank → derived from Name. Validated
+	// + globally unique + immutable either way. The org's security key is the
+	// opaque id minted server-side, never this slug.
+	Slug          string `json:"slug"`
 	Note          string `json:"note"`
 	HomeRegion    string `json:"home_region"`
 	SSOConnection string `json:"sso_connection"`
@@ -59,12 +63,13 @@ func (s *server) handleOrgs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		o, err := s.orgs.Create(req.Name, req.Note, req.HomeRegion, req.SSOConnection)
+		o, err := s.orgs.Create(req.Name, req.Slug, req.Note, req.HomeRegion, req.SSOConnection)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		logInfo("orgs", "organization created", map[string]any{"org_id": o.ID, "home_region": o.HomeRegion})
+		logInfo("orgs", "organization created", map[string]any{"org_id": o.ID, "org_slug": o.Slug, "home_region": o.HomeRegion})
+		s.recordIdentityAudit(r, claims, "ORG_CREATED", auditOrgDetail(o))
 		writeJSON(w, http.StatusCreated, o)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -73,14 +78,23 @@ func (s *server) handleOrgs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleOrgByID(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/orgs/")
-	if id == "" || strings.Contains(id, "/") {
+	ref := strings.TrimPrefix(r.URL.Path, "/api/orgs/")
+	if ref == "" || strings.Contains(ref, "/") {
 		writeError(w, http.StatusBadRequest, errors.New("invalid organization id"))
 		return
 	}
+	// The path segment is UNTRUSTED (id or slug). Resolve it to the canonical
+	// opaque id before any mutation; fail closed if it doesn't resolve.
+	org, found := s.orgs.Resolve(ref)
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("organization not found"))
+		return
+	}
+	id := org.ID
 	switch r.Method {
 	case http.MethodPatch:
 		var u orgUpdate
@@ -98,12 +112,9 @@ func (s *server) handleOrgByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logInfo("orgs", "organization updated", map[string]any{"org_id": o.ID, "home_region": o.HomeRegion})
+		s.recordIdentityAudit(r, claims, "ORG_UPDATED", auditOrgDetail(o))
 		writeJSON(w, http.StatusOK, o)
 	case http.MethodDelete:
-		if _, found := s.orgs.Get(id); !found {
-			writeError(w, http.StatusNotFound, errors.New("organization not found"))
-			return
-		}
 		// Refuse to delete an org that still owns tenants — it would orphan them.
 		// Move/remove the tenants first (mirrors the tenant delete-guard).
 		if n := s.tenants.CountByOrg(id); n > 0 {
@@ -115,6 +126,7 @@ func (s *server) handleOrgByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logWarn("orgs", "organization deleted", map[string]any{"org_id": id})
+		s.recordIdentityAudit(r, claims, "ORG_DELETED", auditOrgDetail(org))
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "PATCH, DELETE")

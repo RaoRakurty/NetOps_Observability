@@ -296,10 +296,15 @@ func (s *server) handleRoleByID(w http.ResponseWriter, r *http.Request) {
 // ---- tenants ---------------------------------------------------------------
 
 type createTenantRequest struct {
-	Name          string `json:"name"`
+	Name string `json:"name"`
+	// Slug is the optional human URL handle. Blank → derived from Name. Validated
+	// + globally unique + immutable. The tenant's security key is the opaque id
+	// minted server-side, never this slug.
+	Slug          string `json:"slug"`
 	Note          string `json:"note"`
 	IsolationMode string `json:"isolation_mode"`
-	// OrgID is the Organization the new tenant belongs to. Blank → Global org.
+	// OrgID is the Organization the new tenant belongs to (id OR slug — resolved
+	// server-side to the opaque org id). Blank → Global org.
 	OrgID string `json:"org_id"`
 	// Region assigns the tenant to a data-residency region. Blank → inherit org.
 	Region string `json:"region"`
@@ -339,15 +344,18 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		// Validate the org exists before creating the tenant under it (zero-trust
-		// on input). Blank org → Global, which always exists.
+		// Resolve the org reference (id OR slug — UNTRUSTED) to the canonical opaque
+		// org id before creating the tenant under it (zero-trust on input). Blank
+		// org → Global, which always exists.
 		if req.OrgID != "" {
-			if _, ok := s.orgs.Get(req.OrgID); !ok {
+			o, ok := s.orgs.Resolve(req.OrgID)
+			if !ok {
 				writeError(w, http.StatusBadRequest, errors.New("unknown organization"))
 				return
 			}
+			req.OrgID = o.ID // store the opaque org id, never the slug
 		}
-		t, err := s.tenants.Create(req.Name, req.Note, req.IsolationMode, req.OrgID)
+		t, err := s.tenants.Create(req.Name, req.Slug, req.Note, req.IsolationMode, req.OrgID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -367,6 +375,8 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 				t = updated
 			}
 		}
+		logInfo("tenants", "tenant created", map[string]any{"tenant_id": t.ID, "tenant_slug": t.Slug, "org_id": orgOf(t)})
+		s.recordIdentityAudit(r, claims, "TENANT_CREATED", auditTenantDetail(t))
 		writeJSON(w, http.StatusCreated, t)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -375,14 +385,23 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
-	if id == "" || strings.Contains(id, "/") {
+	ref := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
+	if ref == "" || strings.Contains(ref, "/") {
 		writeError(w, http.StatusBadRequest, errors.New("invalid tenant id"))
 		return
 	}
+	// The path segment is UNTRUSTED (id or slug). Resolve to the canonical opaque
+	// tenant id before any mutation; fail closed if it doesn't resolve.
+	resolved, found := s.tenants.Resolve(ref)
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("tenant not found"))
+		return
+	}
+	id := resolved.ID
 	switch r.Method {
 	case http.MethodPatch:
 		// Update mutable tenant settings: operator-visibility (compliance) and/or
@@ -415,13 +434,10 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 			}
 			logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
 		}
+		s.recordIdentityAudit(r, claims, "TENANT_UPDATED", auditTenantDetail(t))
 		writeJSON(w, http.StatusOK, t)
 	case http.MethodDelete:
-		t, ok := s.tenants.Get(id)
-		if !ok {
-			writeError(w, http.StatusNotFound, errors.New("tenant not found"))
-			return
-		}
+		t := resolved
 		// Guard a high-impact, irreversible action (GitHub/AWS/GCP pattern), enforced
 		// server-side so the API can't be hit without the safeguards:
 		// 1) Type-to-confirm — the caller must echo the EXACT tenant name.
@@ -441,6 +457,9 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logWarn("tenants", "tenant deleted", map[string]any{"tenant_id": id, "name": t.Name, "forced": force})
+		detail := auditTenantDetail(t)
+		detail["forced"] = force
+		s.recordIdentityAudit(r, claims, "TENANT_DELETED", detail)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "PATCH, DELETE")

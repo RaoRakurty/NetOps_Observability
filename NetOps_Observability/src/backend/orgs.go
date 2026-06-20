@@ -114,21 +114,26 @@ func (s *orgStore) List() []Org {
 	return out
 }
 
-func (s *orgStore) Get(id string) (Org, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	o, ok := s.orgs[strings.ToLower(strings.TrimSpace(id))]
-	return o, ok
-}
+// Get resolves an org by id OR slug — the legacy compatibility resolver (see
+// tenantStore.Get). Resolution only; authorization uses the resolved opaque id.
+func (s *orgStore) Get(ref string) (Org, bool) { return s.Resolve(ref) }
 
-func (s *orgStore) Create(name, note, homeRegion, ssoConnection string) (Org, error) {
+// Create makes a new org. The id is an OPAQUE, IMMUTABLE, cryptographically-
+// random key (mintOrgID) — never derived from name/slug. The slug is a human
+// handle: taken from `slug` if supplied, else derived from the display name, and
+// validated to the full contract either way. Slugs are globally unique.
+func (s *orgStore) Create(name, slug, note, homeRegion, ssoConnection string) (Org, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Org{}, errors.New("organization name required")
 	}
-	id := slugify(name)
-	if id == "" {
-		return Org{}, errors.New("organization name must contain letters or digits")
+	cand := strings.TrimSpace(slug)
+	if cand == "" {
+		cand = slugFromName(name)
+	}
+	cleanSlug, err := validateSlug(cand)
+	if err != nil {
+		return Org{}, err
 	}
 	region, err := normalizeRegion(homeRegion)
 	if err != nil {
@@ -136,11 +141,18 @@ func (s *orgStore) Create(name, note, homeRegion, ssoConnection string) (Org, er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.orgs[id]; ok {
-		return Org{}, errors.New("organization already exists")
+	if s.slugTakenLocked(cleanSlug) {
+		return Org{}, errors.New("organization slug already exists")
+	}
+	id := mintOrgID()
+	for {
+		if _, ok := s.orgs[id]; !ok {
+			break
+		}
+		id = mintOrgID() // astronomically unlikely; guard anyway
 	}
 	o := Org{
-		ID: id, Name: name, Slug: id, Note: strings.TrimSpace(note),
+		ID: id, Name: name, Slug: cleanSlug, Note: strings.TrimSpace(note),
 		HomeRegion: region, SSOConnection: strings.TrimSpace(ssoConnection),
 		CreatedAt: time.Now().UTC(),
 	}
@@ -152,6 +164,46 @@ func (s *orgStore) Create(name, note, homeRegion, ssoConnection string) (Org, er
 	return o, nil
 }
 
+// slugTakenLocked reports whether an org slug is already in use (globally unique).
+// Checks both the Slug field and the id map key (legacy id==slug). Caller holds lock.
+func (s *orgStore) slugTakenLocked(slug string) bool {
+	if _, ok := s.orgs[slug]; ok {
+		return true
+	}
+	for _, o := range s.orgs {
+		if o.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// Resolve maps an UNTRUSTED id-or-slug reference to the canonical org (id first —
+// opaque org_ id, global sentinel, or legacy id==slug — then slug). Resolve
+// before authorizing; never authorize on a raw slug.
+func (s *orgStore) Resolve(ref string) (Org, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.resolveLocked(ref)
+}
+
+// resolveLocked is Resolve's lock-free core for write methods. Caller holds s.mu.
+func (s *orgStore) resolveLocked(ref string) (Org, bool) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if ref == "" {
+		return Org{}, false
+	}
+	if o, ok := s.orgs[ref]; ok {
+		return o, true
+	}
+	for _, o := range s.orgs {
+		if o.Slug == ref {
+			return o, true
+		}
+	}
+	return Org{}, false
+}
+
 // orgUpdate carries the mutable org fields; nil pointers are left unchanged.
 type orgUpdate struct {
 	Note          *string `json:"note"`
@@ -159,14 +211,14 @@ type orgUpdate struct {
 	SSOConnection *string `json:"sso_connection"`
 }
 
-func (s *orgStore) Update(id string, u orgUpdate) (Org, error) {
-	id = strings.ToLower(strings.TrimSpace(id))
+func (s *orgStore) Update(ref string, u orgUpdate) (Org, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o, ok := s.orgs[id]
+	o, ok := s.resolveLocked(ref) // id or slug
 	if !ok {
 		return Org{}, errors.New("organization not found")
 	}
+	id := o.ID
 	if u.Note != nil {
 		o.Note = strings.TrimSpace(*u.Note)
 	}
@@ -189,15 +241,16 @@ func (s *orgStore) Update(id string, u orgUpdate) (Org, error) {
 
 // Delete removes an org. The Global org is permanent. Refusing to delete an org
 // that still owns tenants is enforced by the caller (it has the tenant store).
-func (s *orgStore) Delete(id string) error {
-	id = strings.ToLower(strings.TrimSpace(id))
-	if id == OrgGlobal {
-		return errors.New("cannot delete the Global organization")
-	}
+func (s *orgStore) Delete(ref string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.orgs[id]; !ok {
+	o, ok := s.resolveLocked(ref) // id or slug
+	if !ok {
 		return errors.New("no such organization")
+	}
+	id := o.ID
+	if id == OrgGlobal {
+		return errors.New("cannot delete the Global organization")
 	}
 	delete(s.orgs, id)
 	return s.flushLocked()

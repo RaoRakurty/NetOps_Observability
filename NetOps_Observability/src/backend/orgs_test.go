@@ -31,30 +31,34 @@ func TestOrgStoreSeedsGlobal(t *testing.T) {
 
 func TestOrgCreateValidatesRegion(t *testing.T) {
 	s := newTestOrgStore(t)
-	if _, err := s.Create("Acme", "", "atlantis", ""); err == nil {
+	if _, err := s.Create("Acme", "", "", "atlantis", ""); err == nil {
 		t.Error("unknown region should be rejected")
 	}
-	o, err := s.Create("Acme Corp", "note", "eu-central", "acme-okta")
+	o, err := s.Create("Acme Corp", "", "note", "eu-central", "acme-okta")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if o.ID != "acme-corp" || o.HomeRegion != "eu-central" || o.SSOConnection != "acme-okta" {
+	// id is opaque (not the slugified name); slug is the human handle.
+	if o.Slug != "acme-corp" || o.HomeRegion != "eu-central" || o.SSOConnection != "acme-okta" {
 		t.Errorf("unexpected org: %+v", o)
 	}
+	if o.ID == "acme-corp" || !isOrgID(o.ID) {
+		t.Errorf("org id = %q, want an opaque org_ id (not the slug)", o.ID)
+	}
 	// blank region defaults
-	d, err := s.Create("Default Co", "", "", "")
+	d, err := s.Create("Default Co", "", "", "", "")
 	if err != nil || d.HomeRegion != RegionDefault {
 		t.Errorf("blank region should default, got %q (err %v)", d.HomeRegion, err)
 	}
-	// duplicate rejected
-	if _, err := s.Create("Acme Corp", "", "", ""); err == nil {
+	// duplicate slug rejected
+	if _, err := s.Create("Acme Corp", "", "", "", ""); err == nil {
 		t.Error("duplicate org should be rejected")
 	}
 }
 
 func TestOrgUpdateAndDelete(t *testing.T) {
 	s := newTestOrgStore(t)
-	o, err := s.Create("Globex", "", "us-east", "")
+	o, err := s.Create("Globex", "", "", "us-east", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +91,7 @@ func TestOrgStorePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s1.Create("Persisted Inc", "", "ap-southeast", ""); err != nil {
+	if _, err := s1.Create("Persisted Inc", "", "", "ap-southeast", ""); err != nil {
 		t.Fatal(err)
 	}
 	s2, err := newOrgStore(path)
@@ -109,14 +113,14 @@ func TestTenantOrgMembership(t *testing.T) {
 	if g, _ := ts.Get(TenantGlobal); orgOf(g) != OrgGlobal {
 		t.Errorf("global tenant org = %q, want %q", orgOf(g), OrgGlobal)
 	}
-	a, err := ts.Create("Acme Prod", "", "", "acme")
+	a, err := ts.Create("Acme Prod", "", "", "", "acme")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.OrgID != "acme" {
 		t.Errorf("tenant org = %q, want acme", a.OrgID)
 	}
-	if _, err := ts.Create("Acme Dev", "", "", "acme"); err != nil {
+	if _, err := ts.Create("Acme Dev", "", "", "", "acme"); err != nil {
 		t.Fatal(err)
 	}
 	if n := ts.CountByOrg("acme"); n != 2 {
@@ -126,7 +130,7 @@ func TestTenantOrgMembership(t *testing.T) {
 		t.Errorf("ListByOrg(acme) = %d tenants, want 2", len(got))
 	}
 	// a tenant created with no org counts under global
-	if _, err := ts.Create("Orphan", "", "", ""); err != nil {
+	if _, err := ts.Create("Orphan", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := ts.ListByOrg(OrgGlobal); len(got) != 2 { // global tenant + Orphan

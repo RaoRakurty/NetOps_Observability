@@ -15,9 +15,9 @@ func TestScopedAuditVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.audit = au
-	seedOrgTenants(t, s) // org acme-corp{acme-prod,acme-dev} + globex (global org)
+	seed := seedOrgTenants(t, s) // org acme-corp{acme-prod,acme-dev} + globex (global org)
 
-	// boss administers acme-corp.
+	// boss administers acme-corp (bind by slug → canonicalizes to the opaque org id).
 	if _, err := s.bindings.Add(RoleBinding{PrincipalID: "boss", RoleID: "org-admin", ScopeID: scopeOrg("acme-corp")}); err != nil {
 		t.Fatal(err)
 	}
@@ -26,9 +26,11 @@ func TestScopedAuditVisibility(t *testing.T) {
 	rec := func(tenant string, i int) {
 		au.Record(AuditEvent{Time: now.Add(time.Duration(i) * time.Second), Tenant: tenant, Method: "POST", Path: "/api/test", Actor: "x"})
 	}
-	rec("acme-prod", 1)
-	rec("acme-dev", 2)
-	rec("globex", 3)   // different org
+	// Events are tagged with the OPAQUE tenant id (as the audit middleware records
+	// the actor's resolved tenant).
+	rec(seed.acmeProd, 1)
+	rec(seed.acmeDev, 2)
+	rec(seed.globex, 3)  // different org
 	rec(TenantGlobal, 4) // platform/global
 
 	count := func(claims jwtClaims) (perTenant map[string]int) {
@@ -40,23 +42,23 @@ func TestScopedAuditVisibility(t *testing.T) {
 	}
 
 	// Org-admin: acme-prod + acme-dev only.
-	boss := count(jwtClaims{Sub: "boss", Role: RoleOrgAdmin, Tenant: "acme-prod"})
-	if boss["acme-prod"] != 1 || boss["acme-dev"] != 1 {
+	boss := count(jwtClaims{Sub: "boss", Role: RoleOrgAdmin, Tenant: seed.acmeProd})
+	if boss[seed.acmeProd] != 1 || boss[seed.acmeDev] != 1 {
 		t.Errorf("org-admin should see its org's tenants, got %v", boss)
 	}
-	if boss["globex"] != 0 || boss[TenantGlobal] != 0 {
+	if boss[seed.globex] != 0 || boss[TenantGlobal] != 0 {
 		t.Errorf("org-admin must NOT see other orgs / global events, got %v", boss)
 	}
 
 	// Platform owner: everything.
 	owner := count(jwtClaims{Sub: "root", Role: RoleSuperAdmin, Tenant: TenantGlobal})
-	if len(owner) < 4 || owner["globex"] != 1 || owner[TenantGlobal] != 1 {
+	if len(owner) < 4 || owner[seed.globex] != 1 || owner[TenantGlobal] != 1 {
 		t.Errorf("platform owner should see all events, got %v", owner)
 	}
 
 	// Tenant admin: only its own tenant.
-	ta := count(jwtClaims{Sub: "u", Role: RoleSuperAdmin, Tenant: "globex"})
-	if ta["globex"] != 1 || ta["acme-prod"] != 0 {
+	ta := count(jwtClaims{Sub: "u", Role: RoleSuperAdmin, Tenant: seed.globex})
+	if ta[seed.globex] != 1 || ta[seed.acmeProd] != 0 {
 		t.Errorf("tenant admin should see only its own tenant, got %v", ta)
 	}
 }

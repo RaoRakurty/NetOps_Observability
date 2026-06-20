@@ -32,7 +32,7 @@ func TestTenantCreateIsolationMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	// default → shared
-	def, err := s.Create("Acme", "", "", "")
+	def, err := s.Create("Acme", "", "", "", "")
 	if err != nil || def.IsolationMode != IsolationShared {
 		t.Fatalf("default isolation = %q (err %v), want shared", def.IsolationMode, err)
 	}
@@ -40,12 +40,12 @@ func TestTenantCreateIsolationMode(t *testing.T) {
 		t.Errorf("blank org should default to Global, got %q", def.OrgID)
 	}
 	// explicit dedicated mode persisted
-	ded, err := s.Create("Globex", "", "dedicated_db", "")
+	ded, err := s.Create("Globex", "", "", "dedicated_db", "")
 	if err != nil || ded.IsolationMode != IsolationDedicatedDB {
 		t.Fatalf("dedicated isolation = %q (err %v)", ded.IsolationMode, err)
 	}
 	// invalid rejected
-	if _, err := s.Create("Initech", "", "bogus", ""); err == nil {
+	if _, err := s.Create("Initech", "", "", "bogus", ""); err == nil {
 		t.Error("invalid isolation_mode should be rejected")
 	}
 	// the seeded global tenant is shared

@@ -6,11 +6,11 @@ import "testing"
 // org's home_region; otherwise the platform default.
 func TestEffectiveTenantRegion(t *testing.T) {
 	s := newPBACTestServer(t)
-	if _, err := s.orgs.Create("Acme Corp", "", "eu-central", ""); err != nil {
+	if _, err := s.orgs.Create("Acme Corp", "acme-corp", "", "eu-central", ""); err != nil {
 		t.Fatal(err)
 	}
 	// tenant inherits org region
-	inh, err := s.tenants.Create("Acme Prod", "", "", "acme-corp")
+	inh, err := s.tenants.Create("Acme Prod", "", "", "", "acme-corp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestDataPlaneRouting(t *testing.T) {
 // data plane.
 func TestTenantDataPlane(t *testing.T) {
 	s := newPBACTestServer(t)
-	if _, err := s.tenants.Create("Euro", "", "", ""); err != nil {
+	if _, err := s.tenants.Create("Euro", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.tenants.SetRegion("euro", "eu-west"); err != nil {

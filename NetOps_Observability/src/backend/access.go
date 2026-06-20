@@ -73,16 +73,25 @@ func (s *server) accessibleTenants(principalID string) (tenants []string, all bo
 		}
 		switch st {
 		case scopeTypeTenant:
+			// Canonicalize the (possibly legacy slug) tenant ref to its opaque id so
+			// the reachable set dedups against org-scope reach (which already uses
+			// opaque ids) — never two entries for the same tenant.
+			id := slug
+			if t, ok := s.tenants.Resolve(slug); ok {
+				id = t.ID
+			}
 			if b.Effect == EffectDeny {
-				deny[slug] = true
+				deny[id] = true
 			} else {
-				set[slug] = true
+				set[id] = true
 			}
 		case scopeTypeOrg:
 			if !isOrgManagerRole(b.RoleID) {
 				continue
 			}
-			for _, tn := range s.tenants.ListByOrg(slug) {
+			// Canonicalize the (possibly slug) org ref so it matches tenants stored
+			// under the opaque org id.
+			for _, tn := range s.tenants.ListByOrg(s.canonicalOrgID(slug)) {
 				if b.Effect == EffectDeny {
 					deny[tn.ID] = true
 				} else {
@@ -106,9 +115,23 @@ func (s *server) accessibleTenants(principalID string) (tenants []string, all bo
 	return out, false
 }
 
+// canonicalOrgID resolves an UNTRUSTED org reference (id or slug) to its opaque
+// org id, so every org comparison is opaque-to-opaque regardless of whether the
+// source carried a slug (legacy binding / API input) or the opaque id. Unknown
+// refs pass through normalized (fail-closed: won't match a real opaque id).
+func (s *server) canonicalOrgID(ref string) string {
+	if s.orgs != nil {
+		if o, ok := s.orgs.Resolve(ref); ok {
+			return o.ID
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(ref))
+}
+
 // orgAdminOrgs returns the org ids a principal administers (an active allow
-// org-admin/super-admin binding at org scope). Used to let an org-admin manage
-// users/tenants within its org without being the platform owner.
+// org-admin/super-admin binding at org scope), canonicalized to opaque org ids.
+// Used to let an org-admin manage users/tenants within its org without being the
+// platform owner.
 func (s *server) orgAdminOrgs(principalID string) []string {
 	if s.bindings == nil {
 		return nil
@@ -120,7 +143,7 @@ func (s *server) orgAdminOrgs(principalID string) []string {
 			continue
 		}
 		if st, slug := parseScope(b.ScopeID); st == scopeTypeOrg && isOrgManagerRole(b.RoleID) {
-			set[slug] = true
+			set[s.canonicalOrgID(slug)] = true
 		}
 	}
 	out := make([]string, 0, len(set))
@@ -182,9 +205,10 @@ func (s *server) handleMyScopes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"scopes": scopes, "all_tenants": all})
 }
 
-// isOrgAdminOf reports whether the principal administers the given org.
+// isOrgAdminOf reports whether the principal administers the given org. The org
+// reference (id or slug) is canonicalized so a slug and its opaque id match.
 func (s *server) isOrgAdminOf(principalID, orgID string) bool {
-	orgID = strings.ToLower(strings.TrimSpace(orgID))
+	orgID = s.canonicalOrgID(orgID)
 	for _, o := range s.orgAdminOrgs(principalID) {
 		if o == orgID {
 			return true
