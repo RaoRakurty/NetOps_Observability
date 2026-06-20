@@ -116,3 +116,34 @@ func TestToViewAndCoverage(t *testing.T) {
 		t.Errorf("coverage: %+v", c)
 	}
 }
+
+// TestEnrichLive: live overlay sets node health from alerts (critical wins),
+// OK for a fresh no-alert node, UNKNOWN for a stale no-alert node, + cpu/mem metrics.
+func TestEnrichLive(t *testing.T) {
+	now := time.Now()
+	g := GraphRecords{Nodes: []NodeRecord{
+		{ID: "crit", LastSeen: now},                 // has a critical alert
+		{ID: "warn", LastSeen: now},                 // has a warning alert
+		{ID: "ok", LastSeen: now},                   // fresh, no alert
+		{ID: "staleq", Stale: true, LastSeen: now},  // stale, no alert
+	}}
+	v := g.ToView("a", now)
+	v.EnrichLive(map[string][]AlertFact{
+		"crit": {{Severity: "critical"}},
+		"warn": {{Severity: "warning"}},
+	}, map[string]float64{"crit": 91.5}, map[string]float64{"crit": 40})
+
+	want := map[string]string{"crit": HealthCritical, "warn": HealthWarning, "ok": HealthOK, "staleq": HealthUnknown}
+	for _, n := range v.Nodes {
+		if n.Health != want[n.ID] {
+			t.Errorf("node %s health=%q, want %q", n.ID, n.Health, want[n.ID])
+		}
+	}
+	for _, n := range v.Nodes {
+		if n.ID == "crit" {
+			if n.Metrics["cpu_pct"] != 91.5 || n.Metrics["mem_pct"] != 40 || n.Metrics["alert_count"] != 1 {
+				t.Errorf("crit metrics: %+v", n.Metrics)
+			}
+		}
+	}
+}

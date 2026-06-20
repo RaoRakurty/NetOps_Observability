@@ -41,5 +41,48 @@ func (s *server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, topologyGraphResponse{View: snap.ToView(tenant, now), Coverage: snap.Summarize()})
+	view := snap.ToView(tenant, now)
+
+	// Live enrichment: overlay current health/util onto the structural spine, from
+	// the SAME signals /view uses. The persisted first_seen/last_seen/stale (already
+	// in the view) is kept; only Health/Metrics/Status/Utilization are filled.
+	alertsByDevice := s.activeAlertsByDevice(claims)
+	lm := s.gatherTopoMetrics(r.Context())
+	view.EnrichLive(alertsByDevice, lm.cpu, lm.mem)
+	for i := range view.Edges {
+		e := &view.Edges[i]
+		util, hasUtil, status := resolveLinkMetricBy(e.Source, e.SourcePort, e.Target, e.TargetPort, lm.operStatus, lm.inUtil, lm.outUtil)
+		if status != "" {
+			e.Status = status
+		}
+		if hasUtil {
+			e.Utilization = util
+		}
+	}
+
+	writeJSON(w, http.StatusOK, topologyGraphResponse{View: view, Coverage: snap.Summarize()})
+}
+
+// activeAlertsByDevice returns the caller's visible active alerts grouped by device
+// id (the input EnrichLive needs). Scoped exactly like /api/alerts and /view: a
+// non-cross caller sees only its tenant's devices' alerts.
+func (s *server) activeAlertsByDevice(claims jwtClaims) map[string][]topology.AlertFact {
+	out := map[string][]topology.AlertFact{}
+	if s.alerts == nil {
+		return out
+	}
+	alerts := s.alerts.Active()
+	ids, cross := s.visibleDeviceIDs(claims)
+	for _, a := range alerts {
+		if a.DeviceID == "" {
+			continue // device-less (stack-level) alerts don't bind to a node
+		}
+		if !cross && !ids[a.DeviceID] {
+			continue
+		}
+		out[a.DeviceID] = append(out[a.DeviceID], topology.AlertFact{
+			DeviceID: a.DeviceID, Severity: a.Severity, Summary: a.Summary, FiredAt: a.FiredAt,
+		})
+	}
+	return out
 }

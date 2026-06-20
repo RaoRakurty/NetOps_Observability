@@ -289,25 +289,31 @@ func hasToken(name, tok string) bool {
 //   - never seen / stale with no alert → unknown (we won't claim "ok" blind)
 func deviceHealth(d DeviceFact, alerts []AlertFact, now time.Time, staleAfter time.Duration) (health, change string) {
 	change = changeState(d.LastSeen, now, staleAfter)
-
-	worst := ""
-	for _, a := range alerts {
-		switch strings.ToLower(a.Severity) {
-		case "critical", "major", "crit", "emergency":
-			worst = HealthCritical
-		case "warning", "minor", "warn":
-			if worst != HealthCritical {
-				worst = HealthWarning
-			}
-		}
-	}
-	if worst != "" {
+	if worst := AlertSeverityHealth(alerts); worst != "" {
 		return worst, change
 	}
 	if d.LastSeen.IsZero() || change == ChangeStale {
 		return HealthUnknown, change
 	}
 	return HealthOK, change
+}
+
+// AlertSeverityHealth returns the worst node-health implied by a device's active
+// alerts — HealthCritical for any critical/major, else HealthWarning for any
+// warning/minor, else "" (no alert raises health). Shared by the live projection
+// (deviceHealth) and the persisted-graph live enrichment (EnrichLive) so the rule
+// can't drift between the two surfaces.
+func AlertSeverityHealth(alerts []AlertFact) string {
+	worst := ""
+	for _, a := range alerts {
+		switch strings.ToLower(a.Severity) {
+		case "critical", "major", "crit", "emergency":
+			return HealthCritical
+		case "warning", "minor", "warn":
+			worst = HealthWarning
+		}
+	}
+	return worst
 }
 
 func deviceMetrics(d DeviceFact, links, alerts int) map[string]float64 {

@@ -308,6 +308,36 @@ func (g GraphRecords) ToView(tenant string, now time.Time) View {
 	return v
 }
 
+// EnrichLive overlays live signals onto a structural persisted view (the output of
+// ToView): per-node Health from active alerts — using the SAME rule as the live
+// projection (AlertSeverityHealth) — falling back to OK for a fresh node with no
+// alert or UNKNOWN for a stale one, plus cpu/mem/alert_count metrics. Edges are
+// enriched separately by the package-main handler (interface-keyed link metrics
+// need the vendor-ifname canonicalization that lives there). Pure + tested; the
+// caller gathers the tenant-scoped signals.
+func (v *View) EnrichLive(alertsByDevice map[string][]AlertFact, cpu, mem map[string]float64) {
+	for i := range v.Nodes {
+		n := &v.Nodes[i]
+		al := alertsByDevice[n.ID]
+		switch {
+		case AlertSeverityHealth(al) != "":
+			n.Health = AlertSeverityHealth(al)
+		case n.ChangeState == ChangeStale:
+			n.Health = HealthUnknown
+		default:
+			n.Health = HealthOK
+		}
+		m := map[string]float64{"alert_count": float64(len(al))}
+		if c, ok := cpu[n.ID]; ok {
+			m["cpu_pct"] = c
+		}
+		if mm, ok := mem[n.ID]; ok {
+			m["mem_pct"] = mm
+		}
+		n.Metrics = m
+	}
+}
+
 func orUnresolved(k string) string {
 	if k == "" {
 		return KindUnresolved

@@ -58,6 +58,34 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []to
 	return normalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 }
 
+// topoMetrics is the live signal bundle the topology surfaces overlay: device
+// CPU/mem (by device id) and per-interface oper-status + in/out utilization (by
+// canonical (device, ifName)). Empty maps when VictoriaMetrics is unreachable, so
+// callers degrade to honest "unknown" rather than fabricating health.
+type topoMetrics struct {
+	cpu, mem                    map[string]float64
+	operStatus, inUtil, outUtil map[[2]string]float64
+}
+
+// gatherTopoMetrics fetches the live metric bundle shared by /api/topology/view and
+// /api/topology/graph. Status comes from ifOperStatus (1=up, else down); util is
+// the busier direction as a fraction of ifSpeed (rate(octets)*8 / speed_mbps*1e6).
+// Interface keys are re-canonicalized so abbreviated LLDP/CDP port-ids ("Et1")
+// match full SNMP ifNames ("Ethernet1").
+func (s *server) gatherTopoMetrics(ctx context.Context) topoMetrics {
+	mctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	cpu, _ := s.qVecBy(mctx, `max by (device) (device_cpu_percent)`, "device")
+	mem, _ := s.qVecBy(mctx, `max by (device) (device_mem_percent)`, "device")
+	return topoMetrics{
+		cpu:        cpu,
+		mem:        mem,
+		operStatus: canonIfaceMap(s.qVecBy2(mctx, `max by (device, interface) (device_if_oper_status)`, "device", "interface")),
+		inUtil:     canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")),
+		outUtil:    canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")),
+	}
+}
+
 func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
@@ -87,25 +115,9 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		alerts = filtered
 	}
 
-	// ── device CPU/mem (best-effort; empty when VictoriaMetrics is unreachable) ──
-	mctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-	cpu, _ := s.qVecBy(mctx, `max by (device) (device_cpu_percent)`, "device")
-	mem, _ := s.qVecBy(mctx, `max by (device) (device_mem_percent)`, "device")
-
-	// ── per-interface link metrics (best-effort): oper status + utilization ──
-	// Keyed by (device, interface=ifName). Status comes from ifOperStatus
-	// (1=up, others=down). Utilization is the link's busier direction as a
-	// fraction of ifSpeed — the same canonical formula the health scorer uses
-	// (rate(octets)*8 / speed_mbps*1e6). Left nil when VictoriaMetrics is
-	// unreachable so edges stay honestly "unknown" rather than fabricated.
-	// Re-key by (device, canonIface(ifName)) so abbreviated LLDP/CDP port-ids
-	// (e.g. "Et1") match full SNMP ifNames ("Ethernet1") on lookup.
-	operStatus := canonIfaceMap(s.qVecBy2(mctx, `max by (device, interface) (device_if_oper_status)`, "device", "interface"))
-	inUtil := canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface"))
-	outUtil := canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface"))
-
-	linkFacts := toLinkFacts(links, operStatus, inUtil, outUtil)
+	// ── live device + link metrics (best-effort; same source /graph enrichment uses) ──
+	lm := s.gatherTopoMetrics(r.Context())
+	linkFacts := toLinkFacts(links, lm.operStatus, lm.inUtil, lm.outUtil)
 
 	// Executive geo is a SITE-level projection: it aggregates the same evidence-
 	// bearing device links into WAN circuits between SoT-placed sites. It needs
@@ -121,7 +133,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		Now:      time.Now(),
 		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
 		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
-		Devices:  toDeviceFacts(devs, cpu, mem),
+		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem),
 		Links:    linkFacts,
 		Alerts:   toAlertFacts(alerts),
 	}
@@ -244,8 +256,15 @@ func toLinkFacts(links []topoLink, operStatus, inUtil, outUtil map[[2]string]flo
 //     projection) when no endpoint reported oper-status. An unresolved target
 //     ("ext:<sysname>") carries no metrics, so only the local side contributes.
 func resolveLinkMetric(l topoLink, operStatus, inUtil, outUtil map[[2]string]float64) (util float64, hasUtil bool, status string) {
-	src := [2]string{l.Source, canonIface(l.LocalPort)}
-	dst := [2]string{l.Target, canonIface(l.RemotePort)}
+	return resolveLinkMetricBy(l.Source, l.LocalPort, l.Target, l.RemotePort, operStatus, inUtil, outUtil)
+}
+
+// resolveLinkMetricBy is the endpoint-keyed core of resolveLinkMetric, so callers
+// holding source/target + ports (the persisted /graph edges) reuse the exact same
+// honesty rules without reconstructing a topoLink.
+func resolveLinkMetricBy(srcDev, srcPort, tgtDev, tgtPort string, operStatus, inUtil, outUtil map[[2]string]float64) (util float64, hasUtil bool, status string) {
+	src := [2]string{srcDev, canonIface(srcPort)}
+	dst := [2]string{tgtDev, canonIface(tgtPort)}
 
 	for _, m := range []map[[2]string]float64{inUtil, outUtil} {
 		for _, k := range [][2]string{src, dst} {
