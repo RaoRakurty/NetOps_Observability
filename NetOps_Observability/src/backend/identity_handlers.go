@@ -409,17 +409,25 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			OperatorRestricted *bool   `json:"operator_restricted"`
 			Region             *string `json:"region"`
+			Status             *string `json:"status"` // active | suspended (lifecycle)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if req.OperatorRestricted == nil && req.Region == nil {
+		if req.OperatorRestricted == nil && req.Region == nil && req.Status == nil {
 			writeError(w, http.StatusBadRequest, errors.New("no updatable field provided"))
 			return
 		}
 		var t Tenant
 		var err error
+		if req.Status != nil {
+			if t, err = s.tenants.SetStatus(id, *req.Status); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logWarn("tenants", "lifecycle status changed", map[string]any{"tenant_id": id, "status": *req.Status})
+		}
 		if req.Region != nil {
 			if t, err = s.tenants.SetRegion(id, *req.Region); err != nil {
 				writeError(w, http.StatusBadRequest, err)

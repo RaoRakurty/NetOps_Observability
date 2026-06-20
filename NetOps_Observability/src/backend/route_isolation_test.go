@@ -154,6 +154,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/exports/policy":         "platform",
 	"/api/breakglass":             "platform",
 	"/api/breakglass/":            "platform",
+	"/api/onboard":                "platform",
 	"/api/discovery/refresh":      "platform",
 	"/api/integrations/reconcile": "platform",
 

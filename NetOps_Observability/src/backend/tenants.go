@@ -198,6 +198,32 @@ func (s *tenantStore) SetOperatorRestricted(ref string, restricted bool) (Tenant
 	return t, nil
 }
 
+// SetStatus changes a tenant's lifecycle state (active|suspended). The global
+// tenant is the platform realm and can never be suspended. Resolves id-or-slug.
+func (s *tenantStore) SetStatus(ref, status string) (Tenant, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case TenantStatusActive, TenantStatusSuspended:
+	default:
+		return Tenant{}, errors.New("status must be active or suspended")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.resolveLocked(ref)
+	if !ok {
+		return Tenant{}, errors.New("tenant not found")
+	}
+	if t.ID == TenantGlobal {
+		return Tenant{}, errors.New("the global tenant cannot be suspended")
+	}
+	t.Status = status
+	s.tenants[t.ID] = t
+	if err := s.flushLocked(); err != nil {
+		return Tenant{}, err
+	}
+	return t, nil
+}
+
 // Create makes a new tenant. The id is an OPAQUE, IMMUTABLE, cryptographically-
 // random key (mintTenantID) — never derived from the name/slug, so the security
 // boundary is stable across renames and not guessable. The slug is a human handle:

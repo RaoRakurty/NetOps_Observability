@@ -663,6 +663,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tenants/", s.handleTenantByID)
 	mux.HandleFunc("/api/orgs", s.handleOrgs)
 	mux.HandleFunc("/api/orgs/", s.handleOrgByID)
+	mux.HandleFunc("/api/onboard", s.handleOnboard) // operator: org + first tenant (+SSO) in one audited step
 	mux.HandleFunc("/api/regions", s.handleRegions)
 	mux.HandleFunc("/api/regions/topology", s.handleRegionTopology)
 	mux.HandleFunc("/api/bindings", s.handleBindings)

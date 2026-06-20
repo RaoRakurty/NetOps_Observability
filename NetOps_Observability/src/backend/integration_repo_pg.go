@@ -15,7 +15,7 @@ import (
 // (migration 0006): the external<->internal correlation index + ordering
 // watermark (integration_mappings) and the 3-level-idempotent event ledger
 // (integration_events). Additive; wired by the inbound worker in P2. Modeled on
-// incidents_pg.go (withTenant binds app.current_tenant; system writes run at
+// incidents_pg.go (withTenant binds app.tenant_id; system writes run at
 // platform scope '*' and stamp tenant_id, which RLS WITH CHECK permits).
 
 type integrationStore struct {

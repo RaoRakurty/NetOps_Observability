@@ -1421,6 +1421,15 @@ export const api = {
   // Compliance: toggle whether the platform operator may view this tenant's telemetry.
   setTenantOperatorRestricted: (id: string, restricted: boolean) =>
     request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ operator_restricted: restricted }) }),
+  // Lifecycle: suspend (block sign-in) or reactivate a tenant.
+  setTenantStatus: (id: string, status: "active" | "suspended") =>
+    request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  // Operator one-step onboard: create an org + its first tenant (+optional SSO) in
+  // one audited call (platform-owner only). Slugs optional (derived from names).
+  onboardCustomer: (req: {
+    org_name: string; org_slug?: string; home_region?: string; sso_connection?: string;
+    tenant_name: string; tenant_slug?: string; isolation_mode?: string; operator_restricted?: boolean;
+  }) => request<{ org: Org; tenant: Tenant }>("/api/onboard", { method: "POST", body: JSON.stringify(req) }),
 
   // ---------- Organizations (the account layer above tenants) ----------
   listOrgs: () => request<Org[]>("/api/orgs"),
@@ -1672,6 +1681,7 @@ export type Tenant = {
   org_id?: string; // the organization this tenant belongs to (blank = Global)
   region?: string; // data-residency region (blank = inherit org home_region)
   operator_restricted?: boolean; // compliance: operator may NOT view this tenant's telemetry
+  status?: "active" | "suspended"; // lifecycle: a suspended tenant's users cannot sign in
   created_at?: string;
 };
 export type DataPlane = { region: string; local: boolean; clickhouse?: string; opensearch?: string; victoria_metrics?: string; kafka?: string };

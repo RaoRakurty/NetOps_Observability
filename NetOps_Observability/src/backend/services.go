@@ -221,7 +221,7 @@ func (st *pgServiceStore) AddSelector(ctx context.Context, tenant string, cross 
 			return e
 		}
 		row := tx.QueryRow(ctx, `INSERT INTO service_selectors (tenant_id, service_id, version, spec, created_by)
-              VALUES (current_setting('app.current_tenant', true), $1,
+              VALUES (current_setting('app.tenant_id', true), $1,
                       (SELECT coalesce(max(version),0)+1 FROM service_selectors WHERE service_id = $1), $2, $3)
               RETURNING version, effective_from, created_at`, serviceID, specJSON, createdBy)
 		return row.Scan(&sel.Version, &sel.EffectiveFrom, &sel.CreatedAt)
@@ -265,7 +265,7 @@ func (st *pgServiceStore) AddBinding(ctx context.Context, tenant string, cross b
 			return e
 		}
 		row := tx.QueryRow(ctx, `INSERT INTO service_bindings (binding_id, tenant_id, service_id, kind, ref)
-              VALUES ($1, current_setting('app.current_tenant', true), $2, $3, $4) RETURNING created_at`,
+              VALUES ($1, current_setting('app.tenant_id', true), $2, $3, $4) RETURNING created_at`,
 			id, serviceID, kind, ref)
 		return row.Scan(&b.CreatedAt)
 	})

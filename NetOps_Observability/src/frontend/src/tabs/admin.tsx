@@ -539,6 +539,12 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
     if (hide && !window.confirm(`Hide "${t.name}" from the global view?\n\nGlobal/platform-level users will no longer see this tenant's logs, flows, findings or metrics. The tenant's own users are unaffected. Use this for data-privacy / compliance.`)) return;
     try { await api.setTenantOperatorRestricted(t.id, hide); reload(); } catch (e) { setErr((e as Error).message); }
   };
+  const toggleStatus = async (t: Tenant) => {
+    setErr(null);
+    const suspend = (t.status || "active") !== "suspended";
+    if (suspend && !window.confirm(`Suspend "${t.name}"?\n\nIts users (and API keys) will be unable to sign in or make requests until you reactivate it. The platform operator is unaffected.`)) return;
+    try { await api.setTenantStatus(t.id, suspend ? "suspended" : "active"); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+  };
 
   const list = (tenants ?? []).filter((t) => !orgId || (t.org_id || "global") === orgId);
   return (
@@ -600,6 +606,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
               <tr>
                 <th>Tenant</th>
                 <th>Type</th>
+                <th>Status</th>
                 <th>Organization</th>
                 <th>Region</th>
                 <th>Global visibility</th>
@@ -613,11 +620,19 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                 const isParent = t.id === "global";
                 return (
                   <tr key={t.id}>
-                    <td style={{ fontWeight: 600 }}>{t.name}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {t.name}
+                      <div className="mini-meta" style={{ fontFamily: "var(--mono, monospace)" }} title={t.id}>{t.slug}</div>
+                    </td>
                     <td>
                       <span className={`badge ${isParent ? "accent" : ""}`}>
                         {isParent ? "Parent Tenant" : "Child Tenant"}
                       </span>
+                    </td>
+                    <td>
+                      {!isParent && (t.status || "active") === "suspended"
+                        ? <span className="badge bad">Suspended</span>
+                        : <span className="badge good">Active</span>}
                     </td>
                     <td style={{ color: "var(--muted)", fontSize: 12 }}>{orgName(t.org_id)}</td>
                     <td>
@@ -660,6 +675,11 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                       )}
                       {!isParent && onManageTenant && (
                         <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageTenant(t.id, t.name)}>Manage →</button>
+                      )}
+                      {!isParent && (
+                        <button className="dash-btn" style={{ marginRight: 6 }} onClick={() => toggleStatus(t)} title={(t.status || "active") === "suspended" ? "Reactivate this tenant" : "Suspend this tenant (block its users' sign-in)"}>
+                          {(t.status || "active") === "suspended" ? "Reactivate" : "Suspend"}
+                        </button>
                       )}
                       {!isParent && <button className="dash-btn" onClick={() => openDelete(t)}>Delete</button>}
                     </td>
@@ -772,6 +792,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
   const [note, setNote] = useState("");
   const [edit, setEdit] = useState<Org | null>(null);
   const [adding, setAdding] = useState(false); // create form is hidden until clicked
+  const [onboarding, setOnboarding] = useState(false); // one-step customer onboarding wizard
 
   const regionLabel = (id: string) => (regions ?? []).find((r) => r.id === id)?.label || id;
   const tenantCount = (orgId: string) =>
@@ -801,7 +822,12 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
     <>
       <div className="admin-head-row">
         <AdminHead title="Organizations" sub="Top-level accounts. Each organization has a home data region and sign-in, inherited by the tenants inside it." />
-        {!adding && <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create organization</button>}
+        {!adding && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="dash-btn" onClick={() => { setOnboarding(true); setErr(null); }}>＋ Onboard customer</button>
+            <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create organization</button>
+          </div>
+        )}
       </div>
       <StatStrip>
         <Stat label="Organizations" value={orgs ? list.length : <Skeleton w={26} h={22} />} />
@@ -873,6 +899,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
                         ? <button className="ia-linkname" onClick={() => onManageOrg(o.id, o.name)}>{o.name}</button>
                         : o.name}
                       {isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Parent Organization</span>}
+                      <div className="mini-meta" style={{ fontFamily: "var(--mono, monospace)" }} title={o.id}>{o.slug}</div>
                     </td>
                     <td><span className="badge">{regionLabel(o.home_region)}</span></td>
                     <td style={{ color: "var(--muted)" }}>{isRoot ? "—" : memberCount(o.id)}</td>
@@ -900,7 +927,87 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
           onSaved={() => { setEdit(null); reload(); }}
         />
       )}
+      {onboarding && (
+        <OnboardWizard
+          regions={regions ?? []}
+          onClose={() => setOnboarding(false)}
+          onDone={() => { setOnboarding(false); reload(); }}
+        />
+      )}
     </>
+  );
+}
+
+// OnboardWizard is the operator one-step "Onboard customer" flow: it creates the
+// organization AND its first tenant (the data boundary) in a single audited call
+// (POST /api/onboard), so a customer is never left as a tenant-less org. Slugs are
+// optional (derived from the names server-side); ids are minted opaque.
+function OnboardWizard({ regions, onClose, onDone }: { regions: Region[]; onClose: () => void; onDone: () => void }) {
+  const [orgName, setOrgName] = useState("");
+  const [region, setRegion] = useState("");
+  const [sso, setSso] = useState("");
+  const [tenantName, setTenantName] = useState("");
+  const [restricted, setRestricted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<{ org: Org; tenant: Tenant } | null>(null);
+
+  const submit = async () => {
+    if (!orgName.trim() || !tenantName.trim() || !region) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await api.onboardCustomer({
+        org_name: orgName.trim(), home_region: region, sso_connection: sso.trim(),
+        tenant_name: tenantName.trim(), operator_restricted: restricted,
+      });
+      setDone(res);
+    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="Onboard customer" subtitle="Create an organization and its first tenant in one step" onClose={onClose}>
+      {done ? (
+        <div className="admin-form" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
+          <div className="empty" style={{ textAlign: "left" }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>✓ {done.org.name} onboarded</div>
+            <div className="mini-meta">Organization <b>{done.org.slug}</b> <span style={{ fontFamily: "var(--mono, monospace)" }}>({done.org.id})</span></div>
+            <div className="mini-meta">First tenant <b>{done.tenant.slug}</b> <span style={{ fontFamily: "var(--mono, monospace)" }}>({done.tenant.id})</span></div>
+          </div>
+          <button className="dash-btn accent" onClick={onDone}>Done</button>
+        </div>
+      ) : (
+        <div className="admin-form" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
+          <ErrLine msg={err} />
+          <label className="req-field"><span>Organization name <Req /></span>
+            <input autoFocus placeholder="e.g. Acme Corp" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+          </label>
+          <label className="req-field"><span>Data region <Req /></span>
+            <select value={region} onChange={(e) => setRegion(e.target.value)}>
+              <option value="">Select region…</option>
+              {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </label>
+          <label><span>Sign-in connection</span>
+            <input placeholder="optional SSO connection" value={sso} onChange={(e) => setSso(e.target.value)} />
+          </label>
+          <label className="req-field"><span>First tenant name <Req /></span>
+            <input placeholder="e.g. Acme Production" value={tenantName} onChange={(e) => setTenantName(e.target.value)} />
+          </label>
+          <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={restricted} onChange={(e) => setRestricted(e.target.checked)} style={{ width: "auto" }} />
+            <span>Hide this tenant's telemetry from the platform operator (compliance)</span>
+          </label>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button className="dash-btn" onClick={onClose}>Cancel</button>
+            <button className="dash-btn accent" disabled={busy || !orgName.trim() || !tenantName.trim() || !region} onClick={submit}>
+              {busy ? "Onboarding…" : "Onboard"}
+            </button>
+          </div>
+          <RequiredLegend />
+        </div>
+      )}
+    </Modal>
   );
 }
 

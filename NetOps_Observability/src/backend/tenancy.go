@@ -31,6 +31,23 @@ func isPlatformOwner(c jwtClaims) bool {
 	return isSuperAdminRole(c.Role) && (t == "" || t == TenantGlobal)
 }
 
+// tenantSuspended reports whether the principal's tenant is suspended (deny-by-
+// default lifecycle). The platform owner / global realm is never suspended, so the
+// operator can always reach a suspended tenant to reactivate it. A principal whose
+// tenant no longer resolves is NOT treated as suspended here (other gates handle
+// missing tenants); this answers only "is this caller's live tenant suspended?".
+func (s *server) tenantSuspended(c jwtClaims) bool {
+	if s.tenants == nil || isPlatformOwner(c) {
+		return false
+	}
+	tenant := strings.ToLower(strings.TrimSpace(c.Tenant))
+	if tenant == "" || tenant == TenantGlobal {
+		return false
+	}
+	t, ok := s.tenants.Get(tenant)
+	return ok && t.status() == TenantStatusSuspended
+}
+
 // principalTenant resolves the caller's tenant id and whether they may read
 // across all tenants. crossTenant is true ONLY for the platform owner with no
 // active "view as tenant" override.

@@ -152,6 +152,16 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
 		return
 	}
+	// A SUSPENDED tenant blocks its users from signing in (deny-by-default tenant
+	// lifecycle). The platform owner / global realm is never suspendable, so the
+	// operator can never lock itself out.
+	if user.TenantID != "" && user.TenantID != TenantGlobal && s.tenants != nil {
+		if t, ok := s.tenants.Get(user.TenantID); ok && t.status() == TenantStatusSuspended {
+			logWarn("auth", "login refused: tenant suspended", map[string]any{"user": user.Username, "tenant_id": t.ID})
+			writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+			return
+		}
+	}
 	// SR-029: opportunistically upgrade a hash stored at a weaker iteration count
 	// to the current cost. Best-effort — never fail the login if rehash fails.
 	if passwordNeedsRehash(user.PasswordHash) {
@@ -687,6 +697,11 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				Tenant: k.TenantID,
 				Scopes: k.Scopes,
 			}
+			// A suspended tenant's API keys stop working too (deny-by-default).
+			if s.tenantSuspended(claims) {
+				writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+				return
+			}
 			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -708,6 +723,12 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			// return early above and never reach here.
 			if u, ok := s.users.Get(claims.Sub); !ok || u.Status == "disabled" {
 				writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
+				return
+			}
+			// Instant tenant suspension: a suspended tenant loses access immediately,
+			// not only when its access tokens expire (mirrors the disabled-user check).
+			if s.tenantSuspended(claims) {
+				writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
 				return
 			}
 			// Instant session revocation: if the token carries a session id, the
