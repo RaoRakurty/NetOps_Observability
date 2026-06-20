@@ -33,9 +33,12 @@ type netboxConfig struct {
 	//             mirror; it is NEVER read back as a device source, so synced
 	//             devices can't reappear in the inventory). Building inventory
 	//             from scratch off SNMP discovery.
-	//   "read"  — NetBox → platform only (NetBox is the authoritative intent
-	//             SoT; the reconciler does not push discovered devices up).
-	//   "both"  — bidirectional (read intent + reconcile discoveries up).
+	//   "read"  — NetBox → platform only: NetBox-declared devices are pulled in
+	//             ALONGSIDE SNMP-discovered ones; the reconciler does not push
+	//             discovered devices up. NetBox is a connector here, NOT the
+	//             authority — the platform's own inventory stays the source of
+	//             truth (see activeSoT).
+	//   "both"  — bidirectional (pull NetBox devices in + reconcile discoveries up).
 	// Empty normalizes to "none" (see netboxDirection).
 	Direction string `json:"direction,omitempty"`
 	// Managed is derived (not persisted): true when the connection is the

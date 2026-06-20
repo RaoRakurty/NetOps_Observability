@@ -3,11 +3,14 @@ import { api, NetboxConfig, NetboxSyncStatus } from "../services/api";
 import Icon from "../components/Icon";
 import Wizard, { WizardStep } from "../components/Wizard";
 
-// Automation → Source of Truth. The system of record that feeds the device
-// inventory is bundled with and managed by the platform — it's embedded right
-// here (auto-logged-in, no separate console, no vendor branding). Operators
-// create sites/devices/IPs inline and discovery reconciles them into
-// Infrastructure → Devices. An external instance can be connected instead.
+// Automation → Source of Truth. NetBox here is an OPTIONAL automation connector,
+// NOT the authority over what the platform monitors: the source of truth is the
+// platform's own SNMP-discovered inventory (Infrastructure → Devices) plus the
+// internal sites store. This tab connects NetBox for record exchange — push
+// discovered devices up, and/or pull NetBox-declared devices in as additional
+// inventory entries. It never supersedes discovery, never drives placement/geo,
+// and never locks the in-app sites/placement editors. A bundled instance is
+// embedded (auto-logged-in); an external instance can be connected instead.
 
 type Status = { label: string; tone: "good" | "warn" | "" };
 
@@ -29,7 +32,7 @@ type Direction = "write" | "read" | "both" | "none";
 const DIRECTIONS: { v: Direction; label: string; help: string }[] = [
   { v: "none", label: "Off", help: "No automatic sync. The Source of Truth stays empty (and browsable) — discovery neither populates it nor reads from it. Best when you already run an external Source of Truth and will sync it through its own API. (Default)" },
   { v: "write", label: "Devices → Source of Truth", help: "One-way: devices discovered via SNMP (Infrastructure → Devices) are written into the Source of Truth. It becomes a downstream record and is never read back, so nothing is duplicated. Choose this to build the Source of Truth from scratch — SNMP discovery seeds it." },
-  { v: "read", label: "Source of Truth → Devices", help: "One-way: the Source of Truth is authoritative; its devices appear under Infrastructure → Devices. Discovery does not write anything back up." },
+  { v: "read", label: "Source of Truth → Devices", help: "One-way: NetBox-declared devices are pulled in and appear under Infrastructure → Devices alongside SNMP-discovered ones. Discovery does not write anything back up. (Pulled records are added to the inventory, not treated as the authority over it.)" },
   { v: "both", label: "Bidirectional", help: "Two-way: read Source-of-Truth devices in AND write discovered devices up. Records are de-duplicated by IP / serial / name." },
 ];
 
@@ -292,7 +295,8 @@ export default function SourceOfTruth() {
               {cfg?.managed && <span className="badge" style={{ fontSize: 10 }}>Built-in</span>}
             </div>
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              System of record for the device inventory — discovery reconciles it into Infrastructure → Devices.
+              Optional automation connector. Your SNMP-discovered inventory (Infrastructure → Devices) remains the
+              source of truth — this exchanges device records with NetBox, it doesn't replace discovery.
             </div>
           </div>
           <span className={`badge ${st.tone}`}>{st.label}</span>

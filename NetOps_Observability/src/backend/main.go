@@ -81,7 +81,6 @@ type server struct {
 	netboxCfg        *netboxConfigStore // NetBox source-of-truth discovery config
 	netboxSync       *netboxSyncer      // reconciles discovered devices INTO NetBox (write-through)
 	vulns            *vulnFeed          // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
-	geoSites         geoSiteCache       // memoized NetBox site list for /api/geomap
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().

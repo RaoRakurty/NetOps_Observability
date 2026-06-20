@@ -5,6 +5,32 @@
 
 ---
 
+## Amendment (2026-06-20): NetBox is automation-only; internal is ALWAYS the authority
+
+Owner decision refining the model: for the **observability plane** (device
+inventory, sites, geo/placement, drift) the authority is **always the internal
+provider** — the platform's own SNMP-discovered inventory (`Infrastructure →
+Devices`) plus the internal sites store. NetBox is an **optional automation
+connector** (Devices↔NetBox push/pull, `netbox_sync.go`); it **never** supersedes
+discovery, never drives placement/geo, never causes drift to flag discovered
+devices, and never locks the in-app sites/placement editors.
+
+Rationale: a customer connects NetBox *for automation*, but under the original
+"external configured wins" rule that silently hijacked the observability plane and
+turned the sites/placement UI read-only — backwards from "NetBox is optional and
+only for automation."
+
+Implementation: `activeSoT()` now unconditionally returns the internal provider
+(the `netboxProvider` SoT role + its DCIM geo fetch/cache were removed); the
+`SoTProvider` seam remains so a *future* external authority could be wired in
+explicitly (the declined "explicit toggle" option), but none is selected by
+default. The provider-agnostic drift seam (`evaluateCompliance(..., sotSource)`)
+is unchanged — internal reports `sotSource=""` → drift inactive (honest "the
+inventory is itself the source of truth"). Regression guard:
+`TestActiveSoTAlwaysInternal`.
+
+---
+
 ## Problem
 
 Today "Source of Truth" is hardwired to NetBox. NetBox supplies the *intent* the

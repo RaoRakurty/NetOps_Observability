@@ -56,13 +56,15 @@ type SoTProvider interface {
 	DeviceRecordSource() string
 }
 
-// activeSoT resolves the authority: an enabled+configured external provider wins,
-// otherwise the always-available internal provider. The internal provider is never
-// "off" — at worst it is empty, which the UI handles with its onboarding state.
+// activeSoT resolves the Source-of-Truth authority for the OBSERVABILITY plane
+// (inventory placement, sites, geo, drift). This is ALWAYS the internal provider:
+// the platform's own SNMP-discovered inventory + internal sites store ARE the
+// source of truth (owner decision 2026-06-20). NetBox, when connected, is an
+// AUTOMATION connector (Devices↔NetBox push/pull, see netbox_sync.go) — it never
+// supersedes the platform's inventory, never drifts it, and never locks the
+// placement UI read-only. The SoTProvider seam remains so a future external
+// authority could be wired here explicitly, but none is selected by default.
 func (s *server) activeSoT() SoTProvider {
-	if nb := (&netboxProvider{s: s}); nb.Configured() {
-		return nb
-	}
 	return &internalProvider{sites: s.sites, deviceSites: s.deviceSites}
 }
 
@@ -102,61 +104,6 @@ func (p *internalProvider) Sites(_ context.Context, tenant string, cross bool) (
 	return out, nil
 }
 
-// ── netbox provider: wraps the existing fetch + cache (OPTIONAL, external) ───────
-
-type netboxProvider struct {
-	s *server
-}
-
-func (p *netboxProvider) Name() string { return "netbox" }
-
-func (p *netboxProvider) Configured() bool {
-	if p.s == nil || p.s.netboxCfg == nil {
-		return false
-	}
-	cfg := p.s.netboxCfg.effective()
-	return cfg.Enabled && cfg.URL != "" && cfg.Token != ""
-}
-
-// NetBox is a single shared external instance; its site list is not tenant-tagged,
-// so tenant/cross are accepted for interface parity but not used to filter here
-// (device counts ARE tenant-scoped downstream via visibleDevices). Per-tenant
-// external SoT isolation is a future provider concern.
-func (p *netboxProvider) Sites(ctx context.Context, _ string, _ bool) ([]SoTSite, error) {
-	sites, _, err := p.fetch(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]SoTSite, 0, len(sites))
-	for _, nb := range sites {
-		if nb.Slug == "" {
-			continue
-		}
-		s := SoTSite{Slug: nb.Slug, Name: nb.Name, Source: "netbox"}
-		if nb.Status != nil {
-			s.Status = nb.Status.Value
-		}
-		if nb.Latitude != nil && nb.Longitude != nil {
-			s.Lat, s.Lng, s.HasCoords = *nb.Latitude, *nb.Longitude, true
-		}
-		out = append(out, s)
-	}
-	return out, nil
-}
-
-func (p *netboxProvider) DeviceSites(ctx context.Context, _ string, _ bool) (map[string]string, error) {
-	_, assign, err := p.fetch(ctx)
-	return assign, err
-}
-
-// DeviceRecordSource is "netbox" only when NetBox device records are actually
-// READ BACK into the inventory (direction read/both). In write-only or no-sync
-// mode NetBox is never read as a device source, so the inventory holds no
-// "netbox"-sourced records — returning "" keeps drift inactive instead of
-// flagging every observed device as "unregistered" against an empty SoT.
-func (p *netboxProvider) DeviceRecordSource() string {
-	if p.s == nil || p.s.netboxCfg == nil || !netboxReadsDevices(p.s.netboxCfg.effective()) {
-		return ""
-	}
-	return "netbox"
-}
+// NOTE: NetBox is intentionally NOT an SoT authority provider. It is an automation
+// connector only (netbox_sync.go). The placement/sites/geo/drift authority is the
+// internal provider above; see activeSoT.

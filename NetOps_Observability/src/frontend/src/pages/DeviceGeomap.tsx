@@ -221,12 +221,12 @@ function LocationsEditor({ onChanged }: { onChanged: () => void }) {
   );
 }
 
-// SitesManager — Infrastructure → Maps → "Sites": create and curate the internal
-// Source-of-Truth sites (name + status + WGS-84 coordinates). This is the editable
-// data behind the DEFAULT (internal) SoT provider — declare a site here, then give
-// devices a `site` label matching its slug and they roll up into its map bubble.
-// When an external SoT (NetBox) is the active authority the list is READ-ONLY: its
-// sites are managed in that console, so we show them but disable editing here.
+// SitesManager — Infrastructure → Maps → "Sites": create and curate the platform's
+// own Source-of-Truth sites (name + status + WGS-84 coordinates). The platform's
+// inventory + these sites ARE the source of truth, so this is always editable —
+// declare a site here, then assign devices to it (Devices → Site, or the `site`
+// label) and they roll up into its map bubble. NetBox, when connected, is an
+// automation connector and never takes this over (see Automation → Source of Truth).
 function SitesManager({ onChanged }: { onChanged: () => void }) {
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [active, setActive] = useState<string>("internal");
@@ -296,21 +296,14 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
     <div className="card">
       <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
         Sites
-        <span className="badge" style={{ fontSize: 10 }}>{editable ? "Internal source of truth" : `Managed by ${active}`}</span>
+        <span className="badge" style={{ fontSize: 10 }}>Source of truth</span>
       </h3>
-      {editable ? (
-        <p className="mini-meta">
-          Declare a site with decimal latitude/longitude (WGS 84). Give a device the <code>site</code> label matching the
-          site's slug (shown below) and it folds into that site's map bubble, inheriting these coordinates. Leave
-          coordinates blank to register a site that isn't yet on the map.
-        </p>
-      ) : (
-        <p className="mini-meta">
-          An external Source of Truth ({active}) is the active authority, so its sites are read-only here — manage them in
-          its console under <a className="board-empty-link" href="#/automation/sot">Automation → Source of Truth</a>. Turn the
-          external connector off to manage sites in the platform again.
-        </p>
-      )}
+      <p className="mini-meta">
+        Declare a site with decimal latitude/longitude (WGS 84). Assign a device to it from
+        Infrastructure → Devices (the <code>Site</code> column), or give it a <code>site</code> label matching the
+        site's slug (shown below), and it folds into that site's map bubble, inheriting these coordinates. Leave
+        coordinates blank to register a site that isn't yet on the map.
+      </p>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
       <table className="loc-editor">
         <thead><tr><th>Site</th><th>Slug</th><th>Status</th><th>Owner</th><th>Latitude</th><th>Longitude</th><th /></tr></thead>

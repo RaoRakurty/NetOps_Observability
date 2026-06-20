@@ -6,12 +6,15 @@ package main
 // data the platform already holds (no config pull yet; that's a later phase).
 //
 // The SoT is a ROLE, not a product (docs/design/sot-provider-model.md): drift
-// pairs against whichever provider is active. The provider declares the
-// Device.Source label its records carry via DeviceRecordSource() — "netbox" for an
-// external NetBox read back into the inventory, "" for the internal provider (the
-// inventory IS the authority, so there is nothing to drift device fields against).
-// Drift stays NetBox-agnostic: a future ServiceNow/Infoblox provider just reports
-// its own source label and the same pairing runs unchanged.
+// pairs against whichever provider is active. The active provider is the INTERNAL
+// one (the platform's own SNMP-discovered inventory IS the authority), so
+// DeviceRecordSource() returns "" → there are no separate declared records to
+// drift device fields against, and the check reports the honest "the inventory is
+// itself the source of truth" state rather than flagging discovered devices as
+// "unregistered". NetBox is an automation connector, NOT a drift authority. The
+// pairing stays provider-agnostic: if a future external authority were ever wired
+// into activeSoT it would report its own source label and the same logic runs
+// unchanged (evaluateCompliance takes the source as a parameter).
 //
 // Two check classes:
 //
@@ -149,7 +152,7 @@ func evaluateCompliance(
 		hasAddr    bool
 		cred       *SNMPCredential // first resolvable profile across records
 		credDev    models.Device
-		badCredRef string // a ref that matched no profile (only reported if no record resolved one)
+		badCredRef string             // a ref that matched no profile (only reported if no record resolved one)
 		osi        *collectors.OSInfo // first parseable OS across records
 		osiDev     models.Device
 		vendor     string

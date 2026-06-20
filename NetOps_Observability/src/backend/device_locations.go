@@ -301,39 +301,22 @@ func sotSiteFor(d models.Device, assign map[string]string) string {
 	return d.Labels["site"]
 }
 
-// geoAssignments returns the active provider's device→site map, SCOPED to the
-// (tenant, cross) principal: NetBox's assignment map when NetBox is the authority,
-// otherwise the internal operator bindings. Callers treat nil as "no explicit
-// assignment" and fall back to the device's inventory label.
+// geoAssignments returns the operator device→site bindings (the internal SoT
+// authority), SCOPED to the (tenant, cross) principal. Callers treat nil as "no
+// explicit assignment" and fall back to the device's inventory label.
 func (s *server) geoAssignments(tenant string, cross bool) map[string]string {
-	if nb := (&netboxProvider{s: s}); nb.Configured() {
-		s.geoSites.mu.Lock()
-		defer s.geoSites.mu.Unlock()
-		return s.geoSites.assign
-	}
 	if s.deviceSites == nil {
 		return nil
 	}
 	return s.deviceSites.Assignments(tenant, cross)
 }
 
-// geoSiteSlugs returns the slugs of SoT sites the geomap can actually render,
-// from the ACTIVE provider, SCOPED to the (tenant, cross) principal. A device
-// whose `site` label names a site the provider doesn't list (e.g. a label stamped
-// by a discovery source) is NOT SoT-placed — it must stay editable in the location
-// layer or it could never appear on the map.
+// geoSiteSlugs returns the slugs of internal SoT sites the geomap can actually
+// render, SCOPED to the (tenant, cross) principal. A device whose `site` label
+// names a site that isn't declared (e.g. a label stamped by a discovery source)
+// is NOT SoT-placed — it must stay editable in the location layer or it could
+// never appear on the map.
 func (s *server) geoSiteSlugs(tenant string, cross bool) map[string]bool {
-	if nb := (&netboxProvider{s: s}); nb.Configured() {
-		s.geoSites.mu.Lock()
-		defer s.geoSites.mu.Unlock()
-		out := make(map[string]bool, len(s.geoSites.sites))
-		for _, site := range s.geoSites.sites {
-			if site.Slug != "" {
-				out[site.Slug] = true
-			}
-		}
-		return out
-	}
 	out := map[string]bool{}
 	if s.sites == nil {
 		return out
