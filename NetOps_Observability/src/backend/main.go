@@ -701,8 +701,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/flows/fanout", s.handleFlowsFanout)
 	mux.HandleFunc("/api/probe/paths", s.handleProbePaths)
 	mux.HandleFunc("/api/geomap", s.handleGeomap)
-	mux.HandleFunc("/api/sites", s.handleSites)     // internal SoT sites: GET list / POST upsert
-	mux.HandleFunc("/api/sites/", s.handleSiteByID) // /api/sites/{slug}: PUT / DELETE
+	mux.HandleFunc("/api/sites", s.handleSites)          // internal SoT sites: GET list / POST upsert
+	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE
+	mux.HandleFunc("/api/sot/import", s.handleSoTImport) // external SoT one-way import (sites / device→site)
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
 	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)

@@ -97,6 +97,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/services/":              "scoped",
 	"/api/sites":                  "scoped",
 	"/api/sites/":                 "scoped",
+	"/api/sot/import":             "scoped",
 	"/api/snmp/credentials":       "scoped",
 	"/api/snmp/credentials/":      "scoped",
 	"/api/snmp/options":           "scoped",

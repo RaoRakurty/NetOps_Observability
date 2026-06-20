@@ -1167,6 +1167,11 @@ export const api = {
     request<SiteRow>(`/api/sites/${encodeURIComponent(slug)}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteSite: (slug: string) =>
     request<{ ok: boolean }>(`/api/sites/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+
+  // External SoT import — one-way file seed of sites / device→site into the
+  // internal SoT. dry_run (default true) returns a plan; dry_run:false applies.
+  importSot: (body: { kind: "sites" | "device_sites"; format: "csv" | "json" | "geojson"; data: string; dry_run?: boolean; overwrite?: boolean }) =>
+    request<ImportResult>("/api/sot/import", { method: "POST", body: JSON.stringify(body) }),
   flowsTimeseries: (sinceSeconds = 3600, stepSeconds = 60, type = "", filters?: FlowFilters) =>
     request<ClickHouseResponse>(
       `/api/flows/timeseries?since=${sinceSeconds}s&step=${stepSeconds}s${type ? `&type=${type}` : ""}${flowQS(filters)}`,
@@ -2087,6 +2092,10 @@ export type SiteRow = {
 };
 export type SitesResponse = { sites: SiteRow[]; active: "internal" | "netbox" | string };
 export type SiteInput = { slug?: string; name: string; status?: string; owner?: string; lat?: number; lng?: number };
+
+// External SoT import plan/result (POST /api/sot/import).
+export type ImportRowResult = { line: number; key: string; action: string; detail?: string };
+export type ImportResult = { kind: string; dry_run: boolean; summary: Record<string, number>; rows: ImportRowResult[] };
 export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };

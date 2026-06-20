@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { cssVar } from "../theme/tokens";
 import { registerMap } from "echarts/core";
-import { api, DeviceLocationRow, GeomapResponse, GeoSite, SiteRow } from "../services/api";
+import { api, DeviceLocationRow, GeomapResponse, GeoSite, SiteRow, ImportResult } from "../services/api";
 import { StatStrip, Stat, Segmented } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
@@ -234,6 +234,7 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [add, setAdd] = useState({ name: "", status: "", owner: "", lat: "", lng: "" });
   const [drafts, setDrafts] = useState<Record<string, { name: string; status: string; owner: string; lat: string; lng: string }>>({});
+  const [showImport, setShowImport] = useState(false);
 
   const load = async () => {
     try { const r = await api.sites(); setSites(r.sites); setActive(r.active || "internal"); setErr(null); }
@@ -297,13 +298,20 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
       <h3 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
         Sites
         <span className="badge" style={{ fontSize: 10 }}>Source of truth</span>
+        {editable && (
+          <button className="dash-btn" style={{ marginLeft: "auto" }} onClick={() => setShowImport((v) => !v)}>
+            {showImport ? "Close import" : "Import…"}
+          </button>
+        )}
       </h3>
       <p className="mini-meta">
         Declare a site with decimal latitude/longitude (WGS 84). Assign a device to it from
         Infrastructure → Devices (the <code>Site</code> column), or give it a <code>site</code> label matching the
         site's slug (shown below), and it folds into that site's map bubble, inheriting these coordinates. Leave
-        coordinates blank to register a site that isn't yet on the map.
+        coordinates blank to register a site that isn't yet on the map. Bulk-seed from an existing
+        system with <b>Import</b> — it adds intent only; live discovery stays authoritative.
       </p>
+      {editable && showImport && <ImportPanel onDone={() => { load(); onChanged(); }} />}
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
       <table className="loc-editor">
         <thead><tr><th>Site</th><th>Slug</th><th>Status</th><th>Owner</th><th>Latitude</th><th>Longitude</th><th /></tr></thead>
@@ -362,6 +370,116 @@ function SitesManager({ onChanged }: { onChanged: () => void }) {
           {sites.length === 0 && !editable && <tr><td colSpan={7} className="mini-meta">The external Source of Truth lists no sites.</td></tr>}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// Action → tone for the import plan chips/rows (honest: conflict & error stand out).
+const ACTION_TONE: Record<string, string> = {
+  create: "var(--good, #16a34a)", update: "var(--accent, #2563eb)",
+  conflict: "var(--warn, #d97706)", error: "var(--bad, #dc2626)",
+  skip: "var(--muted)", unchanged: "var(--muted)",
+};
+
+// ImportPanel — external SoT one-way import (Infrastructure → Maps → Sites).
+// Seeds the internal SoT from a CSV/JSON (or GeoJSON for sites) file. Dry-run
+// preview FIRST (create/update/skip/conflict counts), then an explicit Apply —
+// the live discovery inventory always stays authoritative; this only adds intent.
+function ImportPanel({ onDone }: { onDone: () => void }) {
+  const [kind, setKind] = useState<"sites" | "device_sites">("sites");
+  const [format, setFormat] = useState<"csv" | "json" | "geojson">("csv");
+  const [text, setText] = useState("");
+  const [overwrite, setOverwrite] = useState(false);
+  const [plan, setPlan] = useState<ImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // GeoJSON only makes sense for sites; fall back to CSV when switching to bindings.
+  const formats: ("csv" | "json" | "geojson")[] = kind === "sites" ? ["csv", "json", "geojson"] : ["csv", "json"];
+  const fmt = formats.includes(format) ? format : "csv";
+
+  const run = async (dry: boolean) => {
+    if (!text.trim()) { setErr("Paste or upload a file first."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.importSot({ kind, format: fmt, data: text, dry_run: dry, overwrite });
+      setPlan(r);
+      if (!dry) onDone();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const onFile = (f: File | undefined) => {
+    if (!f) return;
+    const ext = f.name.toLowerCase().split(".").pop();
+    if (ext === "csv" || ext === "json" || ext === "geojson") setFormat(ext as typeof format);
+    f.text().then((t) => { setText(t); setPlan(null); });
+  };
+
+  const hint = kind === "sites"
+    ? "Columns: name, slug (optional), status, owner, latitude, longitude. GeoJSON: a FeatureCollection of Point features (coordinates are [lng, lat])."
+    : "Columns: device (id, hostname, mgmt-IP or serial — matched against discovered devices) and site (slug).";
+
+  return (
+    <div className="card" style={{ background: "var(--surface-2, #f6f8fc)", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <strong style={{ fontSize: 13 }}>Import from a file</strong>
+        <span className="mini-meta">one-way seed · discovery stays authoritative</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "10px 0" }}>
+        <select className="form-input" value={kind} onChange={(e) => { setKind(e.target.value as typeof kind); setPlan(null); }} style={{ height: 30 }}>
+          <option value="sites">Sites</option>
+          <option value="device_sites">Device → site placement</option>
+        </select>
+        <select className="form-input" value={fmt} onChange={(e) => { setFormat(e.target.value as typeof format); setPlan(null); }} style={{ height: 30 }}>
+          {formats.map((f) => <option key={f} value={f}>{f.toUpperCase()}</option>)}
+        </select>
+        <input type="file" accept=".csv,.json,.geojson" onChange={(e) => onFile(e.target.files?.[0])} style={{ fontSize: 12 }} />
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <input type="checkbox" checked={overwrite} onChange={(e) => { setOverwrite(e.target.checked); setPlan(null); }} />
+          Overwrite existing (apply changes, not just new rows)
+        </label>
+      </div>
+      <p className="mini-meta" style={{ marginTop: 0 }}>{hint}</p>
+      <textarea
+        className="form-input" value={text} spellCheck={false}
+        onChange={(e) => { setText(e.target.value); setPlan(null); }}
+        placeholder="…or paste file contents here"
+        style={{ width: "100%", minHeight: 90, fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}
+      />
+      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+        <button className="dash-btn" disabled={busy} onClick={() => run(true)}>Preview</button>
+        <button className="dash-btn accent" disabled={busy || !plan} onClick={() => run(false)} title={plan ? "" : "Preview first"}>Apply</button>
+        {plan && <span className="mini-meta">{plan.dry_run ? "Preview (nothing written yet)" : "Applied"}</span>}
+      </div>
+      {err && <p style={{ color: "var(--bad)", marginBottom: 0 }}>{err}</p>}
+      {plan && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {Object.entries(plan.summary).filter(([, n]) => n > 0).map(([a, n]) => (
+              <span key={a} className="badge" style={{ fontSize: 11, color: ACTION_TONE[a] ?? "var(--fg)" }}>{a}: {n}</span>
+            ))}
+            {Object.values(plan.summary).every((n) => n === 0) && <span className="mini-meta">No rows.</span>}
+          </div>
+          {plan.rows.length > 0 && (
+            <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid var(--panel-border, #e2e6ee)", borderRadius: 6 }}>
+              <table className="loc-editor" style={{ margin: 0 }}>
+                <thead><tr><th>Line</th><th>Key</th><th>Action</th><th>Detail</th></tr></thead>
+                <tbody>
+                  {plan.rows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="mini-meta">{r.line}</td>
+                      <td className="mono">{r.key || "—"}</td>
+                      <td style={{ color: ACTION_TONE[r.action] ?? "var(--fg)", fontWeight: 600 }}>{r.action}</td>
+                      <td className="mini-meta">{r.detail || ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
