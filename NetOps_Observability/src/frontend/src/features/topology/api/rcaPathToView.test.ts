@@ -62,6 +62,23 @@ describe("rcaPathToView", () => {
     expect(v.edges.find((e) => e.id === "e2")!.rca_status).toBe("confirmed_down");
   });
 
+  it("an observed-role hop with no status reads green ● (not a gray 'unknown' ring)", () => {
+    const rpv = baseView();
+    // mirror the live API: status absent, role conveys it's an observed-good hop
+    rpv.path.nodes[0] = { id: "n-src", type: "device", kind: "server", label: "App", role: "observed" };
+    const v = rcaPathToView(rpv);
+    const src = v.nodes.find((n) => n.id === "n-src")!;
+    expect(src.rca_status).toBe("observed");
+    expect(src.health).toBe("ok");
+  });
+
+  it("does NOT fabricate a verdict marker for a fault/affected role without a status", () => {
+    const rpv = baseView();
+    rpv.path.nodes[1] = { id: "n-rtr", type: "device", kind: "router", label: "Edge", role: "fault" }; // no status
+    const v = rcaPathToView(rpv);
+    expect(v.nodes.find((n) => n.id === "n-rtr")!.rca_status).toBeUndefined(); // health/banner convey it, no overclaim
+  });
+
   it("rca_status follows the authoritative annotation, not the inline status", () => {
     const rpv = baseView();
     rpv.path.nodes[2].status = "observed";

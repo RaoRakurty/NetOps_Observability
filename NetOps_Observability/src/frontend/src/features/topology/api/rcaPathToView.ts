@@ -13,7 +13,7 @@
 // non-RCA UI; the verdict banner carries the full grounded wording. Pure → testable.
 
 import type { RcaPathView, RcaPathNode, RcaPathEdge, RcaAnnotation } from "../../../services/api";
-import type { TopologyView, TopologyNode, TopologyEdge, NodeKind, Health, EdgeStatus, EdgeRelationship } from "./topologyTypes";
+import type { TopologyView, TopologyNode, TopologyEdge, NodeKind, Health, EdgeStatus, EdgeRelationship, RcaOverlayState } from "./topologyTypes";
 import type { EvidenceRef } from "../graph/topologyFactTypes";
 import { normalizeRcaState } from "../utils/rcaOverlay";
 
@@ -62,9 +62,23 @@ function nodeHealth(n: RcaPathNode): Health {
     case "suspected":
     case "affected":
       return "warning";
+    case "observed":
+      return "ok"; // an explicitly-observed healthy hop reads green, not "unknown"
     default:
       return "unknown";
   }
+}
+
+/**
+ * Role-based RCA marker fallback when a node has no explicit overlay `status`.
+ * ONLY an "observed" role earns a marker (green ● — a healthy hop should read as
+ * observed-good, not a gray "unknown" ring). A fault/suspected/affected role is
+ * NOT promoted to a verdict marker without a grounded status — that would
+ * overclaim; the verdict banner + health colour still convey it. (Endpoints like
+ * "destination"/"target" stay markerless — they're not a verdict.)
+ */
+function roleRcaFallback(role?: string): RcaOverlayState | undefined {
+  return (role || "").toLowerCase() === "observed" ? "observed" : undefined;
 }
 
 /** Map the path edge's overlay state to the closest EdgeStatus. */
@@ -141,9 +155,10 @@ export function rcaPathToView(rpv: RcaPathView): TopologyView {
       health: nodeHealth(merged),
       confidence: baseConf,
       resolved: kindFor(n.kind) !== "unresolved",
-      // Authoritative Layer-3 verdict (only when the engine asserted a state) —
-      // drives the distinct suspected/confirmed/insufficient marker.
-      rca_status: normalizeRcaState(merged.status),
+      // Authoritative Layer-3 verdict (when the engine asserted a state), else an
+      // observed-role fallback so a healthy hop reads green ● (never fabricated for
+      // a fault/affected role — see roleRcaFallback).
+      rca_status: normalizeRcaState(merged.status) ?? roleRcaFallback(n.role),
       evidence: [evidenceFor(ann, merged.status || n.role || "", baseConf)],
     };
   });
