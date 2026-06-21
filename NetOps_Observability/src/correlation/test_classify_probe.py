@@ -1,0 +1,79 @@
+"""classify_probe: target/observer/trust → (scope, authority).
+
+Pins the customer-path probe model: a probe to a platform SERVICE stays internal
+(hidden) no matter who issued it; a measurement vantage probing a CUSTOMER path is
+customer_path and VISIBLE; its authority follows DECLARED trust — untrusted SUPPORT
+(LOW, never confirm), trusted may anchor a confirmed verdict (HIGH). Fail-closed."""
+
+from datetime import datetime, timezone
+
+import main
+from signals import (
+    Signal, Observer, ObserverType, ModalityClass, EntityType, Severity, Source,
+    ProbeScope, ProbeAuthority, CONFIRM_AUTHORITIES,
+)
+
+
+def probe(entity_id: str, observer: str) -> Signal:
+    return Signal(
+        tenant_id="t1",
+        ts=datetime(2026, 6, 21, tzinfo=timezone.utc),
+        source=Source.PROBE,
+        kind="probe_loss",
+        observer=Observer(observer_id=observer, observer_type=ObserverType.VANTAGE_AGENT),
+        modality_class=ModalityClass.ACTIVE_PROBE,
+        entity_type=EntityType.PATH,
+        entity_id=entity_id,
+        severity=Severity.HIGH,
+        native_id=f"test|{entity_id}",
+    )
+
+
+def classify(entity_id: str, observer: str, ev: dict | None = None) -> Signal:
+    sig = probe(entity_id, observer)
+    main.classify_probe(ev or {}, sig)
+    return sig
+
+
+def test_probe_to_stack_service_stays_internal(monkeypatch):
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", {"nginx", "clickhouse"})
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"prober"})  # trusted, but target wins
+    sig = classify("prober->nginx", "prober")
+    assert sig.attrs["probe_scope"] == ProbeScope.INTERNAL_SELF_PROBE.value
+    # internal → not confirm-capable
+    assert sig.attrs["probe_authority"] not in {a.value for a in CONFIRM_AUTHORITIES}
+
+
+def test_untrusted_measurement_probe_to_customer_is_visible_support(monkeypatch):
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", {"nginx"})
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", set())  # conservative default
+    sig = classify("prober->10.70.245.120", "prober")
+    # customer_path scope → shown (NOT internal/synthetic); LOW authority → supports
+    # but never confirms, and is not debug_only so it stays visible.
+    assert sig.attrs["probe_scope"] == ProbeScope.CUSTOMER_PATH.value
+    assert sig.attrs["probe_authority"] == ProbeAuthority.LOW.value
+    assert sig.attrs["probe_authority"] != ProbeAuthority.DEBUG_ONLY.value
+    assert sig.attrs["probe_authority"] not in {a.value for a in CONFIRM_AUTHORITIES}
+
+
+def test_trusted_measurement_probe_to_customer_can_confirm(monkeypatch):
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", {"nginx"})
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_VANTAGE", main.VantageType.PRIVATE_LOCATION)
+    sig = classify("prober->10.70.245.120", "prober")
+    assert sig.attrs["probe_scope"] == ProbeScope.CUSTOMER_PATH.value
+    # trusted real vantage on a customer path → confirm-capable
+    assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}
+
+
+def test_registry_fields_are_authoritative(monkeypatch):
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", set())
+    # the probe event explicitly declares a real enterprise vantage → trumps inference
+    sig = classify("prober->10.70.245.120", "prober",
+                   ev={"probe_intent": "customer_path", "vantage_type": "enterprise_agent"})
+    assert sig.attrs["classification_source"] == "registry"
+    assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}

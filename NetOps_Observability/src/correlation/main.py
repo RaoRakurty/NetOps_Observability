@@ -610,12 +610,30 @@ SYSLOG_THRESHOLD = 30  # cumulative weight
 
 
 # Probe-authority classification config (Step 3). Registry-sourced fields on the
-# event win; otherwise we infer + FAIL CLOSED. Lab synthetic generators are
-# excluded from customer-facing verdicts (debug_only). See
-# docs/design/probe-authority-model.md.
-_SYNTHETIC_PROBE_OBSERVERS = {
-    o.strip().lower() for o in os.getenv("CORR_SYNTHETIC_PROBE_OBSERVERS", "api,prober").split(",") if o.strip()
+# event win; otherwise we infer + FAIL CLOSED. See docs/design/probe-authority-model.md.
+#
+# Active-measurement vantages (e.g. the STAMP prober). Their probes to a CUSTOMER
+# target are customer_path evidence (shown as supporting on the affected device);
+# their probes to a platform service are internal (target check wins, below).
+_MEASUREMENT_PROBE_OBSERVERS = {
+    o.strip().lower() for o in os.getenv(
+        # back-compat: the old var named the same observers.
+        "CORR_MEASUREMENT_PROBE_OBSERVERS", os.getenv("CORR_SYNTHETIC_PROBE_OBSERVERS", "api,prober"),
+    ).split(",") if o.strip()
 }
+# Measurement observers the operator has DECLARED trustworthy. Their customer-path
+# probes may anchor a CONFIRMED verdict — still only alongside an independent
+# witness of another modality (a probe alone never confirms; verdicts.py enforces
+# this). Default EMPTY = conservative: probes SUPPORT (→ suspected), never confirm.
+_TRUSTED_PROBE_OBSERVERS = {
+    o.strip().lower() for o in os.getenv("CORR_TRUSTED_PROBE_OBSERVERS", "").split(",") if o.strip()
+}
+# The (confirm-capable, real) vantage a trusted observer maps to. A self-hosted
+# STAMP runner reads as the customer's private location.
+try:
+    _TRUSTED_PROBE_VANTAGE = VantageType(os.getenv("CORR_TRUSTED_PROBE_VANTAGE", "private_location"))
+except ValueError:
+    _TRUSTED_PROBE_VANTAGE = VantageType.PRIVATE_LOCATION
 # The platform's OWN stack services. A probe whose destination is one of these is
 # self-monitoring, not customer observability — it must never anchor a customer
 # incident (decision #76). Explicit default (was empty) so the classification is
@@ -648,12 +666,23 @@ def classify_probe(ev: dict, sig: Signal) -> None:
     else:
         obs = (sig.observer.observer_id or "").lower()
         target = sig.entity_id.split("->", 1)[1].strip().lower() if "->" in sig.entity_id else ""
-        if obs in _SYNTHETIC_PROBE_OBSERVERS:
-            pi, vt, src = ProbeIntent.LAB_TEST, VantageType.LOCAL_CONTAINER, "inferred"
-        elif target in _INTERNAL_PROBE_TARGETS:
+        # TARGET wins first: probing a platform service is self-monitoring no matter
+        # who issued it (decision #76), so it can never leak into a customer incident.
+        if target in _INTERNAL_PROBE_TARGETS:
             pi, vt, src = ProbeIntent.PLATFORM_SELF_CHECK, VantageType.INTERNAL_COLLECTOR, "inferred"
         elif target in _SERVICE_DEP_TARGETS:
             pi, vt, src = ProbeIntent.SERVICE_DEPENDENCY, VantageType.PUBLIC_CLOUD_AGENT, "inferred"
+        elif obs in _MEASUREMENT_PROBE_OBSERVERS:
+            # An active-measurement vantage probing a CUSTOMER path. Scope =
+            # customer_path → shown as supporting evidence on the affected device.
+            # Authority follows the vantage's DECLARED trust: trusted observers get a
+            # confirm-capable vantage; untrusted (default) stay LOW — SUPPORT, never
+            # CONFIRM. UNKNOWN with customer_path resolves to LOW (not debug), so the
+            # probe is visible, unlike the old LOCAL_CONTAINER→debug_only default.
+            if obs in _TRUSTED_PROBE_OBSERVERS:
+                pi, vt, src = ProbeIntent.CUSTOMER_PATH, _TRUSTED_PROBE_VANTAGE, "inferred-trusted"
+            else:
+                pi, vt, src = ProbeIntent.CUSTOMER_PATH, VantageType.UNKNOWN, "inferred"
         else:
             pi, vt, src = ProbeIntent.UNKNOWN, VantageType.UNKNOWN, "unknown"
     sig.attrs["probe_intent"] = pi.value
