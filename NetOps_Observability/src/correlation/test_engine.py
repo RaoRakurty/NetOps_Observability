@@ -100,6 +100,37 @@ def test_containment_topo_grounding():
     assert "dallas-edge" in edges[0].grounding.ref
 
 
+def test_shared_vantage_is_not_topology_grounding():
+    """Two active probes from the SAME prober to UNRELATED destinations must NOT
+    ground to each other via the shared vantage. (Before this fix, the shared
+    `prober` token welded the platform's self-monitoring onto customer incidents.)"""
+    nodes = build_nodes((
+        sig("probe_loss", EntityType.PATH, "prober->nginx",
+            observer="prober", modality=ModalityClass.ACTIVE_PROBE),
+        sig("probe_loss", EntityType.PATH, "prober->10.70.245.120", offset_s=5,
+            observer="prober", modality=ModalityClass.ACTIVE_PROBE),
+    ))
+    edges, gap_hints = build_edges(nodes, (), EngineConfig())
+    assert edges == ()
+    assert gap_hints == 1
+
+
+def test_probe_still_grounds_to_its_destination_subject():
+    """A probe to a device DOES still ground to a co-located device signal — via
+    the real shared SUBJECT (the destination), not the vantage. The legitimate
+    customer link survives; only the false vantage-bridge is removed."""
+    nodes = build_nodes((
+        sig("probe_loss", EntityType.PATH, "prober->dallas-edge",
+            observer="prober", modality=ModalityClass.ACTIVE_PROBE),
+        sig("bgp_peer_flap", EntityType.DEVICE, "dallas-edge", offset_s=8,
+            observer="collector1"),
+    ))
+    edges, _ = build_edges(nodes, (), EngineConfig())
+    assert len(edges) == 1
+    assert edges[0].grounding.kind == "topo"
+    assert "dallas-edge" in edges[0].grounding.ref
+
+
 def test_direction_unclaimed_on_conflict():
     # The LOWER layer onsets later: onset-order and layer-prior disagree → no claim.
     nodes = build_nodes((

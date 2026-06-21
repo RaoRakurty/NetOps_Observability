@@ -616,8 +616,17 @@ SYSLOG_THRESHOLD = 30  # cumulative weight
 _SYNTHETIC_PROBE_OBSERVERS = {
     o.strip().lower() for o in os.getenv("CORR_SYNTHETIC_PROBE_OBSERVERS", "api,prober").split(",") if o.strip()
 }
+# The platform's OWN stack services. A probe whose destination is one of these is
+# self-monitoring, not customer observability — it must never anchor a customer
+# incident (decision #76). Explicit default (was empty) so the classification is
+# robust regardless of which agent issued the probe; override via env per deploy.
 _INTERNAL_PROBE_TARGETS = {
-    t.strip().lower() for t in os.getenv("CORR_INTERNAL_PROBE_TARGETS", "").split(",") if t.strip()
+    t.strip().lower() for t in os.getenv(
+        "CORR_INTERNAL_PROBE_TARGETS",
+        "nginx,api,frontend,clickhouse,redis,postgres,netbox,grafana,keycloak,"
+        "opensearch,victoriametrics,prometheus,redpanda,vector,loki,promtail,"
+        "correlation,prober",
+    ).split(",") if t.strip()
 }
 _SERVICE_DEP_TARGETS = {
     t.strip().lower() for t in os.getenv("CORR_SERVICE_DEP_TARGETS", "").split(",") if t.strip()

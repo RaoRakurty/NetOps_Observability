@@ -127,16 +127,31 @@ class Node:
 
     def tokens(self) -> frozenset[str]:
         """Identity tokens for grounding: entity id, declared tokens, and the
-        device part of a device-scoped id like 'dallas-edge:Gi0/1'."""
+        device part of a device-scoped id like 'dallas-edge:Gi0/1'.
+
+        A shared measurement VANTAGE is deliberately NOT a grounding token: an
+        observer probing two destinations does not make those destinations
+        topologically related. Including it let the platform's own prober weld its
+        self-monitoring (prober->nginx, prober->clickhouse) onto an unrelated
+        customer incident via the shared `prober` token. So the vantage is excluded
+        WHERE it appears as a vantage — the `A->B` probe prefix and declared
+        entity_tokens — but never stripped from the entity's structural identity
+        (its id and `device:iface` device-part), where the same name can legitimately
+        be the SUBJECT (a device reporting its own interface)."""
+        observers = {s.observer.observer_id for s in self.signals if s.observer.observer_id}
         toks = {self.entity_id}
         for s in self.signals:
-            toks.update(s.entity_tokens)
+            # entity_tokens can carry the measuring vantage (a probe's (prober, host));
+            # the vantage is not a topology subject, the destination is.
+            toks.update(t for t in s.entity_tokens if t not in observers)
             if s.site:
                 toks.add(s.site)
         if ":" in self.entity_id:
-            toks.add(self.entity_id.split(":", 1)[0])
+            toks.add(self.entity_id.split(":", 1)[0])  # device-part is always a subject
         if "->" in self.entity_id:
-            toks.update(p for p in self.entity_id.split("->") if p)
+            # Left of a probe path is the vantage (== observer); drop it. A real
+            # network segment (observer is a separate agent) keeps both endpoints.
+            toks.update(p for p in self.entity_id.split("->") if p and p not in observers)
         return frozenset(toks)
 
 
