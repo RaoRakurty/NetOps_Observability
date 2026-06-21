@@ -120,13 +120,7 @@ function CanvasInner() {
     (async () => {
       try {
         const r = await api.correlations(50);
-        if (!alive) return;
-        const list = r.data ?? [];
-        setIncidents(list);
-        // Auto-pin the most recent incident on entry so Investigate immediately
-        // lands on a real RCA path (not the same graph as Explore). The operator
-        // can switch to "Live projection" to unpin.
-        setIncidentId((cur) => (cur === "" && list.length > 0 ? list[0].correlation_id : cur));
+        if (alive) setIncidents(r.data ?? []);
       } catch {
         if (alive) setIncidents([]);
       }
@@ -424,8 +418,9 @@ function CanvasInner() {
             </select>
           </label>
         )}
-        {mode === "path_trace" && (
-          /* Pick A→B endpoints; the backend resolves the real measured/SPF path. */
+        {mode === "path_trace" && pathSrc && pathDst && (
+          /* Compact control once a path is active (the empty state lives in the
+             stage as a guided card). Lets the operator re-aim the trace. */
           <label className="topo-incident-picker" title="Trace the path between two devices">
             <span className="topo-incident-picker-label">Path</span>
             <select value={pathSrc} onChange={(e) => setPathSrc(e.target.value)} aria-label="Path source device">
@@ -480,6 +475,14 @@ function CanvasInner() {
           </Suspense>
         ) : !view ? (
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />
+        ) : mode === "path_trace" && !(pathSrc && pathDst) ? (
+          <PathTracePrompt
+            options={endpointOptions}
+            src={pathSrc}
+            dst={pathDst}
+            onSrc={setPathSrc}
+            onDst={setPathDst}
+          />
         ) : (
           <>
             <div className="topo-search-dock">
@@ -541,6 +544,64 @@ function CanvasInner() {
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Path Trace guided empty state. Without a source AND destination the backend has
+// nothing to trace, so the canvas would otherwise fall back to the full topology —
+// indistinguishable from Explore. This makes the mode's intent explicit and lets
+// the operator pick both endpoints in one place; the path renders once both are set.
+function PathTracePrompt({
+  options,
+  src,
+  dst,
+  onSrc,
+  onDst,
+}: {
+  options: { id: string; label: string }[];
+  src: string;
+  dst: string;
+  onSrc: (v: string) => void;
+  onDst: (v: string) => void;
+}) {
+  return (
+    <div className="topo-placeholder">
+      <div className="topo-pathprompt-card">
+        <div className="topo-pathprompt-icon" aria-hidden="true">
+          <svg width={30} height={30} viewBox="0 0 24 24" fill="none">
+            <circle cx={5} cy={12} r={2.4} fill="currentColor" />
+            <circle cx={19} cy={12} r={2.4} fill="currentColor" />
+            <path d="M7.4 12h9.2" stroke="currentColor" strokeWidth={1.6} strokeDasharray="2 2.4" strokeLinecap="round" />
+            <path d="M13.6 9.2 16.6 12l-3 2.8" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div className="topo-pathprompt-title">Trace a network path</div>
+        <p className="topo-pathprompt-body">
+          Choose a <strong>source</strong> and <strong>destination</strong> device — the path between them is resolved
+          hop&#8209;by&#8209;hop over the discovered topology (LLDP / IGP), with the ingress&nbsp;/&nbsp;egress interface on each hop.
+        </p>
+        <div className="topo-pathprompt-row">
+          <select value={src} onChange={(e) => onSrc(e.target.value)} aria-label="Path source device">
+            <option value="">Source…</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id} disabled={o.id === dst}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <span className="topo-pathprompt-arrow" aria-hidden="true">→</span>
+          <select value={dst} onChange={(e) => onDst(e.target.value)} aria-label="Path destination device">
+            <option value="">Destination…</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id} disabled={o.id === src}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {src && !dst && <div className="topo-pathprompt-hint">Now pick a destination to trace the path.</div>}
       </div>
     </div>
   );

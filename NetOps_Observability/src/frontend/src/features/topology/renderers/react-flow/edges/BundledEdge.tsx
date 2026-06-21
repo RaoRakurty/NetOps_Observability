@@ -6,37 +6,35 @@
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getSmoothStepPath,
+  getBezierPath,
+  useInternalNode,
   type EdgeProps,
 } from "@xyflow/react";
 import { memo } from "react";
 import type { RFEdgeData } from "../rfTypes";
 import { utilizationWidth, EMPHASIS_TREATMENT, EdgeLabelCard } from "./TopologyEdge";
+import { getEdgeParams } from "./floatingEdge";
 
 function BundledEdgeBase(props: EdgeProps) {
-  const {
-    id,
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    markerEnd,
-  } = props;
+  const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd } = props;
   const data = props.data as unknown as RFEdgeData | undefined;
   const emphasis = data?.emphasis ?? "normal";
   const edge = data?.edge;
   const overlay = data?.overlay;
 
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    borderRadius: 14,
+  // Floating geometry — same as EdgeBody so a bundle anchors and curves like every
+  // other link (consistent fan-out, follows drags).
+  const sourceNode = useInternalNode(props.source);
+  const targetNode = useInternalNode(props.target);
+  let sx = sourceX, sy = sourceY, tx = targetX, ty = targetY;
+  let sPos = sourcePosition, tPos = targetPosition;
+  if (sourceNode?.measured?.width && targetNode?.measured?.width) {
+    const p = getEdgeParams(sourceNode, targetNode);
+    sx = p.sx; sy = p.sy; tx = p.tx; ty = p.ty; sPos = p.sourcePos; tPos = p.targetPos;
+  }
+  const [path, labelX, labelY] = getBezierPath({
+    sourceX: sx, sourceY: sy, targetX: tx, targetY: ty,
+    sourcePosition: sPos, targetPosition: tPos, curvature: 0.28,
   });
 
   const t = EMPHASIS_TREATMENT[emphasis];

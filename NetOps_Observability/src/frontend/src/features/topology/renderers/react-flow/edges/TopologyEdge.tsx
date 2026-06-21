@@ -1,6 +1,11 @@
-// TopologyEdge.tsx — the base, calm-by-default smoothstep edge, plus the shared
-// `EdgeBody` helper every other edge variant reuses so the path math, label card
-// and overlay treatments live in exactly one place (DRY, PDF §11).
+// TopologyEdge.tsx — the base, calm-by-default edge, plus the shared `EdgeBody`
+// helper every other edge variant reuses so the path math, label card and overlay
+// treatments live in exactly one place (DRY, PDF §11).
+//
+// Edges are FLOATING: each link anchors to the point on each node's border that
+// faces its neighbour (floatingEdge.getEdgeParams) and is drawn as a smooth bezier.
+// Links fan out naturally from a node instead of stacking at one centre handle, and
+// they follow node drags in real time — pure geometry, robust in every mode/layout.
 //
 // Emphasis is the heart of "calm by default": muted/normal edges are quiet grey;
 // only `strong` edges (path / selected / unhealthy) get color + width + glow.
@@ -8,13 +13,15 @@
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getSmoothStepPath,
+  getBezierPath,
+  useInternalNode,
   type EdgeProps,
 } from "@xyflow/react";
 import { memo } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { RFEdgeData } from "../rfTypes";
 import type { TopologyEdge as TopologyEdgeModel } from "../../../api/topologyTypes";
+import { getEdgeParams } from "./floatingEdge";
 
 // ── emphasis → base stroke treatment (PDF §11) ──────────────────────────────────
 type StrokeTreatment = { width: number; opacity: number };
@@ -115,25 +122,28 @@ export function EdgeBody({
   style,
   className,
 }: EdgeBodyProps): ReactNode {
-  const {
-    id,
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    markerEnd,
-  } = props;
+  const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd } = props;
   const data = props.data as unknown as RFEdgeData | undefined;
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    borderRadius: 14,
+
+  // Floating geometry: anchor each end to the border point facing the neighbour
+  // (so links fan out instead of stacking at a centre handle). Falls back to the
+  // handle coords React Flow supplies if a node isn't measured yet — never throws.
+  const sourceNode = useInternalNode(props.source);
+  const targetNode = useInternalNode(props.target);
+  let sx = sourceX, sy = sourceY, tx = targetX, ty = targetY;
+  let sPos = sourcePosition, tPos = targetPosition;
+  if (sourceNode?.measured?.width && targetNode?.measured?.width) {
+    const p = getEdgeParams(sourceNode, targetNode);
+    sx = p.sx; sy = p.sy; tx = p.tx; ty = p.ty; sPos = p.sourcePos; tPos = p.targetPos;
+  }
+  const [path, labelX, labelY] = getBezierPath({
+    sourceX: sx,
+    sourceY: sy,
+    targetX: tx,
+    targetY: ty,
+    sourcePosition: sPos,
+    targetPosition: tPos,
+    curvature: 0.28,
   });
   const geom: EdgeGeometry = { path, labelX, labelY };
   const opacity = data?.emphasis === "muted" ? 0.5 : data?.emphasis === "normal" ? 0.85 : 1;

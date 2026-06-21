@@ -831,6 +831,21 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .topo-placeholder-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 20px; font-weight: 680; margin: 6px 0 10px; }
 .topo-placeholder-body { font-size: 14px; color: var(--fg-muted); margin: 0 0 12px; }
 .topo-placeholder-note { font-size: 12px; color: var(--fg-subtle); line-height: 1.55; margin: 0; }
+/* Path Trace guided empty state */
+.topo-pathprompt-card { max-width: 460px; text-align: center; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px 24px;
+  box-shadow: 0 10px 30px rgba(16,24,40,0.14); }
+.topo-pathprompt-icon { display: inline-flex; color: var(--accent-bright, var(--accent)); margin-bottom: 8px; }
+.topo-pathprompt-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 19px;
+  font-weight: 680; margin: 0 0 8px; color: var(--fg); }
+.topo-pathprompt-body { font-size: 13px; color: var(--fg-muted); line-height: 1.55; margin: 0 0 16px; }
+.topo-pathprompt-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.topo-pathprompt-row select { font: inherit; font-size: 13px; font-weight: 600; min-width: 150px; max-width: 190px;
+  padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong, var(--border)); background: var(--surface);
+  color: var(--fg); cursor: pointer; }
+.topo-pathprompt-row select:focus { outline: 2px solid var(--accent-ring, var(--accent)); outline-offset: 1px; }
+.topo-pathprompt-arrow { font-size: 16px; color: var(--fg-subtle); font-weight: 700; }
+.topo-pathprompt-hint { font-size: 12px; color: var(--accent-bright, var(--accent)); margin-top: 12px; font-weight: 600; }
 
 /* fullscreen pop-out */
 .topo-root.topo-fullscreen { position: fixed; inset: 0; z-index: 1200; height: 100vh; min-height: 0;
