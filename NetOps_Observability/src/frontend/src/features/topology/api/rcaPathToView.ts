@@ -11,8 +11,9 @@
 // degraded) so the path reads correctly by colour; the verdict banner carries the
 // precise wording. Pure (no I/O) → unit-testable.
 
-import type { RcaPathView, RcaPathNode, RcaPathEdge } from "../../../services/api";
+import type { RcaPathView, RcaPathNode, RcaPathEdge, RcaAnnotation } from "../../../services/api";
 import type { TopologyView, TopologyNode, TopologyEdge, NodeKind, Health, EdgeStatus, EdgeRelationship } from "./topologyTypes";
+import type { EvidenceRef } from "../graph/topologyFactTypes";
 
 /** Map the path node's shape hint to a canonical NodeKind. */
 function kindFor(hint: string): NodeKind {
@@ -92,42 +93,67 @@ function edgeRelationship(type: string): EdgeRelationship {
 }
 
 /**
+ * Build the evidence row for a path target from its annotation (the grounded RCA
+ * reasoning the engine attached) with a plain-status fallback when there is none.
+ * Carries the annotation's reason, the missing-evidence gaps and a USED-BY-RCA flag
+ * so the side drawer explains every fault node/edge — no silent "just trust it".
+ */
+function evidenceFor(ann: RcaAnnotation | undefined, fallbackDetail: string, baseConf: number): EvidenceRef {
+  if (ann) {
+    const missing = (ann.missing_evidence || []).filter(Boolean).join("; ");
+    return {
+      source: "trace",
+      confidence: ann.confidence || baseConf,
+      summary: ann.reason || fallbackDetail,
+      used_by_rca: true,
+      raw_ref: ann.evidence_refs?.[0],
+      missing_evidence_if_any: missing || undefined,
+    };
+  }
+  return { source: "trace", confidence: baseConf, detail: fallbackDetail };
+}
+
+/**
  * Convert an RcaPathView into a TopologyView. Per-target annotations override the
- * inline node/edge status (the annotation layer is authoritative). The returned
- * view's `path` is the ordered node ids source→destination so the canvas
- * highlights the fault path.
+ * inline node/edge status (the annotation layer is authoritative) AND supply the
+ * grounded reasoning surfaced in the side drawer. The returned view's `path` is the
+ * ordered node ids source→destination so the canvas highlights the fault path.
  */
 export function rcaPathToView(rpv: RcaPathView): TopologyView {
-  // Annotation status by target id (authoritative overlay).
-  const annStatus = new Map<string, string>();
+  // Annotation by target id (authoritative overlay: status + grounded reasoning).
+  const annById = new Map<string, RcaAnnotation>();
   for (const a of rpv.annotations || []) {
-    if (a.target_id && a.status) annStatus.set(a.target_id, a.status);
+    if (a.target_id) annById.set(a.target_id, a);
   }
+  const baseConf = rpv.confidence || 1;
 
   const nodes: TopologyNode[] = (rpv.path?.nodes || []).map((n) => {
-    const merged: RcaPathNode = { ...n, status: annStatus.get(n.id) || n.status };
+    const ann = annById.get(n.id);
+    const merged: RcaPathNode = { ...n, status: ann?.status || n.status };
     return {
       id: n.id,
       label: n.label,
       kind: kindFor(n.kind),
       role: n.role,
+      owner: ann?.owner,
       health: nodeHealth(merged),
-      confidence: rpv.confidence || 1,
+      confidence: baseConf,
       resolved: kindFor(n.kind) !== "unresolved",
-      evidence: [{ source: "trace", confidence: rpv.confidence || 1, detail: merged.status || n.role || "" }],
+      evidence: [evidenceFor(ann, merged.status || n.role || "", baseConf)],
     };
   });
 
   const edges: TopologyEdge[] = (rpv.path?.edges || []).map((e: RcaPathEdge) => {
-    const state = annStatus.get(e.id) || e.state;
+    const ann = annById.get(e.id);
+    const state = ann?.status || e.state;
     return {
       id: e.id,
       source: e.source,
       target: e.target,
       relationship: edgeRelationship(e.type),
       status: edgeStatus(state),
-      confidence: rpv.confidence || 1,
-      evidence: [{ source: "trace", confidence: rpv.confidence || 1, detail: e.label || state || "" }],
+      confidence: baseConf,
+      evidence: [evidenceFor(ann, e.label || state || "", baseConf)],
     };
   });
 

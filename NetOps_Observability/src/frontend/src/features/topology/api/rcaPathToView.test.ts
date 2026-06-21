@@ -81,6 +81,40 @@ describe("rcaPathToView", () => {
     expect(v.nodes.find((n) => n.id === "n-dst")!.health).toBe("warning");
   });
 
+  it("carries the annotation's grounded reasoning onto the node's evidence", () => {
+    const rpv = baseView();
+    rpv.annotations = [
+      {
+        target_type: "node",
+        target_id: "n-rtr",
+        status: "confirmed_down",
+        verdict: "confirmed",
+        confidence: 0.82,
+        owner: "wan_provider",
+        visibility: "partial",
+        reason: "BGP adjacency down grounded on this device",
+        evidence_refs: ["sig-42"],
+        missing_evidence: ["provider-side interface counters"],
+      },
+    ];
+    const v = rcaPathToView(rpv);
+    const rtr = v.nodes.find((n) => n.id === "n-rtr")!;
+    expect(rtr.owner).toBe("wan_provider");
+    const ev = rtr.evidence[0];
+    expect(ev.summary).toBe("BGP adjacency down grounded on this device");
+    expect(ev.used_by_rca).toBe(true);
+    expect(ev.confidence).toBe(0.82);
+    expect(ev.raw_ref).toBe("sig-42");
+    expect(ev.missing_evidence_if_any).toBe("provider-side interface counters");
+  });
+
+  it("falls back to a plain status evidence row when a node has no annotation", () => {
+    const v = rcaPathToView(baseView()); // no annotations
+    const ev = v.nodes.find((n) => n.id === "n-src")!.evidence[0];
+    expect(ev.used_by_rca).toBeUndefined();
+    expect(ev.detail).toBe("observed");
+  });
+
   it("survives an empty path without throwing", () => {
     const rpv = baseView();
     rpv.path = { source: "", destination: "", nodes: [], edges: [] };
