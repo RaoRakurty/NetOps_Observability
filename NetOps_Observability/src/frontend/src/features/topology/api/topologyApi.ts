@@ -62,10 +62,16 @@ const REAL_MODES: ReadonlySet<WorkflowMode> = new Set<WorkflowMode>([
   "executive_geo",
 ]);
 
-export async function fetchTopologyView(mode: WorkflowMode): Promise<TopologyView> {
+export async function fetchTopologyView(
+  mode: WorkflowMode,
+  params?: { src?: string; dst?: string },
+): Promise<TopologyView> {
   if (!REAL_MODES.has(mode)) return normalizeView(mockForMode(mode));
   try {
-    const raw = (await api.topologyView(mode)) as TopologyView;
+    // Path Trace passes src/dst so the backend resolves a real A→B path; the other
+    // modes ignore them. Only forward when both endpoints are set.
+    const ep = params?.src && params?.dst ? { src: params.src, dst: params.dst } : undefined;
+    const raw = (await api.topologyView(mode, ep)) as TopologyView;
     const view = normalizeView(raw);
     if (view.nodes.length > 0) return view;
     // Empty real graph (collectors off / no inventory) → show the mock instead.

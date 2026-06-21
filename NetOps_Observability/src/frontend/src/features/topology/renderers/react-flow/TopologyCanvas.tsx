@@ -105,6 +105,10 @@ function CanvasInner() {
   // the canvas, overriding the live projection. Empty = the live/mock projection.
   const [incidents, setIncidents] = useState<CorrObject[]>([]);
   const [incidentId, setIncidentId] = useState<string>("");
+  // Path Trace endpoints: without a src+dst the backend can't resolve a path, so
+  // path_trace would look identical to Explore. These drive a real A→B trace.
+  const [pathSrc, setPathSrc] = useState<string>("");
+  const [pathDst, setPathDst] = useState<string>("");
   // Raw overlay for the pinned incident — drives the verdict banner (the WHY).
   const [incidentOverlay, setIncidentOverlay] = useState<RcaPathView | null>(null);
 
@@ -116,7 +120,13 @@ function CanvasInner() {
     (async () => {
       try {
         const r = await api.correlations(50);
-        if (alive) setIncidents(r.data ?? []);
+        if (!alive) return;
+        const list = r.data ?? [];
+        setIncidents(list);
+        // Auto-pin the most recent incident on entry so Investigate immediately
+        // lands on a real RCA path (not the same graph as Explore). The operator
+        // can switch to "Live projection" to unpin.
+        setIncidentId((cur) => (cur === "" && list.length > 0 ? list[0].correlation_id : cur));
       } catch {
         if (alive) setIncidents([]);
       }
@@ -148,7 +158,7 @@ function CanvasInner() {
         setFetched(r.view);
         setCoverage(r.coverage ?? null);
       } else {
-        const v = await fetchTopologyView(mode);
+        const v = await fetchTopologyView(mode, mode === "path_trace" ? { src: pathSrc, dst: pathDst } : undefined);
         if (!alive) return;
         setFetched(v);
         setCoverage(null);
@@ -157,7 +167,7 @@ function CanvasInner() {
     return () => {
       alive = false;
     };
-  }, [mode, source, incidentId]);
+  }, [mode, source, incidentId, pathSrc, pathDst]);
 
   // Drop the pinned incident when leaving Investigate mode.
   useEffect(() => {
@@ -221,7 +231,18 @@ function CanvasInner() {
     setHoverEdge(undefined);
     setCollapsedGroups(new Set());
     setOverlay(mode === "capacity" ? "utilization" : "health");
+    setPathSrc("");
+    setPathDst("");
   }, [mode]);
+
+  // Endpoint options for the Path Trace picker: every node, by label, sorted.
+  const endpointOptions = useMemo(
+    () =>
+      (view?.nodes ?? [])
+        .map((n) => ({ id: n.id, label: n.label || n.id }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [view],
+  );
 
   // node → group lookup, for collapse hiding + search-to-expand.
   const nodeGroup = useMemo(() => {
@@ -398,6 +419,29 @@ function CanvasInner() {
               {incidents.map((c) => (
                 <option key={c.correlation_id} value={c.correlation_id}>
                   {(c.verdict_tier ? `[${c.verdict_tier}] ` : "") + (c.top_hypothesis || c.correlation_id)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {mode === "path_trace" && (
+          /* Pick A→B endpoints; the backend resolves the real measured/SPF path. */
+          <label className="topo-incident-picker" title="Trace the path between two devices">
+            <span className="topo-incident-picker-label">Path</span>
+            <select value={pathSrc} onChange={(e) => setPathSrc(e.target.value)} aria-label="Path source device">
+              <option value="">Source…</option>
+              {endpointOptions.map((o) => (
+                <option key={o.id} value={o.id} disabled={o.id === pathDst}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <span className="topo-incident-picker-label" aria-hidden="true">→</span>
+            <select value={pathDst} onChange={(e) => setPathDst(e.target.value)} aria-label="Path destination device">
+              <option value="">Destination…</option>
+              {endpointOptions.map((o) => (
+                <option key={o.id} value={o.id} disabled={o.id === pathSrc}>
+                  {o.label}
                 </option>
               ))}
             </select>

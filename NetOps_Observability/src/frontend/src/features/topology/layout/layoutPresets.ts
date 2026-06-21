@@ -6,8 +6,8 @@ import type { LayoutPreset } from "./layoutTypes";
 
 const PRESETS: Record<LayoutType, LayoutPreset> = {
   // spine/leaf reads best top-to-bottom with generous layer spacing for bundles.
-  spine_leaf: { intent: "spine_leaf", direction: "DOWN", layerSpacing: 120, nodeSpacing: 70 },
-  campus: { intent: "campus", direction: "DOWN", layerSpacing: 110, nodeSpacing: 64 },
+  spine_leaf: { intent: "spine_leaf", direction: "DOWN", layerSpacing: 120, nodeSpacing: 70, partitionByRole: true },
+  campus: { intent: "campus", direction: "DOWN", layerSpacing: 110, nodeSpacing: 64, partitionByRole: true },
   // path views are a left-to-right ribbon.
   path_first: { intent: "path_first", direction: "RIGHT", layerSpacing: 150, nodeSpacing: 56 },
   // incident: root cause → affected path → blast radius, left to right.

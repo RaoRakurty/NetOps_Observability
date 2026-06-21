@@ -20,9 +20,11 @@ import type { TopologyEdge as TopologyEdgeModel } from "../../../api/topologyTyp
 type StrokeTreatment = { width: number; opacity: number };
 
 export const EMPHASIS_TREATMENT: Record<RFEdgeData["emphasis"], StrokeTreatment> = {
-  muted: { width: 1.2, opacity: 0.5 },
-  normal: { width: 1.6, opacity: 0.85 },
-  strong: { width: 2.8, opacity: 1 },
+  // Brightened so links read clearly on the dark canvas (were near-invisible at the
+  // old border colour). muted stays a touch dimmer so a selection's focus stands out.
+  muted: { width: 1.4, opacity: 0.55 },
+  normal: { width: 2, opacity: 0.95 },
+  strong: { width: 3.2, opacity: 1 },
 };
 
 /**
@@ -146,7 +148,7 @@ export function EdgeBody({
           style={{
             stroke: color,
             strokeWidth: width + 6,
-            opacity: 0.16,
+            opacity: 0.22,
             strokeLinecap: "round",
             filter: "blur(2px)",
           }}
@@ -199,8 +201,9 @@ function TopologyEdgeBase(props: EdgeProps) {
   const overlay = data?.overlay;
   const edge = data?.edge;
 
-  // Muted/normal stay grey; only 'strong' tints toward the accent.
-  const color = emphasis === "strong" ? "var(--accent)" : "var(--border)";
+  // Muted/normal are a clear mid-grey (var(--border) was too dark to see on the
+  // canvas); 'strong' (selected/neighbour links) reads in the bright accent.
+  const color = emphasis === "strong" ? "var(--accent-bright, var(--accent))" : "var(--fg-subtle)";
 
   let width = t.width;
   if (overlay === "utilization") width = utilizationWidth(width, edge?.utilization_pct);

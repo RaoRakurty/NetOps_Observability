@@ -20,6 +20,10 @@ export type LayoutPreset = {
   layerSpacing: number;
   /** elk.spacing.nodeNode */
   nodeSpacing: number;
+  /** Pin nodes into role tiers (wan→spine→leaf→access) so a DC/campus graph reads
+   *  as a proper top-down tree instead of letting ELK infer layers from the
+   *  undirected mesh (which can place leaves above spines). */
+  partitionByRole?: boolean;
 };
 
 /** Default rendered card size used for ELK sizing and React Flow node dimensions. */
