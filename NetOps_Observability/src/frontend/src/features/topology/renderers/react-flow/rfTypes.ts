@@ -67,4 +67,5 @@ export const EDGE_TYPE_FOR_VARIANT: Record<string, string> = {
   inferred: "inferredEdge",
   degraded: "degradedEdge",
   bundled: "bundledEdge",
+  rca: "rcaEdge",
 };

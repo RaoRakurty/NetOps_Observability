@@ -88,6 +88,8 @@ export type EdgeBodyProps = {
   label?: (geom: EdgeGeometry) => ReactNode;
   /** Extra style merged onto the BaseEdge stroke. */
   style?: CSSProperties;
+  /** Class on the base stroke (e.g. a reduced-motion-gated dash-flow animation). */
+  className?: string;
 };
 
 export type EdgeGeometry = {
@@ -109,6 +111,7 @@ export function EdgeBody({
   decoration,
   label,
   style,
+  className,
 }: EdgeBodyProps): ReactNode {
   const {
     id,
@@ -153,6 +156,7 @@ export function EdgeBody({
         id={id}
         path={path}
         markerEnd={markerEnd}
+        className={className}
         style={{
           stroke: color,
           strokeWidth: width,

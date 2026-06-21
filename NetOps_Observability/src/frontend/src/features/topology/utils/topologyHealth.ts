@@ -115,12 +115,14 @@ export function confidenceBand(c: number): { label: string; tone: Health } {
 }
 
 /**
- * Choose the edge VARIANT (visual treatment) from the flat edge. Bundled wins
- * (collapsed parallel links); then degraded (unhealthy status); then inferred
- * (inferred/dependency/flow OR low confidence → InferredEdge picks dashed vs
- * dotted); else the plain topology edge.
+ * Choose the edge VARIANT (visual treatment) from the flat edge. RCA overlay wins
+ * (the engine's grounded Layer-3 verdict); then bundled (collapsed parallel links);
+ * then degraded (unhealthy status); then inferred (inferred/dependency/flow OR low
+ * confidence → InferredEdge picks dashed vs dotted); else the plain topology edge.
  */
 export function edgeVariant(edge: TopologyEdge): EdgeVariant {
+  // RCA Layer-3 overlay wins: distinct suspected/confirmed/insufficient treatment.
+  if (edge.rca_status) return "rca";
   if (edge.bundle_id && (edge.bundle_count ?? 1) > 1) return "bundled";
   const h = statusToHealth(edge.status);
   if (h === "critical" || h === "warning") return "degraded";

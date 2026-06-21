@@ -7,6 +7,7 @@ import { PathHighlightEdge } from "./PathHighlightEdge";
 import { InferredEdge } from "./InferredEdge";
 import { DegradedEdge } from "./DegradedEdge";
 import { BundledEdge } from "./BundledEdge";
+import { RcaOverlayEdge } from "./RcaOverlayEdge";
 
 export const edgeTypes: EdgeTypes = {
   topologyEdge: TopologyEdge,
@@ -14,6 +15,7 @@ export const edgeTypes: EdgeTypes = {
   inferredEdge: InferredEdge,
   degradedEdge: DegradedEdge,
   bundledEdge: BundledEdge,
+  rcaEdge: RcaOverlayEdge,
 };
 
 export {
@@ -22,5 +24,6 @@ export {
   InferredEdge,
   DegradedEdge,
   BundledEdge,
+  RcaOverlayEdge,
 };
 export { EdgeBody, EdgeLabelCard, utilizationWidth, EMPHASIS_TREATMENT } from "./TopologyEdge";

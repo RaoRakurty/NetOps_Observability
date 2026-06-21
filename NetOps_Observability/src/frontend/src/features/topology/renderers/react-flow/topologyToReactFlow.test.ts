@@ -8,6 +8,7 @@ import type { Node } from "@xyflow/react";
 import { topologyToReactFlow, type TopologyUIState } from "./topologyToReactFlow";
 import { physicalTopology } from "../../mock/physicalTopology";
 import type { RFNodeData, RFGroupData } from "./rfTypes";
+import type { TopologyView } from "../../api/topologyTypes";
 
 // spine1 is the focus; leaf1 is connected but intentionally left OUT of the focus
 // set so we can assert how out-of-focus cards are treated under each mode.
@@ -45,5 +46,31 @@ describe("topologyToReactFlow — spotlight emphasis", () => {
     const { nodes } = topologyToReactFlow(physicalTopology, {}, { ...baseUI, spotlight: new Set() });
     expect(emphasisOf(nodes, "spine1")).toBe("normal");
     expect(emphasisOf(nodes, "leaf1")).toBe("normal");
+  });
+});
+
+describe("topologyToReactFlow — RCA overlay edges", () => {
+  // An edge carrying an rca_status must route to the dedicated rcaEdge renderer so
+  // suspected/confirmed/insufficient get their distinct treatment (not the generic
+  // degraded/topology edge).
+  const rcaView: TopologyView = {
+    view_id: "rca-test",
+    mode: "investigate",
+    layout_type: "path_first",
+    generated_at: "2026-06-21T00:00:00Z",
+    nodes: [
+      { id: "a", label: "A", kind: "router", health: "warning", confidence: 1, evidence: [{ source: "trace", confidence: 1 }], rca_status: "suspected_down" },
+      { id: "b", label: "B", kind: "cloud", health: "ok", confidence: 1, evidence: [{ source: "trace", confidence: 1 }], rca_status: "observed" },
+    ],
+    edges: [
+      { id: "e-sus", source: "a", target: "b", relationship: "path_hop", confidence: 1, evidence: [{ source: "trace", confidence: 1 }], rca_status: "suspected_down" },
+    ],
+    groups: [],
+    overlays: ["health"],
+  };
+
+  it("routes an rca_status edge to the rcaEdge type", () => {
+    const { edges } = topologyToReactFlow(rcaView, { a: { x: 0, y: 0 }, b: { x: 200, y: 0 } });
+    expect(edges.find((e) => e.id === "e-sus")!.type).toBe("rcaEdge");
   });
 });

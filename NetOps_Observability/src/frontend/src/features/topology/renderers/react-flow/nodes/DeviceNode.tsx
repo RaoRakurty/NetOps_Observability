@@ -14,6 +14,7 @@ import {
   confidencePct,
   nodeTooltip,
 } from "../../../utils/topologyHealth";
+import { RCA_OVERLAY } from "../../../utils/rcaOverlay";
 
 // FIXED card geometry. Both dimensions are constants (not min-height) and are
 // also declared on the React-Flow node (see topologyToReactFlow) so RF never
@@ -53,6 +54,39 @@ function HealthRing({ health }: { health: RFNodeData["node"]["health"] }) {
   );
 }
 
+/**
+ * RCA Layer-3 marker (top-right) — supersedes the health ring on an RCA path with
+ * the engine's grounded verdict, so `suspected` (⚠) reads differently from
+ * `confirmed` (✕). `missing_evidence` is a HOLLOW ring (no fill, dashed border) —
+ * an honest "we don't have the proof", not an alarm.
+ */
+function RcaMarker({ state }: { state: NonNullable<RFNodeData["node"]["rca_status"]> }) {
+  const s = RCA_OVERLAY[state];
+  return (
+    <span
+      title={s.label}
+      aria-label={`RCA: ${s.label}`}
+      style={{
+        width: 18,
+        height: 18,
+        borderRadius: "50%",
+        flex: "0 0 auto",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: `2px ${s.hollow ? "dashed" : "solid"} ${s.color}`,
+        background: s.hollow ? "transparent" : `color-mix(in srgb, ${s.color} 16%, transparent)`,
+        color: s.color,
+        fontSize: 10,
+        fontWeight: 700,
+        lineHeight: 1,
+      }}
+    >
+      {s.hollow ? "" : s.glyph}
+    </span>
+  );
+}
+
 export type NodeCardProps = {
   data: RFNodeData;
   icon: ReactNode;
@@ -65,6 +99,10 @@ export type NodeCardProps = {
  */
 function NodeCardBase({ data, icon, accent }: NodeCardProps) {
   const { node, emphasis, metricsLine } = data;
+  // On an RCA path, the grounded verdict supersedes the generic health ring
+  // (strictly more informative). internal_only is never shown (decision #76).
+  const rca = node.rca_status ? RCA_OVERLAY[node.rca_status] : undefined;
+  const showRca = !!rca && !rca.customerHidden;
   // Uniform face: every node shows ONLY its hostname (+ icon + health) so cards
   // read identically regardless of how much metadata each carries. All the
   // varying detail (vendor/model/site/role/owner/mgmt-IP/metrics) lives in the
@@ -146,7 +184,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         >
           {node.label}
         </span>
-        <HealthRing health={node.health} />
+        {showRca && node.rca_status ? <RcaMarker state={node.rca_status} /> : <HealthRing health={node.health} />}
       </div>
 
       {/* confidence chip — bottom-right, faint */}

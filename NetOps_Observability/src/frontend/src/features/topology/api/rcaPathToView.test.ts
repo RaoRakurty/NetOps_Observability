@@ -50,6 +50,39 @@ describe("rcaPathToView", () => {
     expect(dst.health).toBe("ok"); // observed
   });
 
+  it("carries a DISTINCT rca_status so suspected ≠ confirmed on the canvas", () => {
+    const rpv = baseView();
+    rpv.path.nodes[0].status = "suspected_down"; // n-src
+    const v = rcaPathToView(rpv);
+    expect(v.nodes.find((n) => n.id === "n-src")!.rca_status).toBe("suspected_down");
+    expect(v.nodes.find((n) => n.id === "n-rtr")!.rca_status).toBe("confirmed_down");
+    expect(v.nodes.find((n) => n.id === "n-dst")!.rca_status).toBe("observed");
+    // edges carry their state too (degraded vs confirmed_down)
+    expect(v.edges.find((e) => e.id === "e1")!.rca_status).toBe("degraded");
+    expect(v.edges.find((e) => e.id === "e2")!.rca_status).toBe("confirmed_down");
+  });
+
+  it("rca_status follows the authoritative annotation, not the inline status", () => {
+    const rpv = baseView();
+    rpv.path.nodes[2].status = "observed";
+    rpv.annotations = [
+      {
+        target_type: "node",
+        target_id: "n-dst",
+        status: "suspected_down",
+        verdict: "suspected",
+        confidence: 0.7,
+        owner: "netops",
+        visibility: "shown",
+        reason: "",
+        evidence_refs: [],
+        missing_evidence: [],
+      },
+    ];
+    const v = rcaPathToView(rpv);
+    expect(v.nodes.find((n) => n.id === "n-dst")!.rca_status).toBe("suspected_down");
+  });
+
   it("maps edge relationship + status", () => {
     const v = rcaPathToView(baseView());
     const bgp = v.edges.find((e) => e.id === "e2")!;

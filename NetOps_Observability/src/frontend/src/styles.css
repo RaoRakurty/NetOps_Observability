@@ -763,6 +763,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .topo-rca-missing-chip { font-size: 11px; color: var(--fg-muted); background: var(--surface);
   border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; }
 .topo-rca-grounded { font-size: 11px; font-weight: 600; color: var(--ok, #30a46c); }
+/* RCA overlay edge — a slow dash-flow so a suspected/degraded link reads as "live,
+   not yet resolved". Honoured only when the operator allows motion; cap is enforced
+   upstream (RCA path views are small). */
+@keyframes topo-rca-dash-flow { to { stroke-dashoffset: -20; } }
+.topo-rca-edge-flow { animation: topo-rca-dash-flow 1.1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .topo-rca-edge-flow { animation: none; } }
 
 /* Sigma WebGL enterprise overview (Phase 4) */
 .topo-sigma { position: absolute; inset: 0; }

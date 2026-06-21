@@ -466,7 +466,7 @@ function CanvasInner() {
               <Controls showInteractive={false} />
             </ReactFlow>
 
-            <TopologyLegend overlay={overlay} />
+            <TopologyLegend overlay={overlay} showRca={mode === "investigate" && !!incidentOverlay} />
 
             {mode === "investigate" && incidentOverlay && (
               <div className="topo-rca-dock">

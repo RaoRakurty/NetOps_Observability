@@ -5,6 +5,7 @@
 import { useState } from "react";
 import type { OverlayKind, Health } from "../api/topologyTypes";
 import { HEALTH_COLOR, HEALTH_GLYPH, HEALTH_LABEL } from "../utils/topologyHealth";
+import { RCA_OVERLAY, RCA_OVERLAY_ORDER } from "../utils/rcaOverlay";
 
 const OVERLAY_NOTE: Record<OverlayKind, string> = {
   health: "Node rings show health; edges keep their relationship style.",
@@ -56,7 +57,34 @@ function EdgeStyle({ label, render }: { label: string; render: React.ReactNode }
   );
 }
 
-export default function TopologyLegend({ overlay }: { overlay: OverlayKind }) {
+/** RCA state swatch: a glyph in the state colour (hollow ring for missing-evidence). */
+function RcaSwatch({ color, glyph, label, hollow }: { color: string; glyph: string; label: string; hollow: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--fg-muted)" }}>
+      <span
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: "50%",
+          border: `2px ${hollow ? "dashed" : "solid"} ${color}`,
+          background: hollow ? "transparent" : `color-mix(in srgb, ${color} 16%, transparent)`,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 8,
+          fontWeight: 700,
+          color,
+          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+        }}
+      >
+        {hollow ? "" : glyph}
+      </span>
+      {label}
+    </div>
+  );
+}
+
+export default function TopologyLegend({ overlay, showRca = false }: { overlay: OverlayKind; showRca?: boolean }) {
   // Collapsed by default: the canvas should open clean. Operators expand the
   // legend on demand rather than having it cover the lower-left on every visit.
   const [open, setOpen] = useState(false);
@@ -102,6 +130,20 @@ export default function TopologyLegend({ overlay }: { overlay: OverlayKind }) {
 
       {open ? (
         <div style={{ padding: "0 10px 10px", display: "grid", gap: 9 }}>
+          {showRca && (
+            <>
+              <div style={{ display: "grid", gap: 5 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--fg-subtle)" }}>
+                  RCA verdict
+                </div>
+                {RCA_OVERLAY_ORDER.map((s) => (
+                  <RcaSwatch key={s} color={RCA_OVERLAY[s].color} glyph={RCA_OVERLAY[s].glyph} label={RCA_OVERLAY[s].label} hollow={RCA_OVERLAY[s].hollow} />
+                ))}
+              </div>
+              <div style={{ height: 1, background: "var(--border)" }} />
+            </>
+          )}
+
           <div style={{ display: "grid", gap: 5 }}>
             {HEALTH_ORDER.map((h) => (
               <Swatch key={h} color={HEALTH_COLOR[h]} glyph={HEALTH_GLYPH[h]} label={HEALTH_LABEL[h]} />

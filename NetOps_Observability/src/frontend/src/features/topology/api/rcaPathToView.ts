@@ -4,16 +4,18 @@
 // incident's fault path on the canvas (elk layout, device nodes) instead of a
 // mock, reusing the whole render pipeline.
 //
-// Overlay-state fidelity: the canvas health/status enums don't have distinct
-// suspected_down vs confirmed_down treatments yet (that lands with the edge-
-// component work in topology increment #2/#3). For now both map to the closest
-// existing severity (confirmed → critical/down, suspected/degraded → warning/
-// degraded) so the path reads correctly by colour; the verdict banner carries the
-// precise wording. Pure (no I/O) → unit-testable.
+// Overlay-state fidelity: each node/edge now carries its precise RCA Layer-3 state
+// in `rca_status` (suspected_down vs confirmed_down vs insufficient_visibility vs
+// missing_evidence) — the canvas renders these as DISTINCT treatments via
+// utils/rcaOverlay.ts (dashed+⚠ for suspected, solid+✕ for confirmed, hollow ○ for
+// missing evidence), so the path no longer collapses "suspected" and "confirmed"
+// into the same red. We still set health/status for the colour band + neighbouring
+// non-RCA UI; the verdict banner carries the full grounded wording. Pure → testable.
 
 import type { RcaPathView, RcaPathNode, RcaPathEdge, RcaAnnotation } from "../../../services/api";
 import type { TopologyView, TopologyNode, TopologyEdge, NodeKind, Health, EdgeStatus, EdgeRelationship } from "./topologyTypes";
 import type { EvidenceRef } from "../graph/topologyFactTypes";
+import { normalizeRcaState } from "../utils/rcaOverlay";
 
 /** Map the path node's shape hint to a canonical NodeKind. */
 function kindFor(hint: string): NodeKind {
@@ -139,6 +141,9 @@ export function rcaPathToView(rpv: RcaPathView): TopologyView {
       health: nodeHealth(merged),
       confidence: baseConf,
       resolved: kindFor(n.kind) !== "unresolved",
+      // Authoritative Layer-3 verdict (only when the engine asserted a state) —
+      // drives the distinct suspected/confirmed/insufficient marker.
+      rca_status: normalizeRcaState(merged.status),
       evidence: [evidenceFor(ann, merged.status || n.role || "", baseConf)],
     };
   });
@@ -153,6 +158,7 @@ export function rcaPathToView(rpv: RcaPathView): TopologyView {
       relationship: edgeRelationship(e.type),
       status: edgeStatus(state),
       confidence: baseConf,
+      rca_status: normalizeRcaState(state),
       evidence: [evidenceFor(ann, e.label || state || "", baseConf)],
     };
   });
