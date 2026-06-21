@@ -736,6 +736,33 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .topo-incident-picker select { font: inherit; font-size: 12px; font-weight: 600; max-width: 280px;
   padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel);
   color: var(--fg); cursor: pointer; }
+/* RCA verdict banner — the WHY for a pinned incident (top-right of the stage). */
+.topo-rca-dock { position: absolute; top: 48px; right: 12px; z-index: 6; width: 340px; max-width: 70%;
+  max-height: 60%; overflow: auto; }
+.topo-rca-banner { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 13px; box-shadow: 0 6px 22px rgba(0,0,0,0.18); }
+.topo-rca-banner-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.topo-rca-verdict { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 8px; border: 1px solid; border-radius: 999px; }
+.topo-rca-conf { font-size: 11px; font-weight: 600; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.topo-rca-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--fg-subtle); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.topo-rca-owner { font-size: 11px; font-weight: 600; color: var(--fg-subtle); margin-left: auto; }
+.topo-rca-clear { font-size: 13px; line-height: 1; cursor: pointer; border: 0; background: transparent;
+  color: var(--fg-muted); padding: 2px 4px; border-radius: 4px; }
+.topo-rca-clear:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.topo-rca-title { font-size: 13px; font-weight: 700; color: var(--fg); margin-top: 9px; }
+.topo-rca-summary { font-size: 12px; line-height: 1.45; color: var(--fg-muted); margin: 5px 0 0; }
+.topo-rca-action { font-size: 12px; line-height: 1.4; color: var(--fg); margin-top: 9px;
+  padding: 7px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.topo-rca-action-label { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--accent); margin-right: 7px; }
+.topo-rca-missing { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.topo-rca-missing-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--warn); width: 100%; }
+.topo-rca-missing-chip { font-size: 11px; color: var(--fg-muted); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; }
+.topo-rca-grounded { font-size: 11px; font-weight: 600; color: var(--ok, #30a46c); }
 
 /* Sigma WebGL enterprise overview (Phase 4) */
 .topo-sigma { position: absolute; inset: 0; }

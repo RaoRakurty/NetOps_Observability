@@ -59,7 +59,9 @@ import {
   MapWorkflowSelector,
   PathAnalysisPanel,
   CapacityPanel,
+  RcaVerdictBanner,
 } from "../../components";
+import type { RcaPathView } from "../../../../services/api";
 
 type Density = "executive" | "operator" | "engineer" | "incident";
 
@@ -103,6 +105,8 @@ function CanvasInner() {
   // the canvas, overriding the live projection. Empty = the live/mock projection.
   const [incidents, setIncidents] = useState<CorrObject[]>([]);
   const [incidentId, setIncidentId] = useState<string>("");
+  // Raw overlay for the pinned incident — drives the verdict banner (the WHY).
+  const [incidentOverlay, setIncidentOverlay] = useState<RcaPathView | null>(null);
 
   // Load the recent incident list once when Investigate mode is entered, to
   // populate the picker. Best-effort: a failure just leaves the picker empty.
@@ -131,11 +135,13 @@ function CanvasInner() {
         const rca = await fetchRcaPathView(incidentId);
         if (!alive) return;
         if (rca) {
-          setFetched(rca);
+          setFetched(rca.view);
+          setIncidentOverlay(rca.overlay);
           setCoverage(null);
           return;
         }
       }
+      setIncidentOverlay(null); // no pinned incident (or path unavailable) → no banner
       if (source === "persisted") {
         const r = await fetchTopologyGraph();
         if (!alive) return;
@@ -461,6 +467,12 @@ function CanvasInner() {
             </ReactFlow>
 
             <TopologyLegend overlay={overlay} />
+
+            {mode === "investigate" && incidentOverlay && (
+              <div className="topo-rca-dock">
+                <RcaVerdictBanner overlay={incidentOverlay} onClear={() => setIncidentId("")} />
+              </div>
+            )}
 
             {(mode === "path_trace" || mode === "investigate") && (
               <div className="topo-path-dock">

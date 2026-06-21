@@ -17,7 +17,7 @@
 import type { TopologyView, WorkflowMode } from "./topologyTypes";
 import { normalizeView } from "../utils/topologyMapper";
 import { rcaPathToView } from "./rcaPathToView";
-import { api } from "../../../services/api";
+import { api, type RcaPathView } from "../../../services/api";
 import {
   physicalTopology,
   pathTopology,
@@ -109,13 +109,17 @@ export async function fetchTopologyGraph(): Promise<{ view: TopologyView; covera
  * converts it to the canonical view via the pure {@link rcaPathToView} adapter,
  * then normalizes it for the renderer. Returns null on any error or an empty path
  * so the caller falls back to the live Investigate projection — the canvas never
- * blanks on a malformed or visibility-restricted incident.
+ * blanks on a malformed or visibility-restricted incident. The raw `overlay` is
+ * carried alongside the view so the canvas can render the verdict banner (title,
+ * summary, recommended action, missing evidence) — the anti-black-box narrative.
  */
-export async function fetchRcaPathView(corrId: string): Promise<TopologyView | null> {
+export async function fetchRcaPathView(
+  corrId: string,
+): Promise<{ view: TopologyView; overlay: RcaPathView } | null> {
   try {
-    const rpv = await api.rcaPathView(corrId);
-    const view = normalizeView(rcaPathToView(rpv));
-    return view.nodes.length > 0 ? view : null;
+    const overlay = await api.rcaPathView(corrId);
+    const view = normalizeView(rcaPathToView(overlay));
+    return view.nodes.length > 0 ? { view, overlay } : null;
   } catch {
     return null;
   }
