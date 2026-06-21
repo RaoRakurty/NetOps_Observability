@@ -358,6 +358,22 @@ export type CorrObject = {
   low_authority?: number;      // 0/1
 };
 
+// RCA path overlay (#77) — UI-ready path + annotations for a correlation object
+// (GET /api/correlations/{id}/rca-path-view; backend rca_path_view.go).
+export type RcaPathNode = { id: string; type: string; kind: string; label: string; role?: string; status?: string };
+export type RcaPathEdge = { id: string; source: string; target: string; type: string; state: string; label?: string };
+export type RcaAnnotation = {
+  target_type: string; target_id: string; status: string; verdict: string; confidence: number;
+  owner: string; visibility: string; reason: string; evidence_refs: string[]; missing_evidence: string[];
+};
+export type RcaPathView = {
+  corr_object_id: string; verdict: string; confidence: number; internal: boolean;
+  title: string; summary: string; recommended_action: string;
+  path: { source: string; destination: string; nodes: RcaPathNode[]; edges: RcaPathEdge[] };
+  annotations: RcaAnnotation[];
+  evidence_summary: Record<string, unknown>; missing_evidence_summary: string[];
+};
+
 // Front page (#69) — scope health score, unified event feed, RCA coverage stats.
 export type HealthContribution = {
   signal_class: string; entity: string; badness: number; points: number; reason: string; timestamp?: string;
@@ -1199,6 +1215,10 @@ export const api = {
   },
   correlationDetail: (id: string) =>
     request<{ object: CorrObject; edges: CorrEdge[] }>(`/api/correlations/${encodeURIComponent(id)}`),
+  // RCA path overlay (#77): UI-ready path + per-target overlay annotations for a
+  // correlation object — drives the canvas Investigate-mode RCA overlay.
+  rcaPathView: (id: string) =>
+    request<RcaPathView>(`/api/correlations/${encodeURIComponent(id)}/rca-path-view`),
   correlationReplay: (id: string) =>
     request<CorrReplay>(`/api/correlations/${encodeURIComponent(id)}/replay`),
   // Full window signal slice (attached + concurrent-unattached) for the RCA timeline.

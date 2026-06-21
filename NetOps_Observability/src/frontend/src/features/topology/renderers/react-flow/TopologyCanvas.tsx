@@ -27,7 +27,8 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
-import { fetchTopologyView, fetchTopologyGraph, type TopologyCoverage } from "../../api/topologyApi";
+import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage } from "../../api/topologyApi";
+import { api, type CorrObject } from "../../../../services/api";
 import { layoutView } from "../../layout/elkLayout";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
@@ -97,9 +98,44 @@ function CanvasInner() {
   const [source, setSource] = useState<"live" | "persisted">("live");
   const [fetched, setFetched] = useState<TopologyView | null>(null);
   const [coverage, setCoverage] = useState<TopologyCoverage | null>(null);
+  // Investigate mode can pin a REAL incident: its RCA fault path (GET
+  // /api/correlations/{id}/rca-path-view) is converted to a view and rendered on
+  // the canvas, overriding the live projection. Empty = the live/mock projection.
+  const [incidents, setIncidents] = useState<CorrObject[]>([]);
+  const [incidentId, setIncidentId] = useState<string>("");
+
+  // Load the recent incident list once when Investigate mode is entered, to
+  // populate the picker. Best-effort: a failure just leaves the picker empty.
+  useEffect(() => {
+    if (mode !== "investigate") return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.correlations(50);
+        if (alive) setIncidents(r.data ?? []);
+      } catch {
+        if (alive) setIncidents([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [mode]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
+      // A pinned incident wins: render its RCA fault path. On a missing/empty path
+      // fall through to the live projection so the canvas still shows something.
+      if (mode === "investigate" && incidentId) {
+        const rca = await fetchRcaPathView(incidentId);
+        if (!alive) return;
+        if (rca) {
+          setFetched(rca);
+          setCoverage(null);
+          return;
+        }
+      }
       if (source === "persisted") {
         const r = await fetchTopologyGraph();
         if (!alive) return;
@@ -115,7 +151,12 @@ function CanvasInner() {
     return () => {
       alive = false;
     };
-  }, [mode, source]);
+  }, [mode, source, incidentId]);
+
+  // Drop the pinned incident when leaving Investigate mode.
+  useEffect(() => {
+    if (mode !== "investigate") setIncidentId("");
+  }, [mode]);
 
   const workflow = workflowById(mode);
   const view = fetched ?? workflow?.view;
@@ -341,6 +382,20 @@ function CanvasInner() {
               <span className="topo-coverage-stale"> · {coverage.stale_nodes + coverage.stale_edges} stale</span>
             )}
           </span>
+        )}
+        {mode === "investigate" && (
+          /* Pin a real incident to render its RCA fault path on the canvas. */
+          <label className="topo-incident-picker" title="Render a real incident's RCA fault path on the canvas">
+            <span className="topo-incident-picker-label">Incident</span>
+            <select value={incidentId} onChange={(e) => setIncidentId(e.target.value)} aria-label="Pin an incident's RCA path">
+              <option value="">Live projection</option>
+              {incidents.map((c) => (
+                <option key={c.correlation_id} value={c.correlation_id}>
+                  {(c.verdict_tier ? `[${c.verdict_tier}] ` : "") + (c.top_hypothesis || c.correlation_id)}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         {view && renderer === "canvas" && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
         <div className="topo-render-toggle" role="tablist" aria-label="Renderer">

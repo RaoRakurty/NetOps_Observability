@@ -730,6 +730,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   padding: 4px 11px; border-radius: 6px; border: 0; background: transparent; color: var(--fg-muted); }
 .topo-render-toggle button.on { background: var(--accent); color: #fff; }
 .topo-render-toggle button:not(.on):hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.topo-incident-picker { display: inline-flex; align-items: center; gap: 6px; }
+.topo-incident-picker-label { font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; }
+.topo-incident-picker select { font: inherit; font-size: 12px; font-weight: 600; max-width: 280px;
+  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel);
+  color: var(--fg); cursor: pointer; }
 
 /* Sigma WebGL enterprise overview (Phase 4) */
 .topo-sigma { position: absolute; inset: 0; }

@@ -16,6 +16,7 @@
 
 import type { TopologyView, WorkflowMode } from "./topologyTypes";
 import { normalizeView } from "../utils/topologyMapper";
+import { rcaPathToView } from "./rcaPathToView";
 import { api } from "../../../services/api";
 import {
   physicalTopology,
@@ -99,6 +100,24 @@ export async function fetchTopologyGraph(): Promise<{ view: TopologyView; covera
     return { view: normalizeView(physicalTopology) };
   } catch {
     return { view: normalizeView(physicalTopology) };
+  }
+}
+
+/**
+ * Fetch a REAL incident's RCA fault path as a TopologyView (#77): resolves the
+ * correlation object's path overlay (GET /api/correlations/{id}/rca-path-view),
+ * converts it to the canonical view via the pure {@link rcaPathToView} adapter,
+ * then normalizes it for the renderer. Returns null on any error or an empty path
+ * so the caller falls back to the live Investigate projection — the canvas never
+ * blanks on a malformed or visibility-restricted incident.
+ */
+export async function fetchRcaPathView(corrId: string): Promise<TopologyView | null> {
+  try {
+    const rpv = await api.rcaPathView(corrId);
+    const view = normalizeView(rcaPathToView(rpv));
+    return view.nodes.length > 0 ? view : null;
+  } catch {
+    return null;
   }
 }
 
