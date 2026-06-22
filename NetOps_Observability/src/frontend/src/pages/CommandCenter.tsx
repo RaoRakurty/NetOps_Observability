@@ -3,8 +3,47 @@ import { api, Incident, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel } from "../components/rca/labels";
 import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
-  fmtAge, buildItem, isActionableCorr, bySeverityThenAge,
+  type FaultDomain, type EvidenceState, type CcFilters,
+  fmtAge, buildItem, isActionableCorr, bySeverityThenAge, filterItems, activeFilterCount,
 } from "./commandCenter.model";
+
+// Action Queue filter bar — narrows the queue over data already in memory (no
+// refetch). Facets map 1:1 to the columns an operator triages by.
+const RCA_FILTERS: RcaState[] = ["Confirmed", "Suspected", "Blocked", "Correlated", "RCA running", "Resolved"];
+const SEV_FILTERS: Sev[] = ["crit", "major", "warn", "ok"];
+const FAULT_FILTERS: FaultDomain[] = ["LAN", "SD-WAN", "Data Center", "ISP / Carrier", "Cloud Provider", "Application", "Security", "Unknown"];
+const EVID_FILTERS: EvidenceState[] = ["Complete", "Partial", "Single-stream"];
+
+function FilterBar({ filters, setFilters, total, shown }: {
+  filters: CcFilters; setFilters: (f: CcFilters) => void; total: number; shown: number;
+}) {
+  const n = activeFilterCount(filters);
+  const sel = (key: keyof CcFilters, label: string, opts: string[]) => (
+    <label className="cc-filter">
+      <span>{label}</span>
+      <select value={(filters[key] as string) ?? "all"} onChange={(e) => setFilters({ ...filters, [key]: e.target.value })}>
+        <option value="all">All</option>
+        {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <div className="cc-filterbar">
+      {sel("rca", "RCA", RCA_FILTERS)}
+      {sel("sev", "Severity", SEV_FILTERS)}
+      {sel("fault", "Fault domain", FAULT_FILTERS)}
+      {sel("evidence", "Evidence", EVID_FILTERS)}
+      <button type="button" className={`cc-filter-chip${filters.needsAction ? " on" : ""}`}
+        aria-pressed={!!filters.needsAction}
+        onClick={() => setFilters({ ...filters, needsAction: !filters.needsAction })}
+        title="Missing owner, unticketed confirmed incident, or RCA blocked on evidence">
+        Needs action
+      </button>
+      <span className="cc-filter-count">{n > 0 ? `${shown} of ${total}` : `${total}`}</span>
+      {n > 0 && <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear ({n})</button>}
+    </div>
+  );
+}
 
 // Command Center — the NOC operational control plane (build-order #18). NOT a raw
 // alert table: the primary rows are CORRELATION GROUPS (CorrObjects), each already
@@ -130,6 +169,7 @@ export default function CommandCenter() {
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [filters, setFilters] = useState<CcFilters>({});
 
   const load = useCallback(async () => {
     try {
@@ -146,6 +186,8 @@ export default function CommandCenter() {
   useEffect(() => { load(); const id = setInterval(load, 30_000); return () => clearInterval(id); }, [load]);
 
   const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
+  // KPIs/pressure reflect the WHOLE queue; the filter bar narrows only the table.
+  const visible = useMemo(() => filterItems(items, filters), [items, filters]);
 
   const critical = items.filter((i) => i.sev === "crit").length;
   const untriaged = items.filter((i) => i.rca === "Correlated" || i.rca === "RCA running" || i.rca === "New").length;
@@ -200,10 +242,15 @@ export default function CommandCenter() {
           <h3 className="cc-panel-t">Action Queue</h3>
           <span className="cc-panel-meta">correlated incidents — what to work next</span>
         </div>
+        {loaded && items.length > 0 && (
+          <FilterBar filters={filters} setFilters={setFilters} total={items.length} shown={visible.length} />
+        )}
         {!loaded ? (
           <div className="cc-empty">Loading correlated incidents…</div>
         ) : items.length === 0 ? (
           <div className="cc-empty">No correlated incidents require action. The queue groups raw alerts into incidents — none have correlated.</div>
+        ) : visible.length === 0 ? (
+          <div className="cc-empty">No incidents match the current filters. <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear filters</button></div>
         ) : (
           <div className="cc-table-wrap">
             <table className="cc-table">
@@ -214,7 +261,7 @@ export default function CommandCenter() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((it) => (
+                {visible.map((it) => (
                   <QueueRow key={it.corr.correlation_id} it={it} expanded={open === it.corr.correlation_id}
                     onToggle={() => setOpen(open === it.corr.correlation_id ? null : it.corr.correlation_id)} />
                 ))}

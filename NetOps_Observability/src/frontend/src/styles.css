@@ -3144,6 +3144,15 @@ a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
 .cc-panel-meta { font-size: 11.5px; color: var(--fg-subtle); }
 .cc-ticketgap .cc-kpis { margin-top: 0; padding: 13px 15px; }
 .cc-empty { padding: 26px 18px; text-align: center; color: var(--fg-muted); font-size: 13px; }
+/* filter bar */
+.cc-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 9px 15px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
+.cc-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-subtle); }
+.cc-filter > span { text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600; }
+.cc-filter select { font-size: 11.5px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--fg); }
+.cc-filter-chip { font-size: 11px; font-weight: 600; padding: 4px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--fg-muted); cursor: pointer; }
+.cc-filter-chip.on { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.cc-filter-count { margin-left: auto; font-size: 11.5px; color: var(--fg-subtle); font-family: var(--font-mono, ui-monospace, monospace); }
+.cc-filter-clear { font-size: 11px; font-weight: 600; padding: 3px 8px; border: 1px solid var(--accent); border-radius: 5px; background: transparent; color: var(--accent); cursor: pointer; }
 /* table */
 .cc-table-wrap { overflow-x: auto; }
 .cc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }

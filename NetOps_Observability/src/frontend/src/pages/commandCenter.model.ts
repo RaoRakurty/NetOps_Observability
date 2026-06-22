@@ -146,3 +146,41 @@ export function bySeverityThenAge(a: ActionItem, b: ActionItem): number {
   const sr: Record<Sev, number> = { crit: 0, major: 1, warn: 2, ok: 3 };
   return sr[a.sev] - sr[b.sev] || b.ageMs - a.ageMs;
 }
+
+// ── Action Queue filters (Increment 2) ─────────────────────────────────────────
+// Pure, unit-testable predicates over the already-built ActionItem list. "all"/
+// undefined = no constraint on that facet; needsAction is a derived shortcut.
+
+export type CcFilters = {
+  rca?: RcaState | "all";
+  sev?: Sev | "all";
+  fault?: FaultDomain | "all";
+  evidence?: EvidenceState | "all";
+  needsAction?: boolean;
+};
+
+// needsAction — the operator's "what actually needs me right now": a missing owner,
+// an unticketed confirmed incident, or an RCA blocked on evidence.
+export function needsAction(it: ActionItem): boolean {
+  return it.owner === "Missing" || it.ticket === "Ticket needed" || it.rca === "Blocked";
+}
+
+export function filterItems(items: ActionItem[], f: CcFilters): ActionItem[] {
+  const on = (v: string | undefined): v is string => !!v && v !== "all";
+  return items.filter((it) => {
+    if (on(f.rca) && it.rca !== f.rca) return false;
+    if (on(f.sev) && it.sev !== f.sev) return false;
+    if (on(f.fault) && it.fault !== f.fault) return false;
+    if (on(f.evidence) && it.evidence !== f.evidence) return false;
+    if (f.needsAction && !needsAction(it)) return false;
+    return true;
+  });
+}
+
+// activeFilterCount — how many facets are constraining, for the "clear (N)" affordance.
+export function activeFilterCount(f: CcFilters): number {
+  let n = 0;
+  for (const k of ["rca", "sev", "fault", "evidence"] as const) if (f[k] && f[k] !== "all") n++;
+  if (f.needsAction) n++;
+  return n;
+}

@@ -92,7 +92,8 @@ test("operator sees only actionable customer-network incidents", async ({ page }
   // (exact match disambiguates the fault chip "ISP / Carrier" from the owner
   // recommendation chip "ISP / carrier".)
   await expect(page.locator("tr.cc-row").getByText("Confirmed", { exact: true })).toBeVisible();
-  await expect(page.getByText("ISP / Carrier", { exact: true })).toBeVisible();
+  // Scope to the row — the filter bar's fault-domain dropdown also lists "ISP / Carrier".
+  await expect(page.locator("tr.cc-row").getByText("ISP / Carrier", { exact: true })).toBeVisible();
 });
 
 test("expanding an incident reveals its evidence ledger", async ({ page }) => {
@@ -104,4 +105,17 @@ test("expanding an incident reveals its evidence ledger", async ({ page }) => {
   await expect(page.locator(".cc-eh", { hasText: "Evidence" })).toBeVisible();
   await expect(page.getByText(/correlated signal/)).toBeVisible();
   await expect(page.locator(".cc-eh", { hasText: "Recommended next action" })).toBeVisible();
+});
+
+test("the filter bar narrows the queue without a refetch", async ({ page }) => {
+  await bootCommandCenter(page); // one survivor: confirmed, fault domain "ISP / Carrier"
+
+  await expect(page.locator("tr.cc-row")).toHaveCount(1);
+  // Filtering to a domain the row isn't in empties the table (no match state).
+  await page.getByLabel("Fault domain").selectOption("SD-WAN");
+  await expect(page.locator("tr.cc-row")).toHaveCount(0);
+  await expect(page.getByText(/No incidents match the current filters/)).toBeVisible();
+  // Clearing brings it back.
+  await page.getByRole("button", { name: /Clear/ }).first().click();
+  await expect(page.locator("tr.cc-row")).toHaveCount(1);
 });

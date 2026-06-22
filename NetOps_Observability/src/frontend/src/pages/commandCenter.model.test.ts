@@ -8,6 +8,7 @@ import { corrObject } from "../test/factories";
 import {
   fmtAge, parseAffected, parseMissing, deriveRca, deriveEvidence, deriveFault,
   deriveOwner, deriveTicket, deriveSev, buildItem, isActionableCorr, bySeverityThenAge,
+  filterItems, needsAction, activeFilterCount,
   type ActionItem,
 } from "./commandCenter.model";
 
@@ -117,6 +118,51 @@ describe("isActionableCorr — the customer-facing queue filter", () => {
       affected: JSON.stringify({ devices: ["leaf-1", "spine-2"] }),
     });
     expect(isActionableCorr(real)).toBe(true);
+  });
+});
+
+describe("Action Queue filters", () => {
+  // A small mixed queue.
+  const mk = (over: Partial<ActionItem>): ActionItem => ({
+    corr: {} as never, affected: { devices: [], paths: [], interfaces: [], sites: [] }, missing: [],
+    sev: "warn", rca: "Correlated", evidence: "Partial", fault: "Unknown",
+    owner: "Recommended", ownerName: "x", ticket: "Not eligible", nextAction: "", ageMs: 0,
+    ...over,
+  });
+  const items = [
+    mk({ rca: "Confirmed", sev: "crit", fault: "ISP / Carrier", evidence: "Complete", owner: "Missing", ticket: "Ticket needed" }),
+    mk({ rca: "Suspected", sev: "major", fault: "SD-WAN", evidence: "Partial", owner: "Recommended" }),
+    mk({ rca: "Correlated", sev: "ok", fault: "LAN", evidence: "Single-stream", owner: "Recommended" }),
+  ];
+
+  it("no constraints returns everything", () => {
+    expect(filterItems(items, {})).toHaveLength(3);
+    expect(filterItems(items, { rca: "all", sev: "all" })).toHaveLength(3);
+  });
+
+  it("filters by a single facet", () => {
+    expect(filterItems(items, { rca: "Confirmed" })).toHaveLength(1);
+    expect(filterItems(items, { sev: "ok" }).map((i) => i.fault)).toEqual(["LAN"]);
+    expect(filterItems(items, { fault: "SD-WAN" })).toHaveLength(1);
+    expect(filterItems(items, { evidence: "Single-stream" })).toHaveLength(1);
+  });
+
+  it("combines facets (AND)", () => {
+    expect(filterItems(items, { rca: "Confirmed", fault: "SD-WAN" })).toHaveLength(0);
+    expect(filterItems(items, { sev: "crit", evidence: "Complete" })).toHaveLength(1);
+  });
+
+  it("needsAction selects missing-owner / ticket-needed / blocked", () => {
+    expect(filterItems(items, { needsAction: true })).toHaveLength(1); // the Confirmed/Missing/Ticket one
+    expect(needsAction(items[0])).toBe(true);
+    expect(needsAction(items[1])).toBe(false);
+    expect(needsAction(mk({ rca: "Blocked" }))).toBe(true);
+  });
+
+  it("activeFilterCount counts only constraining facets", () => {
+    expect(activeFilterCount({})).toBe(0);
+    expect(activeFilterCount({ rca: "all", sev: "all" })).toBe(0);
+    expect(activeFilterCount({ rca: "Confirmed", needsAction: true })).toBe(2);
   });
 });
 
