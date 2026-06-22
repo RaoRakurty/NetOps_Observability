@@ -80,9 +80,13 @@ func (s *server) gatherTopoMetrics(ctx context.Context) topoMetrics {
 	return topoMetrics{
 		cpu:        cpu,
 		mem:        mem,
-		operStatus: canonIfaceMap(s.qVecBy2(mctx, `max by (device, interface) (device_if_oper_status)`, "device", "interface")),
-		inUtil:     canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")),
-		outUtil:    canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "interface")),
+		// Interface metrics are labeled by ifName (+ifAlias/index), NOT `interface` —
+		// keying by `interface` silently yields empty maps, so link utilization never
+		// binds to an edge and Capacity shows nothing. canonIfaceMap then collapses
+		// abbreviated LLDP/CDP port-ids and full ifNames to one key.
+		operStatus: canonIfaceMap(s.qVecBy2(mctx, `max by (device, ifName) (device_if_oper_status)`, "device", "ifName")),
+		inUtil:     canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "ifName")),
+		outUtil:    canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "ifName")),
 	}
 }
 

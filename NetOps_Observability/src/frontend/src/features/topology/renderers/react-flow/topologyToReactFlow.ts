@@ -42,6 +42,13 @@ export type TopologyUIState = {
   collapsedGroups: Set<string>;
   /** Collapse/expand toggle, injected onto group node data (stable ref). */
   onToggleGroup?: (groupId: string) => void;
+  /**
+   * Operator DETAIL LEVEL (the toolbar Exec/Operator/Engineer/Incident control).
+   * Drives label + metric density and incident emphasis so the four levels are
+   * visibly distinct — executive = sparsest wallboard, engineer = every label/port,
+   * incident = dim the calm fabric and spotlight trouble. Defaults to operator.
+   */
+  density?: "executive" | "operator" | "engineer" | "incident";
 };
 
 const EMPTY_UI: TopologyUIState = {
@@ -52,6 +59,7 @@ const EMPTY_UI: TopologyUIState = {
   showAllLabels: false,
   searchMatches: new Set(),
   collapsedGroups: new Set(),
+  density: "operator",
 };
 
 /** Precompute the compact metrics strip shown on a node card. Skill metric keys. */
@@ -102,6 +110,7 @@ export function topologyToReactFlow(
   const collapsed = ui.collapsedGroups ?? new Set<string>();
   const spotlightActive = ui.spotlight.size > 0 || ui.searchMatches.size > 0;
   const focus = new Set<string>([...ui.spotlight, ...ui.searchMatches]);
+  const density = ui.density ?? "operator";
 
   // node → group membership, and helpers for collapse hiding / edge rerouting.
   const nodeGroup = new Map<string, string>();
@@ -161,15 +170,37 @@ export function topologyToReactFlow(
     .filter((n) => !isHidden(n.id))
     .map((n) => {
       const inFocus = focus.has(n.id);
+      const unhealthy = n.health === "critical" || n.health === "warning";
+      const critical = n.criticality === "critical";
+      // RCA-flagged = a node the engine marked as trouble (anything but a clean
+      // "observed"/internal hop); used by Incident detail to spotlight the fault.
+      const rcaFlag = !!n.rca_status && n.rca_status !== "observed" && n.rca_status !== "internal_only";
+      const selected = ui.selection.nodeId === n.id;
+
+      // Incident detail dims the calm fabric and lifts trouble even with NO selection
+      // — "calm except trouble" by default. A real click/search spotlight still wins.
+      const incidentDim = density === "incident" && !spotlightActive;
       let emphasis: NodeEmphasis = "normal";
       // A soft (hover) spotlight lifts the focus set but keeps everyone else normal;
       // only a hard focus (click / search) dims the out-of-focus cards.
       if (spotlightActive) emphasis = inFocus ? "spotlight" : ui.spotlightSoft ? "normal" : "dim";
+      else if (incidentDim) emphasis = unhealthy || critical || rcaFlag ? "spotlight" : "dim";
 
-      const unhealthy = n.health === "critical" || n.health === "warning";
-      const critical = n.criticality === "critical";
-      const showLabel =
-        ui.showAllLabels || ui.selection.nodeId === n.id || inFocus || unhealthy || critical || ui.searchMatches.has(n.id);
+      // Label density by detail level (the manual Labels toggle forces all on):
+      //   engineer  → every label/port · executive → only trouble + selection (wallboard)
+      //   incident  → trouble + RCA + selection · operator → focus + trouble + search.
+      const labelByDensity =
+        density === "engineer"
+          ? true
+          : density === "executive"
+            ? unhealthy || critical || selected
+            : density === "incident"
+              ? unhealthy || critical || rcaFlag || selected
+              : inFocus || unhealthy || critical || selected || ui.searchMatches.has(n.id);
+      const showLabel = ui.showAllLabels || labelByDensity;
+      // Per-node metric strip is wallboard clutter at executive detail; keep it for
+      // operator/engineer/incident triage.
+      const showMetrics = density !== "executive";
 
       return {
         id: n.id,
@@ -181,7 +212,7 @@ export function topologyToReactFlow(
         // node from shaking as spotlight recomputes.
         width: CARD_W,
         height: CARD_H,
-        data: { node: n, emphasis, showLabel, overlay: ui.overlay, metricsLine: metricsLine(n.metrics) },
+        data: { node: n, emphasis, showLabel, overlay: ui.overlay, metricsLine: showMetrics ? metricsLine(n.metrics) : undefined },
         zIndex: 1,
         selectable: true,
         draggable: true,
