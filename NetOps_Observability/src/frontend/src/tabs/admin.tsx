@@ -35,6 +35,16 @@ function ErrLine({ msg }: { msg: string | null }) {
 }
 
 // useReload gives a [data, error, reload, setError] tuple over an async loader.
+// Curated, safe landing targets an admin can pick for the default page. Shared by
+// the per-tenant override (Tenants table) and the platform default (Settings).
+export const LANDING_OPTIONS: { route: string; label: string }[] = [
+  { route: "#/incident/overview", label: "Command Center" },
+  { route: "#/dashboards/home", label: "Dashboards · Home" },
+  { route: "#/monitoring/correlations", label: "Correlations" },
+  { route: "#/monitoring/incidents", label: "Incidents" },
+  { route: "#/infrastructure/topology-canvas", label: "Topology Canvas" },
+];
+
 function useReload<T>(loader: () => Promise<T>): [T | undefined, string | null, () => void, (e: string | null) => void] {
   const [data, setData] = useState<T>();
   const [err, setErr] = useState<string | null>(null);
@@ -489,14 +499,6 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
   const orgName = (id?: string) => (orgs ?? []).find((o) => o.id === (id || "global"))?.name || (id || "global");
   const regionLabel = (id?: string) => id ? ((regions ?? []).find((r) => r.id === id)?.label || id) : "";
   const orgRegion = (orgId?: string) => (orgs ?? []).find((o) => o.id === (orgId || "global"))?.home_region;
-  // Curated, safe landing targets an admin can pick for the default page.
-  const LANDING_OPTIONS: { route: string; label: string }[] = [
-    { route: "#/incident/overview", label: "Command Center" },
-    { route: "#/dashboards/home", label: "Dashboards · Home" },
-    { route: "#/monitoring/correlations", label: "Correlations" },
-    { route: "#/monitoring/incidents", label: "Incidents" },
-    { route: "#/infrastructure/topology-canvas", label: "Topology Canvas" },
-  ];
   const changeTenantRegion = async (t: Tenant, value: string) => {
     setErr(null);
     try { await api.setTenantRegion(t.id, value); reload(); } catch (e) { setErr((e as Error).message); }
