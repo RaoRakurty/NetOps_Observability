@@ -236,6 +236,10 @@ func TestProjectPathTraceMeasured(t *testing.T) {
 	if len(v.Path) != 3 || v.Path[0] != "a" || v.Path[1] != "b" || v.Path[2] != "c" {
 		t.Fatalf("measured path should sanitize to %v, got %v", want, v.Path)
 	}
+	// HONESTY: a traceroute-derived path is ground truth and must be tagged measured.
+	if v.PathSource != PathMeasured {
+		t.Fatalf("measured traceroute path must be PathSource=%q, got %q", PathMeasured, v.PathSource)
+	}
 }
 
 // path_trace with no measured path falls back to IGP-weighted SPF over endpoints.
@@ -251,6 +255,24 @@ func TestProjectPathTraceComputed(t *testing.T) {
 	})
 	if len(v.Path) != 3 || v.Path[1] != "b" {
 		t.Fatalf("SPF should pick cheap a-b-c path, got %v", v.Path)
+	}
+	// NON-NEGOTIABLE honesty: an SPF inference must NEVER be tagged measured — the UI
+	// keys off this to avoid calling a computed path "traced".
+	if v.PathSource != PathComputed {
+		t.Fatalf("SPF-derived path must be PathSource=%q (a proxy, not a measurement), got %q", PathComputed, v.PathSource)
+	}
+}
+
+// HONESTY corollary: with neither a measured path nor endpoints, there is no path and
+// no provenance claim at all — the UI shows nothing rather than an empty "trace".
+func TestProjectPathTraceNoneIsHonest(t *testing.T) {
+	now := baseNow()
+	v := Project(Input{Mode: ModePathTrace, Now: now,
+		Devices: []DeviceFact{{ID: "a", LastSeen: now}, {ID: "b", LastSeen: now}},
+		Links:   []LinkFact{{Source: "a", Target: "b", Protocol: "lldp", LastSeen: now}},
+	})
+	if len(v.Path) != 0 || v.PathSource != "" {
+		t.Fatalf("no measured path + no endpoints → empty path and no provenance, got path=%v source=%q", v.Path, v.PathSource)
 	}
 }
 

@@ -36,13 +36,20 @@ the backend is far more covered than the spec assumes; the real gaps are concent
 | 1 | **Cloud / K8s readiness: NONE** — no K8s manifests, Helm chart, Terraform, CIS-K8s policy tests | High (for hyperscaler claim) | Product is docker-compose only; "AWS/Azure/GCP/K8s deployable" is unproven |
 | 2 | **E2E browser tests: NONE** (no Playwright/Cypress) | High | No automated proof the operator workflows (Command Center → incident → evidence) actually work in a browser, incl. cross-tenant UI guards |
 | 3 | **Frontend product-test depth** — `CommandCenter.tsx`, evidence-ledger role grouping, path-trace overclaim guards untested | Medium-High | The product surfaces (the decision system) lack regression tests |
-| 4 | **RCA dedup** (spec P3 #9): duplicate evidence must not inflate confidence | Medium | 0 tests today |
-| 5 | **Capacity "no fake precision"** (P8 #7): missing util → no fabricated numbers | Medium | partial (rankHotLinks excludes null); not explicitly pinned |
-| 6 | **Dependency noise guard** (non-negotiable): control-plane/multicast excluded | Medium | filter is in SQL (added); needs an explicit regression assertion |
+| 4 | ✅ **RCA dedup** (spec P3 #9): duplicate evidence must not inflate confidence | Medium | **DONE `aafd117`** — `assess()` counts unique witnesses |
+| 5 | ✅ **Capacity "no fake precision"** (P8 #7): missing util → no fabricated numbers | Medium | **DONE `aafd117`** — unmeasured link excluded, never simulated/ranked |
+| 6 | ✅ **Dependency noise guard** (non-negotiable): control-plane/multicast excluded | Medium | **DONE** — `isDependencyNoise` guard on the pure projection (defense-in-depth vs the SQL filter) + `TestBuildDependencyViewExcludesNoise`/`TestIsDependencyNoise` |
 | 7 | **CIS-Docker automated check** in CI (Dockerfiles run as non-root, no extra caps) | Medium | hardening exists; not gated by an automated test |
-| 8 | **Path Trace honesty** (non-negotiable): proxy must not be labeled true Path Trace | Medium | today it's a proxy; needs a guard test + the planned rename to "Path Context" |
-| 9 | **Evidence-ledger immutability/audit** (P4 #6) | Medium | append-only/audit on evidence-role changes not asserted |
+| 8 | ✅ **Path Trace honesty** (non-negotiable): proxy must not be labeled true Path Trace | Medium | **DONE** — backend tags `View.PathSource` measured\|computed (`resolvePath` + tests); UI provenance chip in `PathAnalysisPanel` ("Computed · …not a live trace") + render test |
+| 9 | ✅ **Evidence-ledger immutability/audit** (P4 #6) | Medium | **DONE** — versioned append-only ledger pinned: re-version re-stamps frozen evidence (no in-place edit), rows carry role+note (audit), changed evidence ⇒ new version (`test_engine.py`) |
 | 10 | **Load/resilience** (10k incidents/nodes; P5/P6) | Low-Medium | no perf bound tests |
+
+**Step-1 status (2026-06-22): COMPLETE.** All five high-priority correctness/honesty
+guards (#4, #5, #6, #8, #9) closed — no new infra, pure-layer unit + render tests.
+Next per the order below: (2) frontend product regression (Command Center, evidence
+ledger role grouping), then (3) E2E, (4) CIS-Docker CI, (5) cloud/K8s packaging.
+**K8s is ADDITIVE packaging (Helm + manifests alongside docker-compose), not a stack
+migration** — compose stays the default; no forced move off it.
 
 ## Recommended implementation order
 1. **High-priority correctness/honesty unit tests** (no new infra): RCA dedup, capacity

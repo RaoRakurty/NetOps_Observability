@@ -167,8 +167,9 @@ func Project(in Input) View {
 
 	// ── path (path_trace): prefer a measured path; else compute IGP-weighted SPF ──
 	var path []string
+	var pathSource string
 	if mode == ModePathTrace {
-		path = resolvePath(in, graph, managed, unresolvedSeen)
+		path, pathSource = resolvePath(in, graph, managed, unresolvedSeen)
 	}
 
 	return View{
@@ -182,6 +183,7 @@ func Project(in Input) View {
 		Groups:      groups,
 		Overlays:    overlays(mode, edges),
 		Path:        path,
+		PathSource:  pathSource,
 	}
 }
 
@@ -497,24 +499,26 @@ func worseHealth(a, b string) string {
 
 // ── path helpers ─────────────────────────────────────────────────────────────
 
-// resolvePath picks the highlighted path for path_trace mode:
-//   - a measured traceroute (Input.Paths[0]) wins — it's ground truth;
-//   - else, if explicit Src/Dst endpoints are given, compute the IGP-weighted SPF.
+// resolvePath picks the highlighted path for path_trace mode AND reports its
+// provenance (HONESTY — the UI must not present an inference as a measurement):
+//   - a measured traceroute (Input.Paths[0]) wins — it's ground truth → PathMeasured;
+//   - else, if explicit Src/Dst endpoints are given, the IGP-weighted SPF is an
+//     INFERENCE → PathComputed.
 //
-// Returns nil when neither is available (the UI simply shows no path).
-func resolvePath(in Input, g *Graph, managed map[string]bool, unresolved map[string]LinkFact) []string {
+// Returns (nil, "") when neither is available (the UI simply shows no path).
+func resolvePath(in Input, g *Graph, managed map[string]bool, unresolved map[string]LinkFact) ([]string, string) {
 	if len(in.Paths) > 0 {
 		hops := sanitizeHops(in.Paths[0].Hops, managed, unresolved)
 		if len(hops) >= 2 {
-			return hops
+			return hops, PathMeasured
 		}
 	}
 	if in.SrcID != "" && in.DstID != "" {
 		if p, _, ok := g.Dijkstra(in.SrcID, in.DstID); ok {
-			return p
+			return p, PathComputed
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 // sanitizeHops drops empty/unknown hop ids and collapses consecutive duplicates,

@@ -80,6 +80,72 @@ func TestBuildDependencyView(t *testing.T) {
 	}
 }
 
+// depRowPort is depRow with an explicit destination port (for noise-filter tests).
+func depRowPort(src, dst string, dport int) map[string]any {
+	return map[string]any{"src": src, "dst": dst, "bytes_total": 1e6, "flows": float64(10), "dport": float64(dport)}
+}
+
+// NON-NEGOTIABLE (dependency-map honesty): network plumbing must never appear as a
+// service dependency. The SQL filter is primary; this pins the pure-projection guard
+// so a weakened query — or rows from any non-ClickHouse source — can't pollute the map.
+func TestBuildDependencyViewExcludesNoise(t *testing.T) {
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	byAddr := map[string]models.Device{
+		"10.0.0.1": {ID: "dev-a", Name: "app1", Address: "10.0.0.1"},
+		"10.0.0.2": {ID: "dev-b", Name: "db1", Address: "10.0.0.2"},
+	}
+	rows := []map[string]any{
+		depRowPort("10.0.0.1", "10.0.0.2", 5432),          // KEEP: real unicast service
+		depRowPort("10.0.0.1", "224.0.0.5", 5432),         // DROP: OSPF multicast
+		depRowPort("10.0.0.1", "239.255.255.250", 1900),   // DROP: SSDP multicast
+		depRowPort("10.0.0.1", "255.255.255.255", 67),     // DROP: DHCP broadcast
+		depRowPort("10.0.0.1", "169.254.1.1", 5432),       // DROP: link-local
+		depRowPort("10.0.0.1", "10.0.0.2", 0),             // DROP: counter/control sample (no port)
+		depRowPort("10.0.0.2", "10.0.0.2", 5432),          // DROP: self-talk
+	}
+	v := buildDependencyView("t1", now, byAddr, rows)
+	if len(v.Edges) != 1 {
+		t.Fatalf("only the unicast service edge should survive, got %d edges: %+v", len(v.Edges), v.Edges)
+	}
+	if v.Edges[0].Source != "dev-a" || v.Edges[0].Target != "dev-b" {
+		t.Fatalf("surviving edge should be app1→db1, got %s→%s", v.Edges[0].Source, v.Edges[0].Target)
+	}
+	// No multicast/broadcast/link-local endpoint ever became a node.
+	for _, n := range v.Nodes {
+		switch n.ID {
+		case "host:224.0.0.5", "host:239.255.255.250", "host:255.255.255.255", "host:169.254.1.1":
+			t.Fatalf("noise endpoint leaked into the dependency map as a node: %s", n.ID)
+		}
+	}
+}
+
+// isDependencyNoise classifies plumbing vs. real service traffic. Table-pinned so the
+// invariant survives a refactor.
+func TestIsDependencyNoise(t *testing.T) {
+	cases := []struct {
+		src, dst string
+		dport    int
+		noise    bool
+	}{
+		{"10.0.0.1", "10.0.0.2", 443, false},        // unicast HTTPS
+		{"10.0.0.1", "8.8.8.8", 53, false},          // external unicast
+		{"10.0.0.1", "db.example", 5432, false},     // hostname → resolver's call, not noise
+		{"10.0.0.1", "224.0.0.5", 89, true},         // OSPF
+		{"10.0.0.1", "239.1.2.3", 5432, true},       // multicast app
+		{"10.0.0.1", "255.255.255.255", 67, true},   // broadcast
+		{"10.0.0.1", "169.254.0.1", 443, true},      // link-local
+		{"10.0.0.1", "0.0.0.0", 443, true},          // unspecified
+		{"10.0.0.1", "10.0.0.2", 0, true},           // no real port
+		{"10.0.0.1", "10.0.0.1", 443, true},         // self-talk
+		{"", "10.0.0.2", 443, true},                 // empty src
+	}
+	for _, c := range cases {
+		if got := isDependencyNoise(c.src, c.dst, c.dport); got != c.noise {
+			t.Errorf("isDependencyNoise(%q,%q,%d) = %v, want %v", c.src, c.dst, c.dport, got, c.noise)
+		}
+	}
+}
+
 // Empty flow input → a well-formed empty view (the frontend degrades to a sample).
 func TestBuildDependencyViewEmpty(t *testing.T) {
 	v := buildDependencyView("t1", time.Now(), nil, nil)

@@ -64,6 +64,16 @@ const (
 	ModeExecutiveGeo = "executive_geo"
 )
 
+// Path provenance (contract PathSource) — HONESTY guard for path_trace mode. A
+// "measured" path is ground truth from a traceroute/probe; a "computed" path is an
+// IGP-weighted shortest-path INFERENCE over the inventory graph (a proxy, not an
+// observed forwarding path). The UI MUST distinguish them — a computed path is never
+// labeled "traced". Empty when no path is highlighted.
+const (
+	PathMeasured = "measured"
+	PathComputed = "computed"
+)
+
 // Edge link status (contract EdgeStatus). "" → "unknown" at the boundary.
 const (
 	StatusUp          = "up"
@@ -175,6 +185,10 @@ type View struct {
 	Overlays    []string `json:"overlays"`
 	// derived enrichment: ordered node ids of the highlighted path (path_trace).
 	Path []string `json:"path,omitempty"`
+	// provenance of Path: PathMeasured (traceroute ground truth) vs PathComputed
+	// (IGP-weighted SPF inference). HONESTY: the UI must not call a computed path
+	// "traced". Empty when there is no path.
+	PathSource string `json:"path_source,omitempty"`
 }
 
 // ── input: the DI'd telemetry bundle ─────────────────────────────────────────

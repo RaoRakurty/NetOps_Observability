@@ -277,3 +277,49 @@ def test_snapshot_row_contract():
 def test_engine_version_pins_config():
     assert engine_version(EngineConfig()) != engine_version(EngineConfig(tau_s=999))
     assert engine_version(EngineConfig()) == engine_version(EngineConfig())
+
+
+# ── evidence-ledger immutability / audit (gap-report #9, P4 — NON-NEGOTIABLE) ──
+# The evidence ledger is APPEND-ONLY and versioned: a re-evaluation re-stamps the
+# frozen evidence under a NEW version label (never edits a prior version's record),
+# every evidence row is auditable (explicit role + provenance note), and a real
+# evidence change forces a new version rather than silently mutating the old one.
+
+
+def test_evidence_rows_are_auditable_and_versioned():
+    snap = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,))[0]
+    rows = snap.to_evidence_rows(1)
+    assert rows, "a grounded snapshot must emit evidence rows"
+    for r in rows:
+        assert r["role"], "every evidence row carries an explicit role (audit)"
+        assert r["note"], "every evidence row carries a provenance note (audit)"
+        assert r["version"] == 1
+        assert r["correlation_id"] == snap.correlation_id
+
+
+def test_reversioning_is_append_not_in_place_mutation():
+    """v2 of the SAME evidence differs from v1 ONLY by the version label — role,
+    subject and note are frozen, proving a new version is an APPEND, not an edit."""
+    snap = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,))[0]
+    v1, v2 = snap.to_evidence_rows(1), snap.to_evidence_rows(2)
+    assert len(v1) == len(v2) and v1
+    for a, b in zip(v1, v2):
+        assert a["version"] == 1 and b["version"] == 2
+        strip = lambda d: {k: v for k, v in d.items() if k != "version"}
+        assert strip(a) == strip(b), "non-version fields must be immutable across versions"
+
+
+def test_evidence_change_forces_new_version_unchanged_does_not_churn():
+    cat = builtin_catalog()
+    full = run_window(golden_window(), cat, (DALLAS_SEAM,))[0]
+    # Re-evaluating identical evidence ⇒ identical hash ⇒ engine_cycle keeps the
+    # version (no churn) — see main.engine_cycle's `reg["hash"] != chash` gate.
+    again = run_window(golden_window(), cat, (DALLAS_SEAM,))[0]
+    assert full.content_hash() == again.content_hash()
+    # Dropping a corroborating signal genuinely changes the evidence ⇒ the change
+    # detector MUST move, so a NEW version is emitted (audit trail) — the prior
+    # version's evidence is never overwritten in place.
+    reduced = run_window([s for s in golden_window() if s.kind != "qos_drops"],
+                         cat, (DALLAS_SEAM,))[0]
+    assert reduced.correlation_id == full.correlation_id, "same object identity"
+    assert reduced.content_hash() != full.content_hash(), "changed evidence ⇒ new version"

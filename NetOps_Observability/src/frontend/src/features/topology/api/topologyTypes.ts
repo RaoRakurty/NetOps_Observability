@@ -209,6 +209,12 @@ export type TopologyView = {
   time_range?: { from: string; to: string };
   /** Ordered node ids of the highlighted path (path_trace / investigate). */
   path?: string[];
+  /**
+   * Provenance of `path` — HONESTY guard. "measured" = traceroute/probe ground truth;
+   * "computed" = an IGP-weighted shortest-path INFERENCE over inventory (a proxy, not
+   * an observed forwarding path). The UI MUST NOT call a "computed" path "traced".
+   */
+  path_source?: "measured" | "computed";
   renderer_hints?: { preferred: "react_flow" | "sigma" | "deck_geo"; max_detail_level: number };
 };
 

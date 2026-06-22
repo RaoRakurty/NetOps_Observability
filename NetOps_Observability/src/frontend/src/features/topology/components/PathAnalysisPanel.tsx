@@ -1,4 +1,7 @@
-// PathAnalysisPanel — renders a traced A→B path as an instrumented hop ladder.
+// PathAnalysisPanel — renders an A→B path as an instrumented hop ladder. The path
+// may be MEASURED (traceroute ground truth) or COMPUTED (an IGP shortest-path
+// inference); a provenance chip states which so a computed proxy is never read as a
+// live trace (honesty guard).
 // Each hop shows the device, a per-hop HEALTH band, and the ingress/egress
 // interfaces; between hops it shows the connecting LINK's utilization + status,
 // and the worst hop/link on the path is flagged as the likely bottleneck. Per-hop
@@ -64,9 +67,34 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
   // Bottleneck = a down/degraded link if any, else the busiest measured link ≥ 70%.
   const bottleneckIdx = downIdx >= 0 ? downIdx : worstUtil >= 70 ? worstLinkIdx : -1;
 
+  // HONESTY: a "computed" path is an IGP shortest-path INFERENCE, not a live trace.
+  // Surface its provenance so the operator never mistakes a proxy for a measurement.
+  const measured = view.path_source === "measured";
+  const provenance = view.path_source
+    ? measured
+      ? { label: "Measured · live traceroute", color: "var(--ok, #30a46c)" }
+      : { label: "Computed · inferred shortest path (not a live trace)", color: "var(--warn, #f5a524)" }
+    : null;
+
   return (
     <section>
       <div style={SECTION}>Path · {path.length} hops</div>
+
+      {provenance && (
+        <div
+          title={
+            measured
+              ? "Hops observed by an active traceroute/probe — ground truth."
+              : "Derived from the IGP-weighted topology (shortest path), not an observed forwarding path. Run a traceroute to confirm."
+          }
+          style={{ fontSize: 10.5, fontWeight: 600, color: provenance.color, marginBottom: 8,
+            padding: "4px 8px", border: `1px solid ${provenance.color}`, borderRadius: 5,
+            background: `color-mix(in srgb, ${provenance.color} 10%, transparent)`,
+            display: "inline-block" }}
+        >
+          {provenance.label}
+        </div>
+      )}
 
       {bottleneckIdx >= 0 && (
         <div style={{ fontSize: 11, fontWeight: 600, color: "var(--warn)", marginBottom: 8,

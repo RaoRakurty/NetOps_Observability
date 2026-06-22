@@ -15,6 +15,7 @@ package main
 //     so the frontend degrades to the labeled sample, same contract as geo.
 
 import (
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -129,16 +130,21 @@ func buildDependencyView(tenant string, now time.Time, byAddr map[string]models.
 	for _, row := range rows {
 		src, _ := row["src"].(string)
 		dst, _ := row["dst"].(string)
-		if src == "" || dst == "" {
+		dport := int(asFloat(row["dport"]))
+		// Defense-in-depth: drop network plumbing (multicast/broadcast/link-local,
+		// no real port, self-talk) even if the SQL filter is ever weakened or the rows
+		// come from a non-ClickHouse source. A service dependency is unicast to a real
+		// port — see isDependencyNoise.
+		if isDependencyNoise(src, dst, dport) {
 			continue
 		}
 		sID, dID := ensure(src), ensure(dst)
 		if sID == dID {
-			continue
+			continue // distinct addresses resolving to the same managed device
 		}
 		bytes := asFloat(row["bytes_total"])
 		flows := asFloat(row["flows"])
-		svc := serviceForPort(int(asFloat(row["dport"])))
+		svc := serviceForPort(dport)
 		edges = append(edges, topology.Edge{
 			ID:           "dep:" + sID + "--" + dID,
 			Source:       sID,
@@ -167,6 +173,35 @@ func buildDependencyView(tenant string, now time.Time, byAddr map[string]models.
 	}
 	out.Edges = edges
 	return out
+}
+
+// isDependencyNoise reports whether a flow conversation is network plumbing rather
+// than a real service dependency, and must therefore never appear on the dependency
+// map. NON-NEGOTIABLE invariant (see CLAUDE.md §3 zero-trust, dependency-map honesty):
+// control/counter samples (no real destination port), self-talk, and multicast /
+// broadcast / link-local destinations (OSPF/PIM/IGMP/VRRP, DHCP discovery, mDNS, etc.)
+// are NOT dependencies. The SQL in projectDependencyView is the primary filter; this is
+// the unit-testable guard on the PURE projection so the invariant holds regardless of
+// the row source. Unparseable / hostname destinations are left to the resolver.
+func isDependencyNoise(src, dst string, dport int) bool {
+	if src == "" || dst == "" || src == dst {
+		return true
+	}
+	if dport <= 0 {
+		return true
+	}
+	ip := net.ParseIP(dst)
+	if ip == nil {
+		return false
+	}
+	if ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	// IPv4 limited broadcast (255.255.255.255) is not flagged by IsMulticast.
+	if v4 := ip.To4(); v4 != nil && v4[0] == 255 && v4[1] == 255 && v4[2] == 255 && v4[3] == 255 {
+		return true
+	}
+	return false
 }
 
 func displayDevName(d models.Device, fallback string) string {
