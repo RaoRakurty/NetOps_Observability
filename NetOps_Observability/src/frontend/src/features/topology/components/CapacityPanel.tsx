@@ -89,6 +89,8 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
   const headroom = linkHeadroom(view).slice(0, 6);
   const [drainId, setDrainId] = useState<string | null>(null);
   const drain = drainId ? simulateDrain(view, drainId) : [];
+  // Always show device names, never raw internal link ids (customer-facing language).
+  const nodeName = (id: string) => view.nodes.find((n) => n.id === id)?.label ?? id;
 
   if (hot.length === 0) {
     return (
@@ -118,7 +120,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
               <li key={h.edge.id} style={{ padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", display: "grid", gap: 5 }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {h.edge.source_port ? `${h.edge.source}↔${h.edge.target}` : h.edge.id}
+                    {nodeName(h.edge.source)} ↔ {nodeName(h.edge.target)}
                   </span>
                   <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline", flex: "0 0 auto" }}>
                     {h.spof ? <Badge tone="warning">no ECMP backup</Badge> : null}

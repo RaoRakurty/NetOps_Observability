@@ -786,8 +786,8 @@ export default function Flows({ sinceSeconds }: { sinceSeconds?: number } = {}) 
           <>
             <TopNPanel title="Top Devices (exporters)" by="device" q={q} keyHeader="Device" limit={12} />
             <div className="flows-grid">
-              <TopNPanel title="Top Ingress Interfaces" by="in_if" q={q} keyHeader="Ingress ifIndex" />
-              <TopNPanel title="Top Egress Interfaces" by="out_if" q={q} keyHeader="Egress ifIndex" />
+              <TopNPanel title="Top Ingress Interfaces" by="in_if" q={q} keyHeader="Ingress interface" />
+              <TopNPanel title="Top Egress Interfaces" by="out_if" q={q} keyHeader="Egress interface" />
             </div>
           </>
         )}

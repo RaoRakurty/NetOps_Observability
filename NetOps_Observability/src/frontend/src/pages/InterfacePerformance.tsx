@@ -76,7 +76,7 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
             <select value={iface} onChange={(e) => setIface(e.target.value)} disabled={!device}>
               <option value="">All interfaces</option>
               {ifaceOptions.map((i) => (
-                <option key={i} value={i}>ifIndex {i}</option>
+                <option key={i} value={i}>Interface {i}</option>
               ))}
             </select>
           </label>

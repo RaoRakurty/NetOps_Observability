@@ -32,6 +32,15 @@ const CHANGE_LABEL: Record<ChangeState, string> = {
   unknown: "Unknown",
 };
 
+// Customer-facing wording for the link relationship — never the raw enum token.
+const RELATIONSHIP_LABEL: Record<string, string> = {
+  connected_to: "Connected",
+  routed_adjacency: "Routed neighbor",
+  dependency: "Depends on",
+  inferred: "Inferred",
+  flow: "Traffic dependency",
+};
+
 function HealthBadge({ health }: { health: Health }) {
   const color = HEALTH_COLOR[health];
   return (
@@ -94,7 +103,7 @@ function UnresolvedBlock({ node }: { node: TopologyNode }) {
       <div style={{ ...sectionTitle, marginBottom: 6 }}>Unresolved — why it's here</div>
       <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 8 }}>{unresolvedReason(node.tags)}</div>
       <div style={{ display: "grid", gap: 2, marginBottom: 8 }}>
-        <MetaRow label="Raw ID" value={rawId} />
+        <MetaRow label="Discovered as" value={rawId} />
         <MetaRow label="Suggested" value={suggested} />
         <MetaRow label="Missing" value={missing} />
       </div>
@@ -209,7 +218,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
       </div>
 
       <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
-        <MetaRow label="Relationship" value={edge.relationship} />
+        <MetaRow label="Relationship" value={RELATIONSHIP_LABEL[edge.relationship] ?? edge.relationship} />
         <MetaRow label="Source port" value={edge.source_port} />
         <MetaRow label="Target port" value={edge.target_port} />
         <MetaRow label="Status" value={edge.status} />
