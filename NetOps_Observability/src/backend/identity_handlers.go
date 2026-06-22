@@ -409,13 +409,14 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			OperatorRestricted *bool   `json:"operator_restricted"`
 			Region             *string `json:"region"`
-			Status             *string `json:"status"` // active | suspended (lifecycle)
+			Status             *string `json:"status"`          // active | suspended (lifecycle)
+			DefaultLanding     *string `json:"default_landing"` // admin-configurable landing route
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if req.OperatorRestricted == nil && req.Region == nil && req.Status == nil {
+		if req.OperatorRestricted == nil && req.Region == nil && req.Status == nil && req.DefaultLanding == nil {
 			writeError(w, http.StatusBadRequest, errors.New("no updatable field provided"))
 			return
 		}
@@ -441,6 +442,13 @@ func (s *server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			logInfo("tenants", "operator visibility changed", map[string]any{"tenant_id": id, "operator_restricted": *req.OperatorRestricted})
+		}
+		if req.DefaultLanding != nil {
+			if t, err = s.tenants.SetDefaultLanding(id, *req.DefaultLanding); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			logInfo("tenants", "default landing changed", map[string]any{"tenant_id": id, "default_landing": t.DefaultLanding})
 		}
 		s.recordIdentityAudit(r, claims, "TENANT_UPDATED", auditTenantDetail(t))
 		writeJSON(w, http.StatusOK, t)

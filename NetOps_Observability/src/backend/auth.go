@@ -495,7 +495,25 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		AccessibleTenants []string `json:"accessible_tenants"`
 		AllTenants        bool     `json:"all_tenants"`
 		OrgAdminOf        []string `json:"org_admin_of"`
-	}{toPublic(user), owner, s.principalOrg(claims), tenants, allTenants, s.orgAdminOrgs(claims.Sub)})
+		DefaultLanding    string   `json:"default_landing,omitempty"`
+	}{toPublic(user), owner, s.principalOrg(claims), tenants, allTenants, s.orgAdminOrgs(claims.Sub), s.resolveLanding(claims)})
+}
+
+// resolveLanding returns the administratively-configured landing route for the
+// caller: the caller's tenant value, else the platform default (the global tenant's
+// value), else "" (the SPA then uses its built-in home). The route's existence and
+// the caller's authorization to view it are validated client-side against the nav,
+// so a stale or now-forbidden route degrades gracefully rather than trapping a user.
+func (s *server) resolveLanding(claims jwtClaims) string {
+	if tenant, _ := principalTenant(claims); tenant != "" && tenant != TenantGlobal {
+		if t, ok := s.tenants.Get(tenant); ok && t.DefaultLanding != "" {
+			return t.DefaultLanding
+		}
+	}
+	if g, ok := s.tenants.Get(TenantGlobal); ok {
+		return g.DefaultLanding
+	}
+	return ""
 }
 
 // isLocalAccount reports whether an account's password is managed locally (so it

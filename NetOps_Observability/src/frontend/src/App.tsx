@@ -3,7 +3,7 @@ import { api, Health } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
-import { resolveRoute, filteredNav } from "./nav";
+import { resolveRoute, filteredNav, landingResolves } from "./nav";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
@@ -88,6 +88,22 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  // Administratively-configured default landing (Increment 2). Applied ONCE, only on
+  // a fresh open (no explicit deep-link), and only if the configured route resolves
+  // to a real leaf in THIS principal's nav — a stale or now-forbidden route falls
+  // back to the built-in home rather than trapping the user. An explicit deep-link
+  // always wins.
+  const hadDeepLink = useRef(location.hash !== "" && location.hash !== "#/");
+  const appliedLanding = useRef(false);
+  useEffect(() => {
+    if (appliedLanding.current || loading || !user || hadDeepLink.current) return;
+    appliedLanding.current = true;
+    const want = user.default_landing;
+    if (want && want !== hash && landingResolves(want, nav)) {
+      location.hash = want; // fires hashchange → setHash
+    }
+  }, [user, loading, nav, hash]);
 
   // Poll backend health for the top-bar indicator.
   useEffect(() => {

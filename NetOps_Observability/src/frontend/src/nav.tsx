@@ -316,6 +316,20 @@ export function resolveRoute(hash: string, nav: NavSection[] = NAV): Resolved {
   return { section, leaf };
 }
 
+// landingResolves reports whether an administratively-configured landing route
+// points at a REAL, ACCESSIBLE leaf in the given (already principal-filtered) nav —
+// i.e. resolveRoute round-trips it instead of silently falling back. Used to apply a
+// configured default landing only when it's valid for this user; otherwise the app
+// keeps its built-in home. (resolveRoute never reports "not found", so we compare.)
+export function landingResolves(hash: string, nav: NavSection[] = NAV): boolean {
+  const path = hash.replace(/^#\/?/, "").split("?")[0];
+  const [sectionId, leafId] = path.split("/");
+  if (!sectionId) return false;
+  const r = resolveRoute(hash, nav);
+  if (r.section.id !== sectionId) return false;
+  return !leafId || r.leaf?.id === leafId;
+}
+
 // Build the canonical route string for a section (first leaf if grouped).
 export function routeFor(section: NavSection, leaf?: NavLeaf): string {
   if (section.children) return `${section.id}/${(leaf ?? section.children[0]).id}`;

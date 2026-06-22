@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -43,9 +44,33 @@ type Tenant struct {
 	// TenantContext). Default "active"; a future suspend/archive flow flips it,
 	// and policy can deny access to a non-active tenant. Blank is read as active
 	// for tenants created before this field existed.
-	Status    string    `json:"status,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Status string `json:"status,omitempty"`
+	// DefaultLanding is the hash route a user lands on after sign-in, administratively
+	// configurable per tenant (blank = inherit the platform default = the global
+	// tenant's value, else the app's built-in home). Stored as a sanitized opaque
+	// route ("#/section/leaf"); the SPA validates it resolves to a real, accessible
+	// nav leaf and falls back gracefully, so a stale/forbidden route never traps a user.
+	DefaultLanding string    `json:"default_landing,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
+
+// sanitizeLandingRoute validates an administratively-set landing route. Empty is
+// allowed (inherit). Otherwise it must be a relative hash route — no scheme, host,
+// whitespace or control chars — so it can never be turned into an open redirect or
+// injection. Route EXISTENCE/authorization is the SPA's job (it knows the nav).
+func sanitizeLandingRoute(route string) (string, error) {
+	r := strings.TrimSpace(route)
+	if r == "" {
+		return "", nil
+	}
+	if len(r) > 128 || !landingRoutePattern.MatchString(r) {
+		return "", errors.New("invalid landing route (expected a relative #/… route)")
+	}
+	return r, nil
+}
+
+// e.g. "#/incident/overview", "#/dashboards/home". Letters/digits/-/_/ only.
+var landingRoutePattern = regexp.MustCompile(`^#/[A-Za-z0-9][A-Za-z0-9/_-]*$`)
 
 // Tenant lifecycle states.
 const (
@@ -171,6 +196,28 @@ func (s *tenantStore) SetRegion(ref, region string) (Tenant, error) {
 		return Tenant{}, errors.New("tenant not found")
 	}
 	t.Region = reg
+	s.tenants[t.ID] = t
+	if err := s.flushLocked(); err != nil {
+		return Tenant{}, err
+	}
+	return t, nil
+}
+
+// SetDefaultLanding sets the tenant's administratively-configured landing route
+// (blank = inherit the platform default). Setting it on the GLOBAL tenant defines
+// the platform-wide default. The route is sanitized; existence is the SPA's job.
+func (s *tenantStore) SetDefaultLanding(ref, route string) (Tenant, error) {
+	clean, err := sanitizeLandingRoute(route)
+	if err != nil {
+		return Tenant{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.resolveLocked(ref) // id or slug
+	if !ok {
+		return Tenant{}, errors.New("tenant not found")
+	}
+	t.DefaultLanding = clean
 	s.tenants[t.ID] = t
 	if err := s.flushLocked(); err != nil {
 		return Tenant{}, err

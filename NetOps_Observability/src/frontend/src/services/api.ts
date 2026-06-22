@@ -886,6 +886,9 @@ export type AuthUser = {
   // passwords live at the IdP). Empty/undefined = legacy local account.
   auth_source?: string;
   last_login_at?: string;
+  // Administratively-configured default landing route (tenant default → platform
+  // default). The SPA applies it on a fresh open if it resolves to an accessible leaf.
+  default_landing?: string;
 };
 export type LoginResponse = { token: string; refresh_token?: string; expires_in?: number; user: AuthUser };
 
@@ -1448,6 +1451,11 @@ export const api = {
   // Lifecycle: suspend (block sign-in) or reactivate a tenant.
   setTenantStatus: (id: string, status: "active" | "suspended") =>
     request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  // Admin-configurable default landing route for this tenant ("" = inherit the
+  // platform default = the global tenant's value). Set on the global tenant to
+  // define the platform-wide default.
+  setTenantLanding: (id: string, defaultLanding: string) =>
+    request<Tenant>(`/api/tenants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ default_landing: defaultLanding }) }),
   // Operator one-step onboard: create an org + its first tenant (+optional SSO) in
   // one audited call (platform-owner only). Slugs optional (derived from names).
   onboardCustomer: (req: {
@@ -1706,6 +1714,7 @@ export type Tenant = {
   region?: string; // data-residency region (blank = inherit org home_region)
   operator_restricted?: boolean; // compliance: operator may NOT view this tenant's telemetry
   status?: "active" | "suspended"; // lifecycle: a suspended tenant's users cannot sign in
+  default_landing?: string; // admin-configured landing route ("" = inherit platform default)
   created_at?: string;
 };
 export type DataPlane = { region: string; local: boolean; clickhouse?: string; opensearch?: string; victoria_metrics?: string; kafka?: string };

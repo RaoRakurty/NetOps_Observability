@@ -489,9 +489,24 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
   const orgName = (id?: string) => (orgs ?? []).find((o) => o.id === (id || "global"))?.name || (id || "global");
   const regionLabel = (id?: string) => id ? ((regions ?? []).find((r) => r.id === id)?.label || id) : "";
   const orgRegion = (orgId?: string) => (orgs ?? []).find((o) => o.id === (orgId || "global"))?.home_region;
+  // Curated, safe landing targets an admin can pick for the default page.
+  const LANDING_OPTIONS: { route: string; label: string }[] = [
+    { route: "#/incident/overview", label: "Command Center" },
+    { route: "#/dashboards/home", label: "Dashboards · Home" },
+    { route: "#/monitoring/correlations", label: "Correlations" },
+    { route: "#/monitoring/incidents", label: "Incidents" },
+    { route: "#/infrastructure/topology-canvas", label: "Topology Canvas" },
+  ];
   const changeTenantRegion = async (t: Tenant, value: string) => {
     setErr(null);
     try { await api.setTenantRegion(t.id, value); reload(); } catch (e) { setErr((e as Error).message); }
+  };
+  // Admin-configurable default landing page. Curated to real, safe nav leaves.
+  // Editing the parent (global) tenant sets the PLATFORM default; a child tenant
+  // overrides it for that tenant ("" = inherit).
+  const changeTenantLanding = async (t: Tenant, value: string) => {
+    setErr(null);
+    try { await api.setTenantLanding(t.id, value); reload(); } catch (e) { setErr((e as Error).message); }
   };
   // Type-to-confirm delete modal state.
   const [delTarget, setDelTarget] = useState<Tenant | null>(null);
@@ -609,6 +624,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                 <th>Status</th>
                 <th>Organization</th>
                 <th>Region</th>
+                <th title="Default page users land on after sign-in (parent = platform default; child overrides)">Landing</th>
                 <th>Global visibility</th>
                 <th>Note</th>
                 <th>ID</th>
@@ -649,6 +665,19 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                           {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
                         </select>
                       )}
+                    </td>
+                    <td>
+                      <select
+                        className="ds-mini-select"
+                        value={t.default_landing || ""}
+                        onChange={(e) => changeTenantLanding(t, e.target.value)}
+                        title={isParent
+                          ? "Platform-wide default landing page (applies to tenants with no override)"
+                          : "This tenant's landing page (blank = inherit the platform default)"}
+                      >
+                        <option value="">{isParent ? "Built-in (Dashboards)" : "Inherit platform default"}</option>
+                        {LANDING_OPTIONS.map((o) => <option key={o.route} value={o.route}>{o.label}</option>)}
+                      </select>
                     </td>
                     <td>
                       {isParent ? (

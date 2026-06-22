@@ -23,7 +23,7 @@ Status: ⬜ not started · 🟡 in progress · ✅ done (deployed + tested).
 
 | Item | BEFORE | AFTER | Status |
 |---|---|---|---|
-| Default landing | Dashboards/Home (`#/dashboards/home`) | **Command Center** (incident-first) | ⬜ |
+| Default landing | Dashboards/Home (`#/dashboards/home`) | **Command Center** (incident-first) | 🟡 **admin-configurable landing DONE** — per-tenant + platform default (global tenant), resolved in `/api/auth/me`, applied on fresh open only (deep-links win; invalid/forbidden routes fall back via `landingResolves`); admin sets it per-tenant in Identity & Access → Tenants. Sanitized route, no open-redirect. Backend +3 tests, frontend +5. An admin can now make Command Center the default; not hard-forced (by design, per discussion) |
 | Filters | severity / state / tier only | + owner / evidence-quality / site / service / needs-action / missing-evidence-class | ⬜ |
 | Row actions | "Assign owner"/"Create ticket" partly unwired | wired (owner assign, ticket draft from evidence bundle) | ⬜ |
 | Decision line | per-incident next-action present | kept + explicit escalate-to-owner options | ⬜ |
