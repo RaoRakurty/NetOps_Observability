@@ -201,6 +201,13 @@ export default function RcaWorkspace({
                   <div key={i}><span className={`label ${w.tone}`}>{w.label}:</span> {w.text}</div>
                 ))}
               </div>
+              {data.ruledOut.length > 0 && (
+                <div className="rw-ruledout">
+                  <span className="label blue">Ruled out:</span>{" "}
+                  {data.ruledOut.join(" · ")}
+                  <div className="rw-ruledout-note">Competing causes the evidence does not support.</div>
+                </div>
+              )}
             </div>
             <div className="rw-panel">
               <h3>Impact &amp; blast radius</h3>

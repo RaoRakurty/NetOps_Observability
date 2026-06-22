@@ -189,3 +189,34 @@ describe("EXAMPLE_CASE (synthetic golden)", () => {
     expect(EXAMPLE_CASE.ladder).toHaveLength(4);
   });
 });
+
+describe("buildRcaCase — canonical 5-state verdict (convergence)", () => {
+  const tl = timeline({
+    verdict_tier: "suspected", top_hypothesis: "undetermined",
+    signals: [signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", attached: true })],
+  });
+
+  it("an open suspected object → verdictState 'suspected'", () => {
+    const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", state: "open", signal_count: 1 }), {}, "NetOps", []);
+    expect(c.verdictState).toBe("suspected");
+    expect(Array.isArray(c.ruledOut)).toBe(true);
+    expect(Array.isArray(c.whyNot)).toBe(true);
+  });
+
+  it("a closed object → verdictState 'recovered' and a RECOVERED pill", () => {
+    const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", state: "closed", signal_count: 1 }), {}, "NetOps", []);
+    expect(c.verdictState).toBe("recovered");
+    expect(c.pills.map((p) => p.text)).toContain("● RECOVERED");
+  });
+
+  it("a contradicted top hypothesis → verdictState 'contradicted' + ruledOut populated", () => {
+    const obj = corrObject({
+      verdict_tier: "suspected", state: "open", signal_count: 2,
+      hypotheses: JSON.stringify({ ranking: { hypotheses: [{ contradicted: true, contradictions: ["link_state_change"], verdict: { reasons: ["routing remained stable"] } }] } }),
+    });
+    const c = buildRcaCase(tl, obj, {}, "NetOps", []);
+    expect(c.verdictState).toBe("contradicted");
+    expect(c.ruledOut.length).toBeGreaterThan(0);
+    expect(c.whyNot).toContain("routing remained stable");
+  });
+});

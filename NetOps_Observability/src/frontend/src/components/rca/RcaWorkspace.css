@@ -88,6 +88,8 @@
 /* why */
 .rca-ws .rw-why { border-left: 3px solid var(--rw-orange); padding-left: 11px; margin: 12px 0 0; }
 .rca-ws .rw-why div { margin: 5px 0; }
+.rca-ws .rw-ruledout { border-left: 3px solid var(--rw-blue, #5b8def); padding-left: 11px; margin: 12px 0 0; font-size: 13px; }
+.rca-ws .rw-ruledout-note { color: var(--rw-muted, #6b7280); font-size: 11.5px; margin-top: 3px; }
 .rca-ws .rw-why .label { font-weight: 800; }
 .rca-ws .rw-why .label.blue { color: var(--rw-blue); }
 .rca-ws .rw-why .label.orange { color: var(--rw-orange); }

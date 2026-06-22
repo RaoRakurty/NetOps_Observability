@@ -33,12 +33,24 @@ export interface HypothesisRow { rank: string; hypo: string; sub: string; conf: 
 export interface NextAction { badge: string; tone?: "red" | "green" | ""; text: string; }
 export interface DebugRow { signal: string; used: RcaPill; weight: string; reason: string; }
 
+// Canonical verdict state (the full ladder the engine can reach). `confirmed`/
+// `suspected`/`undetermined` are the engine tiers; `contradicted` = the leading cause
+// was ruled OUT by discriminating evidence; `recovered` = the incident has cleared.
+export type VerdictState = "confirmed" | "suspected" | "undetermined" | "contradicted" | "recovered";
+
 export interface RcaCase {
   synthetic: boolean;             // true → show the "synthetic / example" watermark
   title: string;
   subtitle: string;
   pills: RcaPill[];
   decision: { tone: "confirmed" | "" | "red"; text: string };
+  // Canonical 5-state verdict (one contract shared by the workspace AND the topology
+  // Investigate banner — no divergent verdict vocabularies).
+  verdictState: VerdictState;
+  // Discriminating/contradicting evidence the engine used to RULE OUT competing causes.
+  ruledOut: string[];
+  // Why the verdict is not stronger (engine gate reasons), operator language.
+  whyNot: string[];
   observedAt: string;
   rcaId: string;
   aside: KV[];
@@ -72,6 +84,9 @@ export const EXAMPLE_CASE: RcaCase = {
     { tone: "orange", text: "RCA state: Recovering" }, { tone: "red", text: "Impact: Checkout API degraded" },
   ],
   decision: { tone: "confirmed", text: "Open incident and assign to NetOps / ISP escalation. Independent evidence confirms the BGP adjacency change caused SD-WAN path degradation and application impact." },
+  verdictState: "confirmed",
+  ruledOut: ["Isolated device-health change (no traffic-flow impact)"],
+  whyNot: [],
   observedAt: "2026-06-16 19:25:55 UTC",
   rcaId: "RCA-20260616-0427",
   aside: [
@@ -243,7 +258,29 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // an open, unconfirmed object is "Under review" (gathering evidence); confirmed +
   // open is an "Open incident"; cleared → Recovering → Recovered.
   const rcaState = lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : confirmed ? "Open incident" : "Under review";
-  const verdictTone: Tone = confirmed ? "green" : suspected ? "orange" : "gray";
+
+  // Canonical 5-state verdict + discriminating ("ruled out") evidence + why-not, parsed
+  // from the engine hypotheses. additive — never changes the existing confirmed/suspected
+  // pills/decision the workspace + tests rely on.
+  let ruledOut: string[] = [];
+  let whyNot: string[] = [];
+  let contradicted = false;
+  try {
+    const top = JSON.parse(obj.hypotheses || "{}")?.ranking?.hypotheses?.[0];
+    if (top) {
+      contradicted = !!top.contradicted;
+      if (Array.isArray(top.contradictions)) ruledOut = top.contradictions.map((c: string) => kindLabel(c));
+      const reasons: string[] = top?.verdict?.reasons ?? [];
+      if (!confirmed && reasons.length) whyNot = reasons;
+    }
+  } catch { /* hypotheses absent/malformed → no ruled-out/why-not */ }
+  const verdictState: VerdictState =
+    lifecycle === "recovered" ? "recovered"
+      : confirmed ? "confirmed"
+        : contradicted ? "contradicted"
+          : suspected ? "suspected"
+            : "undetermined";
+  const verdictTone: Tone = confirmed ? "green" : verdictState === "recovered" ? "blue" : verdictState === "contradicted" ? "gray" : suspected ? "orange" : "gray";
 
   // ticket decision → exact global NOC phrase (consistent wording across the app).
   // confirmed → OPEN; cleared/recovered with no impact → MONITOR; >=2 aligned but
@@ -411,11 +448,18 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     synthetic: false,
     title, subtitle,
     pills: [
-      { tone: verdictTone, text: confirmed ? "✓ CONFIRMED" : "NOT CONFIRMED" },
+      {
+        tone: verdictTone,
+        text: confirmed ? "✓ CONFIRMED"
+          : verdictState === "recovered" ? "● RECOVERED"
+            : verdictState === "contradicted" ? "✕ RULED OUT"
+              : "NOT CONFIRMED",
+      },
       { tone: "blue", text: `Confidence: ${confidence}` },
       { tone: "orange", text: `RCA state: ${rcaState}` },
     ],
     decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
+    verdictState, ruledOut, whyNot,
     observedAt: (timeline.window_start || "").replace("T", " ").slice(0, 19) + " UTC",
     rcaId: obj.correlation_id.slice(0, 13),
     aside: [
