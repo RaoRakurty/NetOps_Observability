@@ -144,7 +144,6 @@ function ExpandPanel({ it }: { it: ActionItem }) {
         <a className="cc-btn" href="#/infrastructure/topology">View topology</a>
         {it.owner === "Missing" && <button className="cc-btn" type="button">Assign owner</button>}
         {it.ticket === "Ticket needed" && <button className="cc-btn cc-btn-warn" type="button">Create ticket</button>}
-        <button className="cc-btn" type="button">Suppress duplicate</button>
       </div>
     </div>
   );
