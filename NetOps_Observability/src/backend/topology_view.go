@@ -131,6 +131,13 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dependency is a SERVICE graph from observed flows, not the physical fabric —
+	// it answers "who depends on whom" (the blast-radius-for-services question).
+	if mode == topology.ModeDependency {
+		writeJSON(w, http.StatusOK, s.projectDependencyView(r, claims, tenant, devs))
+		return
+	}
+
 	in := topology.Input{
 		Mode:     mode,
 		TenantID: tenant,
