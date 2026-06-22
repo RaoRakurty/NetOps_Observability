@@ -180,10 +180,15 @@ export function topologyToReactFlow(
       // Incident detail dims the calm fabric and lifts trouble even with NO selection
       // — "calm except trouble" by default. A real click/search spotlight still wins.
       const incidentDim = density === "incident" && !spotlightActive;
+      // Historical-diff overlay: spotlight what CHANGED in the window, dim the rest —
+      // the tractable "what changed" slice of topology time-travel.
+      const changed = !!n.change_state && n.change_state !== "unchanged" && n.change_state !== "unknown";
+      const diffMode = ui.overlay === "historical_diff" && !spotlightActive;
       let emphasis: NodeEmphasis = "normal";
       // A soft (hover) spotlight lifts the focus set but keeps everyone else normal;
       // only a hard focus (click / search) dims the out-of-focus cards.
       if (spotlightActive) emphasis = inFocus ? "spotlight" : ui.spotlightSoft ? "normal" : "dim";
+      else if (diffMode) emphasis = changed ? "spotlight" : "dim";
       else if (incidentDim) emphasis = unhealthy || critical || rcaFlag ? "spotlight" : "dim";
 
       // Label density by detail level (the manual Labels toggle forces all on):

@@ -88,12 +88,17 @@ export function availableOverlays(view: TopologyView): TopologyOverlay[] {
     ...(view.nodes ?? []).flatMap((n) => n.evidence ?? []),
   ];
 
+  const changed = (s: string | undefined) => !!s && s !== "unchanged" && s !== "unknown";
   const derived: Partial<Record<OverlayKind, boolean>> = {
     health: true,
     utilization: edges.some((e) => e.utilization_pct != null),
     interface_errors: edges.some((e) => e.errors != null && e.errors > 0),
     flow: edges.some((e) => e.relationship === "dependency"),
     rca_evidence: evidencePools.some((ev) => ev?.used_by_rca === true),
+    // Available only when the window actually has change to show (added/removed/
+    // changed/stale) — the tractable "what changed" slice of topology time-travel.
+    historical_diff:
+      (view.nodes ?? []).some((n) => changed(n.change_state)) || edges.some((e) => changed(e.change_state)),
   };
 
   return OVERLAY_ORDER.map((kind) => {
