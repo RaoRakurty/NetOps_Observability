@@ -4,6 +4,26 @@
 // overlay/lens, not a graph mutation).
 
 import type { TopologyView, Health, NodeKind, TopologyNode } from "../api/topologyTypes";
+import { mentionsInternal } from "../../../components/rca/labels";
+
+/**
+ * Drop the platform's OWN infrastructure (api/correlation/prober/etc.) from the
+ * customer topology canvas — decision #76: RCA/topology is the CUSTOMER's network,
+ * the internal stack belongs to Stack Health, not here. Matches an internal node by
+ * its label or id; edges to a dropped node are pruned. Pure. A node mixing a real
+ * device with infra is kept (mentionsInternal is conservative on the customer side).
+ */
+export function excludeInternalNodes(view: TopologyView): TopologyView {
+  const keep = view.nodes.filter((n) => !mentionsInternal(n.label || "") && !mentionsInternal(n.id || ""));
+  if (keep.length === view.nodes.length) return view;
+  const surviving = new Set(keep.map((n) => n.id));
+  return {
+    ...view,
+    nodes: keep,
+    edges: view.edges.filter((e) => surviving.has(e.source) && surviving.has(e.target)),
+    groups: view.groups.map((g) => ({ ...g, children: g.children.filter((c) => surviving.has(c)) })),
+  };
+}
 
 export type TopologyFilter = {
   health?: Health[];

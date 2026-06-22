@@ -50,6 +50,7 @@ const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
+import { excludeInternalNodes } from "../../utils/topologyFilters";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
 import {
   TopologyToolbar,
@@ -223,7 +224,12 @@ function CanvasInner() {
   }, [mode]);
 
   const workflow = workflowById(mode);
-  const baseView = fetched ?? workflow?.view;
+  // Decision #76: the customer topology canvas shows the CUSTOMER's network — drop the
+  // platform's own stack (api/correlation/prober/etc.) so it never pollutes the map.
+  const baseView = useMemo(() => {
+    const v = fetched ?? workflow?.view;
+    return v ? excludeInternalNodes(v) : v;
+  }, [fetched, workflow?.view]);
   // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
   // — the operator's lens, not just the backend's fixed site hierarchy.
   const view = useMemo(() => (baseView ? regroupView(baseView, groupBy) : baseView), [baseView, groupBy]);
@@ -383,12 +389,14 @@ function CanvasInner() {
     setRfEdges(derived.edges);
   }, [derived, setRfNodes, setRfEdges]);
 
-  // Fit the view once a fresh layout lands.
+  // Fit the view once a fresh layout lands. maxZoom caps the fit so a SMALL graph (a
+  // 2–3 node incident path) opens at a sensible default zoom instead of blowing up to
+  // fill the viewport.
   const fittedFor = useRef<string>("");
   useEffect(() => {
     if (laidOutKey && laidOutKey !== fittedFor.current && rfNodes.length) {
       fittedFor.current = laidOutKey;
-      const t = setTimeout(() => rf.fitView({ padding: 0.2, duration: 320 }), 60);
+      const t = setTimeout(() => rf.fitView({ padding: 0.2, duration: 320, maxZoom: 1.15 }), 60);
       return () => clearTimeout(t);
     }
   }, [laidOutKey, rfNodes.length, rf]);
