@@ -31,6 +31,14 @@ const OWNER_LABEL: Record<string, string> = {
   platform: "Platform",
 };
 
+/** Modality class → operator-facing label (no backend vocabulary leaks). */
+const MODALITY_LABEL: Record<string, string> = {
+  active_probe: "Active probe",
+  control_plane: "Control plane",
+  device_telemetry: "Device telemetry",
+  passive_flow: "Flow",
+};
+
 export default function RcaVerdictBanner({
   overlay,
   onClear,
@@ -43,6 +51,21 @@ export default function RcaVerdictBanner({
   // Owner is carried per-annotation; take the first non-empty as the headline owner.
   const owner = overlay.annotations?.find((a) => a.owner)?.owner;
   const missing = overlay.missing_evidence_summary ?? [];
+
+  // The evidence ledger — the WHY behind the verdict, shown not asserted. The engine
+  // exports the independent confirming pair it actually used, the decisive (trusted)
+  // modalities, the blast radius, and a one-line reason. This is the anti-black-box
+  // differentiator: a confirmation is two independent witnesses, named on the canvas.
+  const ev = (overlay.evidence_summary ?? {}) as Record<string, unknown>;
+  const pair = Array.isArray(ev.confirming_pair) && ev.confirming_pair.length === 2 ? (ev.confirming_pair as string[]) : null;
+  const modalities = Array.isArray(ev.decisive_modalities) ? (ev.decisive_modalities as string[]) : [];
+  const reason = typeof ev.verdict_reason === "string" ? (ev.verdict_reason as string) : "";
+  const blast = ev.blast_radius && typeof ev.blast_radius === "object" ? (ev.blast_radius as Record<string, number>) : null;
+  const blastParts = blast
+    ? (["devices", "paths", "interfaces"] as const)
+        .filter((k) => (blast[k] ?? 0) > 0)
+        .map((k) => `${blast[k]} ${blast[k] === 1 ? k.replace(/s$/, "") : k}`)
+    : [];
 
   return (
     <section className="topo-rca-banner" aria-label="Incident verdict">
@@ -66,6 +89,35 @@ export default function RcaVerdictBanner({
 
       {overlay.title && <div className="topo-rca-title">{overlay.title}</div>}
       {overlay.summary && <p className="topo-rca-summary">{overlay.summary}</p>}
+
+      {(pair || blastParts.length > 0) && (
+        <div className="topo-rca-evidence">
+          {pair && (
+            <div className="topo-rca-evrow">
+              <span className="topo-rca-evlabel">Confirmed by</span>
+              <span className="topo-rca-pair">
+                <span className="topo-rca-witness">{pair[0]}</span>
+                <span className="topo-rca-perp" aria-label="independent of" title="independent of — different observer, modality and failure fate">⟂</span>
+                <span className="topo-rca-witness">{pair[1]}</span>
+              </span>
+              {modalities.length > 0 && (
+                <span className="topo-rca-mods">
+                  {modalities.map((m) => (
+                    <span key={m} className="topo-rca-mod">{MODALITY_LABEL[m] ?? m}</span>
+                  ))}
+                </span>
+              )}
+            </div>
+          )}
+          {blastParts.length > 0 && (
+            <div className="topo-rca-evrow">
+              <span className="topo-rca-evlabel">Blast radius</span>
+              <span className="topo-rca-blast">{blastParts.join(" · ")}</span>
+            </div>
+          )}
+          {reason && <div className="topo-rca-reason" title="Why the engine reached this verdict">{reason}</div>}
+        </div>
+      )}
 
       {overlay.recommended_action && (
         <div className="topo-rca-action">

@@ -367,6 +367,51 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 		"observer_count":   len(observers),
 		"observer_classes": distinctObserverClasses(attached),
 	}
+	// The anti-black-box payload: the INDEPENDENT confirming pair the engine actually
+	// used, the decisive (trusted) modalities, the one-line verdict reason, and the
+	// blast radius. Surfaced verbatim from the corr object so the UI shows the WHY
+	// (e.g. "confirmed by A ⟂ B across 2 modalities, both trusted, non-fate-shared")
+	// instead of an opaque score — the differentiator over correlation-as-causation.
+	if h, ok := meta["hypotheses"].(string); ok && h != "" {
+		var hd struct {
+			Ranking struct {
+				Hypotheses []struct {
+					Verdict struct {
+						IndependentPair   []string `json:"independent_pair"`
+						ModalityCoverage  []string `json:"modality_coverage"`
+						TrustedModalities []string `json:"trusted_modalities"`
+						Reasons           []string `json:"reasons"`
+					} `json:"verdict"`
+				} `json:"hypotheses"`
+			} `json:"ranking"`
+		}
+		if json.Unmarshal([]byte(h), &hd) == nil && len(hd.Ranking.Hypotheses) > 0 {
+			v := hd.Ranking.Hypotheses[0].Verdict
+			if len(v.IndependentPair) == 2 {
+				summary["confirming_pair"] = v.IndependentPair
+			}
+			if len(v.TrustedModalities) > 0 {
+				summary["decisive_modalities"] = v.TrustedModalities
+			} else if len(v.ModalityCoverage) > 0 {
+				summary["decisive_modalities"] = v.ModalityCoverage
+			}
+			if len(v.Reasons) > 0 {
+				summary["verdict_reason"] = v.Reasons[0]
+			}
+		}
+	}
+	if a, ok := meta["affected"].(string); ok && a != "" && a != "{}" {
+		var af struct {
+			Devices    []string `json:"devices"`
+			Paths      []string `json:"paths"`
+			Interfaces []string `json:"interfaces"`
+		}
+		if json.Unmarshal([]byte(a), &af) == nil {
+			summary["blast_radius"] = map[string]int{
+				"devices": len(af.Devices), "paths": len(af.Paths), "interfaces": len(af.Interfaces),
+			}
+		}
+	}
 	// engine-declared missing evidence + a derived "independent observer" note.
 	var missing []string
 	if em, ok := meta["evidence_missing"].(string); ok && em != "" && em != "[]" {

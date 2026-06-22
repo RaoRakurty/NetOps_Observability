@@ -759,6 +759,21 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   padding: 7px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
 .topo-rca-action-label { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--accent); margin-right: 7px; }
+/* Evidence ledger — the anti-black-box WHY (independent confirming pair + blast radius). */
+.topo-rca-evidence { margin-top: 10px; padding: 8px 9px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); display: grid; gap: 6px; }
+.topo-rca-evrow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.topo-rca-evlabel { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--fg-subtle); min-width: 78px; }
+.topo-rca-pair { display: inline-flex; align-items: center; gap: 6px; }
+.topo-rca-witness { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 700;
+  color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
+.topo-rca-perp { font-size: 13px; font-weight: 700; color: var(--ok, #30a46c); }
+.topo-rca-mods { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.topo-rca-mod { font-size: 10px; font-weight: 600; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 999px; padding: 1px 7px; }
+.topo-rca-blast { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 600; color: var(--fg); }
+.topo-rca-reason { font-size: 10.5px; line-height: 1.4; color: var(--fg-subtle); font-style: italic; }
 .topo-rca-missing { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .topo-rca-missing-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--warn); width: 100%; }
