@@ -23,6 +23,7 @@ import {
   pathTopology,
   incidentTopology,
   cloudTopology,
+  capacityTopology,
   enterpriseOverviewTopology,
   geoWanTopology,
 } from "../mock";
@@ -38,6 +39,8 @@ function mockForMode(mode: WorkflowMode): TopologyView {
       return incidentTopology;
     case "dependency":
       return cloudTopology;
+    case "capacity":
+      return capacityTopology;
     case "executive_geo":
       return geoWanTopology;
     default:
@@ -59,6 +62,7 @@ const REAL_MODES: ReadonlySet<WorkflowMode> = new Set<WorkflowMode>([
   "investigate",
   "path_trace",
   "dependency",
+  "capacity",
   "executive_geo",
 ]);
 

@@ -60,6 +60,7 @@ const (
 	ModeInvestigate  = "investigate"
 	ModePathTrace    = "path_trace"
 	ModeDependency   = "dependency"
+	ModeCapacity     = "capacity"
 	ModeExecutiveGeo = "executive_geo"
 )
 

@@ -67,6 +67,33 @@ type Density = "executive" | "operator" | "engineer" | "incident";
 
 // nodeTypes/edgeTypes MUST be module-stable (imported consts) — never inline.
 
+// Verdict-tier ranking for "which incident does Investigate land on?" — confirmed
+// outranks suspected outranks undetermined (strings match the corr_objects Enum8).
+const TIER_RANK: Record<string, number> = { confirmed: 3, suspected: 2, undetermined: 1 };
+
+// mostActionableIncident picks the incident Investigate should auto-open: highest
+// verdict tier, then highest confidence, then most recent. Without this, Investigate
+// with nothing pinned renders the SAME graph as Explore (the backend projection is
+// identical; only a pinned incident's RCA path differentiates it). Returns "" when
+// the list is empty.
+function mostActionableIncident(incidents: CorrObject[]): string {
+  let best: CorrObject | undefined;
+  for (const c of incidents) {
+    if (!best) {
+      best = c;
+      continue;
+    }
+    const dt = (TIER_RANK[c.verdict_tier] ?? 0) - (TIER_RANK[best.verdict_tier] ?? 0);
+    if (dt > 0) best = c;
+    else if (dt === 0) {
+      const dc = (c.top_confidence ?? 0) - (best.top_confidence ?? 0);
+      if (dc > 0) best = c;
+      else if (dc === 0 && (c.created_at ?? "") > (best.created_at ?? "")) best = c;
+    }
+  }
+  return best?.correlation_id ?? "";
+}
+
 function CanvasInner() {
   const rf = useReactFlow();
 
@@ -105,10 +132,19 @@ function CanvasInner() {
   // the canvas, overriding the live projection. Empty = the live/mock projection.
   const [incidents, setIncidents] = useState<CorrObject[]>([]);
   const [incidentId, setIncidentId] = useState<string>("");
+  // Auto-pin guard: Investigate lands on the most actionable incident ONCE per entry
+  // into the mode, so it never silently mirrors Explore — but a later switch to "Live
+  // projection" is the operator's call and must not be overridden.
+  const autoPinnedRef = useRef(false);
   // Path Trace endpoints: without a src+dst the backend can't resolve a path, so
   // path_trace would look identical to Explore. These drive a real A→B trace.
   const [pathSrc, setPathSrc] = useState<string>("");
   const [pathDst, setPathDst] = useState<string>("");
+  // The src>dst the latest path_trace view was actually resolved for. Lets the stage
+  // tell apart "still resolving" from "resolved, but no path exists" — so a failed
+  // trace shows an honest 'no path found' state instead of silently falling back to
+  // the full topology (which is indistinguishable from Explore).
+  const [tracedKey, setTracedKey] = useState<string>("");
   // Raw overlay for the pinned incident — drives the verdict banner (the WHY).
   const [incidentOverlay, setIncidentOverlay] = useState<RcaPathView | null>(null);
 
@@ -120,7 +156,15 @@ function CanvasInner() {
     (async () => {
       try {
         const r = await api.correlations(50);
-        if (alive) setIncidents(r.data ?? []);
+        if (!alive) return;
+        const list = r.data ?? [];
+        setIncidents(list);
+        // Land on the most actionable incident the first time we enter Investigate,
+        // so the mode opens on a real RCA path instead of an Explore look-alike.
+        if (!autoPinnedRef.current && list.length > 0) {
+          autoPinnedRef.current = true;
+          setIncidentId((cur) => (cur === "" ? mostActionableIncident(list) : cur));
+        }
       } catch {
         if (alive) setIncidents([]);
       }
@@ -156,6 +200,9 @@ function CanvasInner() {
         if (!alive) return;
         setFetched(v);
         setCoverage(null);
+        // Record what this view resolved for, so the stage can distinguish a resolved
+        // empty path (no route) from one still in flight.
+        setTracedKey(mode === "path_trace" && pathSrc && pathDst ? `${pathSrc}>${pathDst}` : "");
       }
     })();
     return () => {
@@ -163,9 +210,13 @@ function CanvasInner() {
     };
   }, [mode, source, incidentId, pathSrc, pathDst]);
 
-  // Drop the pinned incident when leaving Investigate mode.
+  // Drop the pinned incident (and re-arm the auto-pin) when leaving Investigate mode,
+  // so a fresh entry lands on the current top incident again.
   useEffect(() => {
-    if (mode !== "investigate") setIncidentId("");
+    if (mode !== "investigate") {
+      setIncidentId("");
+      autoPinnedRef.current = false;
+    }
   }, [mode]);
 
   const workflow = workflowById(mode);
@@ -227,6 +278,7 @@ function CanvasInner() {
     setOverlay(mode === "capacity" ? "utilization" : "health");
     setPathSrc("");
     setPathDst("");
+    setTracedKey("");
   }, [mode]);
 
   // Endpoint options for the Path Trace picker: every node, by label, sorted.
@@ -373,6 +425,19 @@ function CanvasInner() {
     [],
   );
 
+  // Path Trace resolution state (drives the guided stage). A non-empty traceKey means
+  // both endpoints are chosen; traceResolving = the fetch for that pair is still in
+  // flight; traceNoPath = it resolved with no route between them (LLDP/IGP gap) — that
+  // is reported honestly rather than silently showing the full topology.
+  // Only the live per-mode projection resolves an A→B path; the persisted graph is
+  // mode-agnostic, so the guided trace states don't apply there.
+  const traceMode = mode === "path_trace" && source === "live";
+  const traceKey = pathSrc && pathDst ? `${pathSrc}>${pathDst}` : "";
+  const traceResolving = traceMode && traceKey !== "" && tracedKey !== traceKey;
+  const traceNoPath =
+    traceMode && traceKey !== "" && tracedKey === traceKey && !(view?.path && view.path.length >= 2);
+  const labelFor = (id: string) => endpointOptions.find((o) => o.id === id)?.label ?? id;
+
   return (
     <div className={`topo-root${fullscreen ? " topo-fullscreen" : ""}`}>
       <TopologyToolbar
@@ -416,6 +481,11 @@ function CanvasInner() {
                 </option>
               ))}
             </select>
+            {incidents.length === 0 && (
+              <span className="topo-incident-picker-empty" title="No open correlations — Investigate is showing the live topology">
+                No active incidents
+              </span>
+            )}
           </label>
         )}
         {mode === "path_trace" && pathSrc && pathDst && (
@@ -477,6 +547,18 @@ function CanvasInner() {
           <PlaceholderWorkflow blurb={workflow?.blurb ?? "This workflow arrives in a later phase."} label={workflow?.label ?? ""} />
         ) : mode === "path_trace" && !(pathSrc && pathDst) ? (
           <PathTracePrompt
+            options={endpointOptions}
+            src={pathSrc}
+            dst={pathDst}
+            onSrc={setPathSrc}
+            onDst={setPathDst}
+          />
+        ) : traceResolving ? (
+          <PathTraceResolving srcLabel={labelFor(pathSrc)} dstLabel={labelFor(pathDst)} />
+        ) : traceNoPath ? (
+          <PathTraceNoPath
+            srcLabel={labelFor(pathSrc)}
+            dstLabel={labelFor(pathDst)}
             options={endpointOptions}
             src={pathSrc}
             dst={pathDst}
@@ -602,6 +684,82 @@ function PathTracePrompt({
           </select>
         </div>
         {src && !dst && <div className="topo-pathprompt-hint">Now pick a destination to trace the path.</div>}
+      </div>
+    </div>
+  );
+}
+
+// Shown while the A→B trace for the chosen endpoints is being resolved, so the stage
+// doesn't briefly flash the full topology (an Explore look-alike) before the path lands.
+function PathTraceResolving({ srcLabel, dstLabel }: { srcLabel: string; dstLabel: string }) {
+  return (
+    <div className="topo-placeholder">
+      <div className="topo-pathprompt-card">
+        <div className="topo-pathprompt-title">Resolving path…</div>
+        <p className="topo-pathprompt-body">
+          Tracing <strong>{srcLabel}</strong> → <strong>{dstLabel}</strong> over the discovered topology.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Honest "no path" state: the trace resolved but no route exists between the endpoints
+// over the discovered LLDP/IGP adjacency. We say so explicitly (and let the operator
+// re-aim) instead of silently dropping back to the full graph, which read as Explore.
+function PathTraceNoPath({
+  srcLabel,
+  dstLabel,
+  options,
+  src,
+  dst,
+  onSrc,
+  onDst,
+}: {
+  srcLabel: string;
+  dstLabel: string;
+  options: { id: string; label: string }[];
+  src: string;
+  dst: string;
+  onSrc: (v: string) => void;
+  onDst: (v: string) => void;
+}) {
+  return (
+    <div className="topo-placeholder">
+      <div className="topo-pathprompt-card">
+        <div className="topo-pathprompt-icon topo-pathprompt-icon-warn" aria-hidden="true">
+          <svg width={30} height={30} viewBox="0 0 24 24" fill="none">
+            <circle cx={5} cy={12} r={2.4} fill="currentColor" />
+            <circle cx={19} cy={12} r={2.4} fill="currentColor" />
+            <path d="M7.4 12h9.2" stroke="currentColor" strokeWidth={1.6} strokeDasharray="2 2.4" strokeLinecap="round" />
+            <path d="m9.6 9.6 4.8 4.8M14.4 9.6l-4.8 4.8" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
+          </svg>
+        </div>
+        <div className="topo-pathprompt-title">No path found</div>
+        <p className="topo-pathprompt-body">
+          No route between <strong>{srcLabel}</strong> and <strong>{dstLabel}</strong> over the discovered topology — the
+          LLDP/IGP adjacency between them is incomplete or they sit in separate fabrics. Re-aim the trace, or widen
+          discovery so the intervening hops are learned.
+        </p>
+        <div className="topo-pathprompt-row">
+          <select value={src} onChange={(e) => onSrc(e.target.value)} aria-label="Path source device">
+            <option value="">Source…</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id} disabled={o.id === dst}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <span className="topo-pathprompt-arrow" aria-hidden="true">→</span>
+          <select value={dst} onChange={(e) => onDst(e.target.value)} aria-label="Path destination device">
+            <option value="">Destination…</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id} disabled={o.id === src}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   );

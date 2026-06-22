@@ -28,7 +28,7 @@ import (
 func topologyModeOrDefault(m string) string {
 	switch m {
 	case topology.ModeExplore, topology.ModeInvestigate, topology.ModePathTrace,
-		topology.ModeDependency, topology.ModeExecutiveGeo:
+		topology.ModeDependency, topology.ModeCapacity, topology.ModeExecutiveGeo:
 		return m
 	default:
 		return topology.ModeExplore

@@ -254,6 +254,42 @@ func TestProjectPathTraceComputed(t *testing.T) {
 	}
 }
 
+// Capacity mode is a first-class projection over the routed fabric: it preserves
+// the physical graph but must carry per-edge utilization through and ADVERTISE the
+// utilization overlay (it's the mode's whole point). Without this, the frontend
+// Capacity workflow has nothing to rank and reads as a plain Explore graph.
+func TestProjectCapacityCarriesUtilization(t *testing.T) {
+	now := baseNow()
+	v := Project(Input{
+		Mode: ModeCapacity,
+		Now:  now,
+		Devices: []DeviceFact{
+			{ID: "leaf1", Name: "leaf1", Type: "switch", LastSeen: now},
+			{ID: "spine1", Name: "spine1", Type: "switch", LastSeen: now},
+		},
+		Links: []LinkFact{
+			{Source: "leaf1", Target: "spine1", Protocol: "lldp", Status: "up",
+				Utilization: 91.5, HasUtil: true, LastSeen: now},
+		},
+	})
+	if v.Mode != ModeCapacity {
+		t.Fatalf("mode should round-trip as capacity, got %s", v.Mode)
+	}
+	e, ok := findEdge(v, "lnk:leaf1--spine1")
+	if !ok || e.Utilization != 91.5 {
+		t.Fatalf("capacity edge must carry utilization 91.5, got %+v (ok=%v)", e, ok)
+	}
+	hasUtil := false
+	for _, o := range v.Overlays {
+		if o == "utilization" {
+			hasUtil = true
+		}
+	}
+	if !hasUtil {
+		t.Fatalf("capacity view must advertise the utilization overlay, got %v", v.Overlays)
+	}
+}
+
 // nodeKind honors role → type → vendor → name, so a Fortinet firewall whose
 // SNMP type is "generic" still renders as a firewall, not a switch.
 func TestProjectNodeKindInference(t *testing.T) {

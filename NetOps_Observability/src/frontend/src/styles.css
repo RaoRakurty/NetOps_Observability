@@ -736,6 +736,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .topo-incident-picker select { font: inherit; font-size: 12px; font-weight: 600; max-width: 280px;
   padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel);
   color: var(--fg); cursor: pointer; }
+.topo-incident-picker-empty { font-size: 11px; font-weight: 600; color: var(--muted);
+  font-style: italic; }
 /* RCA verdict banner — the WHY for a pinned incident (top-right of the stage). */
 .topo-rca-dock { position: absolute; top: 48px; right: 12px; z-index: 6; width: 340px; max-width: 70%;
   max-height: 60%; overflow: auto; }
@@ -836,6 +838,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px 24px;
   box-shadow: 0 10px 30px rgba(16,24,40,0.14); }
 .topo-pathprompt-icon { display: inline-flex; color: var(--accent-bright, var(--accent)); margin-bottom: 8px; }
+.topo-pathprompt-icon-warn { color: var(--warning, #f5a524); }
 .topo-pathprompt-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 19px;
   font-weight: 680; margin: 0 0 8px; color: var(--fg); }
 .topo-pathprompt-body { font-size: 13px; color: var(--fg-muted); line-height: 1.55; margin: 0 0 16px; }
