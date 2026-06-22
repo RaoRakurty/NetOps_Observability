@@ -156,13 +156,21 @@ export type CcFilters = {
   sev?: Sev | "all";
   fault?: FaultDomain | "all";
   evidence?: EvidenceState | "all";
+  owner?: OwnerState | "all";
   needsAction?: boolean;
+  untriaged?: boolean; // correlated but RCA not yet run (Correlated / RCA running / New)
 };
 
 // needsAction — the operator's "what actually needs me right now": a missing owner,
 // an unticketed confirmed incident, or an RCA blocked on evidence.
 export function needsAction(it: ActionItem): boolean {
   return it.owner === "Missing" || it.ticket === "Ticket needed" || it.rca === "Blocked";
+}
+
+// isUntriaged — a correlated group whose RCA hasn't been run/resolved yet. Mirrors the
+// Untriaged KPI exactly so clicking it filters to the same set it counts.
+export function isUntriaged(it: ActionItem): boolean {
+  return it.rca === "Correlated" || it.rca === "RCA running" || it.rca === "New";
 }
 
 export function filterItems(items: ActionItem[], f: CcFilters): ActionItem[] {
@@ -172,7 +180,9 @@ export function filterItems(items: ActionItem[], f: CcFilters): ActionItem[] {
     if (on(f.sev) && it.sev !== f.sev) return false;
     if (on(f.fault) && it.fault !== f.fault) return false;
     if (on(f.evidence) && it.evidence !== f.evidence) return false;
+    if (on(f.owner) && it.owner !== f.owner) return false;
     if (f.needsAction && !needsAction(it)) return false;
+    if (f.untriaged && !isUntriaged(it)) return false;
     return true;
   });
 }
@@ -180,7 +190,8 @@ export function filterItems(items: ActionItem[], f: CcFilters): ActionItem[] {
 // activeFilterCount — how many facets are constraining, for the "clear (N)" affordance.
 export function activeFilterCount(f: CcFilters): number {
   let n = 0;
-  for (const k of ["rca", "sev", "fault", "evidence"] as const) if (f[k] && f[k] !== "all") n++;
+  for (const k of ["rca", "sev", "fault", "evidence", "owner"] as const) if (f[k] && f[k] !== "all") n++;
   if (f.needsAction) n++;
+  if (f.untriaged) n++;
   return n;
 }

@@ -21,18 +21,24 @@ export function Modal({ title, subtitle, logo, onClose, children, wide }: {
   wide?: boolean; // near-full-viewport variant (panel zoom / deep-look views)
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Keep the latest onClose without re-running the mount effect: parents often pass a
+  // fresh onClose each render, and re-running this effect would call ref.focus() on
+  // EVERY render — stealing focus from inputs after a single keystroke (the form-focus
+  // bug). Effect must run ONCE on mount only.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.focus();
     document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCloseRef.current(); };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
       prev?.focus?.();
     };
-  }, [onClose]);
+  }, []);
   return (
     <div className="ds-modal-scrim" onClick={onClose}>
       <div className={`ds-modal${wide ? " ds-modal-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()}>

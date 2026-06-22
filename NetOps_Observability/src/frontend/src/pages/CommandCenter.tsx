@@ -13,6 +13,7 @@ const RCA_FILTERS: RcaState[] = ["Confirmed", "Suspected", "Blocked", "Correlate
 const SEV_FILTERS: Sev[] = ["crit", "major", "warn", "ok"];
 const FAULT_FILTERS: FaultDomain[] = ["LAN", "SD-WAN", "Data Center", "ISP / Carrier", "Cloud Provider", "Application", "Security", "Unknown"];
 const EVID_FILTERS: EvidenceState[] = ["Complete", "Partial", "Single-stream"];
+const OWNER_FILTERS: OwnerState[] = ["Missing", "Recommended", "Assigned", "Escalated"];
 
 function FilterBar({ filters, setFilters, total, shown }: {
   filters: CcFilters; setFilters: (f: CcFilters) => void; total: number; shown: number;
@@ -33,6 +34,7 @@ function FilterBar({ filters, setFilters, total, shown }: {
       {sel("sev", "Severity", SEV_FILTERS)}
       {sel("fault", "Fault domain", FAULT_FILTERS)}
       {sel("evidence", "Evidence", EVID_FILTERS)}
+      {sel("owner", "Owner", OWNER_FILTERS)}
       <button type="button" className={`cc-filter-chip${filters.needsAction ? " on" : ""}`}
         aria-pressed={!!filters.needsAction}
         onClick={() => setFilters({ ...filters, needsAction: !filters.needsAction })}
@@ -150,7 +152,7 @@ function ExpandPanel({ it }: { it: ActionItem }) {
 }
 
 // ── KPI card ────────────────────────────────────────────────────────────────────
-function CcKpi({ n, label, interp, tone, href }: { n: number | string; label: string; interp: string; tone?: string; href?: string }) {
+function CcKpi({ n, label, interp, tone, href, onClick, active }: { n: number | string; label: string; interp: string; tone?: string; href?: string; onClick?: () => void; active?: boolean }) {
   const body = (
     <>
       <div className="cc-kpi-n" style={tone ? { color: tone } : undefined}>{n}</div>
@@ -158,6 +160,9 @@ function CcKpi({ n, label, interp, tone, href }: { n: number | string; label: st
       <div className="cc-kpi-i">{interp}</div>
     </>
   );
+  // A KPI that filters the queue is a button (consistent, accessible, counts always
+  // match the data it filters). Only the ITSM tile keeps an external href.
+  if (onClick) return <button type="button" className={`cc-kpi cc-kpi-btn${active ? " on" : ""}`} aria-pressed={!!active} onClick={onClick}>{body}</button>;
   return href ? <a className="cc-kpi" href={href}>{body}</a> : <div className="cc-kpi">{body}</div>;
 }
 
@@ -187,6 +192,10 @@ export default function CommandCenter() {
   const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
   // KPIs/pressure reflect the WHOLE queue; the filter bar narrows only the table.
   const visible = useMemo(() => filterItems(items, filters), [items, filters]);
+  // A KPI sets its filter on the queue (and toggles off if already active), so its
+  // count and the rows shown always come from the SAME data — they can't disagree.
+  const kpiActive = (f: CcFilters) => JSON.stringify(filters) === JSON.stringify(f);
+  const applyKpi = (f: CcFilters) => setFilters((cur) => JSON.stringify(cur) === JSON.stringify(f) ? {} : f);
 
   const critical = items.filter((i) => i.sev === "crit").length;
   const untriaged = items.filter((i) => i.rca === "Correlated" || i.rca === "RCA running" || i.rca === "New").length;
@@ -223,13 +232,14 @@ export default function CommandCenter() {
           </div>
         </div>
         <div className="cc-kpis">
-          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not raw alerts" href="#/monitoring/correlations" />
-          <CcKpi n={critical} label="Critical" interp="confirmed impact or high blast radius" tone={critical ? "var(--crit)" : undefined} href="#/monitoring/correlations?tier=confirmed" />
-          <CcKpi n={untriaged} label="Untriaged" interp="correlated, RCA not yet run" tone={untriaged ? "var(--warn)" : undefined} />
-          <CcKpi n={suspected} label="Suspected RCA" interp="impact not confirmed" tone={suspected ? "var(--warn)" : undefined} href="#/monitoring/correlations?tier=suspected" />
-          <CcKpi n={confirmed} label="Confirmed RCA" interp="≥2 evidence streams align" tone={confirmed ? "var(--crit)" : undefined} href="#/monitoring/correlations?tier=confirmed" />
-          <CcKpi n={ownerMissing} label="Owner missing" interp="needs assignment" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} />
-          <CcKpi n={blocked} label="RCA blocked" interp="missing evidence streams" tone={blocked ? "var(--warn)" : "var(--ok)"} />
+          {/* KPIs filter the queue below (same data → counts always match) and toggle. */}
+          <CcKpi n={items.length} label="Correlated incidents" interp="grouped, not raw alerts" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
+          <CcKpi n={critical} label="Critical" interp="confirmed impact or high blast radius" tone={critical ? "var(--crit)" : undefined} onClick={() => applyKpi({ sev: "crit" })} active={kpiActive({ sev: "crit" })} />
+          <CcKpi n={untriaged} label="Untriaged" interp="correlated, RCA not yet run" tone={untriaged ? "var(--warn)" : undefined} onClick={() => applyKpi({ untriaged: true })} active={kpiActive({ untriaged: true })} />
+          <CcKpi n={suspected} label="Suspected RCA" interp="impact not confirmed" tone={suspected ? "var(--warn)" : undefined} onClick={() => applyKpi({ rca: "Suspected" })} active={kpiActive({ rca: "Suspected" })} />
+          <CcKpi n={confirmed} label="Confirmed RCA" interp="≥2 evidence streams align" tone={confirmed ? "var(--crit)" : undefined} onClick={() => applyKpi({ rca: "Confirmed" })} active={kpiActive({ rca: "Confirmed" })} />
+          <CcKpi n={ownerMissing} label="Owner missing" interp="needs assignment" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} onClick={() => applyKpi({ owner: "Missing" })} active={kpiActive({ owner: "Missing" })} />
+          <CcKpi n={blocked} label="RCA blocked" interp="missing evidence streams" tone={blocked ? "var(--warn)" : "var(--ok)"} onClick={() => applyKpi({ rca: "Blocked" })} active={kpiActive({ rca: "Blocked" })} />
           <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" interp="confirmed → ITSM" href="#/incident/integrations" />
         </div>
         <div className="cc-decision">{decision}</div>

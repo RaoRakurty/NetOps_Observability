@@ -3130,6 +3130,11 @@ a.fp-kpistrip-cell.clk:hover::after { opacity: 1; }
 @media (max-width: 1180px) { .cc-kpis { grid-template-columns: repeat(4, 1fr); } }
 .cc-kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; text-decoration: none; color: inherit; display: block; transition: background .12s, border-color .12s; }
 a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
+/* KPI as a queue filter — button reset + clear active state. */
+button.cc-kpi-btn { width: 100%; text-align: left; font: inherit; cursor: pointer; }
+button.cc-kpi-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+button.cc-kpi-btn.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
 .cc-kpi-n { font-family: var(--font-mono); font-feature-settings: "tnum" 1; font-size: 40px; font-weight: 680; line-height: 1.02; letter-spacing: -0.025em; color: var(--fg); }
 .cc-kpi-l { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-subtle); margin-top: 6px; }
 .cc-kpi-i { font-size: 11.5px; color: var(--fg-muted); margin-top: 3px; line-height: 1.35; }

@@ -8,7 +8,7 @@ import { corrObject } from "../test/factories";
 import {
   fmtAge, parseAffected, parseMissing, deriveRca, deriveEvidence, deriveFault,
   deriveOwner, deriveTicket, deriveSev, buildItem, isActionableCorr, bySeverityThenAge,
-  filterItems, needsAction, activeFilterCount,
+  filterItems, needsAction, activeFilterCount, isUntriaged,
   type ActionItem,
 } from "./commandCenter.model";
 
@@ -150,6 +150,16 @@ describe("Action Queue filters", () => {
   it("combines facets (AND)", () => {
     expect(filterItems(items, { rca: "Confirmed", fault: "SD-WAN" })).toHaveLength(0);
     expect(filterItems(items, { sev: "crit", evidence: "Complete" })).toHaveLength(1);
+  });
+
+  it("owner facet + untriaged match their KPIs exactly", () => {
+    expect(filterItems(items, { owner: "Missing" })).toHaveLength(1);
+    // Untriaged = Correlated / RCA running / New — the 'Correlated' row qualifies.
+    expect(filterItems(items, { untriaged: true })).toHaveLength(1);
+    expect(isUntriaged(mk({ rca: "Correlated" }))).toBe(true);
+    expect(isUntriaged(mk({ rca: "RCA running" }))).toBe(true);
+    expect(isUntriaged(mk({ rca: "Confirmed" }))).toBe(false);
+    expect(activeFilterCount({ owner: "Missing", untriaged: true })).toBe(2);
   });
 
   it("needsAction selects missing-owner / ticket-needed / blocked", () => {

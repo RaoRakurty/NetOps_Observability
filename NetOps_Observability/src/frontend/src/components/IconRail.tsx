@@ -58,6 +58,8 @@ type Props = {
   // Opens the self-service change-password modal; undefined for federated
   // accounts (they change it at the IdP) so the item is hidden.
   onChangePassword?: () => void;
+  // Where the brand/Home button goes (the configured landing, else first section).
+  homeRoute?: string;
 };
 
 type OpenState = { id: string; top: number } | null;
@@ -68,7 +70,7 @@ type OpenState = { id: string; top: number } | null;
 // navigates. All sections render in order (Administration is no longer pinned to
 // the very bottom), and a utility cluster (Account · Support · Help) sits at the
 // foot — replacing the top-right user menu.
-export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword }: Props) {
+export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, homeRoute }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
   const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
   const [open, setOpen] = useState<OpenState>(null);
@@ -159,7 +161,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
     <aside className="rail">
       <button
         className="rail-brand"
-        onClick={() => navigate(routeFor(nav[0]))}
+        onClick={() => navigate(homeRoute ?? routeFor(nav[0]))}
         title={BRAND}
         aria-label={BRAND}
       >

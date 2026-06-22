@@ -10,9 +10,10 @@ type Props = {
   activeLeaf?: string;
   collapsed: boolean;
   onToggle: () => void;
+  homeRoute?: string; // brand/Home target (configured landing, else first section)
 };
 
-export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onToggle }: Props) {
+export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onToggle, homeRoute }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
 
   // Which grouped sections are expanded in the sidebar. A section defaults to
@@ -98,7 +99,7 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
 
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
-      <button className="rail-brand" onClick={() => navigate(routeFor(main[0]))} title={BRAND}>
+      <button className="rail-brand" onClick={() => navigate(homeRoute ?? routeFor(main[0]))} title={BRAND}>
         <span className="rail-brand-mark"><Icon name="logo" size={20} /></span>
         {!collapsed && <span className="rail-brand-name">{BRAND}</span>}
       </button>

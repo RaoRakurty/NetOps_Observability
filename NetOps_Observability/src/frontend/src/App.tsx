@@ -3,7 +3,7 @@ import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
-import { resolveRoute, filteredNav, landingResolves } from "./nav";
+import { resolveRoute, filteredNav, landingResolves, routeFor } from "./nav";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
@@ -47,6 +47,12 @@ export default function App() {
   // backend enforces the same boundary independently.
   const platformAdmin = !!user?.platform_admin;
   const nav = useMemo(() => filteredNav(platformAdmin), [platformAdmin]);
+  // The brand/Home button goes to the configured landing (if it resolves for this
+  // principal), else the first nav section — so Home matches "where I start".
+  const homeRoute = useMemo(() => {
+    const want = user?.default_landing;
+    return want && landingResolves(want, nav) ? want : routeFor(nav[0]);
+  }, [user, nav]);
 
   // Shell state — the single source of truth that unifies the sections.
   const [hash, setHash] = useState<string>(() => location.hash || "#/dashboards/home");
@@ -168,7 +174,7 @@ export default function App() {
         <ShellGridSizing />
         <TopBar health={health} user={user} onLogout={logout} onChangePassword={onChangePassword} hideUserMenu={shellV2} />
         {shellV2 ? (
-          <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} />
+          <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} homeRoute={homeRoute} />
         ) : (
           <Sidebar
             nav={nav}
@@ -176,6 +182,7 @@ export default function App() {
             activeLeaf={leaf?.id}
             collapsed={collapsed}
             onToggle={() => setCollapsed((c) => !c)}
+            homeRoute={homeRoute}
           />
         )}
         <main className="main">
