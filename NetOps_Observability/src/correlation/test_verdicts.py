@@ -360,3 +360,15 @@ def test_fate_shared_probes_collapse_to_one_observer():
     a = witness_of(_probe("agentA", probe_authority="high", source_egress="1.2.3.4"))
     b = witness_of(_probe("agentB", probe_authority="high", source_egress="1.2.3.4"))
     assert not a.independent_of(b)
+
+
+def test_duplicate_evidence_does_not_inflate_confidence():
+    """Spec P3 #9 — the SAME event duplicated many times must NOT promote a verdict.
+    Coverage counts UNIQUE witnesses (observer × modality), never the raw signal count,
+    so 8 copies of one device-telemetry observer stay a single modality → suspected."""
+    one = assess([make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY)])
+    many = assess([make_signal("leaf1", ModalityClass.DEVICE_TELEMETRY) for _ in range(8)])
+    assert one.tier is VerdictTier.SUSPECTED
+    assert many.tier is VerdictTier.SUSPECTED, "duplicates must not promote past suspected"
+    assert many.coverage.modality_count == 1
+    assert many.coverage.observer_count == 1

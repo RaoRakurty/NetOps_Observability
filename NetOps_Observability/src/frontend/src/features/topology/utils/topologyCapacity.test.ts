@@ -156,3 +156,17 @@ describe("linkHeadroom & simulateDrain (P3 capacity what-if)", () => {
     expect(impact.every((d) => d.stranded)).toBe(true);
   });
 });
+
+describe("capacity refuses fake precision (P8 #7, non-negotiable)", () => {
+  it("never simulates or ranks an UNMEASURED link", () => {
+    const v = view([
+      edge({ id: "unmeasured", source: "a", target: "b" }), // no utilization_pct → unknown, not 0
+      edge({ id: "measured", source: "a", target: "c", utilization_pct: 50 }),
+    ]);
+    // can't redistribute load we never measured → empty (no fabricated after-utilization)
+    expect(simulateDrain(v, "unmeasured")).toEqual([]);
+    // unmeasured links are excluded from headroom + hot-link ranking entirely
+    expect(linkHeadroom(v).some((h) => h.edge.id === "unmeasured")).toBe(false);
+    expect(rankHotLinks(v).some((l) => l.edge.id === "unmeasured")).toBe(false);
+  });
+})
