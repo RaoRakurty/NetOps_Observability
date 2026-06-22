@@ -774,6 +774,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 999px; padding: 1px 7px; }
 .topo-rca-blast { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 600; color: var(--fg); }
 .topo-rca-reason { font-size: 10.5px; line-height: 1.4; color: var(--fg-subtle); font-style: italic; }
+.topo-rca-whynot { margin-top: 9px; padding: 8px 9px; border: 1px solid var(--warn);
+  border-radius: 6px; background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.topo-rca-whynot-label { font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--warn); }
+.topo-rca-whynot-list { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 3px;
+  color: var(--fg-muted); font-size: 11.5px; line-height: 1.4; }
 .topo-rca-runbook { margin-top: 9px; font-size: 12px; }
 .topo-rca-runbook > summary { cursor: pointer; font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--accent); user-select: none; }

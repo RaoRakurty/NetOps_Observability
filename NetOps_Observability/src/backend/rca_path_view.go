@@ -351,6 +351,32 @@ func bgpPeer(attached []map[string]any) string {
 	return ""
 }
 
+// reasonTokenLabel maps raw engine vocabulary that appears inside verdict-reason
+// strings to operator language (no schema tokens in customer-facing text).
+var reasonTokenLabel = map[string]string{
+	"active_probe":        "active path measurement",
+	"control_plane":       "routing",
+	"device_telemetry":    "device telemetry",
+	"passive_flow":        "traffic flow",
+	"internal_self_probe": "internal self-probe",
+	"customer_path":       "customer-path probe",
+	"synthetic_lab_probe": "lab probe",
+}
+
+// friendlyReasons rewrites engine reason strings into operator language by replacing
+// raw modality/scope tokens (kept verbatim otherwise — the phrasing is already
+// human-authored). Used for the "why not confirmed" + contradicting-evidence text.
+func friendlyReasons(reasons []string) []string {
+	out := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		for tok, label := range reasonTokenLabel {
+			r = strings.ReplaceAll(r, tok, label)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // summarizeEvidence rolls up the attached evidence by plane + the missing pieces.
 func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict string) (map[string]any, []string) {
 	byModality := map[string]int{}
@@ -376,7 +402,10 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 		var hd struct {
 			Ranking struct {
 				Hypotheses []struct {
-					Verdict struct {
+					Contradicted   bool     `json:"contradicted"`
+					Contradictions []string `json:"contradictions"`
+					Satisfied      []string `json:"satisfied"`
+					Verdict        struct {
 						IndependentPair   []string `json:"independent_pair"`
 						ModalityCoverage  []string `json:"modality_coverage"`
 						TrustedModalities []string `json:"trusted_modalities"`
@@ -387,7 +416,8 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 			} `json:"ranking"`
 		}
 		if json.Unmarshal([]byte(h), &hd) == nil && len(hd.Ranking.Hypotheses) > 0 {
-			v := hd.Ranking.Hypotheses[0].Verdict
+			top := hd.Ranking.Hypotheses[0]
+			v := top.Verdict
 			if len(v.IndependentPair) == 2 {
 				summary["confirming_pair"] = v.IndependentPair
 			}
@@ -399,6 +429,19 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 			if len(v.Reasons) > 0 {
 				summary["verdict_reason"] = v.Reasons[0]
 			}
+			// WHY NOT confirmed: when the verdict is short of confirmed, the gate
+			// reasons ARE the explanation — surface them all (the "explain why not"
+			// product principle), friendly-mapped so no raw modality token leaks.
+			if verdict != "confirmed" && len(v.Reasons) > 0 {
+				summary["why_not_confirmed"] = friendlyReasons(v.Reasons)
+			}
+			// Evidence ROLES beyond supporting/missing: discriminating/contradicting
+			// evidence the engine actually used to RULE OUT competing causes — shown so
+			// the operator sees Correlix reasoned, not just pattern-matched.
+			if len(top.Contradictions) > 0 {
+				summary["contradicting"] = friendlyReasons(top.Contradictions)
+			}
+			summary["contradicted"] = top.Contradicted
 			if len(v.FirstSteps) > 0 {
 				// Guided remediation runbook — the engine's first-response steps for this
 				// fault class. Read-only guidance (NOT auto-executed): the operator drives.

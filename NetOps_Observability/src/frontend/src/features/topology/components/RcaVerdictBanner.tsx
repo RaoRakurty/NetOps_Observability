@@ -68,6 +68,11 @@ export default function RcaVerdictBanner({
     : [];
   // Guided remediation runbook (engine first-steps) — read-only, operator-driven.
   const runbook = Array.isArray(ev.runbook) ? (ev.runbook as string[]) : [];
+  // "Explain why not": when the verdict is short of confirmed, the gate reasons say
+  // exactly what's blocking it — Correlix refuses to guess, and shows why.
+  const whyNot = Array.isArray(ev.why_not_confirmed) ? (ev.why_not_confirmed as string[]) : [];
+  // Discriminating/contradicting evidence the engine used to rule out competing causes.
+  const contradicting = Array.isArray(ev.contradicting) ? (ev.contradicting as string[]) : [];
 
   return (
     <section className="topo-rca-banner" aria-label="Incident verdict">
@@ -125,6 +130,26 @@ export default function RcaVerdictBanner({
         <div className="topo-rca-action">
           <span className="topo-rca-action-label">Next</span>
           {overlay.recommended_action}
+        </div>
+      )}
+
+      {whyNot.length > 0 && (
+        <div className="topo-rca-whynot">
+          <span className="topo-rca-whynot-label">Why not confirmed</span>
+          <ul className="topo-rca-whynot-list">
+            {whyNot.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {contradicting.length > 0 && (
+        <div className="topo-rca-missing">
+          <span className="topo-rca-missing-label" style={{ color: "var(--accent)" }}>Ruled out</span>
+          {contradicting.map((c, i) => (
+            <span key={i} className="topo-rca-missing-chip">{c}</span>
+          ))}
         </div>
       )}
 
