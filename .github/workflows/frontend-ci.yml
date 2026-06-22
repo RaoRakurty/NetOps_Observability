@@ -61,6 +61,28 @@ jobs:
       - name: npm audit (high+)
         run: npm audit --audit-level=high
 
+  e2e:
+    name: Playwright E2E (blocking)
+    runs-on: ubuntu-latest
+    # Browser-level proof that the operator workflows actually work (gap-report #2):
+    # drives the real SPA in headless Chromium against the Vite dev server with the
+    # backend mocked at the network boundary — no 19-service stack needed. Playwright
+    # is pinned (1.60.0) to the matching browser build; `install --with-deps` fetches
+    # it in CI. Specs live in e2e/ (vitest ignores them; tsc -b excludes them too).
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '18'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: install Playwright chromium
+        run: npx playwright install --with-deps chromium
+      - name: e2e (headless)
+        run: npm run e2e
+
   metric-contract:
     name: panel↔metric contract (blocking)
     runs-on: ubuntu-latest
