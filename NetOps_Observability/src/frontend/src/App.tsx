@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, Health } from "./services/api";
+import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
@@ -89,21 +89,29 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Administratively-configured default landing (Increment 2). Applied ONCE, only on
-  // a fresh open (no explicit deep-link), and only if the configured route resolves
-  // to a real leaf in THIS principal's nav — a stale or now-forbidden route falls
-  // back to the built-in home rather than trapping the user. An explicit deep-link
-  // always wins.
-  const hadDeepLink = useRef(location.hash !== "" && location.hash !== "#/");
+  // Administratively-configured default landing (Increment 2). Applied ONCE per load,
+  // when the session is a FRESH LOGIN or the app was entered at the root/home — NOT
+  // when reloading or deep-linking a specific page (those keep their page). Only
+  // applied if the configured route resolves to a real leaf in THIS principal's nav;
+  // a stale/forbidden route is ignored (keeps the built-in home).
+  const initialHash = useRef(location.hash);
   const appliedLanding = useRef(false);
   useEffect(() => {
-    if (appliedLanding.current || loading || !user || hadDeepLink.current) return;
+    if (appliedLanding.current || loading || !user) return;
     appliedLanding.current = true;
     const want = user.default_landing;
-    if (want && want !== hash && landingResolves(want, nav)) {
+    if (!want || !landingResolves(want, nav)) {
+      sessionStorage.removeItem(LANDING_PENDING_KEY);
+      return;
+    }
+    const freshLogin = sessionStorage.getItem(LANDING_PENDING_KEY) === "1";
+    const h = initialHash.current;
+    const enteredAtHome = h === "" || h === "#/" || h === "#/dashboards/home";
+    if ((freshLogin || enteredAtHome) && want !== location.hash) {
       location.hash = want; // fires hashchange → setHash
     }
-  }, [user, loading, nav, hash]);
+    sessionStorage.removeItem(LANDING_PENDING_KEY);
+  }, [user, loading, nav]);
 
   // Poll backend health for the top-bar indicator.
   useEffect(() => {

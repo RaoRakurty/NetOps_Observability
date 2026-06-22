@@ -3143,6 +3143,25 @@ a.cc-kpi:hover { border-color: var(--accent); background: var(--accent-soft); }
 .cc-panel-t { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 13px; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase; margin: 0; color: var(--fg); }
 .cc-panel-meta { font-size: 11.5px; color: var(--fg-subtle); }
 .cc-ticketgap .cc-kpis { margin-top: 0; padding: 13px 15px; }
+/* app-select — the standard modern dropdown (elegant, animated, consistent).
+   Reusable across forms + guided windows so selects look unified app-wide. */
+.app-select {
+  appearance: none; -webkit-appearance: none;
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.2;
+  color: var(--fg); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 34px 8px 12px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a93a6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat; background-position: right 11px center;
+  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+}
+.app-select:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.app-select:focus-visible, .app-select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.app-select:disabled { opacity: .55; cursor: progress; }
 .cc-empty { padding: 26px 18px; text-align: center; color: var(--fg-muted); font-size: 13px; }
 /* filter bar */
 .cc-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 9px 15px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }

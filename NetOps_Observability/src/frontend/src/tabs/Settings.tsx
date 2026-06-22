@@ -47,12 +47,12 @@ function DefaultLandingCard() {
         </div>
       </div>
       <select
-        className="ds-mini-select"
+        className="app-select"
         value={current}
         disabled={busy}
         onChange={(e) => onChange(e.target.value)}
         aria-label="Default landing page"
-        style={{ minWidth: 180 }}
+        style={{ minWidth: 200 }}
       >
         <option value="">Built-in (Dashboards · Home)</option>
         {LANDING_OPTIONS.map((o) => <option key={o.route} value={o.route}>{o.label}</option>)}

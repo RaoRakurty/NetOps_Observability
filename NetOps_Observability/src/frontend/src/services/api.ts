@@ -706,6 +706,13 @@ export function setToken(t: string | null): void {
   if (t === null) localStorage.removeItem(TOKEN_KEY);
   else localStorage.setItem(TOKEN_KEY, t);
 }
+// LANDING_PENDING_KEY marks a FRESH login so the app applies the configured default
+// landing on the next authenticated load (a reload of a specific page does NOT set
+// it, so deep-links/reloads keep their page). Cleared once the landing is applied.
+export const LANDING_PENDING_KEY = "netops_landing_pending";
+export function markFreshLogin(): void {
+  try { sessionStorage.setItem(LANDING_PENDING_KEY, "1"); } catch { /* sessionStorage unavailable */ }
+}
 export function getRefresh(): string | null {
   return localStorage.getItem(REFRESH_KEY);
 }
@@ -736,6 +743,7 @@ export function captureSSORedirect(): string | null {
   if (token) {
     setToken(token);
     setRefresh(refresh);
+    markFreshLogin();
     clear();
   }
   return null;
@@ -917,6 +925,7 @@ export const api = {
     if (r.mfa_required && r.mfa_token) return { mfaRequired: true, mfaToken: r.mfa_token };
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
+    markFreshLogin();
     fireAuthChange(true);
     return { mfaRequired: false };
   },
@@ -928,6 +937,7 @@ export const api = {
     });
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
+    markFreshLogin();
     fireAuthChange(true);
     return r;
   },
@@ -968,6 +978,7 @@ export const api = {
     });
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
+    markFreshLogin();
     fireAuthChange(true);
     return r;
   },
@@ -978,6 +989,7 @@ export const api = {
     });
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
+    markFreshLogin();
     fireAuthChange(true);
     return r;
   },
