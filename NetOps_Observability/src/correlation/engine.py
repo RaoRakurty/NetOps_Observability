@@ -289,8 +289,18 @@ def build_edges(
             if grounding is None:
                 gap_hints += 1
                 continue
-            dt = abs((b.onset - a.onset).total_seconds())
-            w_t = math.exp(-dt / cfg.tau_s)
+            # Temporal proximity is measured between the two nodes' ACTIVITY
+            # INTERVALS [onset … last signal], not their onsets. A long-running
+            # condition (e.g. a chronically flapping BGP session whose first sample
+            # in the window is minutes old) must not be penalized against a recent
+            # partner it OVERLAPS in time: onset-to-onset distance would decay the
+            # edge below attach_threshold and split a real cross-modality
+            # corroboration (customer-path probe ⟂ control-plane fault) into two
+            # objects. Overlapping intervals → gap 0 → full temporal weight; the
+            # grounding gate above still bounds WHICH pairs may edge at all.
+            a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
+            gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
+            w_t = math.exp(-gap / cfg.tau_s)
             w_topo = cfg.w_topo_seam if grounding.kind == "seam" else cfg.w_topo_containment
             cross = a.signals[0].modality_class is not b.signals[0].modality_class
             w_r = cfg.reinforce_cross_modality if cross else 1.0

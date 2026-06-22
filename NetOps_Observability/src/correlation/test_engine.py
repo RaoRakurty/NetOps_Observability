@@ -131,6 +131,74 @@ def test_probe_still_grounds_to_its_destination_subject():
     assert "dallas-edge" in edges[0].grounding.ref
 
 
+def test_chronic_condition_corroborates_recent_overlapping_partner():
+    """A long-running condition (e.g. a chronically flapping BGP session whose
+    first sample is ~10 min old) must still corroborate a RECENT cross-modality
+    partner it OVERLAPS in time. Temporal proximity is measured between activity
+    INTERVALS, not onsets — onset-to-onset distance (580s here) would decay the
+    edge below attach_threshold and split a real probe ⟂ control-plane pair into
+    two objects. Regression for the STAMP customer-path corroboration gap."""
+    chronic = [
+        sig("bgp_adjacency_change", EntityType.DEVICE, "dallas-edge:192.0.2.1", offset_s=o,
+            observer="dallas-edge", modality=ModalityClass.CONTROL_PLANE)
+        for o in (0, 300, 600)
+    ]
+    # Probe loss late in the chronic node's active interval (overlap, not onset-aligned).
+    probe = sig("probe_loss", EntityType.PATH, "prober->dallas-edge", offset_s=580,
+                observer="prober", modality=ModalityClass.ACTIVE_PROBE)
+    nodes = build_nodes((*chronic, probe))
+    edges, gap_hints = build_edges(nodes, (), EngineConfig())
+    assert len(edges) == 1, f"overlapping cross-modality pair must edge, got {edges}"
+    assert edges[0].grounding.kind == "topo"  # shared 'dallas-edge' subject
+    assert edges[0].w_reinforce > 1.0          # cross-modality reinforcement applied
+
+
+_DIA_SEAM = SeamView(
+    seam_id="sm-dia", tenant_id="", seam_type="DIA",
+    endpoints=(("on_prem", "172.40.40.52"), ("probe_target", "10.70.245.120")),
+    control_plane_owner="isp",
+)
+
+
+def _probe(off: float) -> Signal:
+    s = Signal(
+        tenant_id="", ts=T0 + timedelta(seconds=off), source=Source.PROBE, kind="probe_loss",
+        observer=Observer(observer_id="prober", observer_type=ObserverType.VANTAGE_AGENT),
+        modality_class=ModalityClass.ACTIVE_PROBE, entity_type=EntityType.PATH,
+        entity_id="prober->10.70.245.120", severity=Severity.CRIT, native_id=f"p|{off}",
+        entity_tokens=("prober", "10.70.245.120"),
+    )
+    # As classify_probe would stamp a TRUSTED customer-path probe (confirm-capable).
+    s.attrs.update(probe_authority="high", probe_scope="customer_path", agent_host="prober")
+    return s
+
+
+def _bgp(off: float) -> Signal:
+    return Signal(
+        tenant_id="", ts=T0 + timedelta(seconds=off), source=Source.TRAP, kind="bgp_adjacency_change",
+        observer=Observer(observer_id="10.70.245.120", observer_type=ObserverType.DEVICE),
+        modality_class=ModalityClass.CONTROL_PLANE, entity_type=EntityType.DEVICE,
+        entity_id="10.70.245.120:192.168.100.5", severity=Severity.CRIT, native_id=f"b|{off}",
+        entity_tokens=("10.70.245.120", "192.168.100.5"),
+    )
+
+
+def test_dia_egress_corroborated_confirms_via_probe_and_control_plane():
+    """END-TO-END feature gate: a TRUSTED customer-path probe and an independent
+    control-plane BGP flap on the same DIA seam confirm together via the
+    dia-egress-corroborated signature — even though the BGP node is chronic
+    (offsets 0/300/600) and the probe is recent (30/60). Exercises both the
+    interval-overlap temporal merge AND the multi-plane signature. A probe alone
+    still never confirms (covered by verdicts tests)."""
+    sigs = (_probe(30), _probe(60), _bgp(0), _bgp(300), _bgp(600))
+    snaps = run_window(sigs, builtin_catalog(), (_DIA_SEAM,), EngineConfig())
+    objs = [s for s in snaps if any(n.entity_id == "prober->10.70.245.120" for n in s.nodes)]
+    assert len(objs) == 1, f"probe + bgp must form ONE object, got {len(snaps)} snapshots"
+    r = objs[0].ranking
+    assert r.top_hypothesis == "sig.ent.middle-mile.dia-egress-corroborated", r.top_hypothesis
+    assert r.verdict_tier.value == "confirmed", r.verdict_tier
+
+
 def test_direction_unclaimed_on_conflict():
     # The LOWER layer onsets later: onset-order and layer-prior disagree → no claim.
     nodes = build_nodes((

@@ -359,6 +359,36 @@ BUILTIN_TEMPLATES: list[dict] = [
         },
     },
     {
+        # Multi-plane DIA egress fault: the customer-path probe AND an independent
+        # control-plane witness (BGP flap) BOTH degrade on the same seam. This is a
+        # MORE-confirmed, more-specific hypothesis than either single-plane sibling
+        # (dia-egress-latency = probe only; bgp-peer-flap = control-plane only), so
+        # when both planes corroborate it wins on coverage (2/2 required, no
+        # contradiction) and confirms via the cross-modality pair — the trusted
+        # customer-path probe corroborating the control-plane fault (decision: a
+        # probe alone never confirms; here it confirms ONLY alongside the independent
+        # BGP witness, which verdicts.assess enforces). When only ONE plane is
+        # present this signature is half-covered and loses to its single-plane
+        # siblings, so it never disturbs their behavior.
+        "id": "sig.ent.middle-mile.dia-egress-corroborated",
+        "title": "DIA egress fault — probe + control-plane corroborated",
+        "domain": "ent.middle-mile",
+        "requires": [
+            {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path"},
+            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device"},
+        ],
+        "required_modalities": ["active_probe", "control_plane"],
+        "direction_expect": "path-egress -> control-plane -> service",
+        "verdict": {
+            "owner": "isp", "layer": "L3 (DIA / provider egress)",
+            "first_steps": [
+                "Confirm both witnesses share the DIA seam: the probe RTT/loss departure point and the flapping BGP peer are the same provider egress",
+                "Check the WAN egress interface and the peer session for the same window (hold-timer expiry vs link bounce)",
+                "Open the ISP ticket with the per-target RTT/loss deltas, the BGP flap timestamps, and the DIA seam id",
+            ],
+        },
+    },
+    {
         "id": "sig.ent.wan-edge.bgp-peer-flap",
         "title": "BGP peer flap",
         "domain": "ent.wan-edge",
