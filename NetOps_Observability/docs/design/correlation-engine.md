@@ -440,6 +440,47 @@ All constants live in engine config, are part of the **config hash** in
 `engine_version`, and get re-fit later from labeled history (Phase-4 calibration) —
 deterministic first, learned second.
 
+> #### ⚠ GROUNDING COVERAGE — implementation status (2026-06-22 audit, HONEST)
+>
+> The `w_topo` ladder above is the **target**. The shipped `resolve_grounding`
+> (engine.py) implements **only two of its rungs**:
+> - ✅ **seam** — both nodes' tokens intersect an active seam's endpoints.
+> - ✅ **containment** (`same interface` / `same device`) — both nodes **share a
+>   token** (e.g. `leaf1:Eth1` and `leaf1:bgp_peer` share `leaf1`).
+>
+> The remaining rungs are **SPECIFIED BUT NOT WIRED**:
+> - ❌ **L2/L3 adjacent device** — the engine has **no topology-adjacency input**.
+>   LLDP/CDP/BGP-LS links are collected by the Go backend (`/api/topology/links`)
+>   but are **never exported to the engine** (it loads only `seams.json`). So two
+>   *different* devices joined by an interior fabric link / IGP adjacency share no
+>   token and match no seam → **no edge** (a counted topology-gap hint).
+> - ❌ **same site / same ASN-provider** — no input feeds these relations.
+>
+> **Consequence (validated live 2026-06-22 via a fabric link-flap):** the engine is
+> effectively a **WAN/seam + single-device** correlator. An entire fault class —
+> intra-fabric link flaps, OSPF/IS-IS adjacency faults, any "device A's fault caused
+> adjacent device B's symptom" causality — **cannot ground today**, even though both
+> ends emit signals and the adjacency is collected one service away. The `dia-egress`
+> objects form (seam-grounded); the fabric flap does not.
+>
+> **Two more foundational gaps found in the same audit:**
+> - **Entity-identity is not canonical across producers.** The same device is
+>   `leaf1` (syslog/metric/trap by name) vs its mgmt IP `10.0.0.5` (BGP peer lists,
+>   probe targets) vs `leaf1:7` (ifIndex) vs `leaf1:Ethernet1` (ifName). These never
+>   reconcile, so even *supported* containment grounding silently fails on id drift.
+>   Extends the "ingestion = one source-agnostic canonical contract is LAW" principle
+>   (see `telemetry-coverage-reference.md`) down to `entity_id`.
+> - **Metric anomalies mostly bypass the v2 spine.** Interface anomalies feed both
+>   the legacy z-score `findings` path and the CUSUM `corr_signals` episode path; the
+>   episode threshold is high, so device-telemetry reaches the engine thinly (~178
+>   findings vs ~5 signals observed) — weakening it as a *confirming* modality.
+>
+> **Remediation (sequenced):** **G1** add an `adjacency` grounding kind + export the
+> collected LLDP/CDP/BGP-LS links to the engine (the data exists — turns on the whole
+> interior-network class); **G2** a canonical entity-identity resolver (name↔mgmt-IP,
+> ifName canonical) at ingestion; **G3** admit device-telemetry as weak confirming
+> evidence. Tracked as the post-2026-06-22 grounding-foundation work.
+
 **Seam-relative correlation (owner spec, 2026-06-11):** `path`/`segment` entities
 are instances of the five **canonical ownership-transition seams**
 (`cloud-ingestion.md` §4: DX, VPN, SDWAN, DIA, CLOUD_BACKBONE). Correlation is

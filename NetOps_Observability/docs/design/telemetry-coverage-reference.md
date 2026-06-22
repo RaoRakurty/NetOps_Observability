@@ -19,6 +19,15 @@ plane** → normalized syslog/firewall field schema (separate log pipeline).
 Owner per family = SNMP vs gNMI-on-change vs controller-API. Mode = sample vs
 **on-change** (preferred for protocol state that flaps).
 
+> ⚠ **The contract must extend to `entity_id` (2026-06-22 audit, gap G2).** Canonical
+> *metric names* aren't enough: correlation grounds signals by shared identity tokens,
+> so the same element must carry the SAME `entity_id` across every producer. Today it
+> doesn't — a device is `leaf1` (syslog/metric/trap) vs mgmt-IP `10.0.0.5` (BGP peer
+> lists / probe targets) vs `leaf1:7` (ifIndex) vs `leaf1:Ethernet1` (ifName) — and
+> these never reconcile, so co-located signals silently fail to correlate. A canonical
+> entity-identity resolver (name↔mgmt-IP, ifName-not-ifIndex) at ingestion is part of
+> this single-contract foundation. See `correlation-engine.md` §4.2.
+
 ---
 
 ## A. VERIFIED groundings (adversarially confirmed against primary sources)
