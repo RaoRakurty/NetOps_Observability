@@ -581,6 +581,11 @@ services:
       LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
       # #20: device→tenant map (exported by api) to stamp tenant_id on findings.
       TENANT_ENRICHMENT_FILE: /data/enrichment/device_tenant.csv
+      # Active-measurement vantage trust (default empty=conservative). Declaring a
+      # trusted observer in .env (e.g. CORR_TRUSTED_PROBE_OBSERVERS=prober) lets its
+      # customer-path probe loss corroborate a control-plane fault → confirmed
+      # (still requires the independent BGP signal — no overclaim).
+      CORR_TRUSTED_PROBE_OBSERVERS: ${CORR_TRUSTED_PROBE_OBSERVERS:-}
     volumes:
       - ../../data/api/enrichment:/data/enrichment:ro
     depends_on:
