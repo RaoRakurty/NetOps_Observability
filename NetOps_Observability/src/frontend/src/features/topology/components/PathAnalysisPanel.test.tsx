@@ -52,3 +52,38 @@ describe("PathAnalysisPanel — path provenance honesty", () => {
     expect(screen.queryByText(/Measured|Computed/)).toBeNull();
   });
 });
+
+// Increment 5 — hop → evidence link: an investigated path marks the hops the RCA
+// engine implicated, connecting the path to the verdict. Honesty: only fault roles
+// get a tag; a healthy/observed hop never gets a fabricated root cause.
+function investigatedView(statuses: (string | undefined)[]): TopologyView {
+  return {
+    view_id: "v1", topology_id: "t1", mode: "investigate", scope: { tenant_id: "t1" },
+    generated_at: "", layout_type: "incident",
+    nodes: [
+      { id: "a", label: "edge1", kind: "router", health: "ok", confidence: 1, evidence: [], rca_status: statuses[0] as never },
+      { id: "b", label: "core1", kind: "router", health: "warning", confidence: 1, evidence: [], rca_status: statuses[1] as never },
+      { id: "c", label: "dc1", kind: "router", health: "ok", confidence: 1, evidence: [], rca_status: statuses[2] as never },
+    ],
+    edges: [], groups: [], overlays: [], path: ["a", "b", "c"],
+  };
+}
+
+describe("PathAnalysisPanel — hop → evidence link (Increment 5)", () => {
+  it("tags a confirmed-fault hop as the root cause", () => {
+    render(<PathAnalysisPanel view={investigatedView([undefined, "confirmed_down", undefined])} />);
+    expect(screen.getByText(/Confirmed root cause/)).toBeTruthy();
+  });
+
+  it("tags a suspected hop as where evidence points (not confirmed)", () => {
+    render(<PathAnalysisPanel view={investigatedView([undefined, "suspected_down", undefined])} />);
+    const tag = screen.getByText(/Where evidence points/);
+    expect(tag.textContent).toMatch(/suspected/i);
+    expect(document.body.textContent).not.toMatch(/Confirmed root cause/);
+  });
+
+  it("never fabricates a root cause on a healthy/observed path", () => {
+    render(<PathAnalysisPanel view={investigatedView(["observed", undefined, undefined])} />);
+    expect(screen.queryByText(/root cause|evidence points|Needs evidence|Limited visibility/)).toBeNull();
+  });
+});

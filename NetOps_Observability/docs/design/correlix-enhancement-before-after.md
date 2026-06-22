@@ -47,7 +47,7 @@ Status: ⬜ not started · 🟡 in progress · ✅ done (deployed + tested).
 |---|---|---|---|
 | Explore | browse map | + blast-radius/affected overlay, ownership-boundary zones, richer node/edge taxonomy (cloud/isp/service/db; dia/dx/vpn/overlay) | ⬜ |
 | Investigate | forked banner | renders canonical evidence on the map (role-grouped, contradicted/recovered) | ⬜ |
-| Path Trace | 🔸 proxy (device health + link util) | true per-hop loss/latency/jitter + ECMP + golden-path delta + **hop→evidence link** ("part of confirmed root cause") | ⬜ |
+| Path Trace | 🔸 proxy (device health + link util) | true per-hop loss/latency/jitter + ECMP + golden-path delta + **hop→evidence link** ("part of confirmed root cause") | 🟡 **hop→evidence link DONE** (PathAnalysisPanel tags each implicated hop w/ its RCA role + recolours the rail to the verdict; honest — only fault roles, never fabricated; 3 tests). ECMP + golden-path delta + per-hop metrics remain |
 | Capacity | drain what-if + headroom + SPOF | + failure / site-isolation / traffic-growth sims, recommendations, evidence-bundle link | ⬜ |
 | Dependency | 🔸 baseline (flow + port name) | service identity (SoT/DNS/SNI) + per-edge health | ⬜ |
 | Replay | 🔸 change-diff slice | RCA event timeline (verdict transitions, evidence added, recovery) | ⬜ |

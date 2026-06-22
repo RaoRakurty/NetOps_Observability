@@ -10,9 +10,23 @@
 // than fabricate per-hop probe numbers. Golden-path delta is honest until wired.
 
 import type React from "react";
-import type { TopologyView, TopologyNode, TopologyEdge } from "../api/topologyTypes";
+import type { TopologyView, TopologyNode, TopologyEdge, RcaOverlayState } from "../api/topologyTypes";
 
 const MONO = "var(--font-mono, ui-monospace, monospace)";
+
+// Hop → evidence link (Increment 5): when an investigated path crosses a hop the
+// RCA engine has implicated, say so on the hop — connecting the path to the verdict.
+// Only fault roles get a tag; "observed"/internal never fabricate a root cause.
+type RootCauseTag = { text: string; color: string; glyph: string };
+const ROOT_CAUSE: Partial<Record<RcaOverlayState, RootCauseTag>> = {
+  confirmed_down: { text: "Confirmed root cause", color: "#dc2626", glyph: "✕" },
+  suspected_down: { text: "Where evidence points · suspected", color: "#dc2626", glyph: "⚠" },
+  degraded: { text: "Degraded on this hop", color: "#d97706", glyph: "!" },
+  missing_evidence: { text: "Needs evidence here", color: "#64748b", glyph: "○" },
+  insufficient_visibility: { text: "Limited visibility here", color: "#64748b", glyph: "?" },
+};
+const rootCauseTag = (rca: RcaOverlayState | undefined): RootCauseTag | null =>
+  (rca && ROOT_CAUSE[rca]) || null;
 
 function edgeBetween(edges: TopologyEdge[], a: string, b: string): TopologyEdge | undefined {
   return edges.find((e) => (e.source === a && e.target === b) || (e.source === b && e.target === a));
@@ -114,7 +128,10 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
           const ingress = prevEdge ? (prevEdge.target === id ? prevEdge.target_port : prevEdge.source_port) : undefined;
           const egress = nextEdge ? (nextEdge.source === id ? nextEdge.source_port : nextEdge.target_port) : undefined;
           const decision = node?.tags?.decision;
-          const band = healthColor(node?.health);
+          // Hop → evidence link: a fault role recolours the hop's rail to the verdict
+          // colour, so the path itself shows WHERE the root cause sits.
+          const rc = rootCauseTag(node?.rca_status);
+          const band = rc?.color ?? healthColor(node?.health);
 
           // The link to the NEXT hop (rendered as a connector below this hop).
           const linkE = i < path.length - 1 ? links[i] : undefined;
@@ -142,6 +159,15 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
                     {"  ·  "}
                     {egress ? `out ${egress}` : i === path.length - 1 ? "egress" : "out —"}
                   </div>
+                  {rc && (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,
+                      fontSize: 10.5, fontWeight: 700, color: rc.color, border: `1px solid ${rc.color}`,
+                      borderRadius: 4, padding: "1px 6px",
+                      background: `color-mix(in srgb, ${rc.color} 12%, transparent)` }}
+                      title="This hop is part of the incident's RCA — the path is linked to the verdict">
+                      <span aria-hidden="true">{rc.glyph}</span>{rc.text}
+                    </div>
+                  )}
                   {decision ? <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 3 }}>{decision}</div> : null}
                 </div>
               </div>
