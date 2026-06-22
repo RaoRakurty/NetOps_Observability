@@ -58,6 +58,19 @@ jobs:
       - name: gitleaks detect (full git history)
         run: gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"
 
+  cis-docker:
+    name: CIS-Docker policy gate (blocking)
+    runs-on: ubuntu-latest
+    # Pins the container posture WE control so it can't silently regress: owned
+    # Dockerfiles run non-root + digest-pinned; owned compose services declare
+    # no-new-privileges + cap_drop ALL, are never privileged, and cap_add only from
+    # a justified allowlist (prober: NET_RAW). Complements Trivy's generic misconfig
+    # scan with project-specific, ignore-proof invariants. Pure stdlib — no daemon.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: CIS-Docker gate (selftest + enforce)
+        run: python3 NetOps_Observability/scripts/audits/cis_docker.py --selftest
+
   sbom:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-latest
