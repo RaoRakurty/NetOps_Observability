@@ -8,7 +8,17 @@ import (
 )
 
 func depRow(src, dst string, bytes, flows float64) map[string]any {
-	return map[string]any{"src": src, "dst": dst, "bytes_total": bytes, "flows": flows}
+	return map[string]any{"src": src, "dst": dst, "bytes_total": bytes, "flows": flows, "dport": float64(5432)}
+}
+
+// serviceForPort renders a well-known port as a customer-facing service name.
+func TestServiceForPort(t *testing.T) {
+	cases := map[int]string{443: "HTTPS (443)", 5432: "PostgreSQL (5432)", 6379: "Redis (6379)", 9999: "port 9999", 0: "service"}
+	for port, want := range cases {
+		if got := serviceForPort(port); got != want {
+			t.Fatalf("serviceForPort(%d) = %q, want %q", port, got, want)
+		}
+	}
 }
 
 // The flow-derived dependency graph: resolved endpoints become device nodes,

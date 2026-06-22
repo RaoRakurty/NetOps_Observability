@@ -44,8 +44,12 @@ func (s *server) projectDependencyView(r *http.Request, claims jwtClaims, tenant
 		}
 	}
 
-	// Top directed conversations by volume in the last hour. Injection-safe: only the
-	// server-built tenant clause + a fixed window/limit are interpolated.
+	// Top directed conversations by volume in the last hour. A SERVICE dependency is
+	// unicast TCP/UDP to a real port — so we exclude the network plumbing that would
+	// otherwise pollute the map: routing/control protocols (OSPF/PIM/IGMP/VRRP/ICMP
+	// all have proto ∉ {6,17}), counter/control samples (dst_port 0), and multicast /
+	// broadcast / link-local destinations. Injection-safe: only the server-built
+	// tenant clause + fixed window/limit are interpolated.
 	sql := `
 SELECT src_addr AS src,
        dst_addr AS dst,
@@ -54,7 +58,11 @@ SELECT src_addr AS src,
        any(dst_port) AS dport
   FROM netops.flows
  WHERE ts >= now() - INTERVAL 3600 SECOND` + tenantClause + `
+   AND proto IN (6, 17) AND dst_port != 0
    AND src_addr != '' AND dst_addr != '' AND src_addr != dst_addr
+   AND NOT (toIPv4OrDefault(dst_addr) BETWEEN toIPv4('224.0.0.0') AND toIPv4('239.255.255.255'))
+   AND NOT (toIPv4OrDefault(dst_addr) BETWEEN toIPv4('169.254.0.0') AND toIPv4('169.254.255.255'))
+   AND dst_addr != '255.255.255.255'
  GROUP BY src, dst
  ORDER BY bytes_total DESC
  LIMIT 60
@@ -130,10 +138,12 @@ func buildDependencyView(tenant string, now time.Time, byAddr map[string]models.
 		}
 		bytes := asFloat(row["bytes_total"])
 		flows := asFloat(row["flows"])
+		svc := serviceForPort(int(asFloat(row["dport"])))
 		edges = append(edges, topology.Edge{
 			ID:           "dep:" + sID + "--" + dID,
 			Source:       sID,
 			Target:       dID,
+			TargetPort:   svc, // the dependency's service (e.g. "https (443)"), not a raw port
 			Relationship: "dependency",
 			Protocol:     "flow",
 			Status:       "up",
@@ -141,7 +151,7 @@ func buildDependencyView(tenant string, now time.Time, byAddr map[string]models.
 			LastSeen:     now.UTC().Format(time.RFC3339),
 			Evidence: []topology.EvidenceRef{{
 				Source: "flow", Confidence: depFlowConfidence,
-				Detail:     flowEdgeDetail(flows, bytes),
+				Detail:     "depends on " + svc + " · " + flowEdgeDetail(flows, bytes),
 				ObservedAt: now.UTC().Format(time.RFC3339),
 			}},
 		})
@@ -172,6 +182,29 @@ func displayDevName(d models.Device, fallback string) string {
 // flowEdgeDetail is a compact human one-liner for a dependency edge's evidence.
 func flowEdgeDetail(flows, bytes float64) string {
 	return intToString(int(flows)) + " flows · " + humanBytes(bytes) + " observed (1h)"
+}
+
+// wellKnownService maps a well-known server port to a customer-facing service name.
+// Keeps the dependency map readable ("depends on PostgreSQL") instead of a raw port.
+var wellKnownService = map[int]string{
+	80: "HTTP", 8080: "HTTP", 443: "HTTPS", 8443: "HTTPS", 53: "DNS",
+	22: "SSH", 25: "SMTP", 587: "SMTP", 465: "SMTP", 110: "POP3", 143: "IMAP",
+	5432: "PostgreSQL", 3306: "MySQL", 1433: "SQL Server", 1521: "Oracle DB",
+	6379: "Redis", 11211: "Memcached", 27017: "MongoDB", 9200: "Search", 9300: "Search",
+	5672: "AMQP", 9092: "Kafka", 2181: "ZooKeeper", 389: "LDAP", 636: "LDAPS",
+	123: "NTP", 161: "SNMP", 514: "Syslog", 179: "BGP", 3389: "RDP", 445: "SMB",
+	8086: "Metrics", 9090: "Metrics", 6443: "Kubernetes API", 2049: "NFS",
+}
+
+// serviceForPort returns "<Service> (<port>)" for a known port, else "port <n>".
+func serviceForPort(port int) string {
+	if port <= 0 {
+		return "service"
+	}
+	if name, ok := wellKnownService[port]; ok {
+		return name + " (" + intToString(port) + ")"
+	}
+	return "port " + intToString(port)
 }
 
 // humanBytes renders a byte count in B/KB/MB/GB (decimal), one decimal place.
