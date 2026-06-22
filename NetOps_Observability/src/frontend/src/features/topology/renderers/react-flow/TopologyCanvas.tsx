@@ -49,6 +49,7 @@ const SigmaTopologyView = lazy(() => import("../sigma/SigmaTopologyView"));
 const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
+import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
 import {
   TopologyToolbar,
@@ -118,6 +119,8 @@ function CanvasInner() {
   // enterprise overview (Phase 4) vs. the geographic / WAN map (Phase 5).
   // Orthogonal to the workflow mode.
   const [renderer, setRenderer] = useState<"canvas" | "overview" | "geo">("canvas");
+  // Group-by lens for the canvas (site default = the backend's own grouping).
+  const [groupBy, setGroupBy] = useState<GroupDimension>("site");
 
   // Data source: "live" = the per-mode projection (GET /api/topology/view); other
   // value "persisted" = the reconciler-maintained graph with stable ids + stale +
@@ -220,7 +223,14 @@ function CanvasInner() {
   }, [mode]);
 
   const workflow = workflowById(mode);
-  const view = fetched ?? workflow?.view;
+  const baseView = fetched ?? workflow?.view;
+  // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
+  // — the operator's lens, not just the backend's fixed site hierarchy.
+  const view = useMemo(() => (baseView ? regroupView(baseView, groupBy) : baseView), [baseView, groupBy]);
+  // Group ids change with the lens, so any collapse state from the old grouping is
+  // stale — clear it when the lens changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setCollapsedGroups(new Set()), [groupBy]);
   const showAllLabels = labelsToggle || density === "engineer";
   // saved-layout key: invalidated when the view, layout type, or node cardinality
   // (a proxy for topology generation) changes.
@@ -514,6 +524,16 @@ function CanvasInner() {
           </label>
         )}
         {view && renderer === "canvas" && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
+        {renderer === "canvas" && (
+          <label className="topo-incident-picker" title="Regroup the canvas by a node dimension">
+            <span className="topo-incident-picker-label">Group</span>
+            <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupDimension)} aria-label="Group the canvas by">
+              {GROUP_DIMENSIONS.map((d) => (
+                <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="topo-render-toggle" role="tablist" aria-label="Renderer">
           <button role="tab" aria-selected={renderer === "canvas"} className={renderer === "canvas" ? "on" : ""} onClick={() => setRenderer("canvas")}>
             Canvas

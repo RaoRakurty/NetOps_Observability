@@ -66,6 +66,8 @@ export default function RcaVerdictBanner({
         .filter((k) => (blast[k] ?? 0) > 0)
         .map((k) => `${blast[k]} ${blast[k] === 1 ? k.replace(/s$/, "") : k}`)
     : [];
+  // Guided remediation runbook (engine first-steps) — read-only, operator-driven.
+  const runbook = Array.isArray(ev.runbook) ? (ev.runbook as string[]) : [];
 
   return (
     <section className="topo-rca-banner" aria-label="Incident verdict">
@@ -124,6 +126,17 @@ export default function RcaVerdictBanner({
           <span className="topo-rca-action-label">Next</span>
           {overlay.recommended_action}
         </div>
+      )}
+
+      {runbook.length > 0 && (
+        <details className="topo-rca-runbook">
+          <summary>Runbook · {runbook.length} steps</summary>
+          <ol className="topo-rca-runbook-list">
+            {runbook.map((step, i) => (
+              <li key={i}>{step}</li>
+            ))}
+          </ol>
+        </details>
       )}
 
       <div className="topo-rca-missing">

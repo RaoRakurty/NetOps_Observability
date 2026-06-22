@@ -3,11 +3,13 @@
 // and lists ECMP sibling sets whose load has drifted out of balance. Pure
 // presentation over topologyCapacity helpers; no graph mutation.
 
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import type { TopologyView } from "../api/topologyTypes";
 import {
   rankHotLinks,
   ecmpGroups,
+  linkHeadroom,
+  simulateDrain,
   SATURATION_THRESHOLD,
   type HotLink,
 } from "../utils/topologyCapacity";
@@ -84,6 +86,9 @@ function Badge({ tone, children }: { tone: "danger" | "warning" | "muted"; child
 export default function CapacityPanel({ view }: { view: TopologyView }) {
   const hot = rankHotLinks(view, 6);
   const imbalance = ecmpGroups(view);
+  const headroom = linkHeadroom(view).slice(0, 6);
+  const [drainId, setDrainId] = useState<string | null>(null);
+  const drain = drainId ? simulateDrain(view, drainId) : [];
 
   if (hot.length === 0) {
     return (
@@ -101,6 +106,54 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
           {hot.map((l) => (
             <HotRow key={l.edge.id} link={l} />
           ))}
+        </ul>
+      </div>
+
+      <div>
+        <div style={SECTION_LABEL}>Headroom &amp; what-if</div>
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
+          {headroom.map((h) => {
+            const open = drainId === h.edge.id;
+            return (
+              <li key={h.edge.id} style={{ padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", display: "grid", gap: 5 }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg)", fontFamily: MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {h.edge.source_port ? `${h.edge.source}↔${h.edge.target}` : h.edge.id}
+                  </span>
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline", flex: "0 0 auto" }}>
+                    {h.spof ? <Badge tone="warning">no ECMP backup</Badge> : null}
+                    <span style={{ fontSize: 11, fontWeight: 700, fontFamily: MONO, color: utilColor(SATURATION_THRESHOLD - h.headroom) }}>
+                      {Math.round(h.headroom)}% headroom
+                    </span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDrainId(open ? null : h.edge.id)}
+                  style={{ justifySelf: "start", fontSize: 10, fontWeight: 600, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                >
+                  {open ? "▾ hide" : "▸ what if this drains?"}
+                </button>
+                {open && (
+                  <div style={{ display: "grid", gap: 4, borderTop: "1px dashed var(--border)", paddingTop: 5 }}>
+                    {drain.map((d) =>
+                      d.stranded ? (
+                        <div key={d.node} style={{ fontSize: 10, color: "var(--danger, #e5484d)", fontWeight: 600 }}>
+                          {d.nodeLabel}: STRANDED — no surviving path
+                        </div>
+                      ) : (
+                        <div key={d.node} style={{ fontSize: 10, color: "var(--fg-subtle)", fontFamily: MONO }}>
+                          {d.nodeLabel}: {d.redistributed
+                            .map((r) => `${r.otherLabel} ${Math.round(r.before)}→${Math.round(r.after)}%${r.saturates ? " ⚠" : ""}`)
+                            .join("  ·  ")}
+                        </div>
+                      ),
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </div>
 

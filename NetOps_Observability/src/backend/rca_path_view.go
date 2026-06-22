@@ -381,6 +381,7 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 						ModalityCoverage  []string `json:"modality_coverage"`
 						TrustedModalities []string `json:"trusted_modalities"`
 						Reasons           []string `json:"reasons"`
+						FirstSteps        []string `json:"first_steps"`
 					} `json:"verdict"`
 				} `json:"hypotheses"`
 			} `json:"ranking"`
@@ -397,6 +398,11 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 			}
 			if len(v.Reasons) > 0 {
 				summary["verdict_reason"] = v.Reasons[0]
+			}
+			if len(v.FirstSteps) > 0 {
+				// Guided remediation runbook — the engine's first-response steps for this
+				// fault class. Read-only guidance (NOT auto-executed): the operator drives.
+				summary["runbook"] = v.FirstSteps
 			}
 		}
 	}

@@ -3,6 +3,8 @@ import {
   rankHotLinks,
   saturatedEdgeIds,
   ecmpGroups,
+  linkHeadroom,
+  simulateDrain,
   SATURATION_THRESHOLD,
   ECMP_IMBALANCE_SPREAD,
 } from "./topologyCapacity";
@@ -115,5 +117,42 @@ describe("ecmpGroups", () => {
     // spine1 also has incident links (95,80 spread 15 < 25 → out). Top is leaf1 (55).
     expect(groups[0].node).toBe("leaf1");
     expect(groups.map((g) => g.spread)).toEqual([...groups.map((g) => g.spread)].sort((x, y) => y - x));
+  });
+});
+
+describe("linkHeadroom & simulateDrain (P3 capacity what-if)", () => {
+  it("computes headroom to saturation and flags single-points-of-failure", () => {
+    const v = view([
+      edge({ id: "e1", source: "leaf1", target: "spine1", utilization_pct: 60 }),
+      edge({ id: "e2", source: "leaf1", target: "spine2", utilization_pct: 20 }),
+      edge({ id: "solo", source: "leaf9", target: "wan", utilization_pct: 10 }),
+    ]);
+    const hr = linkHeadroom(v);
+    const e1 = hr.find((h) => h.edge.id === "e1")!;
+    expect(e1.headroom).toBe(SATURATION_THRESHOLD - 60);
+    expect(e1.spof).toBe(false); // leaf1 has a sibling uplink (e2)
+    expect(hr.find((h) => h.edge.id === "solo")!.spof).toBe(true); // no sibling
+    expect(hr[0].headroom).toBeLessThanOrEqual(hr[hr.length - 1].headroom); // least headroom first
+  });
+
+  it("redistributes a drained link's load across surviving ECMP siblings and flags saturation", () => {
+    const v = view([
+      edge({ id: "up1", source: "leaf1", target: "spine1", utilization_pct: 80 }),
+      edge({ id: "up2", source: "leaf1", target: "spine2", utilization_pct: 70 }),
+    ]);
+    const impact = simulateDrain(v, "up1");
+    const leaf = impact.find((d) => d.node === "leaf1")!;
+    expect(leaf.stranded).toBe(false);
+    // up1's 80% moves onto the one surviving sibling up2 → 70 + 80 = 150% → saturates.
+    const sib = leaf.redistributed[0];
+    expect(sib.edge.id).toBe("up2");
+    expect(sib.after).toBe(150);
+    expect(sib.saturates).toBe(true);
+  });
+
+  it("marks an endpoint stranded when a drained link has no surviving sibling", () => {
+    const v = view([edge({ id: "only", source: "leafX", target: "spineX", utilization_pct: 30 })]);
+    const impact = simulateDrain(v, "only");
+    expect(impact.every((d) => d.stranded)).toBe(true);
   });
 });

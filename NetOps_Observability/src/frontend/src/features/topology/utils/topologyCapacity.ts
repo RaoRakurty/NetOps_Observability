@@ -66,6 +66,92 @@ export function saturatedEdgeIds(view: TopologyView, threshold = SATURATION_THRE
   );
 }
 
+// ── capacity planning: headroom + what-if drain (the white-space "exceed" bet) ──
+
+export type LinkHeadroom = {
+  edge: TopologyEdge;
+  utilization: number;
+  /** % points of capacity left before saturation (SATURATION_THRESHOLD − util). */
+  headroom: number;
+  /** No ECMP sibling carries this load if the link drains → a single point of failure. */
+  spof: boolean;
+};
+
+/**
+ * Per measured link: headroom to saturation + whether it is a single point of
+ * failure (its endpoints share no other measured link to absorb the load). The
+ * busiest / least-headroom links first — capacity planning starts here.
+ */
+export function linkHeadroom(view: TopologyView): LinkHeadroom[] {
+  const siblings = (e: TopologyEdge) =>
+    view.edges.filter(
+      (o) =>
+        o.id !== e.id &&
+        o.utilization_pct != null &&
+        ((o.source === e.source && o.target === e.target) ||
+          (o.source === e.target && o.target === e.source) ||
+          o.source === e.source ||
+          o.target === e.target),
+    );
+  return view.edges
+    .filter((e) => e.utilization_pct != null)
+    .map((e) => {
+      const u = e.utilization_pct as number;
+      return { edge: e, utilization: u, headroom: Math.max(0, SATURATION_THRESHOLD - u), spof: siblings(e).length === 0 };
+    })
+    .sort((a, b) => a.headroom - b.headroom);
+}
+
+export type DrainImpact = {
+  /** the node whose ECMP set absorbs the drained link's load. */
+  node: string;
+  nodeLabel: string;
+  /** sibling links that take the redistributed load, with projected utilization. */
+  redistributed: { edge: TopologyEdge; otherLabel: string; before: number; after: number; saturates: boolean }[];
+  /** load that cannot be absorbed (no surviving sibling) — a hard outage risk. */
+  stranded: boolean;
+};
+
+/**
+ * WHAT-IF: if `edgeId` drains (maintenance / failure), redistribute its measured
+ * load EQUALLY across the surviving ECMP siblings at each shared endpoint and report
+ * the projected utilization — flagging any sibling that would itself saturate, or a
+ * node left with no path (stranded). Pure; no vendor surfaces this today. Returns one
+ * entry per shared endpoint that has surviving siblings (or a stranded marker).
+ */
+export function simulateDrain(view: TopologyView, edgeId: string): DrainImpact[] {
+  const byId = nodeIndex(view);
+  const drained = view.edges.find((e) => e.id === edgeId);
+  if (!drained || drained.utilization_pct == null) return [];
+  const load = drained.utilization_pct;
+
+  const out: DrainImpact[] = [];
+  for (const node of [drained.source, drained.target]) {
+    const siblings = view.edges.filter(
+      (e) => e.id !== edgeId && e.utilization_pct != null && (e.source === node || e.target === node),
+    );
+    if (siblings.length === 0) {
+      out.push({ node, nodeLabel: labelOf(byId, node), redistributed: [], stranded: true });
+      continue;
+    }
+    const share = load / siblings.length;
+    out.push({
+      node,
+      nodeLabel: labelOf(byId, node),
+      stranded: false,
+      redistributed: siblings
+        .map((e) => {
+          const before = e.utilization_pct as number;
+          const after = before + share;
+          const other = e.source === node ? e.target : e.source;
+          return { edge: e, otherLabel: labelOf(byId, other), before, after, saturates: after >= SATURATION_THRESHOLD };
+        })
+        .sort((a, b) => b.after - a.after),
+    });
+  }
+  return out;
+}
+
 export type EcmpMember = { edge: TopologyEdge; utilization: number; otherLabel: string };
 export type EcmpGroup = {
   /** the node the sibling links share (load-balancing point). */
