@@ -9,7 +9,6 @@ Proves the trap guardrail the architecture requires (Layer 1G + Layer 4D):
     signal) — the anti-noise guardrail
   * handle_snmptrap counts received / normalized / dropped and never crashes
 """
-import asyncio
 import unittest
 from datetime import datetime, timezone
 

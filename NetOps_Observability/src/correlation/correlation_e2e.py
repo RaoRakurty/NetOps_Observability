@@ -72,7 +72,7 @@ def ch_json(query: str) -> list[dict]:
     out = ch(query + " FORMAT JSONEachRow")
     if out.startswith("__ERR__") or not out:
         return []
-    return [json.loads(l) for l in out.splitlines() if l.strip()]
+    return [json.loads(ln) for ln in out.splitlines() if ln.strip()]
 
 
 def sig_rows(like: str) -> list[dict]:
@@ -141,7 +141,7 @@ def inject_and_collect():
     # 1. Link down / WAN handoff
     edge = f"{TAG}-edge1"
     n = produce("netops.syslog", [
-        syslog(edge, "LINK-3-UPDOWN", f"%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down"),
+        syslog(edge, "LINK-3-UPDOWN", "%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down"),
         syslog(edge, "BGP-5-ADJCHANGE", "%BGP-5-ADJCHANGE: neighbor 10.99.0.2 Down Interface flap", sev="notice"),
     ])
     n += produce("netops.probes", [probe(f"{TAG}-vantage", edge, loss=85.0)])

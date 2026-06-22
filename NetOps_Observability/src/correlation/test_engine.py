@@ -305,8 +305,10 @@ def test_reversioning_is_append_not_in_place_mutation():
     assert len(v1) == len(v2) and v1
     for a, b in zip(v1, v2):
         assert a["version"] == 1 and b["version"] == 2
-        strip = lambda d: {k: v for k, v in d.items() if k != "version"}
-        assert strip(a) == strip(b), "non-version fields must be immutable across versions"
+        # non-version fields must be immutable across versions (no in-place edit)
+        assert {k: v for k, v in a.items() if k != "version"} == {
+            k: v for k, v in b.items() if k != "version"
+        }, "non-version fields must be immutable across versions"
 
 
 def test_evidence_change_forces_new_version_unchanged_does_not_churn():
