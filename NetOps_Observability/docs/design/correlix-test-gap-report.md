@@ -35,7 +35,7 @@ the backend is far more covered than the spec assumes; the real gaps are concent
 |---|---|---|---|
 | 1 | **Cloud / K8s readiness: NONE** — no K8s manifests, Helm chart, Terraform, CIS-K8s policy tests | High (for hyperscaler claim) | Product is docker-compose only; "AWS/Azure/GCP/K8s deployable" is unproven |
 | 2 | **E2E browser tests: NONE** (no Playwright/Cypress) | High | No automated proof the operator workflows (Command Center → incident → evidence) actually work in a browser, incl. cross-tenant UI guards |
-| 3 | **Frontend product-test depth** — `CommandCenter.tsx`, evidence-ledger role grouping, path-trace overclaim guards untested | Medium-High | The product surfaces (the decision system) lack regression tests |
+| 3 | 🟡 **Frontend product-test depth** — `CommandCenter.tsx`, evidence-ledger role grouping, path-trace overclaim guards untested | Medium-High | **Command Center + evidence ledger DONE** — triage logic extracted to pure `commandCenter.model.ts` (19 tests: single-stream confirm guard, internal-stack exclusion #76, ticket gating, severity sort, defensive parse) + `RcaVerdictBanner` render tests (4: independent-pair naming, raw-field hiding, no-overclaim). Path-trace overclaim guard done under #8. Remaining: deeper RcaWorkspace/topology-canvas product coverage |
 | 4 | ✅ **RCA dedup** (spec P3 #9): duplicate evidence must not inflate confidence | Medium | **DONE `aafd117`** — `assess()` counts unique witnesses |
 | 5 | ✅ **Capacity "no fake precision"** (P8 #7): missing util → no fabricated numbers | Medium | **DONE `aafd117`** — unmeasured link excluded, never simulated/ranked |
 | 6 | ✅ **Dependency noise guard** (non-negotiable): control-plane/multicast excluded | Medium | **DONE** — `isDependencyNoise` guard on the pure projection (defense-in-depth vs the SQL filter) + `TestBuildDependencyViewExcludesNoise`/`TestIsDependencyNoise` |
@@ -46,8 +46,9 @@ the backend is far more covered than the spec assumes; the real gaps are concent
 
 **Step-1 status (2026-06-22): COMPLETE.** All five high-priority correctness/honesty
 guards (#4, #5, #6, #8, #9) closed — no new infra, pure-layer unit + render tests.
-Next per the order below: (2) frontend product regression (Command Center, evidence
-ledger role grouping), then (3) E2E, (4) CIS-Docker CI, (5) cloud/K8s packaging.
+**Step-2 (frontend product regression) IN PROGRESS:** Command Center decision logic +
+evidence-ledger role grouping done (see #3). Next: (3) E2E, (4) CIS-Docker CI, (5)
+cloud/K8s packaging.
 **K8s is ADDITIVE packaging (Helm + manifests alongside docker-compose), not a stack
 migration** — compose stays the default; no forced move off it.
 

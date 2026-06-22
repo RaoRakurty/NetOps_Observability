@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Incident, CorrObject } from "../services/api";
-import { ownerLabel, signatureNocTitle, entityLabel, isInternalStackAffected } from "../components/rca/labels";
+import { signatureNocTitle, entityLabel } from "../components/rca/labels";
+import {
+  type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
+  fmtAge, buildItem, isActionableCorr, bySeverityThenAge,
+} from "./commandCenter.model";
 
 // Command Center — the NOC operational control plane (build-order #18). NOT a raw
 // alert table: the primary rows are CORRELATION GROUPS (CorrObjects), each already
@@ -9,120 +13,10 @@ import { ownerLabel, signatureNocTitle, entityLabel, isInternalStackAffected } f
 // what needs human action" — and what to do next. Incidents/ITSM fold in for the
 // ticketing-gap view. Premium dark/glass via the app-wide theme tokens (frontpage
 // brand consistency) — never a hardcoded palette.
-
-// ── Typed derived contracts (map to backend fields when they exist) ─────────────
-type RcaState = "New" | "Correlated" | "RCA running" | "Suspected" | "Confirmed" | "Blocked" | "Resolved";
-type EvidenceState = "Complete" | "Partial" | "Single-stream";
-type FaultDomain = "LAN" | "SD-WAN" | "Data Center" | "ISP / Carrier" | "Cloud Provider" | "Application" | "Security" | "Unknown";
-type OwnerState = "Assigned" | "Recommended" | "Missing" | "Escalated";
-type TicketState = "Not eligible" | "Eligible" | "Ticket needed" | "Ticketed" | "Sync failed";
-type Sev = "crit" | "major" | "warn" | "ok";
-
-interface ActionItem {
-  corr: CorrObject;
-  affected: { devices: string[]; paths: string[]; interfaces: string[]; sites: string[] };
-  missing: string[];
-  sev: Sev;
-  rca: RcaState;
-  evidence: EvidenceState;
-  fault: FaultDomain;
-  owner: OwnerState;
-  ownerName: string;
-  ticket: TicketState;
-  nextAction: string;
-  ageMs: number;
-}
-
-const fmtAge = (iso?: string): string => {
-  if (!iso) return "—";
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const m = Math.floor(ms / 60_000);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-};
-
-const safeArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
-function parseAffected(json: string): ActionItem["affected"] {
-  try {
-    const a = JSON.parse(json || "{}");
-    return { devices: safeArr(a.devices), paths: safeArr(a.paths), interfaces: safeArr(a.interfaces), sites: safeArr(a.sites) };
-  } catch { return { devices: [], paths: [], interfaces: [], sites: [] }; }
-}
-function parseMissing(json: string): string[] {
-  try { const a = JSON.parse(json || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
-}
-
-// RCA state — verdict + lifecycle, never "Confirmed" on a single stream (the ≥2
-// independent-stream rule lives upstream in verdict_tier).
-function deriveRca(c: CorrObject, missing: string[]): RcaState {
-  const st = (c.state || "").toLowerCase();
-  if (st === "recovered" || st === "closed") return "Resolved";
-  if (c.verdict_tier === "confirmed") return "Confirmed";
-  if (c.verdict_tier === "suspected") return missing.length >= 3 ? "Blocked" : "Suspected";
-  // undetermined: a formed group still gathering evidence
-  return c.signal_count > 1 ? "Correlated" : "RCA running";
-}
-function deriveEvidence(c: CorrObject, missing: string[]): EvidenceState {
-  if (c.signal_count <= 1) return "Single-stream";
-  return missing.length === 0 ? "Complete" : "Partial";
-}
-function deriveFault(c: CorrObject, aff: ActionItem["affected"]): FaultDomain {
-  const o = (c.owner || "").toLowerCase();
-  if (o === "isp") return "ISP / Carrier";
-  if (o === "cloudops") return "Cloud Provider";
-  if (o === "secops") return "Security";
-  if (o === "appops") return "Application";
-  const hay = [...aff.devices, ...aff.paths, ...aff.interfaces].join(" ").toLowerCase();
-  if (/spine|leaf|fabric|dc-|tor/.test(hay)) return "Data Center";
-  if (/wan|sd-?wan|edge|tunnel|vpn|mpls/.test(hay)) return "SD-WAN";
-  if (/lan|sw-|access|dmz|fw/.test(hay)) return "LAN";
-  return "Unknown";
-}
-function deriveOwner(c: CorrObject): { state: OwnerState; name: string } {
-  const o = (c.owner || "").trim().toLowerCase();
-  if (!o || o === "unknown") return { state: "Missing", name: "Unassigned" };
-  // verdict owner is a recommendation (no assignment workflow yet)
-  return { state: "Recommended", name: ownerLabel(c.owner) };
-}
-function deriveTicket(rca: RcaState): TicketState {
-  if (rca === "Confirmed") return "Ticket needed";
-  if (rca === "Resolved") return "Not eligible";
-  return "Not eligible"; // suspected/correlated: hold until RCA confirms impact
-}
-function deriveSev(c: CorrObject, rca: RcaState): Sev {
-  if (rca === "Confirmed") return "crit";
-  if (rca === "Suspected" || rca === "Blocked") return "major";
-  return c.top_confidence >= 0.6 ? "warn" : "ok";
-}
-// Next action — enterprise NOC language; what the operator should do NOW.
-function deriveNextAction(it: Omit<ActionItem, "nextAction">): string {
-  if (it.rca === "Confirmed" && it.owner === "Missing") return "Assign owner · escalate";
-  if (it.rca === "Confirmed") return it.ticket === "Ticketed" ? "Track resolution" : "Open ticket · escalate";
-  if (it.rca === "Blocked") return "Add evidence · unblock RCA";
-  if (it.owner === "Missing") return "Assign owner · open RCA";
-  if (it.rca === "Suspected") return "Confirm impact · hold ticket";
-  return "Review correlation";
-}
-
-function buildItem(c: CorrObject): ActionItem {
-  const affected = parseAffected(c.affected);
-  const missing = parseMissing(c.evidence_missing);
-  const rca = deriveRca(c, missing);
-  const { state: owner, name: ownerName } = deriveOwner(c);
-  const base = {
-    corr: c, affected, missing,
-    sev: deriveSev(c, rca), rca,
-    evidence: deriveEvidence(c, missing),
-    fault: deriveFault(c, affected),
-    owner, ownerName,
-    ticket: deriveTicket(rca),
-    ageMs: Date.now() - Date.parse(c.window_start || c.created_at || ""),
-  };
-  return { ...base, nextAction: deriveNextAction(base) };
-}
+//
+// The triage decision logic (RCA-state/owner/ticket derivation, the single-stream
+// confirm guard, internal-stack exclusion, the severity sort) lives in the pure,
+// unit-tested ./commandCenter.model — this file is the view only.
 
 // ── Badges (token-styled; small uppercase NOC chips) ────────────────────────────
 const SEV_TONE: Record<Sev, string> = { crit: "var(--crit)", major: "var(--warn)", warn: "var(--warn)", ok: "var(--fg-subtle)" };
@@ -243,7 +137,7 @@ export default function CommandCenter() {
         api.correlations(200, 2592000, "open"),
         api.listIncidents({ limit: 500 }).catch(() => [] as Incident[]),
       ]);
-      setCorr((cs?.data ?? []).filter((c) => c.verdict_tier !== "undetermined" || c.signal_count > 1).filter((c) => !isInternalStackAffected(c.affected)));
+      setCorr((cs?.data ?? []).filter(isActionableCorr));
       setIncidents(inc ?? []);
       setErr(null);
     } catch (e) { setErr((e as Error).message); }
@@ -251,10 +145,7 @@ export default function CommandCenter() {
   }, []);
   useEffect(() => { load(); const id = setInterval(load, 30_000); return () => clearInterval(id); }, [load]);
 
-  const items = useMemo(() => corr.map(buildItem).sort((a, b) => {
-    const sr: Record<Sev, number> = { crit: 0, major: 1, warn: 2, ok: 3 };
-    return sr[a.sev] - sr[b.sev] || b.ageMs - a.ageMs;
-  }), [corr]);
+  const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
 
   const critical = items.filter((i) => i.sev === "crit").length;
   const untriaged = items.filter((i) => i.rca === "Correlated" || i.rca === "RCA running" || i.rca === "New").length;
