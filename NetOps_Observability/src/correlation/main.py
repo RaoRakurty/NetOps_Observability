@@ -235,6 +235,12 @@ def buffer_signal(sig: Signal) -> None:
     sid = str(sig.signal_id)
     if sid in _BUFFERED_IDS:
         return  # at-least-once redelivery — the window already holds it
+    # The deque is maxlen-bounded (§9): once full, append() silently evicts the
+    # OLDEST signal. Drop that signal's id from the dedup set in lockstep — else the
+    # set leaks unboundedly under a flood AND a later redelivery of an evicted signal
+    # would be wrongly deduped (dropped) because its stale id lingers in the set.
+    if len(WINDOW_BUFFER) == WINDOW_BUFFER.maxlen:
+        _BUFFERED_IDS.discard(str(WINDOW_BUFFER[0].signal_id))
     _BUFFERED_IDS.add(sid)
     WINDOW_BUFFER.append(sig)
 

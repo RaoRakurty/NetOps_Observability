@@ -42,7 +42,7 @@ the backend is far more covered than the spec assumes; the real gaps are concent
 | 7 | **CIS-Docker automated check** in CI (Dockerfiles run as non-root, no extra caps) | Medium | hardening exists; not gated by an automated test |
 | 8 | ✅ **Path Trace honesty** (non-negotiable): proxy must not be labeled true Path Trace | Medium | **DONE** — backend tags `View.PathSource` measured\|computed (`resolvePath` + tests); UI provenance chip in `PathAnalysisPanel` ("Computed · …not a live trace") + render test |
 | 9 | ✅ **Evidence-ledger immutability/audit** (P4 #6) | Medium | **DONE** — versioned append-only ledger pinned: re-version re-stamps frozen evidence (no in-place edit), rows carry role+note (audit), changed evidence ⇒ new version (`test_engine.py`) |
-| 10 | **Load/resilience** (10k incidents/nodes; P5/P6) | Low-Medium | no perf bound tests |
+| 10 | 🟡 **Load/resilience** (10k incidents/nodes; P5/P6) | Low-Medium | **Bounded-queue guarantees pinned** (`test_resilience.py`, §9) — window buffer maxlen-bounded, dedup set stays in lockstep under flood, redelivery deduped, evicted signals not falsely deduped, prune ages out ids. **Caught + fixed a real leak**: `_BUFFERED_IDS` grew unbounded on maxlen eviction (55k vs 50k buffer) — `buffer_signal` now discards the evicted id in lockstep. Remaining: end-to-end perf bounds (latency under 10k nodes) |
 
 **Step-1 status (2026-06-22): COMPLETE.** All five high-priority correctness/honesty
 guards (#4, #5, #6, #8, #9) closed — no new infra, pure-layer unit + render tests.
