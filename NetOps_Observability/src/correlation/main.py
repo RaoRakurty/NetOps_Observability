@@ -39,7 +39,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from catalog import builtin_catalog
-from engine import EngineConfig, ObjectSnapshot, SeamView, run_window
+from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, run_window
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
@@ -186,6 +186,10 @@ CORR_ENGINE_ENABLED = os.environ.get("CORR_ENGINE_ENABLED", "true").lower() != "
 CORR_ENGINE_INTERVAL_S = float(os.environ.get("CORR_ENGINE_INTERVAL_S", "30"))
 CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
 SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
+# L2/L3 adjacency (LLDP/CDP/BGP-LS links) exported by the Go API — the grounding
+# input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
+# (gate falls back to seam/containment, identical to before — honest, never relaxed).
+TOPO_LINKS_FILE = os.environ.get("TOPO_LINKS_FILE", "/data/enrichment/topology_links.json")
 
 ENGINE_CFG = EngineConfig()
 CATALOG = builtin_catalog()
@@ -208,6 +212,34 @@ LAST_GAP_HINTS = 0
 
 _seam_cache: tuple[SeamView, ...] = ()
 _seam_mtime: float = -1.0
+_adj_cache: dict[str, list[dict]] = {}
+_adj_mtime: float = -1.0
+
+
+def topology_links_by_tenant() -> dict[str, list[dict]]:
+    """L2/L3 device adjacency for the grounding gate (G1), exported by the Go API
+    from LLDP/CDP/BGP-LS, grouped by tenant ("" = global). mtime-cached; absent/
+    unreadable file = empty (gate uses only seam/containment — backward compatible).
+    Tenant-scoped at use (a tenant grounds on its own links ∪ global), mirroring
+    seam_inventory's tenant filter — adjacency never crosses tenants."""
+    global _adj_cache, _adj_mtime
+    try:
+        mt = os.path.getmtime(TOPO_LINKS_FILE)
+    except OSError:
+        return _adj_cache
+    if mt != _adj_mtime:
+        _adj_mtime = mt
+        try:
+            with open(TOPO_LINKS_FILE) as f:
+                raw = json.load(f)
+            links = raw if isinstance(raw, list) else raw.get("links", [])
+            grouped: dict[str, list[dict]] = {}
+            for link in links:
+                grouped.setdefault(str(link.get("tenant_id") or ""), []).append(link)
+            _adj_cache = grouped
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            log.warning("topology links unreadable (%s); keeping previous adjacency", exc)
+    return _adj_cache
 
 
 def seam_inventory() -> tuple[SeamView, ...]:
@@ -294,11 +326,14 @@ async def engine_cycle() -> None:
 
     seen_this_cycle: set[str] = set()
     gap_hints = 0
+    adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
     for tenant in sorted(by_tenant):
         window = by_tenant[tenant]
         seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
+        # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
+        adjacency = TopologyAdjacency.from_links(adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
         try:
-            snapshots = run_window(window, CATALOG, seams, ENGINE_CFG)
+            snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency)
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue

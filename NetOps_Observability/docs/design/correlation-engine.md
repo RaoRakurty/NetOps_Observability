@@ -443,25 +443,27 @@ deterministic first, learned second.
 > #### ⚠ GROUNDING COVERAGE — implementation status (2026-06-22 audit, HONEST)
 >
 > The `w_topo` ladder above is the **target**. The shipped `resolve_grounding`
-> (engine.py) implements **only two of its rungs**:
+> (engine.py) implements **three of its rungs** (adjacency added 2026-06-22, G1):
 > - ✅ **seam** — both nodes' tokens intersect an active seam's endpoints.
 > - ✅ **containment** (`same interface` / `same device`) — both nodes **share a
 >   token** (e.g. `leaf1:Eth1` and `leaf1:bgp_peer` share `leaf1`).
 >
-> The remaining rungs are **SPECIFIED BUT NOT WIRED**:
-> - ❌ **L2/L3 adjacent device** — the engine has **no topology-adjacency input**.
->   LLDP/CDP/BGP-LS links are collected by the Go backend (`/api/topology/links`)
->   but are **never exported to the engine** (it loads only `seams.json`). So two
->   *different* devices joined by an interior fabric link / IGP adjacency share no
->   token and match no seam → **no edge** (a counted topology-gap hint).
-> - ❌ **same site / same ASN-provider** — no input feeds these relations.
+ - **L2/L3 adjacent device** (`adj:a--b`, w_topo 0.65) — two DIFFERENT devices joined
+>   by a known link ground here. The Go backend now exports the collected LLDP/CDP/
+>   BGP-LS links to `topology_links.json` (`startTopologyLinksEnrichment`, tenant-
+>   scoped); the engine loads it (`topology_links_by_tenant`) into a `TopologyAdjacency`
+>   passed to `run_window`. Unlocks intra-fabric link-flaps + IGP adjacency faults.
+>   Golden fixture: `test_fabric_link_flap_forms_one_grounded_incident_with_adjacency`.
 >
-> **Consequence (validated live 2026-06-22 via a fabric link-flap):** the engine is
-> effectively a **WAN/seam + single-device** correlator. An entire fault class —
-> intra-fabric link flaps, OSPF/IS-IS adjacency faults, any "device A's fault caused
-> adjacent device B's symptom" causality — **cannot ground today**, even though both
-> ends emit signals and the adjacency is collected one service away. The `dia-egress`
-> objects form (seam-grounded); the fabric flap does not.
+> Still **SPECIFIED BUT NOT WIRED** (lower value; adjacency covers the interior class):
+> - **same site / same ASN-provider** — no input feeds these weaker rungs yet.
+>
+> **What the live 2026-06-22 fabric link-flap exposed (now FIXED by G1):** before G1
+> the engine was effectively a **WAN/seam + single-device** correlator — intra-fabric
+> link flaps, OSPF/IS-IS adjacency faults, and "device A's fault caused adjacent device
+> B's symptom" causality could not ground, even though both ends emit signals and the
+> adjacency was collected one service away. **G1 wires the adjacency rung**, so that
+> class now correlates; `dia-egress` (seam) objects were always fine.
 >
 > **Two more foundational gaps found in the same audit:**
 > - **Entity-identity is not canonical across producers.** The same device is

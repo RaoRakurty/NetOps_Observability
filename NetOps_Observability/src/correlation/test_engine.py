@@ -19,9 +19,11 @@ from catalog import builtin_catalog
 from engine import (
     EngineConfig,
     SeamView,
+    TopologyAdjacency,
     build_edges,
     build_nodes,
     engine_version,
+    resolve_grounding,
     run_window,
     seams_hash,
 )
@@ -277,6 +279,53 @@ def test_snapshot_row_contract():
 def test_engine_version_pins_config():
     assert engine_version(EngineConfig()) != engine_version(EngineConfig(tau_s=999))
     assert engine_version(EngineConfig()) == engine_version(EngineConfig())
+
+
+# ── G1: L2/L3 adjacency grounding (the fabric-flap regression that was MISSING) ──
+# A fabric link flap emits signals on the TWO ENDS of one link — different devices.
+# Without an adjacency input they share no token and match no seam → no edge → no
+# incident (the gap a live flap exposed). With the adjacency the engine grounds them.
+
+def test_adjacency_rung_grounds_two_adjacent_devices():
+    a = build_nodes((sig("link_state_change", EntityType.INTERFACE, "leaf1:Ethernet1",
+                         observer="leaf1", modality=ModalityClass.CONTROL_PLANE),))[0]
+    b = build_nodes((sig("isis_adjacency_change", EntityType.DEVICE, "spine1",
+                         observer="spine1", modality=ModalityClass.CONTROL_PLANE),))[0]
+    # No seam, no shared token → ungrounded without adjacency.
+    assert resolve_grounding(a, b, ()) is None
+    # With the known fabric link leaf1<->spine1 → grounded via the adjacency rung.
+    adj = TopologyAdjacency.from_links([{"a": "leaf1", "b": "spine1", "a_if": "Ethernet1"}])
+    g = resolve_grounding(a, b, (), adj)
+    assert g is not None and g.kind == "topo" and g.ref == "adj:leaf1--spine1"
+
+
+def test_fabric_link_flap_forms_one_grounded_incident_with_adjacency():
+    # The exact shape of the live chaos: link-state on leaf1's port + IS-IS adjacency
+    # drop on the spine end of the same link.
+    window = [
+        sig("link_state_change", EntityType.INTERFACE, "leaf1:Ethernet1",
+            observer="leaf1", modality=ModalityClass.CONTROL_PLANE),
+        sig("isis_adjacency_change", EntityType.DEVICE, "spine1", offset_s=3,
+            observer="spine1", modality=ModalityClass.CONTROL_PLANE),
+    ]
+    cat = builtin_catalog()
+    # BEFORE (no adjacency): the two ends never correlate — at most singletons, NO edge.
+    assert all(len(s.edges) == 0 for s in run_window(window, cat, ()))
+    # AFTER (adjacency wired): one object with one adjacency-grounded edge.
+    adj = TopologyAdjacency.from_links([{"a": "leaf1", "b": "spine1"}])
+    snaps = run_window(window, cat, (), adjacency=adj)
+    edges = [e for s in snaps for e in s.edges]
+    assert len(edges) == 1, "fabric flap must form exactly one grounded edge"
+    assert edges[0].grounding.ref == "adj:leaf1--spine1"
+
+
+def test_adjacency_is_backward_compatible_when_empty():
+    # An empty adjacency must change nothing — seam/containment behavior is identical.
+    a = build_nodes((sig("if_util_high", EntityType.INTERFACE, "leaf1:Gi0/1", observer="leaf1"),))[0]
+    b = build_nodes((sig("qos_drops", EntityType.INTERFACE, "leaf1:Gi0/1", observer="leaf1"),))[0]
+    # Same device → still grounds by containment, unaffected by the adjacency param.
+    g = resolve_grounding(a, b, (), TopologyAdjacency())
+    assert g is not None and g.ref.startswith("shared:")
 
 
 # ── evidence-ledger immutability / audit (gap-report #9, P4 — NON-NEGOTIABLE) ──

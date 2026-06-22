@@ -44,6 +44,7 @@ class EngineConfig:
     attach_threshold: float = 0.3         # min edge weight to admit into a component
     w_topo_seam: float = 0.8              # grounding via a seam instance
     w_topo_containment: float = 0.9       # grounding via same-device containment
+    w_topo_adjacency: float = 0.65        # grounding via L2/L3 adjacency (§4.2 ladder)
     reinforce_cross_modality: float = 1.25
     direction_conf: float = 0.8           # claimed only on 2-of-3 agreement
     severity_open_floor: str = "high"     # singleton episodes ≥ this open an object
@@ -154,6 +155,19 @@ class Node:
             toks.update(p for p in self.entity_id.split("->") if p and p not in observers)
         return frozenset(toks)
 
+    def device_part(self) -> str | None:
+        """The single device this node sits on, for L2/L3 adjacency grounding:
+        'leaf1:Ethernet1' → 'leaf1'; a bare device id → itself; a path/segment
+        ('a->b') has no single device → None."""
+        eid = self.entity_id
+        if "->" in eid:
+            return None
+        if ":" in eid:
+            return eid.split(":", 1)[0]
+        if self.entity_type in (EntityType.DEVICE, EntityType.INTERFACE):
+            return eid
+        return None
+
 
 _SEV_RANK = {Severity.INFO: 0, Severity.WARN: 1, Severity.HIGH: 2, Severity.CRIT: 3}
 
@@ -190,15 +204,42 @@ def build_nodes(window: tuple[Signal, ...]) -> tuple[Node, ...]:
 
 @dataclass(frozen=True)
 class Grounding:
-    kind: str   # 'seam' | 'topo'
-    ref: str
+    kind: str   # 'seam' | 'topo'  (CH grounding_kind enum; adjacency rides 'topo')
+    ref: str    # seam_id | 'shared:<token>' (containment) | 'adj:<a>--<b>' (adjacency)
 
 
-def resolve_grounding(a: Node, b: Node, seams: tuple[SeamView, ...]) -> Grounding | None:
+@dataclass(frozen=True)
+class TopologyAdjacency:
+    """Undirected L2/L3 device adjacency, learned from LLDP/CDP/BGP-LS and exported
+    by the Go backend (/api/topology/links → topology_links.json). This is the
+    grounding input the §4.2 'L2/L3 adjacent device' rung needs: it lets two signals
+    on DIFFERENT devices ground when those devices are a known link (fabric flap,
+    IGP adjacency). Empty = no adjacency (the gate then admits only seam/containment,
+    same as before — backward compatible)."""
+
+    pairs: frozenset[frozenset[str]] = frozenset()
+
+    def adjacent(self, a: str, b: str) -> bool:
+        return a != b and frozenset({a, b}) in self.pairs
+
+    @staticmethod
+    def from_links(links: "list[dict] | tuple[dict, ...]") -> "TopologyAdjacency":
+        out: set[frozenset[str]] = set()
+        for link in links or ():
+            a, b = str(link.get("a") or ""), str(link.get("b") or "")
+            if a and b and a != b:
+                out.add(frozenset({a, b}))
+        return TopologyAdjacency(frozenset(out))
+
+
+def resolve_grounding(
+    a: Node, b: Node, seams: tuple[SeamView, ...],
+    adjacency: TopologyAdjacency = TopologyAdjacency(),
+) -> Grounding | None:
     """HARD constraint (owner, e4f2236): admit ONLY seam or explicit topology
     grounding. Returns None for everything else — the caller counts a
-    topology-gap hint and NEVER builds the edge. Deterministic: seams are
-    scanned in seam_id order; first match wins."""
+    topology-gap hint and NEVER builds the edge. Deterministic: seams scanned in
+    seam_id order; then same-device containment; then L2/L3 adjacency. First wins."""
     ta, tb = a.tokens(), b.tokens()
     for seam in sorted(seams, key=lambda s: s.seam_id):
         ev = seam.endpoint_values() | {seam.seam_id}
@@ -209,6 +250,13 @@ def resolve_grounding(a: Node, b: Node, seams: tuple[SeamView, ...]) -> Groundin
     shared = ta & tb
     if shared:
         return Grounding("topo", "shared:" + min(sorted(shared)))
+    # L2/L3 adjacency: two DIFFERENT devices joined by a known link (LLDP/CDP/BGP-LS)
+    # are a modeled topology relation — this is what lets a fabric link-flap or an
+    # IGP adjacency fault correlate across the two ends (§4.2 'L2/L3 adjacent device').
+    da, db = a.device_part(), b.device_part()
+    if da and db and adjacency.adjacent(da, db):
+        lo, hi = sorted((da, db))
+        return Grounding("topo", f"adj:{lo}--{hi}")
     return None
 
 
@@ -275,6 +323,7 @@ def _direction(a: Node, b: Node, cfg: EngineConfig) -> tuple[float, str]:
 
 def build_edges(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
+    adjacency: TopologyAdjacency = TopologyAdjacency(),
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node."""
@@ -285,7 +334,7 @@ def build_edges(
             a, b = nodes[i], nodes[j]
             if b.onset < a.onset or (b.onset == a.onset and b.key < a.key):
                 a, b = b, a
-            grounding = resolve_grounding(a, b, seams)
+            grounding = resolve_grounding(a, b, seams, adjacency)
             if grounding is None:
                 gap_hints += 1
                 continue
@@ -301,7 +350,12 @@ def build_edges(
             a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
             gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
             w_t = math.exp(-gap / cfg.tau_s)
-            w_topo = cfg.w_topo_seam if grounding.kind == "seam" else cfg.w_topo_containment
+            if grounding.kind == "seam":
+                w_topo = cfg.w_topo_seam
+            elif grounding.ref.startswith("adj:"):
+                w_topo = cfg.w_topo_adjacency
+            else:
+                w_topo = cfg.w_topo_containment
             cross = a.signals[0].modality_class is not b.signals[0].modality_class
             w_r = cfg.reinforce_cross_modality if cross else 1.0
             weight = min(w_t * w_topo * w_r, 1.0)
@@ -462,6 +516,7 @@ def run_window(
     catalog: Catalog,
     seams: tuple[SeamView, ...],
     cfg: EngineConfig | None = None,
+    adjacency: TopologyAdjacency = TopologyAdjacency(),
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window."""
     cfg = cfg or EngineConfig()
@@ -476,7 +531,7 @@ def run_window(
     nodes = build_nodes(sigs)
     if not nodes:
         return []
-    edges, gap_hints = build_edges(nodes, seams, cfg)
+    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)

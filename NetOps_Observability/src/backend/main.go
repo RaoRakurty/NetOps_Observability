@@ -492,6 +492,8 @@ func main() {
 	// Export active seams to the enrichment dir for the correlation engine's
 	// grounding gate (#67 build ⑥).
 	srv.startSeamEnrichment(ctx)
+	// L2/L3 adjacency export for the correlation engine's adjacency grounding (G1).
+	srv.startTopologyLinksEnrichment(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process
