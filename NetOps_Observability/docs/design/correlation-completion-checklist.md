@@ -95,10 +95,21 @@ volume anomaly needs a multi-minute CUSUM baseline. +3 tests; 170 suite green; d
 after validation. *Future catalog growth (not C6):* DDoS / top-talker-shift / port-scan signatures on
 top of this volume series.
 
-### C7 · Direction inference — topology up/down vote  🟡
-**Status:** PARTIAL by design — 2 of 3 votes (onset + layer prior); the topo up/down vote **abstains**
-until the full topology graph is wired into the direction module. **100%-done =** topo vote active
-(`direction_basis` includes `topo_updown`); the 2-of-3 quorum uses all three.
+### C7 · Direction inference — topology up/down vote  ⛔ *(BLOCKED on a directed-topology input — re-audited 2026-06-23)*
+**Status:** the topo up/down vote correctly **abstains** (2-of-3 → 2 available votes: onset + layer).
+RE-AUDIT found it is **blocked, not merely unbuilt**: the engine receives only **undirected**
+adjacency (`TopologyAdjacency` = unordered device pairs) and **role-ambiguous** seams (a seam is an
+ownership *boundary*, not a causal *direction*). There is **no directed traffic-path topology** to vote
+from. Live cost: ~46% of edges (`direction_basis="none"`, 445/957 in 3h) get no direction — notably
+**same-layer cross-device (fabric) pairs**: when `_LAYER[a]==_LAYER[b]` the layer vote abstains, so
+with no topo vote only onset remains (1 of 2) → direction never claimed even on clear onset.
+**Building it now = speculative directional modeling** (the §4.3 design explicitly defers it; the
+*research-before-implementing* rule applies to direction/scoring policy). **Unblock path (research-gated,
+like G4):** a directed topology source — (a) **seam-anchored tier inference** (BFS hop-distance from
+seam egress → "deeper = upstream"; derivable but a heuristic that assumes north-south traffic and
+breaks on east-west fabric — validate first), or (b) export **BGP-LS SPF / IGP link direction** to the
+engine. The 2-of-3 design is safe meanwhile: a wrong topo vote can't force a false claim (it needs a
+2nd agreeing vote), and the engine never claims direction it can't support.
 
 ### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
 **Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,

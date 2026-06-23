@@ -557,6 +557,19 @@ undirected co-occurrence, `direction_conf = 0`):
 `direction_conf = weighted agreement`, `direction_basis` records which signals agreed —
 auditable, shown in the evidence log.
 
+> ⚠ **IMPLEMENTATION STATUS — vote #2 (topology up/down) is BLOCKED, not just deferred
+> (re-audit 2026-06-23, checklist C7).** `_direction` casts only votes #1 (onset) and #3
+> (layer); the topology vote abstains because the engine receives **undirected** adjacency
+> (`TopologyAdjacency` = unordered pairs) and **role-ambiguous** seams (a seam is an
+> ownership *boundary*, not a causal direction). There is no directed traffic-path graph to
+> vote from. **Concrete cost:** same-layer cross-device (fabric) pairs — where `_LAYER[a]==
+> _LAYER[b]`, so vote #3 abstains too — are left with only vote #1, never reaching the
+> 2-vote bar even on clear onset (~46% of live edges are `direction_basis="none"`). Wiring
+> #2 needs a directed source (**seam-anchored tier inference** — heuristic, north-south
+> assumption, validate first; or exported **BGP-LS/IGP SPF direction**) and is research-gated
+> like G4 — NOT a blind build. The 2-of-3 bar keeps this safe: a wrong topo vote can never
+> force a false claim (it needs a second agreeing vote).
+
 ### 4.4 Graph maintenance
 
 - Node cap per object: 200 (top-weighted kept, evictions logged to evidence as
