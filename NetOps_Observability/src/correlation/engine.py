@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from catalog import Catalog
 from directed_topology import DirectedTopology
 from directed_topology import Verdict as _Verdict
-from layers import layer_of
+from layers import CausalLayer, layer_of, osi_label
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal
 
@@ -441,6 +441,53 @@ class ObjectSnapshot:
                 col.append(n.entity_id)
         return {k: sorted(v) for k, v in out.items() if v}
 
+    def layer_coverage(self) -> dict:
+        """The causal-layer stack the RCA UI renders (C4): the FULL ladder
+        device→application, each layer flagged observed/not, with the kinds +
+        entities + peak severity that sit there, plus the root→impact causal span
+        and any UNMAPPED kinds (honest — a kind with no layer is surfaced here, never
+        silently dropped). The 'not observed' rows are the differentiator: they show
+        which layers the evidence is blind to, between the root and the impact.
+
+        Pure: derived ONLY from this object's nodes (same nodes content_hash hashes),
+        so it can never drift from the object's identity and needs no version pin — it
+        is a projection of already-hashed content, not new evidence."""
+        per_layer: dict[CausalLayer, dict] = {}
+        unmapped: set[str] = set()
+        for n in self.nodes:
+            cl = layer_of(n.kind)
+            if cl is None:
+                unmapped.add(n.kind)
+                continue
+            slot = per_layer.setdefault(
+                cl, {"kinds": set(), "entities": set(), "sev": Severity.INFO})
+            slot["kinds"].add(n.kind)
+            slot["entities"].add(n.entity_id)
+            if _SEV_RANK[n.peak_severity] > _SEV_RANK[slot["sev"]]:
+                slot["sev"] = n.peak_severity
+        layers = []
+        for cl in CausalLayer:  # device(0) → application(6): the fixed bottom-up ladder
+            cell = per_layer.get(cl)
+            layers.append({
+                "layer": cl.name.lower(),
+                "osi": osi_label(cl),
+                "observed": cell is not None,
+                "kinds": sorted(cell["kinds"]) if cell else [],
+                "entities": sorted(cell["entities"]) if cell else [],
+                "peak_severity": cell["sev"].value if cell else "",
+            })
+        observed = list(per_layer)
+        return {
+            "layers": layers,
+            # lowest observed layer = the most root-ward (cause); highest = the impact.
+            "root_layer": min(observed).name.lower() if observed else "",
+            "impact_layer": max(observed).name.lower() if observed else "",
+            "unmapped_kinds": sorted(unmapped),
+        }
+
+    def layer_coverage_blob(self) -> str:
+        return json.dumps(self.layer_coverage(), separators=(",", ":"), sort_keys=True)
+
     def hypotheses_blob(self) -> str:
         """The corr_objects.hypotheses JSON: the ranking PLUS the grounding
         context — replay rehydrates seams from here, never from live state."""
@@ -501,6 +548,10 @@ class ObjectSnapshot:
             "engine_version": self.engine_ver,
             "topology_version": self.topology_version,
             "catalog_version": r.catalog_version,
+            # C4: the causal-layer stack for the RCA UI. A separate column (NOT in the
+            # hypotheses blob), so it never enters content_hash — a pure projection of
+            # the nodes can't change object identity or churn a version.
+            "layer_coverage": self.layer_coverage_blob(),
         }
         if merged_into:
             row["merged_into"] = merged_into  # set ONLY on a terminal 'merged' snapshot

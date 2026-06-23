@@ -55,17 +55,52 @@ type rcaAnnotation struct {
 }
 
 type rcaPathView struct {
-	CorrObjectID           string          `json:"corr_object_id"`
-	Verdict                string          `json:"verdict"`
-	Confidence             float64         `json:"confidence"`
-	Internal               bool            `json:"internal"`
-	Title                  string          `json:"title"`
-	Summary                string          `json:"summary"`
-	RecommendedAction      string          `json:"recommended_action"`
-	Path                   rcaPath         `json:"path"`
-	Annotations            []rcaAnnotation `json:"annotations"`
-	EvidenceSummary        map[string]any  `json:"evidence_summary"`
-	MissingEvidenceSummary []string        `json:"missing_evidence_summary"`
+	CorrObjectID           string            `json:"corr_object_id"`
+	Verdict                string            `json:"verdict"`
+	Confidence             float64           `json:"confidence"`
+	Internal               bool              `json:"internal"`
+	Title                  string            `json:"title"`
+	Summary                string            `json:"summary"`
+	RecommendedAction      string            `json:"recommended_action"`
+	Path                   rcaPath           `json:"path"`
+	Annotations            []rcaAnnotation   `json:"annotations"`
+	EvidenceSummary        map[string]any    `json:"evidence_summary"`
+	MissingEvidenceSummary []string          `json:"missing_evidence_summary"`
+	LayerCoverage          *rcaLayerCoverage `json:"layer_coverage,omitempty"`
+}
+
+// rcaLayerCoverage mirrors the engine's ObjectSnapshot.layer_coverage projection
+// (C4): the bottom-up causal stack the RCA Layer-Stack panel renders. Pass-through
+// only — the engine owns the taxonomy; the API never re-derives a layer (no
+// duplicated map to drift). Absent/empty column → nil → panel hidden, honestly.
+type rcaLayer struct {
+	Layer        string   `json:"layer"`
+	OSI          string   `json:"osi"`
+	Observed     bool     `json:"observed"`
+	Kinds        []string `json:"kinds"`
+	Entities     []string `json:"entities"`
+	PeakSeverity string   `json:"peak_severity"`
+}
+
+type rcaLayerCoverage struct {
+	Layers        []rcaLayer `json:"layers"`
+	RootLayer     string     `json:"root_layer"`
+	ImpactLayer   string     `json:"impact_layer"`
+	UnmappedKinds []string   `json:"unmapped_kinds"`
+}
+
+// parseLayerCoverage decodes the corr_objects.layer_coverage column. Returns nil
+// when absent/empty/malformed/no-layers — the panel renders only on real coverage.
+func parseLayerCoverage(meta map[string]any) *rcaLayerCoverage {
+	s, _ := meta["layer_coverage"].(string)
+	if s == "" || s == "{}" {
+		return nil
+	}
+	var lc rcaLayerCoverage
+	if json.Unmarshal([]byte(s), &lc) != nil || len(lc.Layers) == 0 {
+		return nil
+	}
+	return &lc
 }
 
 type rcaPath struct {
@@ -211,6 +246,7 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 	view.Annotations = mapAnnotations(attached, edgeRows, locus, src, dst, verdict, conf, internal, seamRef)
 	view.Path = buildPath(attached, locus, src, dst, state, internal)
 	view.Title, view.Summary, view.RecommendedAction = narrate(verdict, internal, locus, view.Annotations)
+	view.LayerCoverage = parseLayerCoverage(meta) // C4: pass-through, engine-owned taxonomy
 	return view
 }
 

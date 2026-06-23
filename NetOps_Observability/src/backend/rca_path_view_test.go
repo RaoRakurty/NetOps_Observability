@@ -124,6 +124,40 @@ func TestRcaPathView_InternalExcluded(t *testing.T) {
 	}
 }
 
+// C4: the engine's layer_coverage column passes through onto the view verbatim
+// (the API never re-derives a layer — engine owns the taxonomy).
+func TestRcaPathView_LayerCoveragePassthrough(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	meta["layer_coverage"] = `{"layers":[` +
+		`{"layer":"link","osi":"L2","observed":true,"kinds":["link_state_change"],"entities":["e2e-edge1:Gi0/1"],"peak_severity":"crit"},` +
+		`{"layer":"network","osi":"L3","observed":false,"kinds":[],"entities":[],"peak_severity":""},` +
+		`{"layer":"transport","osi":"L4","observed":true,"kinds":["probe_loss"],"entities":["vantage->e2e-edge1"],"peak_severity":"high"}],` +
+		`"root_layer":"link","impact_layer":"transport","unmapped_kinds":[]}`
+	v := buildRcaPathView("obj", meta, sigs, edges)
+	if v.LayerCoverage == nil {
+		t.Fatal("layer_coverage present in meta but not on the view")
+	}
+	if v.LayerCoverage.RootLayer != "link" || v.LayerCoverage.ImpactLayer != "transport" {
+		t.Fatalf("root/impact = %q/%q", v.LayerCoverage.RootLayer, v.LayerCoverage.ImpactLayer)
+	}
+	if len(v.LayerCoverage.Layers) != 3 || v.LayerCoverage.Layers[1].Observed {
+		t.Fatalf("expected the L3 gap unobserved; got %+v", v.LayerCoverage.Layers)
+	}
+}
+
+// C4: absent / empty / malformed coverage → nil (panel hidden), never a crash.
+func TestRcaPathView_LayerCoverageAbsentOrMalformed(t *testing.T) {
+	for _, val := range []any{nil, "", "{}", "not json", `{"layers":[]}`} {
+		meta, sigs, edges := goldenInputs()
+		if val != nil {
+			meta["layer_coverage"] = val
+		}
+		if v := buildRcaPathView("obj", meta, sigs, edges); v.LayerCoverage != nil {
+			t.Fatalf("layer_coverage=%v (%T) should yield nil, got %+v", val, val, v.LayerCoverage)
+		}
+	}
+}
+
 // #12 the overlay never mutates the base inputs (edges/signals unchanged).
 func TestRcaPathView_NoBaseMutation(t *testing.T) {
 	meta, sigs, edges := goldenInputs()

@@ -333,7 +333,7 @@ SELECT version,
        toString(window_end)     AS window_end,
        toString(trigger_signal) AS trigger_signal,
        verdict_tier, top_hypothesis, top_confidence, evidence_missing,
-       hypotheses, affected
+       hypotheses, affected, layer_coverage
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'` + verCond + `
  ORDER BY version DESC

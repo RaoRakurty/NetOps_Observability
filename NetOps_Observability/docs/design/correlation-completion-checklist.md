@@ -65,20 +65,29 @@ replay pin) is byte-identical to pre-C3 (no churn/drift). `replay.degradation()`
 positives on the healthy stack, healthy blobs unchanged). *Deferred nicety:* per-edge `[STALE_TOPOLOGY]`
 text note (object-level declaration + capped w_topo already make it auditable).
 
-### C4 · G4 — OSI causal-layer enrichment + layer-stack UI  🟡 *(engine half DONE 2026-06-23; UI remaining)*
+### C4 · G4 — OSI causal-layer enrichment + layer-stack UI  ✅ *(DONE 2026-06-23)*
 Research-cleared as **differentiating** (no leader ships an evidence-grounded cross-layer causal
-stack — Dynatrace=app-deps, ThousandEyes=traceroute). **Engine half DONE:** `layers.py` — a per-KIND
+stack — Dynatrace=app-deps, ThousandEyes=traceroute). **Engine half (prior):** `layers.py` — a per-KIND
 causal-layer taxonomy (device→physical→link→network→transport→service→application, with OSI labels),
 wired into the §4.3 layer-prior vote (finer than the old entity-type layer: it distinguishes L2
 link from L3 routing on the *same* DEVICE entity, a tie the old vote couldn't break). Falls back to
-entity-type when a kind is unmapped (backward-compatible). `ENGINE_SEMVER`→2.1.0 (honest replay pin;
-live-verified `2.1.0+cfg…`). 4 tests (mapping/order/tie-break/conflict) + 182 suite green; deployed clean.
+entity-type when a kind is unmapped (backward-compatible). `ENGINE_SEMVER`→2.1.0 (honest replay pin).
 **Decision — same-layer-duplicate confirmation guard REJECTED:** `local-link-fault` legitimately
 confirms via two LINK-layer witnesses (control-plane link_state ⟂ device-telemetry interface-counter
-on one link) — that's real corroboration, not duplication; the existing cross-modality + independence
-gate already blocks true duplicates. A layer constraint would break a validated confirm. **Remaining
-(C4-UI):** RCA Layer-Stack panel (observed/not-observed per L1–L7; root→symptom→impact) + a
-`layer_coverage` summary on the object for the API/UI to render.
+on one link) — real corroboration, not duplication; the cross-modality + independence gate already
+blocks true duplicates. **C4-UI DONE:** `ObjectSnapshot.layer_coverage()` — a pure projection of the
+object's nodes to the full bottom-up ladder (every layer observed/not, per-layer kinds + entities +
+peak severity, root→impact span, and UNMAPPED kinds surfaced not dropped). Stored in its OWN
+`corr_objects.layer_coverage` column (idempotent `ALTER ADD COLUMN`) — NOT in the hypotheses blob, so
+content_hash / the replay pin are untouched (no version churn; replay reproduces it deterministically).
+Go `loadCorrSlice` SELECTs it + `rca_path_view.go` passes it through verbatim (engine owns the taxonomy;
+the API never re-derives a layer). Frontend: a **Layer stack** block in the RCA Verdict Banner
+(Topology Canvas → Investigate → pinned incident) — top-down L7→hardware, severity-tinted observed
+dots, **Root/Impact** pills, and a **blind-spot** flag on any unobserved layer *between* root and impact
+(the honest "what the evidence can't see" no leader surfaces). +3 Python +2 Go +3 vitest tests; full
+suites green; ruff/mypy/vet clean; deployed + **live-validated** (object `a69a3c26` bgp-peer-flap →
+`/rca-path-view` returns root=impact=Network/L3, severity high; multi-layer gap/blind-spot path
+unit-proven, displays when a link⟂transport incident forms).
 
 ### C5 · Catalog + signal coverage — VLAN / STP / HSRP-VRRP / MAC / firewall  🟠 *(the big coverage axis)*
 **Status:** PARTIAL — 10 signatures; ~15 distinct kinds. Grounding is protocol-agnostic & done, so

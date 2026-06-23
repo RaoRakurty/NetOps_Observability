@@ -113,12 +113,19 @@ SETTINGS index_granularity = 8192`,
     engine_version   LowCardinality(String),
     topology_version LowCardinality(String),
     catalog_version  LowCardinality(String),
+    layer_coverage   String DEFAULT '{}',
     merged_into      Nullable(UUID),
     created_at       DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(window_start))
 ORDER BY (tenant_id, correlation_id, version)`,
+
+		// C4: the causal-layer stack (engine ObjectSnapshot.layer_coverage) the RCA
+		// Layer-Stack panel renders. Idempotent ADD for live deployments created
+		// before C4 — a pure projection of the object's nodes, default '{}'.
+		`ALTER TABLE netops.corr_objects
+    ADD COLUMN IF NOT EXISTS layer_coverage String DEFAULT '{}' AFTER catalog_version`,
 
 		`CREATE VIEW IF NOT EXISTS netops.corr_objects_latest AS
 SELECT * FROM netops.corr_objects

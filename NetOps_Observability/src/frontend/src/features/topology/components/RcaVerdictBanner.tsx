@@ -7,7 +7,7 @@
 // server-side (rca_path_view.go `narrate`) — this component only renders it, so
 // the UI never overclaims beyond the engine's grounded verdict.
 
-import type { RcaPathView } from "../../../services/api";
+import type { RcaPathView, RcaLayerCoverage } from "../../../services/api";
 
 /** Verdict → severity colour token + display label. */
 function verdictTone(verdict: string): { color: string; label: string } {
@@ -38,6 +38,93 @@ const MODALITY_LABEL: Record<string, string> = {
   device_telemetry: "Device telemetry",
   passive_flow: "Flow",
 };
+
+/** Causal layer → operator-facing name (no schema vocabulary). */
+const LAYER_LABEL: Record<string, string> = {
+  device: "Device / hardware",
+  physical: "Physical (optics)",
+  link: "Link / interface",
+  network: "Routing",
+  transport: "Reachability / latency",
+  service: "Service (DNS/TLS)",
+  application: "Application",
+};
+
+/** Peak severity → colour token for the observed-layer dot. */
+function sevColor(sev: string): string {
+  switch (sev) {
+    case "crit": return "var(--crit, #e5484d)";
+    case "high": return "var(--warn, #f5a524)";
+    case "warn": return "var(--accent)";
+    default: return "var(--fg-muted)";
+  }
+}
+
+/** OSI badge text: L1..L7, or "HW" for the device layer (no OSI layer). */
+function osiBadge(osi: string): string {
+  return osi === "device" ? "HW" : osi || "—";
+}
+
+// RcaLayerStack — the C4 differentiator: an evidence-grounded CROSS-LAYER causal
+// stack (root → impact across L1–L7), rendered top-down (L7 application at top,
+// hardware at the bottom). Observed layers carry their peak severity; UNOBSERVED
+// layers BETWEEN root and impact are flagged as blind spots — the honest "what we
+// can't see" no leader surfaces. Pure render of the engine's projection.
+function RcaLayerStack({ cov }: { cov: RcaLayerCoverage }) {
+  const ladder = cov.layers; // engine order = bottom-up (device→application)
+  const idx = (name: string) => ladder.findIndex((l) => l.layer === name);
+  const rootIdx = idx(cov.root_layer);
+  const impactIdx = idx(cov.impact_layer);
+  // top-down for display (application first), so the stack reads like an OSI model.
+  const rows = [...ladder].reverse();
+  return (
+    <div className="topo-rca-layers" aria-label="Causal layer stack">
+      <div className="topo-rca-layers-head">
+        <span className="topo-rca-evlabel">Layer stack</span>
+        {cov.root_layer && cov.impact_layer && (
+          <span className="topo-rca-layers-span">
+            root <b>{LAYER_LABEL[cov.root_layer] ?? cov.root_layer}</b>
+            {cov.impact_layer !== cov.root_layer && (
+              <> → impact <b>{LAYER_LABEL[cov.impact_layer] ?? cov.impact_layer}</b></>
+            )}
+          </span>
+        )}
+      </div>
+      <ul className="topo-rca-layers-list">
+        {rows.map((l) => {
+          const li = idx(l.layer);
+          const blindSpot = !l.observed && rootIdx >= 0 && li > rootIdx && li < impactIdx;
+          const isRoot = l.layer === cov.root_layer;
+          const isImpact = l.layer === cov.impact_layer;
+          return (
+            <li
+              key={l.layer}
+              className={`topo-rca-layer${l.observed ? " is-observed" : ""}${blindSpot ? " is-blind" : ""}`}
+              title={l.observed ? l.entities.join(" · ") : blindSpot ? "No evidence at this layer between root and impact" : "Not in this incident"}
+            >
+              <span className="topo-rca-layer-osi">{osiBadge(l.osi)}</span>
+              <span className="topo-rca-layer-dot" style={{ color: l.observed ? sevColor(l.peak_severity) : "var(--border)" }}>
+                {l.observed ? "●" : "○"}
+              </span>
+              <span className="topo-rca-layer-name">{LAYER_LABEL[l.layer] ?? l.layer}</span>
+              {l.observed && l.entities.length > 0 && (
+                <span className="topo-rca-layer-count">{l.entities.length}</span>
+              )}
+              {isRoot && <span className="topo-rca-layer-pill is-root">Root</span>}
+              {isImpact && !isRoot && <span className="topo-rca-layer-pill is-impact">Impact</span>}
+              {blindSpot && <span className="topo-rca-layer-blind">blind spot</span>}
+            </li>
+          );
+        })}
+      </ul>
+      {cov.unmapped_kinds.length > 0 && (
+        <div className="topo-rca-layers-unmapped" title="Signal kinds with no causal-layer mapping yet — surfaced, never silently dropped">
+          {cov.unmapped_kinds.length} signal{cov.unmapped_kinds.length === 1 ? "" : "s"} not layer-mapped
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function RcaVerdictBanner({
   overlay,
@@ -124,6 +211,10 @@ export default function RcaVerdictBanner({
           )}
           {reason && <div className="topo-rca-reason" title="Why the engine reached this verdict">{reason}</div>}
         </div>
+      )}
+
+      {overlay.layer_coverage && overlay.layer_coverage.root_layer && (
+        <RcaLayerStack cov={overlay.layer_coverage} />
       )}
 
       {overlay.recommended_action && (

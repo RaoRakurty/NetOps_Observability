@@ -366,12 +366,29 @@ export type RcaAnnotation = {
   target_type: string; target_id: string; status: string; verdict: string; confidence: number;
   owner: string; visibility: string; reason: string; evidence_refs: string[]; missing_evidence: string[];
 };
+// C4 causal-layer stack — the RCA Layer-Stack panel's data (engine-owned taxonomy,
+// passed through verbatim; backend rca_path_view.go parseLayerCoverage).
+export type RcaLayer = {
+  layer: string;          // device | physical | link | network | transport | service | application
+  osi: string;            // "L1".."L7" | "device" | ""
+  observed: boolean;
+  kinds: string[];
+  entities: string[];
+  peak_severity: string;  // crit | high | warn | info | ""
+};
+export type RcaLayerCoverage = {
+  layers: RcaLayer[];     // full bottom-up ladder, always seven, device→application
+  root_layer: string;     // lowest observed = most root-ward cause ("" if none mapped)
+  impact_layer: string;   // highest observed = the impact
+  unmapped_kinds: string[];
+};
 export type RcaPathView = {
   corr_object_id: string; verdict: string; confidence: number; internal: boolean;
   title: string; summary: string; recommended_action: string;
   path: { source: string; destination: string; nodes: RcaPathNode[]; edges: RcaPathEdge[] };
   annotations: RcaAnnotation[];
   evidence_summary: Record<string, unknown>; missing_evidence_summary: string[];
+  layer_coverage?: RcaLayerCoverage;
 };
 
 // Front page (#69) — scope health score, unified event feed, RCA coverage stats.
