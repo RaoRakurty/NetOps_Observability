@@ -107,6 +107,45 @@ def parse_event_ts(raw: object) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+# ── flow events (netops.flows) — passive_flow volume aggregation (C6) ─────────
+
+
+def _flow_field(ev: dict, *names: str) -> str:
+    """First present value among alternative field spellings — the bus may carry
+    goflow2 CamelCase (SamplerAddress) or the CH-aligned snake_case (sampler_address)."""
+    for n in names:
+        v = ev.get(n)
+        if v not in (None, ""):
+            return str(v)
+    return ""
+
+
+def flow_sample(ev: dict) -> tuple[str, str, float] | None:
+    """One raw flow record → (sampler, entity_id, bytes_estimate) for per-interface
+    volume aggregation, or None when the record can't be attributed/measured.
+
+    entity_id = `<sampler>:if<in_if>` — the exporting interface. An HONEST fallback:
+    production resolves the sampler IP → device and the ifIndex → ifName (the same
+    canonicalization seam as traps, G2); until then the flow grounds on the sampler
+    token. bytes are scaled by the sampling rate to estimate true volume (a 1-in-N
+    sampler under-reports by N×); rate 0/absent ⇒ unsampled ⇒ ×1."""
+    sampler = _flow_field(ev, "sampler_address", "SamplerAddress", "sampler")
+    if not sampler:
+        return None
+    try:
+        nbytes = float(_flow_field(ev, "bytes", "Bytes") or 0)
+    except ValueError:
+        return None
+    if nbytes <= 0:
+        return None
+    try:
+        rate = int(_flow_field(ev, "sampling_rate", "SamplingRate") or 0)
+    except ValueError:
+        rate = 0
+    in_if = _flow_field(ev, "in_if", "InIf", "InIfIndex") or "0"
+    return sampler, f"{sampler}:if{in_if}", nbytes * (rate if rate > 0 else 1)
+
+
 # ── probe events (netops.probes) ──────────────────────────────────────────────
 
 

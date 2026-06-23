@@ -43,6 +43,7 @@ from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, fi
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
+    flow_sample,
     parse_event_ts,
     probe_signals,
     syslog_control_signal,
@@ -52,11 +53,13 @@ from replay import replay_object
 from signals import (
     DeadLetter,
     EntityType,
+    ModalityClass,
     Observer,
     ObserverType,
     ProbeAuthority,
     ProbeIntent,
     Signal,
+    Source,
     VantageType,
     derive_probe_authority,
     derive_probe_scope,
@@ -190,6 +193,13 @@ CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
 # seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
 CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
 STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
+# C6 passive_flow: aggregate flow volume per exporting interface, flush each engine
+# cycle through CUSUM → passive_flow episodes. Flows are a firehose — accumulation is
+# O(1) per flow and the flush is bounded by (samplers × interfaces).
+FLOW_CORRELATION_ENABLED = os.environ.get("ENABLE_FLOW_CORRELATION", "true") == "true"
+_FLOW_AGG: Dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
+FLOWS_RECEIVED = 0
+PASSIVE_FLOW_SIGNALS = 0
 SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
 # L2/L3 adjacency (LLDP/CDP/BGP-LS links) exported by the Go API — the grounding
 # input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
@@ -348,6 +358,9 @@ async def engine_cycle() -> None:
         return
     now = datetime.now(timezone.utc)
     _prune_buffer(now)
+    # C6: flush this cycle's accumulated flow volume → passive_flow episodes BEFORE
+    # partitioning, so the new flow signals join the same window they were measured in.
+    await _flush_flow_aggregator(now)
     # §8 degradation, declared on every snapshot scored under it (never silent):
     topo_stale = _topology_stale(now)
     storm = len(WINDOW_BUFFER) >= STORM_BUFFER_FRACTION * (WINDOW_BUFFER.maxlen or 1)
@@ -448,26 +461,33 @@ async def feed_episode_detector(
     entity_type: EntityType,
     kind_prefix: str,
     entity_tokens: tuple[str, ...] = (),
-) -> None:
+    source: Source = Source.METRIC,
+    modality: ModalityClass = ModalityClass.DEVICE_TELEMETRY,
+    observer_type: ObserverType = ObserverType.DEVICE,
+) -> bool:
     """Stage [1]+[2]: run CUSUM over the canonical (entity, metric) series and
     persist episode signals. Identity is the canonical entity_id (device:ifName
     for interfaces, device:peer for BGP) so per-interface/per-peer series do not
-    collide on a shared metric name. Provenance is threaded from the event."""
+    collide on a shared metric name. Provenance is threaded from the event —
+    parameterized so a passive_flow volume series carries flow-exporter provenance
+    (C6) instead of device telemetry, exactly as probe episodes carry vantage-agent."""
     global DEADLETTER_COUNT, DEVICE_TELEMETRY_SIGNALS
     if not CORR_SIGNALS_ENABLED or ch is None:
-        return
+        return False
     ev = DETECTOR.observe(tenant, entity_id, metric, event_ts, value, clock_quality="unknown")
     if ev is None:
-        return
+        return False  # still baselining / within hysteresis — no episode this sample
     try:
         observer = Observer(
             observer_id=observer_id,
-            observer_type=ObserverType.DEVICE,
+            observer_type=observer_type,
             collection_path=collection_path,
             clock_quality="unknown",
         )
         sig = episode_signal(
             ev, observer,
+            source=source,
+            modality=modality,
             entity_type=entity_type,
             kind_prefix=kind_prefix,
             entity_tokens=entity_tokens,
@@ -476,13 +496,15 @@ async def feed_episode_detector(
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
         log.warning("dead-letter (provenance): %s", exc)
-        return
+        return False
     await ch.insert("netops.corr_signals", [row])
-    DEVICE_TELEMETRY_SIGNALS += 1
+    if modality is ModalityClass.DEVICE_TELEMETRY:
+        DEVICE_TELEMETRY_SIGNALS += 1
     # Build ⑥: every spine signal also feeds the engine's evidence window.
     buffer_signal(sig)
     log.info("episode %s: %s/%s peak=%.1fσ ±%.0fs", ev.phase, ev.key[1],
              ev.key[2], ev.peak_deviation, ev.onset_uncertainty_s)
+    return True  # an episode signal was emitted this sample
 
 
 def score(device: str, metric: str, value: float) -> float | None:
@@ -891,10 +913,48 @@ async def handle_syslog(ev: dict) -> None:
         SYSLOG_BUCKET[host] = []   # reset so we don't spam
 
 
-async def handle_flow(_ev: dict) -> None:
-    # Placeholder: NetFlow correlation (DDoS detection, top-talker
-    # sudden shift, port-scan signatures) goes here.
-    return
+async def handle_flow(ev: dict) -> None:
+    """Accumulate per-(tenant, exporting-interface) flow VOLUME (C6). Cheap by
+    design — flows are a firehose, so we aggregate O(1) here and never emit a signal
+    per flow; _flush_flow_aggregator turns each per-interface total into one CUSUM
+    sample per engine cycle. This is the passive_flow modality lane — the 4th
+    independent witness class for the verdict gate (DDoS / top-talker-shift /
+    port-scan SIGNATURES are future catalog growth on top of this volume series)."""
+    global FLOWS_RECEIVED
+    if not (CORR_SIGNALS_ENABLED and FLOW_CORRELATION_ENABLED) or ch is None:
+        return
+    sample = flow_sample(ev)
+    if sample is None:
+        return
+    FLOWS_RECEIVED += 1
+    sampler, entity, bytes_est = sample
+    tenant = str(ev.get("tenant_id") or "") or tenant_for(sampler)
+    agg = _FLOW_AGG.setdefault((tenant, entity), {"bytes": 0.0, "sampler": sampler})
+    agg["bytes"] += bytes_est
+
+
+async def _flush_flow_aggregator(now: datetime) -> None:
+    """Feed each accumulated per-interface byte total through CUSUM as ONE
+    passive_flow sample this cycle, then reset. The detection interval is the engine
+    cycle interval — regular sampling, exactly like a metric poll — so the existing
+    episode machinery baselines and fires flow_volume_anomaly episodes."""
+    global PASSIVE_FLOW_SIGNALS
+    if not _FLOW_AGG:
+        return
+    snapshot = dict(_FLOW_AGG)
+    _FLOW_AGG.clear()
+    interval = max(CORR_ENGINE_INTERVAL_S, 1.0)
+    for (tenant, entity), a in sorted(snapshot.items()):
+        emitted = await feed_episode_detector(
+            tenant, entity, "flow_bytes_rate", a["bytes"] / interval, now,
+            observer_id=a["sampler"], collection_path="flow_export",
+            entity_type=EntityType.INTERFACE, kind_prefix="flow_volume_anomaly",
+            entity_tokens=(a["sampler"],),
+            source=Source.FLOW, modality=ModalityClass.PASSIVE_FLOW,
+            observer_type=ObserverType.FLOW_EXPORTER,
+        )
+        if emitted:
+            PASSIVE_FLOW_SIGNALS += 1  # count ACTUAL passive_flow signals, not flushes
 
 
 async def emit(**kwargs) -> None:
@@ -978,6 +1038,9 @@ async def health() -> dict:
             "traps_received": TRAPS_RECEIVED,
             "traps_normalized": TRAPS_NORMALIZED,
             "traps_dropped": TRAPS_DROPPED,
+            "flows_received": FLOWS_RECEIVED,
+            "passive_flow_signals": PASSIVE_FLOW_SIGNALS,
+            "flow_entities_tracked": len(_FLOW_AGG),
         },
     }
 

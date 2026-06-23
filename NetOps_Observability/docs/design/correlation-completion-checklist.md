@@ -80,11 +80,20 @@ MAC-move/flap, firewall/policy-drop, dedicated IGP (OSPF parser exists but no la
 in part (multi-vendor collection, #73). **100%-done (per family) =** canonical kind in `producers.py`
 + signature + CI fixture + live validation. Sequenced under #73.
 
-### C6 · passive_flow modality  🟡
-**Status:** MISSING — `handle_flow()` is a stub; NetFlow/sFlow doesn't reach the engine (1 of 4
-modalities absent). Unlocks DDoS / top-talker-shift / port-scan correlation **and** a 4th independent
-modality for confirmation. **100%-done =** flow-anomaly Signal factory + `handle_flow` + entity/grounding
-mapping + fixtures.
+### C6 · passive_flow modality  ✅ *(DONE 2026-06-23)*
+**Was:** MISSING — `handle_flow` a stub; the 4th modality absent. **Done:** the passive_flow lane is
+wired end-to-end. `flow_sample` (pure) extracts `(sampler, sampler:ifN, bytes×rate)` from a flow
+record (bus field-name variants; honest `sampler:ifIndex` entity — production resolves `device:ifName`,
+same seam as G2). `handle_flow` cheaply **aggregates** per-interface volume (firehose-safe: O(1)/flow,
+no signal-per-flow); `_flush_flow_aggregator` feeds each per-interface byte-rate through the **existing
+CUSUM** each engine cycle → `flow_volume_anomaly` `passive_flow` episodes (provenance: `Source.FLOW` /
+`PASSIVE_FLOW` / `FLOW_EXPORTER`). `feed_episode_detector` parameterized for provenance + returns
+whether it emitted (honest counters on `/healthz`). **Live-validated on real tgen traffic** (~60–74k
+flows processed, 5 interface entities aggregated, flush error-free) — the *anomaly→signal* emission is
+unit-proven (`test_flow_volume_episode_carries_passive_flow_provenance`: baseline→spike), since a live
+volume anomaly needs a multi-minute CUSUM baseline. +3 tests; 170 suite green; deployed; tgen stopped
+after validation. *Future catalog growth (not C6):* DDoS / top-talker-shift / port-scan signatures on
+top of this volume series.
 
 ### C7 · Direction inference — topology up/down vote  🟡
 **Status:** PARTIAL by design — 2 of 3 votes (onset + layer prior); the topo up/down vote **abstains**

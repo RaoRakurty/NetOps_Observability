@@ -8,12 +8,14 @@ from datetime import datetime, timedelta, timezone
 from episodes import EpisodeDetector
 from producers import (
     PROBE_LOSS_PCT,
+    episode_signal,
+    flow_sample,
     parse_event_ts,
     probe_host,
     probe_signals,
     syslog_control_signal,
 )
-from signals import EntityType, ModalityClass, ObserverType, Severity, Source
+from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Source
 
 T0 = datetime(2026, 6, 12, 10, 0, 0, tzinfo=timezone.utc)
 
@@ -288,3 +290,43 @@ def test_syslog_classifies_via_parsed_facility_event_type():
         "message": "Interface Ethernet3, changed state to down", "timestamp": T0.isoformat(),
     }, "", T0)
     assert link is not None and link.kind == "link_state_change"
+
+
+# ── flow lane (C6 passive_flow) ───────────────────────────────────────────────
+def test_flow_sample_snake_camel_and_sampling_scale():
+    snake = flow_sample({"sampler_address": "10.0.0.9", "in_if": 7, "bytes": 100, "sampling_rate": 50})
+    assert snake == ("10.0.0.9", "10.0.0.9:if7", 5000.0)   # 100 bytes × 1-in-50 sampling
+    camel = flow_sample({"SamplerAddress": "10.0.0.9", "InIf": 7, "Bytes": 100, "SamplingRate": 0})
+    assert camel == ("10.0.0.9", "10.0.0.9:if7", 100.0)    # rate 0/absent ⇒ unsampled ⇒ ×1
+
+
+def test_flow_sample_rejects_unusable():
+    assert flow_sample({"bytes": 100}) is None                            # no sampler → unattributable
+    assert flow_sample({"sampler_address": "10.0.0.9", "bytes": 0}) is None     # no volume
+    assert flow_sample({"sampler_address": "10.0.0.9", "bytes": "x"}) is None   # malformed
+
+
+def test_flow_volume_episode_carries_passive_flow_provenance():
+    """A flow-byte CUSUM episode → a passive_flow Signal on the exporting interface —
+    the 4th independent modality the verdict gate needs, grounding on the exporter."""
+    det = EpisodeDetector()
+    obs = Observer(observer_id="10.0.0.9", observer_type=ObserverType.FLOW_EXPORTER,
+                   collection_path="flow_export")
+    ts, sig = T0, None
+    for i in range(60):  # baseline ~1 kB/s with σ>0
+        ts += timedelta(seconds=30)
+        assert det.observe("", "10.0.0.9:if7", "flow_bytes_rate", ts,
+                           1000.0 + (10 if i % 2 else -10), clock_quality="unknown") is None
+    for _ in range(6):   # a 50× volume surge
+        ts += timedelta(seconds=30)
+        ev = det.observe("", "10.0.0.9:if7", "flow_bytes_rate", ts, 50000.0, clock_quality="unknown")
+        if ev is not None and ev.phase == "onset":
+            sig = episode_signal(ev, obs, source=Source.FLOW, modality=ModalityClass.PASSIVE_FLOW,
+                                 entity_type=EntityType.INTERFACE, kind_prefix="flow_volume_anomaly",
+                                 entity_tokens=("10.0.0.9",))
+            break
+    assert sig is not None, "a sustained volume surge must open a flow_volume_anomaly episode"
+    assert sig.modality_class is ModalityClass.PASSIVE_FLOW
+    assert sig.source is Source.FLOW
+    assert sig.kind == "flow_volume_anomaly"
+    assert sig.entity_id == "10.0.0.9:if7" and "10.0.0.9" in sig.entity_tokens
