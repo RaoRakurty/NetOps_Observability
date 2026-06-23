@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from catalog import Catalog
+from directed_topology import DirectedTopology
+from directed_topology import Verdict as _Verdict
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal
 
@@ -303,10 +305,13 @@ _LAYER = {
 }
 
 
-def _direction(a: Node, b: Node, cfg: EngineConfig) -> tuple[float, str]:
-    """2-of-3 to claim (§4.3): onset order + layer prior vote here; the
-    topology up/down vote abstains until the full topology graph lands, so v0
-    claims direction only when BOTH available votes agree. a precedes b."""
+def _direction(a: Node, b: Node, cfg: EngineConfig,
+               directed: "DirectedTopology | None" = None) -> tuple[float, str]:
+    """2-of-3 to claim (§4.3): onset order + OSI layer prior + topology up/down.
+    `a precedes b` (a is from_node). Each vote either agrees with a→b, conflicts
+    (→ mixed/none), or abstains. The topology vote (#2) is supplied by the
+    DirectedTopology oracle (C7); with no oracle / no covering source it abstains —
+    exactly the pre-C7 behavior — so direction is only ever claimed it can support."""
     votes = []
     gap = (b.onset - a.onset).total_seconds()
     if gap > a.onset_uncertainty_s + b.onset_uncertainty_s:
@@ -315,8 +320,16 @@ def _direction(a: Node, b: Node, cfg: EngineConfig) -> tuple[float, str]:
     if la < lb:
         votes.append("layer_prior")
     elif la > lb:
-        # Layer prior points the other way: conflict with onset order → mixed.
+        # Layer prior points the other way: conflict with a→b → mixed.
         return (0.0, "mixed") if votes else (0.0, "none")
+    # Topology up/down (vote #2): measured/observed direction between the two devices.
+    if directed is not None:
+        o = directed.orient(a.device_part(), b.device_part())
+        if o.verdict is _Verdict.A_UPSTREAM:
+            votes.append("topo_updown")          # a upstream of b agrees with a→b
+        elif o.verdict is _Verdict.B_UPSTREAM:
+            return (0.0, "mixed") if votes else (0.0, "none")  # conflicts with a→b
+        # AMBIGUOUS / UNKNOWN → abstain (no vote), honestly
     if len(votes) >= 2:
         return cfg.direction_conf, "+".join(votes)
     return 0.0, "none"
@@ -326,6 +339,7 @@ def build_edges(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
     adjacency: TopologyAdjacency = TopologyAdjacency(),
     topology_stale: bool = False,
+    directed: DirectedTopology | None = None,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node."""
@@ -369,7 +383,7 @@ def build_edges(
             weight = min(w_t * w_topo * w_r, 1.0)
             if weight < cfg.attach_threshold:
                 continue
-            conf, basis = _direction(a, b, cfg)
+            conf, basis = _direction(a, b, cfg, directed)
             edges.append(Edge(a.key, b.key, grounding, weight, w_t, w_topo, w_r, conf, basis))
     return tuple(sorted(edges, key=lambda e: (e.from_node, e.to_node))), gap_hints
 
@@ -538,6 +552,7 @@ def run_window(
     adjacency: TopologyAdjacency = TopologyAdjacency(),
     topology_stale: bool = False,
     storm_mode: bool = False,
+    directed: DirectedTopology | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -557,7 +572,7 @@ def run_window(
     nodes = build_nodes(sigs)
     if not nodes:
         return []
-    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale)
+    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, directed)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)

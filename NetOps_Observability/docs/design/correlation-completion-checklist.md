@@ -103,13 +103,15 @@ ownership *boundary*, not a causal *direction*). There is **no directed traffic-
 from. Live cost: ~46% of edges (`direction_basis="none"`, 445/957 in 3h) get no direction — notably
 **same-layer cross-device (fabric) pairs**: when `_LAYER[a]==_LAYER[b]` the layer vote abstains, so
 with no topo vote only onset remains (1 of 2) → direction never claimed even on clear onset.
-**Building it now = speculative directional modeling** (the §4.3 design explicitly defers it; the
-*research-before-implementing* rule applies to direction/scoring policy). **Unblock path (research-gated,
-like G4):** a directed topology source — (a) **seam-anchored tier inference** (BFS hop-distance from
-seam egress → "deeper = upstream"; derivable but a heuristic that assumes north-south traffic and
-breaks on east-west fabric — validate first), or (b) export **BGP-LS SPF / IGP link direction** to the
-engine. The 2-of-3 design is safe meanwhile: a wrong topo vote can't force a false claim (it needs a
-2nd agreeing vote), and the engine never claims direction it can't support.
+**Unblock = ARCHITECTED (2026-06-23, `docs/design/directed-topology-rca.md`).** Decision: a
+**DirectedTopology oracle** — source-agnostic `orient(a,b)` fusing **measured > observed > computed**
+direction (traceroute paths · NetFlow direction · routing SPF) with honest abstention — feeds vote #2;
+the 2-of-3 safety stays intact. The tier-inference heuristic is REJECTED (the research shows leaders
+use observed/measured direction, never inferred-from-undirected; it breaks on east-west fabric).
+Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data already in discovery +
+`ifNameMap`), which also closes G2. Sequenced: **C7.1** resolver · **C7.2** oracle + vote-#2 wiring
+(buildable now, safe no-op until fed) · **C7.3** NetFlow source · **C7.4** traceroute source ·
+**C7.5** routing source. Each plugs behind the oracle seam so `_direction` changes once.
 
 ### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
 **Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,
