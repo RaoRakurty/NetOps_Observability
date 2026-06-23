@@ -202,11 +202,18 @@ Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data a
 > an OSPF-LSDB source on the device), so the producer correctly emits `[]` and the source abstains — a
 > safe no-op (the engine already directs via NetFlow C7.3 + traceroute C7.4). It activates the moment
 > the LSDB fills. +5 Python tests (forwarding direct/both-ways/absent, drop-incomplete, **the full
-> 3-source fusion**) +4 Go SPF tests (linear-path next hops, stub asymmetry, determinism, empty-graph).
-> 212 Python + full Go suite green; ruff/mypy/vet clean; deployed (`routing_direction_pairs=0`,
-> abstaining); the producer→exporter→consumer chain validated end-to-end on the deployed services with a
-> synthetic SPF result (`leaf1→spine1` = A_UPSTREAM via routing, conf 0.7; reverse → B_UPSTREAM;
-> non-adjacent → abstain).
+> 3-source fusion**) +6 Go tests: 4 SPF (linear next hops, stub asymmetry, determinism, empty) **+2
+> FULL-STREAM integration that GENERATE a synthetic BGP-LS LSDB through the real wire parser → RIB →
+> buildRoutingPairs → SPF** — an OSPF (proto-3) line and an IS-IS leaf/spine slice (hostname-resolved +
+> link withdrawal), asserting the directed pairs are correct. 212 Python + full Go suite green;
+> ruff/mypy/vet clean. **The whole stream is validated without the lab:** the live fabric isn't emitting
+> BGP-LS (cEOS won't originate IS-IS; the Cisco OSPF domain has no adjacencies — both diagnosed
+> 2026-06-23), so correctness is proven by the generated-LSDB Go stream tests PLUS a cross-service check
+> on the deployed stack — a generated fabric result written to the shared enrichment volume is loaded by
+> the live correlation service and oriented correctly (a both-ways leaf↔spine link → AMBIGUOUS, the
+> bidirectional-honesty behaviour; non-adjacent → abstain). Deployed `routing_direction_pairs=0`
+> (empty live LSDB, abstaining honestly); activates the moment a real LSDB arrives (this lab's fabric if
+> OSPF/BGP-LS origination is configured, or the owner's other labs).
 >
 > **C7 STATUS: vote #2 is LIVE.** The DirectedTopology oracle fuses three sources behind one seam
 > (`_direction` changed once, in C7.2, and never again); direction is claimed only on a 2-of-3 agreement

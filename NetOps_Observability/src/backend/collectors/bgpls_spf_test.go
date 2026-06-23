@@ -90,3 +90,78 @@ func TestForwardingPairs_Empty(t *testing.T) {
 		t.Fatalf("empty graph must yield no pairs; got %+v", p)
 	}
 }
+
+// ── FULL-STREAM integration: generate a synthetic BGP-LS LSDB through the real wire
+// parser → RIB → buildRoutingPairs → SPF directions. This is the C7.5 producer end to
+// end without the lab (the live fabric isn't emitting BGP-LS). ────────────────────
+
+// OSPF stream: feed OSPF (protocol-ID 3) Link NLRIs for a line r1—r2—r3 and assert
+// the routing source's directed pairs. Names are dotted Router-IDs (System-ID
+// fallback, no Node NLRI needed — exactly the OSPF case the user is targeting).
+func TestBuildRoutingPairs_OSPFStream(t *testing.T) {
+	c := NewBGPLS().(*bgplsCollector)
+	peer := "10.0.0.9:179"
+	rid := func(b byte) []byte {
+		return append(tlv16(subTLVAutonomousSystem, u32b(65001)), tlv16(subTLVIGPRouterID, []byte{10, 0, 0, b})...)
+	}
+	// generate the LSDB: r1—r2 and r2—r3 (OSPFv2 links).
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeLink, linkNLRIValue(3, rid(1), rid(2), []byte{172, 16, 0, 1}, []byte{172, 16, 0, 2})), nil, true))
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeLink, linkNLRIValue(3, rid(2), rid(3), []byte{172, 16, 0, 5}, []byte{172, 16, 0, 6})), nil, true))
+
+	c.mu.RLock()
+	pairs := c.buildRoutingPairs()
+	c.mu.RUnlock()
+
+	// each end node forwards toward the middle; the middle forwards toward each end.
+	for _, want := range [][2]string{{"10.0.0.1", "10.0.0.2"}, {"10.0.0.3", "10.0.0.2"},
+		{"10.0.0.2", "10.0.0.1"}, {"10.0.0.2", "10.0.0.3"}} {
+		if !has(pairs, want[0], want[1]) {
+			t.Fatalf("OSPF stream: missing forwarding %s→%s; got %+v", want[0], want[1], pairs)
+		}
+	}
+	// the two ends are NOT adjacent → they never forward directly to each other.
+	if has(pairs, "10.0.0.1", "10.0.0.3") || has(pairs, "10.0.0.3", "10.0.0.1") {
+		t.Fatalf("OSPF stream: ends must route via the middle, not directly; got %+v", pairs)
+	}
+}
+
+// IS-IS fabric stream: Node NLRIs (hostnames) + Link NLRIs for a leaf/spine slice
+// spine1—leaf1, spine1—leaf2. Asserts the directed pairs AND that hostnames (not
+// raw System-IDs) name the pairs — the join the correlation device entities need.
+func TestBuildRoutingPairs_ISISFabricStream(t *testing.T) {
+	c := NewBGPLS().(*bgplsCollector)
+	peer := "10.0.0.9:179"
+	spine := isisNodeDescSubs(65000, []byte{0, 0, 0, 0, 0, 1})
+	leaf1 := isisNodeDescSubs(65000, []byte{0, 0, 0, 0, 0, 2})
+	leaf2 := isisNodeDescSubs(65000, []byte{0, 0, 0, 0, 0, 3})
+	// Node NLRIs carry hostnames.
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeNode, nodeNLRIValue(2, spine)), tlv16(tlvNodeName, []byte("spine1")), true))
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeNode, nodeNLRIValue(2, leaf1)), tlv16(tlvNodeName, []byte("leaf1")), true))
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeNode, nodeNLRIValue(2, leaf2)), tlv16(tlvNodeName, []byte("leaf2")), true))
+	// Links spine1—leaf1, spine1—leaf2.
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeLink, linkNLRIValue(2, spine, leaf1, []byte{10, 0, 0, 1}, []byte{10, 0, 0, 2})), nil, true))
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeLink, linkNLRIValue(2, spine, leaf2, []byte{10, 0, 0, 5}, []byte{10, 0, 0, 6})), nil, true))
+
+	c.mu.RLock()
+	pairs := c.buildRoutingPairs()
+	c.mu.RUnlock()
+
+	for _, want := range [][2]string{{"leaf1", "spine1"}, {"leaf2", "spine1"},
+		{"spine1", "leaf1"}, {"spine1", "leaf2"}} {
+		if !has(pairs, want[0], want[1]) {
+			t.Fatalf("IS-IS stream: missing %s→%s (hostname-resolved); got %+v", want[0], want[1], pairs)
+		}
+	}
+	// leaves aren't adjacent → no direct leaf→leaf forwarding (it routes via the spine).
+	if has(pairs, "leaf1", "leaf2") || has(pairs, "leaf2", "leaf1") {
+		t.Fatalf("IS-IS stream: leaves must route via the spine; got %+v", pairs)
+	}
+	// withdrawing a link removes its node from the directed set.
+	c.applyUpdate(peer, updateBody(lsNLRIWrap(nlriTypeLink, linkNLRIValue(2, spine, leaf2, []byte{10, 0, 0, 5}, []byte{10, 0, 0, 6})), nil, false))
+	c.mu.RLock()
+	pairs = c.buildRoutingPairs()
+	c.mu.RUnlock()
+	if has(pairs, "leaf2", "spine1") || has(pairs, "spine1", "leaf2") {
+		t.Fatalf("withdraw: leaf2 forwarding must disappear; got %+v", pairs)
+	}
+}
