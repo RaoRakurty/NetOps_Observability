@@ -108,6 +108,12 @@ class TrapClassifyTest(unittest.TestCase):
     def test_missing_device_no_signal(self):
         self.assertIsNone(trap_control_signal(trap(device="", host=""), "", NOW))
 
+    def test_raw_source_ip_is_not_a_phantom_device(self):
+        # G2/C8: an unattributed trap must NOT fall back to the raw source IP — that
+        # would form a phantom "172.40.40.21:Ethernet7" device that never correlates
+        # with the real device. Unattributed → None (searchable, no RCA signal).
+        self.assertIsNone(trap_control_signal(trap(device="", host="172.40.40.21"), "", NOW))
+
 
 class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -120,7 +126,7 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
 
         main.ch = FakeCH()
         main.CORR_SIGNALS_ENABLED = True
-        main.TRAPS_RECEIVED = main.TRAPS_NORMALIZED = main.TRAPS_DROPPED = 0
+        main.TRAPS_RECEIVED = main.TRAPS_NORMALIZED = main.TRAPS_DROPPED = main.TRAPS_RECANON = 0
 
     async def test_classified_trap_creates_signal_and_counts(self):
         await main.handle_snmptrap(trap())
@@ -137,6 +143,41 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(main.TRAPS_RECEIVED, 1)
         self.assertEqual(main.TRAPS_NORMALIZED, 0)
         self.assertEqual(main.TRAPS_DROPPED, 1)
+
+    async def test_unattributed_trap_recovered_via_entity_resolver(self):
+        # C8: G2a left device="" (e.g. discovery matched only mgmt IPs); the C7.1
+        # EntityResolver knows INTERFACE IPs, so a trap from a device's interface IP
+        # is recovered to the real device → a properly-bound RCA signal.
+        from entity_resolver import EntityResolver
+        resolver = EntityResolver.from_rows(
+            devices=[], ifindex=[],
+            interface_ips=[{"device": "leaf1", "ip": "10.0.12.1", "ifname": "Ethernet1"}])
+        orig = main.cached_entity_resolver_all
+        main.cached_entity_resolver_all = lambda: resolver
+        try:
+            await main.handle_snmptrap(trap(device="", host="10.0.12.1"))
+        finally:
+            main.cached_entity_resolver_all = orig
+        self.assertEqual(main.TRAPS_RECANON, 1)
+        self.assertEqual(main.TRAPS_NORMALIZED, 1)
+        sigs = [r for r in self.rows if r["_table"] == "netops.corr_signals"]
+        self.assertEqual(len(sigs), 1)
+        self.assertEqual(sigs[0]["entity_id"], "leaf1:Ethernet7")  # recovered → real device entity
+
+    async def test_nat_collapsed_trap_dropped_no_phantom(self):
+        # C8: a NAT-collapsed source (a shared gateway) resolves to no device → the
+        # trap is DROPPED (searchable, no phantom-device RCA signal), not mis-attributed.
+        from entity_resolver import EMPTY_RESOLVER
+        orig = main.cached_entity_resolver_all
+        main.cached_entity_resolver_all = lambda: EMPTY_RESOLVER
+        try:
+            await main.handle_snmptrap(trap(device="", host="10.70.245.120"))
+        finally:
+            main.cached_entity_resolver_all = orig
+        self.assertEqual(main.TRAPS_DROPPED, 1)
+        self.assertEqual(main.TRAPS_NORMALIZED, 0)
+        self.assertEqual(main.TRAPS_RECANON, 0)
+        self.assertEqual(len([r for r in self.rows if r["_table"] == "netops.corr_signals"]), 0)
         self.assertEqual(self.rows, [])
 
 

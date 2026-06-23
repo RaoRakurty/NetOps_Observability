@@ -174,6 +174,7 @@ METRICS_DROPPED = 0            # rejected (missing identity/value, bad timestamp
 DEVICE_TELEMETRY_SIGNALS = 0   # device_telemetry signals written to corr_signals
 TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
 TRAPS_NORMALIZED = 0           # classified into a control_plane signal
+TRAPS_RECANON = 0              # C8: re-attributed to a device via the C7.1 EntityResolver
 TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
 
 # Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
@@ -324,6 +325,31 @@ def entity_resolver_for(tenant: str) -> EntityResolver:
 
 _resolver_cache: dict[str, EntityResolver] = {}
 _resolver_cache_mtime: float = -1.0
+_ALL_RESOLVER_KEY = "\x00all"   # cache key for the cross-tenant ingest resolver (can't be a tenant id)
+
+
+def cached_entity_resolver_all() -> EntityResolver:
+    """A resolver over ALL devices (every tenant ∪ global), for INGEST ATTRIBUTION
+    only — IP→device id, after which the device's tenant is derived via tenant_for().
+    This mirrors G2a's all-device source-IP matching and tenant_for's global view; the
+    result is routed to its rightful tenant, so it is not a cross-tenant data leak.
+    Never used to SERVE tenant-scoped data (that always goes through the per-tenant
+    resolver)."""
+    global _resolver_cache, _resolver_cache_mtime
+    _entity_resolver_raw()
+    if _er_mtime != _resolver_cache_mtime:
+        _resolver_cache = {}
+        _resolver_cache_mtime = _er_mtime
+    r = _resolver_cache.get(_ALL_RESOLVER_KEY)
+    if r is None:
+        raw = _entity_resolver_raw()
+
+        def rows(section: str) -> list:
+            return [row for per in raw[section].values() for row in per]
+
+        r = EntityResolver.from_rows(rows("devices"), rows("interface_ips"), rows("ifindex"))
+        _resolver_cache[_ALL_RESOLVER_KEY] = r
+    return r
 
 
 def cached_entity_resolver_for(tenant: str) -> EntityResolver:
@@ -1000,11 +1026,24 @@ async def handle_snmptrap(ev: dict) -> None:
     high-value families only. Unclassified traps stay searchable in OpenSearch
     and create NO RCA signal (the anti-noise guardrail). The OpenSearch path is
     untouched — this is an ADDITIONAL evidence lane, not a replacement."""
-    global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED
+    global DEADLETTER_COUNT, TRAPS_RECEIVED, TRAPS_NORMALIZED, TRAPS_DROPPED, TRAPS_RECANON
     TRAPS_RECEIVED += 1
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
-    tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("device") or ev.get("host") or ""))
+    # G2/C8: the Go receiver (G2a) attributes the trap to an inventory device via
+    # source-IP / sysName / agent-addr. When that leaves it UNATTRIBUTED, try the
+    # richer C7.1 EntityResolver on the trap's own source address — it also knows
+    # INTERFACE IPs, so a trap sourced from a device's interface (not its mgmt IP)
+    # still resolves. A NAT-collapsed shared source is ambiguous → stays unresolved
+    # (the producer then keeps it searchable but emits no phantom-device RCA signal).
+    device = str(ev.get("device") or "")
+    if not device:
+        recovered = cached_entity_resolver_all().device_for_ip(str(ev.get("host") or ""))
+        if recovered:
+            ev = {**ev, "device": recovered}
+            device = recovered
+            TRAPS_RECANON += 1
+    tenant = str(ev.get("tenant_id") or "") or tenant_for(device)
     try:
         sig = trap_control_signal(ev, tenant, datetime.now(timezone.utc))
     except DeadLetter as exc:
@@ -1205,6 +1244,7 @@ async def health() -> dict:
             "device_telemetry_signals": DEVICE_TELEMETRY_SIGNALS,
             "traps_received": TRAPS_RECEIVED,
             "traps_normalized": TRAPS_NORMALIZED,
+            "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
             "traps_dropped": TRAPS_DROPPED,
             "flows_received": FLOWS_RECEIVED,
             "passive_flow_signals": PASSIVE_FLOW_SIGNALS,

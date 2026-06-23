@@ -224,11 +224,31 @@ Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data a
 > window; and the precedence-based "trust measured over computed on conflict" fusion upgrade (today's v1
 > conservatively abstains on any conflict).
 
-### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
-**Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,
-zero-regression); the lab's v2c-over-NAT traps still carry source-IP ids. **100%-done =** a path that
-canonicalizes the lab case (or an explicit, documented "not recoverable under this NAT" with the
-production path proven). Note: deeper independence handling = the consciously-excluded G2b.
+### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  ✅ *(DONE 2026-06-23)*
+**Was:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,
+zero-regression, Go-tested: `TestTrapAttributeDevice` + `TestTrapResolveAmbiguityGuard`). The lab
+remnant: **every** lab trap is NAT-collapsed to the host IP (`10.70.245.120`), so G2a correctly
+returns `device=""` — but the Python producer then fell back to the RAW source IP, forming a PHANTOM
+device (`10.70.245.120:Ethernet1`, `:established(6)` — thousands of signals that never correlate with
+the real device). **Done (two parts, both leveraging the C7.1 EntityResolver):**
+1. **Phantom eliminated** — `trap_control_signal` no longer falls back to `ev["host"]`; an unattributed
+   trap → `None` (kept searchable in OpenSearch, never a phantom-device RCA signal — the same honesty
+   guardrail as an unclassified trap).
+2. **EntityResolver recovery** — when G2a leaves the trap unattributed, `handle_snmptrap` resolves the
+   trap's own source address through a cross-tenant ingest resolver (`cached_entity_resolver_all`,
+   mirroring `tenant_for`/G2a's all-device matching, routed to its rightful tenant — not a leak). The
+   resolver knows **interface IPs** too, so a trap sourced from a device's interface (not its mgmt IP)
+   — which G2a's mgmt-only matching misses — is recovered to the real device (`traps_recanonicalized`
+   counter on `/healthz`).
+**The lab NAT case is documented as fundamentally unrecoverable** (and now handled honestly): a v2c
+trap over a shared NAT gateway with **no sysName** carries no surviving device identity (v2c has no
+agent-addr) — there is nothing to resolve, so it is dropped-but-searchable rather than mis-attributed.
+The fix for the lab is the same as the syslog hostname fix (configure the devices to include sysName.0
+in traps) — owner-side, multi-vendor; G2a already attributes any trap that carries it. +3 tests
+(raw-IP→no phantom, interface-IP→recovered to real device, NAT-collapsed→dropped-no-phantom); 215
+Python suite green; ruff/mypy clean; deployed + **live-validated** (NAT source `10.70.245.120`→dropped;
+real interface IP `10.0.0.12`→`leaf2:Ethernet7`, recanon=1). Note: deeper independence handling = the
+consciously-excluded G2b.
 
 ### C9 · P4 — replay-driven calibration  🟢 *(maturity, not a blocker)*
 **Status:** constants are deterministic defaults (`tau`, floors, thresholds, weights). Design defers
