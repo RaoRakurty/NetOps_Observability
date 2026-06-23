@@ -179,6 +179,10 @@ func newServer() *server {
 				ID:       dev.ID,
 				Address:  dev.Address,
 				Protocol: dev.PreferredProtocol,
+				// gNMI-capable devices (a gnmic subscription exists) declare it via the
+				// `gnmi: "true"` label; the SNMP collector then yields gNMI-owned metric
+				// families (BGP/IS-IS) to gNMI on them, staying the floor elsewhere.
+				GNMICapable: strings.EqualFold(dev.Labels["gnmi"], "true"),
 			}
 			if snmpCredsRef != nil && dev.CredentialRef != "" {
 				if c, ok := snmpCredsRef.Resolve(dev.CredentialRef); ok {

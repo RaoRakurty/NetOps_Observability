@@ -392,21 +392,21 @@ groups:
         annotations:
           summary: "{{ $labels.device }} has zero established BGP peers (isolation)"
 
-      - alert: OSPFAdjacencyDown   # OSPF-MIB ospfNbrState (8=full); SNMP-owned, labelled {index}
+      - alert: OSPFAdjacencyDown   # OSPF-MIB ospfNbrState (8=full); SNMP-owned, labelled {neighbor}
         expr: device_ospf_nbr_state != 8
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.index }} not full"
+          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.neighbor }} not full"
 
-      - alert: OSPFAdjacencyFlapping   # [NEEDS METRIC]
+      - alert: OSPFAdjacencyFlapping
         expr: changes(device_ospf_nbr_state[15m]) >= 4
         for: 0m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.index }} flapping"
+          summary: "{{ $labels.device }} OSPF neighbor {{ $labels.neighbor }} flapping"
 
       # IS-IS is the fabric IGP (gNMI device_isis_adj_state; 3=up), labelled
       # {device, ifName, isis_level, isis_neighbor (system-id)}.

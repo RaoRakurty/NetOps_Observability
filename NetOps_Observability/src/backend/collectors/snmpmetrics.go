@@ -106,6 +106,15 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		var ifAliases map[string]string
 		for _, prof := range selectProfiles(c.profiles, ent, entOK) {
 			for _, m := range prof.Metrics {
+				// Single-contract ownership: yield a metric to the transport that owns
+				// it on this device (gNMI owns BGP/IS-IS where present); SNMP stays the
+				// universal floor on devices without that transport (agentless fallback).
+				if m.ownedElsewhere(tg) {
+					continue
+				}
+				// Canonical index label (e.g. bgpPeerTable → "peer") so an SNMP-owned
+				// series matches the contract the richer transport uses; "" → "index".
+				idxLabel := m.indexLabel()
 				if m.Table {
 					rows, err := snmpWalkColumn(dctx, addr, creds, m.OID)
 					if err != nil {
@@ -131,8 +140,8 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 								events = append(events, ev)
 							}
 						} else {
-							lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,index=%q} %d %d",
-								m.Name, tg.ID, vendor, idx, valueInt(v), now))
+							lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,%s=%q} %d %d",
+								m.Name, tg.ID, vendor, idxLabel, idx, valueInt(v), now))
 							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", "", valueInt(v), now); ok {
 								events = append(events, ev)
 							}

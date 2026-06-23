@@ -14,6 +14,7 @@ devices:
     labels:
       site: clos-lab
       role: spine
+      gnmi: "true"   # SR Linux gNMI: owns BGP + IS-IS (gnmic srl-bgp/srl-isis)
   spine2:
     address: 172.40.40.12
     preferred_protocol: snmp
@@ -22,6 +23,7 @@ devices:
     labels:
       site: clos-lab
       role: spine
+      gnmi: "true"   # SR Linux gNMI: owns BGP + IS-IS (gnmic srl-bgp/srl-isis)
   leaf1:
     address: 172.40.40.21
     preferred_protocol: snmp
@@ -30,6 +32,7 @@ devices:
     labels:
       site: clos-lab
       role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
   leaf2:
     address: 172.40.40.22
     preferred_protocol: snmp
@@ -38,6 +41,7 @@ devices:
     labels:
       site: clos-lab
       role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
   leaf3:
     address: 172.40.40.23
     preferred_protocol: snmp
@@ -46,6 +50,7 @@ devices:
     labels:
       site: clos-lab
       role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
   leaf4:
     address: 172.40.40.24
     preferred_protocol: snmp
@@ -54,6 +59,7 @@ devices:
     labels:
       site: clos-lab
       role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
   # wan-r1 (juniper, 172.40.40.31) — REMOVED from the clos lab topology
   # (containerlab node deleted 2026-06-10). Kept here, commented, as a record of
   # intent for re-add; uncomment when the node is back in the topology. While
@@ -75,6 +81,7 @@ devices:
     labels:
       site: clos-lab
       role: wan
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
   lan-sw1:
     address: 172.40.40.51
     preferred_protocol: snmp

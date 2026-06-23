@@ -21,6 +21,35 @@ type SNMPMetric struct {
 	Name  string
 	OID   []int
 	Table bool
+	// Owner is the transport that OWNS this canonical metric when the device has
+	// it — "gnmi" / "netconf" / "" (=SNMP, the default/universal floor). The SNMP
+	// collector withholds an owned metric on a device that actually has that
+	// transport (so it never double-emits a richer source's series), but still
+	// polls it on devices that DON'T (the agentless fallback). The other transport's
+	// canonical lane mirrors the gate (see gnmic ownership-gate). Single-contract:
+	// exactly one transport per (device, family).
+	Owner string
+	// IndexLabel renames a table row's index label so an SNMP-owned series matches
+	// the canonical contract the richer transport uses (e.g. bgpPeerTable index →
+	// "peer", ospfNbrTable → "neighbor"). Empty → "index".
+	IndexLabel string
+}
+
+// ownedElsewhere reports whether the SNMP collector should YIELD this metric to
+// another transport on `tg` (single-contract ownership). True only when the metric
+// declares a non-SNMP Owner AND the device actually has that transport — so a
+// gNMI-owned family is withheld on a gNMI device but still emitted on an agentless
+// one. Default-closed: no owner / SNMP owner / device lacks the transport ⇒ false.
+func (m SNMPMetric) ownedElsewhere(tg Target) bool {
+	return m.Owner != "" && !strings.EqualFold(m.Owner, "snmp") && tg.hasTransport(m.Owner)
+}
+
+// indexLabel is the table row's index label, defaulting to "index".
+func (m SNMPMetric) indexLabel() string {
+	if m.IndexLabel == "" {
+		return "index"
+	}
+	return m.IndexLabel
 }
 
 // SNMPProfile is a named OID set matched by sysObjectID enterprise number.
@@ -72,14 +101,16 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_if_out_bcast_pkts", OID: []int{1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 13}, Table: true},
 				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 2}, Table: true},  // hrProcessorLoad (HOST-RESOURCES-MIB)
 				{Name: "device_sensor_value", OID: []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4}, Table: true}, // entPhySensorValue (ENTITY-SENSOR-MIB)
-				// BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) + OSPF-MIB
-				// neighbor/interface state — standard routing MIBs, generic to all
-				// vendors. Powers the BGP/OSPF Overview board.
-				{Name: "device_bgp_peer_state", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 2}, Table: true},      // bgpPeerState
-				{Name: "device_bgp_fsm_transitions", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 15}, Table: true}, // bgpPeerFsmEstablishedTransitions
-				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true},      // bgpPeerInUpdates
-				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true},      // ospfNbrState
-				{Name: "device_ospf_if_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 12}, Table: true},       // ospfIfState
+				// BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) — gNMI-OWNED where a
+				// device has gNMI (OpenConfig carries richer BGP: per-AFI prefixes, vrf),
+				// SNMP is the agentless fallback. IndexLabel "peer" matches gNMI's contract.
+				{Name: "device_bgp_peer_state", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 2}, Table: true, Owner: "gnmi", IndexLabel: "peer"},      // bgpPeerState
+				{Name: "device_bgp_fsm_transitions", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 15}, Table: true, Owner: "gnmi", IndexLabel: "peer"}, // bgpPeerFsmEstablishedTransitions
+				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true, Owner: "gnmi", IndexLabel: "peer"},      // bgpPeerInUpdates
+				// OSPF-MIB neighbor/interface state — SNMP-owned (gNMI carries IS-IS here,
+				// not OSPF). IndexLabel "neighbor" is the canonical adjacency identity.
+				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true, IndexLabel: "neighbor"}, // ospfNbrState
+				{Name: "device_ospf_if_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 12}, Table: true},                          // ospfIfState
 			},
 		},
 		{
@@ -133,7 +164,8 @@ func loadProfiles() []SNMPProfile {
 			if oid == nil {
 				continue
 			}
-			conv.Metrics = append(conv.Metrics, SNMPMetric{Name: m.Name, OID: oid, Table: m.Table})
+			conv.Metrics = append(conv.Metrics, SNMPMetric{
+				Name: m.Name, OID: oid, Table: m.Table, Owner: m.Owner, IndexLabel: m.IndexLabel})
 		}
 		if i, ok := idxByName[conv.Name]; ok {
 			profs[i] = conv
@@ -149,9 +181,11 @@ type profileJSON struct {
 	Name       string `json:"name"`
 	Enterprise int    `json:"enterprise"`
 	Metrics    []struct {
-		Name  string `json:"name"`
-		OID   string `json:"oid"`
-		Table bool   `json:"table"`
+		Name       string `json:"name"`
+		OID        string `json:"oid"`
+		Table      bool   `json:"table"`
+		Owner      string `json:"owner"`
+		IndexLabel string `json:"index_label"`
 	} `json:"metrics"`
 }
 

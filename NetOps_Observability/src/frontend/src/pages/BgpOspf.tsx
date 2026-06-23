@@ -3,10 +3,11 @@ import {
 } from "../components/board/panels";
 
 // Routing protocols — BGP / OSPF / IS-IS session & adjacency health.
-//   BGP   is gNMI-OWNED (single-contract): device_bgp_peer_state / _fsm_transitions /
-//         _pfx_in, labelled {device, peer, vrf}. BGP4-MIB SNMP was withdrawn — it
-//         labelled by {index} and double-counted every peer gNMI already covers.
-//   OSPF  is SNMP-owned (OSPF-MIB ospfNbrTable/ospfIfTable), labelled {device, index}.
+//   BGP   is gNMI-OWNED per-device (single-contract): device_bgp_peer_state /
+//         _fsm_transitions / _pfx_in, labelled {device, peer, vrf}. On gNMI-capable
+//         devices SNMP yields BGP to gNMI; on agentless gear SNMP stays the floor and
+//         emits the same {peer} contract — so the panels work for either source.
+//   OSPF  is SNMP-owned (OSPF-MIB ospfNbrTable/ospfIfTable), labelled {device, neighbor}.
 //   IS-IS is gNMI-owned (the fabric IGP — leaf↔spine L2): device_isis_adj_state,
 //         labelled {device, ifName, isis_level, isis_neighbor}.
 // Panels show "No data" until a device exposes the corresponding session/adjacency.
@@ -47,7 +48,7 @@ export default function BgpOspf({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricStat label="OSPF interfaces" query="count(device_ospf_if_state) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
         </div>
         <div className="dm-grid">
-          <MetricLine title="OSPF neighbor state over time" query="device_ospf_nbr_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
+          <MetricLine title="OSPF neighbor state over time" query="device_ospf_nbr_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "neighbor"]} stepped />
           <MetricLine title="OSPF interface state over time" query="device_ospf_if_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}><strong>OSPF state</strong>: {OSPF_STATES}</p>

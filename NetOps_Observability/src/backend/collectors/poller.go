@@ -40,6 +40,26 @@ type Target struct {
 	V3PrivProto string
 	V3PrivKey   string
 	V3Context   string
+
+	// GNMICapable marks a device that ALSO has gNMI telemetry (a gnmic subscription).
+	// The SNMP metrics collector uses it to WITHHOLD gNMI-owned metric families on
+	// these devices (single-contract: gNMI owns BGP/IS-IS where present; SNMP stays
+	// the universal floor for devices WITHOUT gNMI). Set from the device label
+	// `gnmi: "true"`.
+	GNMICapable bool
+}
+
+// hasTransport reports whether the device has the named non-SNMP transport, so the
+// SNMP collector can yield ownership of a family that transport owns. Today only
+// gNMI overrides SNMP; add cases here when another transport (e.g. NETCONF) gains
+// ownership of a family.
+func (t Target) hasTransport(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "gnmi":
+		return t.GNMICapable
+	default:
+		return false
+	}
 }
 
 // creds builds the engine credentials for this target (v3 if configured, else

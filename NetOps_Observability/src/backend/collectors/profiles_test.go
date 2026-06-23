@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"os"
 	"reflect"
 	"testing"
 )
@@ -74,4 +75,70 @@ func TestValueInt(t *testing.T) {
 	if v := valueInt(berVal{tag: 0x46, raw: []byte{0x01, 0x00, 0x00}}); v != 65536 {
 		t.Errorf("Counter64 65536 => %d", v)
 	}
+}
+
+// Single-contract ownership: a gNMI-owned metric is withheld on a gNMI device but
+// emitted (the floor) on an SNMP-only one. Default-closed otherwise.
+func TestMetricOwnershipGate(t *testing.T) {
+	bgp := SNMPMetric{Name: "device_bgp_peer_state", Owner: "gnmi", IndexLabel: "peer"}
+	ospf := SNMPMetric{Name: "device_ospf_nbr_state", IndexLabel: "neighbor"} // SNMP-owned
+	iface := SNMPMetric{Name: "device_if_in_octets"}                          // no owner
+
+	gnmiDev := Target{ID: "leaf1", GNMICapable: true}
+	snmpDev := Target{ID: "edge-rtr", GNMICapable: false} // agentless BGP router
+
+	// gNMI-owned BGP: withheld on a gNMI device, emitted on an SNMP-only device.
+	if !bgp.ownedElsewhere(gnmiDev) {
+		t.Error("BGP must be withheld on a gNMI-capable device (gNMI owns it)")
+	}
+	if bgp.ownedElsewhere(snmpDev) {
+		t.Error("BGP must be EMITTED on an SNMP-only device (the floor/fallback)")
+	}
+	// SNMP-owned + unowned families are never withheld, on either device.
+	for _, m := range []SNMPMetric{ospf, iface} {
+		for _, tg := range []Target{gnmiDev, snmpDev} {
+			if m.ownedElsewhere(tg) {
+				t.Errorf("%s must never be withheld (owner=%q) on %s", m.Name, m.Owner, tg.ID)
+			}
+		}
+	}
+	// hasTransport only knows gNMI today; an unknown transport never matches.
+	if (SNMPMetric{Owner: "netconf"}).ownedElsewhere(gnmiDev) {
+		t.Error("a device is not netconf-capable just by being gNMI-capable")
+	}
+}
+
+func TestMetricIndexLabel(t *testing.T) {
+	if got := (SNMPMetric{IndexLabel: "peer"}).indexLabel(); got != "peer" {
+		t.Errorf("index label = %q, want peer", got)
+	}
+	if got := (SNMPMetric{}).indexLabel(); got != "index" {
+		t.Errorf("default index label = %q, want index", got)
+	}
+}
+
+// The JSON override carries owner + index_label through to the loaded profile.
+func TestLoadProfiles_OwnerIndexLabel(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/p.json"
+	js := `[{"name":"generic","enterprise":0,"metrics":[
+	  {"name":"device_bgp_peer_state","oid":"1.3.6.1.2.1.15.3.1.2","table":true,"owner":"gnmi","index_label":"peer"}]}]`
+	if err := os.WriteFile(path, []byte(js), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SNMP_PROFILES_FILE", path)
+	for _, p := range loadProfiles() {
+		if p.Name != "generic" {
+			continue
+		}
+		for _, m := range p.Metrics {
+			if m.Name == "device_bgp_peer_state" {
+				if m.Owner != "gnmi" || m.IndexLabel != "peer" {
+					t.Fatalf("owner/index_label not loaded: %+v", m)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("device_bgp_peer_state not found in loaded generic profile")
 }

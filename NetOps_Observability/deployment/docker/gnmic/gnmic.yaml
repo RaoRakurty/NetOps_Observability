@@ -119,13 +119,13 @@ subscriptions:
     stream-mode: sample
     sample-interval: 30s
 
-# gNMI is the OWNER of BGP state. (Earlier note assumed BGP4-MIB returned nothing on
-# cEOS — WRONG: cEOS DOES answer bgpPeerTable, so the SNMP poll double-emitted every
-# peer that gNMI already covers, labelled {index} vs gNMI's {peer} — double-counting
-# the dashboard. Per the ownership rule below, BGP was withdrawn from the SNMP generic
-# profile; gNMI covers every BGP-speaking fabric device, so no coverage was lost.
-# Re-add a SCOPED SNMP bgpPeerTable poll only for agentless gear with no gNMI.) OSPF
-# stays SNMP-owned (gNMI carries IS-IS, not OSPF, here).
+# gNMI is the OWNER of BGP state — but PER DEVICE, not globally. The SNMP profile
+# still defines BGP with `owner: gnmi`; the SNMP collector WITHHOLDS it only on devices
+# tagged gNMI-capable (label gnmi: "true"), and stays the universal floor for agentless
+# gear that has no gNMI (so an SNMP-only BGP router is still covered). cEOS DOES answer
+# bgpPeerTable, so without this gate the two transports double-emitted every fabric peer
+# ({index} vs {peer}). This canonical lane mirrors the gate from the gNMI side via the
+# ownership-gate below. OSPF stays SNMP-owned (gNMI carries IS-IS, not OSPF, here).
 outputs:
   # Raw lane — gNMI paths verbatim under the gnmi_ prefix. Debug surface,
   # gNMI-liveness source for the backend health monitor, and the comparison
