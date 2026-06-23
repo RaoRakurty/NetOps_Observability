@@ -2,16 +2,18 @@ import {
   Group, MetricLine, MetricTop, MetricStat, fmtUptime,
 } from "../components/board/panels";
 
-// BGP / OSPF Overview — routing-protocol session & adjacency health.
-//   BGP  is gNMI-OWNED (single-contract): device_bgp_peer_state / _fsm_transitions /
-//        _pfx_in, labelled {device, peer, vrf}. BGP4-MIB SNMP was withdrawn — it
-//        labelled by {index} and double-counted every peer gNMI already covers.
-//   OSPF is SNMP-owned (OSPF-MIB ospfNbrTable/ospfIfTable), labelled {device, index}.
-//        gNMI carries IS-IS (the fabric IGP), not OSPF — no collision.
+// Routing protocols — BGP / OSPF / IS-IS session & adjacency health.
+//   BGP   is gNMI-OWNED (single-contract): device_bgp_peer_state / _fsm_transitions /
+//         _pfx_in, labelled {device, peer, vrf}. BGP4-MIB SNMP was withdrawn — it
+//         labelled by {index} and double-counted every peer gNMI already covers.
+//   OSPF  is SNMP-owned (OSPF-MIB ospfNbrTable/ospfIfTable), labelled {device, index}.
+//   IS-IS is gNMI-owned (the fabric IGP — leaf↔spine L2): device_isis_adj_state,
+//         labelled {device, ifName, isis_level, isis_neighbor}.
 // Panels show "No data" until a device exposes the corresponding session/adjacency.
 
 const BGP_STATES = "1 idle · 2 connect · 3 active · 4 opensent · 5 openconfirm · 6 established";
 const OSPF_STATES = "1 down · 2 attempt · 3 init · 4 twoWay · 5 exchangeStart · 6 exchange · 7 loading · 8 full";
+const ISIS_STATES = "1 down · 2 init · 3 up · 4 failed";
 
 export default function BgpOspf({ rangeMinutes = 60 }: { rangeMinutes?: number } = {}) {
   const m = rangeMinutes;
@@ -49,6 +51,19 @@ export default function BgpOspf({ rangeMinutes = 60 }: { rangeMinutes?: number }
           <MetricLine title="OSPF interface state over time" query="device_ospf_if_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "index"]} stepped />
         </div>
         <p className="mini-meta" style={{ margin: 0 }}><strong>OSPF state</strong>: {OSPF_STATES}</p>
+      </Group>
+
+      <Group title="IS-IS — fabric IGP" hue="#10B981">
+        <div className="ds-stats">
+          <MetricStat label="Adjacencies up" query="count(device_isis_adj_state == 3) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "good" : "")} />
+          <MetricStat label="Adjacencies not up" query="count(device_isis_adj_state != 3) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "bad" : "good")} />
+          <MetricStat label="Total adjacencies" query="count(device_isis_adj_state) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
+        </div>
+        <div className="dm-grid">
+          <MetricLine title="IS-IS adjacency state over time" query="device_isis_adj_state" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device", "isis_neighbor"]} stepped />
+          <MetricLine title="IS-IS adjacencies by device" query="count by (device) (device_isis_adj_state == 3)" minutes={m} fmtY={(n) => `${n.toFixed(0)}`} labelKeys={["device"]} stepped />
+        </div>
+        <p className="mini-meta" style={{ margin: 0 }}><strong>IS-IS adjacency</strong>: {ISIS_STATES} · neighbour = IS-IS system-id</p>
       </Group>
     </div>
   );

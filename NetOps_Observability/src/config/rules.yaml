@@ -408,6 +408,24 @@ groups:
         annotations:
           summary: "{{ $labels.device }} OSPF neighbor {{ $labels.index }} flapping"
 
+      # IS-IS is the fabric IGP (gNMI device_isis_adj_state; 3=up), labelled
+      # {device, ifName, isis_level, isis_neighbor (system-id)}.
+      - alert: ISISAdjacencyDown
+        expr: device_isis_adj_state != 3
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} IS-IS adjacency to {{ $labels.isis_neighbor }} on {{ $labels.ifName }} not up"
+
+      - alert: ISISAdjacencyFlapping
+        expr: changes(device_isis_adj_state[15m]) >= 4
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.device }} IS-IS adjacency to {{ $labels.isis_neighbor }} flapping"
+
       - alert: RouteTableShrink   # [NEEDS METRIC]
         expr: delta(device_route_count[10m]) < -500
         for: 5m
