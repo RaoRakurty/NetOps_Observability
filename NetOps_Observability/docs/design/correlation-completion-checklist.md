@@ -41,13 +41,16 @@ AND the replay contract) — per-object replay reproduces content unchanged. 5 u
 replay regressions pass, deployed live (engine clean). *Deferred refinement:* richer
 content-union semantics + the §4.4 diameter≤6 guard (current rule = entity-overlap + window).
 
-### C2 · #76 engine-side internal-stack exclusion — verify + close  🔴
-**Status:** PARTIAL / conflicting audit signals. The **probe plane is done** (`_INTERNAL_PROBE_TARGETS`
-→ target-wins → `PLATFORM_SELF_CHECK` → `DEBUG_ONLY` → excluded from verdicts). **Unverified:** whether
-the internal stack's *own* device_telemetry / control_plane / trap signals are excluded from customer
-correlation objects. **100%-done =** confirm behavior with a test; if internal-device telemetry can
-still form/contaminate a customer object, add the engine-side exclusion; internal nodes never in a
-customer `corr_object`.
+### C2 · #76 engine-side internal-stack exclusion — verify + close  ✅ *(DONE 2026-06-23)*
+**Was:** PARTIAL. Verified live a real leak — object `29b66970` (`prober->netbox` + `api->netbox`)
+showed internal self-monitoring *formed a correlation object*: the `DEBUG_ONLY` classification only
+gated the **verdict**, not **object formation** (contradicting verdicts.py Decision #1: "debug_only…
+never open, attach, or contribute"). (No non-probe internal signals exist today — verified — so the
+leak was probe-only.) **Done:** `buffer_signal` now drops `probe_authority == 'debug_only'` at the
+single window-entry chokepoint — the signal stays searchable in `corr_signals` (Debug view intact)
+but never enters object formation. Replay-safe (run_window unchanged; archive sliced from the window).
++2 tests (debug_only excluded / low-authority still buffers); 163 suite green; deployed + live-verified
+(0 internal objects forming, customer objects unaffected, 0 errors).
 
 ### C3 · Degradation markers (storm-mode + stale-topology)  🟠
 **Status:** PARTIAL. Window buffer is bounded (storm survivable) but **storm-mode isn't declared in

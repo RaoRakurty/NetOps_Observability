@@ -81,3 +81,27 @@ def test_prune_ages_out_old_signals_and_their_ids():
     assert str(fresh.signal_id) in main._BUFFERED_IDS
     # Invariant after pruning: dedup set and buffer agree exactly.
     assert len(main._BUFFERED_IDS) == len(main.WINDOW_BUFFER)
+
+
+# ── C2: #76 — debug_only / platform-self-check probes never form objects ──────
+def test_debug_only_probe_is_searchable_but_never_buffered_into_an_object():
+    """A platform-self-check probe (e.g. prober->netbox) is DEBUG_ONLY: it stays in
+    corr_signals (searchable) but must never open or attach to a correlation object —
+    RCA is the customer's network, not the platform's own stack (decision #76)."""
+    debug = mk(1)
+    debug.attrs["probe_authority"] = "debug_only"
+    main.buffer_signal(debug)
+    assert len(main.WINDOW_BUFFER) == 0, "debug_only probe must NOT enter object formation"
+
+    customer = mk(2)  # a normal customer signal (no debug_only authority)
+    main.buffer_signal(customer)
+    assert len(main.WINDOW_BUFFER) == 1, "a customer signal must still buffer normally"
+
+
+def test_low_authority_probe_still_buffers():
+    """Only DEBUG_ONLY is excluded — a LOW-authority probe is support evidence and
+    must still form/attach to objects (it just can't anchor a confirmed verdict)."""
+    low = mk(3)
+    low.attrs["probe_authority"] = "low"
+    main.buffer_signal(low)
+    assert len(main.WINDOW_BUFFER) == 1

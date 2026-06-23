@@ -54,6 +54,7 @@ from signals import (
     EntityType,
     Observer,
     ObserverType,
+    ProbeAuthority,
     ProbeIntent,
     Signal,
     VantageType,
@@ -264,6 +265,14 @@ def seam_inventory() -> tuple[SeamView, ...]:
 
 
 def buffer_signal(sig: Signal) -> None:
+    # Decision #76 + verdicts.py Decision #1: a debug_only / platform-self-check probe
+    # (e.g. prober->nginx, api->netbox) stays SEARCHABLE — it's already in corr_signals —
+    # but must NEVER open or attach to a correlation object. RCA is the CUSTOMER's
+    # network, not the platform's own stack. Enforced here, at the single window-entry
+    # chokepoint, so run_window stays pure and replay is untouched (the archive is sliced
+    # from the window, so excluded signals simply never reach object formation).
+    if sig.attrs.get("probe_authority") == ProbeAuthority.DEBUG_ONLY.value:
+        return
     sid = str(sig.signal_id)
     if sid in _BUFFERED_IDS:
         return  # at-least-once redelivery — the window already holds it
