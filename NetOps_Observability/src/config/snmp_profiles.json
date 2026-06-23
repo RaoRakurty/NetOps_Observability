@@ -25,12 +25,9 @@
       { "name": "device_storage_size",    "oid": "1.3.6.1.2.1.25.2.3.1.5",     "table": true },
       { "name": "device_storage_used",    "oid": "1.3.6.1.2.1.25.2.3.1.6",     "table": true },
       { "name": "device_sensor_value",    "oid": "1.3.6.1.2.1.99.1.1.1.4",     "table": true },
-      { "_comment": "BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) — state 1=idle 2=connect 3=active 4=opensent 5=openconfirm 6=established; admin 1=stop 2=start; counters for FSM transitions + in-updates (update rate via rate()).",
-        "name": "device_bgp_peer_state",      "oid": "1.3.6.1.2.1.15.3.1.2",  "table": true },
-      { "name": "device_bgp_admin_status",    "oid": "1.3.6.1.2.1.15.3.1.3",  "table": true },
-      { "name": "device_bgp_in_updates",      "oid": "1.3.6.1.2.1.15.3.1.10", "table": true },
-      { "name": "device_bgp_fsm_transitions", "oid": "1.3.6.1.2.1.15.3.1.15", "table": true },
-      { "_comment": "OSPF-MIB — ospfNbrState (index = ospfNbrIpAddr.ospfNbrAddressLessIndex) 1=down..8=full; ospfIfState (index = ospfIfIpAddr.ospfAddressLessIf) 1=down..7=designatedRouter.",
+      { "_comment": "BGP state is gNMI-OWNED (single-contract: one transport per (device,family)). gNMI covers every BGP-speaking device on the fabric and emits the canonical device_bgp_* with the {peer,vrf} label set; BGP4-MIB is withdrawn here to avoid a double-emit collision (it labels by {index} and double-counted peers on the dashboard). Re-add a SCOPED bgpPeerTable poll only for agentless gear that has no gNMI. See deployment/docker/gnmic/gnmic.yaml (oc-bgp/srl-bgp + ownership rule).",
+        "name": "_bgp_withdrawn_gnmi_owned", "oid": "", "_disabled": true },
+      { "_comment": "OSPF-MIB — ospfNbrState (index = ospfNbrIpAddr.ospfNbrAddressLessIndex) 1=down..8=full; ospfIfState (index = ospfIfIpAddr.ospfAddressLessIf) 1=down..7=designatedRouter. SNMP-OWNED: gNMI subscribes IS-IS (the fabric IGP), not OSPF — OSPF is the agentless Cisco/edge IGP, so no collision.",
         "name": "device_ospf_nbr_state",      "oid": "1.3.6.1.2.1.14.10.1.6", "table": true },
       { "name": "device_ospf_if_state",       "oid": "1.3.6.1.2.1.14.7.1.12", "table": true }
     ]

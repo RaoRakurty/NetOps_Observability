@@ -358,31 +358,33 @@ groups:
   - name: noc-routing
     interval: 30s
     rules:
-      - alert: BGPSessionDown   # [NEEDS METRIC] BGP4-MIB bgpPeerState (6=established)
+      # BGP is gNMI-owned (canonical device_bgp_*, labelled {device,peer,vrf};
+      # session-state mapped to BGP4-MIB numerics, 6=established).
+      - alert: BGPSessionDown
         expr: device_bgp_peer_state != 6
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.device }} BGP peer {{ $labels.index }} not established"
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} not established"
 
-      - alert: BGPPeerFlapping   # [NEEDS METRIC]
+      - alert: BGPPeerFlapping
         expr: increase(device_bgp_fsm_transitions[15m]) > 3
         for: 0m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.device }} BGP peer {{ $labels.index }} flapping"
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} flapping"
 
-      - alert: BGPPrefixDrop   # [NEEDS METRIC]
-        expr: delta(device_bgp_accepted_prefixes[10m]) < -1000
+      - alert: BGPPrefixDrop   # device_bgp_pfx_in = OpenConfig afi-safi prefixes/received
+        expr: delta(device_bgp_pfx_in[10m]) < -1000
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.device }} BGP peer {{ $labels.index }} dropped >1000 prefixes"
+          summary: "{{ $labels.device }} BGP peer {{ $labels.peer }} dropped >1000 prefixes"
 
-      - alert: BGPAllPeersDown   # [NEEDS METRIC]
+      - alert: BGPAllPeersDown
         expr: count by (device) (device_bgp_peer_state == 6) == 0
         for: 2m
         labels:
@@ -390,7 +392,7 @@ groups:
         annotations:
           summary: "{{ $labels.device }} has zero established BGP peers (isolation)"
 
-      - alert: OSPFAdjacencyDown   # [NEEDS METRIC] OSPF-MIB ospfNbrState (8=full)
+      - alert: OSPFAdjacencyDown   # OSPF-MIB ospfNbrState (8=full); SNMP-owned, labelled {index}
         expr: device_ospf_nbr_state != 8
         for: 2m
         labels:
