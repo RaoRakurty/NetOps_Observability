@@ -250,10 +250,24 @@ Python suite green; ruff/mypy clean; deployed + **live-validated** (NAT source `
 real interface IP `10.0.0.12`→`leaf2:Ethernet7`, recanon=1). Note: deeper independence handling = the
 consciously-excluded G2b.
 
-### C9 · P4 — replay-driven calibration  🟢 *(maturity, not a blocker)*
-**Status:** constants are deterministic defaults (`tau`, floors, thresholds, weights). Design defers
-tuning to P4 (replay over labeled incidents). **100%-done =** calibration harness + re-fit constants
-with the config-hash bumped, replay-clean.
+### C9 · P4 — replay-driven calibration  ✅ *(HARNESS DONE 2026-06-23; awaits owner fit-data)*
+**Was:** constants were deterministic defaults with no principled re-fit path. **Done — the harness the
+design §P4 names** (`calibration.py`, pure + deterministic): replays a corpus of LABELED incidents
+(window + the outcome it must produce; `expected_hypothesis=""` = NO object — the precision/negative
+case) through the pure `run_window` under candidate `EngineConfig`s, scores hypothesis + verdict against
+the labels, and `grid_search` ranks the candidates **best-first** (highest score, ties → fewest changes
+from the base, then config_hash → smallest fitting config wins, deterministic). A re-fit candidate has a
+new `config_hash` → new `engine_version`, so adopting it is **replay-honest by construction** (replay of
+older objects reports the pin change, never a silent substitution — the §5 contract). Corpus loader +
+CLI (`python calibration.py examples/calibration-corpus.json`) + a starter labeled corpus (the golden
+congestion incident → confirmed, plus an isolated-warn-blip → no-object). +5 tests incl. **the harness
+DISCRIMINATING** — given an over-correlation incident it ranks the `attach_threshold` that abstains above
+the one that forms a spurious object (it actually finds the better config, not just the base). 220 Python
+suite green; ruff/mypy clean. **This is the MECHANISM, per the design's "owner milestone":** the actual
+re-fit needs a corpus of operator-validated incidents (accumulated from end-to-end testing — a confirmed
+object's archived window exports straight into the corpus format and gets labeled). Until that corpus
+exists, the shipped defaults stand and **accuracy claims stay qualitative** (design §P4 honesty rule);
+the loop is ready the moment the labels arrive.
 
 ---
 
@@ -262,6 +276,24 @@ with the config-hash bumped, replay-clean.
 - **G2b independence-aware gate for unresolved traps** — regression risk > value; lab can't validate.
 
 (Both remain documented in `correlation-engine.md` §4.2 + the grounding-foundation memory; revivable.)
+
+---
+
+## ⏸ Closing status (2026-06-23) — correlation paused pending seams + signatures
+
+Everything in the engine that is **in-our-control** is **DONE**: C1 (merge) · C2 (internal exclusion) ·
+C3 (degradation) · C4 (causal layer-stack + UI) · C6 (passive_flow) · **C7.1–C7.5 (direction inference:
+EntityResolver + DirectedTopology oracle + NetFlow + traceroute + routing/SPF, all replay-safe)** · C8
+(trap canonicalization) · **C9 (calibration harness)**. The two open items are **OWNER-GATED, not
+engineering gaps**:
+- **C5 — catalog/signal coverage** (VLAN/STP/HSRP-VRRP/MAC/firewall/IGP): blocked on the owner's failure
+  **signatures** + multi-vendor collection (#73). The grounding + three-layer model are protocol-agnostic
+  and done, so each family is a drop-in (kind + signature + fixture) once the signatures arrive.
+- **C9 fit-data**: the harness is ready; the actual re-fit awaits a corpus of operator-validated incidents
+  from end-to-end testing.
+Correlation is **paused here** until all seams are wired for end-to-end testing — at which point it
+**reopens for bug-fixes** (real data will surface edge cases) and the owner's signatures land C5. Vote #2
+(direction) and the routing source go live the moment real flow/trace/LSDB data flows.
 
 ---
 
