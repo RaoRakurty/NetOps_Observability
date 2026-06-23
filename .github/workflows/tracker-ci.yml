@@ -1,0 +1,44 @@
+name: tracker-ci
+
+# Keeps docs/TRACKER.md honest. tracker_staleness.py cross-checks every item still
+# marked NOT-STARTED against git history: if shipping commits already reference it,
+# the status is stale (it looks untouched but was built — the trap that sends someone
+# to rebuild existing work). FAILS only on those HIGH flags; in-progress/partial items
+# with commits are expected and reported as INFO.
+#
+# Honest scope: this catches "shipped-but-not-marked-done". It does NOT catch
+# "premise went moot with no commit" (e.g. the G2/G3 grounding case) — that drift
+# leaves no git trace and needs the verify-before-building habit, not CI.
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/docs/TRACKER.md'
+      - 'NetOps_Observability/scripts/tracker_staleness.py'
+      - '.github/workflows/tracker-ci.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tracker-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: NetOps_Observability
+
+jobs:
+  staleness:
+    name: tracker staleness (blocking on HIGH)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history — the detector greps git log for item references
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.10'
+      - name: tracker staleness check
+        run: python3 scripts/tracker_staleness.py
