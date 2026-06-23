@@ -73,6 +73,12 @@ type TrapEvent struct {
 	UptimeSeconds    float64           `json:"sys_uptime_seconds,omitempty"`
 	UptimeHuman      string            `json:"sys_uptime_human,omitempty"`
 	Fields           map[string]string `json:"fields,omitempty"` // extracted typed context (vlan/mac/port…)
+
+	// agentAddr is the v1 Trap-PDU agent-address — the originating device's OWN
+	// IP, set inside the PDU by the device, so it SURVIVES NAT (unlike the packet
+	// source IP). Unexported: package-internal device attribution only, never
+	// serialized. (v2c/v3 traps have no agent-addr; identity comes from sysName.)
+	agentAddr string
 }
 
 // vendorFromOID returns the vendor for an enterprise OID via the shared
@@ -437,8 +443,13 @@ func decodeTrapV1(ev *TrapEvent, pduBody []byte) error {
 	if err != nil {
 		return err
 	}
-	if ip := decodeIP(agentRaw); ip != "" && ev.Host == "" {
-		ev.Host = ip
+	if ip := decodeIP(agentRaw); ip != "" {
+		// agent-addr is the device's OWN address (NAT-surviving) — kept for device
+		// attribution (attributeDevice). Only stand in for Host if none is known.
+		ev.agentAddr = ip
+		if ev.Host == "" {
+			ev.Host = ip
+		}
 	}
 	_, genRaw, r, err := readTLV(r) // generic-trap
 	if err != nil {
@@ -494,6 +505,11 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 		return nil, fmt.Errorf("snmptrap: bad version field")
 	}
 	ev := &TrapEvent{Signal: "snmptrap", Host: srcIP, Timestamp: nowRFC3339()}
+	// Primary device attribution: the source IP, resolved fail-closed (a unique
+	// inventory match — a device trapping from its own management address, the
+	// non-NAT norm). When the source is unknown or an ambiguous shared NAT gateway,
+	// this leaves Device empty and attributeDevice (post-decode, in Run) rescues the
+	// identity from the PDU itself — sysName / v1 agent-addr, both NAT-surviving.
 	if resolve != nil {
 		if tg, ok := resolve(srcIP); ok {
 			ev.Device = tg.ID
@@ -822,20 +838,85 @@ func (r *trapReceiver) Status() Status {
 }
 
 // resolve maps a source IP to its inventory device (for device id + v3 creds).
+// FAIL-CLOSED on ambiguity: if the IP matches more than one distinct device — the
+// signature of a shared trap source (a NAT gateway / proxy fronting many devices) —
+// it returns no match rather than guessing one. A wrong attribution is worse than an
+// honest unknown: it would let one device's trap masquerade as another's evidence
+// (and, in the correlation verdict gate, manufacture false cross-device independence).
 func (r *trapReceiver) resolve(ip string) (Target, bool) {
 	if r.targets == nil {
 		return Target{}, false
 	}
+	var match Target
+	n := 0
 	for _, t := range r.targets() {
 		host := t.Address
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
 		if host == ip {
-			return t, true
+			if n == 0 || t.ID != match.ID {
+				n++
+				match = t
+			}
 		}
 	}
-	return Target{}, false
+	if n == 1 {
+		return match, true
+	}
+	return Target{}, false // 0 = unknown source, >1 = ambiguous shared source
+}
+
+// _trapSysNameOID is sysName.0 (RFC 3418) — the device's OWN configured hostname.
+// When a trap carries it, it identifies the originator BY NAME, independent of the
+// packet source IP, so it survives NAT (the same way syslog recovers the RFC5424
+// hostname from the message body).
+const _trapSysNameOID = "1.3.6.1.2.1.1.5"
+
+// trapSysName returns the sysName.0 varbind value, or "" if the trap carries none.
+func trapSysName(ev *TrapEvent) string {
+	for _, vb := range ev.Varbinds {
+		if vb.OID == _trapSysNameOID+".0" || vb.OID == _trapSysNameOID ||
+			strings.EqualFold(vb.Name, "sysName") {
+			return strings.TrimSpace(vb.Value)
+		}
+	}
+	return ""
+}
+
+// attributeDevice resolves a trap to its canonical inventory device id, so the
+// correlation entity_id/observer_id (device[:ifName]) is consistent with every other
+// producer (G2 — correlation-engine.md §4.2). decodeTrap has already tried the source
+// IP (fail-closed on an ambiguous shared NAT source); this RESCUES the identity from
+// inside the PDU when the source IP didn't resolve — both signals survive NAT:
+//
+//	1. sysName.0 varbind matched (case-insensitively) to a device id — by NAME.
+//	2. v1 agent-addr resolved by IP — the device's own address inside the PDU.
+//
+// When nothing resolves, Device stays "" — an honest unknown: the producer keeps the
+// trap as evidence under its source host, never a guessed device. EnrichmentStatus
+// records the outcome for observability. Idempotent; safe to call once per trap.
+func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
+	if ev.Device == "" && r.targets != nil {
+		if sn := trapSysName(ev); sn != "" {
+			for _, t := range r.targets() {
+				if strings.EqualFold(t.ID, sn) {
+					ev.Device = t.ID
+					break
+				}
+			}
+		}
+		if ev.Device == "" && ev.agentAddr != "" && ev.agentAddr != srcIP {
+			if tg, ok := r.resolve(ev.agentAddr); ok {
+				ev.Device = tg.ID
+			}
+		}
+	}
+	if ev.Device != "" {
+		ev.EnrichmentStatus = "inventory_matched"
+	} else {
+		ev.EnrichmentStatus = "inventory_missing"
+	}
 }
 
 func (r *trapReceiver) Run(ctx context.Context) error {
@@ -877,6 +958,9 @@ func (r *trapReceiver) Run(ctx context.Context) error {
 			r.mu.Unlock()
 			continue
 		}
+		// Canonicalize the originating device (sysName / agent-addr / source IP) so
+		// trap evidence binds to the same entity id as every other producer (G2).
+		r.attributeDevice(ev, srcIP)
 		r.mu.Lock()
 		r.decoded++
 		r.status.LastTick = time.Now().UTC()
