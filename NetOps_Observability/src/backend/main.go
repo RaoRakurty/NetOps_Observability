@@ -500,6 +500,9 @@ func main() {
 	// Measured forwarding paths (traceroute hop order) for the C7.4 active-path-trace
 	// direction source — the highest-precedence (measured) direction signal.
 	srv.startProbePathsEnrichment(ctx)
+	// Computed forwarding direction (BGP-LS/IGP SPF) for the C7.5 routing source —
+	// the lowest-precedence (computed) signal; empty until the LSDB has data.
+	srv.startRoutingDirectionEnrichment(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process

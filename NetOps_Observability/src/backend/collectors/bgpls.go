@@ -947,6 +947,17 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 	if b, err := json.Marshal(links); err == nil {
 		_ = redisSetEX(ctx, topoLinksKeyBGPLS, string(b), 1800)
 	}
+	// C7.5: directed forwarding pairs from SPF over the LSDB → the routing-direction
+	// source. Computed under the same read lock as buildLinks (no re-lock).
+	c.mu.RLock()
+	pairs := c.buildRoutingPairs()
+	c.mu.RUnlock()
+	if pairs == nil {
+		pairs = []RoutingPair{}
+	}
+	if b, err := json.Marshal(pairs); err == nil {
+		_ = redisSetEX(ctx, routingDirKey, string(b), 1800)
+	}
 
 	now := time.Now().UnixMilli()
 	emitMetrics(ctx, strings.Join([]string{
@@ -964,6 +975,44 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 	c.status.Reachable = established
 	c.status.Healthy = true
 	c.mu.Unlock()
+}
+
+// buildRoutingPairs builds the undirected node-name graph from every peer RIB and
+// runs SPF (forwardingPairs) to derive DIRECTED forwarding pairs for the C7.5
+// routing-direction source. Caller holds the read lock. Node names are resolved the
+// same way as buildLinks (bgplsNodeName: hostname → system-id), so they match the
+// correlation device entities. No I/O. Empty graph → no pairs (source abstains).
+func (c *bgplsCollector) buildRoutingPairs() []RoutingPair {
+	nodes := map[string]*lsNode{}
+	for _, rib := range c.ribs {
+		for k, n := range rib.nodes {
+			nodes[k] = n
+		}
+	}
+	adj := map[string][]string{}
+	nameSet := map[string]bool{}
+	seenEdge := map[string]bool{}
+	for _, rib := range c.ribs {
+		for _, l := range rib.links {
+			ln := bgplsNodeName(nodes[l.localKey], l.localKey, l.localSysID)
+			rn := bgplsNodeName(nodes[l.remoteKey], l.remoteKey, l.remSysID)
+			if ln == "" || rn == "" || ln == rn {
+				continue
+			}
+			if seenEdge[ln+"\x00"+rn] || seenEdge[rn+"\x00"+ln] {
+				continue // undirected dedup (each link is advertised from both ends)
+			}
+			seenEdge[ln+"\x00"+rn] = true
+			adj[ln] = append(adj[ln], rn)
+			adj[rn] = append(adj[rn], ln)
+			nameSet[ln], nameSet[rn] = true, true
+		}
+	}
+	names := make([]string, 0, len(nameSet))
+	for n := range nameSet {
+		names = append(names, n)
+	}
+	return forwardingPairs(names, adj)
 }
 
 // buildLinks joins links to nodes (for hostnames/router-ids) across all peer

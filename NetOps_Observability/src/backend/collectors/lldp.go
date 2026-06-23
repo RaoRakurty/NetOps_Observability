@@ -79,6 +79,10 @@ const (
 	// collector. The bridge a flow exporter's in/out ifIndex needs to resolve to a
 	// real port (correlation entity device:ifName) — feeds the C7.1 EntityResolver.
 	ifIndexKey = "netops:topology:ifindex"
+	// routingDirKey holds the directed forwarding pairs ([{from,to}]) computed by the
+	// BGP-LS collector's SPF over the link-state DB — the C7.5 routing-direction
+	// source. Empty until the LSDB has data (peer must redistribute link-state).
+	routingDirKey = "netops:topology:routing_dir"
 )
 
 type lldpCollector struct {

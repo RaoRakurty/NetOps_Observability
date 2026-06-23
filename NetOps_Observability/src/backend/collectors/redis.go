@@ -182,6 +182,24 @@ func FetchIfAddrMap(ctx context.Context) (map[string]map[string]string, error) {
 	return out, nil
 }
 
+// FetchRoutingDirection reads the directed forwarding pairs ([{from,to}]) computed by
+// the BGP-LS collector's SPF (C7.5 routing-direction source). Empty when absent
+// (no LSDB / collector off) — best-effort, never an error.
+func FetchRoutingDirection(ctx context.Context) ([]RoutingPair, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", routingDirKey)
+	if err != nil || raw == "" {
+		return []RoutingPair{}, nil
+	}
+	var out []RoutingPair
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out, nil
+}
+
 // FetchIfIndexMap reads the ifIndex map (deviceID → ifIndex → ifName) published by
 // the SNMP metrics collector. Empty map when absent — best-effort, never an error.
 func FetchIfIndexMap(ctx context.Context) (map[string]map[string]string, error) {
