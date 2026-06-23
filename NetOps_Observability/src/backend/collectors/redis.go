@@ -181,3 +181,20 @@ func FetchIfAddrMap(ctx context.Context) (map[string]map[string]string, error) {
 	_ = json.Unmarshal([]byte(raw), &out)
 	return out, nil
 }
+
+// FetchIfIndexMap reads the ifIndex map (deviceID → ifIndex → ifName) published by
+// the SNMP metrics collector. Empty map when absent — best-effort, never an error.
+func FetchIfIndexMap(ctx context.Context) (map[string]map[string]string, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", ifIndexKey)
+	if err != nil || raw == "" {
+		return map[string]map[string]string{}, nil
+	}
+	out := map[string]map[string]string{}
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out, nil
+}

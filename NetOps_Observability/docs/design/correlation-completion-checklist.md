@@ -130,6 +130,21 @@ Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data a
 (buildable now, safe no-op until fed) · **C7.3** NetFlow source · **C7.4** traceroute source ·
 **C7.5** routing source. Each plugs behind the oracle seam so `_direction` changes once.
 
+> **Progress:** **C7.2 ✅** (`directed_topology.py` oracle + `_direction` vote-#2 wiring, prior).
+> **C7.1 ✅ (DONE 2026-06-23)** — the EntityResolver foundation. Go: the SNMP metrics collector now
+> publishes `ifIndex→ifName` to Redis alongside the existing interface-IP→ifName map; a new
+> `entity_resolver_enrichment.go` exporter fuses those with discovery's mgmt-IP→device into
+> tenant-scoped `entity_resolver.json` (mirrors `topology_links.json`: atomic, 60s, no-op without the
+> shared volume). Python: `entity_resolver.py` — a pure, tenant-scoped `EntityResolver`
+> (`device_for_ip` / `iface_for_ip` / `ifname` / `device_iface`); an unresolved OR **ambiguous**
+> (same IP → two devices) endpoint returns None (abstain, never guess). `main.py` loads it mtime-cached
+> + per-tenant (tenant rows ∪ global, never cross-tenant) + `/healthz` coverage. +8 Python tests
+> (incl. the zero-leak tenant-scoping isolation test); ruff/mypy/vet clean; Go + 193 Python suites green.
+> **Live-validated** on the clos lab: exported 10 devices / 36 iface-IPs / 144 ifIndexes; the engine
+> resolves `172.40.40.41→dmz-fw`, `10.0.0.14→leaf4:Loopback0`, `(spine2,1073808128)→spine2:system0`.
+> *Available to C7.3+ and the G2/C8 canonicalizer; not yet consumed (no source registered until C7.3).*
+> **Next: C7.3** — register the NetFlow direction source on the oracle, resolving through this bridge.
+
 ### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
 **Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,
 zero-regression); the lab's v2c-over-NAT traps still carry source-IP ids. **100%-done =** a path that

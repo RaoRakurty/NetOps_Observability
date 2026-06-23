@@ -40,6 +40,7 @@ from pydantic import BaseModel
 
 from catalog import builtin_catalog
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
+from entity_resolver import EntityResolver
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
@@ -205,6 +206,11 @@ SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/
 # input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
 # (gate falls back to seam/containment, identical to before — honest, never relaxed).
 TOPO_LINKS_FILE = os.environ.get("TOPO_LINKS_FILE", "/data/enrichment/topology_links.json")
+# C7.1 EntityResolver inputs (IP→device, interface IP→ifName, (device,ifIndex)→ifName)
+# exported by the Go API. The keystone the directed-topology direction sources
+# (C7.3–C7.5) + G2 canonicalizer resolve raw IPs/ifIndexes through. Absent → resolver
+# abstains (UNKNOWN), never guesses.
+ENTITY_RESOLVER_FILE = os.environ.get("ENTITY_RESOLVER_FILE", "/data/enrichment/entity_resolver.json")
 
 ENGINE_CFG = EngineConfig()
 CATALOG = builtin_catalog()
@@ -255,6 +261,45 @@ def topology_links_by_tenant() -> dict[str, list[dict]]:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             log.warning("topology links unreadable (%s); keeping previous adjacency", exc)
     return _adj_cache
+
+
+_er_raw: dict[str, dict[str, list]] = {"devices": {}, "interface_ips": {}, "ifindex": {}}
+_er_mtime: float = -1.0
+
+
+def _entity_resolver_raw() -> dict[str, dict[str, list]]:
+    """Parse entity_resolver.json into section → tenant → rows, mtime-cached. Absent/
+    unreadable file = empty (resolver abstains — UNKNOWN, never a guess). Tenant-scoped
+    at use (a tenant's rows ∪ global), mirroring seam/adjacency — never cross-tenant."""
+    global _er_raw, _er_mtime
+    try:
+        mt = os.path.getmtime(ENTITY_RESOLVER_FILE)
+    except OSError:
+        return _er_raw
+    if mt != _er_mtime:
+        _er_mtime = mt
+        try:
+            with open(ENTITY_RESOLVER_FILE) as f:
+                raw = json.load(f)
+            grouped: dict[str, dict[str, list]] = {"devices": {}, "interface_ips": {}, "ifindex": {}}
+            for section in grouped:
+                for row in raw.get(section) or []:
+                    grouped[section].setdefault(str(row.get("tenant_id") or ""), []).append(row)
+            _er_raw = grouped
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            log.warning("entity resolver unreadable (%s); keeping previous", exc)
+    return _er_raw
+
+
+def entity_resolver_for(tenant: str) -> EntityResolver:
+    """A resolver scoped to one tenant: its rows ∪ global ("") — never cross-tenant.
+    Cheap to build (dict comprehensions); the engine builds one per tenant per cycle."""
+    raw = _entity_resolver_raw()
+
+    def slice_(section: str) -> list:
+        return raw[section].get(tenant, []) + raw[section].get("", [])
+
+    return EntityResolver.from_rows(slice_("devices"), slice_("interface_ips"), slice_("ifindex"))
 
 
 def seam_inventory() -> tuple[SeamView, ...]:
@@ -1027,6 +1072,9 @@ async def health() -> dict:
             "window_signals": len(WINDOW_BUFFER),
             "seam_inventory": len(seam_inventory()),
             "topology_gap_hints": LAST_GAP_HINTS,
+            # C7.1 EntityResolver coverage (global slice) — proves the IP/ifIndex→entity
+            # bridge is populated; the directed-topology sources resolve through it.
+            "entity_resolver": entity_resolver_for("").coverage(),
         },
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).

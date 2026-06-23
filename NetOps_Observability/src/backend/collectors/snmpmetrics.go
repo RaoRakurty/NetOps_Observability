@@ -69,7 +69,8 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	samples := 0
 	meBuilt, meSent := 0, 0 // metric-event lane observability (built vs sent)
 	var lastErr string
-	ifaddr := map[string]map[string]string{} // deviceID → (interface IP → ifName), for topology enrichment
+	ifaddr := map[string]map[string]string{}    // deviceID → (interface IP → ifName), for topology enrichment
+	ifindexMap := map[string]map[string]string{} // deviceID → (ifIndex → ifName), for the C7.1 EntityResolver
 
 	for _, tg := range targets {
 		addr := withPort(tg.Address, 161)
@@ -160,6 +161,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			if m := ipIfNameMap(dctx, addr, creds, ifNames); len(m) > 0 {
 				ifaddr[tg.ID] = m
 			}
+			ifindexMap[tg.ID] = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
 		}
 		cancel()
 		samples += len(lines)
@@ -177,6 +179,13 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	if len(ifaddr) > 0 {
 		if b, err := json.Marshal(ifaddr); err == nil {
 			_ = redisSetEX(ctx, ifAddrKey, string(b), 1800)
+		}
+	}
+	// ifIndex → ifName per device, for the C7.1 EntityResolver (flow exporter
+	// in/out ifIndex → device:ifName). Same replace+TTL discipline as ifaddr.
+	if len(ifindexMap) > 0 {
+		if b, err := json.Marshal(ifindexMap); err == nil {
+			_ = redisSetEX(ctx, ifIndexKey, string(b), 1800)
 		}
 	}
 

@@ -494,6 +494,9 @@ func main() {
 	srv.startSeamEnrichment(ctx)
 	// L2/L3 adjacency export for the correlation engine's adjacency grounding (G1).
 	srv.startTopologyLinksEnrichment(ctx)
+	// IP→device + (device,ifIndex)→ifName export for the C7.1 EntityResolver (the
+	// keystone for directed-topology direction sources C7.3–C7.5 + G2 canonicalize).
+	srv.startEntityResolverEnrichment(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process

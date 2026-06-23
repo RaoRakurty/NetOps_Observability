@@ -75,6 +75,10 @@ const (
 	// metrics collector, for enriching topology links (esp. BGP-LS, which keys
 	// interfaces by IP). TTL-expiring like the link keys.
 	ifAddrKey = "netops:topology:ifaddr"
+	// ifIndexKey holds deviceID → (ifIndex → ifName), published by the SNMP metrics
+	// collector. The bridge a flow exporter's in/out ifIndex needs to resolve to a
+	// real port (correlation entity device:ifName) — feeds the C7.1 EntityResolver.
+	ifIndexKey = "netops:topology:ifindex"
 )
 
 type lldpCollector struct {
