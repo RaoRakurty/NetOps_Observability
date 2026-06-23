@@ -27,10 +27,11 @@ from datetime import datetime, timezone
 from catalog import Catalog
 from directed_topology import DirectedTopology
 from directed_topology import Verdict as _Verdict
+from layers import layer_of
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal
 
-ENGINE_SEMVER = "2.0.0"
+ENGINE_SEMVER = "2.1.0"  # 2.1.0: C4 per-kind causal-layer direction prior (§4.3 vote #3)
 
 # Default onset uncertainty when a signal does not carry one (episodes stamp
 # attrs.onset_uncertainty_s; foreign signal kinds may not yet).
@@ -316,7 +317,15 @@ def _direction(a: Node, b: Node, cfg: EngineConfig,
     gap = (b.onset - a.onset).total_seconds()
     if gap > a.onset_uncertainty_s + b.onset_uncertainty_s:
         votes.append("onset_order")
-    la, lb = _LAYER[a.entity_type], _LAYER[b.entity_type]
+    # Layer prior (vote #3): prefer the FINER per-kind causal layer (C4 — distinguishes
+    # L2 link from L3 routing on the same DEVICE entity, which the entity-type layer
+    # can't). Fall back to the coarse entity-type layer when either kind is unmapped, so
+    # both nodes are always compared on ONE consistent scale (backward-compatible).
+    ka, kb = layer_of(a.signals[0].kind), layer_of(b.signals[0].kind)
+    if ka is not None and kb is not None:
+        la, lb = int(ka), int(kb)
+    else:
+        la, lb = _LAYER[a.entity_type], _LAYER[b.entity_type]
     if la < lb:
         votes.append("layer_prior")
     elif la > lb:

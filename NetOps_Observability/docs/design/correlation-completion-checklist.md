@@ -65,12 +65,20 @@ replay pin) is byte-identical to pre-C3 (no churn/drift). `replay.degradation()`
 positives on the healthy stack, healthy blobs unchanged). *Deferred nicety:* per-edge `[STALE_TOPOLOGY]`
 text note (object-level declaration + capped w_topo already make it auditable).
 
-### C4 · G4 — OSI causal-layer enrichment + layer-stack UI  🟠 *(research-gated — pass running)*
-**Status:** coarse today (entity-type layer prior). Per-signal `osi_layer`/`causal_layer`; per-kind
-layer in direction inference; layer coverage in evidence; same-layer-duplicate confirmation guard;
-RCA Layer-Stack panel (root→symptom→impact). **Gate:** the competitive research pass (in flight)
-decides what meets/exceeds the market bar before coding. **100%-done =** research diff recorded →
-engine + UI shipped → existing confirms still pass.
+### C4 · G4 — OSI causal-layer enrichment + layer-stack UI  🟡 *(engine half DONE 2026-06-23; UI remaining)*
+Research-cleared as **differentiating** (no leader ships an evidence-grounded cross-layer causal
+stack — Dynatrace=app-deps, ThousandEyes=traceroute). **Engine half DONE:** `layers.py` — a per-KIND
+causal-layer taxonomy (device→physical→link→network→transport→service→application, with OSI labels),
+wired into the §4.3 layer-prior vote (finer than the old entity-type layer: it distinguishes L2
+link from L3 routing on the *same* DEVICE entity, a tie the old vote couldn't break). Falls back to
+entity-type when a kind is unmapped (backward-compatible). `ENGINE_SEMVER`→2.1.0 (honest replay pin;
+live-verified `2.1.0+cfg…`). 4 tests (mapping/order/tie-break/conflict) + 182 suite green; deployed clean.
+**Decision — same-layer-duplicate confirmation guard REJECTED:** `local-link-fault` legitimately
+confirms via two LINK-layer witnesses (control-plane link_state ⟂ device-telemetry interface-counter
+on one link) — that's real corroboration, not duplication; the existing cross-modality + independence
+gate already blocks true duplicates. A layer constraint would break a validated confirm. **Remaining
+(C4-UI):** RCA Layer-Stack panel (observed/not-observed per L1–L7; root→symptom→impact) + a
+`layer_coverage` summary on the object for the API/UI to render.
 
 ### C5 · Catalog + signal coverage — VLAN / STP / HSRP-VRRP / MAC / firewall  🟠 *(the big coverage axis)*
 **Status:** PARTIAL — 10 signatures; ~15 distinct kinds. Grounding is protocol-agnostic & done, so
