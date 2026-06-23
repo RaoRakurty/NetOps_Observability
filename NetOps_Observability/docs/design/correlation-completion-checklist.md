@@ -52,12 +52,18 @@ but never enters object formation. Replay-safe (run_window unchanged; archive sl
 +2 tests (debug_only excluded / low-authority still buffers); 163 suite green; deployed + live-verified
 (0 internal objects forming, customer objects unaffected, 0 errors).
 
-### C3 · Degradation markers (storm-mode + stale-topology)  🟠
-**Status:** PARTIAL. Window buffer is bounded (storm survivable) but **storm-mode isn't declared in
-snapshots**, and the **stale-topology w_topo cap (≤0.4)** isn't applied. Breaks the replay/honesty
-contract (§8: every snapshot under degradation must declare it). **100%-done =** `degradation_mode`
-on the snapshot (storm + stale); topology-age tracking → w_topo cap + `[STALE_TOPOLOGY]` evidence note;
-tests.
+### C3 · Degradation markers (storm-mode + stale-topology)  ✅ *(DONE 2026-06-23)*
+**Was:** PARTIAL — degradation undeclared + no stale w_topo cap (§8 honesty gap). **Done:**
+`_topology_stale` (seam/links mtime age > `CORR_TOPO_STALE_S`) + storm detection (buffer ≥90% of
+maxlen) computed per cycle in `engine_cycle`, threaded into `run_window`. Stale → `build_edges` caps
+`w_topo ≤ w_topo_stale_cap` (0.4, a new EngineConfig tunable → auto-bumps the engine-version pin, so
+replay reports the change honestly). Both flags are **declared** on the snapshot, embedded in the
+grounding-context blob — but **only when degraded**, so a healthy object's blob (hence content_hash +
+replay pin) is byte-identical to pre-C3 (no churn/drift). `replay.degradation()` rehydrates the flags
+→ a degraded object replays under the same flags (deterministic). 4 tests (cap / healthy-blob-unchanged
+/ degraded-declares / transition-versions); 167 suite green; deployed + live-verified (0 false
+positives on the healthy stack, healthy blobs unchanged). *Deferred nicety:* per-edge `[STALE_TOPOLOGY]`
+text note (object-level declaration + capped w_topo already make it auditable).
 
 ### C4 · G4 — OSI causal-layer enrichment + layer-stack UI  🟠 *(research-gated — pass running)*
 **Status:** coarse today (entity-type layer prior). Per-signal `osi_layer`/`causal_layer`; per-kind

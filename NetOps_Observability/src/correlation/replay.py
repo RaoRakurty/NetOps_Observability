@@ -73,6 +73,14 @@ class StoredObject:
         ctx = blob.get("grounding_context") or {}
         return tuple(SeamView.from_dict(d) for d in ctx.get("seams", ()))
 
+    def degradation(self) -> tuple[bool, bool]:
+        """(topology_stale, storm_mode) embedded at score time (§8) — rehydrated so a
+        snapshot scored under degradation REPLAYS under the same flags (w_topo cap is
+        deterministic). Absent block = healthy (the pre-C3 default)."""
+        blob = json.loads(self.hypotheses_blob)
+        deg = (blob.get("grounding_context") or {}).get("degradation") or {}
+        return bool(deg.get("topology_stale")), bool(deg.get("storm_mode"))
+
 
 @dataclass
 class DriftReport:
@@ -138,7 +146,9 @@ def replay(
         report.note("archive empty: no corr_signals_archive rows for this object")
         return report
 
-    snapshots = run_window(window, catalog, seams, cfg)
+    topo_stale, storm = stored.degradation()
+    snapshots = run_window(window, catalog, seams, cfg,
+                           topology_stale=topo_stale, storm_mode=storm)
     match = next((s for s in snapshots if s.correlation_id == stored.correlation_id), None)
     if match is None:
         report.note(

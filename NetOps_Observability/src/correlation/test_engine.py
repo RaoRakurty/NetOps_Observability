@@ -428,3 +428,38 @@ def test_find_merges_is_deterministic_and_order_invariant():
     r1 = find_merges([a, b], [stale])
     r2 = find_merges([b, a], [stale])
     assert r1 == r2 == [("stale", "aaa")]  # tie → earliest window_start, then cid
+
+
+# ── C3: degradation markers — stale-topology w_topo cap + declaration (§8) ────
+def test_stale_topology_caps_w_topo():
+    nodes = build_nodes((
+        sig("link_state_change", EntityType.DEVICE, "leaf1"),
+        sig("device_resource_anomaly", EntityType.DEVICE, "leaf1", offset_s=1),
+    ))
+    fresh, _ = build_edges(nodes, (), EngineConfig())
+    stale, _ = build_edges(nodes, (), EngineConfig(), topology_stale=True)
+    assert fresh and stale
+    assert fresh[0].w_topo == 0.9                  # same-device containment, full weight
+    assert stale[0].w_topo == 0.4                  # capped to w_topo_stale_cap (§8)
+    assert stale[0].weight <= fresh[0].weight      # a stale edge never outweighs a fresh one
+
+
+def test_healthy_snapshot_declares_no_degradation_and_blob_is_unchanged():
+    # The replay-safety guarantee: a healthy object's blob has NO degradation key, so
+    # its content_hash + replay pin are byte-identical to pre-C3 — no churn, no drift.
+    snap = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,))[0]
+    assert snap.topology_stale is False and snap.storm_mode is False
+    assert '"degradation"' not in snap.hypotheses_blob()
+
+
+def test_degraded_snapshot_declares_degradation():
+    snap = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,),
+                      topology_stale=True, storm_mode=True)[0]
+    assert snap.topology_stale and snap.storm_mode
+    assert '"degradation":{"storm_mode":true,"topology_stale":true}' in snap.hypotheses_blob()
+
+
+def test_degradation_changes_content_hash_so_a_transition_versions():
+    healthy = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,))[0]
+    degraded = run_window(golden_window(), builtin_catalog(), (DALLAS_SEAM,), topology_stale=True)[0]
+    assert healthy.content_hash() != degraded.content_hash()  # a real state change → new version

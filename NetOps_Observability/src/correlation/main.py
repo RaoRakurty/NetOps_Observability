@@ -186,6 +186,10 @@ METRIC_MAX_AGE_S = 3600.0
 CORR_ENGINE_ENABLED = os.environ.get("CORR_ENGINE_ENABLED", "true").lower() != "false"
 CORR_ENGINE_INTERVAL_S = float(os.environ.get("CORR_ENGINE_INTERVAL_S", "30"))
 CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
+# §8 degradation. Topology is stale when the Go exporter stopped refreshing the
+# seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
+CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
+STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
 SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
 # L2/L3 adjacency (LLDP/CDP/BGP-LS links) exported by the Go API — the grounding
 # input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
@@ -321,6 +325,21 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
              snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
 
 
+def _topology_stale(now: datetime) -> bool:
+    """§8: the topology/seam view is STALE when the Go exporter has stopped
+    refreshing it (newest of seams.json / topology_links.json older than
+    CORR_TOPO_STALE_S). Grounding then resolves against the last-known view with
+    w_topo capped, and every snapshot scored under it is declared. An ABSENT file
+    is not 'stale' — the grounding gate already handles an empty inventory honestly."""
+    newest = -1.0
+    for path in (SEAM_ENRICHMENT_FILE, TOPO_LINKS_FILE):
+        try:
+            newest = max(newest, os.path.getmtime(path))
+        except OSError:
+            continue
+    return newest >= 0 and (now.timestamp() - newest) > CORR_TOPO_STALE_S
+
+
 async def engine_cycle() -> None:
     """One evaluation: prune window, partition by tenant, run the pure core,
     persist version increments, close quiesced objects."""
@@ -329,6 +348,12 @@ async def engine_cycle() -> None:
         return
     now = datetime.now(timezone.utc)
     _prune_buffer(now)
+    # §8 degradation, declared on every snapshot scored under it (never silent):
+    topo_stale = _topology_stale(now)
+    storm = len(WINDOW_BUFFER) >= STORM_BUFFER_FRACTION * (WINDOW_BUFFER.maxlen or 1)
+    if topo_stale or storm:
+        log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
+                    topo_stale, storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
     by_tenant: Dict[str, list[Signal]] = {}
     for s in WINDOW_BUFFER:
         by_tenant.setdefault(s.tenant_id, []).append(s)
@@ -342,7 +367,8 @@ async def engine_cycle() -> None:
         # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
         adjacency = TopologyAdjacency.from_links(adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
         try:
-            snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency)
+            snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
+                                   topology_stale=topo_stale, storm_mode=storm)
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue

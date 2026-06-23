@@ -45,6 +45,7 @@ class EngineConfig:
     w_topo_seam: float = 0.8              # grounding via a seam instance
     w_topo_containment: float = 0.9       # grounding via same-device containment
     w_topo_adjacency: float = 0.65        # grounding via L2/L3 adjacency (§4.2 ladder)
+    w_topo_stale_cap: float = 0.4         # §8: cap w_topo when the topology view is stale
     reinforce_cross_modality: float = 1.25
     direction_conf: float = 0.8           # claimed only on 2-of-3 agreement
     severity_open_floor: str = "high"     # singleton episodes ≥ this open an object
@@ -324,6 +325,7 @@ def _direction(a: Node, b: Node, cfg: EngineConfig) -> tuple[float, str]:
 def build_edges(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
     adjacency: TopologyAdjacency = TopologyAdjacency(),
+    topology_stale: bool = False,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node."""
@@ -356,6 +358,12 @@ def build_edges(
                 w_topo = cfg.w_topo_adjacency
             else:
                 w_topo = cfg.w_topo_containment
+            # §8 degradation: a stale topology view (the Go exporter stopped
+            # refreshing seams/links) means grounding resolves against a last-known
+            # snapshot whose confidence has decayed — cap w_topo so a stale edge can
+            # never weigh like a fresh one. The admission gate itself never relaxes.
+            if topology_stale:
+                w_topo = min(w_topo, cfg.w_topo_stale_cap)
             cross = a.signals[0].modality_class is not b.signals[0].modality_class
             w_r = cfg.reinforce_cross_modality if cross else 1.0
             weight = min(w_t * w_topo * w_r, 1.0)
@@ -387,6 +395,8 @@ class ObjectSnapshot:
     engine_ver: str
     topology_version: str
     gap_hints: int
+    topology_stale: bool = False   # §8: scored against a stale topology view (w_topo capped)
+    storm_mode: bool = False       # §8: scored under window-flood (maxlen eviction active)
 
     def signal_count(self) -> int:
         return sum(len(n.signals) for n in self.nodes)
@@ -411,13 +421,19 @@ class ObjectSnapshot:
     def hypotheses_blob(self) -> str:
         """The corr_objects.hypotheses JSON: the ranking PLUS the grounding
         context — replay rehydrates seams from here, never from live state."""
+        ctx: dict = {
+            "topology_version": self.topology_version,
+            "seams": [s.to_dict() for s in sorted(self.seams, key=lambda s: s.seam_id)],
+            "topology_gap_hints": self.gap_hints,
+        }
+        # Declare degradation (§8) ONLY when present — a healthy object's blob (and
+        # thus its content_hash + replay pin) is byte-identical to pre-C3, so the
+        # common case never churns a version or drifts on replay.
+        if self.topology_stale or self.storm_mode:
+            ctx["degradation"] = {"topology_stale": self.topology_stale, "storm_mode": self.storm_mode}
         return json.dumps({
             "ranking": self.ranking.to_dict(),
-            "grounding_context": {
-                "topology_version": self.topology_version,
-                "seams": [s.to_dict() for s in sorted(self.seams, key=lambda s: s.seam_id)],
-                "topology_gap_hints": self.gap_hints,
-            },
+            "grounding_context": ctx,
         }, separators=(",", ":"), sort_keys=True)
 
     def content_hash(self) -> str:
@@ -520,8 +536,15 @@ def run_window(
     seams: tuple[SeamView, ...],
     cfg: EngineConfig | None = None,
     adjacency: TopologyAdjacency = TopologyAdjacency(),
+    topology_stale: bool = False,
+    storm_mode: bool = False,
 ) -> list[ObjectSnapshot]:
-    """THE pure engine function. One evaluation of one tenant's window."""
+    """THE pure engine function. One evaluation of one tenant's window.
+
+    topology_stale caps grounding weight (§8) AND is declared on the snapshot;
+    storm_mode is declared only (the window is already maxlen-bounded). Both are
+    embedded in the snapshot so replay rehydrates them — degradation is never silent.
+    """
     cfg = cfg or EngineConfig()
     sigs = tuple(sorted(window, key=lambda s: (s.ts, str(s.signal_id))))
     if not sigs:
@@ -534,7 +557,7 @@ def run_window(
     nodes = build_nodes(sigs)
     if not nodes:
         return []
-    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency)
+    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)
@@ -564,6 +587,8 @@ def run_window(
             engine_ver=eng_ver,
             topology_version=topo_ver,
             gap_hints=gap_hints,
+            topology_stale=topology_stale,
+            storm_mode=storm_mode,
         ))
     return snapshots
 
