@@ -43,6 +43,7 @@ from directed_topology import DirectedTopology
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
 from entity_resolver import EntityResolver
 from flow_direction import flow_direction_sample, netflow_direction_source
+from path_direction import resolve_path_order, traceroute_direction_source
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
@@ -222,6 +223,9 @@ TOPO_LINKS_FILE = os.environ.get("TOPO_LINKS_FILE", "/data/enrichment/topology_l
 # (C7.3–C7.5) + G2 canonicalizer resolve raw IPs/ifIndexes through. Absent → resolver
 # abstains (UNKNOWN), never guesses.
 ENTITY_RESOLVER_FILE = os.environ.get("ENTITY_RESOLVER_FILE", "/data/enrichment/entity_resolver.json")
+# C7.4 measured forwarding paths (traceroute hop order) for the active-path-trace
+# direction source — the highest-precedence direction signal. Absent → source abstains.
+PROBE_PATHS_FILE = os.environ.get("PROBE_PATHS_ENRICH_FILE", "/data/enrichment/probe_paths.json")
 
 ENGINE_CFG = EngineConfig()
 CATALOG = builtin_catalog()
@@ -331,6 +335,31 @@ def cached_entity_resolver_for(tenant: str) -> EntityResolver:
         r = entity_resolver_for(tenant)
         _resolver_cache[tenant] = r
     return r
+
+
+_probe_paths: list[dict] = []
+_probe_paths_mtime: float = -1.0
+
+
+def probe_paths() -> list[dict]:
+    """Measured forwarding paths ([{hops:[ip,...]}]) for the C7.4 direction source,
+    mtime-cached. Absent/unreadable = empty (source abstains). NOT tenant-scoped here —
+    hop IPs are resolved per-tenant downstream, so a tenant orients only its own
+    devices (a foreign hop won't resolve → that pair abstains): zero-leak."""
+    global _probe_paths, _probe_paths_mtime
+    try:
+        mt = os.path.getmtime(PROBE_PATHS_FILE)
+    except OSError:
+        return _probe_paths
+    if mt != _probe_paths_mtime:
+        _probe_paths_mtime = mt
+        try:
+            with open(PROBE_PATHS_FILE) as f:
+                raw = json.load(f)
+            _probe_paths = raw if isinstance(raw, list) else []
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("probe paths unreadable (%s); keeping previous", exc)
+    return _probe_paths
 
 
 def seam_inventory() -> tuple[SeamView, ...]:
@@ -455,13 +484,19 @@ async def engine_cycle() -> None:
         seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
         # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
         adjacency = TopologyAdjacency.from_links(adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
-        # C7.3: the directed-topology oracle for this tenant — the NetFlow direction
-        # source over its accumulated directed volume (∪ global). None when no directed
-        # volume yet → vote #2 abstains (safe no-op, exactly pre-C7 behavior).
+        # The directed-topology oracle for this tenant, sources in PRECEDENCE order
+        # (measured > observed): C7.4 active-path-trace (traceroute hop order) FIRST,
+        # then C7.3 NetFlow volume. Each resolves through this tenant's resolver
+        # (∪ global) → zero-leak. None when neither covers → vote #2 abstains (no-op).
+        tenant_resolver = cached_entity_resolver_for(tenant)
+        before = resolve_path_order(probe_paths(), tenant_resolver)
         vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
-        directed = (DirectedTopology(sources=(
-            ("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)),))
-            if vol else None)
+        sources = []
+        if before:
+            sources.append(("traceroute", traceroute_direction_source(before)))
+        if vol:
+            sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
+        directed = DirectedTopology(sources=tuple(sources)) if sources else None
         try:
             snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
                                    topology_stale=topo_stale, storm_mode=storm, directed=directed)
@@ -1124,6 +1159,7 @@ async def health() -> dict:
             # C7.1 EntityResolver coverage (global slice) — proves the IP/ifIndex→entity
             # bridge is populated; the directed-topology sources resolve through it.
             "entity_resolver": entity_resolver_for("").coverage(),
+            "probe_paths": len(probe_paths()),  # C7.4 measured paths available
         },
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).

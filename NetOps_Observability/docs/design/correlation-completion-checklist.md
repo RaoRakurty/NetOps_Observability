@@ -112,7 +112,7 @@ volume anomaly needs a multi-minute CUSUM baseline. +3 tests; 170 suite green; d
 after validation. *Future catalog growth (not C6):* DDoS / top-talker-shift / port-scan signatures on
 top of this volume series.
 
-### C7 · Direction inference — topology up/down vote  🟡 *(UNBLOCKING — C7.1/C7.2/C7.3 DONE; C7.4/C7.5 remain)*
+### C7 · Direction inference — topology up/down vote  🟡 *(UNBLOCKING — C7.1–C7.4 DONE; C7.5 remains)*
 **Status:** the topo up/down vote correctly **abstains** (2-of-3 → 2 available votes: onset + layer).
 RE-AUDIT found it is **blocked, not merely unbuilt**: the engine receives only **undirected**
 adjacency (`TopologyAdjacency` = unordered device pairs) and **role-ambiguous** seams (a seam is an
@@ -165,7 +165,25 @@ Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data a
 > and balanced volume abstains. Live directed EDGES populate when real device-to-device flows run
 > (tgen idle now; v1 coverage is src/dst→device — the in_if/out_if→neighbour fabric-transit refinement
 > + a rolling/decay volume window are documented follow-ons).
-> **Next: C7.4** — the active-path-trace (traceroute/STAMP) source, precedence-1, on the same oracle.
+>
+> **C7.4 ✅ (DONE 2026-06-23)** — the active-path-trace source, **precedence-1** (measured beats
+> observed). A traceroute/probe path is the measured forwarding path: hop order IS direction (an
+> earlier hop is upstream). Go: `probe_paths_enrichment.go` exports ordered hop-IP lists
+> (`probe_paths.json`) from the prober's Redis paths (mirrors the other enrichers; NOT tenant-tagged —
+> hops resolve per-tenant downstream → zero-leak). Python: `path_direction.py` resolves hop IPs →
+> devices via the C7.1 resolver and exposes the ordering as a Source — a-before-b → A_UPSTREAM
+> (transitively), both orders seen (ECMP/loop) → AMBIGUOUS, else abstain. Wired FIRST in the oracle
+> (before NetFlow). **Conservative v1 fusion validated**: when traceroute and NetFlow CONFLICT the
+> oracle returns AMBIGUOUS (abstains) — a contradiction can never manufacture a false direction; when
+> they AGREE the edge is directed and the highest-precedence source (traceroute) is recorded. Replay-
+> safe via the same embedded-orientation mechanism. +6 tests (hop-order transitive, unresolved-hop
+> drop, both-orders→AMBIGUOUS, end-to-end + replay determinism, conflict→abstain, agree→directed);
+> 207 Python suite green; ruff/mypy/vet clean; deployed clean. **Live on the clos lab**: the exporter
+> shipped **5 real measured paths**, the engine loaded all 5; the direction logic is proven on real
+> device IPs (a 3-device path → dmz-fw→lan-sw1→lan-sw2 ordering, A_UPSTREAM conf 0.90). The current
+> real paths are prober→external traces (8.8.8.8 / aws-tgw) traversing one known device each → honestly
+> 0 device-to-device pairs (abstain); intra-fabric traces yield directed pairs when run.
+> **Next: C7.5** — the routing (BGP-LS / IGP SPF) source, precedence-3, completing the fusion.
 
 ### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
 **Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,
