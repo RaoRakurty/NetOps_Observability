@@ -112,7 +112,7 @@ volume anomaly needs a multi-minute CUSUM baseline. +3 tests; 170 suite green; d
 after validation. *Future catalog growth (not C6):* DDoS / top-talker-shift / port-scan signatures on
 top of this volume series.
 
-### C7 · Direction inference — topology up/down vote  🟡 *(UNBLOCKING — C7.1–C7.4 DONE; C7.5 remains)*
+### C7 · Direction inference — topology up/down vote  🟢 *(UNBLOCKED — fusion complete; C7.1–C7.5 DONE, routing producer deferred)*
 **Status:** the topo up/down vote correctly **abstains** (2-of-3 → 2 available votes: onset + layer).
 RE-AUDIT found it is **blocked, not merely unbuilt**: the engine receives only **undirected**
 adjacency (`TopologyAdjacency` = unordered device pairs) and **role-ambiguous** seams (a seam is an
@@ -183,7 +183,31 @@ Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data a
 > device IPs (a 3-device path → dmz-fw→lan-sw1→lan-sw2 ordering, A_UPSTREAM conf 0.90). The current
 > real paths are prober→external traces (8.8.8.8 / aws-tgw) traversing one known device each → honestly
 > 0 device-to-device pairs (abstain); intra-fabric traces yield directed pairs when run.
-> **Next: C7.5** — the routing (BGP-LS / IGP SPF) source, precedence-3, completing the fusion.
+>
+> **C7.5 ✅ (DONE 2026-06-23, producer deferred)** — the routing (BGP-LS / IGP SPF) source,
+> **precedence-3** (computed < observed < measured), completing the three-source fusion. The routers'
+> SPF yields a directed forwarding DAG (each device's next hop toward every destination), covering
+> backbone paths with neither a probe nor flows. `routing_direction.py` (pure): a Source over the
+> forwarding set `{(upstream,downstream)}` — a→b only → A_UPSTREAM, both ways (transit) → AMBIGUOUS,
+> else abstain. Wired LAST in the per-tenant oracle (`routing_direction.json` contract: `[{from,to}]`).
+> **Honest scope per the design doc ("when lab data exists; else honest abstention + documented"):** the
+> BGP-LS LSDB is enabled (peer 172.40.40.21) but currently **empty** (`netops:topology:bgpls`=`[]`), so
+> there is no directed-routing data to compute or validate SPF against — building an SPF engine against
+> non-existent data would violate the research-before-implementing rule. The Go SPF/nexthop **producer
+> is therefore DEFERRED**; the source abstains until the LSDB yields data (a safe no-op — the engine
+> already directs via NetFlow C7.3 + traceroute C7.4). +5 tests (forwarding direct/both-ways/absent,
+> drop-incomplete, **the full 3-source fusion**: highest-precedence covering source wins, routing
+> extends reach to pairs the others miss, conflict→abstain, provenance round-trips through replay).
+> 212 Python suite green; ruff/mypy clean; deployed clean (`routing_direction_pairs=0`, abstaining).
+>
+> **C7 STATUS: vote #2 is LIVE.** The DirectedTopology oracle fuses three sources behind one seam
+> (`_direction` changed once, in C7.2, and never again); direction is claimed only on a 2-of-3 agreement
+> with the orientation embedded + replay-deterministic. Today it fires from NetFlow (C7.3) and
+> traceroute (C7.4) when device-to-device data exists; the routing source (C7.5) activates the moment a
+> BGP-LS SPF export lands. **Remaining follow-ons (not blockers):** the BGP-LS→SPF→`routing_direction.json`
+> producer; the NetFlow in_if/out_if→neighbour fabric-transit refinement; a rolling/decay flow-volume
+> window; and the precedence-based "trust measured over computed on conflict" fusion upgrade (today's v1
+> conservatively abstains on any conflict).
 
 ### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
 **Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,

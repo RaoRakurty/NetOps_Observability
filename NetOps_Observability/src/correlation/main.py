@@ -44,6 +44,7 @@ from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, fi
 from entity_resolver import EntityResolver
 from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
+from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
@@ -226,6 +227,10 @@ ENTITY_RESOLVER_FILE = os.environ.get("ENTITY_RESOLVER_FILE", "/data/enrichment/
 # C7.4 measured forwarding paths (traceroute hop order) for the active-path-trace
 # direction source — the highest-precedence direction signal. Absent → source abstains.
 PROBE_PATHS_FILE = os.environ.get("PROBE_PATHS_ENRICH_FILE", "/data/enrichment/probe_paths.json")
+# C7.5 computed forwarding direction (BGP-LS/IGP SPF nexthops) for the routing source —
+# the lowest-precedence direction signal. Producer (SPF export) deferred until the
+# BGP-LS LSDB yields data; absent → source abstains (the engine directs via flow/trace).
+ROUTING_DIRECTION_FILE = os.environ.get("ROUTING_DIRECTION_FILE", "/data/enrichment/routing_direction.json")
 
 ENGINE_CFG = EngineConfig()
 CATALOG = builtin_catalog()
@@ -362,6 +367,31 @@ def probe_paths() -> list[dict]:
     return _probe_paths
 
 
+_routing_dir: list[dict] = []
+_routing_dir_mtime: float = -1.0
+
+
+def routing_direction() -> list[dict]:
+    """Computed forwarding pairs ([{from,to}]) for the C7.5 routing source, mtime-
+    cached. Absent/unreadable = empty (source abstains — its SPF producer is deferred
+    until the BGP-LS LSDB has data). Resolved entities are device ids already, so the
+    per-tenant oracle only orients pairs whose devices are in this tenant's component."""
+    global _routing_dir, _routing_dir_mtime
+    try:
+        mt = os.path.getmtime(ROUTING_DIRECTION_FILE)
+    except OSError:
+        return _routing_dir
+    if mt != _routing_dir_mtime:
+        _routing_dir_mtime = mt
+        try:
+            with open(ROUTING_DIRECTION_FILE) as f:
+                raw = json.load(f)
+            _routing_dir = raw if isinstance(raw, list) else []
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("routing direction unreadable (%s); keeping previous", exc)
+    return _routing_dir
+
+
 def seam_inventory() -> tuple[SeamView, ...]:
     """Active seam inventory for the grounding gate, exported by the Go API
     (suggest→confirm→active happens there; only ACTIVE instances ground).
@@ -485,17 +515,21 @@ async def engine_cycle() -> None:
         # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
         adjacency = TopologyAdjacency.from_links(adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
         # The directed-topology oracle for this tenant, sources in PRECEDENCE order
-        # (measured > observed): C7.4 active-path-trace (traceroute hop order) FIRST,
-        # then C7.3 NetFlow volume. Each resolves through this tenant's resolver
-        # (∪ global) → zero-leak. None when neither covers → vote #2 abstains (no-op).
+        # (measured > observed > computed): C7.4 active-path-trace FIRST, then C7.3
+        # NetFlow volume, then C7.5 routing (BGP-LS/IGP SPF). Each resolves through
+        # this tenant's resolver / device entities → zero-leak. None when none covers
+        # → vote #2 abstains (no-op).
         tenant_resolver = cached_entity_resolver_for(tenant)
         before = resolve_path_order(probe_paths(), tenant_resolver)
         vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
+        forward = forwarding_pairs(routing_direction())
         sources = []
         if before:
             sources.append(("traceroute", traceroute_direction_source(before)))
         if vol:
             sources.append(("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)))
+        if forward:
+            sources.append(("routing", routing_direction_source(forward)))
         directed = DirectedTopology(sources=tuple(sources)) if sources else None
         try:
             snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
@@ -1159,7 +1193,8 @@ async def health() -> dict:
             # C7.1 EntityResolver coverage (global slice) — proves the IP/ifIndex→entity
             # bridge is populated; the directed-topology sources resolve through it.
             "entity_resolver": entity_resolver_for("").coverage(),
-            "probe_paths": len(probe_paths()),  # C7.4 measured paths available
+            "probe_paths": len(probe_paths()),          # C7.4 measured paths available
+            "routing_direction_pairs": len(routing_direction()),  # C7.5 computed fwd pairs
         },
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).
