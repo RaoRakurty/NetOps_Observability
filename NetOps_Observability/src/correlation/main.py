@@ -39,7 +39,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from catalog import builtin_catalog
-from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, run_window
+from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
@@ -285,9 +285,9 @@ def _prune_buffer(now: datetime) -> None:
 
 
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
-                            window: list[Signal]) -> None:
+                            window: list[Signal], merged_into: str = "") -> None:
     assert ch is not None
-    await ch.insert("netops.corr_objects", [snap.to_object_row(version, state)])
+    await ch.insert("netops.corr_objects", [snap.to_object_row(version, state, merged_into)])
     edge_rows = snap.to_edge_rows(version)
     if edge_rows:
         await ch.insert("netops.corr_edges", edge_rows)
@@ -355,6 +355,24 @@ async def engine_cycle() -> None:
                 await _persist_snapshot(snap, reg["version"], "open", window)
             else:
                 reg["last_seen"] = now
+
+    # Merge (§4.4): de-split a cross-cycle identity drift. A stale open object that
+    # overlaps a live one this cycle (entity-set + window) is the same incident
+    # re-identified after its earliest signal aged out of the window — tombstone it
+    # into the survivor (terminal state='merged' + merged_into) so the queue shows
+    # ONE incident, not two. Replay-safe: only a lifecycle state + backlink, no
+    # re-key/re-rank. Done BEFORE quiesce so a merged object never also quiesce-closes.
+    survivors = [OPEN_OBJECTS[c]["snapshot"] for c in seen_this_cycle if c in OPEN_OBJECTS]
+    stale_snaps = [OPEN_OBJECTS[c]["snapshot"] for c in OPEN_OBJECTS if c not in seen_this_cycle]
+    for merged_cid, survivor_cid in find_merges(survivors, stale_snaps):
+        reg = OPEN_OBJECTS.get(merged_cid)
+        if reg is None:
+            continue
+        reg["version"] += 1
+        await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid)
+        log.info("corr-object %s merged into %s (split-brain de-duplicated)",
+                 merged_cid[:8], survivor_cid[:8])
+        del OPEN_OBJECTS[merged_cid]
 
     # Quiesce: an object whose component no longer materializes (episodes aged
     # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.

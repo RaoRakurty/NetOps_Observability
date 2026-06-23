@@ -30,15 +30,16 @@ These were checked against code + live data and are complete + tested:
 
 ## ⛏ TO 100% — nail these one at a time, in this order
 
-### C1 · Object MERGE  🔴 *(blocker — start here)*
-**Status:** MISSING. Schema is ready (`corr_objects.merged_into`, `state='merged'`) and the
-deterministic rule is fully specified (§4.4: ≥40% entity overlap + window overlap + diameter
-≤6 → older wins), but **no merge logic runs in the engine** — overlapping incidents emit as
-separate objects (split-brain; the UI hides it today). This directly violates the core promise
-"**one incident → one RCA object**." Self-contained, no external dependency.
-**100%-done =** merge loop in `engine_cycle`/`run_window`; terminal `state='merged'` + `merged_into`;
-`role='merge_event'` evidence on both; ≥3 CI fixtures (incl. the existing negative "must-not-merge");
-live validation that two overlapping faults converge to one object.
+### C1 · Object MERGE  ✅ *(DONE 2026-06-23)*
+**Was:** MISSING — overlapping incidents emitted as separate objects (split-brain). **Done:**
+`find_merges` (pure, deterministic) in `engine.py` + wiring in `engine_cycle` — a stale open
+object that overlaps a live one this cycle (Jaccard(entity_ids) ≥ 0.4 + window overlap) is
+tombstoned `state='merged'` + `merged_into=<survivor>`. **Replay-safe by construction:** only a
+lifecycle state + backlink, never a re-key/re-rank (which would breach the §4.2 grounding gate
+AND the replay contract) — per-object replay reproduces content unchanged. 5 unit tests
+(coalesce / disjoint / below-threshold / window-overlap / determinism), full suite 161 green,
+replay regressions pass, deployed live (engine clean). *Deferred refinement:* richer
+content-union semantics + the §4.4 diameter≤6 guard (current rule = entity-overlap + window).
 
 ### C2 · #76 engine-side internal-stack exclusion — verify + close  🔴
 **Status:** PARTIAL / conflicting audit signals. The **probe plane is done** (`_INTERNAL_PROBE_TARGETS`

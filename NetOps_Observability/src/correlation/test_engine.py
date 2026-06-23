@@ -10,6 +10,7 @@ the owner's grounding constraint stand on:
   * tenancy: a mixed-tenant window is rejected, never silently partitioned
 """
 
+import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,7 @@ from engine import (
     build_edges,
     build_nodes,
     engine_version,
+    find_merges,
     resolve_grounding,
     run_window,
     seams_hash,
@@ -374,3 +376,55 @@ def test_evidence_change_forces_new_version_unchanged_does_not_churn():
                          cat, (DALLAS_SEAM,))[0]
     assert reduced.correlation_id == full.correlation_id, "same object identity"
     assert reduced.content_hash() != full.content_hash(), "changed evidence ⇒ new version"
+
+
+# ── C1: object merge — de-split cross-cycle identity drift (§4.4) ──────────────
+def _obj(devs, cid, start_min, end_min):
+    """A real ObjectSnapshot whose entity set is `devs` and window is
+    [T0+start_min, T0+end_min] — built from real Nodes (run_window), then re-keyed
+    via dataclasses.replace so the pure find_merges sees genuine snapshot shapes."""
+    def one(d):
+        return run_window(
+            [sig("link_state_change", EntityType.DEVICE, d, severity=Severity.CRIT),
+             sig("device_resource_anomaly", EntityType.DEVICE, d, severity=Severity.CRIT, offset_s=1)],
+            builtin_catalog(), ())[0]
+    nodes = tuple(n for d in devs for n in one(d).nodes)
+    base = one(devs[0])
+    return dataclasses.replace(
+        base, correlation_id=cid, nodes=nodes,
+        window_start=T0 + timedelta(minutes=start_min),
+        window_end=T0 + timedelta(minutes=end_min))
+
+
+def test_find_merges_coalesces_split_brain():
+    # Same incident re-identified across windowing: same entities, overlapping window.
+    survivor = _obj(["leaf1", "spine1"], "surv", 2, 7)
+    stale = _obj(["leaf1", "spine1"], "stale", 0, 4)
+    assert find_merges([survivor], [stale]) == [("stale", "surv")]
+
+
+def test_find_merges_ignores_disjoint_entities():
+    survivor = _obj(["leaf1", "spine1"], "surv", 0, 5)
+    stale = _obj(["wan1", "dmz1"], "stale", 0, 5)
+    assert find_merges([survivor], [stale]) == []  # 0% overlap → never merge
+
+
+def test_find_merges_below_overlap_threshold_is_left_alone():
+    survivor = _obj(["leaf1", "spine1", "leaf2"], "surv", 0, 5)
+    stale = _obj(["leaf1", "wan1", "dmz1", "dmz2"], "stale", 0, 5)  # overlap=leaf1: 1/6≈0.17
+    assert find_merges([survivor], [stale]) == []
+
+
+def test_find_merges_requires_window_overlap():
+    survivor = _obj(["leaf1", "spine1"], "surv", 100, 105)  # disjoint window
+    stale = _obj(["leaf1", "spine1"], "stale", 0, 5)
+    assert find_merges([survivor], [stale]) == []
+
+
+def test_find_merges_is_deterministic_and_order_invariant():
+    a = _obj(["leaf1", "spine1"], "aaa", 0, 5)   # earlier window
+    b = _obj(["leaf1", "spine1"], "bbb", 1, 6)
+    stale = _obj(["leaf1", "spine1"], "stale", 0, 5)  # equal overlap to both → tie-break
+    r1 = find_merges([a, b], [stale])
+    r2 = find_merges([b, a], [stale])
+    assert r1 == r2 == [("stale", "aaa")]  # tie → earliest window_start, then cid

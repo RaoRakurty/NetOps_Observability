@@ -441,9 +441,9 @@ class ObjectSnapshot:
                 return h.confidence_rank
         return 0.0
 
-    def to_object_row(self, version: int, state: str = "open") -> dict:
+    def to_object_row(self, version: int, state: str = "open", merged_into: str = "") -> dict:
         r = self.ranking
-        return {
+        row = {
             "tenant_id": self.tenant_id,
             "correlation_id": self.correlation_id,
             "version": version,
@@ -463,6 +463,9 @@ class ObjectSnapshot:
             "topology_version": self.topology_version,
             "catalog_version": r.catalog_version,
         }
+        if merged_into:
+            row["merged_into"] = merged_into  # set ONLY on a terminal 'merged' snapshot
+        return row
 
     def to_edge_rows(self, version: int) -> list[dict]:
         return [e.to_ch_row(self.tenant_id, self.correlation_id, version) for e in self.edges]
@@ -563,3 +566,69 @@ def run_window(
             gap_hints=gap_hints,
         ))
     return snapshots
+
+
+# ── Object merge — de-split a cross-cycle identity drift (§4.4) ────────────────
+#
+# correlation_id = uuid5(tenant, earliest-node.key, onset_ms): stable while the
+# incident's earliest signal stays in the sliding window, but when that signal
+# ages out the SAME incident is re-keyed under a new id (split-brain — one
+# incident, two objects). Merge resolves the IDENTITY split: a still-live object
+# this cycle that overlaps a stale (no-longer-materializing) open object by entity
+# set + time window is the same incident — the stale one is tombstoned (terminal
+# state='merged', merged_into=<survivor>) and the live one continues.
+#
+# REPLAY-SAFE BY CONSTRUCTION: merge writes only a lifecycle state + a backlink; it
+# NEVER re-keys a live object or re-ranks an ungrounded union (which would breach
+# the §4.2 grounding gate AND the replay contract — replay re-runs run_window and
+# would re-derive the un-merged id). Per-object replay reproduces the tombstoned
+# object's content unchanged; the merged_into pointer is metadata, not content.
+# Pure + deterministic: result depends only on the snapshot sets, not order/clock.
+
+def _entity_ids(snap: ObjectSnapshot) -> frozenset[str]:
+    return frozenset(n.entity_id for n in snap.nodes)
+
+
+def _windows_overlap(a: ObjectSnapshot, b: ObjectSnapshot) -> bool:
+    return a.window_start <= b.window_end and b.window_start <= a.window_end
+
+
+def find_merges(
+    survivors: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
+    candidates: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
+    min_overlap: float = 0.4,
+) -> list[tuple[str, str]]:
+    """Which stale `candidates` should tombstone into a live `survivor`.
+
+    A candidate merges into a survivor when their entity sets overlap by
+    Jaccard ≥ min_overlap AND their time windows overlap — the signature of one
+    incident re-identified across windowing (NOT two unrelated incidents: an
+    entity-set overlap IS same-device containment, the §4.2 grounding the gate
+    already trusts). Each candidate merges into at most ONE survivor — the
+    strongest overlap, tie-broken by earliest window_start then cid (deterministic;
+    never depends on input order). Survivors are the live objects this cycle and are
+    never merged away. Returns (merged_cid, survivor_cid) pairs, sorted.
+    """
+    surv = sorted(survivors, key=lambda s: (s.window_start, s.correlation_id))
+    pairs: list[tuple[str, str]] = []
+    for cand in sorted(candidates, key=lambda s: (s.window_start, s.correlation_id)):
+        ce = _entity_ids(cand)
+        if not ce:
+            continue
+        best: tuple[float, datetime, str] | None = None
+        best_cid = ""
+        for s in surv:
+            if s.correlation_id == cand.correlation_id or not _windows_overlap(cand, s):
+                continue
+            se = _entity_ids(s)
+            union = ce | se
+            jac = len(ce & se) / len(union) if union else 0.0
+            if jac < min_overlap:
+                continue
+            key = (jac, s.window_start, s.correlation_id)
+            # Higher overlap wins; tie → earliest window_start, then lexical cid.
+            if best is None or jac > best[0] or (jac == best[0] and (s.window_start, s.correlation_id) < (best[1], best[2])):
+                best, best_cid = key, s.correlation_id
+        if best_cid:
+            pairs.append((cand.correlation_id, best_cid))
+    return sorted(pairs)
