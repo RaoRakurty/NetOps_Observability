@@ -439,6 +439,155 @@ BUILTIN_TEMPLATES: list[dict] = [
             ],
         },
     },
+    # -----------------------------------------------------------------------
+    # C5 signatures (2026-06-23) — the classic L2/L3 enterprise/DC fault families
+    # the design enumerates (dedicated IGP, STP/loop, FHRP failover, MAC-flap). Each
+    # is a Layer-3 DROP-IN: grounding (Layer 1) and the verdict gate are unchanged;
+    # the Layer-2 signal `kind`s already arrive from the syslog/trap producers
+    # (ospf/isis/stp via syslog_control_signal; fhrp_state_change + mac_flap added in
+    # the same change). Single-modality control-plane evidence reaches `suspected`;
+    # an independent off-box/SNMP witness lifts each to `confirmed` (verdicts.assess).
+    # A coincident link-down deliberately defers the IGP/FHRP cause to local-link-fault
+    # (the link drags the session); MAC-flap defers to STP when topology is also churning.
+    # -----------------------------------------------------------------------
+    {
+        "id": "sig.ent.access.ospf-adjacency-flap",
+        "title": "OSPF adjacency flap",
+        "domain": "ent.access",
+        "requires": [
+            {"kind": "ospf_adjacency_change", "entity_type": "device"},
+            # Independent corroboration: host pressure, route-driven loss, an interface
+            # counter anomaly, or a co-incident link event on the adjacency.
+            {"kind": "if_metric_anomaly|device_resource_anomaly|probe_loss|link_state_change",
+             "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A flap with a concurrent link-down is a link fault dragging the IGP —
+            # prefer the L1/L2 explanation.
+            {"absent": {"kind": "link_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "control-plane -> route -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L3 (IGP)",
+            "first_steps": [
+                "Identify the OSPF neighbor and the flap trigger (dead-timer expiry, MTU mismatch, area/auth change, interface bounce)",
+                "Check the adjacency interface and the underlay link for the same window",
+                "If the neighbor is stuck in EXSTART/EXCHANGE, verify ip mtu on both ends; stabilize the interface if it is flapping",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.fabric.isis-adjacency-flap",
+        "title": "IS-IS adjacency flap (fabric IGP)",
+        "domain": "ent.fabric",
+        "requires": [
+            {"kind": "isis_adjacency_change", "entity_type": "device"},
+            # A vanished LLDP peer / interface counter anomaly / host pressure / link
+            # event corroborates a real adjacency loss (LLDP is same-plane, so it
+            # supports but does not by itself confirm — that needs a 2nd modality).
+            {"kind": "if_metric_anomaly|device_resource_anomaly|lldp_neighbor_change|link_state_change",
+             "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            {"absent": {"kind": "link_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "control-plane -> route -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L2/L3 (IS-IS fabric IGP)",
+            "first_steps": [
+                "Identify the IS-IS neighbor (system-id) and the level (L1/L2) that dropped, and the trigger (hold-timer expiry, MTU mismatch, level/area mismatch, interface bounce)",
+                "Check the adjacency interface and its LLDP neighbor for the same window — a vanished LLDP peer corroborates a real link event",
+                "Verify level and area config match on both ends; stabilize the interface if it is flapping",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.access.stp-topology-change",
+        "title": "STP topology change / L2 loop",
+        "domain": "ent.access",
+        "requires": [
+            {"kind": "stp_topology_change", "entity_type": "interface"},
+            # The loop's fingerprint — a broadcast/unknown-unicast storm (interface
+            # util/discards) or a co-incident MAC flap — and the independent 2nd
+            # modality that lifts a lone topology change to a confirmable loop.
+            {"kind": "if_metric_anomaly|if_util_high|mac_flap", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A topology change WITH a coincident link transition is normal STP
+            # reconvergence after a real link event — prefer the link fault.
+            {"absent": {"kind": "link_state_change"}, "within_s": 120,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "interface(L2) -> bridge-domain -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L2 (STP)",
+            "first_steps": [
+                "Find the port(s) cycling root/designated and whether topology-change notifications recur (a loop, not a one-off reconvergence)",
+                "Check for a broadcast/unknown-unicast storm and MAC flapping in the same VLAN/window",
+                "Verify BPDU guard / root guard on edge ports; shut the offending loop port and confirm the storm clears",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.access.fhrp-failover",
+        "title": "First-hop redundancy failover (HSRP/VRRP)",
+        "domain": "ent.access",
+        "requires": [
+            {"kind": "fhrp_state_change", "entity_type": "device", "role": "fhrp_group"},
+            # The gateway-reachability blip during the election (off-box probe), or the
+            # tracked uplink's counter anomaly — the independent witness that confirms
+            # real impact and distinguishes an election from a benign config event.
+            {"kind": "probe_loss|probe_rtt_anomaly|if_metric_anomaly", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A real uplink/cable pull (link down) is a link fault, not an FHRP
+            # election — prefer the L1/L2 explanation.
+            {"absent": {"kind": "link_state_change"}, "within_s": 120,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "device -> gateway -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L2/L3 (FHRP)",
+            "first_steps": [
+                "Confirm which member is Active/Master now and why the prior forwarder demoted (priority/preempt, tracked object/interface down, timer expiry)",
+                "Check the standby uplink and any tracked interface for a coincident flap in the same window",
+                "If failover is flapping, add priority hysteresis / fix the tracked object and verify preempt delay",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.access.mac-flap",
+        "title": "MAC flapping / move storm",
+        "domain": "ent.access",
+        "requires": [
+            {"kind": "mac_flap", "entity_type": "device"},
+            # The L2 instability shows up as an interface counter/util anomaly on the
+            # oscillating ports — the independent second modality.
+            {"kind": "if_metric_anomaly|if_util_high", "entity_type": "interface", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # If STP is also churning, the MAC moves are a SYMPTOM of the topology
+            # change — prefer the STP signature as the root.
+            {"absent": {"kind": "stp_topology_change"}, "within_s": 120,
+             "else_prefer": "sig.ent.access.stp-topology-change"},
+        ],
+        "direction_expect": "interface(L2) -> bridge-domain -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L2 (MAC)",
+            "first_steps": [
+                "Identify the flapping MAC, its VLAN, and the two ports it oscillates between",
+                "Determine whether it is a physical loop, a dual-homed host / NIC-teaming misconfig, or a duplicate MAC",
+                "Shut or isolate one of the two ports; confirm the flap stops and MAC learning stabilizes",
+            ],
+        },
+    },
 ]
 
 

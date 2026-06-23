@@ -253,6 +253,69 @@ def test_stp_state_to_learning_up():
     assert s.attrs["state"] == "up" and s.severity is Severity.WARN
 
 
+def test_hsrp_statechange_to_active_is_failover():
+    s = syslog_control_signal(syslog_event(
+        "%HSRP-5-STATECHANGE", "Vlan10 Grp 1 state Standby -> Active", host="dist-sw1",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "fhrp_state_change"
+    assert s.source is Source.SYSLOG
+    assert s.modality_class is ModalityClass.CONTROL_PLANE
+    assert s.entity_type is EntityType.DEVICE
+    assert s.entity_id == "dist-sw1"
+    assert s.attrs["proto"] == "hsrp"
+    assert s.attrs["group"] == "1"
+    assert s.attrs["interface"] == "Vlan10"
+    assert s.attrs["state"] == "active"
+    assert s.severity is Severity.HIGH        # takeover
+    assert "Vlan10" in s.entity_tokens and "grp1" in s.entity_tokens
+
+
+def test_vrrp_statechange_to_backup_is_warn():
+    s = syslog_control_signal(syslog_event(
+        "%VRRP-6-STATECHANGE", "GigabitEthernet0/1 Grp 2 state Master -> Backup", host="dist-sw2",
+    ), "", T0)
+    assert s is not None and s.kind == "fhrp_state_change"
+    assert s.attrs["proto"] == "vrrp"
+    assert s.attrs["interface"] == "GigabitEthernet0/1"
+    assert s.attrs["state"] == "backup"
+    assert s.severity is Severity.WARN        # demotion, not a takeover
+
+
+def test_macflap_notif_ios():
+    s = syslog_control_signal(syslog_event(
+        "%SW_MATM-4-MACFLAP_NOTIF",
+        "Host 0011.2233.4455 in vlan 10 is flapping between port Gi1/0/1 and port Gi1/0/2",
+        host="acc-sw2",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "mac_flap"
+    assert s.entity_type is EntityType.DEVICE
+    assert s.entity_id == "acc-sw2"
+    assert s.attrs["mac"] == "0011.2233.4455"
+    assert s.attrs["vlan"] == "10"
+    assert s.attrs["port_a"] == "Gi1/0/1" and s.attrs["port_b"] == "Gi1/0/2"
+    assert s.severity is Severity.HIGH
+    assert "0011.2233.4455" in s.entity_tokens and "vlan10" in s.entity_tokens
+
+
+def test_nxos_l2fm_mac_move():
+    s = syslog_control_signal(syslog_event(
+        "%L2FM-4-L2FM_MAC_MOVE",
+        "Mac 00ab.cd00.1122 in vlan 20 has moved between Eth1/1 to Eth1/2", host="leaf2",
+    ), "", T0)
+    assert s is not None and s.kind == "mac_flap"
+    assert s.attrs["mac"] == "00ab.cd00.1122" and s.attrs["vlan"] == "20"
+    assert s.attrs["port_a"] == "Eth1/1" and s.attrs["port_b"] == "Eth1/2"
+
+
+def test_link_flap_phrase_not_misread_as_mac_flap():
+    # "LINK-FLAP" is not a MAC flap — the MAC branch must not greedily claim it.
+    assert syslog_control_signal(syslog_event(
+        "%SYS-6-EVENT_TRIGGERED", "Event handler LINK-FLAP was activated",
+    ), "", T0) is None
+
+
 def test_unrelated_syslog_yields_none():
     assert syslog_control_signal(syslog_event(
         "%SYS-6-EVENT_TRIGGERED", "Event handler LINK-FLAP was activated",

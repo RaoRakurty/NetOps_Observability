@@ -409,6 +409,76 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             attrs={"interface": ifname, "state": state, "tag": tag},
         )
 
+    # First-hop redundancy (HSRP/VRRP) state change — Cisco %HSRP-5-STATECHANGE /
+    # %STANDBY-6-STATECHANGE, %VRRP-6-STATECHANGE; Arista %VRRP-6-... A member's role
+    # transition; "-> Active"/"-> Master" is a TAKEOVER (a failover happened). Device-
+    # scoped (the FHRP group lives on the device); group + interface/VLAN are grounding
+    # tokens so a gateway-reachability probe on the adjacent segment correlates via the
+    # existing seam/adjacency rung (the standby going Active never teaches grounding
+    # the word "HSRP").
+    if "HSRP" in ctoken or "VRRP" in ctoken or "STANDBY" in ctoken:
+        proto = "vrrp" if "VRRP" in ctoken else "hsrp"
+        grp_m = re.search(r"\b[Gg]r(?:ou)?p\s+(\d+)\b", msg)
+        group = grp_m.group(1) if grp_m else ""
+        if_m = _IF_RE.search(msg) or re.search(
+            r"\b((?:Vl(?:an)?|Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*)\b", msg)
+        ifname = if_m.group(1) if if_m else "unknown"
+        # The NEW role: the target of an "X -> Y" transition, else the trailing state word.
+        tgt_m = re.search(r"->\s*(\w+)", msg) or re.search(r"\bstate\s+(\w+)\s*$", msg, re.IGNORECASE)
+        role = (tgt_m.group(1) if tgt_m else "").lower()
+        takeover = role in ("active", "master")
+        tokens = tuple(t for t in (host, ifname, f"grp{group}" if group else "")
+                       if t and t != "unknown")
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="fhrp_state_change",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE,
+            entity_id=host,
+            severity=Severity.HIGH if takeover else Severity.WARN,
+            native_id=f"{host}|fhrp|{proto}|{ifname}|grp{group or '?'}|{role or '?'}|{ts_ms}",
+            entity_tokens=tokens or (host,),
+            metric_name="fhrp_state",
+            attrs={"proto": proto, "group": group, "interface": ifname, "state": role, "tag": tag},
+        )
+
+    # MAC flap / move — a host MAC oscillating between two ports: an L2 loop, a
+    # dual-homing / NIC-teaming misconfig, or a duplicate MAC. Cisco %SW_MATM-4-
+    # MACFLAP_NOTIF, NX-OS %L2FM-4-L2FM_MAC_MOVE, Arista %MACFLAP. Device-scoped; the
+    # MAC, VLAN and the two ports are grounding tokens so it binds to the interface
+    # metrics on either port.
+    if ("MACFLAP" in ctoken or "MAC_MOVE" in ctoken
+            or re.search(r"\b(?:is flapping between|has moved between|mac[\s_-]?move|mac[\s_-]?flap)\b",
+                         msg, re.IGNORECASE)):
+        mac_m = re.search(
+            r"\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})\b", msg)
+        mac = mac_m.group(1) if mac_m else ""
+        vlan_m = re.search(r"\bvlan\s*(\d+)\b", msg, re.IGNORECASE)
+        vlan = vlan_m.group(1) if vlan_m else ""
+        ports = re.findall(
+            r"\b(?:Gi|Te|Fa|Po|Port-channel|Eth\w*|GigabitEthernet|TenGigE)[\d][\w/.\-]*", msg)
+        tokens = tuple(t for t in (host, mac, f"vlan{vlan}" if vlan else "", *ports[:2]) if t)
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="mac_flap",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE,
+            entity_id=host,
+            severity=Severity.HIGH,
+            native_id=f"{host}|mac_flap|{mac or '?'}|vlan{vlan or '?'}|{ts_ms}",
+            entity_tokens=tokens or (host,),
+            metric_name="mac_flap",
+            attrs={"mac": mac, "vlan": vlan,
+                   "port_a": ports[0] if ports else "",
+                   "port_b": ports[1] if len(ports) > 1 else "", "tag": tag},
+        )
+
     return None
 
 

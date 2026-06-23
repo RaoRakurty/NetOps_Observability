@@ -1,0 +1,13 @@
+{
+  "name": "MAC flap (syslog) + interface metric anomaly (SNMP) on an oscillating port: MAC flap confirmed",
+  "comment": "C5: mac_flap is emitted by the new MAC-flap syslog branch (%SW_MATM/%L2FM/%MACFLAP). The oscillating port's counter anomaly (device_telemetry) is the independent confirming witness. No coincident stp_topology_change, so the STP discriminator does not fire (the MAC flap is the root, not a symptom).",
+  "signals": [
+    {"kind": "mac_flap", "entity_type": "device", "entity_id": "acc-sw2",
+     "observer_id": "syslog-acc-sw2", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "acc-sw2:Gi1/0/5",
+     "observer_id": "snmp-acc-sw2", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.access.mac-flap", "tier": "confirmed", "owner": "netops"}
+}

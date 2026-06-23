@@ -1,0 +1,13 @@
+{
+  "name": "HSRP failover (syslog) + tracked-uplink metric anomaly (SNMP): FHRP failover confirmed",
+  "comment": "C5: fhrp_state_change is emitted by the new HSRP/VRRP syslog branch. The tracked uplink's counter anomaly (device_telemetry) is the independent second modality that confirms a real election with impact. No link-down, so the link-fault discriminator does not fire.",
+  "signals": [
+    {"kind": "fhrp_state_change", "entity_type": "device", "entity_id": "dist-sw1",
+     "observer_id": "syslog-dist-sw1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "dist-sw1:Gi0/1",
+     "observer_id": "snmp-dist-sw1", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.access.fhrp-failover", "tier": "confirmed", "owner": "netops"}
+}

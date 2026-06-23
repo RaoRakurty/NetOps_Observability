@@ -59,6 +59,10 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "ospf_adjacency_change": CausalLayer.NETWORK,
     "isis_adjacency_change": CausalLayer.NETWORK,
     "route_withdrawal": CausalLayer.NETWORK,
+    # FHRP (HSRP/VRRP) first-hop gateway redundancy — an L3 reachability event:
+    # a lower-layer link/tracked-object fault (L2) can trigger it, and it causes
+    # L4/service impact, so NETWORK orders it correctly between the two.
+    "fhrp_state_change": CausalLayer.NETWORK,
     # transport (L4) — reachability/latency/volume across the path
     "probe_loss": CausalLayer.TRANSPORT,
     "probe_rtt_anomaly": CausalLayer.TRANSPORT,
