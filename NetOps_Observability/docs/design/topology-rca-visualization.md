@@ -73,13 +73,14 @@ animated edges.
 
 ## Mapping logic (evidence → target)
 
-> ⚠ **Depends on engine grounding (2026-06-22 audit).** This overlay maps a
-> CONFIRMED correlation object's evidence onto topology edges — it runs *after* the
-> engine forms the object. For **intra-fabric** faults (link flap, IGP adjacency)
-> the engine does **not** form the object today: it has no topology-adjacency
-> grounding, so the two ends of a fabric link never correlate (see
-> `correlation-engine.md` §4.2, gap **G1**). Until G1 lands, this mapping only fires
-> for seam/WAN and single-device incidents; fabric mappings have nothing to map.
+> ✅ **Engine grounding dependency met (G1 landed 2026-06-22, live-verified 2026-06-23).**
+> This overlay maps a correlation object's evidence onto topology edges — it runs
+> *after* the engine forms the object. **Intra-fabric** faults (link flap, IGP
+> adjacency) now form objects: the engine grounds the two ends of a fabric link via the
+> L2/L3 adjacency rung (`correlation-engine.md` §4.2, **G1**), so fabric mappings have
+> something to map. Confirmed live (`sig.ent.access.local-link-fault` reached
+> `tier=confirmed`, cross-modality independent pair). Seam/WAN and single-device
+> incidents were always supported.
 
 - `link_state_change` (dev+iface) → exact topology edge by (source_node, local_interface).
 - `bgp_adjacency_change` (dev+peer) → BGP session/BGP-LS edge; merge with link on same iface.

@@ -19,14 +19,18 @@ plane** → normalized syslog/firewall field schema (separate log pipeline).
 Owner per family = SNMP vs gNMI-on-change vs controller-API. Mode = sample vs
 **on-change** (preferred for protocol state that flaps).
 
-> ⚠ **The contract must extend to `entity_id` (2026-06-22 audit, gap G2).** Canonical
-> *metric names* aren't enough: correlation grounds signals by shared identity tokens,
-> so the same element must carry the SAME `entity_id` across every producer. Today it
-> doesn't — a device is `leaf1` (syslog/metric/trap) vs mgmt-IP `10.0.0.5` (BGP peer
-> lists / probe targets) vs `leaf1:7` (ifIndex) vs `leaf1:Ethernet1` (ifName) — and
-> these never reconcile, so co-located signals silently fail to correlate. A canonical
-> entity-identity resolver (name↔mgmt-IP, ifName-not-ifIndex) at ingestion is part of
-> this single-contract foundation. See `correlation-engine.md` §4.2.
+> ⚠ **The contract extends to `entity_id` (gap G2 — RE-AUDITED 2026-06-23, narrowed).**
+> Canonical *metric names* aren't enough: correlation grounds signals by shared identity
+> tokens, so the same element must carry the SAME `entity_id` across every producer.
+> **Live data shows this is mostly already true:** syslog (`leaf1:Ethernet2`, `spine1`)
+> and metric (`leaf1:Ethernet3`) ids are canonical by name and reconcile; no
+> `ifIndex`-style ids exist in practice. The ONE non-canonical producer is **SNMP
+> traps** → `sourceIP:binding` (e.g. `10.70.245.120:peer`; the lab NATs every device to
+> a single gateway IP). The genuine G2 work is therefore narrow: resolve trap
+> source-IP → device via the discovery mgmt-IP→device map — and **independence-aware**,
+> because an un-resolved trap source currently counts as a distinct observer that can
+> (legitimately or spuriously) anchor a `confirmed` verdict. See `correlation-engine.md`
+> §4.2 (the re-audit block + the three-layer model).
 
 ---
 

@@ -440,48 +440,93 @@ All constants live in engine config, are part of the **config hash** in
 `engine_version`, and get re-fit later from labeled history (Phase-4 calibration) —
 deterministic first, learned second.
 
-> #### ⚠ GROUNDING COVERAGE — implementation status (2026-06-22 audit, HONEST)
+> #### ⚠ GROUNDING COVERAGE — implementation status (2026-06-23 RE-AUDIT vs LIVE DATA)
 >
 > The `w_topo` ladder above is the **target**. The shipped `resolve_grounding`
-> (engine.py) implements **three of its rungs** (adjacency added 2026-06-22, G1):
+> (engine.py) implements **three of its rungs**:
 > - ✅ **seam** — both nodes' tokens intersect an active seam's endpoints.
 > - ✅ **containment** (`same interface` / `same device`) — both nodes **share a
 >   token** (e.g. `leaf1:Eth1` and `leaf1:bgp_peer` share `leaf1`).
->
- - **L2/L3 adjacent device** (`adj:a--b`, w_topo 0.65) — two DIFFERENT devices joined
->   by a known link ground here. The Go backend now exports the collected LLDP/CDP/
->   BGP-LS links to `topology_links.json` (`startTopologyLinksEnrichment`, tenant-
->   scoped); the engine loads it (`topology_links_by_tenant`) into a `TopologyAdjacency`
->   passed to `run_window`. Unlocks intra-fabric link-flaps + IGP adjacency faults.
->   Golden fixture: `test_fabric_link_flap_forms_one_grounded_incident_with_adjacency`.
+> - ✅ **L2/L3 adjacent device** (`adj:a--b`, w_topo 0.65, G1, 2026-06-22) — two
+>   DIFFERENT devices joined by a known link ground here. The Go backend exports the
+>   collected LLDP/CDP/BGP-LS links to `topology_links.json`
+>   (`startTopologyLinksEnrichment`, tenant-scoped); the engine loads it
+>   (`topology_links_by_tenant`) into a `TopologyAdjacency` passed to `run_window`.
+>   Unlocks intra-fabric link-flaps + IGP adjacency faults. Golden fixture:
+>   `test_fabric_link_flap_forms_one_grounded_incident_with_adjacency`.
 >
 > Still **SPECIFIED BUT NOT WIRED** (lower value; adjacency covers the interior class):
-> - **same site / same ASN-provider** — no input feeds these weaker rungs yet.
+> - **same site / same ASN-provider** — no input feeds these weaker rungs yet. Note
+>   these are *relational* rungs, NOT per-protocol — see the three-layer model below.
 >
-> **What the live 2026-06-22 fabric link-flap exposed (now FIXED by G1):** before G1
-> the engine was effectively a **WAN/seam + single-device** correlator — intra-fabric
-> link flaps, OSPF/IS-IS adjacency faults, and "device A's fault caused adjacent device
-> B's symptom" causality could not ground, even though both ends emit signals and the
-> adjacency was collected one service away. **G1 wires the adjacency rung**, so that
-> class now correlates; `dia-egress` (seam) objects were always fine.
+> **Grounding is protocol-AGNOSTIC and is now essentially complete for the relational
+> structure we collect.** It asks only "are these two entities topologically related?"
+> — never "what protocol is this?" A BGP flap, an IS-IS adjacency drop, an HSRP
+> failover, and an STP topology-change on two adjacent devices all ground through the
+> *same* adjacency rung. **You do NOT add a grounding rung per protocol.** What scales
+> per-protocol lives in two OTHER layers (signal coverage + signatures) — see below.
 >
-> **Two more foundational gaps found in the same audit:**
-> - **Entity-identity is not canonical across producers.** The same device is
->   `leaf1` (syslog/metric/trap by name) vs its mgmt IP `10.0.0.5` (BGP peer lists,
->   probe targets) vs `leaf1:7` (ifIndex) vs `leaf1:Ethernet1` (ifName). These never
->   reconcile, so even *supported* containment grounding silently fails on id drift.
->   Extends the "ingestion = one source-agnostic canonical contract is LAW" principle
->   (see `telemetry-coverage-reference.md`) down to `entity_id`.
-> - **Metric anomalies mostly bypass the v2 spine.** Interface anomalies feed both
->   the legacy z-score `findings` path and the CUSUM `corr_signals` episode path; the
->   episode threshold is high, so device-telemetry reaches the engine thinly (~178
->   findings vs ~5 signals observed) — weakening it as a *confirming* modality.
+> #### G2 / G3 — RE-AUDITED 2026-06-23 (the 2026-06-22 framing was partly stale)
 >
-> **Remediation (sequenced):** **G1** add an `adjacency` grounding kind + export the
-> collected LLDP/CDP/BGP-LS links to the engine (the data exists — turns on the whole
-> interior-network class); **G2** a canonical entity-identity resolver (name↔mgmt-IP,
-> ifName canonical) at ingestion; **G3** admit device-telemetry as weak confirming
-> evidence. Tracked as the post-2026-06-22 grounding-foundation work.
+> Verified against live lab signals (`corr_signals_archive`) + the verdict gate
+> (`verdicts.py`). Both follow-on "gaps" were overstated:
+>
+> - **G2 — entity_id canonicalization: NARROW, not broad.** Live data shows
+>   syslog (`leaf1:Ethernet2`, `spine1`) and metric (`leaf1:Ethernet3`,
+>   `spine2:ethernet-1/4`) ids are **already canonical and already reconcile**; no
+>   `ifIndex`-style ids exist in practice. The ONLY non-canonical producer is **SNMP
+>   traps** → `10.70.245.120:peer` (the lab NATs every device to the `.120` gateway).
+>   ⚠️ **Delicate:** that un-canonical trap observer is precisely what CONFIRMED
+>   `local-link-fault` live at 23:10 (`independent_pair: .120 ⟂ leaf1`, 2 modalities).
+>   Resolving the trap to its real device would make it the *same* observer as that
+>   device's telemetry → no longer an independent pair → it would STOP confirming, OR
+>   reveal the confirm as false-independence. So G2 must be done **independence-aware**
+>   (a resolved trap must not masquerade as an independent witness for the same
+>   device), and validated carefully given lab NAT. Net: a small, careful fix — not a
+>   broad resolver, and not a prerequisite for fabric confirmation (which already works).
+> - **G3 — "metric anomalies mostly bypass the v2 spine": STALE.** The 2026-06-22
+>   "~5 signals" was a point-in-time low. Live, **device_telemetry is the DOMINANT
+>   modality** (~2.5k signals / hr across ~50 entities vs control_plane ~1.7k, probe
+>   ~0.8k) and already acts as a **trusted confirming modality** (it appears in
+>   `trusted_modalities` of confirmed objects). Essentially moot; doc correction only.
+>
+> **Confirmation already works for the fabric/IGP class** — verified live: a
+> `sig.ent.access.local-link-fault` object reached `tier=confirmed` (cross-modality,
+> independent pair). "Suspected" objects are suspected because the coincident
+> independent witness isn't present in that window — evidence timing, not a missing
+> feature. The verdict gate (`verdicts.py`) is generic: ≥2 independent cross-modality
+> witnesses confirm ANY signature, so adding modalities/signals strengthens
+> confirmation automatically — there is no per-protocol confirmation logic to build.
+
+#### The three layers — "do we add a new element per protocol?" (architecture)
+
+A recurring question: to cover BGP, IS-IS/OSPF, VLAN/STP, HSRP/VRRP, MAC-move, etc.,
+do we add a new *grounding element* for each? **No.** The cases that look like
+"elements" (DIA/probe, fabric-IGP) are **signatures**, not grounding. The engine has
+three independent layers; only two of them grow per-protocol, and neither is grounding:
+
+| Layer | Question it answers | Protocol-specific? | Where | Cost to extend |
+|-------|--------------------|--------------------|-------|----------------|
+| **1 · Grounding** (§4.2 gate) | "Are these two entities topologically related enough to link?" | **NO — agnostic** | `engine.py resolve_grounding` | ~done (generic rungs: seam / containment / adjacency; 2 weak rungs unwired) |
+| **2 · Signal kinds** (collect + normalize) | "Does this protocol's event reach the engine as a canonical `kind`?" | **YES** | collectors (`src/backend/collectors/…`) + normalizer | the real work — *telemetry-coverage program* |
+| **3 · Signatures** (catalog) | "Does this cluster of kinds have a NAMED, owned, confirmable root cause?" | **YES** | `catalog.py` / PG `corr_hypothesis_templates` (declarative data) | one dict per fault family (§4.5 guide) |
+
+How a new fault class (say **HSRP failover**) actually lands:
+1. **Layer 2** — a collector emits FHRP state and the normalizer maps it to a canonical
+   kind, e.g. `hsrp_state_change` (entity `device` or `device:vlan`/`device:group`).
+   *Without this there is nothing to ground — collection is the gate, not correlation.*
+2. **Layer 1** — nothing to do. The standby going Active on one device and a
+   gateway-reachability blip on the adjacent device already **ground via the existing
+   adjacency rung**. Grounding never learns the word "HSRP."
+3. **Layer 3** — add one signature dict: `requires` the `hsrp_state_change` kind (+ a
+   corroborating probe/loss kind for the cross-modality confirm), set `owner`,
+   `first_steps`, and `discriminators` (e.g. *not* a full link-down → it's a real FHRP
+   election, not a cable pull). The generic verdict gate then confirms it whenever an
+   independent second modality is present.
+
+So **"more to build" = Layers 2 + 3, sequenced under the telemetry-coverage program —
+not grounding.** The expensive, generic machinery (grounding, direction inference,
+verdict gate, persistent objects) is built once and absorbs every new protocol for free.
 
 **Seam-relative correlation (owner spec, 2026-06-11):** `path`/`segment` entities
 are instances of the five **canonical ownership-transition seams**
@@ -605,6 +650,62 @@ Built-in starter set ships with the engine (wan_congestion, routing_instability,
 physical_degradation, dns_impairment, cloud_region_degradation, tunnel_mtu_blackhole);
 the user-authored catalog replaces/extends these — same schema, hot-reloaded from PG,
 versioned. **The engine's quality scales with the catalog, by design.**
+
+#### Authoring a new signature — the per-fault-family checklist (Layer 3)
+
+This is how the catalog grows to cover new fault classes (VLAN/STP, HSRP/VRRP,
+MAC-flap, …). It is **declarative authoring, not engine surgery** — grounding (Layer 1)
+and the verdict gate already absorb the new class. The only hard prerequisite is
+**Layer 2**: the relevant events must already arrive as canonical signal `kind`s (if
+not, that collector/normalizer work comes first — there is nothing to match otherwise).
+
+For each new fault family, add one entry with:
+
+1. **`id`** — `sig.<scope>.<class>` (scope ∈ access / wan-edge / middle-mile / internet
+   / cloud; or add a scope for a new layer, e.g. `sig.access.fhrp-failover`).
+2. **`requires`** — the canonical kinds that *define* the class. **For a `confirmed`
+   verdict to be reachable, require at least two DIFFERENT modality classes from
+   INDEPENDENT observers** (the gate in `verdicts.py`): e.g. a control-plane event on
+   the device + a probe/flow witness off-box. A single-modality signature can only ever
+   reach `suspected` — that is correct, not a bug.
+3. **`discriminators`** — the look-alike killers (`not {kind…} else_prefer sig.…`). This
+   is the practitioner gold that prevents "everything looks like X." Name the sibling
+   it should defer to (e.g. FHRP election vs. a real uplink-down → prefer
+   `local-link-fault`).
+4. **`verdict.owner`** + **`first_steps`** — who acts and the first 3 NOC moves.
+5. **`direction_expect`** — the causal arrow (e.g. `device → gateway → service`).
+6. **A fixture** in `test_fixtures.py` (`{name, signals[], expect:{top, tier}}`) — the
+   regression that proves the new signature fires at the intended tier and doesn't
+   steal objects from its discriminators. **No signature is complete without it** (§11).
+
+Worked sketch — **HSRP/VRRP failover** (assuming Layer-2 `hsrp_state_change` exists):
+
+```jsonc
+{
+  "id": "sig.access.fhrp-failover",
+  "title": "First-hop redundancy failover (HSRP/VRRP)",
+  "layer": "L2/L3",
+  "requires": [
+    {"kind": "hsrp_state_change", "entity_type": "device", "role": "fhrp_group"},
+    {"kind": "probe_loss|probe_rtt_anomaly", "entity_type": "segment",   // independent
+     "min_deviation": 3.0, "optional": true}                            //  cross-modality witness
+  ],
+  "discriminators": [
+    {"not": {"kind": "link_state_change", "within": "2m"},              // a real cable pull,
+     "else_prefer": "sig.ent.access.local-link-fault"}                  //  not an FHRP election
+  ],
+  "direction_expect": "device → gateway → service",
+  "verdict": {"owner": "netops",
+    "first_steps": ["Confirm which member is Active and why the prior Active demoted "
+                    "(priority/preempt, tracked-object/interface down, timer expiry)",
+                    "Check the standby uplink + tracked interface for a coincident flap",
+                    "If flapping, raise priority hysteresis / fix the tracked object"]}
+}
+```
+
+Grounding links the standby's `hsrp_state_change` to the adjacent device's symptom via
+the **existing** adjacency rung; the verdict gate confirms it the moment an independent
+second modality (the gateway probe) is present. Nothing in Layers 1–2 changed.
 
 ---
 
