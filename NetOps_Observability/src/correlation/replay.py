@@ -26,7 +26,10 @@ import json
 from dataclasses import dataclass, field
 
 from catalog import Catalog, builtin_catalog
-from engine import EngineConfig, ObjectSnapshot, SeamView, engine_version, run_window
+from directed_topology import DirectedTopology, frozen_oracle
+from engine import (
+    EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, engine_version, run_window,
+)
 from signals import Signal
 
 CONFIDENCE_TOLERANCE = 1e-6   # pure float pipeline: equality up to repr rounding
@@ -80,6 +83,22 @@ class StoredObject:
         blob = json.loads(self.hypotheses_blob)
         deg = (blob.get("grounding_context") or {}).get("degradation") or {}
         return bool(deg.get("topology_stale")), bool(deg.get("storm_mode"))
+
+    def adjacency(self) -> TopologyAdjacency:
+        """The L2/L3 adjacency this object grounded on, embedded per snapshot (C7) so
+        an adjacency-grounded (fabric) edge replays against the SAME links, not the
+        live topology. Absent = none used (pre-C7 / seam-only objects)."""
+        blob = json.loads(self.hypotheses_blob)
+        pairs = (blob.get("grounding_context") or {}).get("adjacency") or ()
+        return TopologyAdjacency.from_links([{"a": p[0], "b": p[1]} for p in pairs])
+
+    def directed(self) -> DirectedTopology | None:
+        """A frozen oracle from the embedded directed-topology orientations (C7) — so a
+        directed edge recomputes its direction from the SAME answers, never from live
+        flow/route state. Absent block = undirected (pre-C7 default) → None → abstain."""
+        blob = json.loads(self.hypotheses_blob)
+        rows = (blob.get("grounding_context") or {}).get("orientations") or ()
+        return frozen_oracle(rows) if rows else None
 
 
 @dataclass
@@ -148,7 +167,9 @@ def replay(
 
     topo_stale, storm = stored.degradation()
     snapshots = run_window(window, catalog, seams, cfg,
-                           topology_stale=topo_stale, storm_mode=storm)
+                           adjacency=stored.adjacency(),
+                           topology_stale=topo_stale, storm_mode=storm,
+                           directed=stored.directed())
     match = next((s for s in snapshots if s.correlation_id == stored.correlation_id), None)
     if match is None:
         report.note(

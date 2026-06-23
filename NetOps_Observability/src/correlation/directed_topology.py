@@ -13,9 +13,9 @@ behavior — so wiring it in is a safe no-op until a source is fed (C7.3+).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional, Protocol
 
 
 class Verdict(str, Enum):
@@ -39,6 +39,13 @@ class Orientation:
 # does not cover the pair. Sources are consulted in PRECEDENCE order (measured >
 # observed > computed); each must answer for the SAME ordered (a, b) it is given.
 Source = Callable[[str, str], Optional[Orientation]]
+
+
+class Oracle(Protocol):
+    """Anything that can orient a device pair — the live DirectedTopology, a frozen
+    replay oracle, or a recording wrapper. The engine depends only on this."""
+
+    def orient(self, a: str | None, b: str | None) -> Orientation: ...
 
 
 @dataclass(frozen=True)
@@ -65,3 +72,36 @@ class DirectedTopology:
         if any(o.verdict != first.verdict for o in covering[1:]):
             return Orientation(Verdict.AMBIGUOUS, source="conflict")
         return first  # all covering sources agree → highest-precedence (first) answer
+
+
+@dataclass
+class RecordingOracle:
+    """Wraps an oracle and remembers every CONFIDENT orientation it returned, keyed
+    by the ordered pair asked. run_window uses this to capture exactly the directed
+    answers an object's edges were built on, so they can be EMBEDDED in the snapshot
+    and replayed deterministically (like seams) — direction never depends on live
+    state at replay time. Abstentions (UNKNOWN/AMBIGUOUS) are not recorded."""
+
+    inner: Oracle
+    calls: dict[tuple[str, str], Orientation] = field(default_factory=dict)
+
+    def orient(self, a: str | None, b: str | None) -> Orientation:
+        o = self.inner.orient(a, b)
+        if a and b and o.verdict in (Verdict.A_UPSTREAM, Verdict.B_UPSTREAM):
+            self.calls[(a, b)] = o
+        return o
+
+
+def frozen_oracle(orientations: Iterable[tuple]) -> DirectedTopology:
+    """Build an oracle that returns EMBEDDED orientations verbatim — the replay path.
+    Each row = (from_dev, to_dev, verdict_value, source). `orient(a,b)` returns the
+    stored verdict for that ordered pair, UNKNOWN otherwise. No live state → a directed
+    edge recomputes identically at replay time."""
+    table: dict[tuple[str, str], Orientation] = {}
+    for frm, to, verdict, source in orientations:
+        table[(str(frm), str(to))] = Orientation(Verdict(verdict), source=str(source))
+
+    def _src(a: str, b: str) -> Optional[Orientation]:
+        return table.get((a, b))
+
+    return DirectedTopology(sources=(("embedded", _src),))

@@ -25,13 +25,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from catalog import Catalog
-from directed_topology import DirectedTopology
+from directed_topology import Oracle, RecordingOracle
 from directed_topology import Verdict as _Verdict
 from layers import CausalLayer, layer_of, osi_label
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal
 
-ENGINE_SEMVER = "2.1.0"  # 2.1.0: C4 per-kind causal-layer direction prior (§4.3 vote #3)
+ENGINE_SEMVER = "2.2.0"  # 2.2.0: C7.3 live directed-topology vote #2 (NetFlow) + adjacency/orientation embedding
+# 2.1.0: C4 per-kind causal-layer direction prior (§4.3 vote #3)
 
 # Default onset uncertainty when a signal does not carry one (episodes stamp
 # attrs.onset_uncertainty_s; foreign signal kinds may not yet).
@@ -307,7 +308,7 @@ _LAYER = {
 
 
 def _direction(a: Node, b: Node, cfg: EngineConfig,
-               directed: "DirectedTopology | None" = None) -> tuple[float, str]:
+               directed: "Oracle | None" = None) -> tuple[float, str]:
     """2-of-3 to claim (§4.3): onset order + OSI layer prior + topology up/down.
     `a precedes b` (a is from_node). Each vote either agrees with a→b, conflicts
     (→ mixed/none), or abstains. The topology vote (#2) is supplied by the
@@ -348,7 +349,7 @@ def build_edges(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
     adjacency: TopologyAdjacency = TopologyAdjacency(),
     topology_stale: bool = False,
-    directed: DirectedTopology | None = None,
+    directed: Oracle | None = None,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node."""
@@ -420,6 +421,16 @@ class ObjectSnapshot:
     gap_hints: int
     topology_stale: bool = False   # §8: scored against a stale topology view (w_topo capped)
     storm_mode: bool = False       # §8: scored under window-flood (maxlen eviction active)
+    # C7: the directed-topology orientations this object's edges were built on —
+    # (from_dev, to_dev, verdict, source). EMBEDDED in the snapshot so a directed
+    # edge replays deterministically (reconstructed via frozen_oracle), exactly like
+    # seams. Empty for undirected objects → blob byte-identical to pre-C7 (no churn).
+    orientations: tuple[tuple, ...] = ()
+    # C7: the adjacency pairs (component-scoped) this object's edges grounded on.
+    # Embedded for the SAME reason seams are — an adjacency-grounded (fabric) edge
+    # must replay against the same topology, not live links. Empty when no adjacency
+    # grounding was used → blob unchanged (seam/containment objects never churn).
+    adjacency_pairs: tuple[tuple[str, str], ...] = ()
 
     def signal_count(self) -> int:
         return sum(len(n.signals) for n in self.nodes)
@@ -501,6 +512,17 @@ class ObjectSnapshot:
         # common case never churns a version or drifts on replay.
         if self.topology_stale or self.storm_mode:
             ctx["degradation"] = {"topology_stale": self.topology_stale, "storm_mode": self.storm_mode}
+        # C7: embed the directed-topology orientations ONLY when present, so an
+        # undirected object's blob (hence content_hash + replay pin) is byte-identical
+        # to pre-C7. A directed object embeds (from,to,verdict,source) → replay
+        # reconstructs the same oracle → same direction (deterministic, no live state).
+        if self.orientations:
+            ctx["orientations"] = [list(o) for o in self.orientations]
+        # C7: embed adjacency grounding (component-scoped) ONLY when used, so a
+        # seam/containment object's blob is byte-identical to pre-C7. Lets an
+        # adjacency-grounded fabric edge replay against the same links.
+        if self.adjacency_pairs:
+            ctx["adjacency"] = [list(p) for p in self.adjacency_pairs]
         return json.dumps({
             "ranking": self.ranking.to_dict(),
             "grounding_context": ctx,
@@ -612,7 +634,7 @@ def run_window(
     adjacency: TopologyAdjacency = TopologyAdjacency(),
     topology_stale: bool = False,
     storm_mode: bool = False,
-    directed: DirectedTopology | None = None,
+    directed: Oracle | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -632,7 +654,10 @@ def run_window(
     nodes = build_nodes(sigs)
     if not nodes:
         return []
-    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, directed)
+    # Wrap the direction oracle so we capture exactly the orientations the edges were
+    # built on — embedded per snapshot for deterministic replay (C7), like seams.
+    rec = RecordingOracle(directed) if directed is not None else None
+    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)
@@ -648,6 +673,20 @@ def run_window(
         first = min(comp, key=lambda n: (n.onset, n.key))
         onset_ms = int(first.onset.timestamp() * 1000)
         cid = str(uuid.uuid5(SIGNAL_NS, f"corrobj|{tenant}|{first.key}|{onset_ms}"))
+        # Component-scoped device set, for embedding the orientations + adjacency this
+        # object grounded on (both replay deterministically from the snapshot).
+        comp_devs = {n.device_part() for n in comp} - {None}
+        orientations: tuple[tuple, ...] = ()
+        if rec is not None and rec.calls:
+            orientations = tuple(sorted(
+                (a, b, o.verdict.value, o.source)
+                for (a, b), o in rec.calls.items()
+                if a in comp_devs and b in comp_devs
+            ))
+        adjacency_pairs = tuple(sorted(
+            (lo, hi) for p in adjacency.pairs
+            if p <= comp_devs for lo, hi in (tuple(sorted(p)),)
+        ))
         snapshots.append(ObjectSnapshot(
             correlation_id=cid,
             tenant_id=tenant,
@@ -664,6 +703,8 @@ def run_window(
             gap_hints=gap_hints,
             topology_stale=topology_stale,
             storm_mode=storm_mode,
+            orientations=orientations,
+            adjacency_pairs=adjacency_pairs,
         ))
     return snapshots
 

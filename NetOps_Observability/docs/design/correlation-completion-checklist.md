@@ -112,7 +112,7 @@ volume anomaly needs a multi-minute CUSUM baseline. +3 tests; 170 suite green; d
 after validation. *Future catalog growth (not C6):* DDoS / top-talker-shift / port-scan signatures on
 top of this volume series.
 
-### C7 · Direction inference — topology up/down vote  ⛔ *(BLOCKED on a directed-topology input — re-audited 2026-06-23)*
+### C7 · Direction inference — topology up/down vote  🟡 *(UNBLOCKING — C7.1/C7.2/C7.3 DONE; C7.4/C7.5 remain)*
 **Status:** the topo up/down vote correctly **abstains** (2-of-3 → 2 available votes: onset + layer).
 RE-AUDIT found it is **blocked, not merely unbuilt**: the engine receives only **undirected**
 adjacency (`TopologyAdjacency` = unordered device pairs) and **role-ambiguous** seams (a seam is an
@@ -143,7 +143,29 @@ Keystone = a shared **EntityResolver** (IP→device, ifIndex→ifName — data a
 > **Live-validated** on the clos lab: exported 10 devices / 36 iface-IPs / 144 ifIndexes; the engine
 > resolves `172.40.40.41→dmz-fw`, `10.0.0.14→leaf4:Loopback0`, `(spine2,1073808128)→spine2:system0`.
 > *Available to C7.3+ and the G2/C8 canonicalizer; not yet consumed (no source registered until C7.3).*
-> **Next: C7.3** — register the NetFlow direction source on the oracle, resolving through this bridge.
+>
+> **C7.3 ✅ (DONE 2026-06-23)** — the NetFlow direction source, the first source to FIRE vote #2.
+> `flow_direction.py`: a pure DirectedTopology source over directed per-device-pair volume —
+> dominant direction wins (≥ `CORR_FLOW_DOMINANCE`, default 0.6), BALANCED → AMBIGUOUS (never an
+> assumed direction — bidirectional honesty), no flow → UNKNOWN. `handle_flow` resolves each flow's
+> src/dst through the C7.1 resolver (cached per mtime — firehose-safe) and accumulates a directed
+> byte total; `engine_cycle` builds the per-tenant oracle (its volume ∪ global) and threads it into
+> `run_window`, so vote #2 now directs **same-layer fabric pairs** the engine couldn't before.
+> **Replay-safety (the crux):** a directed edge's orientation is EMBEDDED per snapshot
+> (`grounding_context.orientations`) and replay reconstructs a `frozen_oracle` from it — direction
+> never depends on live volume at replay time. This forced a latent fix: **adjacency grounding is now
+> also embedded** (`grounding_context.adjacency`), so an adjacency-grounded fabric edge replays against
+> the same links (pre-C7 it could not — seam-only objects were the only replay-safe ones). Both embed
+> ONLY when used → seam/containment objects' blobs are byte-identical (no churn). `ENGINE_SEMVER`→2.2.0
+> (replay honestly reports the logic change). +8 tests (source dominance/balanced/abstain, sample
+> resolve-or-abstain, end-to-end fabric-pair direction, **replay determinism via the embedded
+> orientation**, undirected-blob-unchanged); 201 Python suite green; ruff/mypy clean; deployed clean.
+> **Live-validated on the clos lab** (deterministic, against real resolver data): a flow between two
+> real device IPs resolves `→(dmz-fw, lan-sw1)`, the oracle returns A_UPSTREAM via netflow (conf 0.95),
+> and balanced volume abstains. Live directed EDGES populate when real device-to-device flows run
+> (tgen idle now; v1 coverage is src/dst→device — the in_if/out_if→neighbour fabric-transit refinement
+> + a rolling/decay volume window are documented follow-ons).
+> **Next: C7.4** — the active-path-trace (traceroute/STAMP) source, precedence-1, on the same oracle.
 
 ### C8 · G2 trap entity_id canonicalization — finish the lab/NAT remnant  🟡
 **Status:** PARTIAL. G2a shipped the production path (sysName/agent-addr/source-IP + ambiguity guard,

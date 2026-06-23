@@ -39,8 +39,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from catalog import builtin_catalog
+from directed_topology import DirectedTopology
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
 from entity_resolver import EntityResolver
+from flow_direction import flow_direction_sample, netflow_direction_source
 from episodes import EpisodeDetector
 from producers import (
     episode_signal,
@@ -201,6 +203,15 @@ FLOW_CORRELATION_ENABLED = os.environ.get("ENABLE_FLOW_CORRELATION", "true") == 
 _FLOW_AGG: Dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
 FLOWS_RECEIVED = 0
 PASSIVE_FLOW_SIGNALS = 0
+# C7.3 NetFlow direction: directed per-pair volume, tenant → {(src_dev,dst_dev): bytes}.
+# Accumulated CONTINUOUSLY (no reset) — the dominant direction is the structural
+# forwarding direction (the causal prior: A normally upstream of B), stable under a
+# fault that breaks but doesn't reverse it; a ratio is steady under steady traffic.
+# Bounded by communicating device-pairs. Feeds the oracle's NetFlow source each cycle.
+# (Rolling/decay window for faster reversal detection = a documented future refinement.)
+_FLOW_DIR: Dict[str, Dict[tuple, float]] = {}
+FLOW_DIRECTION_DOMINANCE = float(os.environ.get("CORR_FLOW_DOMINANCE", "0.6"))
+FLOW_DIRECTION_PAIRS = 0  # observability: distinct directed device-pairs seen
 SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
 # L2/L3 adjacency (LLDP/CDP/BGP-LS links) exported by the Go API — the grounding
 # input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
@@ -300,6 +311,26 @@ def entity_resolver_for(tenant: str) -> EntityResolver:
         return raw[section].get(tenant, []) + raw[section].get("", [])
 
     return EntityResolver.from_rows(slice_("devices"), slice_("interface_ips"), slice_("ifindex"))
+
+
+_resolver_cache: dict[str, EntityResolver] = {}
+_resolver_cache_mtime: float = -1.0
+
+
+def cached_entity_resolver_for(tenant: str) -> EntityResolver:
+    """entity_resolver_for, memoized per (tenant, file mtime) — handle_flow is a
+    firehose, so the resolver is built only when entity_resolver.json changes, not
+    per flow."""
+    global _resolver_cache, _resolver_cache_mtime
+    _entity_resolver_raw()  # refresh the underlying mtime cache
+    if _er_mtime != _resolver_cache_mtime:
+        _resolver_cache = {}
+        _resolver_cache_mtime = _er_mtime
+    r = _resolver_cache.get(tenant)
+    if r is None:
+        r = entity_resolver_for(tenant)
+        _resolver_cache[tenant] = r
+    return r
 
 
 def seam_inventory() -> tuple[SeamView, ...]:
@@ -424,9 +455,16 @@ async def engine_cycle() -> None:
         seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
         # Tenant-scoped adjacency: this tenant's links ∪ global — never cross-tenant.
         adjacency = TopologyAdjacency.from_links(adj_by_tenant.get(tenant, []) + adj_by_tenant.get("", []))
+        # C7.3: the directed-topology oracle for this tenant — the NetFlow direction
+        # source over its accumulated directed volume (∪ global). None when no directed
+        # volume yet → vote #2 abstains (safe no-op, exactly pre-C7 behavior).
+        vol = {**_FLOW_DIR.get("", {}), **_FLOW_DIR.get(tenant, {})}
+        directed = (DirectedTopology(sources=(
+            ("netflow", netflow_direction_source(vol, FLOW_DIRECTION_DOMINANCE)),))
+            if vol else None)
         try:
             snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
-                                   topology_stale=topo_stale, storm_mode=storm)
+                                   topology_stale=topo_stale, storm_mode=storm, directed=directed)
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue
@@ -976,6 +1014,17 @@ async def handle_flow(ev: dict) -> None:
     tenant = str(ev.get("tenant_id") or "") or tenant_for(sampler)
     agg = _FLOW_AGG.setdefault((tenant, entity), {"bytes": 0.0, "sampler": sampler})
     agg["bytes"] += bytes_est
+    # C7.3: directed per-pair volume. Resolve src/dst → devices (best-effort; abstains
+    # when an endpoint is unknown) and accumulate a directed byte total → the oracle's
+    # NetFlow direction source.
+    global FLOW_DIRECTION_PAIRS
+    dsample = flow_direction_sample(ev, cached_entity_resolver_for(tenant))
+    if dsample is not None:
+        sd, dd, dbytes = dsample
+        dirmap = _FLOW_DIR.setdefault(tenant, {})
+        if (sd, dd) not in dirmap:
+            FLOW_DIRECTION_PAIRS += 1
+        dirmap[(sd, dd)] = dirmap.get((sd, dd), 0.0) + dbytes
 
 
 async def _flush_flow_aggregator(now: datetime) -> None:
@@ -1089,6 +1138,8 @@ async def health() -> dict:
             "flows_received": FLOWS_RECEIVED,
             "passive_flow_signals": PASSIVE_FLOW_SIGNALS,
             "flow_entities_tracked": len(_FLOW_AGG),
+            # C7.3 NetFlow direction: distinct directed device-pairs observed.
+            "flow_direction_pairs": FLOW_DIRECTION_PAIRS,
         },
     }
 

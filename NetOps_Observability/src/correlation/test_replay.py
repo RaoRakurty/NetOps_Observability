@@ -8,7 +8,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from catalog import builtin_catalog
-from engine import EngineConfig, SeamView, run_window
+from directed_topology import DirectedTopology
+from engine import EngineConfig, SeamView, TopologyAdjacency, run_window
+from flow_direction import netflow_direction_source
 from replay import DriftReport, StoredObject, replay
 from signals import (
     EntityType,
@@ -101,6 +103,33 @@ def test_replay_round_trip_is_clean():
     report = replay(stored, window)
     assert report.engine_pin_match and report.catalog_pin_match
     assert report.clean, f"unexpected drift: {report.differences}"
+
+
+def test_directed_object_replays_clean_via_embedded_orientation():
+    # C7: a directed fabric pair must round-trip drift-free. Replay reconstructs the
+    # direction from the EMBEDDED orientation (StoredObject.directed → frozen oracle),
+    # never from live flow volume — so the directed edge recomputes identically.
+    def rsig(dev, off):
+        return Signal(
+            tenant_id="", ts=T0 + timedelta(seconds=off), source=Source.TOPOLOGY,
+            kind="bgp_adjacency_change",
+            observer=Observer(observer_id=dev, observer_type=ObserverType.DEVICE),
+            modality_class=ModalityClass.CONTROL_PLANE, entity_type=EntityType.DEVICE,
+            entity_id=dev, severity=Severity.HIGH, native_id=f"r|{dev}",
+            entity_tokens=(dev,), attrs={"onset_uncertainty_s": 1.0})
+
+    win = [rsig("leaf1", 0), rsig("spine1", 20)]
+    adj = TopologyAdjacency.from_links([{"a": "leaf1", "b": "spine1"}])
+    directed = DirectedTopology(sources=(("netflow", netflow_direction_source(
+        {("leaf1", "spine1"): 1000.0, ("spine1", "leaf1"): 50.0})),))
+    snap = run_window(win, builtin_catalog(), (), adjacency=adj, directed=directed)[0]
+    assert snap.orientations, "fixture must be a directed object"
+
+    stored, window = persist_and_rehydrate(snap, win)
+    assert stored.directed() is not None, "embedded orientations must rehydrate an oracle"
+    report = replay(stored, window)
+    assert report.engine_pin_match and report.catalog_pin_match
+    assert report.clean, f"directed object drifted on replay: {report.differences}"
 
 
 def test_replay_uses_embedded_grounding_context_not_live_state():
