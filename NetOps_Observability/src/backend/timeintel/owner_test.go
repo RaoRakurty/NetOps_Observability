@@ -17,15 +17,14 @@ func TestClassifyOwnerDomain(t *testing.T) {
 		{"netops", nil, DomainLAN, false},
 		{"", nil, DomainUnknown, false},
 		{"platform", nil, DomainInternal, true},
-		// explicit EXTERNAL owner is authoritative — internal tokens must NOT override
-		{"isp", map[string]string{"app_path": "api->clickhouse"}, DomainISP, false},
-		{"isp", map[string]string{"device": "spine1"}, DomainISP, false},
-		// internal detection only for ambiguous owners (netops/empty) on platform infra
+		// unambiguous platform-service objects are self-monitoring — WINS over owner
+		{"isp", map[string]string{"app_path": "api->clickhouse"}, DomainInternal, true},
 		{"netops", map[string]string{"device": "netbox"}, DomainInternal, true},
-		{"", map[string]string{"app_path": "prober->netbox"}, DomainInternal, true},
-		{"", map[string]string{"app_path": "api->clickhouse"}, DomainInternal, true},
-		// a real LAN device with no internal tokens stays LAN
+		{"cloud_provider", map[string]string{"app_path": "prober->netbox"}, DomainInternal, true},
+		// real fabric (no platform token) keeps its engine owner
+		{"isp", map[string]string{"device": "spine1"}, DomainISP, false},
 		{"netops", map[string]string{"device": "spine1"}, DomainLAN, false},
+		{"cloud_provider", map[string]string{"device": "wan-r2"}, DomainCloud, false},
 	}
 	for _, c := range cases {
 		got, internal := ClassifyOwnerDomain(c.owner, c.group)

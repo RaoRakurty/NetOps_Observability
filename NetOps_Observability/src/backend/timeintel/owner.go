@@ -61,9 +61,15 @@ func looksInternal(group map[string]string) bool {
 // is where Correlix's own self-monitoring noise actually lives.
 func ClassifyOwnerDomain(owner string, group map[string]string) (OwnerDomain, bool) {
 	o := strings.ToLower(strings.TrimSpace(owner))
-	switch o {
-	case "platform", "internal":
+	// A platform/internal owner, OR an object that is unambiguously one of Correlix's
+	// own stack services (clickhouse/netbox/prober/api/…), is self-monitoring — this
+	// WINS over the engine's seam owner: an incident "on" the flow store can't be an
+	// ISP incident even if the engine labelled it isp. Real fabric (spine1/leaf1/
+	// wan-r2) carries no such token, so genuine customer incidents are unaffected.
+	if o == "platform" || o == "internal" || looksInternal(group) {
 		return DomainInternal, true
+	}
+	switch o {
 	case "isp", "carrier", "wan_provider", "provider":
 		return DomainISP, false
 	case "sdwan_vendor", "sdwan", "sd-wan":
@@ -73,16 +79,8 @@ func ClassifyOwnerDomain(owner string, group map[string]string) (OwnerDomain, bo
 	case "saas", "app_team", "app":
 		return DomainApp, false
 	case "netops", "network_ops", "lan", "colo_provider", "dc":
-		// A clear network owner — but if the object is plainly platform infra (no
-		// external owner involved), it's self-monitoring, not customer LAN.
-		if looksInternal(group) {
-			return DomainInternal, true
-		}
 		return DomainLAN, false
 	default: // "" / unknown / unrecognised
-		if looksInternal(group) {
-			return DomainInternal, true
-		}
 		return DomainUnknown, false
 	}
 }
