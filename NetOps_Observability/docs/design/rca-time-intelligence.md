@@ -1,7 +1,7 @@
 # RCA Time Intelligence — Incident Time Decomposition
 
-**Tracker:** #84 · **Status:** P1a + P1b + P1c + P2 SHIPPED & live · P3 (exec
-dashboard), P1d (persistence/RLS/manual-edit/backfill), docs page REMAINING.
+**Tracker:** #84 · **Status:** P1a + P1b + P1c + P2 + P3 SHIPPED & live · P1d (persistence/RLS/
+manual-edit/backfill) + docs page REMAINING.
 **Owner spec:** 2026-06-24 (chat). **This doc** is the durable design of record.
 
 ---
@@ -139,8 +139,8 @@ idempotent + retry-safe; PII/secrets redacted from ITSM/source payloads.
 - **P1b ✅** `d9bbf52` — deriveLifecycle + `/time-metrics` (4 tests, live).
 - **P1c ✅** `76bfa35` — Time Impact card + lifecycle timeline (1 test, live).
 - **P2 ✅** `c0cf42e` — `rollup.go` + `/reliability/*` (7 tests, live over 5000 obj).
-- **P3 ⏳** — executive reliability dashboard widgets (trends, MTBF by seam/provider/
-  site, top-10 chronic offenders, top time-loss phase, evidence-gap delay) + filters.
+- **P3 ✅** `b3f353e` — Operational Recovery Scorecard page (scorecard stats, MTTI★
+  trend chart, chronic-offenders table, filters) + `GET /api/reliability/trends`.
 - **P1d ⏳** — migration 0014 + persistence + audited manual edits + backfill + RLS
   isolation test.
 - **Docs page ⏳** — operator-facing definitions + formulas (this doc is the design;
