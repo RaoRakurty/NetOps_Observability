@@ -10,13 +10,16 @@ const ME = { username: "alice", role: "operator", tenant_id: "t_acme", platform_
 
 // Two nodes: one calm (named only at operator+), one in trouble (named at every
 // density). Both carry CPU/MEM so the engineer metric strip has data.
-function node(id: string, label: string, health: string) {
+function node(id: string, label: string, health: string, issues?: { severity: string; summary: string; since?: string }[]) {
   return {
     id, label, kind: "router", health, confidence: 1, resolved: true,
     metrics: { cpu_pct: 42, mem_pct: 61 },
     evidence: [{ source: "lldp", confidence: 1 }],
+    ...(issues ? { issues } : {}),
   };
 }
+
+const SICK_ISSUE = [{ severity: "critical", summary: "BGP peer 10.0.0.5 down (hold timer expired)", since: new Date().toISOString() }];
 
 function topoView(mode: string) {
   const base = { view_id: "v", mode, scope: { tenant_id: "t_acme" }, layout_type: "spine_leaf", generated_at: new Date().toISOString(), groups: [] };
@@ -39,7 +42,7 @@ function topoView(mode: string) {
   }
   return {
     ...base,
-    nodes: [node("calm-sw", "calm-sw", "ok"), node("sick-rtr", "sick-rtr", "critical")],
+    nodes: [node("calm-sw", "calm-sw", "ok"), node("sick-rtr", "sick-rtr", "critical", SICK_ISSUE)],
     edges: [{ id: "e1", source: "calm-sw", target: "sick-rtr", status: "up", confidence: 1, evidence: [{ source: "lldp", confidence: 1 }] }],
     overlays: ["health"],
   };
@@ -98,6 +101,14 @@ test("no dead tabs: only implemented workflows are offered (no greyed do-nothing
   // The placeholder modes are NOT rendered (they were greyed + did nothing).
   await expect(page.getByRole("button", { name: "Change Review", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Executive / Geo", exact: true })).toHaveCount(0);
+});
+
+test("clicking a critical device shows WHY (active issues), not just a colour", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByText("sick-rtr", { exact: true }).first().click();
+  // The inspector answers "why critical" with the actual alert, not just a colour.
+  await expect(page.getByText(/Active issues/i)).toBeVisible();
+  await expect(page.getByText("BGP peer 10.0.0.5 down (hold timer expired)")).toBeVisible();
 });
 
 test("overlay selector offers only applicable overlays — no permanently-dead greyed tabs", async ({ page }) => {

@@ -96,6 +96,14 @@ type EvidenceRef struct {
 	ObservedAt string  `json:"observed_at,omitempty"` // RFC3339 (derived, but cheap & useful)
 }
 
+// NodeIssue — one active alert behind a node's health. The inspector's "why is this
+// critical" section. Mirrors AlertFact minus the device id (it's on the node).
+type NodeIssue struct {
+	Severity string `json:"severity"`        // critical|warning|info
+	Summary  string `json:"summary"`         // the alert one-liner (what is wrong)
+	Since    string `json:"since,omitempty"` // RFC3339 fired-at
+}
+
 // ── output: node ─────────────────────────────────────────────────────────────
 
 type Node struct {
@@ -116,6 +124,10 @@ type Node struct {
 	ChangeState string             `json:"change_state,omitempty"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	Evidence    []EvidenceRef      `json:"evidence"`
+	// Issues are the active alerts DRIVING this node's health — surfaced so the
+	// inspector can answer "why is this device critical/warning" with the actual
+	// problem, not just a colour. Worst-first, capped. Empty when healthy.
+	Issues []NodeIssue `json:"issues,omitempty"`
 	// derived enrichment the backend can safely supply
 	Resolved bool   `json:"resolved"`
 	GroupID  string `json:"group_id,omitempty"`

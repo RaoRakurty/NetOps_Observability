@@ -127,6 +127,58 @@ function UnresolvedBlock({ node }: { node: TopologyNode }) {
   );
 }
 
+const ISSUE_COLOR: Record<string, string> = {
+  critical: "var(--danger, #e5484d)", crit: "var(--danger, #e5484d)", major: "var(--danger, #e5484d)",
+  emergency: "var(--danger, #e5484d)", warning: "var(--warning, #f5a524)", warn: "var(--warning, #f5a524)",
+  minor: "var(--warning, #f5a524)",
+};
+function issueColor(sev: string): string {
+  return ISSUE_COLOR[sev.toLowerCase()] ?? "var(--fg-muted)";
+}
+function sinceLabel(ts?: string): string {
+  if (!ts) return "";
+  const t = Date.parse(ts);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+// IssuesBlock — the "why is this device critical/warning" answer. The FIRST thing an
+// operator needs on click: the active alerts driving the health, worst-first.
+function IssuesBlock({ issues }: { issues: NonNullable<TopologyNode["issues"]> }) {
+  if (!issues || issues.length === 0) return null;
+  const worst = issueColor(issues[0].severity);
+  return (
+    <section
+      style={{
+        marginBottom: 14,
+        border: `1px solid ${worst}`,
+        borderRadius: 8,
+        background: `color-mix(in srgb, ${worst} 8%, var(--surface))`,
+        padding: "10px 11px",
+      }}
+    >
+      <div style={{ ...sectionTitle, marginBottom: 8, color: "var(--fg)" }}>Active issues · {issues.length}</div>
+      <div style={{ display: "grid", gap: 9 }}>
+        {issues.map((iss, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: issueColor(iss.severity), flex: "0 0 auto", marginTop: 4 }} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.45, wordBreak: "break-word" }}>{iss.summary}</div>
+              <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.3, marginTop: 1 }}>
+                {iss.severity}{sinceLabel(iss.since) ? ` · ${sinceLabel(iss.since)}` : ""}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function NodeBody({ node }: { node: TopologyNode }) {
   const metrics = Object.entries(node.metrics ?? {});
   const unresolved = node.resolved === false || node.kind === "unresolved";
@@ -140,6 +192,8 @@ function NodeBody({ node }: { node: TopologyNode }) {
       <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 14 }}>
         {[node.kind, node.role].filter(Boolean).join(" · ")}
       </div>
+
+      <IssuesBlock issues={node.issues ?? []} />
 
       <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
         <MetaRow label="Vendor" value={node.vendor} />

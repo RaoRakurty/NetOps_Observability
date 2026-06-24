@@ -123,6 +123,9 @@ export type TopologyNode = {
   /** Skill metric keys: cpu_pct, mem_pct, link_count, alert_count, … */
   metrics?: Record<string, number | string>;
   evidence: EvidenceRef[];
+  /** Active alerts DRIVING this node's health — the inspector's "why is this
+   * critical/warning" answer. Worst-first, capped. Empty/absent when healthy. */
+  issues?: { severity: string; summary: string; since?: string }[];
   // ── derived / UI enrichment (not canonical API) ──
   zone?: string;
   group_id?: string;

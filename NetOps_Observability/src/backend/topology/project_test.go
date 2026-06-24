@@ -159,6 +159,17 @@ func TestProjectHealthDerivation(t *testing.T) {
 	if crit.Metrics["alert_count"] != 2 {
 		t.Errorf("crit alert_count should be 2, got %v", crit.Metrics["alert_count"])
 	}
+	// Issues surface the alerts DRIVING health, worst-first — the inspector's "why is
+	// this critical". crit has critical+warning → 2 issues, critical ranked first.
+	if len(crit.Issues) != 2 {
+		t.Fatalf("crit should carry 2 issues, got %d", len(crit.Issues))
+	}
+	if crit.Issues[0].Severity != "critical" {
+		t.Errorf("worst issue must rank first, got %q", crit.Issues[0].Severity)
+	}
+	if fresh, _ := findNode(v, "fresh"); len(fresh.Issues) != 0 {
+		t.Errorf("a healthy node must carry no issues, got %d", len(fresh.Issues))
+	}
 }
 
 // Multi-source corroboration raises edge confidence above a single source.

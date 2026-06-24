@@ -327,6 +327,7 @@ func (v *View) EnrichLive(alertsByDevice map[string][]AlertFact, cpu, mem map[st
 		default:
 			n.Health = HealthOK
 		}
+		n.Issues = nodeIssues(al) // why-it's-critical, same as the live projection
 		m := map[string]float64{"alert_count": float64(len(al))}
 		if c, ok := cpu[n.ID]; ok {
 			m["cpu_pct"] = c

@@ -131,6 +131,7 @@ func Project(in Input) View {
 			ChangeState: change,
 			Metrics:     deviceMetrics(d, linkCount[d.ID], len(alertsByDev[d.ID])),
 			Evidence:    deviceEvidence(d),
+			Issues:      nodeIssues(alertsByDev[d.ID]),
 			Resolved:    true,
 			GroupID:     groupID(d.Site),
 		}
@@ -316,6 +317,46 @@ func AlertSeverityHealth(alerts []AlertFact) string {
 		}
 	}
 	return worst
+}
+
+// alertSeverityRank orders alerts for the inspector's issue list (higher = worse).
+func alertSeverityRank(s string) int {
+	switch strings.ToLower(s) {
+	case "critical", "major", "crit", "emergency":
+		return 4
+	case "warning", "minor", "warn":
+		return 3
+	case "info", "notice":
+		return 2
+	default:
+		return 1
+	}
+}
+
+// nodeIssues turns the alerts driving a device's health into inspector-ready issues —
+// worst-severity first, then most-recent, capped so a flapping device can't flood the
+// panel. This is what answers "why is this device critical?" on click. Empty = healthy.
+func nodeIssues(alerts []AlertFact) []NodeIssue {
+	if len(alerts) == 0 {
+		return nil
+	}
+	sorted := append([]AlertFact(nil), alerts...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, rj := alertSeverityRank(sorted[i].Severity), alertSeverityRank(sorted[j].Severity)
+		if ri != rj {
+			return ri > rj
+		}
+		return sorted[i].FiredAt.After(sorted[j].FiredAt)
+	})
+	const maxIssues = 6
+	if len(sorted) > maxIssues {
+		sorted = sorted[:maxIssues]
+	}
+	out := make([]NodeIssue, 0, len(sorted))
+	for _, a := range sorted {
+		out = append(out, NodeIssue{Severity: a.Severity, Summary: a.Summary, Since: rfc3339(a.FiredAt)})
+	}
+	return out
 }
 
 func deviceMetrics(d DeviceFact, links, alerts int) map[string]float64 {
