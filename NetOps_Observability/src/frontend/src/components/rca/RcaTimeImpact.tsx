@@ -1,83 +1,75 @@
 // RcaTimeImpact — the "Time Impact" card for the RCA detail window (RCA Time
-// Intelligence). It breaks one incident's clock apart and shows WHERE the time went:
-// detection → correlation → root/seam ISOLATION (MTTI, the hero) → owner → evidence
-// → ticket → ack → mitigate → recover → close, plus the CURRENT BOTTLENECK.
+// Intelligence). It breaks one incident's clock apart in two zones: what Correlix has
+// PROVEN/inferred (detect → correlate → root/seam ISOLATION (MTTI, the hero) → owner →
+// evidence) and the WORKFLOW & RECOVERY lifecycle that requires ITSM/recovery evidence.
 //
-// Phase-consistent: the bottleneck is the earliest INCOMPLETE phase (backend walk),
-// so it never says "provider repair pending" while evidence/ticket are still open.
-// Honesty: inferred timestamps are chipped; ITSM/recovery phases with no workflow
-// read "Workflow required" / natural pending text — never a bare dash, never fabricated.
+// State model: each phase is observed | inferred | completed | not_measured | pending |
+// current. A "measurement gap" (workflow not connected) is NOT a bottleneck — Correlix
+// finished RCA; the downstream steps just aren't observable yet, so they read
+// "Not measured", never "Workflow required" (which would imply the NOC failed).
 
 import { useEffect, useState } from "react";
 import { api, type TimeIntel, type Bottleneck, type TimeIntelLifecycleRow } from "../../services/api";
 
-// ── phase rows (spec order). Each maps to a backend lifecycle event_type. ──
 type PhaseKey =
   | "detected" | "correlated" | "root_isolated" | "owner_assigned" | "evidence_bundle_ready"
   | "ticket_created" | "acknowledged" | "mitigated" | "service_recovered" | "ticket_closed";
-const PHASES: { key: PhaseKey; event: string; label: string; pending: string; star?: boolean; workflow?: boolean }[] = [
+type PhaseStatus = "observed" | "inferred" | "current" | "not_measured" | "pending";
+
+type Phase = { key: PhaseKey; event: string; label: string; pending: string; star?: boolean; workflow?: boolean };
+// RCA-evidence zone (proven/inferred by Correlix) + Workflow & recovery zone (needs evidence).
+const RCA_ZONE: Phase[] = [
   { key: "detected", event: "detected", label: "Detected", pending: "Awaiting detection" },
   { key: "correlated", event: "correlation_completed", label: "Correlated", pending: "Awaiting correlation" },
   { key: "root_isolated", event: "root_domain_identified", label: "Root / seam isolated", pending: "Awaiting root isolation", star: true },
   { key: "owner_assigned", event: "owner_identified", label: "Owner assigned", pending: "Awaiting owner assignment" },
   { key: "evidence_bundle_ready", event: "evidence_ready", label: "Evidence bundle ready", pending: "Awaiting evidence bundle" },
+];
+const WF_ZONE: Phase[] = [
   { key: "ticket_created", event: "ticket_created", label: "Ticket created", pending: "Awaiting ticket creation", workflow: true },
   { key: "acknowledged", event: "acknowledged", label: "Acknowledged", pending: "Awaiting acknowledgement", workflow: true },
   { key: "mitigated", event: "mitigated", label: "Mitigated", pending: "Awaiting mitigation", workflow: true },
   { key: "service_recovered", event: "recovered", label: "Service recovered", pending: "Awaiting recovery signal", workflow: true },
-  { key: "ticket_closed", event: "closed", label: "Ticket closed", pending: "Awaiting ticket closure", workflow: true },
+  { key: "ticket_closed", event: "ticket_closed", label: "Ticket closed", pending: "Awaiting ticket closure", workflow: true },
 ];
 
-// the lifecycle phase each current-bottleneck value points at (for "current" highlight)
 const BOTTLENECK_PHASE: Partial<Record<Bottleneck, PhaseKey>> = {
   root_isolation: "root_isolated", owner_assignment: "owner_assigned", evidence_bundle: "evidence_bundle_ready",
-  ticket_creation: "ticket_created", workflow_not_connected: "ticket_created", acknowledgement: "acknowledged",
+  ticket_creation: "ticket_created", acknowledgement: "acknowledged",
   provider_repair: "mitigated", mitigation: "mitigated", recovery: "service_recovered", closure: "ticket_closed",
 };
+// Real bottleneck labels (only used when there's a measured delay, not a measurement gap).
 const BOTTLENECK_LABEL: Record<Bottleneck, string> = {
   resolved: "Resolved", detection: "Detection pending", correlation: "Correlation pending",
   root_isolation: "Root domain isolation pending", owner_assignment: "Owner assignment pending",
-  evidence_bundle: "Evidence bundle pending", ticket_creation: "Ticket creation pending",
-  acknowledgement: "Provider acknowledgement pending", provider_repair: "Provider repair pending",
-  mitigation: "Mitigation pending", recovery: "Recovery validation pending", closure: "Ticket closure pending",
-  workflow_not_connected: "Workflow not connected", unknown: "—",
-};
-// banner tone: amber = operator-controllable delay; slate = external/workflow; green = resolved.
-const BOTTLENECK_TONE: Record<Bottleneck, "amber" | "slate" | "good"> = {
-  resolved: "good", detection: "amber", correlation: "amber", root_isolation: "amber",
-  owner_assignment: "amber", evidence_bundle: "amber", ticket_creation: "amber", acknowledgement: "slate",
-  provider_repair: "slate", mitigation: "amber", recovery: "amber", closure: "slate",
-  workflow_not_connected: "slate", unknown: "slate",
+  evidence_bundle: "Evidence bundle pending", ticket_creation: "Ticket creation delayed",
+  acknowledgement: "Acknowledgement delayed", provider_repair: "Provider repair pending",
+  mitigation: "Mitigation delayed", recovery: "Recovery delayed", closure: "Ticket closure delayed",
+  workflow_not_connected: "ITSM / recovery workflow not connected", unknown: "—",
 };
 
 const STAGE_TIPS: Record<string, string> = {
-  impact: "Incident impact onset. May be inferred if no direct impact signal exists.",
+  impact: "Incident impact onset. May be inferred from the earliest customer-impacting signal.",
   first_signal: "First observable signal associated with this incident.",
-  detected: "Incident detected by Correlix.",
-  correlated: "Related signals grouped into one incident.",
-  root_isolated: "Likely root domain/seam isolated with evidence.",
-  owner: "Responsible owner domain assigned.",
-  evidence: "Evidence package ready for workflow/escalation.",
-  ticket: "ITSM/provider ticket created.",
-  acknowledged: "Owner/provider acknowledged the ticket.",
-  mitigated: "Mitigation action recorded.",
-  recovered: "Service recovery signal observed.",
-  ticket_closed: "Ticket/workflow closed.",
+  detected: "Incident detected by Correlix.", correlated: "Related signals grouped into one incident.",
+  root_isolated: "Likely root domain/seam isolated with evidence.", owner: "Responsible owner domain assigned.",
+  evidence: "Evidence package ready for workflow/escalation.", ticket: "ITSM/provider ticket created.",
+  acknowledged: "Owner/provider acknowledged the ticket.", mitigated: "Mitigation action recorded.",
+  recovered: "Service recovery signal observed.", ticket_closed: "Ticket/workflow closed.",
 };
-// bottom timeline (consistent terminology with the rows)
-const TIMELINE: { key: string; label: string; tip: string }[] = [
+const TIMELINE: { key: string; label: string; tip: string; hero?: boolean }[] = [
   { key: "impact", label: "Impact", tip: STAGE_TIPS.impact },
   { key: "first_signal", label: "First signal", tip: STAGE_TIPS.first_signal },
   { key: "detected", label: "Detected", tip: STAGE_TIPS.detected },
   { key: "correlation_completed", label: "Correlated", tip: STAGE_TIPS.correlated },
-  { key: "root_domain_identified", label: "Root isolated", tip: STAGE_TIPS.root_isolated },
+  { key: "root_domain_identified", label: "Isolated", tip: STAGE_TIPS.root_isolated, hero: true },
   { key: "owner_identified", label: "Owner", tip: STAGE_TIPS.owner },
-  { key: "evidence_ready", label: "Evidence bundle", tip: STAGE_TIPS.evidence },
+  { key: "evidence_ready", label: "Evidence", tip: STAGE_TIPS.evidence },
   { key: "ticket_created", label: "Ticket", tip: STAGE_TIPS.ticket },
-  { key: "acknowledged", label: "Acknowledged", tip: STAGE_TIPS.acknowledged },
+  { key: "acknowledged", label: "Ack", tip: STAGE_TIPS.acknowledged },
   { key: "mitigated", label: "Mitigated", tip: STAGE_TIPS.mitigated },
-  { key: "recovered", label: "Service recovered", tip: STAGE_TIPS.recovered },
-  { key: "closed", label: "Ticket closed", tip: STAGE_TIPS.ticket_closed },
+  { key: "recovered", label: "Recovered", tip: STAGE_TIPS.recovered },
+  { key: "closed", label: "Closed", tip: STAGE_TIPS.ticket_closed },
 ];
 
 function fmtElapsed(ms: number): string {
@@ -90,6 +82,7 @@ function fmtElapsed(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${m - h * 60}m`;
 }
+const confidenceWord = (tier: string) => tier === "confirmed" ? "Confirmed" : tier === "suspected" ? "Suspected" : "Inferred";
 
 export default function RcaTimeImpact({ correlationId }: { correlationId: string }) {
   const [d, setD] = useState<TimeIntel | null>(null);
@@ -99,9 +92,7 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
     let alive = true;
     setD(null); setErr("");
     if (!correlationId) return;
-    api.correlationTimeMetrics(correlationId)
-      .then((r) => { if (alive) setD(r); })
-      .catch(() => { if (alive) setErr("unavailable"); });
+    api.correlationTimeMetrics(correlationId).then((r) => { if (alive) setD(r); }).catch(() => { if (alive) setErr("unavailable"); });
     return () => { alive = false; };
   }, [correlationId]);
 
@@ -109,18 +100,61 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
   if (!d) return <div className="ti-card ti-empty">Loading time impact…</div>;
 
   const at = new Map<string, TimeIntelLifecycleRow>(d.lifecycle.map((l) => [l.event_type, l]));
-  // Impact onset anchor: impact_started if present, else first_signal (inferred).
   const impact = at.get("impact_started") ?? at.get("first_signal");
   const impactInferred = !at.get("impact_started");
   const impactMs = impact ? Date.parse(impact.at) : NaN;
-  const currentPhase = BOTTLENECK_PHASE[d.current_bottleneck];
-  const tone = BOTTLENECK_TONE[d.current_bottleneck];
 
-  // Identical-timestamp honesty: the engine grounds correlation+isolation+owner+
-  // evidence in ONE persist, so those elapsed times legitimately coincide.
-  const groundedSameUpdate = ["correlation_completed", "root_domain_identified", "owner_identified"]
-    .map((e) => at.get(e)?.at).filter(Boolean);
-  const sameUpdate = groundedSameUpdate.length >= 2 && new Set(groundedSameUpdate).size === 1;
+  // A "measurement gap" = the downstream workflow is not OBSERVABLE (not connected),
+  // NOT a process bottleneck. Only call it a bottleneck for a real RCA/measured delay.
+  const measurementGap = d.current_bottleneck === "workflow_not_connected";
+  const currentPhase = measurementGap ? undefined : BOTTLENECK_PHASE[d.current_bottleneck];
+  const elapsedTo = (ev: string): number | null => {
+    const r = at.get(ev); return r && !Number.isNaN(impactMs) ? Date.parse(r.at) - impactMs : null;
+  };
+  const isoMs = elapsedTo("root_domain_identified");
+
+  // Data-driven outcome line.
+  const outcome = (() => {
+    if (isoMs == null) return "RCA is correlating evidence toward root-domain isolation.";
+    const isoStr = fmtElapsed(isoMs);
+    const recMs = elapsedTo("recovered"), closeMs = elapsedTo("closed");
+    if (recMs != null || closeMs != null) {
+      const parts = [`RCA isolated the root domain in ${isoStr}.`];
+      if (recMs != null) parts.push(`Service recovery completed in ${fmtElapsed(recMs)}.`);
+      if (closeMs != null) parts.push(`Ticket closed in ${fmtElapsed(closeMs)}.`);
+      return parts.join(" ");
+    }
+    return `RCA completed through root-domain isolation in ${isoStr}. Recovery and ticket-closure timing are not measured because workflow evidence is not connected.`;
+  })();
+
+  function Row({ p }: { p: Phase }) {
+    const ev = at.get(p.event);
+    const isCurrent = currentPhase === p.key;
+    const elapsed = ev && !Number.isNaN(impactMs) ? Date.parse(ev.at) - impactMs : null;
+    const status: PhaseStatus = ev ? (ev.timestamp_source === "inferred" ? "inferred" : "observed")
+      : p.workflow && !d!.workflow_connected ? "not_measured" : isCurrent ? "current" : "pending";
+    return (
+      <div className={`ti-row${p.star ? " ti-row-star" : ""}${status === "current" ? " ti-row-current" : ""}${status === "not_measured" ? " ti-row-nm" : ""}`}>
+        <span className="ti-row-label">
+          {p.star && <span className="ti-star" aria-hidden="true">★</span>}{p.label}
+          {p.star && ev && <span className="ti-row-ctx">{[d!.owner_label && `Owner: ${d!.owner_label}`, `${confidenceWord(d!.verdict_tier)} · evidence bundle ready`].filter(Boolean).join(" · ")}</span>}
+          {p.key === "owner_assigned" && ev && (
+            <span className="ti-row-ctx" title="Owner was inferred from root-domain, seam ownership, and supporting evidence. No external workflow assignment observed.">
+              {ev.timestamp_source === "inferred" ? "Inferred · Source: Correlix RCA" : "Assigned · Source: workflow"}
+            </span>
+          )}
+        </span>
+        {ev ? (
+          <span className="ti-row-val">{elapsed != null ? fmtElapsed(elapsed) : "—"}
+            {ev.timestamp_source === "inferred" && <span className="ti-src ti-src-inferred" title="Derived (e.g. impact onset from the first observable signal).">Inferred</span>}</span>
+        ) : status === "not_measured" ? (
+          <span className="ti-row-val ti-row-na"><span className="ti-src-muted" title="ITSM / recovery workflow evidence not connected.">Not measured</span></span>
+        ) : (
+          <span className={`ti-row-val ti-row-na${isCurrent ? " ti-na-current" : ""}`}><span className="ti-pending">{p.pending}</span></span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="ti-card">
@@ -129,59 +163,48 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
         <span className="ti-sub">Incident time decomposition</span>
       </div>
 
-      {/* CURRENT BOTTLENECK — phase-consistent, precise, non-marketing. */}
-      <div className={`ti-driver ti-tone-${tone}`}>
-        <span className="ti-driver-tag">Current bottleneck</span>
+      {/* Data-driven outcome line — separates the investigation clock from the repair clock. */}
+      <div className="ti-outcome">{outcome}</div>
+
+      {/* Current measurement gap (workflow unobservable) vs real bottleneck (measured delay). */}
+      <div className={`ti-driver ${measurementGap ? "ti-tone-slate" : d.current_bottleneck === "resolved" ? "ti-tone-good" : "ti-tone-amber"}`}>
+        <span className="ti-driver-tag">{measurementGap ? "Current measurement gap" : "Current bottleneck"}</span>
         <span className="ti-driver-name">{BOTTLENECK_LABEL[d.current_bottleneck]}</span>
-        <span className="ti-driver-expl">{d.bottleneck_message}</span>
+        <span className="ti-driver-expl">
+          {measurementGap
+            ? "RCA evidence is ready. Ticket creation, acknowledgement, mitigation, service recovery and closure timing require ServiceNow, Jira, PagerDuty, or Correlix operator workflow evidence."
+            : d.bottleneck_message}
+        </span>
       </div>
 
-      <div className="ti-basis" title="Impact onset may be inferred from the first observable signal and correlation window. Inferred timestamps are marked explicitly.">
-        Elapsed from {impactInferred ? "inferred " : ""}impact onset
+      <div className="ti-basis" title="Elapsed time is measured from the earliest observed or inferred customer-impacting signal in this RCA group.">
+        Elapsed from first impact signal{impactInferred && <span className="ti-onset-badge">Inferred onset</span>}
       </div>
 
-      <div className="ti-rows">
-        {PHASES.map((p) => {
-          const ev = at.get(p.event);
-          const isCurrent = currentPhase === p.key;
-          const elapsed = ev && !Number.isNaN(impactMs) ? Date.parse(ev.at) - impactMs : null;
-          return (
-            <div key={p.key} className={`ti-row${p.star ? " ti-row-star" : ""}${isCurrent ? " ti-row-current" : ""}`}>
-              <span className="ti-row-label">
-                {p.star && <span className="ti-star" aria-hidden="true">★</span>}{p.label}
-                {/* Root-isolated context: owner + evidence confidence (the MTTI proof). */}
-                {p.star && ev && (d.owner_label || d.confidence_label) && (
-                  <span className="ti-row-ctx">{[d.owner_label && `${d.owner_label}-owned`, d.confidence_label].filter(Boolean).join(" · ")}</span>
-                )}
-              </span>
-              {ev ? (
-                <span className="ti-row-val" title={sameUpdate && ["correlated", "root_isolated", "owner_assigned"].includes(p.key) ? "Correlation, isolation and owner assignment were completed by the same evidence update." : undefined}>
-                  {elapsed != null ? fmtElapsed(elapsed) : "—"}
-                  {ev.timestamp_source === "inferred" && <span className="ti-src ti-src-inferred" title="Derived (e.g. impact onset from the first observable signal).">Inferred</span>}
-                </span>
-              ) : (
-                <span className={`ti-row-val ti-row-na${isCurrent ? " ti-na-current" : ""}`}>
-                  {p.workflow && !d.workflow_connected
-                    ? <span className="ti-src-muted" title="Requires ServiceNow, Jira, PagerDuty, or operator workflow evidence.">Workflow required</span>
-                    : <span className="ti-pending">{p.pending}</span>}
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {/* Zone 1 — RCA evidence timeline (proven/inferred by Correlix). */}
+      <div className="ti-zone-label">RCA evidence timeline</div>
+      <div className="ti-rows">{RCA_ZONE.map((p) => <Row key={p.key} p={p} />)}</div>
 
-      {/* Lifecycle timeline — consistent labels; current bottleneck stage = amber. */}
+      {/* Zone 2 — workflow & recovery lifecycle (requires ITSM/recovery evidence). */}
+      <div className="ti-zone-label ti-zone-wf">Workflow &amp; recovery timeline</div>
+      <div className="ti-rows">{WF_ZONE.map((p) => <Row key={p.key} p={p} />)}</div>
+
+      {/* Operational CTA when the workflow is unmeasured (not salesy). */}
+      {measurementGap && (
+        <div className="ti-cta">Connect ITSM or enable Correlix operator workflow to measure recovery and closure timing.</div>
+      )}
+
+      {/* Milestone rail: green observed · purple isolation · gray-hollow not measured. */}
       <div className="ti-timeline" aria-label="Incident lifecycle">
         {TIMELINE.map((st) => {
-          const reached = !!at.get(st.key) || (st.key === "impact" && !!impact);
-          const isCurrentStage = currentPhase && BOTTLENECK_PHASE[d.current_bottleneck] &&
-            PHASES.find((p) => p.key === currentPhase)?.event === st.key;
           const row = at.get(st.key);
-          const cls = reached ? "on" : isCurrentStage ? "current" : "";
+          const reached = !!row || (st.key === "impact" && !!impact);
+          const wfStage = ["ticket_created", "acknowledged", "mitigated", "recovered", "closed"].includes(st.key);
+          const notMeasured = !reached && wfStage && !d.workflow_connected;
+          const cls = reached ? "on" : notMeasured ? "nm" : "";
           return (
-            <div key={st.key} className={`ti-stage ${cls}${st.key === "root_domain_identified" ? " ti-stage-hero" : ""}`}
-              title={`${st.label} — ${st.tip}${row ? ` · ${new Date(row.at).toLocaleString()}${row.timestamp_source !== "observed" ? ` (${row.timestamp_source})` : ""}` : reached ? "" : " · not reached"}`}>
+            <div key={st.key} className={`ti-stage ${cls}${st.hero ? " ti-stage-hero" : ""}`}
+              title={`${st.label} — ${st.tip}${row ? ` · ${new Date(row.at).toLocaleString()}${row.timestamp_source !== "observed" ? ` (${row.timestamp_source})` : ""}` : notMeasured ? " · not measured (workflow not connected)" : reached ? "" : " · not reached"}`}>
               <span className="ti-dot" aria-hidden="true" />
               <span className="ti-stage-label">{st.label}</span>
             </div>

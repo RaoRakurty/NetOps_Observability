@@ -292,3 +292,18 @@
 .rca-ws .ti-stage.current .ti-stage-label { color: var(--rw-orange); font-weight: 700; }
 .rca-ws .ti-stage-hero .ti-stage-label { font-weight: 700; }
 .rca-ws .ti-stage-hero.on .ti-dot { box-shadow: 0 0 0 3px var(--rw-purple2); border-color: var(--rw-purple); background: var(--rw-purple); }
+
+/* ----- Time Impact card v3 (measurement-gap model + two zones) ----- */
+.rca-ws .ti-outcome { font-size: 12.5px; color: var(--rw-text); line-height: 1.55; margin: 0 0 10px;
+  padding: 9px 11px; border-radius: 8px; background: var(--rw-soft); border: 1px solid var(--rw-line); }
+.rca-ws .ti-zone-label { font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--rw-muted2); margin: 12px 0 5px; padding-bottom: 3px; border-bottom: 1px solid var(--rw-line); }
+.rca-ws .ti-zone-wf { color: var(--rw-muted2); }
+.rca-ws .ti-onset-badge { display: inline-block; margin-left: 7px; font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .3px; color: var(--rw-orange); background: var(--rw-orange2);
+  padding: 1px 6px; border-radius: 4px; }
+.rca-ws .ti-cta { margin-top: 8px; font-size: 12px; color: var(--rw-muted); padding: 8px 11px;
+  border: 1px dashed var(--rw-line); border-radius: 8px; background: var(--rw-panel2, var(--rw-soft)); }
+/* not-measured rows are MUTED (gray), never amber — a measurement gap is not a failure */
+.rca-ws .ti-row-nm { background: var(--rw-panel); }
+.rca-ws .ti-row-nm .ti-row-label { color: var(--rw-muted2); }
