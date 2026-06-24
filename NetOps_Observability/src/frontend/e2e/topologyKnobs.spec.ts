@@ -19,12 +19,29 @@ function node(id: string, label: string, health: string) {
 }
 
 function topoView(mode: string) {
+  const base = { view_id: "v", mode, scope: { tenant_id: "t_acme" }, layout_type: "spine_leaf", generated_at: new Date().toISOString(), groups: [] };
+  if (mode === "dependency") {
+    // No flow attribution → zero nodes. Must show an honest empty state, not a blank canvas.
+    return { ...base, layout_type: "dependency", nodes: [], edges: [], overlays: ["flow"] };
+  }
+  if (mode === "capacity") {
+    // A near-idle link (raw VM ratio) must render "<0.1%", never the 20-digit float.
+    return {
+      ...base,
+      nodes: [node("calm-sw", "calm-sw", "ok"), node("sick-rtr", "sick-rtr", "critical")],
+      edges: [{
+        id: "e1", source: "calm-sw", target: "sick-rtr", status: "up", confidence: 1,
+        utilization_pct: 0.00003984453955175126, source_port: "Gi0/1", target_port: "Eth1",
+        evidence: [{ source: "lldp", confidence: 1 }],
+      }],
+      overlays: ["health", "utilization"],
+    };
+  }
   return {
-    view_id: "v", mode, scope: { tenant_id: "t_acme" }, layout_type: "spine_leaf",
-    generated_at: new Date().toISOString(),
+    ...base,
     nodes: [node("calm-sw", "calm-sw", "ok"), node("sick-rtr", "sick-rtr", "critical")],
     edges: [{ id: "e1", source: "calm-sw", target: "sick-rtr", status: "up", confidence: 1, evidence: [{ source: "lldp", confidence: 1 }] }],
-    groups: [], overlays: ["health"],
+    overlays: ["health"],
   };
 }
 
@@ -81,4 +98,22 @@ test("no dead tabs: only implemented workflows are offered (no greyed do-nothing
   // The placeholder modes are NOT rendered (they were greyed + did nothing).
   await expect(page.getByRole("button", { name: "Change Review", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Executive / Geo", exact: true })).toHaveCount(0);
+});
+
+test("Capacity utilization is operator-readable (no 20-digit float)", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByRole("button", { name: "Capacity", exact: true }).click();
+  // The near-idle link reads "<0.1%", never the raw 0.0000398… float.
+  await expect(page.getByText("<0.1%").first()).toBeVisible();
+  await expect(page.getByText(/0\.0000398/)).toHaveCount(0);
+});
+
+test("empty real view shows an honest empty state — never fabricated demo data", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByRole("button", { name: "Dependency", exact: true }).click();
+  // The dependency projection returned zero nodes → we show the honest empty state,
+  // NOT the cloud demo mock (us-east-1 / vpc-prod / alb-checkout) as if it were live.
+  await expect(page.getByText("No service dependencies in this window")).toBeVisible();
+  await expect(page.getByText("us-east-1")).toHaveCount(0);
+  await expect(page.getByText("alb-checkout")).toHaveCount(0);
 });

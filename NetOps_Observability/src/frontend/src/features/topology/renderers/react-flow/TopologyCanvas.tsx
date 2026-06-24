@@ -628,6 +628,24 @@ function CanvasInner() {
               <Controls showInteractive={false} />
             </ReactFlow>
 
+            {/* Honest empty state — a mode that resolves no nodes (e.g. Dependency
+                with no flow attribution, or a too-narrow window) must SAY so, never
+                leave a silent blank canvas the operator can't read. */}
+            {view && view.nodes.length === 0 && (
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)", marginBottom: 6 }}>
+                    {mode === "dependency" ? "No service dependencies in this window" : "Nothing to display for this view"}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5 }}>
+                    {mode === "dependency"
+                      ? "Dependency edges appear when flows are attributed to services. Widen the time range, or confirm flow collection is active."
+                      : "No nodes resolved for the current mode, data source and time range."}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <TopologyLegend overlay={overlay} showRca={mode === "investigate" && !!incidentOverlay} />
 
             {mode === "investigate" && incidentOverlay && (

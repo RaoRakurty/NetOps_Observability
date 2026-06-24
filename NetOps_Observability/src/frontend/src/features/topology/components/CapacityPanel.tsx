@@ -31,6 +31,16 @@ function utilColor(u: number): string {
   return "var(--accent, #5b8def)";
 }
 
+// Operator-readable utilization. Raw VM ratios arrive as long floats (0.0000398…%);
+// a NOC engineer needs "<0.1%" / "12.4%" / "87%", never a 20-digit number.
+function fmtUtil(u: number): string {
+  if (!isFinite(u)) return "—";
+  if (u <= 0) return "0%";
+  if (u < 0.1) return "<0.1%";
+  if (u < 10) return `${u.toFixed(1)}%`;
+  return `${Math.round(u)}%`;
+}
+
 function HotRow({ link }: { link: HotLink }) {
   const u = link.utilization;
   return (
@@ -49,7 +59,7 @@ function HotRow({ link }: { link: HotLink }) {
           {link.sourceLabel} → {link.targetLabel}
         </span>
         <span style={{ fontSize: 12, fontWeight: 700, color: utilColor(u), fontFamily: MONO, flex: "0 0 auto" }}>
-          {u}%
+          {fmtUtil(u)}
         </span>
       </div>
       {/* utilization bar */}
@@ -103,7 +113,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
   return (
     <section style={{ display: "grid", gap: 14 }}>
       <div>
-        <div style={SECTION_LABEL}>Hot links · busiest {hot.length}</div>
+        <div style={SECTION_LABEL}>Busiest links · {hot.length}</div>
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
           {hot.map((l) => (
             <HotRow key={l.edge.id} link={l} />
@@ -179,7 +189,7 @@ export default function CapacityPanel({ view }: { view: TopologyView }) {
                   </span>
                 </div>
                 <div style={{ fontSize: 10, color: "var(--fg-subtle)", marginTop: 3, fontFamily: MONO }}>
-                  {g.members.map((m) => `${m.otherLabel} ${m.utilization}%`).join("  ·  ")}
+                  {g.members.map((m) => `${m.otherLabel} ${fmtUtil(m.utilization)}`).join("  ·  ")}
                 </div>
               </li>
             ))}

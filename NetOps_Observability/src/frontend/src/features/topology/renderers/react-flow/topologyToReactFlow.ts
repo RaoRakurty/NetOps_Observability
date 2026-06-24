@@ -75,7 +75,12 @@ function metricsLine(metrics: Record<string, number | string> | undefined): stri
   for (const [key, label, pctish] of order) {
     const v = metrics[key];
     if (v === undefined || v === null || v === "") continue;
-    parts.push(`${label} ${v}${pctish ? "%" : ""}`);
+    // Never render a fake reading: a non-finite number (NaN/Inf from a missing VM
+    // series) or the literal "NaN" is "no data", not a value the operator can use.
+    if (typeof v === "number" && !isFinite(v)) continue;
+    if (typeof v === "string" && (v === "NaN" || !v.trim())) continue;
+    const shown = pctish && typeof v === "number" ? Math.round(v) : v;
+    parts.push(`${label} ${shown}${pctish ? "%" : ""}`);
   }
   return parts.length ? parts.join(" · ") : undefined;
 }

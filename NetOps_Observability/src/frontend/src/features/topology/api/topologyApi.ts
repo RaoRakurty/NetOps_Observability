@@ -76,12 +76,18 @@ export async function fetchTopologyView(
     // modes ignore them. Only forward when both endpoints are set.
     const ep = params?.src && params?.dst ? { src: params.src, dst: params.dst } : undefined;
     const raw = (await api.topologyView(mode, ep)) as TopologyView;
-    const view = normalizeView(raw);
-    if (view.nodes.length > 0) return view;
-    // Empty real graph (collectors off / no inventory) → show the mock instead.
-    return normalizeView(mockForMode(mode));
+    // HONESTY (zero-trust on display): a real mode shows REAL data or an honest empty
+    // state — NEVER fabricated demo nodes presented as the live network. An empty
+    // graph (collectors off / no inventory / no flow attribution) returns the empty
+    // view so the canvas renders its "nothing to display" state, not a fake cloud map.
+    return normalizeView(raw);
   } catch {
-    return normalizeView(mockForMode(mode));
+    // A failed fetch is not "no data" either — return an empty view (honest empty
+    // state), not mock data that looks like the operator's network.
+    return normalizeView({
+      view_id: `empty-${mode}`, mode, scope: { tenant_id: "" }, layout_type: "spine_leaf",
+      generated_at: new Date().toISOString(), nodes: [], edges: [], groups: [], overlays: [],
+    } as unknown as TopologyView);
   }
 }
 
