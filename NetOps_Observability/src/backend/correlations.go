@@ -235,17 +235,22 @@ SELECT countIf(state='open')                                          AS open,
 // handleCorrelationByID serves GET /api/correlations/{id} (object + edges) and
 // GET /api/correlations/{id}/replay (drift report, proxied).
 func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/correlations/")
+	id, sub, _ := strings.Cut(rest, "/")
+	if !isUUIDToken(id) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid correlation id"))
+		return
+	}
+	// Manual lifecycle-event writes (#84 P1d) — POST/DELETE, own auth (write) + audit.
+	if sub == "time-events" || strings.HasPrefix(sub, "time-events/") {
+		s.handleCorrelationTimeEvents(w, r, id, strings.TrimPrefix(strings.TrimPrefix(sub, "time-events"), "/"))
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
-		return
-	}
-	rest := strings.TrimPrefix(r.URL.Path, "/api/correlations/")
-	id, sub, _ := strings.Cut(rest, "/")
-	if !isUUIDToken(id) {
-		writeError(w, http.StatusBadRequest, errors.New("invalid correlation id"))
 		return
 	}
 	switch sub {

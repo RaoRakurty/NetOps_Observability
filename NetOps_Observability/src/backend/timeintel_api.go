@@ -159,6 +159,11 @@ SELECT toString(window_start) AS window_start,
 	workflowConnected := false
 
 	lc := deriveLifecycle(facts, itsm)
+	// Overlay the caller's stored MANUAL events (operator-supplied recovery/closure/
+	// ack timestamps) — tenant-scoped, user-entered wins. Unblocks the human phases.
+	if claims, ok := userFrom(r.Context()); ok {
+		s.manualLifecycle(r, claims, id, lc)
+	}
 	now := time.Now().UTC()
 	metrics := timeintel.ComputeTimeMetrics(lc, timeIntelCalcVersion, now)
 	bottleneck, message := timeintel.DeriveCurrentBottleneck(lc, timeintel.DriverContext{
