@@ -83,6 +83,13 @@ function fmtElapsed(ms: number): string {
   return `${h}h ${m - h * 60}m`;
 }
 const confidenceWord = (tier: string) => tier === "confirmed" ? "Confirmed" : tier === "suspected" ? "Suspected" : "Inferred";
+// Grounded seam type → operator display (the WHERE of the fault).
+const SEAM_LABEL: Record<string, string> = {
+  DIA: "DIA", SDWAN: "SD-WAN", "SD-WAN": "SD-WAN", VPN: "VPN", DX: "Direct Connect",
+  EXPRESSROUTE: "ExpressRoute", INTERCONNECT: "Interconnect", CLOUD_BACKBONE: "Cloud backbone",
+  LAN: "LAN", WAN: "WAN", DC: "Data center", CLOUD: "Cloud",
+};
+const seamLabel = (t?: string) => (t ? (SEAM_LABEL[t.toUpperCase()] ?? t) : "");
 
 export default function RcaTimeImpact({ correlationId }: { correlationId: string }) {
   const [d, setD] = useState<TimeIntel | null>(null);
@@ -137,7 +144,11 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
       <div className={`ti-row${p.star ? " ti-row-star" : ""}${status === "current" ? " ti-row-current" : ""}${status === "not_measured" ? " ti-row-nm" : ""}`}>
         <span className="ti-row-label">
           {p.star && <span className="ti-star" aria-hidden="true">★</span>}{p.label}
-          {p.star && ev && <span className="ti-row-ctx">{[d!.owner_label && `Owner: ${d!.owner_label}`, `${confidenceWord(d!.verdict_tier)} · evidence bundle ready`].filter(Boolean).join(" · ")}</span>}
+          {p.star && ev && <span className="ti-row-ctx">{[
+            d!.seam_type && `Seam: ${seamLabel(d!.seam_type)}`,
+            d!.owner_label && `Owner: ${d!.owner_label}`,
+            `${confidenceWord(d!.verdict_tier)} · evidence bundle ready`,
+          ].filter(Boolean).join(" · ")}</span>}
           {p.key === "owner_assigned" && ev && (
             <span className="ti-row-ctx" title="Owner was inferred from root-domain, seam ownership, and supporting evidence. No external workflow assignment observed.">
               {ev.timestamp_source === "inferred" ? "Inferred · Source: Correlix RCA" : "Assigned · Source: workflow"}

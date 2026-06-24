@@ -62,6 +62,27 @@ func ownerFromHypotheses(blob string) string {
 	return h.Ranking.Hypotheses[0].Verdict.Owner
 }
 
+// seamTypeFromHypotheses pulls the grounded seam TYPE (DIA / SDWAN / VPN / DX /
+// CLOUD_BACKBONE / …) from the hypotheses blob (grounding_context.seams[0].seam_type).
+// "" when the object isn't grounded on a seam (most LAN/DC incidents).
+func seamTypeFromHypotheses(blob string) string {
+	blob = strings.TrimSpace(blob)
+	if blob == "" {
+		return ""
+	}
+	var h struct {
+		GroundingContext struct {
+			Seams []struct {
+				SeamType string `json:"seam_type"`
+			} `json:"seams"`
+		} `json:"grounding_context"`
+	}
+	if err := json.Unmarshal([]byte(blob), &h); err != nil || len(h.GroundingContext.Seams) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(h.GroundingContext.Seams[0].SeamType)
+}
+
 // evidenceMissingFromBlob reports whether the evidence_missing JSON array is
 // non-empty (evidence not yet sufficient).
 func evidenceMissingFromBlob(blob string) bool {
@@ -90,6 +111,7 @@ type timeIntelResponse struct {
 	Owner           string                  `json:"owner,omitempty"`
 	OwnerDomain     timeintel.OwnerDomain   `json:"owner_domain"`
 	OwnerLabel      string                  `json:"owner_label"` // operator-facing (never lowercase raw)
+	SeamType        string                  `json:"seam_type,omitempty"` // DIA/SDWAN/VPN/DX/CLOUD_BACKBONE (grounded seam)
 	RootDomain      string                  `json:"root_domain,omitempty"`
 	ConfidenceLbl   string                  `json:"confidence_label"` // Evidence-backed | Candidate | Insufficient evidence
 	EvidenceMissing bool                    `json:"evidence_missing"`
@@ -190,6 +212,7 @@ SELECT toString(window_start) AS window_start,
 		Owner:              facts.Owner,
 		OwnerDomain:        ownerDomain,
 		OwnerLabel:         timeintel.OwnerLabel(facts.Owner),
+		SeamType:           seamTypeFromHypotheses(asString(o["hypotheses"])),
 		RootDomain:         group["root_entity"],
 		ConfidenceLbl:      confidenceLabel(facts.VerdictTier),
 		EvidenceMissing:    facts.EvidenceMissing,

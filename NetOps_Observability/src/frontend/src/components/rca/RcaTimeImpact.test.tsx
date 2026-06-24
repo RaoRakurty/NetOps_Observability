@@ -13,7 +13,7 @@ const t = (s: number) => new Date(Date.parse(t0) + s * 1000).toISOString();
 // RCA complete (isolated, owner, evidence ready) but NO workflow connected.
 const gapFixture: TimeIntel = {
   correlation_id: "abc", verdict_tier: "suspected",
-  owner: "netops", owner_domain: "LAN", owner_label: "Network", root_domain: "spine1",
+  owner: "netops", owner_domain: "LAN", owner_label: "Network", root_domain: "spine1", seam_type: "DIA",
   confidence_label: "Candidate", evidence_missing: false, workflow_connected: false,
   current_bottleneck: "workflow_not_connected",
   bottleneck_message: "Evidence bundle ready; ticket, recovery and closure require ServiceNow…",
@@ -73,7 +73,7 @@ describe("RcaTimeImpact — measurement-gap model", () => {
     mockApi(gapFixture);
     const { default: Card } = await import("./RcaTimeImpact");
     render(<Card correlationId="abc" />);
-    expect(await screen.findByText(/Owner: Network · Suspected/)).toBeTruthy();
+    expect(await screen.findByText(/Seam: DIA · Owner: Network · Suspected/)).toBeTruthy();
     expect(screen.getByText(/Elapsed from first impact signal/)).toBeTruthy();
     expect(screen.getByText("Inferred onset")).toBeTruthy();
   });

@@ -490,6 +490,7 @@ export type TimeIntel = {
   owner?: string;
   owner_domain: string;
   owner_label: string;
+  seam_type?: string;
   root_domain?: string;
   confidence_label: string; // Evidence-backed | Candidate | Insufficient evidence
   evidence_missing: boolean;
