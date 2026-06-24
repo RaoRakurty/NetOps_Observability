@@ -12,7 +12,7 @@ from verdicts import VerdictTier
 
 def test_builtin_catalog_validates():
     cat = builtin_catalog()
-    assert len(cat.enabled_templates()) == 15  # 6 v0 + 3 P3 + 1 multi-plane DIA + 5 C5 L2/L3
+    assert len(cat.enabled_templates()) == 17  # 6 v0 + 3 P3 + 1 DIA + 5 C5 L2/L3 + 2 overlay
     assert all(t.id.startswith("sig.ent.") for t in cat.templates)
 
 

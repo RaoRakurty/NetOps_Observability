@@ -1,0 +1,13 @@
+{
+  "name": "EVPN dup-MAC blacklist (Arista %EVPN / NX-OS HMM) + interface util anomaly (broadcast storm, SNMP): EVPN L2 loop confirmed",
+  "comment": "P2/P3 overlay: evpn_mac_move emitted from the dup-MAC/MAC-move-loop syslog. The broadcast/util storm on the oscillating port is the independent device_telemetry witness confirming a real loop, not a one-off mobility event.",
+  "signals": [
+    {"kind": "evpn_mac_move", "entity_type": "device", "entity_id": "leaf1",
+     "observer_id": "syslog-leaf1", "observer_type": "device",
+     "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
+    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "leaf1:Ethernet5",
+     "observer_id": "snmp-leaf1", "observer_type": "device",
+     "modality": "device_telemetry", "collection_path": "direct", "deviation": 6.0}
+  ],
+  "expect": {"top": "sig.ent.fabric.evpn-l2-loop", "tier": "confirmed", "owner": "netops"}
+}

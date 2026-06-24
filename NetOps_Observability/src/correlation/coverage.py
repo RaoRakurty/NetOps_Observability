@@ -1,0 +1,81 @@
+"""Catalog self-coverage reports (#80 §5) — the engine's report about its own
+rule-base, so coverage growth is MEASURED, not guessed.
+
+Two static reports (the dynamic companion — the undetermined-frequency feed over
+corr_objects — lives in the API/reports layer where the object history is):
+
+  * ``dead_template_kinds`` — kinds a signature REQUIRES that no producer EMITS:
+    a template that can never fire (the early-catalog failure mode). The CI gate
+    (test_coverage.py) asserts these are all in ``KNOWN_PENDING`` — the documented
+    v0-theoretical templates awaiting Layer-2 collection (#73) — so a NEW dead
+    template (a signature whose kind nothing emits) fails the build.
+  * ``blind_spot_kinds`` — kinds producers EMIT that no signature consumes: rule-
+    base blind spots (informational). Some are intentional (``device_alarm`` is the
+    generic catch-all by design; ``lldp_neighbor_change`` is corroboration-only).
+
+This converts "how do we know what's missing" from a guess into a deterministic
+report the engine produces about itself.
+"""
+from __future__ import annotations
+
+from catalog import Catalog
+from producers import EMITTED_KINDS
+
+# Emitted-but-unconsumed kinds that are INTENTIONALLY required by no signature.
+INTENTIONAL_BLIND: frozenset[str] = frozenset({
+    "device_alarm",              # the #80 §4 generic catch-all — matches no signature by design
+    "lldp_neighbor_change",      # supporting / corroborating evidence only
+    "device_restart",            # contributing lifecycle context
+    "routing_adjacency_change",  # generic fallback for an unscoped ADJCHANGE
+})
+
+# Consumed-but-unemitted kinds from the v0 THEORETICAL templates (wan-congestion,
+# routing-instability, physical-degradation, dns-impairment, cloud-region,
+# tunnel-mtu-blackhole) — pending Layer-2 collection (#73). A NEW signature
+# requiring an unemitted kind NOT in here fails the CI gate (the discipline this
+# whole exercise is meant to enforce: don't author a signature whose kind nothing
+# emits — fix Layer 2 first, or add it here with a tracker reference).
+KNOWN_PENDING: frozenset[str] = frozenset({
+    "app_large_transfer_fail", "bgp_path_change", "bgp_peer_flap",
+    "cloud_gw_anomaly", "cloud_health_event", "dns_failure_rate", "dns_latency_high",
+    "if_crc", "if_discards", "if_errors", "if_util_high", "lb_5xx",
+    "optical_power_low", "path_change", "probe_latency_departure", "qos_drops",
+    "synthetic_http_fail", "tunnel_degraded", "tunnel_down", "tunnel_flap",
+})
+
+
+def consumed_kinds(catalog: Catalog) -> frozenset[str]:
+    """Every signal kind any enabled signature references — requires clauses AND
+    discriminator 'absent' clauses (alternations expanded). A discriminator that
+    names an unemitted kind never fires, so it counts as consumed too."""
+    out: set[str] = set()
+    for t in catalog.enabled_templates():
+        for c in t.requires:
+            out |= set(c.kinds())
+        for d in t.discriminators:
+            out |= set(d.absent.kinds())
+    return frozenset(out)
+
+
+def dead_template_kinds(catalog: Catalog) -> frozenset[str]:
+    """Required/referenced kinds that NO producer emits — templates that cannot
+    fire (or discriminators that can never trigger)."""
+    return consumed_kinds(catalog) - EMITTED_KINDS
+
+
+def blind_spot_kinds(catalog: Catalog) -> frozenset[str]:
+    """Emitted kinds NO signature consumes (rule-base blind spots), minus the
+    intentional generic/supporting ones — candidates for a new signature."""
+    return EMITTED_KINDS - consumed_kinds(catalog) - INTENTIONAL_BLIND
+
+
+def coverage_report(catalog: Catalog) -> dict:
+    """Machine-readable self-coverage summary (for /internal/healthz, CI logs,
+    and the backlog generator)."""
+    return {
+        "emitted_kinds": sorted(EMITTED_KINDS),
+        "consumed_kinds": sorted(consumed_kinds(catalog)),
+        "dead_template_kinds": sorted(dead_template_kinds(catalog)),
+        "pending_dead_templates": sorted(dead_template_kinds(catalog) & KNOWN_PENDING),
+        "blind_spot_kinds": sorted(blind_spot_kinds(catalog)),
+    }

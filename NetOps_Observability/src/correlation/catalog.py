@@ -588,6 +588,62 @@ BUILTIN_TEMPLATES: list[dict] = [
             ],
         },
     },
+    # -----------------------------------------------------------------------
+    # P3 overlay signatures (2026-06-24, #80) — the TWO emergent DC-overlay causes
+    # the fault matrix marks SIG (everything else self-describing rides generic
+    # ingestion). Layer-2 kinds emitted by the P2 producer branches: vtep_state_change
+    # (NX-OS %NVE BFD), evpn_mac_move (Arista dup-MAC / NX-OS HMM / L2FM VXLAN loop).
+    # -----------------------------------------------------------------------
+    {
+        "id": "sig.ent.fabric.vtep-unreachable",
+        "title": "VTEP unreachable (VXLAN underlay → overlay)",
+        "domain": "ent.fabric",
+        "requires": [
+            {"kind": "vtep_state_change", "entity_type": "device"},
+            # The emergent angle: an underlay reachability/routing loss to the remote
+            # VTEP loopback, or the overlay traffic impact — an independent witness
+            # (probe = active_probe, if_metric = device_telemetry) confirms real blackhole.
+            {"kind": "bgp_adjacency_change|ospf_adjacency_change|isis_adjacency_change|probe_loss|if_metric_anomaly",
+             "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A local link-down dragging the VTEP is a link fault, not an overlay-
+            # reachability fault — prefer the L1/L2 explanation.
+            {"absent": {"kind": "link_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "underlay -> vtep -> overlay-service",
+        "verdict": {
+            "owner": "netops", "layer": "L3 (VXLAN underlay / VTEP)",
+            "first_steps": [
+                "Confirm underlay reachability to the remote VTEP loopback (ping/BFD) and which VTEP went unreachable",
+                "Check the underlay IGP/BGP to that loopback and the source NVE interface in the same window",
+                "If the loopback is reachable but the tunnel is down, check NVE source-interface, VNI-to-VRF mapping, and BFD-for-VXLAN config",
+            ],
+        },
+    },
+    {
+        "id": "sig.ent.fabric.evpn-l2-loop",
+        "title": "EVPN L2 loop / MAC-mobility storm across VTEPs",
+        "domain": "ent.fabric",
+        "requires": [
+            {"kind": "evpn_mac_move", "entity_type": "device"},
+            # The loop's fingerprint — a broadcast/util storm or tenant-path loss —
+            # and the independent 2nd modality that confirms real overlay impact.
+            {"kind": "if_metric_anomaly|if_util_high|probe_loss", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "direction_expect": "mac-mobility(overlay) -> bridge-domain(VNI) -> tenant-service",
+        "verdict": {
+            "owner": "netops", "layer": "L2 (EVPN overlay)",
+            "first_steps": [
+                "Identify the duplicated/blacklisted MAC, its VLAN/VNI, and the two VTEPs (or VTEP+port) it oscillates between",
+                "Determine whether it is a dual-homed host / NIC-teaming or ESI multihoming misconfig, a back-door L2 path bridging two VTEPs, or a genuine duplicate MAC",
+                "Break the loop (shut the back-door port / fix the ESI or multihoming config); confirm MAC mobility settles and the blacklist clears",
+            ],
+        },
+    },
 ]
 
 

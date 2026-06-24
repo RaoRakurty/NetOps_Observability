@@ -50,6 +50,7 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "cdp_neighbor_change": CausalLayer.LINK,
     "stp_topology_change": CausalLayer.LINK,
     "mac_flap": CausalLayer.LINK,
+    "evpn_mac_move": CausalLayer.LINK,   # EVPN MAC mobility (overlay) — an L2 event
     "if_metric_anomaly": CausalLayer.LINK,
     "if_util_high": CausalLayer.LINK,
     # network (L3)
@@ -58,6 +59,7 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "bgp_path_change": CausalLayer.NETWORK,
     "ospf_adjacency_change": CausalLayer.NETWORK,
     "isis_adjacency_change": CausalLayer.NETWORK,
+    "vtep_state_change": CausalLayer.NETWORK,   # VXLAN VTEP/underlay reachability (L3)
     "route_withdrawal": CausalLayer.NETWORK,
     # FHRP (HSRP/VRRP) first-hop gateway redundancy — an L3 reachability event:
     # a lower-layer link/tracked-object fault (L2) can trigger it, and it causes

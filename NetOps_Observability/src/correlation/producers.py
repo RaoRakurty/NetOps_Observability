@@ -95,6 +95,30 @@ def _severity_from_num(n: int) -> Severity:
     return Severity.WARN  # warning (the floor)
 
 
+# Canonical set of signal kinds the producer pipeline can emit (the syslog/trap/
+# probe producers here + the metric-episode kinds main.py emits via
+# metric_identity). The #80 §5 coverage check (coverage.py) asserts no signature
+# REQUIRES a kind absent from this set (the dead-template guard). KEEP IN SYNC when
+# a producer gains a kind — the coverage test will fail loudly if you forget.
+EMITTED_KINDS: frozenset[str] = frozenset({
+    # probe lane
+    "probe_loss", "probe_rtt_anomaly",
+    # syslog control-plane
+    "isis_adjacency_change", "bgp_adjacency_change", "ospf_adjacency_change",
+    "routing_adjacency_change", "link_state_change", "lldp_neighbor_change",
+    "stp_topology_change", "fhrp_state_change", "mac_flap",
+    # DC overlay (P2)
+    "vtep_state_change", "evpn_mac_move",
+    # trap lane
+    "device_restart",
+    # generic-alarm keystone (#80 §4)
+    "device_alarm",
+    # metric episodes (main.py metric_identity + C6 flow)
+    "if_metric_anomaly", "bgp_state_anomaly", "device_resource_anomaly",
+    "flow_volume_anomaly",
+})
+
+
 def episode_signal(
     ev: EpisodeEvent,
     observer: Observer,
@@ -456,6 +480,56 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
             entity_tokens=(host, ifname),
             metric_name="stp_state",
             attrs={"interface": ifname, "state": state, "tag": tag},
+        )
+
+    # VTEP / NVE peer reachability (DC overlay) — NX-OS %NVE-5-BFD_CC_STATE_CHANGE
+    # ("BFD CC down for bfd-neighbor <remote-VTEP>"): the underlay→VTEP liveness that
+    # gates VXLAN-encapsulated traffic. Device-scoped; the remote VTEP IP is a
+    # grounding token so it binds to the underlay reachability/BGP to that loopback.
+    if "NVE" in ctoken or ("VTEP" in ctoken and "BFD" in (ctoken + " " + msg.upper())):
+        peer_m = _IP_RE.search(msg)
+        peer = peer_m.group(1) if peer_m else ""
+        state = _state_of(msg)
+        tokens = (host, peer) if peer else (host,)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind="vtep_state_change",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=host,
+            severity=Severity.HIGH if state == "down" else Severity.WARN,
+            native_id=f"{host}|vtep|{peer or '?'}|{state}|{ts_ms}",
+            entity_tokens=tokens, metric_name="vtep_state",
+            attrs={"vtep": peer, "state": state, "tag": tag},
+        )
+
+    # EVPN MAC mobility / duplicate-MAC freeze (DC overlay) — the cross-VTEP analog
+    # of a local mac_flap: Arista %EVPN-3-BLACKLISTED_DUPLICATE_MAC, NX-OS
+    # %HMM-2-DUP_HOSTS, %L2FM-2-L2FM_VXLAN_MAC_MOVE_PORT_DOWN. Checked BEFORE the
+    # local mac_flap branch (NX-OS "VXLAN_MAC_MOVE" else hits it). Device-scoped; the
+    # MAC, VLAN, VNI and remote VTEP are grounding tokens.
+    if ("EVPN" in ctoken or "HMM" in ctoken or "DUP_HOST" in ctoken
+            or "VXLAN_MAC_MOVE" in ctoken
+            or re.search(r"\b(?:blacklisted|duplicate host|between NVE and)\b", msg, re.IGNORECASE)):
+        mac_m = re.search(
+            r"\b([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})\b", msg)
+        mac = mac_m.group(1) if mac_m else ""
+        vlan_m = re.search(r"\bvlan\s*(\d+)\b", msg, re.IGNORECASE)
+        vlan = vlan_m.group(1) if vlan_m else ""
+        vni_m = re.search(r"\bvni\s*(\d+)\b", msg, re.IGNORECASE)
+        vni = vni_m.group(1) if vni_m else ""
+        vtep_m = re.search(r"VTEP\s+(\d{1,3}(?:\.\d{1,3}){3})", msg, re.IGNORECASE)
+        vtep = vtep_m.group(1) if vtep_m else ""
+        blacklisted = bool(re.search(r"blacklist|frozen|disabl|port[\s-]?down", msg, re.IGNORECASE))
+        tokens = tuple(t for t in (host, mac, f"vlan{vlan}" if vlan else "",
+                                   f"vni{vni}" if vni else "", vtep) if t)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind="evpn_mac_move",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=EntityType.DEVICE, entity_id=host,
+            severity=Severity.HIGH,
+            native_id=f"{host}|evpn_mac|{mac or '?'}|vlan{vlan or '?'}|{ts_ms}",
+            entity_tokens=tokens or (host,), metric_name="evpn_mac_move",
+            attrs={"mac": mac, "vlan": vlan, "vni": vni, "vtep": vtep,
+                   "blacklisted": blacklisted, "tag": tag},
         )
 
     # First-hop redundancy (HSRP/VRRP) state change — Cisco %HSRP-5-STATECHANGE /

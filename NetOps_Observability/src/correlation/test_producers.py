@@ -316,6 +316,74 @@ def test_link_flap_phrase_not_misread_as_mac_flap():
     ), "", T0) is None
 
 
+# ── DC overlay (VXLAN/EVPN) — P2 ──────────────────────────────────────────────
+
+
+def test_nve_bfd_vtep_state_down():
+    s = syslog_control_signal(syslog_event(
+        "%NVE-5-BFD_CC_STATE_CHANGE", "BFD CC down for bfd-neighbor 10.0.0.5", host="leaf3",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "vtep_state_change"
+    assert s.entity_type is EntityType.DEVICE
+    assert s.entity_id == "leaf3"
+    assert s.attrs["vtep"] == "10.0.0.5"
+    assert s.attrs["state"] == "down"
+    assert s.severity is Severity.HIGH
+    assert "10.0.0.5" in s.entity_tokens   # remote VTEP = underlay grounding token
+
+
+def test_arista_evpn_blacklisted_duplicate_mac():
+    s = syslog_control_signal(syslog_event(
+        "%EVPN-3-BLACKLISTED_DUPLICATE_MAC",
+        "MAC address 00:1c:73:ef:55:6b on VLAN 110 has been blacklisted for moving "
+        "5 or more times within the past 180 seconds", host="leaf1",
+    ), "", T0)
+    assert s is not None
+    assert s.kind == "evpn_mac_move"
+    assert s.entity_type is EntityType.DEVICE
+    assert s.attrs["mac"] == "00:1c:73:ef:55:6b"
+    assert s.attrs["vlan"] == "110"
+    assert s.attrs["blacklisted"] is True
+    assert s.severity is Severity.HIGH
+
+
+def test_nxos_hmm_duplicate_host_carries_vni_and_vtep():
+    s = syslog_control_signal(syslog_event(
+        "%HMM-2-DUP_HOSTS",
+        "Detected duplicate host 0000.0033.3333, topology 200, during Local update, "
+        "with host located at remote VTEP 192.0.2.4, VNI 2", host="leaf2",
+    ), "", T0)
+    assert s is not None and s.kind == "evpn_mac_move"
+    assert s.attrs["mac"] == "0000.0033.3333"
+    assert s.attrs["vni"] == "2"
+    assert s.attrs["vtep"] == "192.0.2.4"
+    assert "vni2" in s.entity_tokens and "192.0.2.4" in s.entity_tokens
+
+
+def test_nxos_l2fm_vxlan_loop_is_evpn_not_local_macflap():
+    # The VXLAN MAC-move loop is OVERLAY (evpn_mac_move), NOT a local mac_flap —
+    # the EVPN branch must claim "VXLAN_MAC_MOVE" before the mac_flap branch.
+    s = syslog_control_signal(syslog_event(
+        "%L2FM-2-L2FM_VXLAN_MAC_MOVE_PORT_DOWN",
+        "Loops detected in the network for mac 0011.2233.4455 between NVE and Eth1/1 "
+        "on vlan 10 - Port Eth1/1 Disabled on loop detection", host="leaf4",
+    ), "", T0)
+    assert s is not None and s.kind == "evpn_mac_move"
+    assert s.attrs["mac"] == "0011.2233.4455"
+    assert s.attrs["vlan"] == "10"
+    assert s.attrs["blacklisted"] is True
+
+
+def test_plain_l2fm_mac_move_stays_local_macflap():
+    # A non-VXLAN L2FM mac move is a LOCAL mac_flap, not an overlay event.
+    s = syslog_control_signal(syslog_event(
+        "%L2FM-4-L2FM_MAC_MOVE",
+        "Mac 00ab.cd00.1122 in vlan 20 has moved between Eth1/1 to Eth1/2", host="leaf2",
+    ), "", T0)
+    assert s is not None and s.kind == "mac_flap"   # NOT evpn_mac_move
+
+
 def test_unrelated_syslog_yields_none():
     assert syslog_control_signal(syslog_event(
         "%SYS-6-EVENT_TRIGGERED", "Event handler LINK-FLAP was activated",
