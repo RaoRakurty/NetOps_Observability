@@ -98,6 +98,24 @@ def test_debug_only_probe_is_searchable_but_never_buffered_into_an_object():
     assert len(main.WINDOW_BUFFER) == 1, "a customer signal must still buffer normally"
 
 
+def test_internal_self_probe_never_buffers():
+    """Decision #76 (engine-side): a LOW-authority internal_self_probe (platform
+    self-monitoring, e.g. prober->clickhouse) stays searchable in corr_signals but must
+    never enter object formation — customer RCA reflects the monitored network only.
+    A LOW-authority CUSTOMER probe (no internal scope) still buffers normally."""
+    internal = mk(1)
+    internal.attrs["probe_authority"] = "low"
+    internal.attrs["probe_scope"] = "internal_self_probe"
+    main.buffer_signal(internal)
+    assert len(main.WINDOW_BUFFER) == 0, "internal_self_probe must NOT enter object formation"
+
+    customer = mk(2)
+    customer.attrs["probe_authority"] = "low"
+    customer.attrs["probe_scope"] = "customer_path"
+    main.buffer_signal(customer)
+    assert len(main.WINDOW_BUFFER) == 1, "a low-authority CUSTOMER probe must still buffer"
+
+
 def test_low_authority_probe_still_buffers():
     """Only DEBUG_ONLY is excluded — a LOW-authority probe is support evidence and
     must still form/attach to objects (it just can't anchor a confirmed verdict)."""

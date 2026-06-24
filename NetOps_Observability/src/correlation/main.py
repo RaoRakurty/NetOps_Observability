@@ -63,6 +63,7 @@ from signals import (
     ObserverType,
     ProbeAuthority,
     ProbeIntent,
+    ProbeScope,
     Signal,
     Source,
     VantageType,
@@ -447,6 +448,15 @@ def buffer_signal(sig: Signal) -> None:
     # chokepoint, so run_window stays pure and replay is untouched (the archive is sliced
     # from the window, so excluded signals simply never reach object formation).
     if sig.attrs.get("probe_authority") == ProbeAuthority.DEBUG_ONLY.value:
+        return
+    # Decision #76 (engine-side): platform self-monitoring — a LOW-authority
+    # internal_self_probe (PLATFORM_SELF_CHECK / INTERNAL_COLLECTOR vantage, e.g.
+    # prober->clickhouse, api->netbox) is the platform's OWN stack, not the customer
+    # network. Like debug_only it stays SEARCHABLE in corr_signals but must never open
+    # or attach to a customer RCA object, so the customer-facing RCA list, coverage
+    # counts and Network Health Index reflect the monitored network only. (Stack
+    # Health watches the platform separately and does not read corr_objects.)
+    if sig.attrs.get("probe_scope") == ProbeScope.INTERNAL_SELF_PROBE.value:
         return
     sid = str(sig.signal_id)
     if sid in _BUFFERED_IDS:
