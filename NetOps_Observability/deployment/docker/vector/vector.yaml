@@ -230,6 +230,25 @@ transforms:
           if t != "" && st != "" { .appname = t + "/" + st } else if t != "" { .appname = t }
           lvl = string(kv.level) ?? ""
           if lvl != "" { .severity = lvl }
+          # #81 P-NGFW: lift the FortiGate App-ID classification (on-box DPI) + its
+          # 5-tuple to a vendor-NEUTRAL contract (.app_id/.app_src/.app_dst/
+          # .app_dport/.app_proto) so the app-identity resolver can consume an
+          # authoritative app label without knowing the vendor. Only when the
+          # traffic log actually carries an app classification (app=, not N/A).
+          # Flat top-level keys (no dots) to avoid OpenSearch mapping collisions.
+          fapp = string(kv.app) ?? ""
+          if fapp != "" && fapp != "N/A" {
+            .app_id = fapp
+            .app_vendor = "fortinet"
+            asrc = string(kv.srcip) ?? ""
+            adst = string(kv.dstip) ?? ""
+            if asrc != "" { .app_src = asrc }
+            if adst != "" { .app_dst = adst }
+            dpt = string(kv.dstport) ?? ""
+            if dpt != "" { .app_dport = dpt }
+            prt = string(kv.proto) ?? ""
+            if prt != "" { .app_proto = prt }
+          }
         }
       }
 
@@ -267,7 +286,9 @@ transforms:
 
       # Severity reconcile: the body's embedded level overrides the syslog PRI when
       # stronger (lower RFC5424 number wins) — e.g. PRI=notice + body "W:" → warning.
-      sysv = downcase(string(.severity) ?? "info")
+      # .severity was already coalesced to a string above (line ~173), so a second
+      # `?? "info"` here is flagged E651 (unnecessary) by a fresh vector compile.
+      sysv = downcase(string(.severity))
       sysint = if sysv == "emergency" || sysv == "alert" || sysv == "critical" || sysv == "crit" { 2 } else if sysv == "error" || sysv == "err" { 3 } else if sysv == "warning" || sysv == "warn" { 4 } else if sysv == "notice" { 5 } else if sysv == "debug" { 7 } else { 6 }
       eff = if embedded_sev < sysint { embedded_sev } else { sysint }
       .normalized_severity = if eff <= 2 { "critical" } else if eff == 3 { "error" } else if eff == 4 { "warning" } else if eff == 5 { "notice" } else { "info" }
