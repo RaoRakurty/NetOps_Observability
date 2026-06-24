@@ -191,21 +191,26 @@ export function topologyToReactFlow(
       else if (diffMode) emphasis = changed ? "spotlight" : "dim";
       else if (incidentDim) emphasis = unhealthy || critical || rcaFlag ? "spotlight" : "dim";
 
-      // Label density by detail level (the manual Labels toggle forces all on):
-      //   engineer  → every label/port · executive → only trouble + selection (wallboard)
-      //   incident  → trouble + RCA + selection · operator → focus + trouble + search.
+      // Label density is a MONOTONIC ramp so every level is visibly distinct
+      // regardless of data state (the manual Labels toggle forces all on):
+      //   executive → only trouble + selection (wallboard, fewest marks)
+      //   operator  → EVERY node named (the working map) — always more than executive
+      //   engineer  → every node named (+ the metric strip below)
+      //   incident  → calm dimmed, trouble + RCA + selection lifted (re-focused view)
+      // This guarantees executive≠operator≠engineer on a calm graph too — the prior
+      // logic tied the difference to trouble/metrics that may all be absent, so the
+      // levels collapsed to look identical (the "Exec vs Operator shows the same" bug).
       const labelByDensity =
-        density === "engineer"
+        density === "operator" || density === "engineer"
           ? true
-          : density === "executive"
-            ? unhealthy || critical || selected
-            : density === "incident"
-              ? unhealthy || critical || rcaFlag || selected
-              : inFocus || unhealthy || critical || selected || ui.searchMatches.has(n.id);
+          : density === "incident"
+            ? unhealthy || critical || rcaFlag || selected
+            : /* executive */ unhealthy || critical || selected;
       const showLabel = ui.showAllLabels || labelByDensity;
-      // Per-node metric strip is wallboard clutter at executive detail; keep it for
-      // operator/engineer/incident triage.
-      const showMetrics = density !== "executive";
+      // The per-node metric strip is the engineer/incident detail tier — names alone
+      // at operator, names + telemetry at engineer, so operator≠engineer is visible
+      // too; wallboard clutter is kept off the executive view.
+      const showMetrics = density === "engineer" || density === "incident";
 
       return {
         id: n.id,

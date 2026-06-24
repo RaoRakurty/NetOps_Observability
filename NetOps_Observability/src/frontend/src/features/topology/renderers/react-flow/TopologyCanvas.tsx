@@ -439,8 +439,12 @@ function CanvasInner() {
   );
 
   const overlays = useMemo(() => (view ? availableOverlays(view) : []), [view]);
+  // Only the IMPLEMENTED workflows reach the selector — a greyed, do-nothing tab is a
+  // dead control. Placeholder modes (change_review → covered by the Historical-diff
+  // overlay; executive_geo → covered by the Geo renderer) stay defined for re-enable
+  // but are not shown until they actually do something.
   const workflowMeta = useMemo(
-    () => WORKFLOWS.map((w) => ({ id: w.id, label: w.label, implemented: w.implemented, blurb: w.blurb })),
+    () => WORKFLOWS.filter((w) => w.implemented).map((w) => ({ id: w.id, label: w.label, implemented: w.implemented, blurb: w.blurb })),
     [],
   );
 

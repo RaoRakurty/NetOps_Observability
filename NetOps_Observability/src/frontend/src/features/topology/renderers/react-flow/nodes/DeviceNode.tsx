@@ -98,7 +98,14 @@ export type NodeCardProps = {
  * their own icon + accent, so the anatomy stays identical and data-driven.
  */
 function NodeCardBase({ data, icon, accent }: NodeCardProps) {
-  const { node, emphasis, metricsLine } = data;
+  const { node, emphasis, metricsLine, showLabel } = data;
+  // Density is a real, visible ramp (the toolbar Exec/Operator/Engineer/Incident):
+  //   showLabel=false (executive wallboard, calm incident nodes) → the hostname is
+  //   suppressed so the board reads as calm health-coloured cards with only the
+  //   NAMED troublemakers standing out. metricsLine present (engineer/incident) →
+  //   a compact CPU/MEM strip renders inline. Both are CONTENT-ONLY (no geometry
+  //   change), so the fixed-size no-shake invariant below still holds.
+  const nameHidden = showLabel === false;
   // On an RCA path, the grounded verdict supersedes the generic health ring
   // (strictly more informative). internal_only is never shown (decision #76).
   const rca = node.rca_status ? RCA_OVERLAY[node.rca_status] : undefined;
@@ -180,12 +187,38 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            // Wallboard (executive / calm incident): suppress the hostname so only
+            // named troublemakers read across the room. Name lives in tip + drawer.
+            visibility: nameHidden ? "hidden" : "visible",
           }}
         >
           {node.label}
         </span>
         {showRca && node.rca_status ? <RcaMarker state={node.rca_status} /> : <HealthRing health={node.health} />}
       </div>
+
+      {/* engineer/incident detail strip — compact CPU/MEM inline, bottom-left, so the
+          card never resizes (paired with the confidence chip at bottom-right). */}
+      {metricsLine ? (
+        <span
+          title={metricsLine}
+          style={{
+            position: "absolute",
+            left: 14,
+            bottom: 4,
+            fontSize: 9,
+            fontFamily: MONO,
+            color: "var(--fg-subtle)",
+            opacity: 0.85,
+            maxWidth: CARD_W - 64,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {metricsLine}
+        </span>
+      ) : null}
 
       {/* confidence chip — bottom-right, faint */}
       <span
