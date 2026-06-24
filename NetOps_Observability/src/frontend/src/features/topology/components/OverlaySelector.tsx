@@ -1,6 +1,10 @@
-// OverlaySelector — compact segmented control over the available overlays.
-// Overlays the view can't satisfy (available:false) render disabled + muted so
-// the operator sees what's possible without being misled by empty data.
+// OverlaySelector — compact segmented control over the overlays that ACTUALLY
+// apply to the current view. Only AVAILABLE overlays are shown — a permanently
+// greyed, do-nothing overlay (config-drift/syslog/golden-path/routing-changes have
+// no data source; flow/rca-evidence/interface-errors/historical-diff light up in
+// their own mode/data) reads as broken. They appear contextually instead: RCA
+// evidence in Investigate, Flow dependencies in Dependency, Interface errors when a
+// link reports errors, Historical diff when something changed. Health is always on.
 
 import type { OverlayKind, TopologyOverlay } from "../api/topologyTypes";
 
@@ -13,6 +17,8 @@ export default function OverlaySelector({
   overlays: TopologyOverlay[];
   onChange: (k: OverlayKind) => void;
 }) {
+  const shown = overlays.filter((o) => o.available);
+  if (shown.length === 0) return null;
   return (
     <div
       role="group"
@@ -27,16 +33,14 @@ export default function OverlaySelector({
         background: "var(--surface)",
       }}
     >
-      {overlays.map((o) => {
+      {shown.map((o) => {
         const active = o.kind === value;
-        const disabled = !o.available;
         return (
           <button
             key={o.kind}
             type="button"
-            disabled={disabled}
-            onClick={() => !disabled && onChange(o.kind)}
-            title={o.description ?? (disabled ? `${o.label} — no data in this view` : o.label)}
+            onClick={() => onChange(o.kind)}
+            title={o.description ?? o.label}
             aria-pressed={active}
             style={{
               border: "none",
@@ -44,11 +48,10 @@ export default function OverlaySelector({
               padding: "4px 9px",
               fontSize: 11,
               fontWeight: active ? 600 : 500,
-              cursor: disabled ? "not-allowed" : "pointer",
+              cursor: "pointer",
               whiteSpace: "nowrap",
               background: active ? "var(--panel)" : "transparent",
-              color: disabled ? "var(--fg-subtle)" : active ? "var(--fg)" : "var(--fg-muted)",
-              opacity: disabled ? 0.5 : 1,
+              color: active ? "var(--fg)" : "var(--fg-muted)",
               boxShadow: active ? "0 1px 2px rgba(0,0,0,0.12)" : "none",
             }}
           >

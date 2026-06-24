@@ -439,6 +439,14 @@ function CanvasInner() {
   );
 
   const overlays = useMemo(() => (view ? availableOverlays(view) : []), [view]);
+  // The overlay picker only shows AVAILABLE overlays; if the selected one stops being
+  // available (e.g. switching to a view with no utilization), fall back to health so
+  // the canvas never renders a stale overlay the operator can't change.
+  useEffect(() => {
+    if (overlay !== "health" && !overlays.some((o) => o.kind === overlay && o.available)) {
+      setOverlay("health");
+    }
+  }, [overlays, overlay]);
   // Only the IMPLEMENTED workflows reach the selector — a greyed, do-nothing tab is a
   // dead control. Placeholder modes (change_review → covered by the Historical-diff
   // overlay; executive_geo → covered by the Geo renderer) stay defined for re-enable

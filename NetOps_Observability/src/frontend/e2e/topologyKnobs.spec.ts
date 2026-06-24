@@ -100,6 +100,16 @@ test("no dead tabs: only implemented workflows are offered (no greyed do-nothing
   await expect(page.getByRole("button", { name: "Executive / Geo", exact: true })).toHaveCount(0);
 });
 
+test("overlay selector offers only applicable overlays — no permanently-dead greyed tabs", async ({ page }) => {
+  await openCanvas(page);
+  const bar = page.getByRole("group", { name: "Overlay" });
+  await expect(bar.getByRole("button", { name: "Health" })).toBeVisible();
+  // The placeholder overlays with no data source are never rendered (were greyed-dead).
+  for (const dead of ["Config drift", "Syslog", "Routing changes", "Golden-path delta"]) {
+    await expect(bar.getByRole("button", { name: dead, exact: true })).toHaveCount(0);
+  }
+});
+
 test("Capacity utilization is operator-readable (no 20-digit float)", async ({ page }) => {
   await openCanvas(page);
   await page.getByRole("button", { name: "Capacity", exact: true }).click();
