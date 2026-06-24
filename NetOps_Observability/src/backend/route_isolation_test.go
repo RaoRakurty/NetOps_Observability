@@ -40,8 +40,14 @@ var routeIsolationLedger = map[string]string{
 	"/api/alerts":                 "scoped",
 	"/api/compliance":             "scoped",
 	"/api/correlations":           "scoped",
-	"/api/correlations/":          "scoped",
+	"/api/correlations/":          "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
 	"/api/correlations/stats":     "scoped",
+	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's
+	// own incidents: chRows injects chTenantScope, ClickHouse row policies enforce it
+	// (TestChTenantScope). A tenant never sees another tenant's MTTI/MTBF/offenders.
+	"/api/reliability/rollups":           "scoped",
+	"/api/reliability/trends":            "scoped",
+	"/api/reliability/chronic-offenders": "scoped",
 	"/api/credentials":            "scoped",
 	"/api/devices":                "scoped",
 	"/api/devices/":               "scoped",
