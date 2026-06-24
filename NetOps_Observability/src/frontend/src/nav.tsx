@@ -11,6 +11,7 @@ import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
 import Events from "./pages/Events";
 import Correlations from "./tabs/Correlations";
+import ReliabilityScorecard from "./pages/ReliabilityScorecard";
 import Quality from "./pages/Quality";
 import DataSources from "./pages/DataSources";
 import NetworkPath from "./pages/NetworkPath";
@@ -129,6 +130,7 @@ export const NAV: NavSection[] = [
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
       { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
+      { id: "reliability", label: "Recovery Scorecard", group: "Event Management", render: () => <ReliabilityScorecard /> },
     ],
   },
   // Incident Response — coordinate response across chat/collaboration tools, and

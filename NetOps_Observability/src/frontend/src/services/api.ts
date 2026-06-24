@@ -492,6 +492,31 @@ export type TimeIntel = {
   calculation_version: string;
 };
 
+// Reliability rollups (Operational Recovery Scorecard).
+export type MetricStat = { incident_count: number; p50_ms: number; p90_ms: number; p95_ms: number; mean_ms: number };
+export type ReliabilityRollup = {
+  incident_count: number;
+  metrics: Record<string, MetricStat>;
+  top_time_loss_phase: string;
+  repeat_incident_rate: number;
+  mtbf_ms: number;
+};
+export type ReliabilityRollupResp = {
+  window_seconds: number; rollup: ReliabilityRollup;
+  mttf_ms: number; mttf_asset_count: number; capped: boolean; note: string;
+};
+export type ReliabilityTrendBucket = {
+  bucket_start: string; incident_count: number;
+  metrics: Record<string, MetricStat>; repeat_incident_rate: number; mtbf_ms: number;
+};
+export type ReliabilityTrendsResp = { window_seconds: number; bucket_seconds: number; buckets: ReliabilityTrendBucket[] };
+export type ChronicOffender = { group_key: string; incident_count: number; mtbf_ms: number; last_seen: string };
+export type ReliabilityQuery = { owner?: string; provider?: string; device?: string; severity?: string; signature?: string };
+function reliabilityQS(f: ReliabilityQuery): string {
+  return (["owner", "provider", "device", "severity", "signature"] as const)
+    .filter((k) => f[k]).map((k) => `&${k}=${encodeURIComponent(f[k]!)}`).join("");
+}
+
 // One evidence link: a signal's role w.r.t. an edge or hypothesis.
 export type CorrEvidence = {
   signal_id: string;
@@ -1292,6 +1317,13 @@ export const api = {
   // RCA Time Intelligence — incident time decomposition (phases + time-loss driver).
   correlationTimeMetrics: (id: string) =>
     request<TimeIntel>(`/api/correlations/${encodeURIComponent(id)}/time-metrics`),
+  // Reliability rollups (Operational Recovery Scorecard).
+  reliabilityRollups: (sinceSeconds = 2592000, f: ReliabilityQuery = {}) =>
+    request<ReliabilityRollupResp>(`/api/reliability/rollups?since=${sinceSeconds}${reliabilityQS(f)}`),
+  reliabilityTrends: (sinceSeconds = 2592000, bucketSeconds = 604800, f: ReliabilityQuery = {}) =>
+    request<ReliabilityTrendsResp>(`/api/reliability/trends?since=${sinceSeconds}&bucket=${bucketSeconds}${reliabilityQS(f)}`),
+  reliabilityChronicOffenders: (sinceSeconds = 2592000, top = 10, f: ReliabilityQuery = {}) =>
+    request<{ offenders: ChronicOffender[] }>(`/api/reliability/chronic-offenders?since=${sinceSeconds}&top=${top}${reliabilityQS(f)}`),
   // Active grounding seams (owner/visibility) — joined to edge grounding_ref in
   // the seam-aware graph. 501 on the file backend → caller degrades gracefully.
   seams: (state = "active") =>

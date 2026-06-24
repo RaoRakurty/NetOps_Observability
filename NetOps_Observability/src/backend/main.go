@@ -748,6 +748,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/events/feed", s.handleEventsFeed)
 	mux.HandleFunc("/api/paths/health", s.handlePathsHealth)
 	mux.HandleFunc("/api/reliability/rollups", s.handleReliabilityRollups)                   // RCA Time Intelligence reliability rollups (#84)
+	mux.HandleFunc("/api/reliability/trends", s.handleReliabilityTrends)                     // bucketed phase-metric trends (#84)
 	mux.HandleFunc("/api/reliability/chronic-offenders", s.handleReliabilityChronicOffenders) // recurring-object ranking (#84)
 	mux.HandleFunc("/api/health/score", s.handleHealthScore)
 	mux.HandleFunc("/api/metrics/forecast", s.handleMetricsForecast)

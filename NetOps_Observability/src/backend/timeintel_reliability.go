@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -189,6 +190,61 @@ func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request
 		// that internal-stack incidents are NOT yet excluded (decision #76 engine-side).
 		"capped": len(incs) >= 5000,
 		"note":   "includes internal-stack incidents until #76 engine-side exclusion lands",
+	})
+}
+
+// handleReliabilityTrends serves GET /api/reliability/trends — the same per-incident
+// summaries, bucketed by time, each bucket run through Rollup so the dashboard can
+// chart MTTI / MTTR-Recovery / MTTD / MTTA p50/p90 over time. One CH read; bucketing
+// + percentiles in-process.
+func (s *server) handleReliabilityTrends(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	since := intQuery(r, "since", 30*86400, 86400, 365*86400)
+	bucket := intQuery(r, "bucket", 86400, 3600, 30*86400) // default daily
+	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	byBucket := map[int64][]timeintel.IncidentSummary{}
+	for _, in := range incs {
+		if in.OccurredAt.IsZero() {
+			continue
+		}
+		b := (in.OccurredAt.Unix() / int64(bucket)) * int64(bucket)
+		byBucket[b] = append(byBucket[b], in)
+	}
+	keys := make([]int64, 0, len(byBucket))
+	for k := range byBucket {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	type bucketRow struct {
+		BucketStart   time.Time                                     `json:"bucket_start"`
+		IncidentCount int                                           `json:"incident_count"`
+		Metrics       map[timeintel.MetricName]timeintel.MetricStat `json:"metrics"`
+		RepeatRate    float64                                       `json:"repeat_incident_rate"`
+		MTBFms        int64                                         `json:"mtbf_ms"`
+	}
+	rows := make([]bucketRow, 0, len(keys))
+	for _, k := range keys {
+		ro := timeintel.Rollup(byBucket[k])
+		rows = append(rows, bucketRow{
+			BucketStart: time.Unix(k, 0).UTC(), IncidentCount: ro.IncidentCount,
+			Metrics: ro.Metrics, RepeatRate: ro.RepeatIncidentRate, MTBFms: ro.MTBFms,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"window_seconds": since,
+		"bucket_seconds": bucket,
+		"buckets":        rows,
 	})
 }
 
