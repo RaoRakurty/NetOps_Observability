@@ -94,6 +94,21 @@ describe("NetworkPathView — ribbon", () => {
     expect(screen.getAllByText(/no probe/).length).toBeGreaterThan(0);
   });
 
+  it("derives per-segment added latency and flags the worst segment", () => {
+    // hop a=0.3ms, b=0.5ms, c=2.0ms (OWD) → seg a→b adds 0.2ms, seg b→c adds 1.5ms (worst)
+    render(<NetworkPathView view={viewWith({
+      path_source: "measured",
+      stamp: [
+        { stamp_owd_ms: 0.3 },
+        { stamp_owd_ms: 0.5 },
+        { stamp_owd_ms: 2.0 },
+      ],
+    })} />);
+    expect(screen.getByText(/200 µs/)).toBeTruthy();      // a→b delta = 0.2ms
+    expect(screen.getByText(/most delay/)).toBeTruthy();  // worst segment flagged
+    expect(screen.getByText(/1.5 ms/)).toBeTruthy();      // b→c delta = 1.5ms
+  });
+
   it("shows the honest footnote when no hop has a STAMP probe", () => {
     render(<NetworkPathView view={viewWith({ path_source: "computed" })} />);
     expect(screen.getByText(/add a STAMP target per hop/i)).toBeTruthy();

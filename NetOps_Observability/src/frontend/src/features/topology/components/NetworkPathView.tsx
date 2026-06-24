@@ -77,6 +77,12 @@ function fmtMs(v: number): string {
   if (v < 1) return `${Math.round(v * 1000)} µs`;
   return `${v.toFixed(v < 10 ? 1 : 0)} ms`;
 }
+/** A hop's end-to-end latency for segment-delta math: prefer one-way delay (OWD),
+ *  fall back to RTT. The DIFFERENCE between two consecutive hops' values is that
+ *  segment's added latency — an honest derivation of "where the delay enters". */
+function segLatencyOf(st: HopStamp): number | undefined {
+  return st.owd ?? st.rtt;
+}
 
 /** Utilisation → calm-under-load → hot-near-saturation band (mirrors the hop ladder). */
 function utilColor(u: number): string {
@@ -124,6 +130,25 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
     () => path.some((id) => hopStamp(byId.get(id)).has),
     [path, byId],
   );
+
+  // Per-segment added latency = downstream hop's e2e latency − upstream's, where BOTH
+  // hops are STAMP-measured. The segment that adds the most is the latency culprit
+  // (the fault-isolation answer: "the delay enters between spine2 and wan-r2"). null
+  // where either endpoint is unmeasured — never inferred.
+  const segDelay = useMemo<(number | null)[]>(() => {
+    const out: (number | null)[] = [];
+    for (let i = 0; i < path.length - 1; i++) {
+      const up = segLatencyOf(hopStamp(byId.get(path[i])));
+      const dn = segLatencyOf(hopStamp(byId.get(path[i + 1])));
+      out.push(up != null && dn != null ? Math.max(0, dn - up) : null);
+    }
+    return out;
+  }, [path, byId]);
+  const worstDelayIdx = useMemo(() => {
+    let idx = -1, worst = -1;
+    segDelay.forEach((d, i) => { if (d != null && d > worst) { worst = d; idx = i; } });
+    return worst > 0 ? idx : -1; // only flag a real positive delta
+  }, [segDelay]);
 
   if (path.length < 2) return null; // parent owns the no-path/resolving/empty states
 
@@ -252,6 +277,17 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                     {(egress || ingress) && (
                       <div className="netpath-link-ports" style={{ fontFamily: MONO }}>
                         {egress ? `out ${egress}` : "out —"} <span aria-hidden="true">→</span> {ingress ? `in ${ingress}` : "in —"}
+                      </div>
+                    )}
+                    {/* Per-segment added latency (STAMP delta between the two hops) — the
+                        segment that adds the most is the latency culprit. */}
+                    {segDelay[i] != null && (
+                      <div className={`netpath-seg-delay${i === worstDelayIdx ? " worst" : ""}`}
+                        style={{ fontFamily: MONO }}
+                        title={i === worstDelayIdx
+                          ? "This segment adds the most latency on the path (STAMP delta)"
+                          : "Latency this segment adds (downstream STAMP − upstream STAMP)"}>
+                        +{fmtMs(segDelay[i] as number)} {i === worstDelayIdx ? "⤴ most delay" : "added"}
                       </div>
                     )}
                   </div>

@@ -945,6 +945,10 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .netpath-stamp-none { color: var(--fg-subtle); font-style: italic; }
 .netpath-stamp-foot { margin-top: 10px; font-size: 11px; color: var(--fg-subtle); line-height: 1.5;
   max-width: 620px; }
+/* per-segment added latency (STAMP delta between two hops) */
+.netpath-seg-delay { font-size: 9.5px; font-weight: 600; color: var(--fg-muted); text-align: center;
+  font-variant-numeric: tabular-nums; }
+.netpath-seg-delay.worst { color: var(--warn, #f5a524); font-weight: 800; }
 .netpath-link { width: 116px; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
   gap: 3px; padding: 0 4px; }
 .netpath-link-svg { display: block; }
