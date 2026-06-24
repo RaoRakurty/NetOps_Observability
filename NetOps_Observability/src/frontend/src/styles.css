@@ -3429,3 +3429,28 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .rsc-obj-name { font-weight: 600; color: var(--fg); }
 .rsc-obj-raw { font-size: 10px; color: var(--fg-subtle); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rsc-action { font-size: 12px; color: var(--fg-muted); max-width: 240px; }
+
+/* ----- NOC Recovery Scorecard v3 (readiness + coverage + muted cards) ----- */
+.rsc-title-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.rsc-readiness { display: inline-flex; align-items: center; gap: 9px; padding: 5px 11px; border-radius: 9px;
+  border: 1px solid var(--border); font-size: 12px; background: var(--panel); }
+.rsc-rd-state { font-weight: 700; }
+.rsc-rd-score { font-weight: 800; font-variant-numeric: tabular-nums; padding: 1px 7px; border-radius: 6px; background: var(--surface); }
+.rsc-rd-drag { color: var(--fg-muted); font-size: 11px; }
+.rsc-rd-healthy { border-color: #bce8cf; } .rsc-rd-healthy .rsc-rd-state { color: var(--ok, #16a34a); }
+.rsc-rd-stable { border-color: #cdd9ea; } .rsc-rd-stable .rsc-rd-state { color: var(--accent, #2563eb); }
+.rsc-rd-atrisk { border-color: #f0c89a; background: color-mix(in srgb, #f5a524 7%, var(--panel)); } .rsc-rd-atrisk .rsc-rd-state { color: var(--warn, #d97706); }
+/* evidence coverage strip */
+.rsc-coverage { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 14px;
+  padding: 9px 13px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); }
+.rsc-cov-head { font-size: 11px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; color: var(--fg-subtle); }
+.rsc-cov { display: inline-flex; align-items: center; gap: 6px; }
+.rsc-cov-label { font-size: 12px; color: var(--fg-muted); }
+.rsc-cov-state { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 5px; }
+.rsc-cov-good { background: #eafaf1; color: #0f9f4f; }
+.rsc-cov-warn { background: var(--rw-orange2, #fff4e8); color: #b45309; }
+.rsc-cov-muted { background: var(--surface); color: var(--fg-subtle); }
+/* intentionally-unavailable card: clearly muted, not a broken value */
+.rsc-card-muted { background: var(--surface); border-style: dashed; }
+.rsc-card-muted .rsc-card-val { font-size: 14px; }
+.rsc-chart-note { font-size: 11.5px; color: var(--fg-subtle); margin-top: 6px; font-style: italic; }

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { fmtDur, delayLabel, recommendedAction, offenderDisplay } from "./reliabilityMeta";
+import {
+  fmtDur, delayLabel, recommendedAction, offenderDisplay,
+  deriveCoverage, recoveryReadiness, pctlOrSample,
+} from "./reliabilityMeta";
 
 describe("reliabilityMeta", () => {
   it("formats durations", () => {
@@ -17,6 +20,46 @@ describe("reliabilityMeta", () => {
     expect(recommendedAction("Cloud")).toMatch(/route table/);
     expect(recommendedAction("Unknown")).toMatch(/missing evidence/);
   });
+  it("object-aware recommended actions", () => {
+    expect(recommendedAction("Cloud", "app_path:api->x")).toMatch(/route tables/);
+    expect(recommendedAction("LAN", "device:wan-r2")).toMatch(/WAN interface errors, BGP\/BFD/);
+    expect(recommendedAction("LAN", "device:spine1")).toMatch(/uplink errors.*ECMP/);
+    expect(recommendedAction("LAN", "root_entity:10.0.0.1:10.0.0.2")).toMatch(/path endpoints/);
+    expect(recommendedAction("LAN", "device:leaf1")).toMatch(/optic health, link flaps/);
+  });
+
+  it("never renders 0 ms for a no-sample percentile", () => {
+    expect(pctlOrSample(0)).toBeNull();      // → caller shows "No valid sample"
+    expect(pctlOrSample(undefined)).toBeNull();
+    expect(pctlOrSample(84000)).toBe("1m 24s");
+  });
+
+  it("evidence coverage reflects which phases are measured", () => {
+    const c = deriveCoverage({ ttc: true, tti: true, recovery: false, ticketing: false });
+    expect(c.correlation).toBe("connected");
+    expect(c.isolation).toBe("connected");
+    expect(c.recovery).toBe("missing");
+    expect(c.ticketing).toBe("missing");
+  });
+
+  it("readiness: high repeat + missing evidence → At Risk; clean → Healthy", () => {
+    const atRisk = recoveryReadiness({
+      repeatRate: 0.94, topDelay: "evidence_bundle",
+      coverage: { correlation: "connected", isolation: "connected", recovery: "missing", ticketing: "missing" },
+      mttiP90Ms: 30 * 60 * 1000 + 1, offenderCount: 10,
+    });
+    expect(atRisk.state).toBe("At Risk");
+    expect(atRisk.score).toBeLessThan(55);
+
+    const healthy = recoveryReadiness({
+      repeatRate: 0.05, topDelay: "resolved",
+      coverage: { correlation: "connected", isolation: "connected", recovery: "connected", ticketing: "connected" },
+      mttiP90Ms: 5 * 60 * 1000, offenderCount: 0,
+    });
+    expect(healthy.state).toBe("Healthy");
+    expect(healthy.score).toBeGreaterThanOrEqual(75);
+  });
+
   it("enriches offender display names but keeps the raw id", () => {
     const a = offenderDisplay("app_path:api->clickhouse");
     expect(a.display).toBe("Correlix API → Flow Store");
