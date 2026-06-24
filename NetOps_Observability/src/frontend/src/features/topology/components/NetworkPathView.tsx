@@ -256,7 +256,14 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                         )}
                       </>
                     ) : (
-                      <span className="netpath-stamp-none" title="No active STAMP/probe reaches this hop yet">— no probe</span>
+                      // Labeled empty slots so the placeholder reads as "latency/jitter/
+                      // delay go here" — not just a blank. Lights up when a STAMP probe
+                      // targets this hop's IP.
+                      <span className="netpath-stamp-empty" title="STAMP latency / jitter / delay appear here once an active probe targets this hop's IP. No probe reaches this hop yet.">
+                        <span>— <span className="netpath-stamp-k">lat</span></span>
+                        <span>— <span className="netpath-stamp-k">jit</span></span>
+                        <span>— <span className="netpath-stamp-k">delay</span></span>
+                      </span>
                     )}
                   </div>
                 </div>

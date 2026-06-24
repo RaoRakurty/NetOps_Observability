@@ -943,6 +943,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; max-width: 128px; }
 .netpath-stamp b { color: var(--fg); font-weight: 700; }
 .netpath-stamp-none { color: var(--fg-subtle); font-style: italic; }
+.netpath-stamp-empty { display: inline-flex; gap: 7px; color: var(--fg-subtle); }
+.netpath-stamp-empty .netpath-stamp-k { color: var(--fg-muted); font-weight: 600; }
 .netpath-stamp-foot { margin-top: 10px; font-size: 11px; color: var(--fg-subtle); line-height: 1.5;
   max-width: 620px; }
 /* per-segment added latency (STAMP delta between two hops) */
