@@ -60,6 +60,24 @@ function edgeBetween(edges: TopologyEdge[], a: string, b: string): TopologyEdge 
   return edges.find((e) => (e.source === a && e.target === b) || (e.source === b && e.target === a));
 }
 
+/** A hop's STAMP active-measurement metrics, read from node.metrics (backend attaches
+ *  stamp_* keys for hops a probe reaches; absent → honest "—"). */
+type HopStamp = { rtt?: number; pdv?: number; owd?: number; loss?: number; has: boolean };
+function hopStamp(n: TopologyNode | undefined): HopStamp {
+  const m = n?.metrics;
+  const num = (k: string): number | undefined => {
+    const v = m?.[k];
+    return typeof v === "number" ? v : undefined;
+  };
+  const rtt = num("stamp_rtt_ms"), pdv = num("stamp_pdv_ms"), owd = num("stamp_owd_ms"), loss = num("stamp_loss_pct");
+  return { rtt, pdv, owd, loss, has: rtt != null || pdv != null || owd != null || loss != null };
+}
+/** Format a millisecond value compactly: sub-ms as µs, else 1-decimal ms. */
+function fmtMs(v: number): string {
+  if (v < 1) return `${Math.round(v * 1000)} µs`;
+  return `${v.toFixed(v < 10 ? 1 : 0)} ms`;
+}
+
 /** Utilisation → calm-under-load → hot-near-saturation band (mirrors the hop ladder). */
 function utilColor(u: number): string {
   if (u >= 85) return "var(--crit, #e5484d)";
@@ -99,6 +117,13 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
     }
     return downIdx >= 0 ? downIdx : worst >= 70 ? worstIdx : -1;
   }, [path, view.edges]);
+
+  // Does ANY hop carry a STAMP measurement? Drives the honest path-level footnote
+  // (a wall of "—" reads as broken; one note explains it instead).
+  const anyStamp = useMemo(
+    () => path.some((id) => hopStamp(byId.get(id)).has),
+    [path, byId],
+  );
 
   if (path.length < 2) return null; // parent owns the no-path/resolving/empty states
 
@@ -146,6 +171,7 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
             const isDst = i === path.length - 1;
             const endpointTag = isSrc ? "Source" : isDst ? "Destination" : null;
             const stateLabel = rca ? rca.label : HEALTH_LABEL[n?.health ?? "unknown"];
+            const st = hopStamp(n);
 
             // The connector to the NEXT hop (drawn to the right of this node).
             const nextEdge = i < path.length - 1 ? edgeBetween(view.edges, id, path[i + 1]) : undefined;
@@ -176,6 +202,38 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                   </div>
                   <div className="netpath-label" title={n?.label ?? id}>{n?.label ?? id}</div>
                   <div className="netpath-sub" style={{ color: tone }}>{stateLabel}</div>
+
+                  {/* Per-hop STAMP active-measurement: latency / jitter / delay / loss
+                      to this hop. Honest "—" when no probe reaches the hop. */}
+                  <div className="netpath-stamp" aria-label="STAMP metrics for this hop">
+                    {st.has ? (
+                      <>
+                        {st.rtt != null && (
+                          <span title="STAMP latency to this hop (RTT, p95 over 5m)">
+                            <b>{fmtMs(st.rtt)}</b> lat
+                          </span>
+                        )}
+                        {st.pdv != null && (
+                          <span title="STAMP jitter to this hop (PDV, p95 over 5m)">
+                            <b>{fmtMs(st.pdv)}</b> jit
+                          </span>
+                        )}
+                        {st.owd != null && (
+                          <span title="STAMP one-way delay to this hop (OWD, p95 over 5m)">
+                            <b>{fmtMs(st.owd)}</b> delay
+                          </span>
+                        )}
+                        {st.loss != null && (
+                          <span title="STAMP packet loss to this hop (avg over 5m)"
+                            style={{ color: st.loss >= 1 ? "var(--crit, #e5484d)" : undefined }}>
+                            <b>{st.loss.toFixed(st.loss < 1 ? 2 : 1)}%</b> loss
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="netpath-stamp-none" title="No active STAMP/probe reaches this hop yet">— no probe</span>
+                    )}
+                  </div>
                 </div>
 
                 {!isDst && seg && (
@@ -202,6 +260,13 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
             );
           })}
         </div>
+
+        {!anyStamp && (
+          <div className="netpath-stamp-foot" role="note">
+            Per-hop latency / jitter / delay appear here from STAMP active probes. No probe
+            currently targets the hops on this path — add a STAMP target per hop to light them up.
+          </div>
+        )}
       </div>
 
       <aside className="netpath-rail" aria-label="Per-hop path detail">

@@ -149,7 +149,13 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		Alerts:   toAlertFacts(alerts),
 	}
 
-	writeJSON(w, http.StatusOK, topology.Project(in))
+	view := topology.Project(in)
+	// Path Trace: attach per-hop STAMP metrics (latency/jitter/delay/loss) to the
+	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
+	if mode == topology.ModePathTrace && len(view.Path) > 0 {
+		enrichPathStamp(&view, s.stampByDst(r.Context()))
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // projectGeoView builds the executive_geo View from SoT site placement + the

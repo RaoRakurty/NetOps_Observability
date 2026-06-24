@@ -15,6 +15,7 @@ function viewWith(opts: {
   path_source?: "measured" | "computed";
   rca?: (RcaOverlayState | undefined)[];
   util?: (number | undefined)[]; // util on link i→i+1
+  stamp?: (Record<string, number> | undefined)[]; // per-hop node.metrics
 }): TopologyView {
   const ids = ["a", "b", "c"];
   return {
@@ -28,6 +29,7 @@ function viewWith(opts: {
       id, label: { a: "edge1", b: "core1", c: "dc1" }[id]!,
       kind: "router", health: "ok", confidence: 1, evidence: [],
       rca_status: opts.rca?.[i],
+      metrics: opts.stamp?.[i],
     })),
     edges: [
       { id: "e1", source: "a", target: "b", relationship: "connected_to", protocol: "lldp",
@@ -77,6 +79,24 @@ describe("NetworkPathView — ribbon", () => {
     render(<NetworkPathView view={viewWith({ path_source: "measured", util: [20, 92] })} />);
     // The ribbon's own "bottleneck ·" tag + the rail's "Likely bottleneck:" line.
     expect(screen.getAllByText(/bottleneck/i).length).toBeGreaterThan(0);
+  });
+
+  it("shows per-hop STAMP latency/jitter/delay/loss when present", () => {
+    render(<NetworkPathView view={viewWith({
+      path_source: "measured",
+      stamp: [{ stamp_rtt_ms: 0.7, stamp_pdv_ms: 0.4, stamp_owd_ms: 0.3, stamp_loss_pct: 0 }, undefined, undefined],
+    })} />);
+    expect(screen.getByText(/lat/)).toBeTruthy();   // latency label rendered
+    expect(screen.getByText(/jit/)).toBeTruthy();   // jitter
+    expect(screen.getByText(/delay/)).toBeTruthy(); // one-way delay
+    expect(screen.getByText("700 µs")).toBeTruthy(); // 0.7ms → sub-ms formatted as µs
+    // hops without a probe read an honest "— no probe", not a fabricated number
+    expect(screen.getAllByText(/no probe/).length).toBeGreaterThan(0);
+  });
+
+  it("shows the honest footnote when no hop has a STAMP probe", () => {
+    render(<NetworkPathView view={viewWith({ path_source: "computed" })} />);
+    expect(screen.getByText(/add a STAMP target per hop/i)).toBeTruthy();
   });
 
   it("draws nothing for a sub-2-hop path (parent owns the empty state)", () => {
