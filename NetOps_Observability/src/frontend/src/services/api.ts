@@ -459,6 +459,39 @@ export type CorrReplay = {
   differences: string[];
 };
 
+// RCA Time Intelligence (Incident Time Decomposition). Mirrors timeintel_api.go.
+export type TimeMetric = {
+  metric_name: "ttd" | "ttc" | "tti" | "tte" | "tta" | "ttm" | "ttr_recovery" | "ttr_resolution";
+  complete: boolean;
+  started_at?: string;
+  ended_at?: string;
+  duration_ms: number;
+  start_event_type: string;
+  end_event_type: string;
+  confidence: number;
+  is_inferred: boolean;
+  blocked_by?: string;
+  missing_event?: string;
+  calculation_version: string;
+};
+export type TimeIntelLifecycleRow = {
+  event_type: string;
+  at: string;
+  timestamp_source: "observed" | "inferred" | "user_entered" | "itsm" | "synthetic" | "imported";
+  confidence: number;
+};
+export type TimeIntel = {
+  correlation_id: string;
+  verdict_tier: string;
+  owner?: string;
+  evidence_missing: boolean;
+  lifecycle: TimeIntelLifecycleRow[];
+  metrics: TimeMetric[];
+  time_loss_driver: "detection" | "correlation" | "evidence_missing" | "ownership" | "acknowledgement" | "mitigation" | "provider_repair" | "unknown";
+  time_loss_explanation: string;
+  calculation_version: string;
+};
+
 // One evidence link: a signal's role w.r.t. an edge or hypothesis.
 export type CorrEvidence = {
   signal_id: string;
@@ -1256,6 +1289,9 @@ export const api = {
   // Full window signal slice (attached + concurrent-unattached) for the RCA timeline.
   correlationTimeline: (id: string) =>
     request<CorrTimeline>(`/api/correlations/${encodeURIComponent(id)}/timeline`),
+  // RCA Time Intelligence — incident time decomposition (phases + time-loss driver).
+  correlationTimeMetrics: (id: string) =>
+    request<TimeIntel>(`/api/correlations/${encodeURIComponent(id)}/time-metrics`),
   // Active grounding seams (owner/visibility) — joined to edge grounding_ref in
   // the seam-aware graph. 501 on the file backend → caller degrades gracefully.
   seams: (state = "active") =>

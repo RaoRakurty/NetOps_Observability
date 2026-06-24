@@ -138,7 +138,7 @@ function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[]
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot, timeImpactSlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -147,6 +147,7 @@ export default function RcaWorkspace({
   exportDisabled?: boolean;
   debugExtra?: ReactNode;
   topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
+  timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -214,6 +215,14 @@ export default function RcaWorkspace({
               <KeyVal rows={data.impact} />
             </div>
           </section>
+
+          {/* RCA Time Intelligence — where this incident's time was spent. */}
+          {timeImpactSlot && (
+            <>
+              <div className="rw-section-title">Time impact</div>
+              <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
+            </>
+          )}
 
           {/* causal topology — advanced Network-Path graphics (RcaTopology) when
               provided, with the data-driven chain / placement card as fallback */}

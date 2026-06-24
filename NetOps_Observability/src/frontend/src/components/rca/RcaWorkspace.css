@@ -227,3 +227,48 @@
   .rca-ws .rw-aside { border-left: 0; border-top: 1px solid var(--rw-line); padding-left: 0; padding-top: 10px; }
   .rca-ws .rw-keyval { grid-template-columns: 120px 1fr; }
 }
+
+/* ----- RCA Time Intelligence — Time Impact card ----- */
+.rca-ws .ti-card { background: var(--rw-panel); border: 1px solid var(--rw-line); border-radius: 10px;
+  box-shadow: var(--rw-shadow); padding: 14px 16px; }
+.rca-ws .ti-card.ti-empty { color: var(--rw-muted); font-size: 13px; }
+.rca-ws .ti-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 10px; }
+.rca-ws .ti-title { font-weight: 700; font-size: 14px; color: var(--rw-text); }
+.rca-ws .ti-sub { font-size: 12px; color: var(--rw-muted); }
+/* time-loss driver headline — precise, never marketing */
+.rca-ws .ti-driver { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  padding: 8px 11px; border-radius: 8px; border: 1px solid var(--rw-line); background: var(--rw-soft); margin-bottom: 12px; }
+.rca-ws .ti-driver-tag { font-size: 10px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; color: var(--rw-muted2); }
+.rca-ws .ti-driver-name { font-weight: 700; font-size: 13px; color: var(--rw-text); }
+.rca-ws .ti-driver-expl { font-size: 12.5px; color: var(--rw-muted); }
+.rca-ws .ti-driver-provider_repair, .rca-ws .ti-driver-evidence_missing { background: var(--rw-orange2); border-color: #f6d9b8; }
+.rca-ws .ti-driver-provider_repair .ti-driver-name, .rca-ws .ti-driver-evidence_missing .ti-driver-name { color: var(--rw-orange); }
+/* phase rows */
+.rca-ws .ti-rows { display: grid; gap: 1px; background: var(--rw-line); border: 1px solid var(--rw-line);
+  border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.rca-ws .ti-row { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 7px 11px; background: var(--rw-panel); font-size: 13px; }
+.rca-ws .ti-row-star { background: var(--rw-purple2); }
+.rca-ws .ti-row-label { color: var(--rw-muted); }
+.rca-ws .ti-star { color: var(--rw-purple); font-size: 11px; margin-right: 5px; }
+.rca-ws .ti-row-star .ti-row-label { color: var(--rw-text); font-weight: 600; }
+.rca-ws .ti-row-val { font-weight: 700; color: var(--rw-text); font-variant-numeric: tabular-nums; font-family: var(--rw-mono); }
+.rca-ws .ti-row-na { color: var(--rw-muted2); font-weight: 600; }
+.rca-ws .ti-missing { font-weight: 500; font-style: italic; font-size: 11.5px; font-family: inherit; }
+.rca-ws .ti-conf { color: var(--rw-muted2); font-weight: 600; }
+.rca-ws .ti-src { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .3px;
+  margin-left: 7px; padding: 1px 5px; border-radius: 4px; font-family: var(--rw-sans, inherit); }
+.rca-ws .ti-src-inferred { background: var(--rw-orange2); color: var(--rw-orange); }
+/* horizontal lifecycle timeline */
+.rca-ws .ti-timeline { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; padding-top: 4px; }
+.rca-ws .ti-stage { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1 0 auto;
+  min-width: 62px; position: relative; }
+.rca-ws .ti-stage::before { content: ""; position: absolute; top: 5px; left: -50%; width: 100%; height: 2px;
+  background: var(--rw-line); z-index: 0; }
+.rca-ws .ti-stage:first-child::before { display: none; }
+.rca-ws .ti-stage.on ~ .ti-stage::before { background: var(--rw-line); }
+.rca-ws .ti-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--rw-panel);
+  border: 2px solid var(--rw-line); z-index: 1; }
+.rca-ws .ti-stage.on .ti-dot { background: var(--rw-green); border-color: var(--rw-green); }
+.rca-ws .ti-stage-label { font-size: 10px; color: var(--rw-muted2); text-align: center; white-space: nowrap; }
+.rca-ws .ti-stage.on .ti-stage-label { color: var(--rw-text); font-weight: 600; }
