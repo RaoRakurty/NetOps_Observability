@@ -903,6 +903,51 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .topo-pathprompt-arrow { font-size: 16px; color: var(--fg-subtle); font-weight: 700; }
 .topo-pathprompt-hint { font-size: 12px; color: var(--accent-bright, var(--accent)); margin-top: 12px; font-weight: 600; }
 
+/* ----- NetworkPathView — dedicated L→R source→destination path ribbon (#77) ----- */
+.netpath { position: absolute; inset: 0; display: flex; gap: 0; }
+.netpath-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+  padding: 18px 20px; overflow: hidden; }
+.netpath-head { display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.netpath-title { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 15px;
+  font-weight: 680; color: var(--fg); }
+.netpath-route { font-size: 13px; font-weight: 600; color: var(--fg-muted); margin-top: 3px;
+  font-variant-numeric: tabular-nums; }
+.netpath-route-arrow { color: var(--fg-subtle); font-weight: 700; padding: 0 2px; }
+.netpath-route-hops { color: var(--fg-subtle); font-weight: 600; }
+.netpath-prov { font-size: 10.5px; font-weight: 700; padding: 4px 9px; border: 1px solid; border-radius: 6px;
+  white-space: nowrap; }
+/* the ribbon: a single horizontal lane, scrolls L→R when the path is long (never
+   wraps — the reading order IS the forwarding order). */
+.netpath-ribbon { flex: 1 1 auto; display: flex; align-items: center; gap: 0;
+  overflow-x: auto; overflow-y: hidden; padding: 8px 4px 14px; }
+.netpath-seg { display: flex; align-items: center; gap: 0; flex: 0 0 auto; }
+.netpath-node { display: flex; flex-direction: column; align-items: center; gap: 4px;
+  width: 132px; flex: 0 0 auto; position: relative; }
+.netpath-endpoint { font-size: 9.5px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase;
+  border: 1px solid; border-radius: 5px; padding: 1px 7px; margin-bottom: 2px; }
+.netpath-glyph { position: relative; display: inline-flex; }
+.netpath-hopno { position: absolute; left: -4px; top: -4px; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--panel); border: 1.5px solid; font-size: 11px; font-weight: 800; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.netpath-mark { position: absolute; right: -4px; top: -4px; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid; font-size: 10px; font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; }
+.netpath-label { font-size: 12px; font-weight: 600; color: var(--fg); max-width: 124px; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.netpath-sub { font-size: 10px; font-weight: 600; text-transform: capitalize; }
+.netpath-link { width: 116px; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+  gap: 3px; padding: 0 4px; }
+.netpath-link-svg { display: block; }
+.netpath-link-meta { font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: center; }
+.netpath-bottleneck { font-weight: 800; text-transform: uppercase; letter-spacing: 0.3px; }
+.netpath-link-ports { font-size: 9.5px; color: var(--fg-subtle); text-align: center; white-space: nowrap; }
+.netpath-rail { flex: 0 0 320px; max-width: 42%; border-left: 1px solid var(--border);
+  background: var(--panel); padding: 16px 14px; overflow: auto; }
+@media (max-width: 880px) { .netpath { flex-direction: column; } .netpath-rail { flex-basis: auto; max-width: none;
+  border-left: none; border-top: 1px solid var(--border); max-height: 46%; } }
+
 /* fullscreen pop-out */
 .topo-root.topo-fullscreen { position: fixed; inset: 0; z-index: 1200; height: 100vh; min-height: 0;
   margin: 0; background: var(--surface); padding: 10px 12px 12px; }

@@ -12,9 +12,11 @@ import (
 // (#77). Where /api/topology/view recomputes an ephemeral live projection each
 // request, /graph serves the reconciler-maintained spine: STABLE node/edge ids
 // with first_seen/last_seen and a stale flag (change_state), tenant-scoped, plus a
-// coverage summary. Structural by design — live health/utilization stays on /view
-// (folding it in is the next enrichment step). Reuses the canonical Node/Edge
-// render contract so the frontend needs no new type.
+// coverage summary. The structural spine is read-enriched with live health/
+// utilization from the SAME signals /view uses (EnrichLive below) — the persisted
+// first_seen/last_seen/stale is authoritative, only Health/Metrics/Status/Util are
+// overlaid. Reuses the canonical Node/Edge render contract so the frontend needs no
+// new type.
 
 type topologyGraphResponse struct {
 	topology.View

@@ -60,6 +60,7 @@ import {
   OverlaySelector,
   MapWorkflowSelector,
   PathAnalysisPanel,
+  NetworkPathView,
   CapacityPanel,
   RcaVerdictBanner,
 } from "../../components";
@@ -606,6 +607,10 @@ function CanvasInner() {
             onSrc={setPathSrc}
             onDst={setPathDst}
           />
+        ) : mode === "path_trace" && view.path && view.path.length >= 2 ? (
+          // Dedicated source→destination view (#77): the resolved path as a clean
+          // L→R ribbon, NOT the full topology with the path merely highlighted.
+          <NetworkPathView view={view} />
         ) : (
           <>
             <div className="topo-search-dock">
@@ -662,7 +667,9 @@ function CanvasInner() {
               </div>
             )}
 
-            {(mode === "path_trace" || mode === "investigate") && (
+            {/* Investigate keeps the floating hop-ladder dock; path_trace's detail
+                now lives inside the dedicated NetworkPathView (above). */}
+            {mode === "investigate" && (
               <div className="topo-path-dock">
                 <PathAnalysisPanel view={view} />
               </div>
