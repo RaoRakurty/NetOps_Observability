@@ -71,6 +71,7 @@ type server struct {
 	services         *pgServiceStore       // service catalog #69 §2 P2 (nil on file backend)
 	topology         topologyGraphStore    // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline incidentTimelineStore // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	applications     applicationStore      // Application Identification registry #81 P0 (in-memory or pg)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -423,6 +424,7 @@ func newServer() *server {
 	srv.services = newServiceStore()
 	srv.topology = newTopologyStore() // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore() // RCA Time Intelligence manual lifecycle events (#84)
+	srv.applications = newApplicationStore()          // Application Identification registry (#81 P0)
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
@@ -756,6 +758,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/metrics/forecast", s.handleMetricsForecast)
 	mux.HandleFunc("/api/services", s.handleServices)
 	mux.HandleFunc("/api/services/", s.handleServiceByID)
+	mux.HandleFunc("/api/applications", s.handleApplications)
+	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
