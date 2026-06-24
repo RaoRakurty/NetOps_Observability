@@ -18,6 +18,7 @@ import {
   statusToHealth,
   rollupHealth,
   unresolvedReason,
+  fmtUtil,
 } from "../utils/topologyHealth";
 import type { Health } from "../api/topologyTypes";
 import ConfidencePanel from "./ConfidencePanel";
@@ -179,8 +180,25 @@ function IssuesBlock({ issues }: { issues: NonNullable<TopologyNode["issues"]> }
   );
 }
 
+// Customer-facing metric names + formatting — never raw schema keys (cpu_pct) or
+// long floats in the operator's face. alert_count is dropped: the Active-issues
+// block above already shows the alerts, so repeating a bare count is noise.
+const METRIC_LABEL: Record<string, string> = {
+  cpu_pct: "CPU", mem_pct: "Memory", link_count: "Links",
+  if_in_util: "In util", if_out_util: "Out util",
+};
+function metricLabel(k: string): string {
+  return METRIC_LABEL[k] ?? k.replace(/_pct$/i, "").replace(/_/g, " ");
+}
+function metricValue(k: string, v: number | string): string {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (/_pct$|util/i.test(k)) return `${Math.round(n)}%`;
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
 function NodeBody({ node }: { node: TopologyNode }) {
-  const metrics = Object.entries(node.metrics ?? {});
+  const metrics = Object.entries(node.metrics ?? {}).filter(([k]) => k !== "alert_count");
   const unresolved = node.resolved === false || node.kind === "unresolved";
   return (
     <>
@@ -230,7 +248,7 @@ function NodeBody({ node }: { node: TopologyNode }) {
                 }}
               >
                 <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.3 }}>
-                  {k}
+                  {metricLabel(k)}
                 </div>
                 <div
                   style={{
@@ -240,7 +258,7 @@ function NodeBody({ node }: { node: TopologyNode }) {
                     fontFamily: "var(--font-mono, ui-monospace, monospace)",
                   }}
                 >
-                  {String(v)}
+                  {metricValue(k, v)}
                 </div>
               </div>
             ))}
@@ -278,7 +296,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
         <MetaRow label="Status" value={edge.status} />
         <MetaRow
           label="Utilization"
-          value={edge.utilization_pct != null ? `${edge.utilization_pct}%` : undefined}
+          value={edge.utilization_pct != null ? fmtUtil(edge.utilization_pct) : undefined}
         />
         <MetaRow label="Errors" value={edge.errors != null ? String(edge.errors) : undefined} />
         <MetaRow label="Last seen" value={edge.last_seen} />
@@ -296,7 +314,7 @@ function EdgeBody({ edge, view }: { edge: TopologyEdge; view: TopologyView }) {
               <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", padding: "7px 9px" }}>
                 <div style={{ fontSize: 10, color: "var(--fg-subtle)", textTransform: "uppercase" }}>Utilization</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color, fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
-                  {edge.utilization_pct}%
+                  {fmtUtil(edge.utilization_pct)}
                 </div>
               </div>
             ) : null}

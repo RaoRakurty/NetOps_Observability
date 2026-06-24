@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { registerMap } from "echarts/core";
 import { cssVar } from "../../../../theme/tokens";
-import { HEALTH_COLOR, HEALTH_LABEL } from "../../utils/topologyHealth";
+import { HEALTH_COLOR, HEALTH_LABEL, fmtUtil } from "../../utils/topologyHealth";
 import { topologyToEchartsGeo, type GeoModel } from "./topologyToEchartsGeo";
 import { TopologySideDrawer } from "../../components";
 import { normalizeView } from "../../utils/topologyMapper";
@@ -93,7 +93,7 @@ function buildOption(model: GeoModel) {
           formatter: (p: { data?: { _circuit?: GeoModel["circuits"][number] } }) => {
             const c = p.data?._circuit;
             if (!c) return "";
-            const util = c.utilization == null ? "—" : `${c.utilization}%`;
+            const util = fmtUtil(c.utilization);
             return `<b>${c.fromName} ↔ ${c.toName}</b><br/>${c.status} · util ${util}`;
           },
         },

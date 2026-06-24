@@ -5,6 +5,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import type { TopologyView } from "../api/topologyTypes";
+import { fmtUtil } from "../utils/topologyHealth";
 import {
   rankHotLinks,
   ecmpGroups,
@@ -29,16 +30,6 @@ function utilColor(u: number): string {
   if (u >= SATURATION_THRESHOLD) return "var(--danger, #e5484d)";
   if (u >= 70) return "var(--warning, #f5a524)";
   return "var(--accent, #5b8def)";
-}
-
-// Operator-readable utilization. Raw VM ratios arrive as long floats (0.0000398…%);
-// a NOC engineer needs "<0.1%" / "12.4%" / "87%", never a 20-digit number.
-function fmtUtil(u: number): string {
-  if (!isFinite(u)) return "—";
-  if (u <= 0) return "0%";
-  if (u < 0.1) return "<0.1%";
-  if (u < 10) return `${u.toFixed(1)}%`;
-  return `${Math.round(u)}%`;
 }
 
 function HotRow({ link }: { link: HotLink }) {

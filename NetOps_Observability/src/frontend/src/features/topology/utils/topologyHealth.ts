@@ -183,3 +183,14 @@ export function edgeEvidenceSummary(edge: TopologyEdge): string {
   const bi = edge.direction === "bi" ? "bidirectional " : "";
   return `${bi}${src} · confidence ${confidencePct(edge.confidence)}`;
 }
+
+/** Operator-readable link utilization. Raw VM ratios arrive as long floats
+ * (0.0000398…%); a NOC engineer needs "<0.1%" / "12.4%" / "87%" / "—", never a
+ * 20-digit number. Shared by the capacity panel, edge inspector and geo tooltips. */
+export function fmtUtil(u: number | null | undefined): string {
+  if (u == null || !Number.isFinite(u)) return "—";
+  if (u <= 0) return "0%";
+  if (u < 0.1) return "<0.1%";
+  if (u < 10) return `${u.toFixed(1)}%`;
+  return `${Math.round(u)}%`;
+}
