@@ -72,6 +72,7 @@ type server struct {
 	topology         topologyGraphStore    // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline incidentTimelineStore // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	applications     applicationStore      // Application Identification registry #81 P0 (in-memory or pg)
+	appCatalog       *appCatalogHolder     // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -422,9 +423,13 @@ func newServer() *server {
 	// Postgres only, like incidents; the bootstrap loop starts in main().
 	srv.seams = newSeamStore()
 	srv.services = newServiceStore()
-	srv.topology = newTopologyStore() // persistent topology graph (#77); reconciler starts in main()
+	srv.topology = newTopologyStore()                 // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore() // RCA Time Intelligence manual lifecycle events (#84)
 	srv.applications = newApplicationStore()          // Application Identification registry (#81 P0)
+	srv.appCatalog = newAppCatalogHolder()            // Application Identification IP→app resolver (#81 P1)
+	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
+		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
+	}
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
@@ -751,8 +756,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	mux.HandleFunc("/api/events/feed", s.handleEventsFeed)
 	mux.HandleFunc("/api/paths/health", s.handlePathsHealth)
-	mux.HandleFunc("/api/reliability/rollups", s.handleReliabilityRollups)                   // RCA Time Intelligence reliability rollups (#84)
-	mux.HandleFunc("/api/reliability/trends", s.handleReliabilityTrends)                     // bucketed phase-metric trends (#84)
+	mux.HandleFunc("/api/reliability/rollups", s.handleReliabilityRollups)                    // RCA Time Intelligence reliability rollups (#84)
+	mux.HandleFunc("/api/reliability/trends", s.handleReliabilityTrends)                      // bucketed phase-metric trends (#84)
 	mux.HandleFunc("/api/reliability/chronic-offenders", s.handleReliabilityChronicOffenders) // recurring-object ranking (#84)
 	mux.HandleFunc("/api/health/score", s.handleHealthScore)
 	mux.HandleFunc("/api/metrics/forecast", s.handleMetricsForecast)
@@ -760,6 +765,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/services/", s.handleServiceByID)
 	mux.HandleFunc("/api/applications", s.handleApplications)
 	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
+	mux.HandleFunc("/api/appid/resolve", s.handleAppIDResolve)
+	mux.HandleFunc("/api/appid/status", s.handleAppIDStatus)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
