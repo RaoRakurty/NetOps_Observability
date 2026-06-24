@@ -255,6 +255,8 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.serveCorrelationTimeline(w, r, id)
 	case "rca-path-view":
 		s.serveRcaPathView(w, r, id)
+	case "time-metrics":
+		s.serveCorrelationTimeMetrics(w, r, id)
 	case "replay":
 		s.proxyCorrelationReplay(w, r, id)
 	default:
