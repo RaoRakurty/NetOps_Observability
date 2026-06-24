@@ -960,6 +960,25 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 @media (max-width: 880px) { .netpath { flex-direction: column; } .netpath-rail { flex-basis: auto; max-width: none;
   border-left: none; border-top: 1px solid var(--border); max-height: 46%; } }
 
+/* ----- EvidencePopover — hover peek at a node/edge's WHY + evidence ----- */
+.topo-evpop { position: fixed; z-index: 1400; width: 280px; pointer-events: none;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(16,24,40,0.22); padding: 10px 12px; }
+.topo-evpop-head { display: flex; align-items: center; gap: 7px; }
+.topo-evpop-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.topo-evpop-title { font-size: 12.5px; font-weight: 700; color: var(--fg); flex: 1 1 auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topo-evpop-state { font-size: 10px; font-weight: 700; text-transform: capitalize; flex: 0 0 auto; }
+.topo-evpop-meta { font-size: 10.5px; color: var(--fg-muted); margin-top: 2px; }
+.topo-evpop-issues { margin-top: 6px; display: grid; gap: 2px; }
+.topo-evpop-issue { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topo-evpop-ev { margin-top: 8px; display: grid; gap: 3px; }
+.topo-evpop-evrow { display: flex; align-items: baseline; gap: 7px; font-size: 10.5px; }
+.topo-evpop-src { flex: 0 0 auto; font-weight: 700; color: var(--fg-subtle); min-width: 46px; }
+.topo-evpop-sum { flex: 1 1 auto; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topo-evpop-conf { flex: 0 0 auto; color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+.topo-evpop-more { font-size: 10px; color: var(--fg-subtle); font-style: italic; margin-top: 2px; }
+
 /* fullscreen pop-out */
 .topo-root.topo-fullscreen { position: fixed; inset: 0; z-index: 1200; height: 100vh; min-height: 0;
   margin: 0; background: var(--surface); padding: 10px 12px 12px; }

@@ -61,6 +61,7 @@ import {
   MapWorkflowSelector,
   PathAnalysisPanel,
   NetworkPathView,
+  EvidencePopover,
   CapacityPanel,
   RcaVerdictBanner,
 } from "../../components";
@@ -115,6 +116,9 @@ function CanvasInner() {
   // first-degree neighbours (skill design-tokens) without opening the drawer.
   const [hoverNode, setHoverNode] = useState<string | undefined>();
   const [hoverEdge, setHoverEdge] = useState<string | undefined>();
+  // Cursor position of the current hover — drives the EvidencePopover peek (a hover
+  // glance at WHY a node/edge is here, without a click into the drawer).
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | undefined>();
   const [fullscreen, setFullscreen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Renderer toggle: the scoped React Flow canvas (default) vs. the WebGL
@@ -291,6 +295,7 @@ function CanvasInner() {
     setSearchMatches(new Set());
     setHoverNode(undefined);
     setHoverEdge(undefined);
+    setHoverPos(undefined);
     setCollapsedGroups(new Set());
     setOverlay(mode === "capacity" ? "utilization" : "health");
     setPathSrc("");
@@ -425,10 +430,16 @@ function CanvasInner() {
     setSelection({ edgeId: ed.id });
   }, []);
   const onPaneClick = useCallback(() => setSelection({}), []);
-  const onNodeMouseEnter = useCallback<NodeMouseHandler>((_e, n) => setHoverNode(n.id), []);
-  const onNodeMouseLeave = useCallback(() => setHoverNode(undefined), []);
-  const onEdgeMouseEnter = useCallback<EdgeMouseHandler>((_e, ed) => setHoverEdge(ed.id), []);
-  const onEdgeMouseLeave = useCallback(() => setHoverEdge(undefined), []);
+  const onNodeMouseEnter = useCallback<NodeMouseHandler>((e, n) => {
+    setHoverNode(n.id);
+    setHoverPos({ x: e.clientX, y: e.clientY });
+  }, []);
+  const onNodeMouseLeave = useCallback(() => { setHoverNode(undefined); setHoverPos(undefined); }, []);
+  const onEdgeMouseEnter = useCallback<EdgeMouseHandler>((e, ed) => {
+    setHoverEdge(ed.id);
+    setHoverPos({ x: e.clientX, y: e.clientY });
+  }, []);
+  const onEdgeMouseLeave = useCallback(() => { setHoverEdge(undefined); setHoverPos(undefined); }, []);
 
   const onPick = useCallback(
     (nodeId: string) => {
@@ -657,6 +668,12 @@ function CanvasInner() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Hover peek: WHY this node/edge is here (health/verdict + evidence),
+                without a click into the drawer. Suppressed while a drawer is open. */}
+            {hoverPos && (hoverNode || hoverEdge) && !(selection.nodeId || selection.edgeId || selection.groupId) && (
+              <EvidencePopover view={view} nodeId={hoverNode} edgeId={hoverEdge} x={hoverPos.x} y={hoverPos.y} />
             )}
 
             <TopologyLegend overlay={overlay} showRca={mode === "investigate" && !!incidentOverlay} />

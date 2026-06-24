@@ -3,6 +3,7 @@ export { default as EvidencePanel } from "./EvidencePanel";
 export { default as ConfidencePanel } from "./ConfidencePanel";
 export { default as PathAnalysisPanel } from "./PathAnalysisPanel";
 export { default as NetworkPathView } from "./NetworkPathView";
+export { default as EvidencePopover } from "./EvidencePopover";
 export { default as RcaVerdictBanner } from "./RcaVerdictBanner";
 export { default as CapacityPanel } from "./CapacityPanel";
 export { default as TopologySideDrawer } from "./TopologySideDrawer";
