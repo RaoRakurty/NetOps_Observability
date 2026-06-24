@@ -46,6 +46,55 @@ def severity_for(peak_z: float) -> Severity:
     return Severity.WARN
 
 
+# ── generic-alarm ingestion (#80 §4 — the keystone safety net) ────────────────
+#
+# Any device-generated alarm at severity ≥ the floor that NO specific classifier
+# recognized still becomes a canonical `device_alarm` signal (no per-mnemonic
+# branch), so a fault with no signature is grounded evidence, never a blind spot.
+# Below the floor stays a searchable log, never an RCA signal (anti-firehose).
+# kind `device_alarm` matches no signature → it only enriches clusters / the
+# undetermined-with-evidence outcome — exactly the long-tail coverage the fault
+# matrix (docs/design/fault-coverage-and-signature-matrix.md) relies on.
+
+# Severity keyword/char → numeric (RFC5424; lower = more severe). Covers IOS
+# keywords, SR Linux single-char (I/N/W/E/C), and the %FAC-N-MNEMONIC tag digit.
+_SEVERITY_NUM: dict[str, int] = {
+    "emerg": 0, "emergency": 0, "alert": 1, "crit": 2, "critical": 2, "c": 2,
+    "err": 3, "error": 3, "e": 3, "warn": 4, "warning": 4, "w": 4,
+    "notice": 5, "note": 5, "n": 5, "info": 6, "informational": 6, "i": 6,
+    "debug": 7, "d": 7,
+}
+
+# Anti-firehose floor: warning(4) or worse becomes a generic alarm; notice/info/
+# debug stay logs only. main.py may override the module global from env.
+ALARM_SEVERITY_FLOOR = 4  # warning
+
+_TAG_SEV_RE = re.compile(r"%[A-Z0-9_]+-(\d)-[A-Z0-9_]+")  # Cisco %FAC-N-MNEMONIC
+
+
+def syslog_severity_num(ev: dict, tag: str) -> int | None:
+    """Most-severe numeric severity (0=emerg..7=debug) derivable from the event —
+    the RFC5424/SR-Linux `severity` keyword/char AND the Cisco %FAC-N-MNEMONIC tag
+    digit. None when neither parses (the generic-alarm fallback then abstains: no
+    severity, no guessed alarm)."""
+    cands: list[int] = []
+    sev = str(ev.get("severity") or "").strip().lower()
+    if sev in _SEVERITY_NUM:
+        cands.append(_SEVERITY_NUM[sev])
+    m = _TAG_SEV_RE.search(tag)
+    if m:
+        cands.append(int(m.group(1)))
+    return min(cands) if cands else None
+
+
+def _severity_from_num(n: int) -> Severity:
+    if n <= 2:   # emerg / alert / crit
+        return Severity.CRIT
+    if n == 3:   # err
+        return Severity.HIGH
+    return Severity.WARN  # warning (the floor)
+
+
 def episode_signal(
     ev: EpisodeEvent,
     observer: Observer,
@@ -479,6 +528,39 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
                    "port_b": ports[1] if len(ports) > 1 else "", "tag": tag},
         )
 
+    # Generic device-alarm fallback (#80 §4 keystone) — the SAFETY NET. Nothing
+    # above recognized this event, but if the DEVICE itself flagged it at warning
+    # or worse it is still real evidence: one canonical `device_alarm` signal so it
+    # grounds + correlates + tiers like any other (no per-mnemonic branch). Below
+    # the floor (notice/info/debug) stays a searchable log, never an RCA signal.
+    sev_num = syslog_severity_num(ev, tag)
+    if sev_num is not None and sev_num <= ALARM_SEVERITY_FLOOR:
+        if_m = _IF_RE.search(msg)
+        ifname = if_m.group(1) if if_m else ""
+        facility = (str(ev.get("facility") or "")
+                    or (tag.split("-", 1)[0].lstrip("%") if "-" in tag else tag.lstrip("%")))
+        mnem = tag.rsplit("-", 1)[-1] if "-" in tag else str(ev.get("event_type") or "")
+        if ifname:
+            etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{ifname}", (host, ifname)
+        else:
+            etype_, eid_, toks_ = EntityType.DEVICE, host, (host,)
+        return Signal(
+            tenant_id=tenant,
+            ts=ts,
+            source=Source.SYSLOG,
+            kind="device_alarm",
+            observer=observer,
+            modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=etype_,
+            entity_id=eid_,
+            severity=_severity_from_num(sev_num),
+            native_id=f"{host}|alarm|{facility}|{mnem or '?'}|{ifname or '-'}|{ts_ms}",
+            entity_tokens=toks_,
+            metric_name="device_alarm",
+            attrs={"facility": facility, "mnemonic": mnem, "severity": sev_num,
+                   "interface": ifname, "tag": tag, "text": msg[:256]},
+        )
+
     return None
 
 
@@ -666,6 +748,30 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
             native_id=f"{device}|trap_restart|{kind_type}|{ts_ms}",
             entity_tokens=(device,), metric_name="device_restart",
             attrs={"restart": kind_type, "trap_oid": oid, "event_type": etype, "authenticated": authed},
+        )
+
+    # Generic device-alarm fallback (#80 §4 keystone) — an unclassified trap is
+    # still real evidence IF the device/MIB flagged it at warning or worse (the MIB
+    # severity the Go receiver's trapMeta resolved). One canonical `device_alarm`
+    # signal so vendor alarm traps with no dedicated branch still ground + correlate.
+    # Below the floor stays searchable in OpenSearch, never an RCA signal.
+    sev_num = _SEVERITY_NUM.get(str(ev.get("severity") or "").strip().lower())
+    if sev_num is not None and sev_num <= ALARM_SEVERITY_FLOOR:
+        iface = _trap_interface(ev)
+        if iface and iface != "unknown":
+            etype_, eid_, toks_ = EntityType.INTERFACE, f"{device}:{iface}", (device, iface)
+        else:
+            etype_, eid_, toks_ = EntityType.DEVICE, device, (device,)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.TRAP, kind="device_alarm",
+            observer=observer, modality_class=ModalityClass.CONTROL_PLANE,
+            entity_type=etype_, entity_id=eid_, severity=_severity_from_num(sev_num),
+            native_id=f"{device}|alarm|{oid or '?'}|{ts_ms}",
+            entity_tokens=toks_, metric_name="device_alarm",
+            attrs={"trap_oid": oid, "trap_name": name, "event_type": etype,
+                   "category": str(ev.get("category") or ""), "severity": sev_num,
+                   "authenticated": authed,
+                   "interface": iface if iface != "unknown" else ""},
         )
 
     return None  # unclassified — searchable in OpenSearch, no RCA signal

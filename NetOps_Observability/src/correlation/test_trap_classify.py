@@ -5,8 +5,12 @@ Proves the trap guardrail the architecture requires (Layer 1G + Layer 4D):
   * high-value, well-standardized traps (linkDown/Up, coldStart/warmStart, BGP
     transition) → ONE normalized control_plane signal bound to the same
     interface/peer entity model as metrics & syslog
-  * every UNCLASSIFIED trap → None (kept searchable in OpenSearch, NEVER an RCA
-    signal) — the anti-noise guardrail
+  * an UNCLASSIFIED trap below the severity floor → None (kept searchable in
+    OpenSearch, NEVER an RCA signal) — the anti-noise guardrail. Production defaults
+    unknown OIDs to `notice` (snmptrap.go), which is below the floor.
+  * an UNCLASSIFIED but MIB-flagged-SEVERE trap (warning+) → a generic `device_alarm`
+    signal (#80 §4 generic-alarm keystone) — the safety net so no severe device
+    alarm is a blind spot
   * handle_snmptrap counts received / normalized / dropped and never crashes
 """
 import unittest
@@ -86,10 +90,26 @@ class TrapClassifyTest(unittest.TestCase):
         sig = trap_control_signal(trap(authenticated=True), "", NOW)
         self.assertTrue(sig.attrs["authenticated"])
 
-    def test_unknown_trap_creates_no_signal(self):
-        # an enterprise-specific / unclassified trap → searchable, no RCA signal
-        ev = trap(trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="enterpriseSpecific", varbinds=[])
+    def test_unknown_low_severity_trap_creates_no_signal(self):
+        # an enterprise-specific / unclassified trap at notice (the production default
+        # for an unknown OID) → searchable, no RCA signal (below the alarm floor).
+        ev = trap(trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="enterpriseSpecific",
+                  severity="notice", varbinds=[])
         self.assertIsNone(trap_control_signal(ev, "", NOW))
+
+    def test_unknown_severe_trap_becomes_generic_device_alarm(self):
+        # #80 §4 keystone: an unclassified trap the MIB flagged SEVERE (warning+) is
+        # still real evidence → a generic device_alarm signal (device-scoped here, no
+        # interface varbind), so a severe vendor alarm is never a blind spot.
+        ev = trap(trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="enterpriseSpecific",
+                  severity="critical", varbinds=[])
+        sig = trap_control_signal(ev, "", NOW)
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.kind, "device_alarm")
+        self.assertEqual(sig.modality_class, ModalityClass.CONTROL_PLANE)
+        self.assertEqual(sig.entity_type, EntityType.DEVICE)
+        self.assertEqual(sig.entity_id, "leaf1")
+        self.assertEqual(sig.attrs["trap_oid"], "1.3.6.1.4.1.9.9.999.0.1")
 
     def test_vendor_bgp_trap_classifies_via_event_type(self):
         # Arista BGP trap: non-standard OID the standard checks miss, but the
@@ -137,9 +157,10 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sigs), 1)
         self.assertEqual(sigs[0]["modality_class"], "control_plane")
 
-    async def test_unknown_trap_dropped_no_signal(self):
+    async def test_unknown_low_severity_trap_dropped_no_signal(self):
         await main.handle_snmptrap(
-            trap(trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="enterpriseSpecific", varbinds=[]))
+            trap(trap_oid="1.3.6.1.4.1.9.9.999.0.1", trap_name="enterpriseSpecific",
+                 severity="notice", varbinds=[]))
         self.assertEqual(main.TRAPS_RECEIVED, 1)
         self.assertEqual(main.TRAPS_NORMALIZED, 0)
         self.assertEqual(main.TRAPS_DROPPED, 1)

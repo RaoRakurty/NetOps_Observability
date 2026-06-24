@@ -355,6 +355,62 @@ def test_syslog_classifies_via_parsed_facility_event_type():
     assert link is not None and link.kind == "link_state_change"
 
 
+# ── generic-alarm fallback (#80 §4 keystone) ──────────────────────────────────
+
+
+def test_generic_alarm_unrecognized_severe_event_device_scoped():
+    # An unrecognized device alarm at err/crit → ONE generic device_alarm signal
+    # (no per-mnemonic branch), device-scoped when no interface is named.
+    s = syslog_control_signal({**syslog_event(
+        "%ENVMON-2-FAN_FAILED", "Fan 2 in chassis has failed", host="core1"),
+        "severity": "critical"}, "", T0)
+    assert s is not None
+    assert s.kind == "device_alarm"
+    assert s.source is Source.SYSLOG
+    assert s.modality_class is ModalityClass.CONTROL_PLANE
+    assert s.entity_type is EntityType.DEVICE
+    assert s.entity_id == "core1"
+    assert s.severity is Severity.CRIT
+    assert s.attrs["facility"] == "ENVMON"
+    assert s.attrs["mnemonic"] == "FAN_FAILED"
+    assert "core1" in s.entity_tokens
+
+
+def test_generic_alarm_interface_scoped_when_named():
+    s = syslog_control_signal({**syslog_event(
+        "%PORT-3-IF_DOWN_ERROR", "Interface Ethernet5 disabled due to error", host="leaf1"),
+        "severity": "err"}, "", T0)
+    assert s is not None and s.kind == "device_alarm"
+    assert s.entity_type is EntityType.INTERFACE
+    assert s.entity_id == "leaf1:Ethernet5"
+    assert s.severity is Severity.HIGH
+    assert "Ethernet5" in s.entity_tokens
+
+
+def test_generic_alarm_below_floor_is_no_signal():
+    # notice/info unrecognized events stay searchable logs, never an RCA signal.
+    assert syslog_control_signal({**syslog_event(
+        "%SYS-5-CONFIG_I", "Configured from console by admin", host="leaf1"),
+        "severity": "notice"}, "", T0) is None
+
+
+def test_specific_classifier_wins_over_generic_alarm():
+    # A recognized control-plane event classifies specifically even at high severity —
+    # the generic fallback only catches the long tail nothing else matched.
+    s = syslog_control_signal({**syslog_event(
+        "%BGP-5-ADJCHANGE", "peer 10.0.0.9 new state Idle", host="leaf1"),
+        "severity": "critical"}, "", T0)
+    assert s is not None and s.kind == "bgp_adjacency_change"  # NOT device_alarm
+
+
+def test_generic_alarm_severity_from_mnemonic_digit_only():
+    # No RFC5424 severity field, but the Cisco %FAC-N-MNEMONIC digit (err=3) drives it.
+    s = syslog_control_signal({"hostname": "sw1", "appname": "%PLATFORM-3-ELEMENT_FAULT",
+                               "message": "PSU 1 voltage out of range", "timestamp": T0.isoformat()},
+                              "", T0)
+    assert s is not None and s.kind == "device_alarm" and s.severity is Severity.HIGH
+
+
 # ── flow lane (C6 passive_flow) ───────────────────────────────────────────────
 def test_flow_sample_snake_camel_and_sampling_scale():
     snake = flow_sample({"sampler_address": "10.0.0.9", "in_if": 7, "bytes": 100, "sampling_rate": 50})

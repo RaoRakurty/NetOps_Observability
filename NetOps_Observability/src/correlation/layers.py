@@ -76,6 +76,9 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "synthetic_http_fail": CausalLayer.APPLICATION,
     "http_error_rate": CausalLayer.APPLICATION,
     "app_timeout": CausalLayer.APPLICATION,
+    # `device_alarm` (the #80 generic-alarm catch-all) is INTENTIONALLY unmapped:
+    # a generic alarm has no known causal layer, so the layer prior abstains for it
+    # (honest, never a guess). Its absence here is by design, NOT a coverage gap.
 }
 
 
