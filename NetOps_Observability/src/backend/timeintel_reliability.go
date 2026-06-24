@@ -1,0 +1,215 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"netops/backend/timeintel"
+)
+
+// timeintel_reliability.go — RCA Time Intelligence reliability rollups:
+//   GET /api/reliability/rollups            (percentile phase stats, MTBF, repeat rate, top time-loss phase)
+//   GET /api/reliability/chronic-offenders  (recurring objects ranked by incident count)
+//
+// Both aggregate per-incident time decompositions over a window. The per-incident
+// metrics are derived from corr objects (no engine change, no persisted table yet) —
+// a single batched ClickHouse read, tenant-scoped via chRows (chTenantScope), so a
+// tenant only ever aggregates its OWN incidents (no cross-tenant leak). Percentiles
+// (p50/p90/p95), NOT just averages.
+
+// reliabilityFilters are the optional scoping filters (network-specific dimensions).
+type reliabilityFilters struct {
+	Owner     string // customer | isp | cloud_provider | ...
+	Provider  string
+	Device    string
+	Severity  string
+	Signature string // root_cause_signature (top_hypothesis)
+}
+
+func reliabilityFiltersFrom(r *http.Request) reliabilityFilters {
+	q := r.URL.Query()
+	return reliabilityFilters{
+		Owner:     strings.ToLower(strings.TrimSpace(q.Get("owner"))),
+		Provider:  strings.TrimSpace(q.Get("provider")),
+		Device:    strings.TrimSpace(q.Get("device")),
+		Severity:  strings.ToLower(strings.TrimSpace(q.Get("severity"))),
+		Signature: strings.TrimSpace(q.Get("signature")),
+	}
+}
+
+// buildIncidentSummaries loads corr objects in the window (tenant-scoped) and turns
+// each into a timeintel.IncidentSummary: derive lifecycle (engine facts; detection
+// falls back to onset here — per-object ingest queries would be N+1), compute phase
+// durations + the time-loss driver, and extract grouping keys for MTBF / chronic
+// offenders. Maintenance/child classification: merged objects are children.
+func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f reliabilityFilters) ([]timeintel.IncidentSummary, error) {
+	// Qualify with a table alias so WHERE references the real DateTime64 column, not
+	// the toString() SELECT alias of the same name (which would be String → type
+	// mismatch — the same gotcha handleCorrelations documents).
+	// Extract owner server-side (JSONExtractString) instead of pulling the whole
+	// hypotheses blob per object — at 5000 objects the blobs would blow past chRows'
+	// 8 MB read cap and truncate the JSON.
+	sql := `
+SELECT toString(o.correlation_id) AS correlation_id,
+       toString(o.window_start)   AS window_start,
+       toString(o.created_at)     AS created_at,
+       o.verdict_tier             AS verdict_tier,
+       o.top_confidence           AS top_confidence,
+       o.top_hypothesis           AS top_hypothesis,
+       o.evidence_missing         AS evidence_missing,
+       o.affected                 AS affected,
+       o.state                    AS state,
+       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner') AS owner
+  FROM netops.corr_objects_latest AS o
+ WHERE o.window_start >= now() - INTERVAL ` + intToString(sinceSeconds) + ` SECOND
+ ORDER BY o.window_start ASC
+ LIMIT 5000
+ FORMAT JSON`
+	rows, err := s.chRows(r, sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]timeintel.IncidentSummary, 0, len(rows))
+	for _, o := range rows {
+		owner := strings.ToLower(strings.TrimSpace(asString(o["owner"])))
+		sig := asString(o["top_hypothesis"])
+		facts := corrTimeFacts{
+			WindowStart:     parseCHTime(o["window_start"]),
+			CreatedAt:       parseCHTime(o["created_at"]),
+			VerdictTier:     asString(o["verdict_tier"]),
+			Owner:           owner,
+			EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
+			Confidence:      asFloat(o["top_confidence"]),
+		}
+		group := groupKeysFromAffected(asString(o["affected"]))
+		if owner != "" {
+			group["provider"] = owner
+		}
+		if sig != "" {
+			group["signature"] = sig
+		}
+
+		// Filters (applied after grouping extraction).
+		if f.Owner != "" && owner != f.Owner {
+			continue
+		}
+		if f.Provider != "" && group["provider"] != f.Provider {
+			continue
+		}
+		if f.Device != "" && group["device"] != f.Device {
+			continue
+		}
+		if f.Signature != "" && sig != f.Signature {
+			continue
+		}
+
+		lc := deriveLifecycle(facts, itsmTimeFacts{})
+		metrics := timeintel.ComputeTimeMetrics(lc, timeIntelCalcVersion, time.Now().UTC())
+		durs := map[timeintel.MetricName]int64{}
+		for _, m := range metrics {
+			// TTD is excluded from rollups: the batch path doesn't run the per-object
+			// min(ingest_ts) query (N+1), so detection falls back to onset → a
+			// misleading 0. Detection latency is shown per-incident (Time Impact card),
+			// where the ingest query runs. Everything else rolls up honestly.
+			if m.Complete && m.Name != timeintel.MetricTTD {
+				durs[m.Name] = m.DurationMs
+			}
+		}
+		driver, _ := timeintel.DeriveTimeLossDriver(lc, timeintel.DriverContext{EvidenceMissing: facts.EvidenceMissing, Owner: owner})
+
+		out = append(out, timeintel.IncidentSummary{
+			CorrelationID:  asString(o["correlation_id"]),
+			Durations:      durs,
+			TimeLossDriver: driver,
+			Group:          group,
+			OccurredAt:     facts.WindowStart,
+			State:          asString(o["state"]),
+			IsChild:        strings.EqualFold(asString(o["state"]), "merged"),
+		})
+	}
+	return out, nil
+}
+
+// groupKeysFromAffected extracts MTBF grouping keys from the corr object's affected
+// JSON ({devices,interfaces,paths}). First of each → the stable object identity.
+func groupKeysFromAffected(blob string) map[string]string {
+	g := map[string]string{}
+	blob = strings.TrimSpace(blob)
+	if blob == "" || blob == "{}" {
+		return g
+	}
+	var a struct {
+		Devices    []string `json:"devices"`
+		Interfaces []string `json:"interfaces"`
+		Paths      []string `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(blob), &a); err != nil {
+		return g
+	}
+	if len(a.Devices) > 0 {
+		g["device"] = a.Devices[0]
+		g["root_entity"] = a.Devices[0]
+	}
+	if len(a.Interfaces) > 0 {
+		g["interface"] = a.Interfaces[0]
+	}
+	if len(a.Paths) > 0 {
+		g["app_path"] = a.Paths[0]
+	}
+	return g
+}
+
+// handleReliabilityRollups serves GET /api/reliability/rollups.
+func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
+	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	rollup := timeintel.Rollup(incs)
+	mttf, mttfCount := timeintel.MTTF(incs)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"window_seconds":      since,
+		"rollup":              rollup,
+		"mttf_ms":             mttf,
+		"mttf_asset_count":    mttfCount,
+		"calculation_version": timeIntelCalcVersion,
+		// Honesty: surface the scan cap (no silent truncation) + the open dependency
+		// that internal-stack incidents are NOT yet excluded (decision #76 engine-side).
+		"capped": len(incs) >= 5000,
+		"note":   "includes internal-stack incidents until #76 engine-side exclusion lands",
+	})
+}
+
+// handleReliabilityChronicOffenders serves GET /api/reliability/chronic-offenders.
+func (s *server) handleReliabilityChronicOffenders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
+	topN := intQuery(r, "top", 10, 1, 100)
+	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"window_seconds": since,
+		"offenders":      timeintel.ChronicOffenders(incs, topN),
+	})
+}
