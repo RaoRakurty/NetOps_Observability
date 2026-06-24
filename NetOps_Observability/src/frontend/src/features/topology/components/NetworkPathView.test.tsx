@@ -5,7 +5,7 @@
 // sub-2-hop "path" draws nothing (the parent owns the empty/resolving states).
 
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import NetworkPathView from "./NetworkPathView";
 import type { TopologyView, RcaOverlayState } from "../api/topologyTypes";
 
@@ -81,17 +81,29 @@ describe("NetworkPathView — ribbon", () => {
     expect(screen.getAllByText(/bottleneck/i).length).toBeGreaterThan(0);
   });
 
-  it("shows per-hop STAMP latency/jitter/delay/loss when present", () => {
+  it("shows per-hop STAMP latency + jitter inline (no redundant 'delay')", () => {
     render(<NetworkPathView view={viewWith({
       path_source: "measured",
       stamp: [{ stamp_rtt_ms: 0.7, stamp_pdv_ms: 0.4, stamp_owd_ms: 0.3, stamp_loss_pct: 0 }, undefined, undefined],
     })} />);
-    expect(screen.getByText(/lat/)).toBeTruthy();   // latency label rendered
-    expect(screen.getByText(/jit/)).toBeTruthy();   // jitter
-    expect(screen.getByText(/delay/)).toBeTruthy(); // one-way delay
-    expect(screen.getByText("700 µs")).toBeTruthy(); // 0.7ms → sub-ms formatted as µs
-    // hops without a probe read an honest "— no probe", not a fabricated number
-    expect(screen.getAllByText(/no probe/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/lat/).length).toBeGreaterThan(0); // latency inline
+    expect(screen.getAllByText(/jit/).length).toBeGreaterThan(0); // jitter inline
+    expect(screen.getByText("700 µs")).toBeTruthy();              // 0.7ms → µs
+  });
+
+  it("expands the FULL per-hop metric list on click (latency/OWD/jitter/loss/hop position)", () => {
+    render(<NetworkPathView view={viewWith({
+      path_source: "measured",
+      stamp: [{ stamp_rtt_ms: 0.7, stamp_pdv_ms: 0.4, stamp_owd_ms: 0.3, stamp_loss_pct: 0 }, undefined, undefined],
+    })} />);
+    // click the first hop's metric button
+    fireEvent.click(screen.getAllByTitle("Click for the full per-hop metrics")[0]);
+    expect(screen.getByText("Latency (round-trip)")).toBeTruthy();
+    expect(screen.getByText("One-way delay (OWD)")).toBeTruthy();
+    expect(screen.getByText("Hop position")).toBeTruthy();
+    expect(screen.getByText("1 of 3")).toBeTruthy();
+    // not-yet-wired metrics show an honest "—", not a fabricated value
+    expect(screen.getByText("Bandwidth")).toBeTruthy();
   });
 
   it("derives per-segment added latency and flags the worst segment", () => {

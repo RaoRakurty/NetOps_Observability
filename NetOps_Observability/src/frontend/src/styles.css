@@ -938,13 +938,33 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .netpath-sub { font-size: 10px; font-weight: 600; text-transform: capitalize; }
 /* per-hop STAMP active-measurement (latency/jitter/delay/loss) */
-.netpath-stamp { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 8px; margin-top: 3px;
-  font-size: 10px; color: var(--fg-muted); font-variant-numeric: tabular-nums;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; max-width: 128px; }
+.netpath-stamp { display: inline-flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px 8px;
+  margin-top: 3px; font-size: 10px; color: var(--fg-muted); font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; max-width: 130px;
+  background: none; border: 1px solid transparent; border-radius: 6px; padding: 1px 5px; cursor: pointer; }
+.netpath-stamp:hover { border-color: var(--border); background: var(--surface); }
+.netpath-stamp.open { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .netpath-stamp b { color: var(--fg); font-weight: 700; }
+.netpath-stamp-more { color: var(--fg-subtle); font-weight: 700; }
 .netpath-stamp-none { color: var(--fg-subtle); font-style: italic; }
 .netpath-stamp-empty { display: inline-flex; gap: 7px; color: var(--fg-subtle); }
 .netpath-stamp-empty .netpath-stamp-k { color: var(--fg-muted); font-weight: 600; }
+/* expanded per-hop metric list */
+.netpath-hopdetail { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); padding: 12px 14px; max-width: 520px; }
+.netpath-hopdetail-head { display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; color: var(--fg); margin-bottom: 8px; }
+.netpath-hd-close { background: none; border: none; color: var(--fg-subtle); cursor: pointer; font-size: 13px; padding: 2px 5px; }
+.netpath-hd-close:hover { color: var(--fg); }
+.netpath-hopdetail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 18px; }
+.netpath-hd-group { grid-column: 1 / -1; font-size: 9.5px; font-weight: 800; letter-spacing: .4px;
+  text-transform: uppercase; color: var(--fg-subtle); margin: 8px 0 2px; }
+.netpath-hd-group:first-child { margin-top: 0; }
+.netpath-hd-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 3px 0; border-bottom: 1px dotted var(--border); font-size: 12px; }
+.netpath-hd-label { color: var(--fg-muted); }
+.netpath-hd-val { color: var(--fg); font-weight: 700; }
+.netpath-hd-na { color: var(--fg-subtle); }
 .netpath-stamp-foot { margin-top: 10px; font-size: 11px; color: var(--fg-subtle); line-height: 1.5;
   max-width: 620px; }
 /* per-segment added latency (STAMP delta between two hops) */

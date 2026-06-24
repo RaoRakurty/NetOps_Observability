@@ -13,7 +13,7 @@
 // Pure render — no business logic, no fetching. The parent (TopologyCanvas) resolves
 // the path and the empty/resolving/no-path states; this only draws a resolved path.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { TopologyView, TopologyNode, TopologyEdge, RcaOverlayState } from "../api/topologyTypes";
 import { HEALTH_COLOR, HEALTH_LABEL } from "../utils/topologyHealth";
 import { RCA_OVERLAY } from "../utils/rcaOverlay";
@@ -150,6 +150,9 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
     return worst > 0 ? idx : -1; // only flag a real positive delta
   }, [segDelay]);
 
+  // Clicking a hop's latency/jitter expands its FULL per-hop metric list below the ribbon.
+  const [openHop, setOpenHop] = useState<string | null>(null);
+
   if (path.length < 2) return null; // parent owns the no-path/resolving/empty states
 
   const srcN = byId.get(path[0]);
@@ -228,44 +231,27 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                   <div className="netpath-label" title={n?.label ?? id}>{n?.label ?? id}</div>
                   <div className="netpath-sub" style={{ color: tone }}>{stateLabel}</div>
 
-                  {/* Per-hop STAMP active-measurement: latency / jitter / delay / loss
-                      to this hop. Honest "—" when no probe reaches the hop. */}
-                  <div className="netpath-stamp" aria-label="STAMP metrics for this hop">
+                  {/* Per-hop STAMP headline (latency + jitter). Click to expand the FULL
+                      per-hop metric list below the ribbon. Honest empty slots when no
+                      probe reaches the hop. */}
+                  <button type="button"
+                    className={`netpath-stamp${openHop === id ? " open" : ""}`}
+                    aria-expanded={openHop === id}
+                    title="Click for the full per-hop metrics"
+                    onClick={() => setOpenHop(openHop === id ? null : id)}>
                     {st.has ? (
                       <>
-                        {st.rtt != null && (
-                          <span title="STAMP latency to this hop (RTT, p95 over 5m)">
-                            <b>{fmtMs(st.rtt)}</b> lat
-                          </span>
-                        )}
-                        {st.pdv != null && (
-                          <span title="STAMP jitter to this hop (PDV, p95 over 5m)">
-                            <b>{fmtMs(st.pdv)}</b> jit
-                          </span>
-                        )}
-                        {st.owd != null && (
-                          <span title="STAMP one-way delay to this hop (OWD, p95 over 5m)">
-                            <b>{fmtMs(st.owd)}</b> delay
-                          </span>
-                        )}
-                        {st.loss != null && (
-                          <span title="STAMP packet loss to this hop (avg over 5m)"
-                            style={{ color: st.loss >= 1 ? "var(--crit, #e5484d)" : undefined }}>
-                            <b>{st.loss.toFixed(st.loss < 1 ? 2 : 1)}%</b> loss
-                          </span>
-                        )}
+                        {st.rtt != null && <span><b>{fmtMs(st.rtt)}</b> lat</span>}
+                        {st.pdv != null && <span><b>{fmtMs(st.pdv)}</b> jit</span>}
                       </>
                     ) : (
-                      // Labeled empty slots so the placeholder reads as "latency/jitter/
-                      // delay go here" — not just a blank. Lights up when a STAMP probe
-                      // targets this hop's IP.
-                      <span className="netpath-stamp-empty" title="STAMP latency / jitter / delay appear here once an active probe targets this hop's IP. No probe reaches this hop yet.">
+                      <span className="netpath-stamp-empty">
                         <span>— <span className="netpath-stamp-k">lat</span></span>
                         <span>— <span className="netpath-stamp-k">jit</span></span>
-                        <span>— <span className="netpath-stamp-k">delay</span></span>
                       </span>
                     )}
-                  </div>
+                    <span className="netpath-stamp-more" aria-hidden="true">{openHop === id ? "▾" : "›"}</span>
+                  </button>
                 </div>
 
                 {!isDst && seg && (
@@ -304,10 +290,54 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
           })}
         </div>
 
-        {!anyStamp && (
+        {/* Expanded per-hop metric list (click a hop's latency/jitter). Slots are
+            populated where we have data (STAMP latency/delay/jitter/loss, link load,
+            hop position) and read "—" honestly for metrics not yet wired. */}
+        {openHop && (() => {
+          const idx = path.indexOf(openHop);
+          const node = byId.get(openHop);
+          const st = hopStamp(node);
+          const outE = idx >= 0 && idx < path.length - 1 ? edgeBetween(view.edges, openHop, path[idx + 1]) : undefined;
+          const inE = idx > 0 ? edgeBetween(view.edges, path[idx - 1], openHop) : undefined;
+          const loadPct = outE?.utilization_pct ?? inE?.utilization_pct;
+          const M = (label: string, value: string | null, hint?: string) => (
+            <div className="netpath-hd-row" key={label}>
+              <span className="netpath-hd-label">{label}</span>
+              {value != null
+                ? <span className="netpath-hd-val mono">{value}</span>
+                : <span className="netpath-hd-na" title={hint ?? "Not measured yet"}>—</span>}
+            </div>
+          );
+          return (
+            <div className="netpath-hopdetail">
+              <div className="netpath-hopdetail-head">
+                <span>Hop {idx + 1} of {path.length} · <b>{node?.label ?? openHop}</b></span>
+                <button type="button" className="netpath-hd-close" aria-label="Close" onClick={() => setOpenHop(null)}>✕</button>
+              </div>
+              <div className="netpath-hopdetail-grid">
+                <div className="netpath-hd-group">Active measurement · STAMP</div>
+                {M("Latency (round-trip)", st.rtt != null ? fmtMs(st.rtt) : null, "No STAMP probe targets this hop's IP yet")}
+                {M("One-way delay (OWD)", st.owd != null ? fmtMs(st.owd) : null, "No STAMP probe targets this hop's IP yet")}
+                {M("Jitter (PDV)", st.pdv != null ? fmtMs(st.pdv) : null, "No STAMP probe targets this hop's IP yet")}
+                {M("Packet loss", st.loss != null ? `${st.loss.toFixed(st.loss < 1 ? 2 : 1)}%` : null, "No STAMP probe targets this hop's IP yet")}
+                <div className="netpath-hd-group">Link</div>
+                {M("Load (utilization)", loadPct != null ? `${Math.round(loadPct)}%` : null)}
+                {M("Bandwidth", null, "Link-speed enrichment not wired yet")}
+                {M("Throughput", null, "Interface-rate enrichment not wired yet")}
+                {M("MTU", null, "Interface MTU enrichment not wired yet")}
+                <div className="netpath-hd-group">Path</div>
+                {M("Hop position", `${idx + 1} of ${path.length}`)}
+                {M("Reliability", null, "Reliability scoring not wired yet")}
+              </div>
+            </div>
+          );
+        })()}
+
+        {!anyStamp && !openHop && (
           <div className="netpath-stamp-foot" role="note">
-            Per-hop latency / jitter / delay appear here from STAMP active probes. No probe
-            currently targets the hops on this path — add a STAMP target per hop to light them up.
+            Per-hop latency / jitter appear here from STAMP active probes — click a hop for the full
+            metric list. No probe currently targets the hops on this path; add a STAMP target per hop
+            to light them up.
           </div>
         )}
       </div>
