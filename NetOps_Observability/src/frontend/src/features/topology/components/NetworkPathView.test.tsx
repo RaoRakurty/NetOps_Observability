@@ -86,9 +86,9 @@ describe("NetworkPathView — ribbon", () => {
       path_source: "measured",
       stamp: [{ stamp_rtt_ms: 0.7, stamp_pdv_ms: 0.4, stamp_owd_ms: 0.3, stamp_loss_pct: 0 }, undefined, undefined],
     })} />);
-    expect(screen.getAllByText(/lat/).length).toBeGreaterThan(0); // latency inline
-    expect(screen.getAllByText(/jit/).length).toBeGreaterThan(0); // jitter inline
-    expect(screen.getByText("700 µs")).toBeTruthy();              // 0.7ms → µs
+    expect(screen.getAllByText("LAT").length).toBeGreaterThan(0); // latency label inline
+    expect(screen.getAllByText("JIT").length).toBeGreaterThan(0); // jitter label inline
+    expect(screen.getByText("700 µs")).toBeTruthy();              // 0.7ms → µs value
   });
 
   it("expands the FULL per-hop metric list on click (latency/OWD/jitter/loss/hop position)", () => {
@@ -97,7 +97,7 @@ describe("NetworkPathView — ribbon", () => {
       stamp: [{ stamp_rtt_ms: 0.7, stamp_pdv_ms: 0.4, stamp_owd_ms: 0.3, stamp_loss_pct: 0 }, undefined, undefined],
     })} />);
     // click the first hop's metric button
-    fireEvent.click(screen.getAllByTitle("Click for the full per-hop metrics")[0]);
+    fireEvent.click(screen.getAllByTitle(/Click for the full per-hop metrics/)[0]);
     expect(screen.getByText("Latency (round-trip)")).toBeTruthy();
     expect(screen.getByText("One-way delay (OWD)")).toBeTruthy();
     expect(screen.getByText("Hop position")).toBeTruthy();

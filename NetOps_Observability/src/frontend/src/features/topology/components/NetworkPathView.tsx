@@ -235,21 +235,13 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                       per-hop metric list below the ribbon. Honest empty slots when no
                       probe reaches the hop. */}
                   <button type="button"
-                    className={`netpath-stamp${openHop === id ? " open" : ""}`}
+                    className={`netpath-stamp${openHop === id ? " open" : ""}${st.has ? " live" : ""}`}
                     aria-expanded={openHop === id}
-                    title="Click for the full per-hop metrics"
+                    title="Click for the full per-hop metrics (latency, jitter, delay, loss, load, …)"
                     onClick={() => setOpenHop(openHop === id ? null : id)}>
-                    {st.has ? (
-                      <>
-                        {st.rtt != null && <span><b>{fmtMs(st.rtt)}</b> lat</span>}
-                        {st.pdv != null && <span><b>{fmtMs(st.pdv)}</b> jit</span>}
-                      </>
-                    ) : (
-                      <span className="netpath-stamp-empty">
-                        <span>— <span className="netpath-stamp-k">lat</span></span>
-                        <span>— <span className="netpath-stamp-k">jit</span></span>
-                      </span>
-                    )}
+                    <span className="nm"><b>{st.rtt != null ? fmtMs(st.rtt) : "—"}</b><i>LAT</i></span>
+                    <span className="nm-div" aria-hidden="true" />
+                    <span className="nm"><b>{st.pdv != null ? fmtMs(st.pdv) : "—"}</b><i>JIT</i></span>
                     <span className="netpath-stamp-more" aria-hidden="true">{openHop === id ? "▾" : "›"}</span>
                   </button>
                 </div>
