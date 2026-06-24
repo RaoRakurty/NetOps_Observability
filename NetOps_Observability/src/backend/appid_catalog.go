@@ -15,12 +15,15 @@ package main
 // the catalog is empty and every resolve is the honest first-class "unknown".
 
 import (
+	"context"
 	"errors"
+	"log"
 	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"netops/backend/appid"
 )
@@ -75,6 +78,36 @@ func (h *appCatalogHolder) reload() (int, []error) {
 	cat := appid.NewCatalog(entries)
 	h.cur.Store(cat)
 	return cat.Size(), errs
+}
+
+// startRefresh periodically re-reads the snapshot dir and hot-swaps the catalog,
+// so an out-of-band feed refresh (cron running fetch-appid-feeds.sh) is picked up
+// without an API restart. No-op unless feeds are configured. Interval from
+// APPID_REFRESH_MINUTES (default 360 = 6h; ≤0 disables). The initial load already
+// happened synchronously in newServer.
+func (h *appCatalogHolder) startRefresh(ctx context.Context) {
+	if h.feedsDir == "" {
+		return
+	}
+	mins := envInt("APPID_REFRESH_MINUTES", 360)
+	if mins <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(time.Duration(mins) * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				n, errs := h.reload()
+				if len(errs) > 0 {
+					log.Printf("appid: refreshed catalog to %d prefixes (%d feed errors)", n, len(errs))
+				}
+			}
+		}
+	}()
 }
 
 // ── handlers ──────────────────────────────────────────────────────────────────

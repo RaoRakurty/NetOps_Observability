@@ -499,6 +499,8 @@ func main() {
 	ensureCHRowPolicies()
 	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
 	srv.startDriftReconciler(ctx)
+	// App-identity catalog hot-reload (#81 P1b). No-op unless APPID_FEEDS_DIR set.
+	srv.appCatalog.startRefresh(ctx)
 	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
@@ -767,6 +769,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
 	mux.HandleFunc("/api/appid/resolve", s.handleAppIDResolve)
 	mux.HandleFunc("/api/appid/status", s.handleAppIDStatus)
+	mux.HandleFunc("/api/flows/apps", s.handleFlowsApps)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
