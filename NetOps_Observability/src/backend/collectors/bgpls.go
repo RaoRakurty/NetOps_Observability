@@ -43,6 +43,12 @@ import (
 // IS-IS Level-1/Level-2; the node Hostname TLV (1026) in the BGP-LS attribute
 // gives the display name we resolve against inventory.
 
+// topoNodesKeyBGPLS holds the published BGP-LS node metadata ([]BGPLSNode):
+// origin-node→prefix join + SR parameters. Read by the API (FetchTopologyNodes)
+// to enrich the topology graph with node-level data the adjacency link contract
+// cannot carry. TTL-expiring like the link keys so a dead peer self-heals.
+const topoNodesKeyBGPLS = "netops:topology:bgpls_nodes"
+
 const (
 	bgpPort      = 179
 	bgpMarkerLen = 16
@@ -98,6 +104,21 @@ const (
 	tlvNodeName        = 1026
 	tlvISISAreaID      = 1027
 	tlvIPv4RouterIDLoc = 1028
+
+	// Segment-Routing BGP-LS attribute TLVs (RFC 9085). Type codes verified
+	// against the IANA "BGP-LS Node Descriptor, Link Descriptor, Prefix
+	// Descriptor, and Attribute TLVs" registry:
+	//   SR Capabilities (SRGB) 1034 §2.1.2 — NODE attribute
+	//   SR Algorithm           1035 §2.1.3 — NODE attribute
+	//   Adjacency-SID          1099 §2.2.1 — LINK attribute
+	//   Prefix-SID             1158 §2.3.1 — PREFIX attribute
+	tlvSRCapabilities = 1034
+	tlvSRAlgorithm    = 1035
+	tlvAdjSID         = 1099
+	tlvPrefixSID      = 1158
+	// SID/Label sub-TLV nested inside the SR Capabilities SRGB descriptor
+	// (RFC 9085 §2.1.1): value is a 3-octet label or 4-octet index.
+	subTLVSIDLabel = 1161
 )
 
 // bgplsProtocolID maps the Link-State NLRI Protocol-ID byte to a label
@@ -142,10 +163,11 @@ type lsRIB struct {
 }
 
 type lsPrefix struct {
-	key      string
-	igp      string
-	localKey string // origin node descriptor key
-	prefix   string // CIDR (e.g. 10.0.0.0/24)
+	key       string
+	igp       string
+	localKey  string // origin node descriptor key
+	prefix    string // CIDR (e.g. 10.0.0.0/24)
+	prefixSID uint32 // SR Prefix-SID index/label (RFC 9085 §2.3.1); 0 = none
 }
 
 type lsNode struct {
@@ -155,6 +177,16 @@ type lsNode struct {
 	area     string
 	hostname string // BGP-LS Node Name TLV (1026)
 	routerV4 string // IPv4 Router-ID of local node (TLV 1028)
+
+	// Segment-Routing (RFC 9085). SRGB base/range from the SR Capabilities TLV
+	// (1034); the first algorithm from the SR Algorithm TLV (1035). 0 = absent.
+	srgbBase  uint32
+	srgbRange uint32
+	srAlgo    int // -1 when no SR Algorithm TLV present
+
+	// originatedPrefixes: CIDRs this node originates (origin-node → prefix join,
+	// RFC 7752). Carried as NODE metadata only — NEVER an adjacency/link.
+	originatedPrefixes []string
 }
 
 type lsLink struct {
@@ -166,6 +198,7 @@ type lsLink struct {
 	remSysID   string // rendered IGP Router-ID of the remote endpoint
 	localIface string // IPv4 interface address / link-local id
 	remIface   string // IPv4 neighbor address / link-remote id
+	adjSID     uint32 // SR Adjacency-SID index/label (RFC 9085 §2.2.1); 0 = none
 	ts         int64
 }
 
@@ -528,20 +561,24 @@ func (c *bgplsCollector) applyUpdate(peer string, body []byte) {
 	for _, n := range parseLSNLRIs(reach) {
 		switch n.kind {
 		case nlriTypeNode:
-			node := &lsNode{key: n.localKey, igp: n.igp, systemID: n.localSysID, area: n.area}
+			node := &lsNode{key: n.localKey, igp: n.igp, systemID: n.localSysID, area: n.area, srAlgo: -1}
 			applyNodeAttr(node, lsAttr)
 			rib.nodes[node.key] = node
 		case nlriTypeLink:
-			rib.links[n.linkKey] = &lsLink{
+			link := &lsLink{
 				key: n.linkKey, igp: n.igp,
 				localKey: n.localKey, remoteKey: n.remoteKey,
 				localSysID: n.localSysID, remSysID: n.remoteSysID,
 				localIface: n.localIface, remIface: n.remIface, ts: now,
 			}
+			applyLinkAttr(link, lsAttr)
+			rib.links[n.linkKey] = link
 		case nlriTypeIPv4Prefix, nlriTypeIPv6Prefix:
-			rib.prefixes[n.prefixKey] = &lsPrefix{
+			p := &lsPrefix{
 				key: n.prefixKey, igp: n.igp, localKey: n.localKey, prefix: n.prefix,
 			}
+			applyPrefixAttr(p, lsAttr)
+			rib.prefixes[n.prefixKey] = p
 		}
 	}
 	for _, n := range parseLSNLRIs(unreach) {
@@ -888,8 +925,108 @@ func applyNodeAttr(n *lsNode, attr []byte) {
 			if len(v) == 4 {
 				n.routerV4 = net.IP(v).String()
 			}
+		case tlvSRCapabilities:
+			if base, rng, ok := parseSRCapabilities(v); ok {
+				n.srgbBase, n.srgbRange = base, rng
+			}
+		case tlvSRAlgorithm:
+			if len(v) > 0 {
+				n.srAlgo = int(v[0]) // first advertised algorithm (0 = SPF)
+			}
 		}
 	}
+}
+
+// parseSRCapabilities decodes the SR Capabilities TLV value (RFC 9085 §2.1.2):
+// Flags(1) Reserved(1) then one-or-more SRGB descriptors, each Range(3 octets) +
+// a SID/Label sub-TLV (1161) carrying a 3-octet base label or 4-octet base index.
+// We surface the FIRST SRGB range (base label/index + range size). Length-checked
+// throughout: a short/truncated value yields ok=false and is skipped by the caller.
+func parseSRCapabilities(v []byte) (base, rng uint32, ok bool) {
+	if len(v) < 2 {
+		return 0, 0, false
+	}
+	d := v[2:] // skip Flags + Reserved
+	if len(d) < 3 {
+		return 0, 0, false
+	}
+	rng = uint32(d[0])<<16 | uint32(d[1])<<8 | uint32(d[2])
+	sub, _, sok := readTLV16(d[3:], subTLVSIDLabel)
+	if !sok {
+		return 0, 0, false
+	}
+	b, bok := sidLabelValue(sub)
+	if !bok {
+		return 0, 0, false
+	}
+	return b, rng, true
+}
+
+// sidLabelValue reads a SID/Label/Index field: a 20-bit MPLS label (3 octets,
+// masked to the low 20 bits) or a 32-bit SID index (4 octets). Any other length
+// is rejected (no panic) per the zero-trust bounded-read rule.
+func sidLabelValue(b []byte) (uint32, bool) {
+	switch len(b) {
+	case 3:
+		return (uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])) & 0xFFFFF, true
+	case 4:
+		return binary.BigEndian.Uint32(b), true
+	default:
+		return 0, false
+	}
+}
+
+// applyLinkAttr decodes the SR Adjacency-SID TLV (RFC 9085 §2.2.1) from the
+// LINK BGP-LS attribute and attaches the SID to the link. Truncation-safe.
+func applyLinkAttr(l *lsLink, attr []byte) {
+	i := 0
+	for i+4 <= len(attr) {
+		t := int(binary.BigEndian.Uint16(attr[i : i+2]))
+		ln := int(binary.BigEndian.Uint16(attr[i+2 : i+4]))
+		i += 4
+		if i+ln > len(attr) {
+			break
+		}
+		v := attr[i : i+ln]
+		i += ln
+		if t == tlvAdjSID {
+			if sid, ok := parseSIDFlagged(v); ok {
+				l.adjSID = sid
+			}
+		}
+	}
+}
+
+// applyPrefixAttr decodes the SR Prefix-SID TLV (RFC 9085 §2.3.1) from the
+// PREFIX BGP-LS attribute and attaches the SID/index. Truncation-safe.
+func applyPrefixAttr(p *lsPrefix, attr []byte) {
+	i := 0
+	for i+4 <= len(attr) {
+		t := int(binary.BigEndian.Uint16(attr[i : i+2]))
+		ln := int(binary.BigEndian.Uint16(attr[i+2 : i+4]))
+		i += 4
+		if i+ln > len(attr) {
+			break
+		}
+		v := attr[i : i+ln]
+		i += ln
+		if t == tlvPrefixSID {
+			if sid, ok := parseSIDFlagged(v); ok {
+				p.prefixSID = sid
+			}
+		}
+	}
+}
+
+// parseSIDFlagged decodes the common Prefix-SID / Adjacency-SID layout
+// (RFC 9085 §2.2.1 / §2.3.1): two leading octets (Flags + Algorithm, or
+// Flags + Weight), a 2-octet Reserved, then a 3-octet label or 4-octet index.
+// Returns ok=false on a short value so the caller skips it without panicking.
+func parseSIDFlagged(v []byte) (uint32, bool) {
+	if len(v) < 4 {
+		return 0, false
+	}
+	return sidLabelValue(v[4:])
 }
 
 // readTLV16 reads a 2-byte-type/2-byte-length TLV at the head of b, requiring it
@@ -933,6 +1070,7 @@ func (c *bgplsCollector) setPeerError(err error) {
 func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 	c.mu.RLock()
 	links := c.buildLinks()
+	bgplsNodes := c.buildNodes()
 	established, nodeCount, prefixCount := 0, 0, 0
 	for _, rib := range c.ribs {
 		established++
@@ -946,6 +1084,13 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 	}
 	if b, err := json.Marshal(links); err == nil {
 		_ = redisSetEX(ctx, topoLinksKeyBGPLS, string(b), 1800)
+	}
+	// Origin-node metadata (prefixes + SR) — NODE shape, never links.
+	if bgplsNodes == nil {
+		bgplsNodes = []BGPLSNode{}
+	}
+	if b, err := json.Marshal(bgplsNodes); err == nil {
+		_ = redisSetEX(ctx, topoNodesKeyBGPLS, string(b), 1800)
 	}
 	// C7.5: directed forwarding pairs from SPF over the LSDB → the routing-direction
 	// source. Computed under the same read lock as buildLinks (no re-lock).
@@ -1013,6 +1158,90 @@ func (c *bgplsCollector) buildRoutingPairs() []RoutingPair {
 		names = append(names, n)
 	}
 	return forwardingPairs(names, adj)
+}
+
+// FetchTopologyNodes reads the published BGP-LS node metadata ([]BGPLSNode):
+// origin-node→prefix join + SR parameters. Empty slice when absent (collector
+// off / Redis down) — node enrichment is best-effort, never an error.
+func FetchTopologyNodes(ctx context.Context) ([]BGPLSNode, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", topoNodesKeyBGPLS)
+	if err != nil || raw == "" {
+		return []BGPLSNode{}, nil
+	}
+	var out []BGPLSNode
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out, nil
+}
+
+// BGPLSNode is the published BGP-LS node shape (origin-node metadata that has no
+// home on the adjacency-only link contract): the node's display name + the
+// prefixes it ORIGINATES (RFC 7752 prefix NLRI, origin-node→prefix join) and its
+// Segment-Routing parameters (RFC 9085). Consumed by /api/topology as node
+// enrichment. Prefixes are NODE data here — they are NEVER emitted as links.
+type BGPLSNode struct {
+	Name               string   `json:"name"`                          // hostname → System-ID (bgplsNodeName)
+	RouterID           string   `json:"router_id,omitempty"`           // IPv4 Router-ID (TLV 1028)
+	IGP                string   `json:"igp,omitempty"`                 // isis-l2 / ospfv2 / …
+	Area               string   `json:"area,omitempty"`                // IGP area
+	OriginatedPrefixes []string `json:"originated_prefixes,omitempty"` // CIDRs this node originates
+	SRGBBase           uint32   `json:"srgb_base,omitempty"`           // SR Capabilities base label/index (RFC 9085 §2.1.2)
+	SRGBRange          uint32   `json:"srgb_range,omitempty"`          // SR Capabilities range size
+	SRAlgo             int      `json:"sr_algo"`                       // first SR Algorithm (RFC 9085 §2.1.3); -1 = absent, 0 = SPF
+	TS                 int64    `json:"ts"`                            // last-built unix millis
+}
+
+// buildNodes unions nodes across all peer RIBs and joins each node to the
+// prefixes it ORIGINATES (by the local-node descriptor key — the same key the
+// node↔link join uses), surfacing origin-node metadata + SR parameters. Caller
+// holds the read lock. Pure of I/O. HARD CONSTRAINT: prefixes attach to nodes
+// here as origin data; they are never turned into adjacencies/links.
+func (c *bgplsCollector) buildNodes() []BGPLSNode {
+	nodes := map[string]*lsNode{}
+	for _, rib := range c.ribs {
+		for k, n := range rib.nodes {
+			nodes[k] = n
+		}
+	}
+	// Origin-node → prefixes (deduped, sorted for a stable published shape).
+	origin := map[string]map[string]bool{}
+	for _, rib := range c.ribs {
+		for _, p := range rib.prefixes {
+			if p.localKey == "" || p.prefix == "" {
+				continue
+			}
+			if origin[p.localKey] == nil {
+				origin[p.localKey] = map[string]bool{}
+			}
+			origin[p.localKey][p.prefix] = true
+		}
+	}
+	now := time.Now().UnixMilli()
+	var out []BGPLSNode
+	for key, n := range nodes {
+		var pfx []string
+		for cidr := range origin[key] {
+			pfx = append(pfx, cidr)
+		}
+		sort.Strings(pfx)
+		out = append(out, BGPLSNode{
+			Name:               bgplsNodeName(n, key, n.systemID),
+			RouterID:           n.routerV4,
+			IGP:                n.igp,
+			Area:               n.area,
+			OriginatedPrefixes: pfx,
+			SRGBBase:           n.srgbBase,
+			SRGBRange:          n.srgbRange,
+			SRAlgo:             n.srAlgo,
+			TS:                 now,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // buildLinks joins links to nodes (for hostnames/router-ids) across all peer
