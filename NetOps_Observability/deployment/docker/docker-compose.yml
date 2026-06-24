@@ -640,6 +640,11 @@ services:
       TENANT_ENRICHMENT_DIR: /data/enrichment
       STATIC_DEVICES_PATH: /config/devices.yaml
       RULES_FILE: /config/rules.yaml
+      # #81 P1: Application Identification IP→app catalog. Opt-in snapshot dir of
+      # vendor IP-range feeds (aws/azure/gcp/m365.json — populate via
+      # scripts/fetch-appid-feeds.sh). Absent/empty ⇒ resolver returns honest
+      # "unknown"; never required for the stack to run.
+      APPID_FEEDS_DIR: ${APPID_FEEDS_DIR:-/data/appid-feeds}
       # Bundled (internal) NetBox: when present, the API auto-wires to it (managed
       # mode) so the UI needs no URL/token. Set by install.py with the netbox
       # profile; NETBOX_URL/NETBOX_TOKEN remain for pointing at an EXTERNAL NetBox.

@@ -54,12 +54,22 @@ func ParseAWS(raw []byte) ([]CatalogEntry, error) {
 	}
 	var out []CatalogEntry
 	for _, p := range doc.Prefixes {
-		out = appendValidPrefix(out, p.IPPrefix, "AWS "+titleService(p.Service), "aws")
+		out = appendValidPrefix(out, p.IPPrefix, awsApp(p.Service), "aws")
 	}
 	for _, p := range doc.IPv6Prefixes {
-		out = appendValidPrefix(out, p.IPv6Prefix, "AWS "+titleService(p.Service), "aws")
+		out = appendValidPrefix(out, p.IPv6Prefix, awsApp(p.Service), "aws")
 	}
 	return out, nil
+}
+
+// awsApp names an AWS service. "AMAZON" is the catch-all aggregate covering all of
+// AWS — render it as plain "AWS" rather than the awkward "AWS AMAZON"; specific
+// service tags (S3, EC2, CLOUDFRONT…) keep their name.
+func awsApp(service string) string {
+	if service == "" || service == "AMAZON" {
+		return "AWS"
+	}
+	return "AWS " + service
 }
 
 // ParseAzure reads the Azure ServiceTags JSON feed.
@@ -155,13 +165,6 @@ func appendValidPrefix(out []CatalogEntry, raw, app, feed string) []CatalogEntry
 		return out
 	}
 	return append(out, ipCatalogEntry(raw, app, feed))
-}
-
-func titleService(s string) string {
-	if s == "" {
-		return "Cloud"
-	}
-	return s
 }
 
 // ── catalog ──────────────────────────────────────────────────────────────────

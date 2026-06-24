@@ -51,6 +51,17 @@ func TestParseAWS(t *testing.T) {
 	}
 }
 
+func TestParseAWS_GenericAmazonTag(t *testing.T) {
+	// the catch-all "AMAZON" aggregate renders as plain "AWS", not "AWS AMAZON".
+	es, err := ParseAWS([]byte(`{"prefixes":[{"ip_prefix":"52.94.0.0/22","service":"AMAZON"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(es) != 1 || es[0].App != "AWS" {
+		t.Fatalf("AMAZON aggregate should be 'AWS', got %+v", es)
+	}
+}
+
 func TestParseAzure(t *testing.T) {
 	raw := []byte(`{"values":[{"name":"Storage.WestUS","properties":{"systemService":"AzureStorage","addressPrefixes":["20.150.0.0/16","2603:1030::/44"]}}]}`)
 	es, err := ParseAzure(raw)
