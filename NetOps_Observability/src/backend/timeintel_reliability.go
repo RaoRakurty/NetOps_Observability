@@ -30,6 +30,13 @@ type reliabilityFilters struct {
 	Signature string // root_cause_signature (top_hypothesis)
 }
 
+// includeInternalFrom reads the "Include internal/platform events" toggle (default
+// OFF — customer-impacting incidents only).
+func includeInternalFrom(r *http.Request) bool {
+	v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_internal")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
 func reliabilityFiltersFrom(r *http.Request) reliabilityFilters {
 	q := r.URL.Query()
 	return reliabilityFilters{
@@ -46,7 +53,7 @@ func reliabilityFiltersFrom(r *http.Request) reliabilityFilters {
 // falls back to onset here — per-object ingest queries would be N+1), compute phase
 // durations + the time-loss driver, and extract grouping keys for MTBF / chronic
 // offenders. Maintenance/child classification: merged objects are children.
-func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f reliabilityFilters) ([]timeintel.IncidentSummary, error) {
+func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f reliabilityFilters, includeInternal bool) ([]timeintel.IncidentSummary, error) {
 	// Qualify with a table alias so WHERE references the real DateTime64 column, not
 	// the toString() SELECT alias of the same name (which would be String → type
 	// mismatch — the same gotcha handleCorrelations documents).
@@ -92,6 +99,13 @@ SELECT toString(o.correlation_id) AS correlation_id,
 		if sig != "" {
 			group["signature"] = sig
 		}
+		ownerDomain, internal := timeintel.ClassifyOwnerDomain(owner, group)
+
+		// Customer-impacting default: internal/platform self-monitoring is excluded
+		// unless explicitly included (the dashboard's "Include internal/platform" toggle).
+		if internal && !includeInternal {
+			continue
+		}
 
 		// Filters (applied after grouping extraction).
 		if f.Owner != "" && owner != f.Owner {
@@ -129,6 +143,8 @@ SELECT toString(o.correlation_id) AS correlation_id,
 			OccurredAt:     facts.WindowStart,
 			State:          asString(o["state"]),
 			IsChild:        strings.EqualFold(asString(o["state"]), "merged"),
+			OwnerDomain:    ownerDomain,
+			Internal:       internal,
 		})
 	}
 	return out, nil
@@ -173,7 +189,7 @@ func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request
 		return
 	}
 	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
-	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r))
+	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -183,13 +199,13 @@ func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{
 		"window_seconds":      since,
 		"rollup":              rollup,
+		"by_owner_domain":     timeintel.RollupByDomain(incs),
 		"mttf_ms":             mttf,
 		"mttf_asset_count":    mttfCount,
 		"calculation_version": timeIntelCalcVersion,
-		// Honesty: surface the scan cap (no silent truncation) + the open dependency
-		// that internal-stack incidents are NOT yet excluded (decision #76 engine-side).
-		"capped": len(incs) >= 5000,
-		"note":   "includes internal-stack incidents until #76 engine-side exclusion lands",
+		"include_internal":    includeInternalFrom(r),
+		"scan_cap":            5000,
+		"capped":              len(incs) >= 5000, // info, not error — surfaced cleanly in the UI
 	})
 }
 
@@ -207,7 +223,7 @@ func (s *server) handleReliabilityTrends(w http.ResponseWriter, r *http.Request)
 	}
 	since := intQuery(r, "since", 30*86400, 86400, 365*86400)
 	bucket := intQuery(r, "bucket", 86400, 3600, 30*86400) // default daily
-	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r))
+	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -259,7 +275,7 @@ func (s *server) handleReliabilityChronicOffenders(w http.ResponseWriter, r *htt
 	}
 	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
 	topN := intQuery(r, "top", 10, 1, 100)
-	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r))
+	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

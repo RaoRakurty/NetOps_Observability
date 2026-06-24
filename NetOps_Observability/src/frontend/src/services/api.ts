@@ -510,20 +510,26 @@ export type ReliabilityRollup = {
   repeat_incident_rate: number;
   mtbf_ms: number;
 };
+export type OwnerDomainStat = {
+  domain: string; incident_count: number; mtti_p90_ms: number;
+  recovery_p90_ms: number; repeat_incident_rate: number; top_delay_driver: string;
+};
 export type ReliabilityRollupResp = {
-  window_seconds: number; rollup: ReliabilityRollup;
-  mttf_ms: number; mttf_asset_count: number; capped: boolean; note: string;
+  window_seconds: number; rollup: ReliabilityRollup; by_owner_domain: OwnerDomainStat[];
+  mttf_ms: number; mttf_asset_count: number; capped: boolean; scan_cap: number; include_internal: boolean;
 };
 export type ReliabilityTrendBucket = {
   bucket_start: string; incident_count: number;
   metrics: Record<string, MetricStat>; repeat_incident_rate: number; mtbf_ms: number;
 };
 export type ReliabilityTrendsResp = { window_seconds: number; bucket_seconds: number; buckets: ReliabilityTrendBucket[] };
-export type ChronicOffender = { group_key: string; incident_count: number; mtbf_ms: number; last_seen: string };
-export type ReliabilityQuery = { owner?: string; provider?: string; device?: string; severity?: string; signature?: string };
+export type ChronicOffender = { group_key: string; incident_count: number; mtbf_ms: number; last_seen: string; owner_domain: string };
+export type ReliabilityQuery = { owner?: string; provider?: string; device?: string; severity?: string; signature?: string; include_internal?: boolean };
 function reliabilityQS(f: ReliabilityQuery): string {
-  return (["owner", "provider", "device", "severity", "signature"] as const)
-    .filter((k) => f[k]).map((k) => `&${k}=${encodeURIComponent(f[k]!)}`).join("");
+  const parts = (["owner", "provider", "device", "severity", "signature"] as const)
+    .filter((k) => f[k]).map((k) => `&${k}=${encodeURIComponent(String(f[k]))}`);
+  if (f.include_internal) parts.push("&include_internal=true");
+  return parts.join("");
 }
 
 // One evidence link: a signal's role w.r.t. an edge or hypothesis.

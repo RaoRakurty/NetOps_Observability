@@ -190,30 +190,59 @@ func repeatAndMTBF(incidents []IncidentSummary) (float64, int64) {
 
 // ChronicOffender ranks a recurring object by incident count.
 type ChronicOffender struct {
-	GroupKey      string    `json:"group_key"`
-	IncidentCount int       `json:"incident_count"`
-	MTBFms        int64     `json:"mtbf_ms"`
-	LastSeen      time.Time `json:"last_seen"`
+	GroupKey      string      `json:"group_key"`
+	IncidentCount int         `json:"incident_count"`
+	MTBFms        int64       `json:"mtbf_ms"`
+	LastSeen      time.Time   `json:"last_seen"`
+	OwnerDomain   OwnerDomain `json:"owner_domain"` // dominant owner → drives the recommended action
 }
 
 // ChronicOffenders ranks recurring objects (≥2 unplanned, non-child incidents) by
 // incident count, returning the top N. The answer to "which circuit keeps failing".
 func ChronicOffenders(incidents []IncidentSummary, topN int) []ChronicOffender {
-	byGroup := repeatableByGroup(incidents)
-	out := make([]ChronicOffender, 0, len(byGroup))
-	for key, ts := range byGroup {
+	// occurrence times + dominant owner domain per group (children/maintenance excluded).
+	times := map[string][]time.Time{}
+	domVotes := map[string]map[OwnerDomain]int{}
+	for _, in := range incidents {
+		if in.IsChild || in.Maintenance {
+			continue
+		}
+		key := groupKeyOf(in)
+		if key == "" || in.OccurredAt.IsZero() {
+			continue
+		}
+		times[key] = append(times[key], in.OccurredAt)
+		if domVotes[key] == nil {
+			domVotes[key] = map[OwnerDomain]int{}
+		}
+		d := in.OwnerDomain
+		if d == "" {
+			d = DomainUnknown
+		}
+		domVotes[key][d]++
+	}
+	out := make([]ChronicOffender, 0, len(times))
+	for key, ts := range times {
 		if len(ts) < 2 {
 			continue // a single incident is not a chronic offender
 		}
+		sort.Slice(ts, func(i, j int) bool { return ts[i].Before(ts[j]) })
 		var gapSum int64
 		for i := 1; i < len(ts); i++ {
 			gapSum += ts[i].Sub(ts[i-1]).Milliseconds()
+		}
+		dom, domN := DomainUnknown, 0
+		for d, n := range domVotes[key] {
+			if n > domN {
+				dom, domN = d, n
+			}
 		}
 		out = append(out, ChronicOffender{
 			GroupKey:      key,
 			IncidentCount: len(ts),
 			MTBFms:        gapSum / int64(len(ts)-1),
 			LastSeen:      ts[len(ts)-1],
+			OwnerDomain:   dom,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

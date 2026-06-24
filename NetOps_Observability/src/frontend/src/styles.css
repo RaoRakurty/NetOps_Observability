@@ -3363,3 +3363,41 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .rsc-obj { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rsc-note { margin-top: 12px; font-size: 11.5px; color: var(--fg-subtle); line-height: 1.5;
   padding: 8px 11px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); }
+
+/* ----- NOC Recovery Scorecard v2 ----- */
+.rsc-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-muted); cursor: pointer; user-select: none; }
+.rsc-toggle input { accent-color: var(--accent); }
+.rsc-exec { margin: 0 0 14px; padding: 11px 14px; border-radius: 10px; background: var(--panel);
+  border: 1px solid var(--border); font-size: 13.5px; line-height: 1.6; color: var(--fg-muted); }
+.rsc-exec b { color: var(--fg); font-weight: 700; }
+/* stat cards with hierarchy */
+.rsc-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.rsc-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; }
+.rsc-card-hero { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, #6d5dfc 6%, var(--panel)); }
+.rsc-card-amber { border-color: #f0c89a; background: color-mix(in srgb, #f5a524 8%, var(--panel)); }
+.rsc-card-good { border-color: #bce8cf; }
+.rsc-card-muted { background: var(--surface); }
+.rsc-card-label { font-size: 11px; font-weight: 600; color: var(--fg-subtle); display: flex; align-items: center; gap: 4px; }
+.rsc-card-val { font-size: 22px; font-weight: 700; color: var(--fg); margin: 4px 0 1px; font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.rsc-card-hero .rsc-card-val { color: #6d5dfc; }
+.rsc-card-amber .rsc-card-val { color: var(--warn, #d97706); font-size: 17px; }
+.rsc-card-na { font-size: 13px; font-weight: 600; color: var(--fg-subtle); font-family: var(--font-sans, sans-serif); }
+.rsc-card-sub { font-size: 10.5px; color: var(--fg-subtle); text-transform: uppercase; letter-spacing: .3px; }
+/* owner domain chips */
+.rsc-dom { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 5px; }
+.rsc-dom-isp { background: #fde7d6; color: #b45309; }
+.rsc-dom-lan { background: #dbeafe; color: #1d4ed8; }
+.rsc-dom-sdwan { background: #e0e7ff; color: #4338ca; }
+.rsc-dom-cloud { background: #cffafe; color: #0e7490; }
+.rsc-dom-app { background: #f3e8ff; color: #7e22ce; }
+.rsc-dom-internal { background: var(--surface); color: var(--fg-muted); }
+.rsc-dom-unknown { background: var(--surface); color: var(--fg-subtle); }
+.rsc-row-dim { opacity: .45; }
+.rsc-na-sm { color: var(--fg-subtle); font-style: italic; font-size: 11px; }
+.rsc-hint { margin-top: 8px; font-size: 12px; color: var(--accent-bright, var(--accent)); }
+/* enriched chronic offenders */
+.rsc-offenders td { vertical-align: top; }
+.rsc-obj-name { font-weight: 600; color: var(--fg); }
+.rsc-obj-raw { font-size: 10px; color: var(--fg-subtle); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rsc-action { font-size: 12px; color: var(--fg-muted); max-width: 240px; }
