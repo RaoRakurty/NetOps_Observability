@@ -2,6 +2,7 @@ package timeintel
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,14 +48,14 @@ func TestMetricFormulas(t *testing.T) {
 		wantMs         int64
 		wantStart, end EventType
 	}{
-		{MetricTTD, 10_000, EvImpactStarted, EvDetected},                 // 10s
-		{MetricTTC, 15_000, EvFirstSignal, EvCorrelationCompleted},       // 20−5
-		{MetricTTI, 20_000, EvFirstSignal, EvRootDomainIdentified},       // 25−5  (the differentiator)
-		{MetricTTE, 30_000, EvFirstSignal, EvEvidenceReady},              // 35−5
-		{MetricTTA, 30_000, EvTicketCreated, EvAcknowledged},             // 70−40 (NOT impact→ack)
-		{MetricTTM, 90_000, EvDetected, EvMitigated},                     // 100−10
-		{MetricTTRRecovery, 120_000, EvImpactStarted, EvRecovered},       // 120−0
-		{MetricTTRResolution, 300_000, EvImpactStarted, EvClosed},        // 300−0
+		{MetricTTD, 10_000, EvImpactStarted, EvDetected},           // 10s
+		{MetricTTC, 15_000, EvFirstSignal, EvCorrelationCompleted}, // 20−5
+		{MetricTTI, 20_000, EvFirstSignal, EvRootDomainIdentified}, // 25−5  (the differentiator)
+		{MetricTTE, 30_000, EvFirstSignal, EvEvidenceReady},        // 35−5
+		{MetricTTA, 30_000, EvTicketCreated, EvAcknowledged},       // 70−40 (NOT impact→ack)
+		{MetricTTM, 90_000, EvDetected, EvMitigated},               // 100−10
+		{MetricTTRRecovery, 120_000, EvImpactStarted, EvRecovered}, // 120−0
+		{MetricTTRResolution, 300_000, EvImpactStarted, EvClosed},  // 300−0
 	}
 	for _, c := range cases {
 		m := metricByName(ms, c.name)
@@ -154,56 +155,73 @@ func TestNegativeDurationClampsToZero(t *testing.T) {
 	}
 }
 
-// Test 15: evidence still missing → time-loss driver = evidence_missing.
-func TestDriverEvidenceMissing(t *testing.T) {
-	d, expl := DeriveTimeLossDriver(fullLifecycle(), DriverContext{EvidenceMissing: true, Owner: "customer"})
-	if d != DriverEvidenceMissing {
-		t.Fatalf("driver = %s, want evidence_missing", d)
-	}
-	if expl == "" {
-		t.Fatalf("explanation must be present")
-	}
-}
-
-// Test 16: provider-owned seam → provider_repair ONLY after owner_identified and
-// before recovered.
-func TestDriverProviderRepairWindow(t *testing.T) {
-	// owner identified, NOT yet recovered → provider_repair
+// THE CONTRADICTION FIX: an ISP-owned, isolated incident with evidence still missing
+// must read EVIDENCE bottleneck — NOT provider_repair (the bug the owner caught).
+func TestBottleneckEvidenceBeforeProviderRepair(t *testing.T) {
 	lc := Lifecycle{
 		EvFirstSignal: obs(5), EvDetected: obs(10),
 		EvRootDomainIdentified: obs(25), EvOwnerIdentified: obs(30),
 	}
-	d, _ := DeriveTimeLossDriver(lc, DriverContext{Owner: "isp"})
-	if d != DriverProviderRepair {
-		t.Fatalf("pre-recovery provider incident: driver %s, want provider_repair", d)
+	d, msg := DeriveCurrentBottleneck(lc, DriverContext{EvidenceMissing: true, Owner: "isp"})
+	if d != DriverEvidence {
+		t.Fatalf("evidence-missing ISP incident: bottleneck = %s, want evidence_bundle (NOT provider_repair)", d)
 	}
-	// once recovered, provider_repair no longer applies (falls to segment analysis)
-	lc[EvRecovered] = obs(120)
-	d2, _ := DeriveTimeLossDriver(lc, DriverContext{Owner: "isp"})
-	if d2 == DriverProviderRepair {
-		t.Fatalf("after recovery, provider_repair must NOT apply, got %s", d2)
-	}
-	// before owner identified, provider_repair must not apply either
-	lc2 := Lifecycle{EvFirstSignal: obs(5), EvDetected: obs(10), EvRootDomainIdentified: obs(25)}
-	d3, _ := DeriveTimeLossDriver(lc2, DriverContext{Owner: "isp"})
-	if d3 == DriverProviderRepair {
-		t.Fatalf("before owner_identified, provider_repair must NOT apply, got %s", d3)
+	if !strings.Contains(msg, "evidence readiness") {
+		t.Fatalf("message should mention evidence readiness: %q", msg)
 	}
 }
 
-// Driver picks the largest controllable segment when no override applies.
-func TestDriverLargestSegment(t *testing.T) {
-	// acknowledgement is the long pole: ticket(40)→ack(70) = 30s, beats detection 10s,
-	// correlation 20s, ownership 5s.
-	d, _ := DeriveTimeLossDriver(fullLifecycle(), DriverContext{Owner: "customer"})
-	if d != DriverAcknowledgement {
-		t.Fatalf("driver = %s, want acknowledgement (longest segment)", d)
+// The phase walk: provider_repair only AFTER evidence + ticket + acknowledgement.
+func TestBottleneckPhaseWalk(t *testing.T) {
+	base := Lifecycle{
+		EvFirstSignal: obs(5), EvDetected: obs(10),
+		EvRootDomainIdentified: obs(25), EvOwnerIdentified: obs(30), EvEvidenceReady: obs(35),
+	}
+	ctx := DriverContext{Owner: "isp", WorkflowConnected: true}
+
+	// evidence ready, no ticket → ticket_creation
+	if d, _ := DeriveCurrentBottleneck(base, ctx); d != DriverTicketCreation {
+		t.Fatalf("evidence ready, no ticket → %s, want ticket_creation", d)
+	}
+	// ticket created, no ack → acknowledgement
+	base[EvTicketCreated] = obs(40)
+	if d, _ := DeriveCurrentBottleneck(base, ctx); d != DriverAcknowledgement {
+		t.Fatalf("ticket, no ack → %s, want acknowledgement", d)
+	}
+	// acknowledged, provider, not recovered → provider_repair (FINALLY valid)
+	base[EvAcknowledged] = obs(70)
+	if d, _ := DeriveCurrentBottleneck(base, ctx); d != DriverProviderRepair {
+		t.Fatalf("acked provider, no recovery → %s, want provider_repair", d)
+	}
+	// recovered, not closed → closure
+	base[EvRecovered] = obs(120)
+	if d, _ := DeriveCurrentBottleneck(base, ctx); d != DriverClosure {
+		t.Fatalf("recovered, not closed → %s, want closure", d)
+	}
+	// closed → resolved
+	base[EvClosed] = obs(300)
+	if d, _ := DeriveCurrentBottleneck(base, ctx); d != DriverResolved {
+		t.Fatalf("closed → %s, want resolved", d)
 	}
 }
 
-func TestDriverUnknownWhenInsufficient(t *testing.T) {
-	d, _ := DeriveTimeLossDriver(Lifecycle{EvFirstSignal: obs(5)}, DriverContext{Owner: "customer"})
-	if d != DriverUnknown {
-		t.Fatalf("driver = %s, want unknown", d)
+// Not isolated yet → root isolation bottleneck.
+func TestBottleneckRootIsolation(t *testing.T) {
+	d, _ := DeriveCurrentBottleneck(Lifecycle{EvFirstSignal: obs(5), EvDetected: obs(10)}, DriverContext{})
+	if d != DriverRootIsolation {
+		t.Fatalf("not isolated → %s, want root_isolation", d)
+	}
+}
+
+// Evidence ready but NO workflow connected → workflow_not_connected (honest), not a
+// fabricated ticket phase.
+func TestBottleneckWorkflowNotConnected(t *testing.T) {
+	lc := Lifecycle{
+		EvFirstSignal: obs(5), EvDetected: obs(10), EvRootDomainIdentified: obs(25),
+		EvOwnerIdentified: obs(30), EvEvidenceReady: obs(35),
+	}
+	d, _ := DeriveCurrentBottleneck(lc, DriverContext{Owner: "isp", WorkflowConnected: false})
+	if d != DriverWorkflow {
+		t.Fatalf("evidence ready, no workflow → %s, want workflow_not_connected", d)
 	}
 }

@@ -19,13 +19,15 @@ type IncidentSummary struct {
 	TimeLossDriver TimeLossDriver
 	Group          map[string]string // grouping keys: root_entity, seam_id, device, interface, app_path, provider, signature
 	Severity       string
-	OccurredAt     time.Time // incident onset (window_start) — MTBF/MTTF spacing anchor
-	RecoveredAt    time.Time // zero if not recovered
-	ClosedAt       time.Time // zero if not closed
-	State          string    // open | closed | merged
-	IsChild        bool      // suppressed/merged duplicate → excluded from MTBF (spec test 9)
-	Maintenance    bool      // planned maintenance → separated from unplanned (spec test 10)
-	NonRepairable  bool      // asset is non-repairable → MTTF, not MTBF (spec test 11)
+	OccurredAt     time.Time   // incident onset (window_start) — MTBF/MTTF spacing anchor
+	RecoveredAt    time.Time   // zero if not recovered
+	ClosedAt       time.Time   // zero if not closed
+	State          string      // open | closed | merged
+	IsChild        bool        // suppressed/merged duplicate → excluded from MTBF (spec test 9)
+	Maintenance    bool        // planned maintenance → separated from unplanned (spec test 10)
+	NonRepairable  bool        // asset is non-repairable → MTTF, not MTBF (spec test 11)
+	OwnerDomain    OwnerDomain // ISP/LAN/SD-WAN/Cloud/App/Internal Platform/Unknown
+	Internal       bool        // platform self-monitoring (excluded from customer-impacting default)
 }
 
 // MetricStat is the percentile summary for one phase across many incidents.

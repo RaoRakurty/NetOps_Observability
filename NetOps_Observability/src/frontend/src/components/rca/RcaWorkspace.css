@@ -272,3 +272,23 @@
 .rca-ws .ti-stage.on .ti-dot { background: var(--rw-green); border-color: var(--rw-green); }
 .rca-ws .ti-stage-label { font-size: 10px; color: var(--rw-muted2); text-align: center; white-space: nowrap; }
 .rca-ws .ti-stage.on .ti-stage-label { color: var(--rw-text); font-weight: 600; }
+
+/* ----- Time Impact card v2 (current bottleneck + NOC refinements) ----- */
+.rca-ws .ti-tone-amber { background: var(--rw-orange2); border-color: #f6d9b8; }
+.rca-ws .ti-tone-amber .ti-driver-name { color: var(--rw-orange); }
+.rca-ws .ti-tone-slate { background: var(--rw-soft); border-color: var(--rw-line); }
+.rca-ws .ti-tone-slate .ti-driver-name { color: var(--rw-muted); }
+.rca-ws .ti-tone-good { background: var(--rw-green2); border-color: #bce8cf; }
+.rca-ws .ti-tone-good .ti-driver-name { color: var(--rw-green); }
+.rca-ws .ti-basis { font-size: 11px; color: var(--rw-muted2); margin: 0 0 6px; font-style: italic; }
+.rca-ws .ti-row-current { background: var(--rw-orange2); }
+.rca-ws .ti-row-current .ti-row-label { color: var(--rw-text); font-weight: 600; }
+.rca-ws .ti-row-ctx { display: block; font-size: 10.5px; font-weight: 500; color: var(--rw-muted); margin-top: 1px; }
+.rca-ws .ti-na-current { font-weight: 700; }
+.rca-ws .ti-pending { color: var(--rw-muted2); font-weight: 500; font-style: italic; font-size: 11.5px; font-family: inherit; }
+.rca-ws .ti-src-muted { color: var(--rw-muted2); font-weight: 600; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .3px; font-family: var(--rw-sans, inherit); }
+.rca-ws .ti-stage.current .ti-dot { background: var(--rw-orange); border-color: var(--rw-orange); }
+.rca-ws .ti-stage.current .ti-stage-label { color: var(--rw-orange); font-weight: 700; }
+.rca-ws .ti-stage-hero .ti-stage-label { font-weight: 700; }
+.rca-ws .ti-stage-hero.on .ti-dot { box-shadow: 0 0 0 3px var(--rw-purple2); border-color: var(--rw-purple); background: var(--rw-purple); }

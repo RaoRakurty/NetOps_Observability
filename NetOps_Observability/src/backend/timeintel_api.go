@@ -85,15 +85,35 @@ type timeIntelLifecycleRow struct {
 }
 
 type timeIntelResponse struct {
-	CorrelationID      string                   `json:"correlation_id"`
-	VerdictTier        string                   `json:"verdict_tier"`
-	Owner              string                   `json:"owner,omitempty"`
-	EvidenceMissing    bool                     `json:"evidence_missing"`
-	Lifecycle          []timeIntelLifecycleRow  `json:"lifecycle"`
-	Metrics            []timeintel.TimeMetric   `json:"metrics"`
-	TimeLossDriver     timeintel.TimeLossDriver `json:"time_loss_driver"`
-	TimeLossExplain    string                   `json:"time_loss_explanation"`
+	CorrelationID   string                  `json:"correlation_id"`
+	VerdictTier     string                  `json:"verdict_tier"`
+	Owner           string                  `json:"owner,omitempty"`
+	OwnerDomain     timeintel.OwnerDomain   `json:"owner_domain"`
+	OwnerLabel      string                  `json:"owner_label"` // operator-facing (never lowercase raw)
+	RootDomain      string                  `json:"root_domain,omitempty"`
+	ConfidenceLbl   string                  `json:"confidence_label"` // Evidence-backed | Candidate | Insufficient evidence
+	EvidenceMissing bool                    `json:"evidence_missing"`
+	Lifecycle       []timeIntelLifecycleRow `json:"lifecycle"`
+	Metrics         []timeintel.TimeMetric  `json:"metrics"`
+	// Current bottleneck = the EARLIEST incomplete lifecycle phase (phase-consistent).
+	CurrentBottleneck  timeintel.TimeLossDriver `json:"current_bottleneck"`
+	BottleneckMessage  string                   `json:"bottleneck_message"`
+	WorkflowConnected  bool                     `json:"workflow_connected"`
 	CalculationVersion string                   `json:"calculation_version"`
+}
+
+// confidenceLabel maps a verdict tier to operator-facing evidence-strength copy.
+func confidenceLabel(tier string) string {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "confirmed":
+		return "Evidence-backed"
+	case "suspected":
+		return "Candidate"
+	case "undetermined":
+		return "Insufficient evidence"
+	default:
+		return ""
+	}
 }
 
 // serveCorrelationTimeMetrics handles GET /api/correlations/{id}/time-metrics.
@@ -102,7 +122,7 @@ func (s *server) serveCorrelationTimeMetrics(w http.ResponseWriter, r *http.Requ
 SELECT toString(window_start) AS window_start,
        toString(created_at)   AS created_at,
        verdict_tier, top_confidence,
-       hypotheses, evidence_missing
+       hypotheses, evidence_missing, affected
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'
  ORDER BY version DESC
@@ -120,6 +140,7 @@ SELECT toString(window_start) AS window_start,
 	}
 	o := rows[0]
 	owner := ownerFromHypotheses(asString(o["hypotheses"]))
+	group := groupKeysFromAffected(asString(o["affected"]))
 	facts := corrTimeFacts{
 		WindowStart:     parseCHTime(o["window_start"]),
 		FirstIngest:     s.minIngestTS(r, id), // detection latency (best-effort)
@@ -129,18 +150,21 @@ SELECT toString(window_start) AS window_start,
 		EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
 		Confidence:      asFloat(o["top_confidence"]),
 	}
+	ownerDomain, _ := timeintel.ClassifyOwnerDomain(owner, group)
 
 	// ITSM facts: per-correlation ticket lifecycle. The hub-and-spoke ticket linkage
-	// (#78) is not wired yet, so this is empty today — those phases read INCOMPLETE
-	// (honest) rather than fabricated. Hook left for when #78 lands.
+	// (#78) is not wired yet → workflowConnected=false, so the bottleneck says
+	// "workflow not connected" instead of inventing a ticket phase that can't move.
 	itsm := s.itsmTimeFacts(r, id)
+	workflowConnected := false
 
 	lc := deriveLifecycle(facts, itsm)
 	now := time.Now().UTC()
 	metrics := timeintel.ComputeTimeMetrics(lc, timeIntelCalcVersion, now)
-	driver, explain := timeintel.DeriveTimeLossDriver(lc, timeintel.DriverContext{
-		EvidenceMissing: facts.EvidenceMissing,
-		Owner:           facts.Owner,
+	bottleneck, message := timeintel.DeriveCurrentBottleneck(lc, timeintel.DriverContext{
+		EvidenceMissing:   facts.EvidenceMissing,
+		Owner:             facts.Owner,
+		WorkflowConnected: workflowConnected,
 	})
 
 	// Lifecycle → sorted rows (chronological) for the UI timeline.
@@ -159,11 +183,16 @@ SELECT toString(window_start) AS window_start,
 		CorrelationID:      id,
 		VerdictTier:        facts.VerdictTier,
 		Owner:              facts.Owner,
+		OwnerDomain:        ownerDomain,
+		OwnerLabel:         timeintel.OwnerLabel(facts.Owner),
+		RootDomain:         group["root_entity"],
+		ConfidenceLbl:      confidenceLabel(facts.VerdictTier),
 		EvidenceMissing:    facts.EvidenceMissing,
 		Lifecycle:          lcRows,
 		Metrics:            metrics,
-		TimeLossDriver:     driver,
-		TimeLossExplain:    explain,
+		CurrentBottleneck:  bottleneck,
+		BottleneckMessage:  message,
+		WorkflowConnected:  workflowConnected,
 		CalculationVersion: timeIntelCalcVersion,
 	})
 }

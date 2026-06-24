@@ -48,9 +48,9 @@ const (
 	SrcObserved    TimestampSource = "observed"     // measured directly (signal/engine)
 	SrcInferred    TimestampSource = "inferred"     // derived/approximated (e.g. impact from earliest signal)
 	SrcUserEntered TimestampSource = "user_entered" // a human typed it (audited)
-	SrcITSM        TimestampSource = "itsm"          // from ServiceNow/Jira/PagerDuty/Slack
-	SrcSynthetic   TimestampSource = "synthetic"     // generated (lab/test)
-	SrcImported    TimestampSource = "imported"      // backfilled from an external system
+	SrcITSM        TimestampSource = "itsm"         // from ServiceNow/Jira/PagerDuty/Slack
+	SrcSynthetic   TimestampSource = "synthetic"    // generated (lab/test)
+	SrcImported    TimestampSource = "imported"     // backfilled from an external system
 )
 
 // MetricName is a decomposed time phase. MTBF/MTTF are reliability rollups computed
@@ -102,17 +102,26 @@ type TimeMetric struct {
 	CalculationVersion string     `json:"calculation_version"`
 }
 
-// TimeLossDriver is the single phase that dominated the incident's elapsed time —
-// the "where did the time go" answer.
+// TimeLossDriver is the incident's CURRENT BOTTLENECK — the earliest incomplete
+// lifecycle phase (per-incident), or the most common bottleneck across a window
+// (fleet "top time-loss phase"). Phase-consistent by construction: a later phase
+// (e.g. provider_repair) can never be the bottleneck while an earlier one (evidence,
+// ticket, acknowledgement) is still unmet — which is the contradiction this replaces.
 type TimeLossDriver string
 
 const (
-	DriverDetection       TimeLossDriver = "detection"
-	DriverCorrelation     TimeLossDriver = "correlation"
-	DriverEvidenceMissing TimeLossDriver = "evidence_missing"
-	DriverOwnership       TimeLossDriver = "ownership"
-	DriverAcknowledgement TimeLossDriver = "acknowledgement"
-	DriverMitigation      TimeLossDriver = "mitigation"
-	DriverProviderRepair  TimeLossDriver = "provider_repair"
+	DriverResolved        TimeLossDriver = "resolved"               // closed — no open bottleneck
+	DriverDetection       TimeLossDriver = "detection"              // not yet detected (rare)
+	DriverCorrelation     TimeLossDriver = "correlation"            // signals not yet correlated
+	DriverRootIsolation   TimeLossDriver = "root_isolation"         // root domain/seam not yet isolated
+	DriverOwnerAssignment TimeLossDriver = "owner_assignment"       // owner not yet assigned
+	DriverEvidence        TimeLossDriver = "evidence_bundle"        // evidence bundle not yet ready
+	DriverTicketCreation  TimeLossDriver = "ticket_creation"        // ticket/escalation not yet created
+	DriverAcknowledgement TimeLossDriver = "acknowledgement"        // ticket not yet acknowledged
+	DriverProviderRepair  TimeLossDriver = "provider_repair"        // acknowledged; provider repair clock
+	DriverMitigation      TimeLossDriver = "mitigation"             // acknowledged; mitigation in progress
+	DriverRecovery        TimeLossDriver = "recovery"               // mitigated; awaiting recovery signal
+	DriverClosure         TimeLossDriver = "closure"                // recovered; awaiting ticket closure
+	DriverWorkflow        TimeLossDriver = "workflow_not_connected" // ITSM/recovery evidence not connected
 	DriverUnknown         TimeLossDriver = "unknown"
 )

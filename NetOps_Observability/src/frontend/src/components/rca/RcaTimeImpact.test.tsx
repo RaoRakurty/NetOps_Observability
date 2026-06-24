@@ -1,29 +1,31 @@
-// RcaTimeImpact.test.tsx — the Time Impact card renders real phase durations + the
-// time-loss driver, EMPHASISES MTTI (isolation), labels inferred timestamps, and
-// shows an honest "—" (never a fake 0) for phases with no data.
+// RcaTimeImpact.test.tsx — the Time Impact card: phase-consistent CURRENT BOTTLENECK
+// (no provider-repair while evidence is missing), Owner-assigned row, "Evidence
+// bundle ready" wording, natural pending text, inferred chip, root-isolated owner/
+// confidence context, and the elapsed-from-impact basis line.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import type { TimeIntel } from "../../services/api";
 
+const t0 = "2026-06-24T12:00:00Z";
+const t = (s: number) => new Date(Date.parse(t0) + s * 1000).toISOString();
+
+// Evidence-missing ISP incident: isolated + owner, but evidence not ready, no workflow.
 const fixture: TimeIntel = {
-  correlation_id: "abc",
-  verdict_tier: "suspected",
-  owner: "isp",
-  evidence_missing: true,
-  lifecycle: [
-    { event_type: "first_signal", at: "2026-06-24T12:00:00Z", timestamp_source: "observed", confidence: 1 },
-    { event_type: "detected", at: "2026-06-24T12:00:05Z", timestamp_source: "observed", confidence: 1 },
-    { event_type: "root_domain_identified", at: "2026-06-24T12:01:24Z", timestamp_source: "observed", confidence: 0.8 },
-  ],
-  metrics: [
-    { metric_name: "ttd", complete: true, duration_ms: 5000, start_event_type: "impact_started", end_event_type: "detected", confidence: 1, is_inferred: true, calculation_version: "ti-1" },
-    { metric_name: "tti", complete: true, duration_ms: 84000, start_event_type: "first_signal", end_event_type: "root_domain_identified", confidence: 0.8, is_inferred: false, calculation_version: "ti-1" },
-    { metric_name: "tta", complete: false, duration_ms: 0, start_event_type: "ticket_created", end_event_type: "acknowledged", confidence: 1, is_inferred: false, missing_event: "ticket_created", calculation_version: "ti-1" },
-  ],
-  time_loss_driver: "provider_repair",
-  time_loss_explanation: "owner identified as isp; provider repair pending",
+  correlation_id: "abc", verdict_tier: "suspected",
+  owner: "isp", owner_domain: "ISP", owner_label: "ISP", root_domain: "wan-r2",
+  confidence_label: "Candidate", evidence_missing: true, workflow_connected: false,
+  current_bottleneck: "evidence_bundle",
+  bottleneck_message: "ISP-owned seam isolated; provider escalation is waiting on evidence readiness.",
   calculation_version: "ti-1",
+  lifecycle: [
+    { event_type: "first_signal", at: t(0), timestamp_source: "observed", confidence: 1 },
+    { event_type: "detected", at: t(5), timestamp_source: "observed", confidence: 1 },
+    { event_type: "correlation_completed", at: t(120), timestamp_source: "observed", confidence: 1 },
+    { event_type: "root_domain_identified", at: t(120), timestamp_source: "observed", confidence: 0.8 },
+    { event_type: "owner_identified", at: t(120), timestamp_source: "inferred", confidence: 0.8 },
+  ],
+  metrics: [],
 };
 
 vi.mock("../../services/api", () => ({
@@ -34,23 +36,33 @@ import RcaTimeImpact from "./RcaTimeImpact";
 
 afterEach(cleanup);
 
-describe("RcaTimeImpact", () => {
-  it("renders the time-loss driver, MTTI emphasis, and honest incomplete phases", async () => {
+describe("RcaTimeImpact — current bottleneck + NOC refinements", () => {
+  it("shows the phase-consistent CURRENT BOTTLENECK (evidence, NOT provider repair)", async () => {
     render(<RcaTimeImpact correlationId="abc" />);
+    expect(await screen.findByText("Current bottleneck")).toBeTruthy();
+    expect(screen.getByText("Evidence bundle pending")).toBeTruthy();
+    expect(screen.getByText(/waiting on evidence readiness/)).toBeTruthy();
+    // the bug guard: provider-repair copy must NOT appear while evidence is missing
+    expect(screen.queryByText(/Provider repair pending/)).toBeNull();
+  });
 
-    // time-loss driver headline (precise wording, not marketing)
-    expect(await screen.findByText(/provider repair pending/i)).toBeTruthy();
-    expect(screen.getByText("Provider repair")).toBeTruthy();
+  it("has the Owner-assigned row and 'Evidence bundle ready' wording", async () => {
+    render(<RcaTimeImpact correlationId="abc" />);
+    expect(await screen.findByText("Owner assigned")).toBeTruthy();
+    expect(screen.getByText("Evidence bundle ready")).toBeTruthy();
+    expect(screen.getByText("Root / seam isolated")).toBeTruthy();
+  });
 
-    // MTTI (the differentiator) row present with its duration
-    expect(screen.getByText(/Root \/ seam isolated in/)).toBeTruthy();
-    expect(screen.getByText(/1m 24s/)).toBeTruthy(); // 84000ms
+  it("uses natural pending language + workflow-required (no bare dash)", async () => {
+    render(<RcaTimeImpact correlationId="abc" />);
+    expect(await screen.findByText("Awaiting evidence bundle")).toBeTruthy();
+    // ITSM phases with no workflow connected read "Workflow required"
+    expect(screen.getAllByText("Workflow required").length).toBeGreaterThan(0);
+  });
 
-    // detection complete + inferred chip
-    expect(screen.getByText(/Detected in/)).toBeTruthy();
-    expect(screen.getByText("inferred")).toBeTruthy();
-
-    // an ITSM-dependent phase is honestly incomplete (awaiting), not zero
-    await waitFor(() => expect(screen.getByText(/awaiting ticket created/i)).toBeTruthy());
+  it("shows the elapsed-from-impact basis (inferred) + root-isolated owner/confidence context", async () => {
+    render(<RcaTimeImpact correlationId="abc" />);
+    expect(await screen.findByText(/Elapsed from inferred impact onset/)).toBeTruthy();
+    expect(screen.getByText(/ISP-owned · Candidate/)).toBeTruthy();
   });
 });

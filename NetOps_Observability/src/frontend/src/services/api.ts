@@ -480,15 +480,24 @@ export type TimeIntelLifecycleRow = {
   timestamp_source: "observed" | "inferred" | "user_entered" | "itsm" | "synthetic" | "imported";
   confidence: number;
 };
+export type Bottleneck =
+  | "resolved" | "detection" | "correlation" | "root_isolation" | "owner_assignment"
+  | "evidence_bundle" | "ticket_creation" | "acknowledgement" | "provider_repair"
+  | "mitigation" | "recovery" | "closure" | "workflow_not_connected" | "unknown";
 export type TimeIntel = {
   correlation_id: string;
   verdict_tier: string;
   owner?: string;
+  owner_domain: string;
+  owner_label: string;
+  root_domain?: string;
+  confidence_label: string; // Evidence-backed | Candidate | Insufficient evidence
   evidence_missing: boolean;
   lifecycle: TimeIntelLifecycleRow[];
   metrics: TimeMetric[];
-  time_loss_driver: "detection" | "correlation" | "evidence_missing" | "ownership" | "acknowledgement" | "mitigation" | "provider_repair" | "unknown";
-  time_loss_explanation: string;
+  current_bottleneck: Bottleneck;
+  bottleneck_message: string;
+  workflow_connected: boolean;
   calculation_version: string;
 };
 

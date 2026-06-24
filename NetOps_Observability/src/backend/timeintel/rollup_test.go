@@ -72,7 +72,7 @@ func TestMTBFSeparatesMaintenance(t *testing.T) {
 // Test 11: MTTF applies ONLY to non-repairable assets (not logical services).
 func TestMTTFNonRepairableOnly(t *testing.T) {
 	incs := []IncidentSummary{
-		{CorrelationID: "svc", Group: map[string]string{"app_path": "checkout"}, OccurredAt: day(1)},            // logical → excluded
+		{CorrelationID: "svc", Group: map[string]string{"app_path": "checkout"}, OccurredAt: day(1)}, // logical → excluded
 		{CorrelationID: "optic", Group: map[string]string{"device": "optic-1"}, OccurredAt: day(2), NonRepairable: true},
 	}
 	_, count := MTTF(incs)
