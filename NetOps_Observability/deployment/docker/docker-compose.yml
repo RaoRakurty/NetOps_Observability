@@ -645,6 +645,11 @@ services:
       # scripts/fetch-appid-feeds.sh). Absent/empty ⇒ resolver returns honest
       # "unknown"; never required for the stack to run.
       APPID_FEEDS_DIR: ${APPID_FEEDS_DIR:-/data/appid-feeds}
+      # #81 P3A: Cloud App Observability inventory fixtures (opt-in demo). A dir of
+      # provider inventory JSON (cloud.FixtureProvider) loaded into the inventory store
+      # at boot. Empty/absent ⇒ no cloud inventory (honest); real per-tenant SDK
+      # connectors replace the fixture loader later.
+      CLOUD_FIXTURES_DIR: ${CLOUD_FIXTURES_DIR:-/data/cloud-fixtures}
       # Bundled (internal) NetBox: when present, the API auto-wires to it (managed
       # mode) so the UI needs no URL/token. Set by install.py with the netbox
       # profile; NETBOX_URL/NETBOX_TOKEN remain for pointing at an EXTERNAL NetBox.

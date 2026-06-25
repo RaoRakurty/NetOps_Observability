@@ -75,6 +75,7 @@ type server struct {
 	appCatalog       *appCatalogHolder     // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
 	ngfw             *ngfwAppResolver      // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
 	appOverrides     appCatalogStore       // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
+	cloud            cloudStore            // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -431,6 +432,7 @@ func newServer() *server {
 	srv.appCatalog = newAppCatalogHolder()            // Application Identification IP→app resolver (#81 P1)
 	srv.ngfw = newNgfwAppResolver()                   // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
 	srv.appOverrides = newAppCatalogStore()           // Application Identification operator-defined overrides (#81 P1c)
+	srv.cloud = newCloudStore()                       // Cloud App Observability inventory (#81 P3A)
 	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
 	}
@@ -508,6 +510,9 @@ func main() {
 	// NGFW app-id overlay refresh (#81 P-NGFW pt2): aggregate firewall app-id events
 	// from OpenSearch into the resolver. Harmless empty map if no firewall onboarded.
 	srv.ngfw.startRefresh(ctx)
+	// Cloud App Observability inventory (#81 P3A): load fixtures into the store.
+	// No-op unless CLOUD_FIXTURES_DIR set (real per-tenant SDK connectors come later).
+	srv.startCloudInventory(ctx)
 	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
@@ -779,6 +784,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/appid/catalog", s.handleAppIDCatalog)
 	mux.HandleFunc("/api/appid/catalog/", s.handleAppIDCatalogByID)
 	mux.HandleFunc("/api/flows/apps", s.handleFlowsApps)
+	mux.HandleFunc("/api/cloud/resources", s.handleCloudResources)
+	mux.HandleFunc("/api/cloud/identity-map", s.handleCloudIdentityMap)
+	mux.HandleFunc("/api/cloud/apps", s.handleCloudApps)
+	mux.HandleFunc("/api/cloud/attribution/coverage", s.handleCloudCoverage)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)

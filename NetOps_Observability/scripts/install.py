@@ -507,10 +507,16 @@ def ensure_data_dirs(root: Path) -> None:
     # returns "unknown" until feeds land) so the opt-in feature works without a restart.
     appid_feeds = root / "data" / "api" / "appid-feeds"
     appid_feeds.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chown(appid_feeds, 65532, 65532)
-    except (PermissionError, OSError):
-        pass  # not root; api adopts it where it can
+    # #81 P3A: Cloud App Observability inventory fixtures dir (CLOUD_FIXTURES_DIR=
+    # /data/cloud-fixtures). Empty by default — populate with provider inventory JSON
+    # (or wire real connectors) to light up the App Observability cloud views.
+    cloud_fixtures = root / "data" / "api" / "cloud-fixtures"
+    cloud_fixtures.mkdir(parents=True, exist_ok=True)
+    for d in (appid_feeds, cloud_fixtures):
+        try:
+            os.chown(d, 65532, 65532)
+        except (PermissionError, OSError):
+            pass  # not root; api adopts it where it can
 
     # #13: vulnerability-feed dir. OPERATOR-owned (unlike the service dirs) —
     # the operator writes it with scripts/vuln-feed-prepare.py and the api only
