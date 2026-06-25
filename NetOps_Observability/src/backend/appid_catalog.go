@@ -171,11 +171,22 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
+	tenant, cross := principalTenant(claims)
+	ov := s.overridesFor(r.Context(), tenant, cross)
+	// The engine's coverage at a glance (the design's "coverage is INSPECTABLE"):
+	// global vendor catalog + domain matcher (shared), the firewall app-id overlay,
+	// and THIS tenant's operator overrides.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"prefixes":         s.appCatalog.get().Size(),
-		"feeds_configured": s.appCatalog.feedsDir != "",
+		"feeds_configured":    s.appCatalog.feedsDir != "",
+		"catalog_prefixes":    s.appCatalog.get().Size(),
+		"catalog_domains":     s.appCatalog.domains().Size(),
+		"ngfw_attributions":   s.ngfw.count(),
+		"tenant_overrides":    ov.prefixes.Size() + ov.domains.Size(),
+		"tenant_override_pfx": ov.prefixes.Size(),
+		"tenant_override_dom": ov.domains.Size(),
 	})
 }

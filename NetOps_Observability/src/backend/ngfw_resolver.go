@@ -47,6 +47,15 @@ func (r *ngfwAppResolver) get() ngfwAppMap {
 	return nil
 }
 
+// count reports the total (tenant,dst) firewall attributions indexed.
+func (r *ngfwAppResolver) count() int {
+	n := 0
+	for _, b := range r.get() {
+		n += len(b)
+	}
+	return n
+}
+
 // signalFor returns an authoritative NGFW app-id signal for (tenant,dstIP) if the
 // firewall classified traffic to that destination. A scoped caller reads ONLY its
 // own tenant bucket; the platform owner (cross) reads the untagged ("") bucket
