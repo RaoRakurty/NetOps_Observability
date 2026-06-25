@@ -158,6 +158,11 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		if sig, has := s.ngfw.signalFor(tenant, cross, ipStr); has {
 			signals = append(signals, sig)
 		}
+		// cloud inventory identity-map (private IP / resource → app) — the
+		// authoritative cloud identity, now consumed (#81 P3F+1).
+		if sig, has := s.cloudApp.signalFor(tenant, cross, ipStr); has {
+			signals = append(signals, sig)
+		}
 	}
 	if domain != "" {
 		signals = append(signals, s.appCatalog.domains().SignalsFor(domain)...)
@@ -185,6 +190,7 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 		"catalog_prefixes":    s.appCatalog.get().Size(),
 		"catalog_domains":     s.appCatalog.domains().Size(),
 		"ngfw_attributions":   s.ngfw.count(),
+		"cloud_attributions":  s.cloudApp.count(),
 		"tenant_overrides":    ov.prefixes.Size() + ov.domains.Size(),
 		"tenant_override_pfx": ov.prefixes.Size(),
 		"tenant_override_dom": ov.domains.Size(),

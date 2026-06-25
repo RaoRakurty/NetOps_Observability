@@ -76,6 +76,7 @@ type server struct {
 	ngfw             *ngfwAppResolver      // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
 	appOverrides     appCatalogStore       // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
 	cloud            cloudStore            // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	cloudApp         *cloudAppResolver     // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -433,6 +434,7 @@ func newServer() *server {
 	srv.ngfw = newNgfwAppResolver()                   // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
 	srv.appOverrides = newAppCatalogStore()           // Application Identification operator-defined overrides (#81 P1c)
 	srv.cloud = newCloudStore()                       // Cloud App Observability inventory (#81 P3A)
+	srv.cloudApp = newCloudAppResolver(srv.cloud)     // Cloud identity-map → appid bridge (#81 P3F+1)
 	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
 	}
@@ -513,6 +515,10 @@ func main() {
 	// Cloud App Observability inventory (#81 P3A): load fixtures into the store.
 	// No-op unless CLOUD_FIXTURES_DIR set (real per-tenant SDK connectors come later).
 	srv.startCloudInventory(ctx)
+	// Cloud identity-map → appid bridge (#81 P3F+1): index the cloud inventory's
+	// (private-IP/ENI/resource → app) mappings into the shared resolver so flows/logs
+	// to cloud resources name their app. Runs after the fixture load above.
+	srv.cloudApp.startRefresh(ctx)
 	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)

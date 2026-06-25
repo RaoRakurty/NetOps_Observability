@@ -71,7 +71,7 @@ func TestAppIDResolveEndpoint(t *testing.T) {
 		t.Fatalf("status %d: %s", st, body)
 	}
 	var status struct {
-		Prefixes        int  `json:"prefixes"`
+		Prefixes        int  `json:"catalog_prefixes"`
 		FeedsConfigured bool `json:"feeds_configured"`
 	}
 	_ = json.Unmarshal(body, &status)

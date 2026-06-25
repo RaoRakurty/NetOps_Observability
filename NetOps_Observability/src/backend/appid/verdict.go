@@ -44,6 +44,8 @@ const (
 	SrcIPFIXAppID Source = "ipfix_app_id" // IPFIX applicationId IE 95 / NBAR2 — authoritative
 	SrcOperator   Source = "operator"     // #69 operator-declared service selector — authoritative (internal)
 	SrcSoT        Source = "sot"          // SoT/NetBox IP→app mapping — authoritative (internal)
+	SrcCloudTag   Source = "cloud_tag"    // cloud resource tag (operator) via the cloud inventory — authoritative
+	SrcCloudGraph Source = "cloud_graph"  // cloud resource-graph name via the cloud inventory — strong
 	SrcDNS        Source = "dns"          // DNS-flow correlation — strong
 	SrcSNI        Source = "sni"          // TLS SNI — strong
 	SrcIPCatalog  Source = "ip_catalog"   // vendor published IP/prefix range — medium (coarse on shared CDN IPs)
@@ -56,9 +58,9 @@ const (
 //	4 authoritative · 3 strong · 2 medium · 1 weak · 0 hint
 func (s Source) strength() int {
 	switch s {
-	case SrcNGFWAppID, SrcIPFIXAppID, SrcOperator, SrcSoT:
+	case SrcNGFWAppID, SrcIPFIXAppID, SrcOperator, SrcSoT, SrcCloudTag:
 		return 4
-	case SrcDNS, SrcSNI:
+	case SrcDNS, SrcSNI, SrcCloudGraph:
 		return 3
 	case SrcIPCatalog:
 		return 2
@@ -263,8 +265,8 @@ func missingEvidence(signals []Signal) []string {
 	if !present[SrcNGFWAppID] && !present[SrcIPFIXAppID] {
 		miss = append(miss, "no on-box app-id (ngfw/ipfix) on this path")
 	}
-	if !present[SrcOperator] && !present[SrcSoT] {
-		miss = append(miss, "no operator-declared service or SoT mapping")
+	if !present[SrcOperator] && !present[SrcSoT] && !present[SrcCloudTag] {
+		miss = append(miss, "no operator-declared service, SoT, or cloud-tag mapping")
 	}
 	return miss
 }

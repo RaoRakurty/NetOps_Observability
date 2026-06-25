@@ -116,6 +116,11 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 		if sig, has := s.ngfw.signalFor(tenant, cross, dst); has {
 			extra = append(extra, sig)
 		}
+		// cloud inventory identity-map: a flow to a tagged cloud private IP now
+		// resolves to its app instead of "unknown" (#81 P3F+1).
+		if sig, has := s.cloudApp.signalFor(tenant, cross, dst); has {
+			extra = append(extra, sig)
+		}
 		return extra
 	}
 	out := aggregateFlowApps(rows, cat, extraFor)

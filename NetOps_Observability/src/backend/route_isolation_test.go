@@ -118,6 +118,23 @@ var routeIsolationLedger = map[string]string{
 	"/api/sessions/":              "scoped",
 	"/api/copilot/chat":           "scoped",
 
+	// ── Application Identification + Cloud App Observability (#81), tenant-scoped ──
+	// appid resolve/status reflect the caller's tenant view (operator overrides +
+	// NGFW + cloud identity-map are all default-closed per tenant); cloud inventory
+	// + applications are principalTenant-scoped with store isolation tests
+	// (TestCloudStoreIsolation, appid_isolation_test.go, cloud_appid_resolver_test.go).
+	"/api/appid/resolve":               "scoped",
+	"/api/appid/status":                "scoped",
+	"/api/appid/catalog":               "scoped",
+	"/api/appid/catalog/":              "scoped",
+	"/api/applications":                "scoped",
+	"/api/applications/":               "scoped",
+	"/api/flows/apps":                  "scoped",
+	"/api/cloud/apps":                  "scoped",
+	"/api/cloud/resources":            "scoped",
+	"/api/cloud/identity-map":          "scoped",
+	"/api/cloud/attribution/coverage":  "scoped",
+
 	// ── identity/admin, scoped to caller's tenant/org by the handler ──
 	"/api/audit":             "adminScoped",
 	"/api/users":             "adminScoped",
