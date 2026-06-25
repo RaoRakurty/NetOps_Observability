@@ -1,0 +1,50 @@
+{
+  "provider": "aws",
+  "account_id": "123456789012",
+  "resources": [
+    {
+      "resource_id": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/billing-alb/abc123",
+      "resource_arn_or_uri": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/billing-alb/abc123",
+      "resource_type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "resource_name": "billing-alb",
+      "region": "us-east-1",
+      "private_ips": ["10.0.1.10", "10.0.2.10"],
+      "network_interface_ids": ["eni-alb1", "eni-alb2"],
+      "tags": { "app": "billing", "owner": "payments", "env": "prod" }
+    },
+    {
+      "resource_id": "billing-ecs-task-1",
+      "resource_type": "AWS::ECS::Task",
+      "resource_name": "billing-svc",
+      "region": "us-east-1",
+      "zone": "us-east-1a",
+      "private_ips": ["10.0.3.21"],
+      "network_interface_ids": ["eni-ecs1"],
+      "tags": { "app": "billing", "env": "prod" }
+    },
+    {
+      "resource_id": "billing-db",
+      "resource_arn_or_uri": "arn:aws:rds:us-east-1:123456789012:db:billing-db",
+      "resource_type": "AWS::RDS::DBInstance",
+      "resource_name": "billing-db",
+      "region": "us-east-1",
+      "private_ips": ["10.0.4.50"],
+      "tags": { "app": "billing" }
+    },
+    {
+      "resource_id": "i-0graphonly01",
+      "resource_type": "AWS::EC2::Instance",
+      "resource_name": "legacy-reports-worker",
+      "region": "us-east-1",
+      "private_ips": ["10.0.5.5"],
+      "network_interface_ids": ["eni-leg1"]
+    },
+    {
+      "resource_id": "i-0untagged01",
+      "resource_type": "AWS::EC2::Instance",
+      "region": "us-east-1",
+      "private_ips": ["10.0.6.6"],
+      "network_interface_ids": ["eni-unk1"]
+    }
+  ]
+}
