@@ -2,10 +2,11 @@
 // Identity → Health → Change → Cloud Network → Underlay → RCA, every claim with
 // confidence + evidence, unknown first-class. Built entirely on the existing design
 // system (NOC kit, ds-*/cc-* classes, var(--*) tokens, Inter/Space-Grotesk/Plex-Mono
-// fonts) so it matches the rest of Correlix; mock-fed today, wires to /api/cloud/* later.
+// fonts) so it matches the rest of Correlix. Identity surfaces are live from
+// /api/cloud/*; not-yet-ingested telemetry is shown as preview, never faked.
 
 import { useEffect, useState } from "react";
-import { NocHeader, Chip, LiveChip } from "../components/noc";
+import { NocHeader, Chip } from "../components/noc";
 import { Skeleton } from "../components/ui";
 import DataTable from "../components/DataTable";
 import {
@@ -18,6 +19,8 @@ import type {
   App, CloudResource, Coverage, EvidenceRow, ImpactedApplication, UnknownContributor,
 } from "./appobs/types";
 import { loadApps, loadResources, loadCoverage, NOT_MEASURED } from "./appobs/api";
+import { useCloudShell } from "./appobs/useCloudShell";
+import { CloudScopeBar } from "./appobs/shell";
 import {
   mockHealth, mockChanges, mockEvidence,
   mockUnderlay, mockSummary, mockBreakdown, mockImpacted,
@@ -89,6 +92,7 @@ const LIVE_TABS = new Set<Tab>(["applications", "resources", "attribution", "unk
 export default function AppObservability() {
   const [tab, setTab] = useState<Tab>("overview");
   const [sel, setSel] = useState<App | null>(null);
+  const shell = useCloudShell();
 
   // deep-link: #/monitoring/appobs/applications → opens that tab
   useEffect(() => {
@@ -103,12 +107,8 @@ export default function AppObservability() {
       <NocHeader
         title="App Observability"
         subtitle="Cloud app identity, health, change & app-to-underlay RCA — evidence-grounded"
-        chips={<>
-          <Chip label="Identity: live" tone="var(--good)" />
-          <Chip label="Health · Change: preview" tone="var(--fg-subtle)" />
-          <LiveChip detail="P3A" />
-        </>}
       />
+      <CloudScopeBar scope={shell.scope} mode={shell.mode} summary={shell.summary} />
 
       <nav className="ao-tabs" role="tablist" aria-label="App Observability">
         {TABS.map((tk) => (

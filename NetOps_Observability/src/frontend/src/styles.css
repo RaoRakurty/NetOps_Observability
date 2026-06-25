@@ -3479,6 +3479,34 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   background: var(--panel); border: 1px dashed var(--panel-border);
   border-radius: var(--r-2); padding: var(--sp-2) var(--sp-3); }
 
+/* ── Global cloud scope / freshness strip (#81 P3F+1 trust pass) ───────────── */
+.ao-scope { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) var(--sp-3);
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-2); }
+.ao-scope-fields { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-4);
+  font-size: var(--fs-micro, 12px); }
+.ao-scope-f { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.ao-scope-k { color: var(--fg-subtle); text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.ao-scope-v { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ao-scope-right { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.ao-scope-pills { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+
+/* readiness strip = same cards, just a wider min so the 6 fit a row */
+.ao-readiness { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+/* freshness badge — "updated 42s ago" with a calm live dot */
+.ao-fresh { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-micro, 12px);
+  color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.ao-fresh-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.ao-fresh--stale { color: var(--warn); }
+.ao-fresh--stale .ao-fresh-dot { background: var(--warn); }
+.ao-fresh--off { color: var(--fg-subtle); }
+
+/* honest measurement renderers — "not measured" / "partial data" / stale-tagged */
+.ao-meas { font-size: var(--fs-micro, 12px); }
+.ao-meas--stale { color: var(--warn); display: inline-flex; align-items: baseline; gap: 4px; }
+.ao-meas-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--warn); opacity: 0.85; }
+
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
 .ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);
