@@ -794,6 +794,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/identity-map", s.handleCloudIdentityMap)
 	mux.HandleFunc("/api/cloud/apps", s.handleCloudApps)
 	mux.HandleFunc("/api/cloud/attribution/coverage", s.handleCloudCoverage)
+	mux.HandleFunc("/api/cloud/app-rca", s.handleCloudAppRca)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)

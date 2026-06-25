@@ -1710,6 +1710,23 @@ export const api = {
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
+  // #81 P3G — the REAL engine-formed cloud RCA object(s) for an app (corr_objects),
+  // tenant-scoped. Empty data[] when the app has no active RCA (unknown stays first-class).
+  cloudAppRca: (app: string) => request<ClickHouseResponse<CloudAppRcaRow>>(`/api/cloud/app-rca?app=${encodeURIComponent(app)}`),
+};
+
+export type CloudAppRcaRow = {
+  correlation_id: string;
+  verdict_tier: string;
+  confidence: number;
+  top_hypothesis: string;
+  signal_count: number;
+  state: string;
+  window_start: string;
+  created_at: string;
+  affected: string;
+  sources: string[];
+  cross_plane: number | boolean;
 };
 
 // ----- Security Policy types (mirror src/backend/policy/model.go JSON) -----

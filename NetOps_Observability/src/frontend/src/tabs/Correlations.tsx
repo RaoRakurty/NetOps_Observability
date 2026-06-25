@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
@@ -160,6 +160,21 @@ export default function Correlations() {
       });
     }
   };
+
+  // Deep link by id (#81 P3G): App Observability links here as
+  // #/monitoring/correlations?id=<correlation_id> to open the app's real RCA.
+  // Fires once, after the list loads and contains the target.
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current || !items.length) return;
+    const q = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
+    const id = new URLSearchParams(q).get("id");
+    if (!id) return;
+    const o = items.find((x) => x.correlation_id === id);
+    if (!o) return;
+    deepLinked.current = true;
+    select(o);
+  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = !ws.enabled && sel ? items.find((o) => o.correlation_id === sel) : undefined;
 

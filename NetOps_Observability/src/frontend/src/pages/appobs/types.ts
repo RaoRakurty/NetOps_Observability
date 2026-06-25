@@ -210,3 +210,16 @@ export interface UnderlayImpact {
   confidence: Confidence;
   owner: string;
 }
+
+// AppRca — the REAL engine-formed cloud RCA object for an app (#81 P3G), as
+// surfaced by /api/cloud/app-rca. Distinct from the heuristic root-domain verdict:
+// this is the correlation engine's grounded object (links to the full RCA detail).
+export interface AppRca {
+  correlationId: string;
+  verdictTier: string;     // confirmed | suspected | undetermined | recovered | contradicted
+  confidence: number;      // 0..1
+  signalCount: number;
+  state: string;           // open | closed
+  crossPlane: boolean;     // an independent (non-cloud) observer corroborates
+  sources: string[];       // observed signal planes (cloud, probe, …)
+}

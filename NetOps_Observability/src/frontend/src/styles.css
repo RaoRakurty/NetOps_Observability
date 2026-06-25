@@ -3652,6 +3652,14 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 
 /* RCA panel */
 .ao-rca { border-left: 3px solid var(--accent); }
+/* Correlation-engine RCA banner (#81 P3G) — the real grounded object for the app. */
+.ao-rca-engine { border: 1px solid var(--border); border-radius: var(--radius-2, 8px);
+  background: var(--bg-subtle, rgba(127,127,127,.05)); padding: var(--sp-3); margin-bottom: var(--sp-3); }
+.ao-rca-engine-h { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  font-size: var(--fs-sm, 14px); font-weight: 700; color: var(--fg); margin-bottom: var(--sp-3); }
+.ao-rca-link { display: inline-block; margin-top: var(--sp-3); font-size: var(--fs-meta, 13px);
+  color: var(--accent); text-decoration: none; font-weight: 600; }
+.ao-rca-link:hover { text-decoration: underline; }
 .ao-rca-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-4); }
 .ao-rca-l { font-size: var(--fs-micro, 12px); color: var(--fg-muted); text-transform: uppercase; letter-spacing: .06em; }
 .ao-rca-v { font-size: var(--fs-meta, 13px); color: var(--fg); margin-top: 2px; }

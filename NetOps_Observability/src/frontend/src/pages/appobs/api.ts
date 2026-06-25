@@ -12,7 +12,7 @@ import type {
   CloudAppRow, CloudResourceRow, CloudCoverageReport, CloudConfidence, CloudSource,
 } from "../../services/api";
 import type {
-  App, CloudResource, Coverage, UnknownContributor, Provider, Confidence, AttrSource,
+  App, CloudResource, Coverage, UnknownContributor, Provider, Confidence, AttrSource, AppRca,
 } from "./types";
 
 // Sentinel for a numeric metric the platform does not measure yet (P3B–D).
@@ -156,6 +156,25 @@ export async function loadApps(): Promise<App[]> {
 export async function loadResources(): Promise<CloudResource[]> {
   const r = await api.cloudResources();
   return (r.resources ?? []).map(toResource);
+}
+
+// The REAL engine RCA for an app (#81 P3G). Returns the most recent grounded
+// corr_object, or null when the app has no active RCA (unknown stays first-class —
+// we never synthesize a verdict the engine didn't form).
+export async function loadAppRca(appId: string): Promise<AppRca | null> {
+  if (!appId) return null;
+  const r = await api.cloudAppRca(appId);
+  const row = (r.data ?? [])[0];
+  if (!row) return null;
+  return {
+    correlationId: row.correlation_id,
+    verdictTier: row.verdict_tier || "undetermined",
+    confidence: typeof row.confidence === "number" ? row.confidence : 0,
+    signalCount: row.signal_count ?? 0,
+    state: row.state || "open",
+    crossPlane: row.cross_plane === 1 || row.cross_plane === true,
+    sources: Array.isArray(row.sources) ? row.sources : [],
+  };
 }
 
 export type CoverageBundle = { coverage: Coverage; unknowns: UnknownContributor[] };

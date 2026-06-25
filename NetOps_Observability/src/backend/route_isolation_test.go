@@ -134,6 +134,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/resources":            "scoped",
 	"/api/cloud/identity-map":          "scoped",
 	"/api/cloud/attribution/coverage":  "scoped",
+	"/api/cloud/app-rca":               "scoped",
 
 	// ── identity/admin, scoped to caller's tenant/org by the handler ──
 	"/api/audit":             "adminScoped",

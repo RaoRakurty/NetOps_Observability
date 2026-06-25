@@ -7,12 +7,12 @@ import { useState, useEffect, ReactNode } from "react";
 import { Segmented } from "../../components/ui";
 import { Chip } from "../../components/noc";
 import DataTable from "../../components/DataTable";
-import type { App, CloudResource, EvidenceRow, EvidenceCategory, Confidence } from "./types";
+import type { App, CloudResource, EvidenceRow, EvidenceCategory, Confidence, AppRca } from "./types";
 import {
   HealthBadge, ConfidenceBadge, RootDomainBadge, MetricCard, EmptyState,
   fmtBps, ago,
 } from "./badges";
-import { loadResources } from "./api";
+import { loadResources, loadAppRca } from "./api";
 import { resourceCategory } from "./attribution";
 import { mockHealth, mockChanges, mockEvidence } from "./mock";
 
@@ -190,9 +190,62 @@ function EvBlock({ title, badge, rows, mark, tone }: {
   );
 }
 
+// EngineRcaBanner — the REAL correlation-engine RCA for this app (#81 P3G), not the
+// heuristic root-domain verdict. Present only when the engine has grounded a cloud
+// object for the app; links to the full RCA detail. crossPlane = an independent
+// (non-cloud) observer corroborates → the engine can confirm; single cloud vantage
+// is suspected-at-best, stated honestly.
+const VERDICT_LABEL: Record<string, string> = {
+  confirmed: "Confirmed", suspected: "Suspected · not confirmed",
+  undetermined: "Under review", recovered: "Recovered", contradicted: "Ruled out",
+};
+function EngineRcaBanner({ rca }: { rca: AppRca }) {
+  return (
+    <div className="ao-rca-engine">
+      <div className="ao-rca-engine-h">
+        <span>Correlation engine RCA</span>
+        <Chip
+          label={rca.crossPlane ? "Corroborated cross-plane" : "Single-plane · suspected"}
+          tone={rca.crossPlane ? "var(--ok)" : "var(--warn)"}
+        />
+      </div>
+      <div className="ao-rca-grid">
+        <div><div className="ao-rca-l">Verdict</div><div className="ao-rca-v">{VERDICT_LABEL[rca.verdictTier] ?? rca.verdictTier}</div></div>
+        <div><div className="ao-rca-l">Signals</div><div className="ao-rca-v">{rca.signalCount}</div></div>
+        <div><div className="ao-rca-l">Observers</div><div className="ao-rca-v">{rca.sources.length ? rca.sources.join(" · ") : "—"}</div></div>
+        <div><div className="ao-rca-l">State</div><div className="ao-rca-v">{rca.state}</div></div>
+      </div>
+      <a className="ao-rca-link" href={`#/monitoring/correlations?id=${encodeURIComponent(rca.correlationId)}`}>
+        View full RCA →
+      </a>
+    </div>
+  );
+}
+
+function useAppRca(appId: string): AppRca | null {
+  const [rca, setRca] = useState<AppRca | null>(null);
+  useEffect(() => {
+    let live = true;
+    loadAppRca(appId).then((r) => { if (live) setRca(r); }).catch(() => { if (live) setRca(null); });
+    return () => { live = false; };
+  }, [appId]);
+  return rca;
+}
+
 function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
+  const engineRca = useAppRca(app.id);
+  const banner = engineRca ? <EngineRcaBanner rca={engineRca} /> : null;
+
+  // No heuristic root-domain verdict: still surface the engine RCA if one exists;
+  // otherwise the honest empty state ("unknown" is first-class).
   if (app.rootDomain === "unknown") {
-    return <div className="ao-panel ao-rca"><div className="ao-panel-h">RCA</div><EmptyState title="No active RCA — app is healthy or evidence is insufficient" hint="unknown is first-class; we don't guess a root cause" /></div>;
+    return (
+      <div className="ao-panel ao-rca">
+        <div className="ao-panel-h">RCA</div>
+        {banner}
+        {!engineRca && <EmptyState title="No active RCA — app is healthy or evidence is insufficient" hint="unknown is first-class; we don't guess a root cause" />}
+      </div>
+    );
   }
   const byCat = (c: EvidenceCategory) => evidence.filter((e) => e.category === c);
   const supporting = byCat("supporting");
@@ -208,6 +261,8 @@ function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
   return (
     <div className="ao-panel ao-rca">
       <div className="ao-panel-h">RCA verdict <RootDomainBadge domain={app.rootDomain} /></div>
+
+      {banner}
 
       {/* verdict card */}
       <div className="ao-rca-grid">
