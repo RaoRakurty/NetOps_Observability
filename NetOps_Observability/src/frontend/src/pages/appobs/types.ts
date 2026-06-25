@@ -65,6 +65,8 @@ export interface CloudResource {
   trafficBps: number;
   lastSeen: string;
   missingTags: string[];  // e.g. ["app","owner"]
+  tags?: Record<string, string>;
+  resourceId?: string;    // the raw cloud id/ARN (drawer identity)
 }
 
 export interface HealthSignal {

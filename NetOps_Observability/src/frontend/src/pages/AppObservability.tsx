@@ -20,6 +20,7 @@ import type {
   App, CloudResource, Coverage, EvidenceRow, ImpactedApplication, UnknownContributor, UnderlayImpact,
 } from "./appobs/types";
 import { loadApps, loadResources, loadCoverage, NOT_MEASURED } from "./appobs/api";
+import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES } from "./appobs/attribution";
 import { useCloudShell } from "./appobs/useCloudShell";
 import { CloudScopeBar, ReadinessStrip, SourceStatusBadge, AppPathStrip } from "./appobs/shell";
 import type { PathSeg } from "./appobs/shell";
@@ -295,20 +296,39 @@ function Applications({ onOpen }: { onOpen: (a: App) => void }) {
 }
 
 // ── App Map (graph-ready placeholder) ────────────────────────────────────────
+// App Map — the STRUCTURAL app→resource map from the live inventory (real). The
+// traffic-dependency layer (talks_to / egresses_via / suspected_cause edges) needs
+// cloud flow logs and is honestly deferred, not faked.
 function AppMap() {
-  const nodes = ["Application", "Cloud Resource", "Load Balancer", "Database", "Kubernetes Service", "External SaaS", "Network Seam", "Underlay Device", "Unknown Resource"];
-  const edges = ["talks_to", "fronted_by", "runs_on", "depends_on", "egresses_via", "impacted_by", "suspected_cause"];
+  const { data, status } = useAsync(loadResources);
+  if (status === "loading") return <TableSkeleton />;
+  if (status === "error") return <LoadError what="app map" />;
+  const resources = data ?? [];
+  if (resources.length === 0) return <CloudEmpty />;
+  const groups = groupByApp(resources);
   return (
     <div className="ao-stack">
-      <PreviewNote what="The dependency graph" />
-      <div className="ao-panel">
-        <div className="ao-panel-h">App dependency map</div>
-        <EmptyState title="Graph renders here (React Flow — reuses the Topology Canvas renderer)"
-          hint="app → resource → LB → DB → seam → underlay, with suspected_cause edges lit on active RCA" />
+      <div className="ao-preview-note">
+        <Chip label="structural" tone="var(--good)" />
+        <span>App→resource structure is live from the inventory. Traffic dependencies (talks_to / egresses_via) and RCA edges appear when cloud flow logs are ingested.</span>
       </div>
-      <div className="ao-legend-grid">
-        <div className="ao-panel"><div className="ao-panel-h">Node categories</div><div className="ao-chips">{nodes.map((n) => <Chip key={n} label={n} tone="var(--accent)" />)}</div></div>
-        <div className="ao-panel"><div className="ao-panel-h">Edge categories</div><div className="ao-chips">{edges.map((e) => <Chip key={e} label={e} tone={e === "suspected_cause" || e === "impacted_by" ? "var(--warn)" : "var(--fg-subtle)"} />)}</div></div>
+      <div className="ao-appmap">
+        {groups.map((g) => (
+          <div className={`ao-appmap-card${g.app === "" ? " ao-appmap-card--unknown" : ""}`} key={g.app || "__unattributed"}>
+            <div className="ao-appmap-h">
+              {g.app ? <strong>{g.app}</strong> : <span className="ao-unknown">unattributed</span>}
+              <span className="ao-appmap-n">{g.resources.length} resources</span>
+            </div>
+            {RESOURCE_CATEGORIES.filter((cat) => g.byCategory[cat].length).map((cat) => (
+              <div className="ao-appmap-cat" key={cat}>
+                <span className="ao-appmap-cat-l">{cat}</span>
+                <div className="ao-chips">
+                  {g.byCategory[cat].map((r) => <Chip key={r.id} label={`${r.name} · ${r.type}`} tone={g.app === "" ? "var(--fg-subtle)" : "var(--accent)"} title={`${r.provider === "—" ? "" : r.provider.toUpperCase() + " · "}${r.region}`} />)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -317,6 +337,7 @@ function AppMap() {
 // ── Cloud Resources (LIVE: /api/cloud/resources) ─────────────────────────────
 function Resources() {
   const [f, setF] = useState<Record<string, string>>({});
+  const [sel, setSel] = useState<CloudResource | null>(null);
   const { data, status } = useAsync(loadResources);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="cloud resources" />;
@@ -335,7 +356,7 @@ function Resources() {
           { key: "unknown", label: "Unknown app", options: [{ value: "yes", label: "yes" }] },
         ]} />
       <div className="ao-panel">
-        <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources"
+        <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
           columns={[
             { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
             { key: "type", header: "Type", width: 120, render: (r) => r.type },
@@ -351,19 +372,56 @@ function Resources() {
             { key: "tags", header: "Missing tags", width: 130, render: (r) => r.missingTags.length ? <Chip label={r.missingTags.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
           ]} />
       </div>
+      {sel && <ResourceDrawer r={sel} onClose={() => setSel(null)} />}
     </div>
+  );
+}
+
+// Cloud Resource detail drawer — identity, attribution provenance, tags, and the
+// honest not-measured signals (health/traffic arrive with cloud telemetry).
+function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void }) {
+  const tags = r.tags ?? {};
+  const tagKeys = Object.keys(tags);
+  return (
+    <EvidenceDrawer title={r.name}
+      subtitle={<span className="ao-drawer-badges"><AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /><ConfidenceBadge level={r.confidence} /></span>}
+      onClose={onClose}>
+      <table className="ao-kv"><tbody>
+        <tr><td>Type</td><td>{r.type}</td></tr>
+        <tr><td>Resource id</td><td><span className="ao-mono ao-muted">{r.resourceId}</span></td></tr>
+        <tr><td>Cloud</td><td>{r.provider === "—" ? "—" : r.provider.toUpperCase()} · {r.account} · {r.region}</td></tr>
+        <tr><td>App attribution</td><td><AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> {r.app ? `(by ${r.source})` : "— unattributed"}</td></tr>
+        <tr><td>Owner / Env</td><td>{r.owner} · {r.env}</td></tr>
+        <tr><td>Health</td><td><HealthBadge status={r.health} /> <span className="ao-muted">— not measured (cloud health)</span></td></tr>
+        <tr><td>Traffic</td><td>{NM(r.trafficBps, fmtBps)} <span className="ao-muted">— not measured (flow logs)</span></td></tr>
+        <tr><td>Last seen</td><td>{ago(r.lastSeen)}</td></tr>
+      </tbody></table>
+
+      <div className="ao-ev-h">Tags</div>
+      {tagKeys.length ? (
+        <div className="ao-chips">{tagKeys.map((k) => <Chip key={k} label={`${k}=${tags[k]}`} tone="var(--fg-subtle)" />)}</div>
+      ) : <div className="ao-muted">no tags</div>}
+
+      {r.missingTags.length > 0 && (<>
+        <div className="ao-ev-h">Recommended action</div>
+        <div className="ao-next-v">Tag {r.name} with {r.missingTags.join(", ")} to lift attribution coverage.</div>
+      </>)}
+    </EvidenceDrawer>
   );
 }
 
 // ── Attribution (LIVE: /api/cloud/attribution/coverage) ──────────────────────
 function Attribution() {
   const { data, status } = useAsync(loadCoverage);
+  const resq = useAsync(loadResources);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="attribution coverage" />;
   const c: Coverage = data?.coverage ?? { confirmedTag: 0, strongGraph: 0, firewallAppId: 0, suspectedDomainIp: 0, unknown: 0, total: 0 };
   const unknowns: UnknownContributor[] = data?.unknowns ?? [];
   if (c.total === 0) return <CloudEmpty />;
   const pct = (n: number) => Math.round((n / c.total) * 100);
+  const resources = resq.data ?? [];
+  const byScope = coverageByScope(resources, (r) => `${r.provider === "—" ? "—" : r.provider.toUpperCase()} / ${r.region || "—"}`);
   return (
     <div className="ao-stack">
       <div className="ao-cards">
@@ -373,6 +431,41 @@ function Attribution() {
         <MetricCard label="Suspected by domain/IP" value={`${pct(c.suspectedDomainIp)}%`} sub={`${c.suspectedDomainIp}`} tone="warn" />
         <MetricCard label="Unknown" value={`${pct(c.unknown)}%`} sub={`${c.unknown}`} tone={pct(c.unknown) > 10 ? "warn" : undefined} />
       </div>
+
+      {/* coverage funnel — total → confirmed → strong → firewall → suspected → unknown */}
+      <div className="ao-panel">
+        <div className="ao-panel-h">Attribution coverage funnel <span className="ao-panel-meta">{c.total} observed · how each was identified</span></div>
+        <div className="ao-funnel">
+          {funnelSteps(c).map((s) => (
+            <div className="ao-funnel-row" key={s.label}>
+              <span className="ao-funnel-l">{s.label}</span>
+              <span className="ao-funnel-bar"><span className="ao-funnel-fill" style={{ width: `${s.pct}%`, background: s.tone }} /></span>
+              <span className="ao-funnel-n">{s.pct}% · {s.count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* coverage by scope (provider / region) — real, from the inventory */}
+      <div className="ao-panel">
+        <div className="ao-panel-h">Coverage by scope <span className="ao-panel-meta">attributed resources per provider / region</span></div>
+        {byScope.length === 0 ? <EmptyState title="No resources in scope" /> : (
+          <table className="ao-tbl">
+            <thead><tr><th>Provider / Region</th><th>Attributed</th><th>Total</th><th>Coverage</th></tr></thead>
+            <tbody>
+              {byScope.map((s) => (
+                <tr key={s.scope}>
+                  <td>{s.scope}</td>
+                  <td>{s.attributed}</td>
+                  <td>{s.total}</td>
+                  <td><span className="ao-funnel-bar ao-funnel-bar--inline"><span className="ao-funnel-fill" style={{ width: `${s.pct}%`, background: s.pct >= 80 ? "var(--ok)" : s.pct >= 50 ? "var(--warn)" : "var(--crit)" }} /></span> {s.pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
       <div className="ao-panel">
         <div className="ao-panel-h">Top unknown contributors <span className="ao-panel-meta">tag these to lift coverage · traffic ranking arrives with cloud flow logs</span></div>
         {unknowns.length === 0 ? (

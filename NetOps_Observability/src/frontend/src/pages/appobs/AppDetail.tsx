@@ -3,16 +3,18 @@
 // → Underlay → Evidence, with an RCA summary that always shows confidence + evidence.
 // Built on the existing tokens/components; mock-fed today.
 
-import { useState, ReactNode } from "react";
+import { useState, useEffect, ReactNode } from "react";
 import { Segmented } from "../../components/ui";
 import { Chip } from "../../components/noc";
 import DataTable from "../../components/DataTable";
-import type { App, EvidenceRow, EvidenceCategory, Confidence } from "./types";
+import type { App, CloudResource, EvidenceRow, EvidenceCategory, Confidence } from "./types";
 import {
   HealthBadge, ConfidenceBadge, RootDomainBadge, MetricCard, EmptyState,
   fmtBps, ago,
 } from "./badges";
-import { mockHealth, mockChanges, mockEvidence, mockResources } from "./mock";
+import { loadResources } from "./api";
+import { resourceCategory } from "./attribution";
+import { mockHealth, mockChanges, mockEvidence } from "./mock";
 
 type DetailTab = "overview" | "identity" | "health" | "changes" | "traffic" | "dependencies" | "underlay" | "evidence";
 
@@ -21,7 +23,16 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
   const health = mockHealth.filter((h) => h.app === app.name);
   const changes = mockChanges.filter((c) => c.app === app.name);
   const evidence = mockEvidence.filter((e) => e.app === app.name);
-  const resources = mockResources.filter((r) => r.app === app.name || r.app === app.id);
+  // App resources are LIVE from the inventory (real), filtered to this app.
+  const [resources, setResources] = useState<CloudResource[]>([]);
+  useEffect(() => {
+    let live = true;
+    loadResources().then(
+      (all) => { if (live) setResources(all.filter((r) => r.app === app.name || r.app === app.id)); },
+      () => { /* leave empty on error */ },
+    );
+    return () => { live = false; };
+  }, [app.name, app.id]);
 
   return (
     <div className="ao-detail">
@@ -92,14 +103,20 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
               <tr><td>Unknown traffic</td><td>{app.unknownPct}%</td></tr>
             </tbody>
           </table>
-          <div className="ao-panel-h">Resources</div>
-          <DataTable<typeof resources[number]> rows={resources} rowKey={(r) => r.id} height={Math.min(300, 44 + resources.length * 30)} ariaLabel="App resources"
+          <div className="ao-panel-h">Resources <span className="ao-panel-meta">{resources.length} mapped · live from inventory</span></div>
+          {resources.length === 0 ? (
+            <EmptyState title="No resources mapped to this app yet" hint="resources appear as the cloud inventory is discovered and attributed" />
+          ) : (
+          <DataTable<CloudResource> rows={resources} rowKey={(r) => r.id} height={Math.min(320, 44 + resources.length * 30)} ariaLabel="App resources"
             columns={[
-              { key: "name", header: "Resource", width: 200, text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
-              { key: "type", header: "Type", width: 110, render: (r) => r.type },
-              { key: "src", header: "Identity source", width: 140, render: (r) => <>{r.source} <ConfidenceBadge level={r.confidence} /></> },
+              { key: "name", header: "Resource", width: 190, text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
+              { key: "cat", header: "Category", width: 116, sortable: true, sortValue: (r) => resourceCategory(r.type), render: (r) => <Chip label={resourceCategory(r.type)} tone="var(--fg-subtle)" /> },
+              { key: "type", header: "Type", width: 120, render: (r) => r.type },
+              { key: "region", header: "Region", width: 100, render: (r) => r.region },
+              { key: "src", header: "Identity source", width: 130, render: (r) => <>{r.source} <ConfidenceBadge level={r.confidence} /></> },
               { key: "health", header: "Health", width: 110, render: (r) => <HealthBadge status={r.health} /> },
             ]} />
+          )}
         </div>
       )}
 

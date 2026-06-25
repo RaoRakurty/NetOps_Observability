@@ -110,6 +110,8 @@ function toResource(r: CloudResourceRow): CloudResource {
     trafficBps: NOT_MEASURED,    // not measured (P3B)
     lastSeen: r.last_seen_at,
     missingTags: missingTags(r.tags),
+    tags: r.tags ?? {},
+    resourceId: r.resource_id,
   };
 }
 

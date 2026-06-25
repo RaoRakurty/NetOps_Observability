@@ -3563,6 +3563,26 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-path-arrow { color: var(--fg-subtle); font-size: 14px; }
 .ao-path-arrow.is-bad { color: var(--crit); }
 
+/* attribution coverage funnel + by-scope bars */
+.ao-funnel { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-funnel-row { display: grid; grid-template-columns: 200px 1fr 120px; align-items: center; gap: var(--sp-3); }
+.ao-funnel-l { font-size: var(--fs-micro, 12px); color: var(--fg-muted); }
+.ao-funnel-bar { display: block; height: 10px; border-radius: 999px; background: var(--panel-2, rgba(127,127,127,0.12)); overflow: hidden; }
+.ao-funnel-bar--inline { display: inline-block; width: 90px; vertical-align: middle; margin-right: 6px; }
+.ao-funnel-fill { display: block; height: 100%; border-radius: 999px; min-width: 2px; }
+.ao-funnel-n { font-size: var(--fs-micro, 12px); color: var(--fg); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* app map — structural app→resource cards */
+.ao-appmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--sp-3); }
+.ao-appmap-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--accent);
+  border-radius: var(--r-2); padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-appmap-card--unknown { border-left-color: var(--fg-subtle); }
+.ao-appmap-h { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2);
+  font-size: var(--fs-meta, 13px); }
+.ao-appmap-n { font-size: var(--fs-micro, 12px); color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+.ao-appmap-cat { display: flex; flex-direction: column; gap: 4px; }
+.ao-appmap-cat-l { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-subtle); }
+
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
 .ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);
