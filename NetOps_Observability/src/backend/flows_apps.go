@@ -14,6 +14,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -42,11 +43,12 @@ func tierRank(t appid.Tier) int {
 }
 
 // aggregateFlowApps resolves each destination row (cols d=dst_addr, b=bytes,
-// f=flows) to an app via the catalog — layering the authoritative NGFW app-id from
-// ngfw(dstIP) when present — and aggregates by app, strongest-tier-wins, sorted by
-// bytes desc. Pure (no IO; ngfw is an injected lookup) so it is unit-tested without
-// ClickHouse. ngfw may be nil.
-func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, ngfw func(dstIP string) (appid.Signal, bool)) []appFlowRow {
+// f=flows) to an app via the global catalog, layering any extra signals from
+// extraFor(dst) (operator overrides + the authoritative NGFW app-id), and
+// aggregates by app, strongest-tier-wins, sorted by bytes desc. Pure (no IO;
+// extraFor is an injected lookup) so it is unit-tested without ClickHouse.
+// extraFor may be nil.
+func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, extraFor func(dst string) []appid.Signal) []appFlowRow {
 	type agg struct {
 		bytes, flows float64
 		dests        int
@@ -57,10 +59,8 @@ func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, ngfw func(dstI
 	for _, row := range rows {
 		dst, _ := row["d"].(string)
 		var extra []appid.Signal
-		if ngfw != nil {
-			if sig, has := ngfw(dst); has {
-				extra = append(extra, sig)
-			}
+		if extraFor != nil {
+			extra = extraFor(dst)
 		}
 		v := cat.ResolveStr(dst, extra...)
 		a := byApp[v.App]
@@ -107,8 +107,20 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 
 	cat := s.appCatalog.get()
 	tenant, cross := principalTenant(claims)
-	ngfwLookup := func(dst string) (appid.Signal, bool) { return s.ngfw.signalFor(tenant, cross, dst) }
-	out := aggregateFlowApps(rows, cat, ngfwLookup)
+	overrideCat := s.overrideCatalogFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
+	extraFor := func(dst string) []appid.Signal {
+		var extra []appid.Signal
+		if overrideCat != nil {
+			if ip, err := netip.ParseAddr(dst); err == nil {
+				extra = append(extra, overrideCat.SignalsFor(ip)...)
+			}
+		}
+		if sig, has := s.ngfw.signalFor(tenant, cross, dst); has {
+			extra = append(extra, sig)
+		}
+		return extra
+	}
+	out := aggregateFlowApps(rows, cat, extraFor)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"apps":  out,

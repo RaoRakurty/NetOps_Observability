@@ -59,13 +59,13 @@ func TestAggregateFlowApps_NGFWPromotes(t *testing.T) {
 	// IP-catalog alone would call 8.8.8.8 "unknown"; the firewall's authoritative
 	// app-id for that dst overrides → a confirmed, named verdict.
 	rows := []map[string]any{{"d": "8.8.8.8", "b": float64(1000), "f": float64(10)}}
-	ngfw := func(dst string) (appid.Signal, bool) {
+	extraFor := func(dst string) []appid.Signal {
 		if dst == "8.8.8.8" {
-			return appid.Signal{Source: appid.SrcNGFWAppID, App: "Zoom"}, true
+			return []appid.Signal{{Source: appid.SrcNGFWAppID, App: "Zoom"}}
 		}
-		return appid.Signal{}, false
+		return nil
 	}
-	out := aggregateFlowApps(rows, appid.NewCatalog(nil), ngfw)
+	out := aggregateFlowApps(rows, appid.NewCatalog(nil), extraFor)
 	if len(out) != 1 || out[0].App != "Zoom" || out[0].Tier != string(appid.Confirmed) {
 		t.Fatalf("ngfw app-id should confirm Zoom, got %+v", out)
 	}

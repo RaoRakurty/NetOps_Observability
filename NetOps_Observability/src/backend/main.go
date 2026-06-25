@@ -74,6 +74,7 @@ type server struct {
 	applications     applicationStore      // Application Identification registry #81 P0 (in-memory or pg)
 	appCatalog       *appCatalogHolder     // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
 	ngfw             *ngfwAppResolver      // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
+	appOverrides     appCatalogStore       // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -429,6 +430,7 @@ func newServer() *server {
 	srv.applications = newApplicationStore()          // Application Identification registry (#81 P0)
 	srv.appCatalog = newAppCatalogHolder()            // Application Identification IP→app resolver (#81 P1)
 	srv.ngfw = newNgfwAppResolver()                   // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
+	srv.appOverrides = newAppCatalogStore()           // Application Identification operator-defined overrides (#81 P1c)
 	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
 	}
@@ -774,6 +776,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
 	mux.HandleFunc("/api/appid/resolve", s.handleAppIDResolve)
 	mux.HandleFunc("/api/appid/status", s.handleAppIDStatus)
+	mux.HandleFunc("/api/appid/catalog", s.handleAppIDCatalog)
+	mux.HandleFunc("/api/appid/catalog/", s.handleAppIDCatalogByID)
 	mux.HandleFunc("/api/flows/apps", s.handleFlowsApps)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)

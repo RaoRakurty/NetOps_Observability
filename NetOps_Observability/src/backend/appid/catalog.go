@@ -195,22 +195,29 @@ func (c *Catalog) Size() int {
 	return c.entries
 }
 
+// SignalsFor returns the raw (unfused) signals this catalog has for a destination
+// IP — the longest-prefix-match hits as Signals. Used to layer multiple catalogs
+// (global vendor feeds + per-tenant operator overrides) through a single Fuse.
+func (c *Catalog) SignalsFor(ip netip.Addr) []Signal {
+	if c == nil || !ip.IsValid() {
+		return nil
+	}
+	var signals []Signal
+	for _, e := range c.trie.lookup(ip) {
+		signals = append(signals, Signal{
+			Source: e.Source, App: e.App, Confidence: e.Confidence,
+			Detail: e.Feed + ":" + e.Prefix,
+		})
+	}
+	return signals
+}
+
 // Resolve identifies the app for a destination IP. extra carries any stronger
 // signals the caller already has for this flow (NGFW/IPFIX app-id, DNS, SNI,
 // operator/SoT); they are fused with the IP-catalog hit. An empty catalog + no
 // extra signals yields the honest first-class "unknown".
 func (c *Catalog) Resolve(ip netip.Addr, extra ...Signal) Verdict {
-	var signals []Signal
-	if c != nil && ip.IsValid() {
-		for _, e := range c.trie.lookup(ip) {
-			signals = append(signals, Signal{
-				Source: e.Source, App: e.App, Confidence: e.Confidence,
-				Detail: e.Feed + ":" + e.Prefix,
-			})
-		}
-	}
-	signals = append(signals, extra...)
-	return Fuse(signals)
+	return Fuse(append(c.SignalsFor(ip), extra...))
 }
 
 // ResolveStr is a convenience wrapper that parses a string IP.

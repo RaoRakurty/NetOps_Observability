@@ -127,10 +127,14 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("a valid ?ip= is required"))
 		return
 	}
-	// Layer the authoritative NGFW app-id (if the firewall classified this dst) over
-	// the IP-catalog hit — tenant-scoped, fused by Resolve.
+	// Layer the operator-defined overrides (internal apps, authoritative) + the NGFW
+	// app-id (firewall-classified, authoritative) over the IP-catalog hit — all
+	// tenant-scoped, fused by Resolve.
 	var extra []appid.Signal
 	tenant, cross := principalTenant(claims)
+	if oc := s.overrideCatalogFor(r.Context(), tenant, cross); oc != nil {
+		extra = append(extra, oc.SignalsFor(ip)...)
+	}
 	if sig, has := s.ngfw.signalFor(tenant, cross, ipStr); has {
 		extra = append(extra, sig)
 	}
