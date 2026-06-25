@@ -6,7 +6,7 @@
 // value renderers (MeasuredValue / MeasuredState). All built on the existing NOC kit
 // (Chip, MetricCard, var(--*) tokens) — no new fonts, hex, or spacing.
 
-import { ReactNode } from "react";
+import { ReactNode, Fragment } from "react";
 import { Chip } from "../../components/noc";
 import { MetricCard } from "./badges";
 import {
@@ -116,4 +116,28 @@ export function MeasuredValue({ value, status, fmt }: {
   if (st === "ok") return <>{fmt(value)}</>;
   if (st === "stale") return <span className="ao-meas ao-meas--stale">{fmt(value)}<span className="ao-meas-tag">stale</span></span>;
   return <MeasuredState state={st} />;
+}
+
+// ── AppPathStrip — the app→underlay path ribbon (User→…→seam→…→App) ───────────
+// A horizontal hop ribbon with the degraded segment lit. Honest: a segment with
+// no measurement reads muted ("unknown"), never green.
+export type PathSegState = "ok" | "degraded" | "unknown";
+export interface PathSeg { label: string; state?: PathSegState; sub?: string }
+
+export function AppPathStrip({ segments }: { segments: PathSeg[] }) {
+  return (
+    <div className="ao-path" role="list" aria-label="App to underlay path">
+      {segments.map((s, i) => (
+        <Fragment key={i}>
+          <span className={`ao-path-node ao-path-node--${s.state ?? "ok"}`} role="listitem" title={s.sub}>
+            <span className="ao-path-l">{s.label}</span>
+            {s.sub && <span className="ao-path-sub">{s.sub}</span>}
+          </span>
+          {i < segments.length - 1 && (
+            <span className={`ao-path-arrow${s.state === "degraded" || segments[i + 1].state === "degraded" ? " is-bad" : ""}`} aria-hidden>→</span>
+          )}
+        </Fragment>
+      ))}
+    </div>
+  );
 }
