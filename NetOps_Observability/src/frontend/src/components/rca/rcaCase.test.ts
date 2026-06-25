@@ -222,6 +222,16 @@ describe("buildRcaCase — cloud evidence section (#81 P3G 1c)", () => {
     expect(c.cloud!.note).toMatch(/corroborated|independent/i);
   });
 
+  it("titles a cloud object app-centric, not by the network plane it rides", () => {
+    // cloud_health/database_metric map onto device_telemetry — the title must NOT
+    // read "Device health change"; it must name the cloud app.
+    const tl = timeline({ verdict_tier: "suspected", signals: [cloudHealth, cloudRes] });
+    const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", signal_count: 2 }), {}, "AppOps", []);
+    expect(c.title).toBe("Cloud application issue — billing");
+    expect(c.title).not.toMatch(/device/i);
+    expect(c.summary).toMatch(/cloud issue.*billing/i);
+  });
+
   it("ignores cleared and unattached cloud signals in the count", () => {
     const cleared = signal({ source: "cloud", kind: "cloud_health_clear", entity_type: "app", entity_id: "billing", attached: true });
     const unattached = signal({ source: "cloud", kind: "cloud_health", entity_type: "app", entity_id: "ghost", attached: false });

@@ -277,7 +277,21 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   }
   device = device ? entityLabel(device) : "";
 
-  let title = timeline.top_hypothesis !== "undetermined" ? signatureNocTitle(timeline.top_hypothesis) : (PLANE_NOC_TITLE[dominant] ?? "Network change observed");
+  // Cloud-dominant objects must NOT be titled by the network plane they happen to
+  // ride (cloud_health / database_metric map onto device_telemetry). Detect the
+  // cloud app early so the title/summary/hypotheses read app-centric, not "device".
+  const cloudAppEarly = (() => {
+    for (const s of timeline.signals) {
+      if (s.source !== "cloud" || !s.attached || s.kind.endsWith("_clear") || s.entity_type !== "app") continue;
+      try { const a = JSON.parse((s as { attrs?: string }).attrs || "{}"); return a.app ? String(a.app) : s.entity_id; } catch { return s.entity_id; }
+    }
+    return "";
+  })();
+  const hasCloudEarly = cloudAppEarly !== "" || timeline.signals.some((s) => s.source === "cloud" && s.attached && !s.kind.endsWith("_clear"));
+
+  let title = timeline.top_hypothesis !== "undetermined" ? signatureNocTitle(timeline.top_hypothesis)
+    : hasCloudEarly ? (cloudAppEarly ? `Cloud application issue — ${cloudAppEarly}` : "Cloud service issue")
+      : (PLANE_NOC_TITLE[dominant] ?? "Network change observed");
   if (!confirmed && hasDevice && hasRouting && /routing|network/i.test(title) && !/wan|provider|boundary/i.test(title)) title = "Device & routing change";
 
   const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";
@@ -326,10 +340,12 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   };
 
   const summary = confirmed
-    ? `${title.replace(/^Possible /, "")} — independent evidence confirms a real network issue.`
+    ? `${title.replace(/^Possible /, "")} — independent evidence confirms a real issue.`
     : (hasRouting && device)
       ? `A ${kindLabel(routeKind)} was observed on ${device}${peer ? ` with peer ${peer}` : ""}. Customer impact is not confirmed yet.`
-      : "Evidence changed but does not yet confirm a real network issue.";
+      : hasCloudEarly
+        ? `A cloud issue was observed${cloudAppEarly ? ` for ${cloudAppEarly}` : ""}. Customer impact is not confirmed yet.`
+        : "Evidence changed but does not yet confirm a real network issue.";
 
   const why: WhyLine[] = [{
     tone: "orange", label: "Why suspected",
