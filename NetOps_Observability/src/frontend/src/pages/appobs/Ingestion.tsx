@@ -92,7 +92,7 @@ function Accounts({ accounts }: { accounts: CloudAccount[] }) {
                   <tr key={a.provider + a.accountId}>
                     <td>{PROVIDER(a.provider)}</td>
                     <td><span className="ao-mono">{a.accountId}</span></td>
-                    <td className="ao-muted">global</td>
+                    <td className="ao-muted">{a.tenant || "global"}</td>
                     <td>{a.regions.join(", ") || "—"}</td>
                     <td>{a.enabledSources} of {SOURCE_TYPES.length}</td>
                     <td><SourceStatusBadge status={a.status} /></td>

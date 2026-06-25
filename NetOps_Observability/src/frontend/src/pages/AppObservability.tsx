@@ -21,7 +21,8 @@ import type {
 } from "./appobs/types";
 import { loadApps, loadResources, loadCoverage, NOT_MEASURED } from "./appobs/api";
 import { useCloudShell } from "./appobs/useCloudShell";
-import { CloudScopeBar } from "./appobs/shell";
+import { CloudScopeBar, ReadinessStrip } from "./appobs/shell";
+import type { ReadinessSummary } from "./appobs/readiness";
 import {
   mockHealth, mockChanges, mockEvidence,
   mockUnderlay, mockSummary, mockBreakdown, mockImpacted,
@@ -123,7 +124,7 @@ export default function AppObservability() {
         ))}
       </nav>
 
-      {tab === "overview" && <Overview onOpen={setSel} goTab={setTab} />}
+      {tab === "overview" && <Overview onOpen={setSel} goTab={setTab} summary={shell.summary} />}
       {tab === "ingestion" && <Ingestion />}
       {tab === "applications" && <Applications onOpen={setSel} />}
       {tab === "appmap" && <AppMap />}
@@ -154,7 +155,7 @@ function toApp(im: ImpactedApplication): App {
   };
 }
 
-function Overview({ onOpen, goTab }: { onOpen: (a: App) => void; goTab: (t: Tab) => void }) {
+function Overview({ onOpen, goTab, summary }: { onOpen: (a: App) => void; goTab: (t: Tab) => void; summary: ReadinessSummary }) {
   const [status, setStatus] = useState<LoadState>("loading");
   const [drawer, setDrawer] = useState<ImpactedApplication | null>(null);
   const s = mockSummary;
@@ -181,6 +182,9 @@ function Overview({ onOpen, goTab }: { onOpen: (a: App) => void; goTab: (t: Tab)
 
   return (
     <div className="ao-stack">
+      {/* Readiness BEFORE impact — prove the data is connected before any verdict. */}
+      <div className="ao-section-l">Data readiness</div>
+      <ReadinessStrip summary={summary} />
       <PreviewNote what="App health, RCA & change correlation" />
       {/* A. grouped operational cards */}
       <div className="ao-groups">
@@ -228,7 +232,7 @@ function Overview({ onOpen, goTab }: { onOpen: (a: App) => void; goTab: (t: Tab)
               { key: "traffic", header: "Traffic", width: 96, align: "right", render: (a) => fmtBps(a.trafficBps) },
               { key: "change", header: "Last Change", width: 100, render: (a) => ago(a.lastChange) },
               { key: "underlay", header: "Underlay", width: 150, render: (a) => <UnderlayCell u={a.underlay} /> },
-              { key: "action", header: "Action", width: 150, render: (a) => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); setDrawer(a); }}>{a.action}</button> },
+              { key: "action", header: "Action", width: 200, render: (a) => <button className="ao-rowaction ao-rowaction--wide" title={a.action} onClick={(e) => { e.stopPropagation(); setDrawer(a); }}>{a.action}</button> },
             ]} />
         )}
       </div>

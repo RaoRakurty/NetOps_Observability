@@ -3663,6 +3663,11 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: var(--r-1, 6px);
   padding: 3px 8px; white-space: nowrap; }
 .ao-rowaction:hover { background: var(--hover, rgba(127,127,127,.08)); border-color: var(--accent); }
+/* wide action — show the full label (don't clip "Page payments on-call") */
+.ao-rowaction--wide { max-width: 188px; overflow: hidden; text-overflow: ellipsis; }
+/* small section label above a strip */
+.ao-section-l { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--fg-subtle); margin-bottom: calc(-1 * var(--sp-2)); }
 
 /* RCA drawer body */
 .ao-drawer-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }

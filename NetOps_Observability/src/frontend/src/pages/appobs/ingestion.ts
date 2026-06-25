@@ -60,6 +60,7 @@ export function buildMatrix(rows: CloudResourceRow[]): RegionReadiness[] {
 export interface CloudAccount {
   provider: string;
   accountId: string;
+  tenant: string;         // the owning tenant ("" = global) — from the scoped data, never assumed
   regions: string[];
   resourceCount: number;
   lastSyncIso?: string;
@@ -77,6 +78,7 @@ export function buildAccounts(rows: CloudResourceRow[]): CloudAccount[] {
     out.push({
       provider,
       accountId,
+      tenant: rs[0]?.tenant_id ?? "", // all rows are already scoped to the caller's tenant
       regions,
       resourceCount: rs.length,
       lastSyncIso,
