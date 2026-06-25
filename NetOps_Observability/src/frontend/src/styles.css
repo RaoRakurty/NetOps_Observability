@@ -3454,3 +3454,97 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .rsc-card-muted { background: var(--surface); border-style: dashed; }
 .rsc-card-muted .rsc-card-val { font-size: 14px; }
 .rsc-chart-note { font-size: 11.5px; color: var(--fg-subtle); margin-top: 6px; font-style: italic; }
+
+/* ── App Observability (#81 P3F) ──────────────────────────────────────────────
+   All values are existing tokens — inherits the theme (Inter/Space-Grotesk/Plex-Mono
+   fonts, light/dark colors) by construction. No new fonts/hex. */
+.ao { display: flex; flex-direction: column; gap: var(--sp-4); }
+.ao-stack { display: flex; flex-direction: column; gap: var(--sp-4); }
+
+/* tab bar — underline style, matches the app's sub-nav language */
+.ao-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); border-bottom: 1px solid var(--border); }
+.ao-tabs--sub { border-bottom: none; }
+.ao-tab { appearance: none; background: transparent; border: none; cursor: pointer;
+  font: inherit; font-size: var(--fs-meta, 13px); font-weight: 600; color: var(--fg-muted);
+  padding: var(--sp-2) var(--sp-3); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.ao-tab:hover { color: var(--fg); }
+.ao-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* KPI cards — same left-accent idea as Stat */
+.ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
+.ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);
+  border-radius: var(--r-2); padding: var(--sp-3) var(--sp-4); min-width: 0; }
+.ao-card--accent { border-left-color: var(--accent); }
+.ao-card--good { border-left-color: var(--ok); }
+.ao-card--warn { border-left-color: var(--warn); }
+.ao-card--bad { border-left-color: var(--crit); }
+.ao-card-v { font-size: var(--fs-lg, 24px); font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--fg); }
+.ao-card-l { font-size: var(--fs-micro, 12px); color: var(--fg-muted); margin-top: 2px; }
+.ao-card-s { font-size: var(--fs-micro, 12px); color: var(--fg-subtle); margin-top: 2px; }
+
+/* panels */
+.ao-panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-3, 10px); padding: var(--sp-4); }
+.ao-panel-h { font-size: var(--fs-sm, 14px); font-weight: 700; color: var(--fg); margin-bottom: var(--sp-3); display: flex; align-items: baseline; gap: var(--sp-2); }
+.ao-panel-meta { font-size: var(--fs-micro, 12px); font-weight: 400; color: var(--fg-subtle); }
+
+/* helpers */
+.ao-muted { color: var(--fg-subtle); }
+.ao-good { color: var(--ok); }
+.ao-mono { font-family: var(--font-mono); font-size: 12px; }
+.ao-unknown { color: var(--fg-subtle); font-style: italic; }
+.ao-pill { display: inline-flex; align-items: center; gap: 6px; }
+.ao-pill-src { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+
+/* empty state */
+.ao-empty { text-align: center; padding: var(--sp-6) var(--sp-4); color: var(--fg-muted); }
+.ao-empty-t { font-size: var(--fs-sm, 14px); font-weight: 600; }
+.ao-empty-h { font-size: var(--fs-micro, 12px); color: var(--fg-subtle); margin-top: var(--sp-1); }
+
+/* filter bar */
+.ao-filterbar { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+.ao-filter { display: inline-flex; align-items: center; gap: 6px; }
+.ao-filter-l { font-size: var(--fs-micro, 12px); color: var(--fg-muted); }
+.ao-select { font: inherit; font-size: var(--fs-micro, 12px); color: var(--fg); background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--r-1, 6px); padding: 4px 6px; }
+
+/* controls */
+.ao-link { appearance: none; background: transparent; border: none; cursor: pointer; font: inherit;
+  color: var(--accent); font-weight: 600; padding: 0; }
+.ao-x { appearance: none; background: transparent; border: none; cursor: pointer; font-size: 20px;
+  line-height: 1; color: var(--fg-muted); }
+
+/* drawer body (rides the existing ev-detail/ev-detail-scrim) */
+.ao-drawer-t { font-size: var(--fs-md, 18px); font-weight: 700; color: var(--fg); }
+.ao-drawer-s { font-size: var(--fs-micro, 12px); color: var(--fg-muted); margin-top: 2px; }
+.ao-drawer-body { padding: var(--sp-4); }
+
+/* app detail */
+.ao-detail { display: flex; flex-direction: column; gap: var(--sp-4); }
+.ao-detail-bar { }
+.ao-detail-head { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-detail-id { display: flex; align-items: center; gap: var(--sp-3); }
+.ao-detail-id h2 { margin: 0; font-size: var(--fs-xl, 30px); }
+.ao-detail-meta { display: flex; flex-wrap: wrap; gap: var(--sp-4); font-size: var(--fs-meta, 13px); color: var(--fg-muted); }
+
+/* key-value tables in panels */
+.ao-kv { width: 100%; border-collapse: collapse; }
+.ao-kv td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-meta, 13px); vertical-align: top; }
+.ao-kv td:first-child { color: var(--fg-muted); width: 180px; }
+
+/* timeline */
+.ao-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-timeline li { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta, 13px); color: var(--fg); }
+.ao-tl-t { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); min-width: 64px; }
+
+/* RCA panel */
+.ao-rca { border-left: 3px solid var(--accent); }
+.ao-rca-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-4); }
+.ao-rca-l { font-size: var(--fs-micro, 12px); color: var(--fg-muted); text-transform: uppercase; letter-spacing: .06em; }
+.ao-rca-v { font-size: var(--fs-meta, 13px); color: var(--fg); margin-top: 2px; }
+
+/* misc */
+.ao-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+.ao-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.ao-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-4); }
+.ao-set-d { font-size: var(--fs-meta, 13px); color: var(--fg-muted); margin: 0 0 var(--sp-3); }

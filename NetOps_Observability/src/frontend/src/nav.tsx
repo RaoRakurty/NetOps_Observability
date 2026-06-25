@@ -11,6 +11,7 @@ import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
 import Events from "./pages/Events";
 import Correlations from "./tabs/Correlations";
+import AppObservability from "./pages/AppObservability";
 import ReliabilityScorecard from "./pages/ReliabilityScorecard";
 import Quality from "./pages/Quality";
 import DataSources from "./pages/DataSources";
@@ -130,6 +131,11 @@ export const NAV: NavSection[] = [
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
       { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
+      { id: "appobs", label: "App Observability", group: "Event Management", render: () => <AppObservability />, subItems: [
+        { id: "overview", label: "Overview" }, { id: "applications", label: "Applications" },
+        { id: "attribution", label: "Attribution" }, { id: "unknowns", label: "Unknowns" },
+        { id: "evidence", label: "Evidence" },
+      ] },
       { id: "reliability", label: "Recovery Scorecard", group: "Event Management", render: () => <ReliabilityScorecard /> },
     ],
   },
