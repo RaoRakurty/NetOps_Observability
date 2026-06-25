@@ -14,6 +14,40 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 
 ---
 
+## 🧭 Execution streams (2026-06-25) — finish whole streams, not bits & pieces
+
+Organizing lens agreed with the owner: stop touching items piecemeal; drive ONE
+coherent stream to *done* before starting the next. Each stream bundles the
+tracker items that share an outcome. **The owner will provide detailed
+instructions for some streams** — capture them under the stream as they arrive.
+
+**Order:**
+```
+NOW  →  Stream 1 (RCA loop)  →  Stream 2 (app/service)  →  Stream 3 (path/topology)
+                ↓ generates incident history
+THEN →  Stream 4 (engine calibration)
+WHEN THE NETWORK IS BUILT → Stream 5 (cloud expansion)
+BEFORE SCALE → Stream 6 (SaaS hardening)
+```
+
+| Stream | Outcome (done-definition) | Bundles | Status |
+|--------|---------------------------|---------|--------|
+| **1 — Close the RCA Loop** | incident → root-cause (evidence) → ONE auto-filed ticket → measured phase timing, end to end | #78 (RCA→ServiceNow) + #84 tails (backfill, seam_type, ITSM phase link) | ⏳ next — pure software, unblocked |
+| **2 — App & Service Layer** | app/service health attributed from real flows, with baselines + the App Observability trust pass | #69 P2 (service catalog, svc_flow_rollup, baselines) + #81 P3 + **#81 P3F+1 App Observability Trust & Data Readiness Pass** | 🟡 in progress — P3F+1 Phase 1 shipped (`a620d20`); 7 phases remain |
+| **3 — Path & Topology Completeness** | every hop shows real metrics; no sourceable "—" gaps left | #85 (4 per-hop backend metrics) + #77 polish | ⏳ open — pure software |
+| **4 — Engine Maturation (calibration)** | engine calibrated vs real incident history; grows own signature coverage | #67 P4 (replay calibration) + #80 (undetermined-frequency feed) | ⏳ later — needs the incident history Stream 1 generates |
+| **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
+| **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
+
+**Parking lot (not streams):** #73 (telemetry re-run, owner go) · #53/#44 (event pipeline / AIOps grouping, discuss-first) · #82 (VXLAN overlay, gated on real gear) · #36 (reports contact points P3/P4) · #5 (vendor syslog).
+
+> **Owner detailed-instruction slots** (fill in as provided):
+> - Stream 1: _…_
+> - Stream 2: _…_
+> - Stream 3: _…_
+
+---
+
 ## ✅ Done (shipped + deployed on this branch)
 
 ### Tenancy & isolation
