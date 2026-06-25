@@ -15,6 +15,7 @@ import {
   fmtBps, fmtBytes, ago,
 } from "./appobs/badges";
 import AppDetail from "./appobs/AppDetail";
+import Ingestion from "./appobs/Ingestion";
 import type {
   App, CloudResource, Coverage, EvidenceRow, ImpactedApplication, UnknownContributor,
 } from "./appobs/types";
@@ -76,18 +77,19 @@ function CloudEmpty() {
 }
 
 const TABS = [
-  "overview", "applications", "appmap", "resources", "attribution",
+  "overview", "ingestion", "applications", "appmap", "resources", "attribution",
   "health", "underlay", "unknowns", "evidence", "settings",
 ] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
-  overview: "Overview", applications: "Applications", appmap: "App Map",
+  overview: "Overview", ingestion: "Ingestion", applications: "Applications", appmap: "App Map",
   resources: "Cloud Resources", attribution: "Attribution", health: "Health & Changes",
   underlay: "Underlay Impact", unknowns: "Unknowns", evidence: "Evidence", settings: "Settings",
 };
-// Tabs backed by the live /api/cloud/* identity surfaces (P3A). The rest still
-// render preview data pending cloud telemetry ingestion (P3B–P3D).
-const LIVE_TABS = new Set<Tab>(["applications", "resources", "attribution", "unknowns"]);
+// Tabs backed by live data (the /api/cloud/* identity surfaces + the inventory-
+// derived ingestion readiness). The rest still render preview data pending cloud
+// telemetry ingestion (P3B–P3D).
+const LIVE_TABS = new Set<Tab>(["ingestion", "applications", "resources", "attribution", "unknowns"]);
 
 export default function AppObservability() {
   const [tab, setTab] = useState<Tab>("overview");
@@ -122,6 +124,7 @@ export default function AppObservability() {
       </nav>
 
       {tab === "overview" && <Overview onOpen={setSel} goTab={setTab} />}
+      {tab === "ingestion" && <Ingestion />}
       {tab === "applications" && <Applications onOpen={setSel} />}
       {tab === "appmap" && <AppMap />}
       {tab === "resources" && <Resources />}

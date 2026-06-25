@@ -3507,6 +3507,42 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-meas--stale { color: var(--warn); display: inline-flex; align-items: baseline; gap: 4px; }
 .ao-meas-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--warn); opacity: 0.85; }
 
+/* ── Ingestion page (#81 P3F+1 Phase 2) ───────────────────────────────────── */
+/* CTA row — connect/IAM/integrations entry points */
+.ao-cta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4); }
+.ao-cta-h { font-size: var(--fs-meta, 13px); color: var(--fg-muted); }
+.ao-cta-btns { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+
+/* plain table (Accounts) */
+.ao-table-wrap { overflow-x: auto; }
+.ao-tbl { width: 100%; border-collapse: collapse; font-size: var(--fs-micro, 12px); }
+.ao-tbl th { text-align: left; font-weight: 600; color: var(--fg-subtle); text-transform: uppercase;
+  letter-spacing: 0.04em; font-size: 10px; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.ao-tbl td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--panel-border); color: var(--fg); vertical-align: middle; }
+.ao-tbl tr:hover td { background: var(--panel-hover, rgba(127,127,127,0.06)); }
+
+/* the readiness matrix — one row per account×region, source cells inline */
+.ao-matrix { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-matrix-row { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3);
+  border: 1px solid var(--panel-border); border-radius: var(--r-2); background: var(--panel); }
+.ao-matrix-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-micro, 12px); }
+.ao-matrix-prov { font-weight: 700; color: var(--fg); letter-spacing: 0.02em; }
+.ao-matrix-region { color: var(--accent); font-weight: 600; }
+.ao-matrix-count { color: var(--fg-subtle); margin-left: auto; font-variant-numeric: tabular-nums; }
+.ao-matrix-cells { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* a source cell — colored dot + label, freshness/volume when measured */
+.ao-srccell { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+  border: 1px solid var(--panel-border); border-radius: var(--r-2);
+  font-size: var(--fs-micro, 12px); color: var(--fg-muted); white-space: nowrap; }
+.ao-srccell.is-on { color: var(--fg); border-color: var(--border); }
+.ao-srccell-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.ao-srccell-meta { color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+
+.ao-remediation .ao-cta-btns { margin-top: var(--sp-2); }
+
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
 .ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);
