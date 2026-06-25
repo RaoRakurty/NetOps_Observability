@@ -241,6 +241,45 @@ func TestRcaPathView_CloudAppIsProbeDestination(t *testing.T) {
 	}
 }
 
+// #81 P3G: cloud-ONLY object (app + resource, no network path) → the projection
+// stands the app up as the affected head with its resource hanging off it, and
+// adds NO provider_boundary (there is no upstream network node to bridge from).
+func TestRcaPathView_CloudOnlyProjection(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.4, "trigger_signal": "c1", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
+		pvSig(map[string]any{"signal_id": "c2", "source": "cloud", "entity_type": "cloud_resource", "entity_id": "billing-db", "kind": "database_metric", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
+	}
+	v := buildRcaPathView("obj", meta, sigs, nil)
+	var app, res bool
+	for _, n := range v.Path.Nodes {
+		if n.ID == "billing" && n.Type == "cloud" {
+			app = true
+		}
+		if n.ID == "billing-db" && n.Type == "cloud" {
+			res = true
+		}
+	}
+	if !app || !res {
+		t.Fatalf("expected cloud app + resource nodes; got %+v", v.Path.Nodes)
+	}
+	for _, e := range v.Path.Edges {
+		if e.Type == "provider_boundary" {
+			t.Fatalf("cloud-only object should have no provider_boundary (no upstream net node); got %+v", e)
+		}
+	}
+	// the resource hangs off the app.
+	dep := false
+	for _, e := range v.Path.Edges {
+		if e.Source == "billing" && e.Target == "billing-db" {
+			dep = true
+		}
+	}
+	if !dep {
+		t.Fatalf("expected an app→resource dependency edge; got %+v", v.Path.Edges)
+	}
+}
+
 // #81 P3G: no app/cloud_resource entities → the cloud projection is a no-op
 // (network RCA path is byte-identical to before).
 func TestRcaPathView_NoCloudProjectionForNetworkObject(t *testing.T) {
