@@ -1,0 +1,44 @@
+name: fresh-install-integrity
+
+# Guardrail for the "fresh install / restart would break" bug class (the vector
+# E651 landmine: a config the running stack tolerated in memory but that a clean
+# load rejects). Two layers, both must stay green to merge:
+#   1. preflight-install.py — STATIC: a clean install.py provisions every env var,
+#      config file, and data dir the compose stack requires (compose ↔ install.py).
+#   2. preflight-configs.sh — RUNTIME: every committed service config boots on a
+#      fresh load with its real binary (vector topology, nginx -t, promtool, syslog-ng).
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/deployment/docker/**'
+      - 'NetOps_Observability/src/config/**'
+      - 'NetOps_Observability/src/backend/migrations/**'
+      - 'NetOps_Observability/scripts/install.py'
+      - 'NetOps_Observability/scripts/preflight*'
+      - '.github/workflows/fresh-install-integrity.yml'
+  # No paths filter on pull_request: a required check must report on EVERY PR to
+  # main (a path-skipped workflow leaves the check stuck "Expected").
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fresh-install-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Layer 1 — static, no docker. Fails if a clean install.py would miss something.
+      - name: install integrity (compose ↔ install.py)
+        run: python3 NetOps_Observability/scripts/preflight-install.py
+
+      # Layer 2 — real-runtime config load (docker is preinstalled on ubuntu-latest).
+      # Pulls the pinned service images and boots each committed config.
+      - name: config fresh-load (real runtime binaries)
+        run: bash NetOps_Observability/scripts/preflight-configs.sh

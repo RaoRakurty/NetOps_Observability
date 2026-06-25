@@ -461,6 +461,8 @@ def ensure_data_dirs(root: Path) -> None:
         "api":        None,             # Go API runs as nonroot but writes JSON only
         "secrets-seal": None,           # #17 sealing-sidecar socket dir (root-owned; opt-in 'seal' profile)
         "swtpm":      None,             # #17 software-TPM state (sealed KEK objects); root-owned
+        "netbox-postgres": None,        # bundled-NetBox DB (opt-in 'netbox' profile); initdb self-chowns
+        "netbox-media":    None,        # bundled-NetBox media (opt-in 'netbox' profile)
     }
     for name, uid_gid in owners.items():
         d = root / "data" / name
@@ -498,6 +500,17 @@ def ensure_data_dirs(root: Path) -> None:
         os.chown(seed, 65532, 65532)
     except (PermissionError, OSError):
         pass  # not root; api will adopt it on first write where it can
+
+    # #81 P1: Application Identification IP→app catalog feeds dir. The api (nonroot
+    # 65532) reads vendor IP-range snapshots dropped here by scripts/fetch-appid-feeds.sh
+    # (APPID_FEEDS_DIR=/data/appid-feeds). Pre-create it (empty is fine — the resolver
+    # returns "unknown" until feeds land) so the opt-in feature works without a restart.
+    appid_feeds = root / "data" / "api" / "appid-feeds"
+    appid_feeds.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chown(appid_feeds, 65532, 65532)
+    except (PermissionError, OSError):
+        pass  # not root; api adopts it where it can
 
     # #13: vulnerability-feed dir. OPERATOR-owned (unlike the service dirs) —
     # the operator writes it with scripts/vuln-feed-prepare.py and the api only
