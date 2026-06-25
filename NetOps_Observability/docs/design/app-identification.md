@@ -158,15 +158,25 @@ runtime dependency** (radix trie + suffix automata are stdlib).
 
 ## 6. Phased build (MVP → scale → futuristic)
 
-| Phase | Deliverable | Gated on |
+> **STATUS 2026-06-25 — core engine COMPLETE + live-validated.** P0, P1 (a+b),
+> P-NGFW (pt1+pt2), P1c, P2, and P4 are shipped and proven on the live stack. P3
+> (SoT/NetBox + cloud-log) and P5 (ML/LLM) stay roadmap — collection-gated/futuristic;
+> building them without the data sources would be surface-knowledge code.
+
+| Phase | Deliverable | Status |
 |---|---|---|
-| **P0 — contract** | `applications` thin parent + `app_catalog` schema + `AppVerdict` type reusing `VerdictTier`/`corr_evidence`; isolation test scaffold | — |
-| **P1 — MVP core** | LPM trie over **free vendor IP-range feeds** (M365/AWS/Azure/GCP) + ASN; query-time resolver alongside `flows_services.go`; `unknown` first-class; flow→app in the flows API | P0 |
-| **P-NGFW** | Parse the `fw_event` **`app-id`** field (Vector) → join firewall-crossing flows to the free vendor app label | NGFW log parse |
-| **P2 — precise tier** | **DNS-flow correlation** (needs a DNS source) → SNI where exported; suffix-automaton domain matcher; agreement/contradiction fusion | DNS/SNI collection |
-| **P3 — internal + cloud** | SoT/NetBox enrichment for internal apps; cloud resource-id/tag → app from cloud logs | cloud-log ingest |
-| **P4 — scale** | hot LRU + negative cache; optional inline enricher writing `app_id` column (measured); per-tenant override catalogs | measured need |
-| **P5 — futuristic** | ML-on-flow-feature residue (explainable), LLM-assisted catalog curation (§15 guardrails), operator-confirm feedback loop → SoT | later |
+| **P0 — contract** | `applications` thin parent + `app_catalog` schema + `appid.Verdict`/`Fuse` reusing `VerdictTier`/`corr_evidence` roles; isolation tests | ✅ shipped + live |
+| **P1a — MVP core** | LPM radix trie over free vendor feeds (M365/AWS/Azure/GCP); query-time resolver; `unknown` first-class; `/api/appid/resolve` | ✅ shipped + live (17,325 prefixes) |
+| **P1b — flow→app** | `/api/flows/apps` bytes-per-app aggregation (query-time, no MV) + catalog hot-reload | ✅ shipped + live |
+| **P-NGFW** | FortiGate App-ID → vendor-neutral `.app_id` (Vector pt1) + `ngfwAppResolver` consumes it as authoritative `SrcNGFWAppID` (pt2) | ✅ shipped + live (firewall→confirmed) |
+| **P1c — operator catalog** | `app_catalog` write API + per-tenant prefix overrides (`SrcOperator`→confirmed); closes internal-apps gap | ✅ shipped + live |
+| **P2 — domain/SNI tier** | `DomainIndex` suffix/exact matcher; global from M365 urls[]; operator domain overrides; `?domain=` resolve | ✅ matcher shipped + live · **live non-firewall domain source (passive DNS/SNI) gated** |
+| **P4 — scale** | bounded LRU + negative cache on the IP→signals hot path | ✅ shipped (~89 ns/op hit) |
+| **P3 — internal + cloud** | SoT/NetBox prefix→app import; cloud resource-id/tag → app from cloud logs | 📋 roadmap — gated on NetBox app-data model + cloud-log ingest |
+| **P5 — futuristic** | ML-on-flow-feature residue (explainable); LLM-assisted catalog curation (§15 guardrails); operator-confirm feedback → SoT; Palo Alto CSV (no PAN device) | 📋 roadmap — futuristic / gated |
+
+**Engine coverage is inspectable** at `GET /api/appid/status` (catalog prefixes +
+domains, firewall attributions, per-tenant overrides).
 
 **Dependencies:** none new at runtime (stdlib trie/automata; feed-fetch is opt-in
 background). A commercial IP→app feed (Netify/IPinfo) is an *optional later*
