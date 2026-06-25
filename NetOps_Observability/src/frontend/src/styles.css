@@ -3543,6 +3543,13 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 
 .ao-remediation .ao-cta-btns { margin-top: var(--sp-2); }
 
+/* source-freshness strip (Health & Changes) — honest per-source state */
+.ao-freshstrip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-2) var(--sp-3); background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-2); }
+.ao-freshstrip-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle); }
+.ao-freshstrip-i { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-micro, 12px); }
+.ao-freshstrip-l { color: var(--fg-muted); }
+
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
 .ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);

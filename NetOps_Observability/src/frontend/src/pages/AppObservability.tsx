@@ -21,8 +21,9 @@ import type {
 } from "./appobs/types";
 import { loadApps, loadResources, loadCoverage, NOT_MEASURED } from "./appobs/api";
 import { useCloudShell } from "./appobs/useCloudShell";
-import { CloudScopeBar, ReadinessStrip } from "./appobs/shell";
-import type { ReadinessSummary } from "./appobs/readiness";
+import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell";
+import { SOURCE_LABEL } from "./appobs/readiness";
+import type { ReadinessSummary, SourceType } from "./appobs/readiness";
 import {
   mockHealth, mockChanges, mockEvidence,
   mockUnderlay, mockSummary, mockBreakdown, mockImpacted,
@@ -394,11 +395,56 @@ function Attribution() {
 }
 
 // ── Health & Changes ─────────────────────────────────────────────────────────
+// honest source-freshness strip: the cloud telemetry sources are not ingested
+// yet, so they read "off" — which is exactly why the data below is sample.
+function SourceFreshnessStrip() {
+  const srcs: SourceType[] = ["cloud_health", "change_audit", "flow_logs", "traces"];
+  return (
+    <div className="ao-freshstrip">
+      <span className="ao-freshstrip-h">Source freshness</span>
+      {srcs.map((s) => (
+        <span className="ao-freshstrip-i" key={s}>
+          <span className="ao-freshstrip-l">{SOURCE_LABEL[s]}</span>
+          <SourceStatusBadge status="off" />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// merged change + health timeline, newest first — the NOC "what happened, when".
+function HCTimeline() {
+  const items = [
+    ...mockChanges.map((c) => ({ time: c.time, kind: "change", tone: "var(--warn)", app: c.app, label: `${c.changeType.replace(/_/g, " ")} on ${c.resource}` })),
+    ...mockHealth.map((h) => ({ time: h.time, kind: h.state === "down" ? "down" : "health", tone: h.severity === "critical" ? "var(--crit)" : "var(--warn)", app: h.app, label: `${h.signal} ${h.current} (baseline ${h.baseline})` })),
+  ].sort((a, b) => b.time.localeCompare(a.time));
+  return (
+    <div className="ao-panel">
+      <div className="ao-panel-h">Event timeline <span className="ao-panel-meta">change + health, newest first</span></div>
+      {items.length === 0 ? <EmptyState title="No events in window" /> : (
+        <ul className="ao-timeline">
+          {items.map((it, i) => (
+            <li key={i}><span className="ao-tl-t">{ago(it.time)}</span><Chip label={it.kind} tone={it.tone} /> <strong>{it.app}</strong> · {it.label}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function HealthChanges() {
+  const [view, setView] = useState<"timeline" | "table">("timeline");
   const [sub, setSub] = useState<"health" | "changes">("health");
   return (
     <div className="ao-stack">
       <PreviewNote what="Cloud health signals & change events" />
+      <SourceFreshnessStrip />
+      <div className="ao-tabs ao-tabs--sub">
+        <button className={`ao-tab${view === "timeline" ? " is-active" : ""}`} onClick={() => setView("timeline")}>Timeline</button>
+        <button className={`ao-tab${view === "table" ? " is-active" : ""}`} onClick={() => setView("table")}>Table</button>
+      </div>
+      {view === "timeline" && <HCTimeline />}
+      {view === "table" && (<>
       <div className="ao-tabs ao-tabs--sub">
         <button className={`ao-tab${sub === "health" ? " is-active" : ""}`} onClick={() => setSub("health")}>Health Signals</button>
         <button className={`ao-tab${sub === "changes" ? " is-active" : ""}`} onClick={() => setSub("changes")}>Change Events</button>
@@ -407,16 +453,18 @@ function HealthChanges() {
         <div className="ao-panel">
           <DataTable rows={mockHealth} rowKey={(r) => r.time + r.signal} height={Math.min(480, 44 + mockHealth.length * 30)} ariaLabel="Health signals"
             columns={[
-              { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-              { key: "app", header: "App", width: 130, render: (r) => <strong>{r.app}</strong> },
-              { key: "res", header: "Resource", width: 140, render: (r) => r.resource },
-              { key: "sig", header: "Signal", width: 150, render: (r) => r.signal },
-              { key: "state", header: "State", width: 100, render: (r) => <HealthBadge status={r.state} /> },
-              { key: "metric", header: "Metric", width: 180, render: (r) => <span className="ao-mono">{r.metric}</span> },
-              { key: "cur", header: "Current", width: 80, render: (r) => <strong>{r.current}</strong> },
-              { key: "base", header: "Baseline", width: 80, render: (r) => <span className="ao-muted">{r.baseline}</span> },
-              { key: "sev", header: "Severity", width: 90, render: (r) => <Chip label={r.severity} tone={r.severity === "critical" ? "var(--crit)" : "var(--warn)"} /> },
-              { key: "src", header: "Source", width: 150, render: (r) => r.source },
+              { key: "time", header: "Time", width: 84, render: (r) => ago(r.time) },
+              { key: "app", header: "App", width: 120, render: (r) => <strong>{r.app}</strong> },
+              { key: "res", header: "Resource", width: 130, render: (r) => r.resource },
+              { key: "sig", header: "Signal", width: 140, render: (r) => r.signal },
+              { key: "state", header: "State", width: 96, render: (r) => <HealthBadge status={r.state} /> },
+              { key: "metric", header: "Metric", width: 170, render: (r) => <span className="ao-mono">{r.metric}</span> },
+              { key: "cur", header: "Current", width: 76, render: (r) => <strong>{r.current}</strong> },
+              { key: "base", header: "Baseline", width: 76, render: (r) => <span className="ao-muted">{r.baseline}</span> },
+              { key: "sev", header: "Severity", width: 86, render: (r) => <Chip label={r.severity} tone={r.severity === "critical" ? "var(--crit)" : "var(--warn)"} /> },
+              { key: "src", header: "Source", width: 140, render: (r) => r.source },
+              { key: "fresh", header: "Freshness", width: 90, render: (r) => ago(r.time) },
+              { key: "rca", header: "Used in RCA", width: 96, render: (r) => r.severity === "critical" ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">—</span> },
             ]} />
         </div>
       ) : (
@@ -434,6 +482,7 @@ function HealthChanges() {
             ]} />
         </div>
       )}
+      </>)}
     </div>
   );
 }
