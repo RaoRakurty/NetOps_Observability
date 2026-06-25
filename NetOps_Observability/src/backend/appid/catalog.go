@@ -169,11 +169,17 @@ func appendValidPrefix(out []CatalogEntry, raw, app, feed string) []CatalogEntry
 
 // ── catalog ──────────────────────────────────────────────────────────────────
 
+// sigCacheCapacity bounds the per-generation IP→signals LRU. ~16k entries is a few
+// MB and covers the popular-destination working set of a busy flow→app window.
+const sigCacheCapacity = 16384
+
 // Catalog is an immutable, resolved IP→app index. Build once, swap atomically on
-// reload (the EntityResolver hot-reload pattern).
+// reload (the EntityResolver hot-reload pattern). Carries a bounded LRU (#81 P4)
+// over its own SignalsFor lookups; the cache resets with each generation.
 type Catalog struct {
 	trie    *prefixTrie
 	entries int
+	cache   *sigCache
 }
 
 // NewCatalog builds a Catalog from entries (invalid prefixes are skipped).
@@ -184,7 +190,7 @@ func NewCatalog(entries []CatalogEntry) *Catalog {
 			t.insert(p, e)
 		}
 	}
-	return &Catalog{trie: t, entries: t.n}
+	return &Catalog{trie: t, entries: t.n, cache: newSigCache(sigCacheCapacity)}
 }
 
 // Size reports how many prefixes are indexed.
@@ -202,12 +208,21 @@ func (c *Catalog) SignalsFor(ip netip.Addr) []Signal {
 	if c == nil || !ip.IsValid() {
 		return nil
 	}
+	ip = ip.Unmap()
+	if c.cache != nil {
+		if v, ok := c.cache.get(ip); ok { // hit (incl. negative: empty slice)
+			return v
+		}
+	}
 	var signals []Signal
 	for _, e := range c.trie.lookup(ip) {
 		signals = append(signals, Signal{
 			Source: e.Source, App: e.App, Confidence: e.Confidence,
 			Detail: e.Feed + ":" + e.Prefix,
 		})
+	}
+	if c.cache != nil {
+		c.cache.put(ip, signals) // caches misses too (signals == nil/empty)
 	}
 	return signals
 }
