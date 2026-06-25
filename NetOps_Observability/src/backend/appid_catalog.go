@@ -117,7 +117,8 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
 	ipStr := r.URL.Query().Get("ip")
@@ -126,7 +127,14 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("a valid ?ip= is required"))
 		return
 	}
-	v := s.appCatalog.get().Resolve(ip)
+	// Layer the authoritative NGFW app-id (if the firewall classified this dst) over
+	// the IP-catalog hit — tenant-scoped, fused by Resolve.
+	var extra []appid.Signal
+	tenant, cross := principalTenant(claims)
+	if sig, has := s.ngfw.signalFor(tenant, cross, ipStr); has {
+		extra = append(extra, sig)
+	}
+	v := s.appCatalog.get().Resolve(ip, extra...)
 	writeJSON(w, http.StatusOK, v)
 }
 

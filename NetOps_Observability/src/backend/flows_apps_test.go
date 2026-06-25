@@ -18,7 +18,7 @@ func TestAggregateFlowApps(t *testing.T) {
 		{"d": "52.94.0.9", "b": float64(3000), "f": float64(3)},     // AWS S3
 		{"d": "8.8.8.8", "b": float64(50), "f": float64(1)},         // unknown
 	}
-	out := aggregateFlowApps(rows, cat)
+	out := aggregateFlowApps(rows, cat, nil)
 
 	if len(out) != 3 {
 		t.Fatalf("want 3 apps (M365, AWS, unknown), got %d: %+v", len(out), out)
@@ -50,7 +50,23 @@ func TestAggregateFlowApps(t *testing.T) {
 }
 
 func TestAggregateFlowApps_Empty(t *testing.T) {
-	if out := aggregateFlowApps(nil, appid.NewCatalog(nil)); len(out) != 0 {
+	if out := aggregateFlowApps(nil, appid.NewCatalog(nil), nil); len(out) != 0 {
 		t.Fatalf("no rows should yield no apps, got %+v", out)
+	}
+}
+
+func TestAggregateFlowApps_NGFWPromotes(t *testing.T) {
+	// IP-catalog alone would call 8.8.8.8 "unknown"; the firewall's authoritative
+	// app-id for that dst overrides → a confirmed, named verdict.
+	rows := []map[string]any{{"d": "8.8.8.8", "b": float64(1000), "f": float64(10)}}
+	ngfw := func(dst string) (appid.Signal, bool) {
+		if dst == "8.8.8.8" {
+			return appid.Signal{Source: appid.SrcNGFWAppID, App: "Zoom"}, true
+		}
+		return appid.Signal{}, false
+	}
+	out := aggregateFlowApps(rows, appid.NewCatalog(nil), ngfw)
+	if len(out) != 1 || out[0].App != "Zoom" || out[0].Tier != string(appid.Confirmed) {
+		t.Fatalf("ngfw app-id should confirm Zoom, got %+v", out)
 	}
 }

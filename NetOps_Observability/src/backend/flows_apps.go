@@ -42,9 +42,11 @@ func tierRank(t appid.Tier) int {
 }
 
 // aggregateFlowApps resolves each destination row (cols d=dst_addr, b=bytes,
-// f=flows) to an app via the catalog and aggregates by app, strongest-tier-wins,
-// sorted by bytes desc. Pure (no IO) so it is unit-tested without ClickHouse.
-func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog) []appFlowRow {
+// f=flows) to an app via the catalog — layering the authoritative NGFW app-id from
+// ngfw(dstIP) when present — and aggregates by app, strongest-tier-wins, sorted by
+// bytes desc. Pure (no IO; ngfw is an injected lookup) so it is unit-tested without
+// ClickHouse. ngfw may be nil.
+func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, ngfw func(dstIP string) (appid.Signal, bool)) []appFlowRow {
 	type agg struct {
 		bytes, flows float64
 		dests        int
@@ -54,7 +56,13 @@ func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog) []appFlowRow {
 	var order []string
 	for _, row := range rows {
 		dst, _ := row["d"].(string)
-		v := cat.ResolveStr(dst)
+		var extra []appid.Signal
+		if ngfw != nil {
+			if sig, has := ngfw(dst); has {
+				extra = append(extra, sig)
+			}
+		}
+		v := cat.ResolveStr(dst, extra...)
 		a := byApp[v.App]
 		if a == nil {
 			a = &agg{tier: v.Tier}
@@ -82,7 +90,8 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
 	since := durationQuery(r, "since", time.Hour)
@@ -97,7 +106,9 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cat := s.appCatalog.get()
-	out := aggregateFlowApps(rows, cat)
+	tenant, cross := principalTenant(claims)
+	ngfwLookup := func(dst string) (appid.Signal, bool) { return s.ngfw.signalFor(tenant, cross, dst) }
+	out := aggregateFlowApps(rows, cat, ngfwLookup)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"apps":  out,

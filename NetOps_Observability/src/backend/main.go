@@ -73,6 +73,7 @@ type server struct {
 	incidentTimeline incidentTimelineStore // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	applications     applicationStore      // Application Identification registry #81 P0 (in-memory or pg)
 	appCatalog       *appCatalogHolder     // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
+	ngfw             *ngfwAppResolver      // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
 	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
 	providers        *integration.Registry // inbound provider translators (registry)
 	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
@@ -427,6 +428,7 @@ func newServer() *server {
 	srv.incidentTimeline = newIncidentTimelineStore() // RCA Time Intelligence manual lifecycle events (#84)
 	srv.applications = newApplicationStore()          // Application Identification registry (#81 P0)
 	srv.appCatalog = newAppCatalogHolder()            // Application Identification IP→app resolver (#81 P1)
+	srv.ngfw = newNgfwAppResolver()                   // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
 	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
 	}
@@ -501,6 +503,9 @@ func main() {
 	srv.startDriftReconciler(ctx)
 	// App-identity catalog hot-reload (#81 P1b). No-op unless APPID_FEEDS_DIR set.
 	srv.appCatalog.startRefresh(ctx)
+	// NGFW app-id overlay refresh (#81 P-NGFW pt2): aggregate firewall app-id events
+	// from OpenSearch into the resolver. Harmless empty map if no firewall onboarded.
+	srv.ngfw.startRefresh(ctx)
 	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
