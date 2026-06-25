@@ -17,11 +17,12 @@ import {
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import type {
-  App, CloudResource, Coverage, EvidenceRow, ImpactedApplication, UnknownContributor,
+  App, CloudResource, Coverage, EvidenceRow, ImpactedApplication, UnknownContributor, UnderlayImpact,
 } from "./appobs/types";
 import { loadApps, loadResources, loadCoverage, NOT_MEASURED } from "./appobs/api";
 import { useCloudShell } from "./appobs/useCloudShell";
-import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell";
+import { CloudScopeBar, ReadinessStrip, SourceStatusBadge, AppPathStrip } from "./appobs/shell";
+import type { PathSeg } from "./appobs/shell";
 import { SOURCE_LABEL } from "./appobs/readiness";
 import type { ReadinessSummary, SourceType } from "./appobs/readiness";
 import {
@@ -488,23 +489,86 @@ function HealthChanges() {
 }
 
 // ── Underlay Impact ──────────────────────────────────────────────────────────
+// Canonical seam inventory (matches #68: DX · VPN · SD-WAN · DIA · Cloud Backbone).
+const SEAMS = [
+  { label: "Direct Connect", short: "DX" },
+  { label: "VPN", short: "VPN" },
+  { label: "SD-WAN", short: "SD-WAN" },
+  { label: "Direct Internet", short: "DIA" },
+  { label: "Cloud Backbone", short: "Cloud BB" },
+];
+
+// map a free-text seam name onto its canonical short label.
+function shortSeam(s: string): string {
+  if (/direct connect|express|interconnect|\bdx\b/i.test(s)) return "DX";
+  if (/vpn/i.test(s)) return "VPN";
+  if (/sd-?wan/i.test(s)) return "SD-WAN";
+  if (/dia|internet/i.test(s)) return "DIA";
+  if (/backbone/i.test(s)) return "Cloud BB";
+  return s;
+}
+
+// the standard hop ribbon, with the degraded seam lit.
+function pathFor(u: UnderlayImpact): PathSeg[] {
+  return [
+    { label: "User" },
+    { label: "Branch" },
+    { label: "SD-WAN" },
+    { label: "ISP" },
+    { label: shortSeam(u.seam), state: "degraded", sub: u.underlayEvidence },
+    { label: "TGW" },
+    { label: "ALB" },
+    { label: u.app, sub: u.appSymptom },
+  ];
+}
+
 function Underlay() {
+  const [sel, setSel] = useState<UnderlayImpact | null>(null);
+  const rows = mockUnderlay;
+  const focus = sel ?? rows[0];
+  const seamDegraded = (short: string) => rows.some((r) => shortSeam(r.seam) === short);
+
   return (
     <div className="ao-stack">
       <PreviewNote what="App-to-underlay correlation" />
       <div className="ao-cards">
-        <MetricCard label="Apps impacted by underlay" value={mockUnderlay.length} tone={mockUnderlay.length ? "warn" : "good"} />
+        <MetricCard label="Apps impacted by underlay" value={rows.length} tone={rows.length ? "warn" : "good"} />
         <MetricCard label="Healthy apps on degraded seam" value={0} />
-        <MetricCard label="Apps on DX / VPN / ExpressRoute" value={1} />
-        <MetricCard label="Hybrid traffic anomalies" value={1} tone="warn" />
+        <MetricCard label="Apps on DX / VPN / ExpressRoute" value={rows.filter((r) => ["DX", "VPN"].includes(shortSeam(r.seam))).length} />
+        <MetricCard label="Hybrid traffic anomalies" value={rows.length} tone={rows.length ? "warn" : undefined} />
       </div>
+
+      {/* path strip for the focused row — the degraded segment is lit */}
+      {focus && (
+        <div className="ao-panel">
+          <div className="ao-panel-h">Path · {focus.app}
+            <span className="ao-panel-meta">{focus.path} · degraded segment lit</span></div>
+          <AppPathStrip segments={pathFor(focus)} />
+        </div>
+      )}
+
+      {/* canonical seam health cards — honest: only measured seams show state */}
+      <div>
+        <div className="ao-section-l">Seam health</div>
+        <div className="ao-cards">
+          {SEAMS.map((s) => {
+            const deg = seamDegraded(s.short);
+            return (
+              <MetricCard key={s.short} label={s.label} sub={s.short}
+                value={deg ? <HealthBadge status="degraded" /> : <span className="ao-muted">not measured</span>}
+                tone={deg ? "warn" : undefined} />
+            );
+          })}
+        </div>
+      </div>
+
       <div className="ao-panel">
-        <div className="ao-panel-h">App-to-underlay correlation</div>
-        <DataTable rows={mockUnderlay} rowKey={(r) => r.app + r.seam} height={Math.min(360, 44 + mockUnderlay.length * 34)} ariaLabel="Underlay impact"
+        <div className="ao-panel-h">App-to-underlay correlation <span className="ao-panel-meta">click a row for the path + evidence</span></div>
+        <DataTable<UnderlayImpact> rows={rows} rowKey={(r) => r.app + r.seam} height={Math.min(360, 44 + rows.length * 34)} ariaLabel="Underlay impact" onRowClick={setSel}
           columns={[
             { key: "app", header: "App", width: 150, render: (r) => <strong>{r.app}</strong> },
             { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider.toUpperCase() },
-            { key: "seam", header: "Seam", width: 130, render: (r) => <Chip label={r.seam} tone="var(--warn)" /> },
+            { key: "seam", header: "Seam", width: 130, render: (r) => <Chip label={shortSeam(r.seam)} tone="var(--warn)" /> },
             { key: "path", header: "Path", width: 200, render: (r) => r.path },
             { key: "ev", header: "Underlay evidence", width: 260, render: (r) => r.underlayEvidence },
             { key: "sym", header: "App symptom", width: 150, render: (r) => r.appSymptom },
@@ -513,12 +577,43 @@ function Underlay() {
             { key: "owner", header: "Owner", width: 90, render: (r) => r.owner },
           ]} />
       </div>
+
+      {sel && (
+        <EvidenceDrawer title={`${sel.app} · ${shortSeam(sel.seam)}`}
+          subtitle={<span className="ao-drawer-badges"><RootDomainBadge domain={sel.rootDomain} /><ConfidenceBadge level={sel.confidence} /></span>}
+          onClose={() => setSel(null)}>
+          <AppPathStrip segments={pathFor(sel)} />
+          <table className="ao-kv"><tbody>
+            <tr><td>App</td><td><strong>{sel.app}</strong></td></tr>
+            <tr><td>Cloud</td><td>{sel.provider.toUpperCase()}</td></tr>
+            <tr><td>Seam</td><td>{sel.seam} ({shortSeam(sel.seam)})</td></tr>
+            <tr><td>Path</td><td>{sel.path}</td></tr>
+            <tr><td>Underlay evidence</td><td>{sel.underlayEvidence}</td></tr>
+            <tr><td>App symptom</td><td>{sel.appSymptom}</td></tr>
+            <tr><td>Root domain</td><td><RootDomainBadge domain={sel.rootDomain} /></td></tr>
+            <tr><td>Confidence</td><td><ConfidenceBadge level={sel.confidence} /></td></tr>
+            <tr><td>Owner</td><td>{sel.owner}</td></tr>
+          </tbody></table>
+        </EvidenceDrawer>
+      )}
     </div>
   );
 }
 
 // ── Unknowns (first-class · LIVE) ────────────────────────────────────────────
+// remediation actions for an unknown entity — a real queue, not just a report.
+const REMEDIATIONS = [
+  "Tag resource (app / owner / env)",
+  "Assign owner",
+  "Create attribution rule",
+  "Suppress known shared service",
+  "Mark as external dependency",
+  "Open resource in cloud console",
+];
+function openIntegrations() { location.hash = "#/incident/integrations"; }
+
 function Unknowns() {
+  const [fix, setFix] = useState<UnknownContributor | null>(null);
   const res = useAsync(loadResources);
   const cov = useAsync(loadCoverage);
   if (res.status === "loading" || cov.status === "loading") return <TableSkeleton />;
@@ -539,22 +634,39 @@ function Unknowns() {
         <MetricCard key={c.label} label={c.label} value={c.measured ? c.n : "—"} tone={c.measured && c.n ? "warn" : undefined} />
       ))}</div>
       <div className="ao-panel">
-        <div className="ao-panel-h">Unknown entities <span className="ao-panel-meta">unknown is a real answer — never a guess · traffic arrives with cloud flow logs</span></div>
+        <div className="ao-panel-h">Remediation queue <span className="ao-panel-meta">unknown is a real answer — never a guess · resolve each to lift coverage</span></div>
         {unknowns.length === 0 ? (
           <EmptyState title="No unattributed entities" hint="every discovered resource resolved to an app identity" />
         ) : (
-          <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Unknowns"
+          <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Unknowns" onRowClick={setFix}
             columns={[
-              { key: "entity", header: "Entity", width: 220, render: (r) => <span className="ao-mono">{r.entity}</span> },
-              { key: "kind", header: "Type", width: 120, render: (r) => r.kind },
-              { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
-              { key: "bytes", header: "Traffic", width: 90, align: "right", render: (r) => NM(r.bytes, fmtBytes) },
-              { key: "guess", header: "Current guess", width: 220, render: (r) => r.likelyResource },
-              { key: "why", header: "Why unknown", width: 180, render: (r) => r.missingFields.length ? <Chip label={`missing ${r.missingFields.join("/")}`} tone="var(--fg-subtle)" /> : <span className="ao-muted">—</span> },
-              { key: "fix", header: "Recommended fix", width: 260, render: (r) => r.recommendation },
+              { key: "entity", header: "Entity", width: 210, render: (r) => <span className="ao-mono">{r.entity}</span> },
+              { key: "kind", header: "Type", width: 116, render: (r) => r.kind },
+              { key: "provider", header: "Cloud", width: 60, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
+              { key: "region", header: "Region", width: 96, render: (r) => r.region },
+              { key: "bytes", header: "Traffic", width: 86, align: "right", render: (r) => NM(r.bytes, fmtBytes) },
+              { key: "guess", header: "Current guess", width: 200, render: (r) => r.likelyResource },
+              { key: "why", header: "Why unknown", width: 170, render: (r) => r.missingFields.length ? <Chip label={`missing ${r.missingFields.join("/")}`} tone="var(--fg-subtle)" /> : <span className="ao-muted">—</span> },
+              { key: "fix", header: "Recommended fix", width: 240, render: (r) => r.recommendation },
+              { key: "act", header: "Action", width: 110, render: (r) => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); setFix(r); }}>Remediate</button> },
             ]} />
         )}
       </div>
+
+      {fix && (
+        <EvidenceDrawer title={`Remediate · ${fix.entity}`} subtitle={<span className="ao-muted">{fix.kind} · {fix.provider === "—" ? "—" : fix.provider.toUpperCase()} · {fix.region}</span>} onClose={() => setFix(null)}>
+          <table className="ao-kv"><tbody>
+            <tr><td>Current guess</td><td>{fix.likelyResource}</td></tr>
+            <tr><td>Why unknown</td><td>{fix.missingFields.length ? `missing ${fix.missingFields.join(", ")}` : "—"}</td></tr>
+            <tr><td>Recommended fix</td><td>{fix.recommendation}</td></tr>
+          </tbody></table>
+          <div className="ao-ev-h">Actions</div>
+          <div className="ao-cta-btns">
+            {REMEDIATIONS.map((a) => <button key={a} className="ao-btn" onClick={openIntegrations}>{a}</button>)}
+            <button className="ao-btn ao-btn--primary" onClick={openIntegrations}>Open Integrations</button>
+          </div>
+        </EvidenceDrawer>
+      )}
     </div>
   );
 }
@@ -616,13 +728,16 @@ function Evidence() {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+// Advanced configuration only — connector setup lives in the first-class
+// Ingestion tab + Admin → Integrations, not here. Each card shows the current
+// effective config (real resolver defaults) with a single manage action.
 function Settings() {
-  const sections = [
-    { t: "Catalog Sources", d: "Vendor IP/domain feeds (AWS/Azure/GCP/M365), refresh cadence." },
-    { t: "Cloud Connectors", d: "Connect AWS/Azure/GCP accounts (role/creds), region+account scope, least-priv IAM." },
-    { t: "Attribution Rules", d: "Tag keys read for app/owner/env; source precedence (tag>graph>firewall>domain>ip)." },
-    { t: "Required Tags", d: "Tags an org requires (app/owner/env) — drives the coverage report." },
-    { t: "RCA Windows", d: "deploy→degradation correlation window; verdict thresholds." },
+  const sections: { t: string; d: string; value: string; cta: string }[] = [
+    { t: "Catalog Sources", d: "Managed vendor IP/domain feeds used for catalog-based attribution.", value: "AWS · Azure · GCP · Microsoft 365 (refreshed every 6h)", cta: "Configure catalog sources" },
+    { t: "Cloud Connectors", d: "Cloud account setup is managed in Admin → Integrations.", value: "Connect AWS / Azure / GCP accounts (least-privilege IAM)", cta: "Open Integrations" },
+    { t: "Attribution Rules", d: "Source precedence when signals disagree.", value: "cloud tag → resource graph → firewall App-ID → domain → IP catalog", cta: "Edit attribution precedence" },
+    { t: "Required Tags", d: "Tags an org requires — drives the coverage report.", value: "app · owner · env (case-insensitive)", cta: "Edit required tags" },
+    { t: "RCA Windows", d: "Deploy-to-degradation correlation window + verdict thresholds.", value: "Default deploy→degradation window: 30 minutes", cta: "Edit RCA windows" },
   ];
   return (
     <div className="ao-settings">
@@ -630,7 +745,8 @@ function Settings() {
         <div key={s.t} className="ao-panel">
           <div className="ao-panel-h">{s.t}</div>
           <p className="ao-set-d">{s.d}</p>
-          <EmptyState title="Configuration UI wires here" hint="reuses the existing Integrations control plane" />
+          <div className="ao-set-v">{s.value}</div>
+          <button className="ao-btn" onClick={openIntegrations}>{s.cta}</button>
         </div>
       ))}
     </div>

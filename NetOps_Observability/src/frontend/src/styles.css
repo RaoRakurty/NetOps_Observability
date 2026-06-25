@@ -3550,6 +3550,19 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-freshstrip-i { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-micro, 12px); }
 .ao-freshstrip-l { color: var(--fg-muted); }
 
+/* app→underlay path ribbon (Underlay Impact) — degraded segment lit */
+.ao-path { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: var(--sp-2) 0; }
+.ao-path-node { display: inline-flex; flex-direction: column; gap: 1px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: var(--r-2); background: var(--panel);
+  font-size: var(--fs-micro, 12px); min-width: 0; }
+.ao-path-l { font-weight: 600; color: var(--fg); white-space: nowrap; }
+.ao-path-sub { font-size: 10px; color: var(--fg-subtle); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ao-path-node--degraded { border-color: var(--crit); box-shadow: 0 0 0 1px var(--crit) inset; }
+.ao-path-node--degraded .ao-path-l { color: var(--crit); }
+.ao-path-node--unknown { opacity: 0.6; }
+.ao-path-arrow { color: var(--fg-subtle); font-size: 14px; }
+.ao-path-arrow.is-bad { color: var(--crit); }
+
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
 .ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);
@@ -3634,7 +3647,9 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
 .ao-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .ao-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-4); }
-.ao-set-d { font-size: var(--fs-meta, 13px); color: var(--fg-muted); margin: 0 0 var(--sp-3); }
+.ao-set-d { font-size: var(--fs-meta, 13px); color: var(--fg-muted); margin: 0 0 var(--sp-2); }
+.ao-set-v { font-size: var(--fs-micro, 12px); color: var(--fg); font-weight: 600; margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); background: var(--panel-2, rgba(127,127,127,0.06)); border-radius: var(--r-2); }
 
 /* ── App Observability — Overview pass (#81 P3F) ──────────────────────────────
    NOC polish: prominent numerals, small uppercase labels, grouped cards, explicit
