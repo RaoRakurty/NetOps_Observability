@@ -1701,6 +1701,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ scope: ref.scope, selector: ref.selector ?? "", tenant: ref.tenant ?? "", key, value, locked }),
     }),
+
+  // ----- Cloud App Observability (#81 P3A) -----
+  // The IDENTITY surfaces are live from the cloud inventory; health/change/flow
+  // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
+  // mirror src/backend/cloud/{model,derive}.go.
+  cloudResources: () => request<{ resources: CloudResourceRow[]; count: number }>("/api/cloud/resources"),
+  cloudApps: () => request<{ apps: CloudAppRow[]; count: number }>("/api/cloud/apps"),
+  cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
+  cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
 };
 
 // ----- Security Policy types (mirror src/backend/policy/model.go JSON) -----
@@ -2264,4 +2273,74 @@ export type PromInstantResponse = {
   status: string;
   data?: { resultType: string; result: PromInstantSeries[] };
   error?: string;
+};
+
+// ---------- Cloud App Observability (#81 P3) ----------
+// Backend cloud.* JSON shapes (src/backend/cloud/model.go + derive.go). The App
+// Observability UI maps these into its view types (pages/appobs/types.ts) — see
+// pages/appobs/api.ts. Confidence/source string values match the UI enums 1:1.
+export type CloudConfidence = "confirmed" | "strong" | "suspected" | "weak" | "unknown";
+export type CloudSource =
+  | "cloud_tag" | "cloud_graph" | "operator_catalog" | "firewall_appid"
+  | "domain" | "ip_catalog" | "unknown";
+
+export type CloudResourceRow = {
+  tenant_id: string;
+  cloud_provider: string; // aws | azure | gcp | ""
+  account_id: string;
+  region: string;
+  zone?: string;
+  resource_id: string;
+  resource_arn_or_uri?: string;
+  resource_type: string; // e.g. "AWS::ElasticLoadBalancingV2::LoadBalancer"
+  resource_name?: string;
+  private_ips?: string[];
+  public_ips?: string[];
+  network_interface_ids?: string[];
+  tags?: Record<string, string>;
+  owner?: string;
+  env?: string;
+  app_id?: string;
+  app_name?: string;
+  discovered_at: string;
+  last_seen_at: string;
+  source: CloudSource;
+  confidence: CloudConfidence;
+};
+
+export type CloudAppRow = {
+  app_id: string;
+  app_name: string;
+  owner: string;
+  env: string;
+  cloud_provider: string;
+  account_id: string;
+  region: string;
+  confidence: CloudConfidence;
+  source: CloudSource;
+  resources: number;
+};
+
+export type CloudCoverageReport = {
+  confirmed_tag: number;
+  strong_graph: number;
+  firewall_appid: number;
+  suspected_domain_ip: number;
+  unknown: number;
+  total: number;
+};
+
+export type CloudIdentityMappingRow = {
+  tenant_id: string;
+  match_key_type: string;
+  match_key: string;
+  app_id: string;
+  app_name: string;
+  owner?: string;
+  env?: string;
+  resource_id?: string;
+  source: CloudSource;
+  confidence: CloudConfidence;
+  attribution_reason: string;
+  updated_at: string;
 };

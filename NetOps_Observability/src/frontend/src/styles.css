@@ -3469,6 +3469,15 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   padding: var(--sp-2) var(--sp-3); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .ao-tab:hover { color: var(--fg); }
 .ao-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+/* preview marker on tabs not yet backed by live cloud telemetry */
+.ao-tab-dot { display: inline-block; width: 5px; height: 5px; margin-left: 6px; vertical-align: middle;
+  border-radius: 50%; background: var(--fg-subtle); opacity: 0.6; }
+
+/* honest preview banner — live identity vs not-yet-ingested telemetry */
+.ao-preview-note { display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-micro, 12px); color: var(--fg-subtle);
+  background: var(--panel); border: 1px dashed var(--panel-border);
+  border-radius: var(--r-2); padding: var(--sp-2) var(--sp-3); }
 
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
