@@ -12,7 +12,7 @@ import DataTable from "../components/DataTable";
 import {
   ConfidenceBadge, HealthBadge, RootDomainBadge, AppIdentityPill, MetricCard,
   CardGroup, UnderlayCell, RcaDrawer, EmptyState, FilterBar, EvidenceDrawer,
-  fmtBps, fmtBytes, ago,
+  EvidenceCategoryBadge, fmtBps, fmtBytes, ago,
 } from "./appobs/badges";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
@@ -517,6 +517,8 @@ function Evidence() {
   const rows = mockEvidence.filter((e) =>
     (!f.signal || e.signalType === f.signal) &&
     (!f.confidence || e.confidence === f.confidence) &&
+    (!f.category || e.category === f.category) &&
+    (!f.verdict || (f.verdict === "yes") === e.usedInVerdict) &&
     (!f.app || e.app === f.app));
   return (
     <div className="ao-stack">
@@ -524,30 +526,36 @@ function Evidence() {
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
           { key: "app", label: "App", options: [...new Set(mockEvidence.map((e) => e.app))].map((a) => ({ value: a, label: a })) },
+          { key: "category", label: "Category", options: [{ value: "supporting", label: "supporting" }, { value: "contradicting", label: "contradicting" }, { value: "discriminating", label: "discriminating" }, { value: "missing", label: "missing" }, { value: "recovery", label: "recovery" }] },
           { key: "signal", label: "Signal type", options: [...new Set(mockEvidence.map((e) => e.signalType))].map((s) => ({ value: s, label: s })) },
           { key: "confidence", label: "Confidence", options: [{ value: "confirmed", label: "confirmed" }, { value: "strong", label: "strong" }, { value: "suspected", label: "suspected" }] },
+          { key: "verdict", label: "Used in verdict", options: [{ value: "yes", label: "yes" }, { value: "no", label: "no" }] },
         ]} />
       <div className="ao-panel">
         <DataTable<EvidenceRow> rows={rows} rowKey={(r) => r.time + r.signalType + r.resource} height={Math.min(480, 44 + rows.length * 30)}
           ariaLabel="Evidence" onRowClick={setSel}
           columns={[
-            { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-            { key: "sig", header: "Signal type", width: 150, render: (r) => r.signalType },
-            { key: "app", header: "App", width: 130, render: (r) => <strong>{r.app}</strong> },
-            { key: "res", header: "Resource", width: 140, render: (r) => r.resource },
-            { key: "src", header: "Source", width: 140, render: (r) => r.source },
-            { key: "conf", header: "Confidence", width: 110, render: (r) => <ConfidenceBadge level={r.confidence} /> },
-            { key: "reason", header: "Reason", width: 280, render: (r) => r.reason },
+            { key: "time", header: "Time", width: 84, render: (r) => ago(r.time) },
+            { key: "cat", header: "Category", width: 130, sortable: true, sortValue: (r) => r.category, render: (r) => <EvidenceCategoryBadge category={r.category} /> },
+            { key: "sig", header: "Signal type", width: 140, render: (r) => r.signalType },
+            { key: "app", header: "App", width: 110, render: (r) => <strong>{r.app}</strong> },
+            { key: "res", header: "Resource", width: 130, render: (r) => r.resource },
+            { key: "src", header: "Source", width: 130, render: (r) => r.source },
+            { key: "conf", header: "Confidence", width: 104, render: (r) => <ConfidenceBadge level={r.confidence} /> },
+            { key: "reason", header: "Reason", width: 320, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
+            { key: "verdict", header: "In verdict", width: 90, render: (r) => r.usedInVerdict ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">context</span> },
             { key: "rca", header: "RCA group", width: 130, render: (r) => r.rcaGroup ? <Chip label={r.rcaGroup} tone="var(--accent)" /> : <span className="ao-muted">—</span> },
           ]} />
       </div>
       {sel && (
-        <EvidenceDrawer title={`${sel.signalType} · ${sel.app}`} subtitle={<ConfidenceBadge level={sel.confidence} />} onClose={() => setSel(null)}>
+        <EvidenceDrawer title={`${sel.signalType} · ${sel.app}`} subtitle={<span className="ao-drawer-badges"><EvidenceCategoryBadge category={sel.category} /><ConfidenceBadge level={sel.confidence} /></span>} onClose={() => setSel(null)}>
           <table className="ao-kv"><tbody>
             <tr><td>Time</td><td>{new Date(sel.time).toLocaleString()}</td></tr>
+            <tr><td>Category</td><td><EvidenceCategoryBadge category={sel.category} /></td></tr>
             <tr><td>App / Resource</td><td>{sel.app} · {sel.resource}</td></tr>
             <tr><td>Source</td><td>{sel.source}</td></tr>
             <tr><td>Confidence</td><td><ConfidenceBadge level={sel.confidence} /></td></tr>
+            <tr><td>Used in verdict</td><td>{sel.usedInVerdict ? "yes — fed the RCA verdict" : "no — context / gap only"}</td></tr>
             <tr><td>Reason</td><td>{sel.reason}</td></tr>
             <tr><td>RCA group</td><td>{sel.rcaGroup || "—"}</td></tr>
             <tr><td>Evidence ref</td><td><span className="ao-mono ao-muted">{sel.evidenceRef}</span></td></tr>

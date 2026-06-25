@@ -81,10 +81,13 @@ export const mockChanges: ChangeEvent[] = [
 ];
 
 export const mockEvidence: EvidenceRow[] = [
-  { time: t(7), signalType: "cloud_change", app: "billing", resource: "billing-svc", source: "cloudtrail", confidence: "confirmed", reason: "deploy 7 min before 5xx onset", rcaGroup: "rca-billing-01", evidenceRef: "ct:evt/9f3a..." },
-  { time: t(6), signalType: "cloud_health", app: "billing", resource: "billing-alb", source: "cloudwatch_metric", confidence: "strong", reason: "ALB target 5xx 0.2%→6.4%", rcaGroup: "rca-billing-01", evidenceRef: "cw:HTTPCode_Target_5XX" },
-  { time: t(5), signalType: "cloud_health", app: "billing", resource: "billing-db", source: "cloudwatch_metric", confidence: "suspected", reason: "DB connections near max (pool exhaustion)", rcaGroup: "rca-billing-01", evidenceRef: "cw:DatabaseConnections" },
-  { time: t(0), signalType: "cloud_lb_access", app: "checkout", resource: "checkout-alb", source: "cloud_tag", confidence: "confirmed", reason: "target_status_code='-' (no backend response)", rcaGroup: "rca-checkout-01", evidenceRef: "alb:log/00ab..." },
+  { time: t(7), category: "supporting", signalType: "cloud_change", app: "billing", resource: "billing-svc", source: "cloudtrail", confidence: "confirmed", reason: "deploy completed 7 min before 5xx onset — temporally aligned with the incident window", usedInVerdict: true, rcaGroup: "rca-billing-01", evidenceRef: "ct:evt/9f3a..." },
+  { time: t(6), category: "supporting", signalType: "cloud_health", app: "billing", resource: "billing-alb", source: "cloudwatch_metric", confidence: "strong", reason: "ALB target 5xx rose 0.2%→6.4% (32× baseline), onset aligned with the deploy", usedInVerdict: true, rcaGroup: "rca-billing-01", evidenceRef: "cw:HTTPCode_Target_5XX" },
+  { time: t(5), category: "discriminating", signalType: "cloud_health", app: "billing", resource: "billing-db", source: "cloudwatch_metric", confidence: "suspected", reason: "DB connections 98% vs 40% baseline — discriminates database-dependency from app-code as the root", usedInVerdict: true, rcaGroup: "rca-billing-01", evidenceRef: "cw:DatabaseConnections" },
+  { time: t(6), category: "contradicting", signalType: "underlay", app: "billing", resource: "dx-use1", source: "probe", confidence: "confirmed", reason: "DX BGP stable + RTT flat through the window — argues AGAINST a network/underlay root", usedInVerdict: true, rcaGroup: "rca-billing-01", evidenceRef: "probe:dx/rtt" },
+  { time: t(0), category: "missing", signalType: "traces", app: "billing", resource: "billing-svc", source: "unknown", confidence: "unknown", reason: "no distributed traces ingested — cannot confirm the slow downstream call; enable APM/OTel to close this gap", usedInVerdict: false, rcaGroup: "rca-billing-01", evidenceRef: "—" },
+  { time: t(0), category: "supporting", signalType: "cloud_lb_access", app: "checkout", resource: "checkout-alb", source: "cloud_tag", confidence: "confirmed", reason: "target_status_code='-' (no backend response) on 4.1% of requests — targets unhealthy", usedInVerdict: true, rcaGroup: "rca-checkout-01", evidenceRef: "alb:log/00ab..." },
+  { time: t(2), category: "recovery", signalType: "cloud_health", app: "checkout", resource: "checkout-alb", source: "cloudwatch_metric", confidence: "strong", reason: "5xx returned to baseline 2 min after the target group scaled out — recovery confirms the target-capacity hypothesis", usedInVerdict: false, rcaGroup: "rca-checkout-01", evidenceRef: "cw:HTTPCode_Target_5XX" },
 ];
 
 export const mockCoverage: Coverage = {

@@ -93,14 +93,22 @@ export interface ChangeEvent {
   relatedSymptoms: string[];
 }
 
+// How a piece of evidence relates to a verdict — the anti-black-box ledger.
+// supporting = argues for · contradicting = argues against · discriminating =
+// separates competing root domains · missing = a signal we'd want but don't have
+// (honest gap) · recovery = confirmed the fix/return-to-baseline.
+export type EvidenceCategory = "supporting" | "contradicting" | "discriminating" | "missing" | "recovery";
+
 export interface EvidenceRow {
   time: string;
+  category: EvidenceCategory;
   signalType: string;     // cloud_health | cloud_change | cloud_flow | cloud_lb_access | underlay | ...
   app: string;
   resource: string;
   source: AttrSource | string;
   confidence: Confidence;
   reason: string;
+  usedInVerdict: boolean; // did this row feed the verdict, or is it context/gap?
   rcaGroup: string;       // "" when none
   evidenceRef: string;    // opaque ref to the raw record
 }

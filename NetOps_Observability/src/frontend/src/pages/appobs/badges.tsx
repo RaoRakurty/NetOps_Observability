@@ -7,7 +7,23 @@
 
 import { ReactNode, useEffect } from "react";
 import { Chip } from "../../components/noc";
-import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel } from "./types";
+import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory } from "./types";
+
+// Evidence-category badge — the anti-black-box ledger. Discriminating (the
+// differentiator) reads as accent; contradicting as crit; missing stays muted
+// (an honest gap, not an alarm); recovery and supporting read calm-positive.
+const EV_CAT_META: Record<EvidenceCategory, { label: string; tone: string }> = {
+  supporting: { label: "Supporting", tone: "var(--ok)" },
+  contradicting: { label: "Contradicting", tone: "var(--crit)" },
+  discriminating: { label: "Discriminating", tone: "var(--accent)" },
+  missing: { label: "Missing", tone: "var(--fg-subtle)" },
+  recovery: { label: "Recovery", tone: "var(--ok)" },
+};
+
+export function EvidenceCategoryBadge({ category }: { category: EvidenceCategory }) {
+  const m = EV_CAT_META[category];
+  return <Chip label={m.label} tone={m.tone} title={`evidence: ${m.label.toLowerCase()}`} />;
+}
 
 // Confidence ladder → tone. Higher confidence reads stronger; unknown is visible but
 // calm (muted), not alarming — alarm is reserved for health/severity.
