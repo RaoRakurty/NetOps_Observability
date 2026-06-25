@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import glob
 import json
 import logging
 import os
@@ -46,6 +47,7 @@ from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
 from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
+from cloud_log_parsers import cloud_log_event
 from cloud_producers import cloud_signal_from_event
 from producers import (
     episode_signal,
@@ -83,6 +85,17 @@ CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
 TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud"]
+
+# #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
+# drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
+# parsers, and feeds the SAME cloud lane as the bus (handle_cloud). Default-CLOSED:
+# disabled unless BOTH a dir AND an explicit tenant are set (cloud logs carry no
+# tenant — it is assigned at the source, never guessed). The production source is an
+# S3/Kinesis poller that produces to netops.cloud; this is the offline-safe sibling.
+CLOUD_LOGS_DIR = os.environ.get("CLOUD_LOGS_DIR", "")
+CLOUD_LOGS_TENANT = os.environ.get("CLOUD_LOGS_TENANT", "")
+CLOUD_LOGS_REFRESH_S = float(os.environ.get("CLOUD_LOGS_REFRESH_S", "30"))
+_cloud_log_offsets: dict[str, int] = {}  # path → bytes consumed (tail-style; in-memory)
 
 # Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
 # tenant_id onto each finding so it carries the same tenant discriminator as the
@@ -764,6 +777,64 @@ ch: CH | None = None
 # ---------------------------------------------------------------------------
 
 
+async def _scan_cloud_logs() -> int:
+    """Tail every *.alb/*.vpc file in CLOUD_LOGS_DIR from its last byte offset,
+    parse new lines, stamp the configured tenant, and feed the cloud lane. Returns
+    the number of signals fed. Offset-tracked so a re-scan never re-ingests a line;
+    a truncated/rotated file (size < offset) restarts from 0."""
+    fed = 0
+    for path in sorted(glob.glob(os.path.join(CLOUD_LOGS_DIR, "*"))):
+        if not (path.endswith(".alb") or path.endswith(".vpc")):
+            continue
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        off = _cloud_log_offsets.get(path, 0)
+        if size < off:
+            off = 0
+        if size == off:
+            continue
+        try:
+            with open(path) as f:
+                f.seek(off)
+                data = f.read()
+                _cloud_log_offsets[path] = f.tell()
+        except OSError as exc:
+            log.warning("cloud-log read failed %s: %s", path, exc)
+            continue
+        fname = os.path.basename(path)
+        for line in data.splitlines():
+            ev = cloud_log_event(fname, line)
+            if ev is None:
+                continue
+            ev["tenant_id"] = CLOUD_LOGS_TENANT
+            await handle_cloud(ev)
+            fed += 1
+    return fed
+
+
+async def cloud_log_tailer() -> None:
+    """Supervised P3B file source (§10 — never a silent task death). Disabled unless
+    CLOUD_LOGS_DIR and CLOUD_LOGS_TENANT are both set (default-closed isolation)."""
+    if not CLOUD_LOGS_DIR:
+        return
+    if not CLOUD_LOGS_TENANT:
+        log.warning("CLOUD_LOGS_DIR set but CLOUD_LOGS_TENANT empty — cloud-log ingestion DISABLED (default-closed)")
+        return
+    log.info("cloud-log tailer watching %s (tenant=%s, every %.0fs)", CLOUD_LOGS_DIR, CLOUD_LOGS_TENANT, CLOUD_LOGS_REFRESH_S)
+    while True:
+        try:
+            n = await _scan_cloud_logs()
+            if n:
+                log.info("cloud-log tailer fed %d signal(s)", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                                  # noqa: BLE001
+            log.exception("cloud-log scan failed; retrying")
+        await asyncio.sleep(max(CLOUD_LOGS_REFRESH_S, 5.0))
+
+
 async def consume() -> None:
     """Supervised consumer: a poison batch / codec error / broker hiccup is
     logged and retried with backoff, NEVER a silent task death (§10 — the
@@ -1235,7 +1306,11 @@ async def emit(**kwargs) -> None:
 async def lifespan(_app: FastAPI):
     global ch
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
-    tasks = [asyncio.create_task(consume()), asyncio.create_task(engine_loop())]
+    tasks = [
+        asyncio.create_task(consume()),
+        asyncio.create_task(engine_loop()),
+        asyncio.create_task(cloud_log_tailer()),  # #81 P3B file source (opt-in)
+    ]
     try:
         yield
     finally:

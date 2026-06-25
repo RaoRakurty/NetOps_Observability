@@ -586,8 +586,15 @@ services:
       # customer-path probe loss corroborate a control-plane fault → confirmed
       # (still requires the independent BGP signal — no overclaim).
       CORR_TRUSTED_PROBE_OBSERVERS: ${CORR_TRUSTED_PROBE_OBSERVERS:-}
+      # #81 P3B cloud-log file source (dev/demo + on-host drops). Reads *.alb/*.vpc
+      # from CLOUD_LOGS_DIR → P3B parsers → the cloud lane. Default-CLOSED: off unless
+      # CLOUD_LOGS_TENANT is also set (cloud logs carry no tenant; never guessed).
+      CLOUD_LOGS_DIR: ${CLOUD_LOGS_DIR:-/data/cloud-logs}
+      CLOUD_LOGS_TENANT: ${CLOUD_LOGS_TENANT:-}
+      CLOUD_LOGS_REFRESH_S: ${CLOUD_LOGS_REFRESH_S:-30}
     volumes:
       - ../../data/api/enrichment:/data/enrichment:ro
+      - ../../data/cloud-logs:/data/cloud-logs:ro
     depends_on:
       redpanda:   { condition: service_healthy }
       opensearch: { condition: service_started }

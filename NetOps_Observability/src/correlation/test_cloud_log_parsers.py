@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from cloud_log_parsers import (
     alb_lb_signal,
+    cloud_log_event,
     parse_alb_access_log,
     parse_vpc_flow_log,
     vpc_flow_signal,
@@ -107,3 +108,12 @@ def test_vpc_custom_field_layout_maps_by_name():
 
 def test_vpc_wrong_field_count_returns_none():
     assert parse_vpc_flow_log("2 123456789012 eni-0abc123 REJECT") is None
+
+
+# ── runtime dispatch (the file tailer's per-line router) ─────────────────────
+
+def test_cloud_log_event_dispatch_by_extension():
+    assert cloud_log_event("billing.alb", ALB_5XX)["kind"] == "cloud_lb_log"
+    assert cloud_log_event("prod.vpc", VPC_REJECT)["kind"] == "cloud_flow_log"
+    assert cloud_log_event("billing.alb", ALB_200) is None    # non-5xx → no signal
+    assert cloud_log_event("notes.txt", ALB_5XX) is None       # unknown extension ignored

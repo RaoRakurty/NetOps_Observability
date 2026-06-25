@@ -140,6 +140,17 @@ def parse_vpc_flow_log(line: str, fields: tuple[str, ...] | list[str] | None = N
     return rec
 
 
+def cloud_log_event(fname: str, line: str) -> dict | None:
+    """Dispatch one raw cloud-log line to the right parser by file extension
+    (.alb → ALB access log, .vpc → VPC flow log), returning a signal-worthy
+    netops.cloud event or None. Pure (no IO) — the runtime tailer adds tenancy + IO."""
+    if fname.endswith(".alb"):
+        return alb_lb_signal(parse_alb_access_log(line))
+    if fname.endswith(".vpc"):
+        return vpc_flow_signal(parse_vpc_flow_log(line))
+    return None
+
+
 def vpc_flow_signal(rec: dict) -> dict | None:
     """Parsed VPC flow record → a cloud_flow_log event WHEN signal-worthy: a REJECT
     (security-group/NACL drop at a boundary — the cloud-side of a reachability fault).
