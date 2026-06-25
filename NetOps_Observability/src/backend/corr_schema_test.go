@@ -25,6 +25,12 @@ func corrStmt(t *testing.T, table string) string {
 
 func TestCorrSchemaIdempotent(t *testing.T) {
 	for _, s := range corrSchemaDDL() {
+		// MODIFY COLUMN re-applies an identical column definition (an additive enum
+		// value-add for the cloud signal plane, #81 P3G): idempotent by nature — a
+		// no-op once applied — and ClickHouse has no "IF NOT EXISTS" form for it.
+		if strings.Contains(s, "MODIFY COLUMN") {
+			continue
+		}
 		if !strings.Contains(s, "IF NOT EXISTS") {
 			t.Errorf("statement not idempotent (missing IF NOT EXISTS): %.80s", s)
 		}

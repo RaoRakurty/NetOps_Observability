@@ -36,6 +36,7 @@ class Source(str, Enum):
     SYSLOG = "syslog"
     TRAP = "trap"
     SOT_DRIFT = "sot_drift"
+    CLOUD = "cloud"  # #81 P3G: Cloud App Observability plane (cloud APIs + cloud logs)
 
 
 class ObserverType(str, Enum):
@@ -61,6 +62,8 @@ class EntityType(str, Enum):
     SITE = "site"
     SERVICE = "service"
     PREFIX = "prefix"
+    APP = "app"                       # #81 P3G: an application (cloud-app observability)
+    CLOUD_RESOURCE = "cloud_resource"  # #81 P3G: a cloud resource (ELB/RDS/ECS/…)
 
 
 class Severity(str, Enum):

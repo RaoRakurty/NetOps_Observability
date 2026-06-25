@@ -32,7 +32,7 @@ func corrSchemaDDL() []string {
     ts             DateTime64(3),
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
-                         'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8),
+                         'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
@@ -44,7 +44,7 @@ func corrSchemaDDL() []string {
                          'control_plane'=3,'device_telemetry'=4),
     source_clock_quality LowCardinality(String) DEFAULT 'unknown',
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
-                         'site'=5,'service'=6,'prefix'=7),
+                         'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9),
     entity_id      String,
     entity_tokens  Array(String),
     site           LowCardinality(String) DEFAULT '',
@@ -92,6 +92,16 @@ SETTINGS index_granularity = 8192`,
 		// union for those, documented). Idempotent self-heal for live tables.
 		`ALTER TABLE netops.corr_signals_archive
     ADD COLUMN IF NOT EXISTS archived_version UInt32 DEFAULT 0 AFTER archived_for`,
+
+		// Cloud App Observability as an evidence producer (#81 P3G): cloud signals
+		// flow as corr_signals into the SAME engine. Additive enum widening — source
+		// gains 'cloud'=9, entity_type gains 'app'=8/'cloud_resource'=9. MODIFY COLUMN
+		// is safe for an Enum8 value-add (existing rows keep their mapping). Idempotent
+		// self-heal for live tables (both signals + archive share signalColumns).
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9)`,
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9)`,
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_objects
 (
