@@ -128,6 +128,67 @@ export interface UnknownContributor {
   recommendation: string;
 }
 
+// ── Overview-specific models (#81 P3F Overview pass) ────────────────────────
+
+// Underlay involvement is EXPLICIT — never a bare "—". kind drives tone, seam names it.
+export type UnderlayState =
+  | { kind: "none" }                       // "No impact"
+  | { kind: "suspected"; seam: string }    // "Suspected: DX Dallas"
+  | { kind: "confirmed"; seam: string }    // "Confirmed: VPN East"
+  | { kind: "not_checked" }                // "Not checked"
+  | { kind: "unknown" };                   // "Unknown"
+
+export interface EvidenceItem {
+  text: string;
+  kind: "supporting" | "contradicting";
+}
+
+export interface RcaDrawerModel {
+  app: string;
+  health: Health;
+  rootDomain: RootDomain;
+  confidence: Confidence;
+  recommendedOwner: string;
+  evidence: EvidenceItem[];   // supporting + contradicting, in one list
+  nextAction: string;
+}
+
+// A row in the Overview "Impacted Applications" table — the 5-second story.
+export interface ImpactedApplication {
+  id: string;
+  name: string;
+  health: Health;
+  owner: string;
+  env: string;
+  symptom: string;            // human symptom (e.g. "5xx errors", "latency")
+  rootDomain: RootDomain;     // likely root domain
+  confidence: Confidence;
+  why: string;                // evidence-grounded one-liner — the critical column
+  trafficBps: number;
+  lastChange?: string;        // ISO
+  underlay: UnderlayState;
+  action: string;             // recommended action label
+  rca: RcaDrawerModel;        // drawer payload
+}
+
+export interface RootDomainBreakdown { domain: RootDomain; count: number; }
+
+export interface AppOverviewSummary {
+  // impact group
+  appsDegraded: number;
+  activeRca: number;
+  underlayImpacted: number;
+  // coverage group
+  appsObserved: number;
+  resourcesMapped: number;
+  unknownPct: number;
+  // change group
+  recentChanges: number;
+  deployLinkedIncidents: number;
+  // small subtext/trend per metric key (e.g. "+3 vs 1h", "↑ 2")
+  trends?: Partial<Record<string, string>>;
+}
+
 export interface UnderlayImpact {
   app: string;
   provider: Provider;

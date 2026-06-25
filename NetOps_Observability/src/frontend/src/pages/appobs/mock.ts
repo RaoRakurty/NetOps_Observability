@@ -7,7 +7,8 @@
 
 import type {
   App, CloudResource, HealthSignal, ChangeEvent, EvidenceRow, Coverage,
-  UnknownContributor, UnderlayImpact,
+  UnknownContributor, UnderlayImpact, AppOverviewSummary, RootDomainBreakdown,
+  ImpactedApplication,
 } from "./types";
 
 const now = Date.UTC(2026, 5, 25, 14, 30); // fixed clock for deterministic mock
@@ -97,4 +98,129 @@ export const mockUnknowns: UnknownContributor[] = [
 
 export const mockUnderlay: UnderlayImpact[] = [
   { app: "reports-worker", provider: "aws", seam: "Direct Connect", path: "us-east-1 ⇄ on-prem dc1", underlayEvidence: "DX virtual interface BGP flap + RTT 12→140ms", appSymptom: "p95 latency 1.5s", rootDomain: "hybrid_underlay", confidence: "suspected", owner: "data" },
+];
+
+// ── Overview mock (#81 P3F Overview pass) ────────────────────────────────────
+
+export const mockSummary: AppOverviewSummary = {
+  appsObserved: 128, appsDegraded: 7, unknownPct: 14, resourcesMapped: 1842,
+  activeRca: 5, underlayImpacted: 2, recentChanges: 37, deployLinkedIncidents: 3,
+  trends: {
+    appsDegraded: "+2 vs 1h", activeRca: "+1 vs 1h", underlayImpacted: "stable",
+    unknownPct: "−3% vs 24h", resourcesMapped: "+18 today", recentChanges: "last 24h",
+    deployLinkedIncidents: "of 5 RCA", appsObserved: "across 3 clouds",
+  },
+};
+
+export const mockBreakdown: RootDomainBreakdown[] = [
+  { domain: "deployment", count: 2 },
+  { domain: "database_dependency", count: 1 },
+  { domain: "hybrid_underlay", count: 1 },
+  { domain: "cloud_security_policy", count: 1 },
+  { domain: "unknown", count: 1 },
+];
+
+export const mockImpacted: ImpactedApplication[] = [
+  {
+    id: "billing", name: "billing", health: "degraded", owner: "payments", env: "prod",
+    symptom: "5xx errors", rootDomain: "deployment", confidence: "confirmed",
+    why: "ECS deploy 3m before ALB 5xx spike; underlay healthy", trafficBps: 84_000_000,
+    lastChange: t(3), underlay: { kind: "none" }, action: "Rollback deploy",
+    rca: {
+      app: "billing", health: "degraded", rootDomain: "deployment", confidence: "confirmed",
+      recommendedOwner: "payments",
+      evidence: [
+        { kind: "supporting", text: "ECS deploy at 14:02" },
+        { kind: "supporting", text: "ALB 5xx increased to 11.8%" },
+        { kind: "supporting", text: "p99 latency increased to 1.8s" },
+        { kind: "supporting", text: "No BGP/interface/probe degradation on related seam" },
+        { kind: "contradicting", text: "No firewall drops" },
+        { kind: "contradicting", text: "No cloud route change" },
+      ],
+      nextAction: "Rollback deployment or inspect release diff.",
+    },
+  },
+  {
+    id: "orders", name: "orders-api", health: "degraded", owner: "commerce", env: "prod",
+    symptom: "errors", rootDomain: "deployment", confidence: "strong",
+    why: "Config deploy 12m before error-rate rise; no infra change", trafficBps: 51_000_000,
+    lastChange: t(12), underlay: { kind: "not_checked" }, action: "Inspect release diff",
+    rca: {
+      app: "orders-api", health: "degraded", rootDomain: "deployment", confidence: "strong",
+      recommendedOwner: "commerce",
+      evidence: [
+        { kind: "supporting", text: "Config change at 13:53 (deploy 9b1)" },
+        { kind: "supporting", text: "Error rate 0.3% → 2.1%" },
+        { kind: "contradicting", text: "Underlay seam not yet checked" },
+      ],
+      nextAction: "Inspect release diff; check feature-flag rollout.",
+    },
+  },
+  {
+    id: "checkout", name: "checkout", health: "down", owner: "commerce", env: "prod",
+    symptom: "availability", rootDomain: "database_dependency", confidence: "strong",
+    why: "DB connections saturated; target health degraded", trafficBps: 42_000_000,
+    lastChange: t(140), underlay: { kind: "none" }, action: "Scale DB pool",
+    rca: {
+      app: "checkout", health: "down", rootDomain: "database_dependency", confidence: "strong",
+      recommendedOwner: "commerce",
+      evidence: [
+        { kind: "supporting", text: "RDS DatabaseConnections at 98% (baseline 40%)" },
+        { kind: "supporting", text: "ELB UnHealthyHostCount 3/3" },
+        { kind: "supporting", text: "target_status_code='-' (no backend response)" },
+        { kind: "contradicting", text: "No recent deploy on checkout" },
+      ],
+      nextAction: "Scale DB connection pool / check max_connections.",
+    },
+  },
+  {
+    id: "reports", name: "reports-worker", health: "degraded", owner: "data", env: "prod",
+    symptom: "latency", rootDomain: "hybrid_underlay", confidence: "suspected",
+    why: "DX Dallas RTT spike aligns with app latency", trafficBps: 9_500_000,
+    lastChange: t(1300), underlay: { kind: "suspected", seam: "DX Dallas" }, action: "Open DX seam ticket",
+    rca: {
+      app: "reports-worker", health: "degraded", rootDomain: "hybrid_underlay", confidence: "suspected",
+      recommendedOwner: "data / network",
+      evidence: [
+        { kind: "supporting", text: "Direct Connect (Dallas) RTT 12 → 140ms" },
+        { kind: "supporting", text: "BGP flap on DX virtual interface" },
+        { kind: "supporting", text: "app p95 latency 1.5s, onset aligned" },
+        { kind: "contradicting", text: "No deploy or config change" },
+        { kind: "contradicting", text: "App error rate normal (0.2%)" },
+      ],
+      nextAction: "Open Direct Connect (Dallas) seam ticket; verify on-prem BGP.",
+    },
+  },
+  {
+    id: "paygw", name: "payments-gw", health: "degraded", owner: "payments", env: "prod",
+    symptom: "connection resets", rootDomain: "cloud_security_policy", confidence: "suspected",
+    why: "Security-group change + VPN East flap precede resets", trafficBps: 28_000_000,
+    lastChange: t(35), underlay: { kind: "confirmed", seam: "VPN East" }, action: "Review SG / VPN East",
+    rca: {
+      app: "payments-gw", health: "degraded", rootDomain: "cloud_security_policy", confidence: "suspected",
+      recommendedOwner: "security / network",
+      evidence: [
+        { kind: "supporting", text: "Security-group rule change at 13:55" },
+        { kind: "supporting", text: "VPN East tunnel flap (confirmed underlay)" },
+        { kind: "supporting", text: "TCP resets to upstream rose" },
+        { kind: "contradicting", text: "No app deploy" },
+      ],
+      nextAction: "Review SG change 7c2; confirm VPN East tunnel stability.",
+    },
+  },
+  {
+    id: "unknown-1", name: "unknown", health: "unknown", owner: "—", env: "—",
+    symptom: "—", rootDomain: "unknown", confidence: "unknown",
+    why: "No app tag or resource graph match", trafficBps: 22_000_000,
+    underlay: { kind: "unknown" }, action: "Tag resource (app/owner/env)",
+    rca: {
+      app: "unknown", health: "unknown", rootDomain: "unknown", confidence: "unknown",
+      recommendedOwner: "—",
+      evidence: [
+        { kind: "supporting", text: "22 Mbps to eni-unk1 (10.0.6.6)" },
+        { kind: "contradicting", text: "No tag, no resource-graph name, no firewall app-id" },
+      ],
+      nextAction: "Tag i-0untagged01 with app/owner/env, or enable Config inventory.",
+    },
+  },
 ];

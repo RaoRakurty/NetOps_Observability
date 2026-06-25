@@ -3548,3 +3548,70 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .ao-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-4); }
 .ao-set-d { font-size: var(--fs-meta, 13px); color: var(--fg-muted); margin: 0 0 var(--sp-3); }
+
+/* ── App Observability — Overview pass (#81 P3F) ──────────────────────────────
+   NOC polish: prominent numerals, small uppercase labels, grouped cards, explicit
+   underlay, RCA drawer. All tokens — overrides the earlier card rules (later wins). */
+
+/* card: small UPPERCASE label on top, prominent number below, trend subtext */
+.ao-card { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-3) var(--sp-4); }
+.ao-card-l { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--fg-muted); order: 0; margin: 0; }
+.ao-card-v { font-size: var(--fs-xl, 30px); font-weight: 700; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em; color: var(--fg); line-height: 1.04; order: 1; margin: 2px 0 0; }
+.ao-card-s { font-size: 11px; color: var(--fg-subtle); order: 2; margin: 2px 0 0; }
+
+/* grouped operational cards */
+.ao-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--sp-4); }
+.ao-group { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-group-h { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--fg-subtle); padding-left: 2px; }
+.ao-group-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2); }
+@media (max-width: 1100px) { .ao-group-cards { grid-template-columns: repeat(3, 1fr); } }
+
+/* root-domain breakdown strip */
+.ao-breakdown { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3);
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-2);
+  padding: var(--sp-2) var(--sp-4); }
+.ao-breakdown-l { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg-subtle); margin-right: var(--sp-2); }
+.ao-breakdown-i { display: inline-flex; align-items: center; gap: 6px; }
+.ao-breakdown-n { font-variant-numeric: tabular-nums; font-weight: 700; font-size: var(--fs-sm, 14px); color: var(--fg); }
+
+/* root-domain badge — never wrap/clip a short official label */
+.ao-root { display: inline-flex; }
+.ao-root .cc-badge { white-space: nowrap; max-width: none; }
+
+/* table cells */
+.ao-why { display: inline-block; max-width: 330px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--fg); font-size: var(--fs-meta, 13px); }
+.ao-underlay { font-size: var(--fs-meta, 13px); font-weight: 600; white-space: nowrap; }
+.ao-rowaction { appearance: none; cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: var(--r-1, 6px);
+  padding: 3px 8px; white-space: nowrap; }
+.ao-rowaction:hover { background: var(--hover, rgba(127,127,127,.08)); border-color: var(--accent); }
+
+/* RCA drawer body */
+.ao-drawer-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.ao-rca-drawer { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ao-rca-row { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3);
+  font-size: var(--fs-meta, 13px); border-bottom: 1px solid var(--border); padding-bottom: var(--sp-2); }
+.ao-rca-k { color: var(--fg-muted); }
+.ao-rca-owner { font-weight: 600; color: var(--fg); }
+.ao-ev-h { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--fg-subtle); margin-top: var(--sp-2); }
+.ao-ev-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ao-ev { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-meta, 13px); color: var(--fg); }
+.ao-ev-i { font-weight: 700; flex: 0 0 auto; }
+.ao-ev--ok .ao-ev-i { color: var(--ok); }
+.ao-ev--no { color: var(--fg-muted); }
+.ao-ev--no .ao-ev-i { color: var(--crit); }
+.ao-next { background: var(--surface, var(--panel)); border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent); border-radius: var(--r-2); padding: var(--sp-3); margin-top: var(--sp-2); }
+.ao-next-h { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--fg-subtle); }
+.ao-next-v { font-size: var(--fs-sm, 14px); color: var(--fg); margin-top: 4px; }
+.ao-drawer-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.ao-btn { appearance: none; cursor: pointer; font: inherit; font-size: var(--fs-meta, 13px); font-weight: 600;
+  color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-1, 6px); padding: 6px 12px; }
+.ao-btn:hover { border-color: var(--accent); }
+.ao-btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }

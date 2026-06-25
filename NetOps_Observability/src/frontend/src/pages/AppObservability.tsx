@@ -6,16 +6,18 @@
 
 import { useEffect, useState } from "react";
 import { NocHeader, Chip, LiveChip } from "../components/noc";
+import { Skeleton } from "../components/ui";
 import DataTable from "../components/DataTable";
 import {
   ConfidenceBadge, HealthBadge, RootDomainBadge, AppIdentityPill, MetricCard,
-  EmptyState, FilterBar, EvidenceDrawer, fmtBps, fmtBytes, ago,
+  CardGroup, UnderlayCell, RcaDrawer, EmptyState, FilterBar, EvidenceDrawer,
+  fmtBps, fmtBytes, ago,
 } from "./appobs/badges";
 import AppDetail from "./appobs/AppDetail";
-import type { App, EvidenceRow } from "./appobs/types";
+import type { App, EvidenceRow, ImpactedApplication } from "./appobs/types";
 import {
   mockApps, mockResources, mockHealth, mockChanges, mockEvidence, mockCoverage,
-  mockUnknowns, mockUnderlay,
+  mockUnknowns, mockUnderlay, mockSummary, mockBreakdown, mockImpacted,
 } from "./appobs/mock";
 
 const TABS = [
@@ -39,11 +41,6 @@ export default function AppObservability() {
     if (TABS.includes(suffix)) setTab(suffix);
   }, []);
 
-  const degraded = mockApps.filter((a) => a.health === "degraded" || a.health === "down").length;
-  const unknownPct = Math.round((mockCoverage.unknown / mockCoverage.total) * 100);
-  const rcaActive = mockApps.filter((a) => a.rootDomain !== "unknown").length;
-  const underlay = mockApps.filter((a) => a.underlayImpacted).length;
-
   if (sel) return <AppDetail app={sel} onBack={() => setSel(null)} />;
 
   return (
@@ -52,9 +49,9 @@ export default function AppObservability() {
         title="App Observability"
         subtitle="Cloud app identity, health, change & app-to-underlay RCA — evidence-grounded"
         chips={<>
-          <Chip label={`${mockApps.length} apps`} tone="var(--accent)" />
-          <Chip label={`${degraded} impacted`} tone="var(--warn)" />
-          <Chip label={`${unknownPct}% unknown`} tone="var(--fg-subtle)" />
+          <Chip label={`${mockSummary.appsObserved} apps`} tone="var(--accent)" />
+          <Chip label={`${mockSummary.appsDegraded} degraded`} tone="var(--warn)" />
+          <Chip label={`${mockSummary.unknownPct}% unknown`} tone="var(--fg-subtle)" />
           <LiveChip detail="mock" />
         </>}
       />
@@ -68,7 +65,7 @@ export default function AppObservability() {
         ))}
       </nav>
 
-      {tab === "overview" && <Overview onOpen={setSel} kpis={{ degraded, unknownPct, rcaActive, underlay }} />}
+      {tab === "overview" && <Overview onOpen={setSel} goTab={setTab} />}
       {tab === "applications" && <Applications onOpen={setSel} />}
       {tab === "appmap" && <AppMap />}
       {tab === "resources" && <Resources />}
@@ -83,37 +80,107 @@ export default function AppObservability() {
 }
 
 // ── Overview ─────────────────────────────────────────────────────────────────
-function Overview({ onOpen, kpis }: { onOpen: (a: App) => void; kpis: { degraded: number; unknownPct: number; rcaActive: number; underlay: number } }) {
-  const impacted = mockApps.filter((a) => a.rootDomain !== "unknown" || a.health !== "healthy");
-  const recentChanges = mockChanges.length;
+type LoadState = "loading" | "ready" | "error";
+
+// converts an impacted-app row → the App shape App Detail expects (looks up the full
+// record when we have it, else synthesizes from the row).
+function toApp(im: ImpactedApplication): App {
+  const m = mockApps.find((a) => a.id === im.id);
+  if (m) return m;
+  return {
+    id: im.id, name: im.name, health: im.health, owner: im.owner, env: im.env,
+    confidence: im.confidence, source: "cloud_tag", provider: "aws", account: "—", region: "—",
+    resources: 0, trafficBps: im.trafficBps, errorPct: 0, p95ms: 0, unknownPct: 0,
+    lastSeen: new Date().toISOString(), lastChange: im.lastChange, primarySymptom: "—",
+    rootDomain: im.rootDomain,
+    underlayImpacted: im.underlay.kind === "confirmed" || im.underlay.kind === "suspected",
+  };
+}
+
+function Overview({ onOpen, goTab }: { onOpen: (a: App) => void; goTab: (t: Tab) => void }) {
+  const [status, setStatus] = useState<LoadState>("loading");
+  const [drawer, setDrawer] = useState<ImpactedApplication | null>(null);
+  const s = mockSummary;
+  const tr = s.trends ?? {};
+
+  // simulate the async load so the skeleton/empty/error states are real (mock data).
+  useEffect(() => { const id = setTimeout(() => setStatus("ready"), 350); return () => clearTimeout(id); }, []);
+
+  if (status === "loading") {
+    return (
+      <div className="ao-stack">
+        <div className="ao-groups">{[0, 1, 2].map((g) => (
+          <section className="ao-group" key={g}><Skeleton w={90} h={12} />
+            <div className="ao-group-cards">{[0, 1, 2].map((i) => <div className="ao-card" key={i}><Skeleton w={60} h={10} /><Skeleton w={80} h={28} /></div>)}</div>
+          </section>
+        ))}</div>
+        <div className="ao-panel"><Skeleton w={180} h={14} /><div style={{ marginTop: 12 }}><Skeleton h={240} /></div></div>
+      </div>
+    );
+  }
+  if (status === "error") {
+    return <div className="ao-panel"><EmptyState title="Unable to load App Observability summary" hint="retry, or check the cloud connector status in Settings" /></div>;
+  }
+
   return (
     <div className="ao-stack">
-      <div className="ao-cards">
-        <MetricCard label="Apps observed" value={mockApps.length} tone="accent" />
-        <MetricCard label="Apps degraded" value={kpis.degraded} tone={kpis.degraded ? "warn" : "good"} />
-        <MetricCard label="Unknown attribution" value={`${kpis.unknownPct}%`} tone={kpis.unknownPct > 10 ? "warn" : undefined} />
-        <MetricCard label="Resources mapped" value={mockResources.length} />
-        <MetricCard label="Active app RCA" value={kpis.rcaActive} tone={kpis.rcaActive ? "warn" : "good"} />
-        <MetricCard label="Underlay-impacted" value={kpis.underlay} tone={kpis.underlay ? "warn" : undefined} />
-        <MetricCard label="Recent changes" value={recentChanges} sub="last 24h" />
+      {/* A. grouped operational cards */}
+      <div className="ao-groups">
+        <CardGroup title="Impact">
+          <MetricCard label="Apps Degraded" value={s.appsDegraded} trend={tr.appsDegraded} tone="warn" />
+          <MetricCard label="Active App RCA" value={s.activeRca} trend={tr.activeRca} tone="warn" />
+          <MetricCard label="Underlay Impacted" value={s.underlayImpacted} trend={tr.underlayImpacted} tone={s.underlayImpacted ? "warn" : "good"} />
+        </CardGroup>
+        <CardGroup title="Coverage">
+          <MetricCard label="Apps Observed" value={s.appsObserved.toLocaleString()} trend={tr.appsObserved} tone="accent" />
+          <MetricCard label="Resources Mapped" value={s.resourcesMapped.toLocaleString()} trend={tr.resourcesMapped} />
+          <MetricCard label="Unknown Attribution" value={`${s.unknownPct}%`} trend={tr.unknownPct} tone={s.unknownPct > 10 ? "warn" : "good"} />
+        </CardGroup>
+        <CardGroup title="Change">
+          <MetricCard label="Recent Cloud Changes" value={s.recentChanges} trend={tr.recentChanges} />
+          <MetricCard label="Deploy-linked Incidents" value={s.deployLinkedIncidents} trend={tr.deployLinkedIncidents} tone={s.deployLinkedIncidents ? "warn" : "good"} />
+        </CardGroup>
       </div>
+
+      {/* B. root-domain breakdown strip */}
+      <div className="ao-breakdown">
+        <span className="ao-breakdown-l">Root domain breakdown</span>
+        {mockBreakdown.map((b) => (
+          <span className="ao-breakdown-i" key={b.domain}><RootDomainBadge domain={b.domain} /><span className="ao-breakdown-n">{b.count}</span></span>
+        ))}
+      </div>
+
+      {/* C. impacted applications table */}
       <div className="ao-panel">
-        <div className="ao-panel-h">Impacted applications</div>
-        <DataTable<App> rows={impacted} rowKey={(a) => a.id} height={Math.min(420, 44 + impacted.length * 30)}
-          ariaLabel="Impacted applications" onRowClick={onOpen}
-          columns={[
-            { key: "app", header: "App", width: 160, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
-            { key: "health", header: "Health", width: 100, render: (a) => <HealthBadge status={a.health} /> },
-            { key: "owner", header: "Owner", width: 110, render: (a) => a.owner },
-            { key: "env", header: "Env", width: 70, render: (a) => a.env },
-            { key: "symptom", header: "Primary symptom", width: 140, render: (a) => a.primarySymptom },
-            { key: "domain", header: "Likely root domain", width: 160, render: (a) => <RootDomainBadge domain={a.rootDomain} /> },
-            { key: "conf", header: "Confidence", width: 110, render: (a) => <ConfidenceBadge level={a.rootDomain === "unknown" ? "unknown" : a.confidence} /> },
-            { key: "traffic", header: "Traffic", width: 100, align: "right", render: (a) => fmtBps(a.trafficBps) },
-            { key: "change", header: "Last change", width: 110, render: (a) => ago(a.lastChange) },
-            { key: "underlay", header: "Underlay", width: 90, render: (a) => a.underlayImpacted ? <Chip label="impacted" tone="var(--warn)" /> : <span className="ao-muted">—</span> },
-          ]} />
+        <div className="ao-panel-h">Impacted applications <span className="ao-panel-meta">click a row for the RCA + evidence</span></div>
+        {mockImpacted.length === 0 ? (
+          <EmptyState title="No impacted applications in selected time range" hint="all observed apps are healthy" />
+        ) : (
+          <DataTable<ImpactedApplication> rows={mockImpacted} rowKey={(a) => a.id} height={Math.min(460, 56 + mockImpacted.length * 34)}
+            ariaLabel="Impacted applications" onRowClick={setDrawer} initialSort={{ key: "health", dir: "asc" }}
+            columns={[
+              { key: "app", header: "App", width: 130, sortable: true, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
+              { key: "health", header: "Health", width: 100, sortable: true, sortValue: (a) => a.health, render: (a) => <HealthBadge status={a.health} /> },
+              { key: "owner", header: "Owner", width: 90, render: (a) => a.owner },
+              { key: "env", header: "Env", width: 56, render: (a) => a.env },
+              { key: "symptom", header: "Symptom", width: 130, render: (a) => a.symptom },
+              { key: "domain", header: "Likely Root", width: 150, render: (a) => <RootDomainBadge domain={a.rootDomain} /> },
+              { key: "conf", header: "Confidence", width: 112, render: (a) => <ConfidenceBadge level={a.confidence} /> },
+              { key: "why", header: "Why", width: 340, render: (a) => <span className="ao-why" title={a.why}>{a.why}</span> },
+              { key: "traffic", header: "Traffic", width: 96, align: "right", render: (a) => fmtBps(a.trafficBps) },
+              { key: "change", header: "Last Change", width: 100, render: (a) => ago(a.lastChange) },
+              { key: "underlay", header: "Underlay", width: 150, render: (a) => <UnderlayCell u={a.underlay} /> },
+              { key: "action", header: "Action", width: 150, render: (a) => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); setDrawer(a); }}>{a.action}</button> },
+            ]} />
+        )}
       </div>
+
+      {drawer && (
+        <RcaDrawer rca={drawer.rca} onClose={() => setDrawer(null)}
+          onViewDetail={() => { onOpen(toApp(drawer)); setDrawer(null); }}
+          onOpenEvidence={() => { goTab("evidence"); setDrawer(null); }}
+          onViewUnderlay={() => { goTab("underlay"); setDrawer(null); }} />
+      )}
     </div>
   );
 }

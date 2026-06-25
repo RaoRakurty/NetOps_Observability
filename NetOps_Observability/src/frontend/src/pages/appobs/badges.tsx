@@ -7,7 +7,7 @@
 
 import { ReactNode, useEffect } from "react";
 import { Chip } from "../../components/noc";
-import type { Confidence, Health, RootDomain, AttrSource } from "./types";
+import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel } from "./types";
 
 // Confidence ladder → tone. Higher confidence reads stronger; unknown is visible but
 // calm (muted), not alarming — alarm is reserved for health/severity.
@@ -50,9 +50,34 @@ const DOMAIN_TONE: Partial<Record<RootDomain, string>> = {
   unknown: "var(--fg-subtle)",
 };
 
+// Short, OFFICIAL labels — never truncate "DATABASE DEPENDE…". (Chip never clips; the
+// .ao-root class keeps it on one line at a readable width.)
+const ROOT_LABEL: Record<RootDomain, string> = {
+  application: "Application", deployment: "Deployment", cloud_resource: "Cloud Resource",
+  cloud_security_policy: "Cloud Policy", cloud_network: "Cloud Network",
+  cloud_provider: "Cloud Provider", hybrid_underlay: "Hybrid Underlay",
+  external_saas: "External SaaS", dns: "DNS", certificate_tls: "Certificate/TLS",
+  identity_auth: "Identity/Auth", database_dependency: "Database", unknown: "Unknown",
+};
+
 export function RootDomainBadge({ domain }: { domain: RootDomain }) {
-  if (domain === "unknown") return <span className="ao-muted">—</span>;
-  return <Chip label={domain.replace(/_/g, " ")} tone={DOMAIN_TONE[domain] ?? "var(--accent)"} />;
+  return <span className="ao-root"><Chip label={ROOT_LABEL[domain]} tone={DOMAIN_TONE[domain] ?? "var(--fg-subtle)"} /></span>;
+}
+
+// Underlay involvement → explicit text + tone (never a bare "—").
+export function underlayDisplay(u: UnderlayState): { text: string; tone: string } {
+  switch (u.kind) {
+    case "none": return { text: "No impact", tone: "var(--ok)" };
+    case "suspected": return { text: `Suspected: ${u.seam}`, tone: "var(--warn)" };
+    case "confirmed": return { text: `Confirmed: ${u.seam}`, tone: "var(--crit)" };
+    case "not_checked": return { text: "Not checked", tone: "var(--fg-subtle)" };
+    default: return { text: "Unknown", tone: "var(--fg-subtle)" };
+  }
+}
+
+export function UnderlayCell({ u }: { u: UnderlayState }) {
+  const d = underlayDisplay(u);
+  return <span className="ao-underlay" style={{ color: d.tone }}>{d.text}</span>;
 }
 
 // Identity pill — app name + the source that attributed it, so identity is never a
@@ -74,15 +99,29 @@ export function AppIdentityPill({ app, source, confidence }: { app: string; sour
   );
 }
 
-// MetricCard — a KPI tile in the house style (uses the cc-kpi look via local class
-// that maps to the same tokens). tone ∈ accent|good|warn|bad.
-export function MetricCard({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode; tone?: "accent" | "good" | "warn" | "bad" }) {
+// MetricCard — a NOC KPI tile: prominent number, small UPPERCASE label, optional
+// trend subtext, and a subtle left severity accent (only when useful). All tokens.
+export function MetricCard({ label, value, trend, sub, tone }: {
+  label: string; value: ReactNode; trend?: ReactNode; sub?: ReactNode;
+  tone?: "accent" | "good" | "warn" | "bad";
+}) {
+  const foot = trend ?? sub;
   return (
     <div className={`ao-card${tone ? " ao-card--" + tone : ""}`}>
-      <div className="ao-card-v">{value}</div>
       <div className="ao-card-l">{label}</div>
-      {sub != null && <div className="ao-card-s">{sub}</div>}
+      <div className="ao-card-v">{value}</div>
+      {foot != null && <div className="ao-card-s">{foot}</div>}
     </div>
+  );
+}
+
+// CardGroup — a labelled operational group (Impact / Coverage / Change).
+export function CardGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="ao-group">
+      <div className="ao-group-h">{title}</div>
+      <div className="ao-group-cards">{children}</div>
+    </section>
   );
 }
 
@@ -146,6 +185,53 @@ export function EvidenceDrawer({ title, subtitle, onClose, children }: { title: 
         <div className="ao-drawer-body">{children}</div>
       </aside>
     </div>
+  );
+}
+
+// RcaDrawer — the right-side RCA/evidence panel opened from an impacted-app row.
+// Always shows root domain + confidence + supporting AND contradicting evidence +
+// the recommended next action, so a verdict is never a bare label.
+export function RcaDrawer({ rca, onClose, onViewDetail, onOpenEvidence, onViewUnderlay }: {
+  rca: RcaDrawerModel; onClose: () => void;
+  onViewDetail: () => void; onOpenEvidence: () => void; onViewUnderlay: () => void;
+}) {
+  const supporting = rca.evidence.filter((e) => e.kind === "supporting");
+  const contradicting = rca.evidence.filter((e) => e.kind === "contradicting");
+  return (
+    <EvidenceDrawer
+      title={rca.app}
+      subtitle={<span className="ao-drawer-badges"><HealthBadge status={rca.health} /><RootDomainBadge domain={rca.rootDomain} /><ConfidenceBadge level={rca.confidence} /></span>}
+      onClose={onClose}
+    >
+      <div className="ao-rca-drawer">
+        <div className="ao-rca-row"><span className="ao-rca-k">Likely root domain</span><span><RootDomainBadge domain={rca.rootDomain} /></span></div>
+        <div className="ao-rca-row"><span className="ao-rca-k">Confidence</span><span><ConfidenceBadge level={rca.confidence} /></span></div>
+        <div className="ao-rca-row"><span className="ao-rca-k">Recommended owner</span><span className="ao-rca-owner">{rca.recommendedOwner}</span></div>
+
+        <div className="ao-ev-h">Supporting evidence</div>
+        <ul className="ao-ev-list">
+          {supporting.map((e, i) => <li key={i} className="ao-ev ao-ev--ok"><span className="ao-ev-i">✓</span>{e.text}</li>)}
+        </ul>
+
+        <div className="ao-ev-h">Contradicting evidence</div>
+        <ul className="ao-ev-list">
+          {contradicting.length
+            ? contradicting.map((e, i) => <li key={i} className="ao-ev ao-ev--no"><span className="ao-ev-i">✕</span>{e.text}</li>)
+            : <li className="ao-ev ao-muted"><span className="ao-ev-i">–</span>none above floor</li>}
+        </ul>
+
+        <div className="ao-next">
+          <div className="ao-next-h">Recommended next action</div>
+          <div className="ao-next-v">{rca.nextAction}</div>
+        </div>
+
+        <div className="ao-drawer-actions">
+          <button className="ao-btn ao-btn--primary" onClick={onViewDetail}>View App Detail</button>
+          <button className="ao-btn" onClick={onOpenEvidence}>Open Evidence</button>
+          <button className="ao-btn" onClick={onViewUnderlay}>View Underlay Path</button>
+        </div>
+      </div>
+    </EvidenceDrawer>
   );
 }
 
