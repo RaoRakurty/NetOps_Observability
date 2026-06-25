@@ -3,11 +3,11 @@
 // → Underlay → Evidence, with an RCA summary that always shows confidence + evidence.
 // Built on the existing tokens/components; mock-fed today.
 
-import { useState } from "react";
+import { useState, ReactNode } from "react";
 import { Segmented } from "../../components/ui";
 import { Chip } from "../../components/noc";
 import DataTable from "../../components/DataTable";
-import type { App } from "./types";
+import type { App, EvidenceRow, EvidenceCategory, Confidence } from "./types";
 import {
   HealthBadge, ConfidenceBadge, RootDomainBadge, MetricCard, EmptyState,
   fmtBps, ago,
@@ -65,7 +65,7 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
             <MetricCard label="Last change" value={ago(app.lastChange)} sub={app.lastChange ? "deploy" : undefined} />
             <MetricCard label="Impacted seams" value={app.underlayImpacted ? "1" : "0"} tone={app.underlayImpacted ? "warn" : undefined} />
           </div>
-          <RcaPanel app={app} />
+          <RcaPanel app={app} evidence={evidence} />
           <div className="ao-panel">
             <div className="ao-panel-h">Incident timeline</div>
             <ul className="ao-timeline">
@@ -85,6 +85,7 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
             <tbody>
               <tr><td>App</td><td><strong>{app.name}</strong></td></tr>
               <tr><td>Attributed by</td><td>{app.source} <ConfidenceBadge level={app.confidence} /></td></tr>
+              <tr><td>Why this identity</td><td>{identityWhy(app)}</td></tr>
               <tr><td>Owner / Env</td><td>{app.owner} · {app.env}</td></tr>
               <tr><td>Cloud</td><td>{app.provider.toUpperCase()} · {app.account} · {app.region}</td></tr>
               <tr><td>Resources mapped</td><td>{app.resources}</td></tr>
@@ -142,23 +143,98 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
   );
 }
 
-function RcaPanel({ app }: { app: App }) {
-  if (app.rootDomain === "unknown") {
-    return <div className="ao-panel ao-rca"><div className="ao-panel-h">RCA</div><EmptyState title="No active RCA — app is healthy or evidence is insufficient" hint="unknown is first-class; we don't guess a root cause" /></div>;
+// owner the verdict routes to — driven by the root domain, not guessed.
+function ownerFor(a: App): string {
+  switch (a.rootDomain) {
+    case "deployment": case "application": return a.owner || "app team";
+    case "database_dependency": return "data";
+    case "hybrid_underlay": case "cloud_network": return "network";
+    case "cloud_provider": return "cloud provider (open ticket)";
+    case "dns": return "platform / DNS";
+    case "certificate_tls": return "platform / PKI";
+    default: return a.owner || "—";
   }
+}
+
+// a labelled list of evidence reasons (one category of the chain).
+function EvBlock({ title, badge, rows, mark, tone }: {
+  title: string; badge?: ReactNode; rows: EvidenceRow[]; mark: string; tone?: string;
+}) {
+  if (!rows.length) return null;
   return (
-    <div className="ao-panel ao-rca">
-      <div className="ao-panel-h">RCA summary <RootDomainBadge domain={app.rootDomain} /></div>
-      <div className="ao-rca-grid">
-        <div><div className="ao-rca-l">Likely root domain</div><div className="ao-rca-v"><RootDomainBadge domain={app.rootDomain} /></div></div>
-        <div><div className="ao-rca-l">Why</div><div className="ao-rca-v">{rcaWhy(app)}</div></div>
-        <div><div className="ao-rca-l">Supporting evidence</div><div className="ao-rca-v ao-good">{rcaSupport(app)}</div></div>
-        <div><div className="ao-rca-l">Contradicting</div><div className="ao-rca-v ao-muted">none above floor</div></div>
-        <div><div className="ao-rca-l">Next action</div><div className="ao-rca-v">{rcaAction(app)}</div></div>
-      </div>
+    <div className="ao-chain-block">
+      <div className="ao-chain-h">{title} {badge}</div>
+      <ul className="ao-ev-list">
+        {rows.map((e, i) => (
+          <li key={i} className="ao-ev"><span className="ao-ev-i" style={tone ? { color: tone } : undefined}>{mark}</span>{e.reason}</li>
+        ))}
+      </ul>
     </div>
   );
 }
+
+function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
+  if (app.rootDomain === "unknown") {
+    return <div className="ao-panel ao-rca"><div className="ao-panel-h">RCA</div><EmptyState title="No active RCA — app is healthy or evidence is insufficient" hint="unknown is first-class; we don't guess a root cause" /></div>;
+  }
+  const byCat = (c: EvidenceCategory) => evidence.filter((e) => e.category === c);
+  const supporting = byCat("supporting");
+  const discriminating = byCat("discriminating");
+  const contradicting = byCat("contradicting");
+  const missing = byCat("missing");
+  const recovery = byCat("recovery");
+  const hasChain = evidence.length > 0;
+  // verdict confidence is EARNED: a discriminator + support reads strong; support
+  // alone reads suspected; no chain falls back to the identity confidence.
+  const rcaConf: Confidence = discriminating.length && supporting.length ? "strong" : supporting.length ? "suspected" : app.confidence;
+
+  return (
+    <div className="ao-panel ao-rca">
+      <div className="ao-panel-h">RCA verdict <RootDomainBadge domain={app.rootDomain} /></div>
+
+      {/* verdict card */}
+      <div className="ao-rca-grid">
+        <div><div className="ao-rca-l">Likely root domain</div><div className="ao-rca-v"><RootDomainBadge domain={app.rootDomain} /></div></div>
+        <div><div className="ao-rca-l">Confidence</div><div className="ao-rca-v"><ConfidenceBadge level={rcaConf} /></div></div>
+        <div><div className="ao-rca-l">Status</div><div className="ao-rca-v">open · investigating</div></div>
+        <div><div className="ao-rca-l">Owner</div><div className="ao-rca-v">{ownerFor(app)}</div></div>
+        <div><div className="ao-rca-l">Next action</div><div className="ao-rca-v">{rcaAction(app)}</div></div>
+      </div>
+
+      {/* evidence chain — why this, why not, what's missing */}
+      {hasChain ? (
+        <div className="ao-chain">
+          <EvBlock title="Why this root domain" badge={<RootDomainBadge domain={app.rootDomain} />} rows={[...supporting, ...discriminating]} mark="✓" tone="var(--ok)" />
+          <EvBlock title="Why not other domains" rows={contradicting} mark="✕" tone="var(--crit)" />
+          <EvBlock title="Missing evidence (gaps)" rows={missing} mark="–" tone="var(--fg-subtle)" />
+          <EvBlock title="Recovery" rows={recovery} mark="↺" tone="var(--ok)" />
+          {!supporting.length && !discriminating.length && (
+            <div className="ao-muted ao-chain-empty">No supporting evidence above floor — verdict is provisional.</div>
+          )}
+        </div>
+      ) : (
+        <div className="ao-rca-grid">
+          <div><div className="ao-rca-l">Why</div><div className="ao-rca-v">{rcaWhy(app)}</div></div>
+          <div><div className="ao-rca-l">Supporting</div><div className="ao-rca-v ao-good">{rcaSupport(app)}</div></div>
+          <div><div className="ao-rca-l">Contradicting</div><div className="ao-rca-v ao-muted">none above floor</div></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// plain-language provenance for the app's identity — never a bare source token.
+const identityWhy = (a: App): string => {
+  switch (a.source) {
+    case "cloud_tag": return `cloud tags (app/owner/env) on the resources resolve to "${a.name}"`;
+    case "cloud_graph": return `resource-graph name matches "${a.name}" (no app tag present)`;
+    case "operator_catalog": return `operator-defined attribution rule maps these resources to "${a.name}"`;
+    case "firewall_appid": return `firewall App-ID on crossing flows identifies "${a.name}"`;
+    case "domain": return `observed domain/SNI maps to "${a.name}"`;
+    case "ip_catalog": return `vendor IP/prefix catalog suggests "${a.name}" (suspected)`;
+    default: return "no confident attribution — identity is unknown";
+  }
+};
 
 const rcaWhy = (a: App) => a.rootDomain === "deployment" ? "deploy 7m before 5xx onset, same app" : a.rootDomain === "database_dependency" ? "DB connection pool exhausted; targets unhealthy" : a.rootDomain === "hybrid_underlay" ? "Direct Connect BGP flap coincides with latency rise" : "multi-signal correlation";
 const rcaSupport = (a: App) => a.rootDomain === "deployment" ? "cloud_change (confirmed) + cloud_health 5xx (strong)" : a.rootDomain === "database_dependency" ? "elb target_health down + rds connections (strong)" : "underlay BGP/RTT + app latency (suspected)";

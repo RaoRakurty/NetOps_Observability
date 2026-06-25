@@ -3615,6 +3615,13 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-rca-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-4); }
 .ao-rca-l { font-size: var(--fs-micro, 12px); color: var(--fg-muted); text-transform: uppercase; letter-spacing: .06em; }
 .ao-rca-v { font-size: var(--fs-meta, 13px); color: var(--fg); margin-top: 2px; }
+/* RCA evidence chain (App Detail · why-this / why-not / missing) */
+.ao-chain { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-4);
+  margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--panel-border); }
+.ao-chain-block { min-width: 0; }
+.ao-chain-h { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--fg-muted); margin-bottom: var(--sp-2); display: flex; align-items: center; gap: 6px; }
+.ao-chain-empty { font-size: var(--fs-micro, 12px); }
 
 /* misc */
 .ao-legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
