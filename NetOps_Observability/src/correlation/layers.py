@@ -78,6 +78,17 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "synthetic_http_fail": CausalLayer.APPLICATION,
     "http_error_rate": CausalLayer.APPLICATION,
     "app_timeout": CausalLayer.APPLICATION,
+    # cloud app observability (#81 P3G) — cloud signals on the same causal stack so
+    # a cloud resource/db symptom orders BELOW the app symptom it causes. Config
+    # mutations (cloud_change/cloud_audit/security_policy_change) are INTENTIONALLY
+    # unmapped — a change has no fixed causal layer → layer prior abstains, onset
+    # ordering decides (like device_alarm).
+    "cloud_health": CausalLayer.APPLICATION,        # app health symptom (L7)
+    "cloud_lb_log": CausalLayer.SERVICE,            # load-balancer access (L7 infra)
+    "cloud_resource_health": CausalLayer.SERVICE,   # LB/compute/resource health
+    "cloud_metric": CausalLayer.SERVICE,            # resource metric
+    "database_metric": CausalLayer.SERVICE,         # DB/cache/queue dependency
+    "cloud_flow_log": CausalLayer.TRANSPORT,        # cloud flow (L4)
     # `device_alarm` (the #80 generic-alarm catch-all) is INTENTIONALLY unmapped:
     # a generic alarm has no known causal layer, so the layer prior abstains for it
     # (honest, never a guess). Its absence here is by design, NOT a coverage gap.

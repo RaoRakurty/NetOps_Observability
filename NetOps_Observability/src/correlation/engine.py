@@ -299,11 +299,15 @@ class Edge:
 
 
 # OSI-flavored layer prior over entity types: lower layers cause higher ones.
+# (#81 P3G) APP is the top of the stack (application symptom); a CLOUD_RESOURCE
+# (LB/DB/compute dependency) sits below the app it serves — so "DB saturation
+# → app 5xx" orders correctly. Coarse fallback only; the finer per-kind
+# layers.py map drives direction when both kinds are mapped.
 _LAYER = {
     EntityType.DEVICE: 0, EntityType.INTERFACE: 0,
     EntityType.PREFIX: 1, EntityType.SITE: 1,
-    EntityType.PATH: 2, EntityType.SEGMENT: 2,
-    EntityType.SERVICE: 3,
+    EntityType.PATH: 2, EntityType.SEGMENT: 2, EntityType.CLOUD_RESOURCE: 2,
+    EntityType.SERVICE: 3, EntityType.APP: 3,
 }
 
 
