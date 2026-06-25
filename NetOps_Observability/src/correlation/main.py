@@ -46,6 +46,7 @@ from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
 from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
+from cloud_producers import cloud_signal_from_event
 from producers import (
     episode_signal,
     flow_sample,
@@ -81,7 +82,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud"]
 
 # Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
 # tenant_id onto each finding so it carries the same tenant discriminator as the
@@ -177,6 +178,9 @@ TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
 TRAPS_NORMALIZED = 0           # classified into a control_plane signal
 TRAPS_RECANON = 0              # C8: re-attributed to a device via the C7.1 EntityResolver
 TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
+CLOUD_RECEIVED = 0             # consumed from netops.cloud (#81 P3G ingestion lane)
+CLOUD_SIGNALS = 0             # source=cloud signals written to corr_signals + buffered
+CLOUD_DROPPED = 0             # dropped: no tenant (default-closed) / malformed (dead-letter)
 
 # Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
 # stamp beyond this, or a stamp older than the correlation window, is dropped
@@ -805,6 +809,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_probe(event)
     elif topic == "netops.snmptrap":
         await handle_snmptrap(event)
+    elif topic == "netops.cloud":
+        await handle_cloud(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -1069,6 +1075,38 @@ async def handle_snmptrap(ev: dict) -> None:
     log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
 
 
+async def handle_cloud(ev: dict) -> None:
+    """Cloud App Observability events (netops.cloud) → canonical cloud signals on
+    the SAME spine (#81 P3G). Additive evidence lane: the existing engine grounds,
+    correlates and verdicts them with no cloud-specific code path. A cloud-only
+    picture is suspected-at-best (one vantage); confirmation needs an independent
+    observer (probe / underlay / firewall). Tenancy is EXPLICIT — a cloud event
+    carries its own tenant_id (there is no device to infer it from); an untenanted
+    event is DROPPED, never guessed (default-closed isolation, §3a)."""
+    global DEADLETTER_COUNT, CLOUD_RECEIVED, CLOUD_SIGNALS, CLOUD_DROPPED
+    CLOUD_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        CLOUD_DROPPED += 1
+        log.warning("cloud event dropped: no tenant_id (kind=%s)", ev.get("kind"))
+        return
+    try:
+        sig = cloud_signal_from_event(ev, tenant, datetime.now(timezone.utc))
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        CLOUD_DROPPED += 1
+        log.warning("dead-letter (cloud): %s", exc)
+        return
+    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    CLOUD_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("cloud signal %s: %s sev=%s acct=%s region=%s",
+             sig.kind, sig.entity_id, sig.severity.value,
+             sig.attrs.get("account", ""), sig.attrs.get("region", ""))
+
+
 async def handle_syslog(ev: dict) -> None:
     # Control-plane extraction first (#67 build ⑦): adjacency / link-state
     # events become control_plane signals on the spine regardless of burst
@@ -1261,6 +1299,10 @@ async def health() -> dict:
             "flow_entities_tracked": len(_FLOW_AGG),
             # C7.3 NetFlow direction: distinct directed device-pairs observed.
             "flow_direction_pairs": FLOW_DIRECTION_PAIRS,
+            # #81 P3G cloud lane: proves netops.cloud is consumed + where events are lost.
+            "cloud_received": CLOUD_RECEIVED,
+            "cloud_signals": CLOUD_SIGNALS,
+            "cloud_dropped": CLOUD_DROPPED,
         },
     }
 

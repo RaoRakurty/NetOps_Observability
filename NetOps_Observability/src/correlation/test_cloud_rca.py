@@ -64,6 +64,21 @@ def test_cloud_only_grounds_but_cannot_confirm():
         assert e.to_node.startswith("app:billing")
 
 
+def test_cloud_object_persists_blast_radius():
+    # REGRESSION (caught live): the engine cycle persists via to_object_row()→
+    # affected(), which buckets nodes by entity_type. APP/CLOUD_RESOURCE were
+    # unmapped → KeyError crashed the WHOLE cycle (blocking every tenant's RCA).
+    # run_window alone never exercised persistence, so the golden tests missed it.
+    db, app = _db_then_app()
+    snap = run_window([db, app], builtin_catalog(), ())[0]
+    aff = snap.affected()
+    assert "billing" in aff.get("apps", [])
+    assert "billing-db" in aff.get("cloud_resources", [])
+    # the actual prod call site must build the row without raising.
+    row = snap.to_object_row(1, "open", "")
+    assert row["correlation_id"] and "affected" in row
+
+
 def test_cloud_symptom_plus_underlay_grounds_across_seam():
     # app 5xx (cloud plane) + a probe RTT anomaly on the underlay (an INDEPENDENT
     # vantage), grounded across a DX seam whose endpoints carry both the app token

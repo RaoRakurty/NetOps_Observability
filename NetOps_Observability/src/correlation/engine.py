@@ -443,15 +443,24 @@ class ObjectSnapshot:
         out: dict[str, list[str]] = {
             "devices": [], "interfaces": [], "sites": [], "paths": [],
             "segments": [], "services": [], "prefixes": [],
+            "apps": [], "cloud_resources": [],
         }
         bucket = {
             EntityType.DEVICE: "devices", EntityType.INTERFACE: "interfaces",
             EntityType.SITE: "sites", EntityType.PATH: "paths",
             EntityType.SEGMENT: "segments", EntityType.SERVICE: "services",
             EntityType.PREFIX: "prefixes",
+            # cloud plane (#81 P3G) — app + cloud resource blast-radius buckets.
+            EntityType.APP: "apps", EntityType.CLOUD_RESOURCE: "cloud_resources",
         }
         for n in self.nodes:
-            col = out[bucket[n.entity_type]]
+            # Defensive: an unmapped entity_type must never crash the whole engine
+            # cycle (one object would block persistence for EVERY tenant). Skip it
+            # from the blast radius rather than KeyError — additive types stay safe.
+            key = bucket.get(n.entity_type)
+            if key is None:
+                continue
+            col = out[key]
             if n.entity_id not in col:
                 col.append(n.entity_id)
         return {k: sorted(v) for k, v in out.items() if v}

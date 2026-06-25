@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from producers import parse_event_ts
 from signals import (
+    DeadLetter,
     EntityType,
     ModalityClass,
     Observer,
@@ -127,3 +129,75 @@ def cloud_signal(
         deviation=deviation,
         attrs=merged_attrs,
     )
+
+
+# ── wire adapter (netops.cloud topic → Signal) ───────────────────────────────
+
+_SEVERITY_ALIASES: dict[str, Severity] = {
+    "info": Severity.INFO, "informational": Severity.INFO, "notice": Severity.INFO,
+    "debug": Severity.INFO, "ok": Severity.INFO, "low": Severity.INFO,
+    "warn": Severity.WARN, "warning": Severity.WARN, "minor": Severity.WARN, "medium": Severity.WARN,
+    "high": Severity.HIGH, "error": Severity.HIGH, "err": Severity.HIGH, "major": Severity.HIGH,
+    "crit": Severity.CRIT, "critical": Severity.CRIT, "fatal": Severity.CRIT, "emergency": Severity.CRIT,
+}
+
+
+def _parse_severity(raw: object) -> Severity:
+    """Wire severity token → canonical Severity (default WARN). Tolerant of the
+    common vendor/cloud spellings; an unknown token is WARN, never a crash."""
+    return _SEVERITY_ALIASES.get(str(raw or "").strip().lower(), Severity.WARN)
+
+
+def _coerce_float(raw: object) -> float:
+    """Best-effort numeric coercion for value/baseline/deviation; non-numeric → 0.0
+    (booleans are NOT numbers here)."""
+    if raw is None or isinstance(raw, bool):
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    try:
+        return float(str(raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def cloud_signal_from_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signal:
+    """Wire event off the `netops.cloud` topic → one canonical cloud Signal.
+
+    The runtime ingestion adapter for cloud_signal(): validates the wire dict and
+    delegates to the pure builder. Raises DeadLetter on a malformed event (unknown
+    kind / no entity) so the consumer parks + counts it rather than guessing —
+    provenance is never invented (§10 no silent failures). Tenancy is the CALLER's
+    job (a cloud event carries an explicit tenant_id; there is no device to infer
+    it from), so this takes the already-resolved `tenant`.
+    """
+    kind = str(ev.get("kind") or "").strip()
+    if kind not in CLOUD_KINDS:
+        raise DeadLetter(f"unknown cloud kind: {kind!r}")
+    app = str(ev.get("app") or "").strip()
+    resource_id = str(ev.get("resource_id") or "").strip()
+    if not app and not resource_id:
+        raise DeadLetter(f"cloud event {kind!r} carries neither app nor resource_id")
+    raw_tokens = ev.get("entity_tokens")
+    tokens = tuple(str(t) for t in raw_tokens if t) if isinstance(raw_tokens, (list, tuple)) else ()
+    raw_attrs = ev.get("attrs")
+    attrs = raw_attrs if isinstance(raw_attrs, dict) else None
+    try:
+        return cloud_signal(
+            tenant,
+            parse_event_ts(ev.get("ts")) or ingest_ts,
+            kind,
+            app=app,
+            resource_id=resource_id,
+            account=str(ev.get("account") or ""),
+            region=str(ev.get("region") or ""),
+            severity=_parse_severity(ev.get("severity")),
+            metric_name=str(ev.get("metric_name") or ev.get("metric") or ""),
+            value=_coerce_float(ev.get("value")),
+            baseline=_coerce_float(ev.get("baseline")),
+            deviation=_coerce_float(ev.get("deviation")),
+            entity_tokens=tokens,
+            attrs=attrs,
+        )
+    except ValueError as exc:  # cloud_signal's own guards → dead-letter, not a crash
+        raise DeadLetter(str(exc)) from exc
