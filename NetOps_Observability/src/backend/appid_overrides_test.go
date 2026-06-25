@@ -68,11 +68,14 @@ func TestBuildOverrideCatalogAuthoritative(t *testing.T) {
 		{MatchKind: "prefix", MatchValue: "10.5.0.0/16", AppLabel: "Payroll"},
 		{MatchKind: "domain", MatchValue: "wiki.corp", AppLabel: "Wiki"}, // non-prefix: skipped in P1c
 	}
-	oc := buildOverrideCatalog(entries)
-	if oc.Size() != 1 {
-		t.Fatalf("only the prefix entry should index, size=%d", oc.Size())
+	ov := buildOverrides(entries)
+	if ov.prefixes.Size() != 1 {
+		t.Fatalf("only the prefix entry should index as a prefix, size=%d", ov.prefixes.Size())
 	}
-	sigs := oc.SignalsFor(netip.MustParseAddr("10.5.1.2"))
+	if ov.domains.Size() != 1 {
+		t.Fatalf("the domain entry should index in the domain matcher, size=%d", ov.domains.Size())
+	}
+	sigs := ov.prefixes.SignalsFor(netip.MustParseAddr("10.5.1.2"))
 	if len(sigs) != 1 || sigs[0].Source != appid.SrcOperator || sigs[0].App != "Payroll" {
 		t.Fatalf("expected an authoritative Payroll signal, got %+v", sigs)
 	}

@@ -91,21 +91,30 @@ func newAppCatalogStore() appCatalogStore {
 	return &memAppCatalogStore{by: map[string]AppCatalogEntry{}}
 }
 
-// buildOverrideCatalog turns prefix override entries into an appid.Catalog whose
-// hits carry SrcOperator (authoritative). Non-prefix kinds (domain/asn/port) are
-// handled in later phases; they are skipped here.
-func buildOverrideCatalog(entries []AppCatalogEntry) *appid.Catalog {
+// tenantOverrides bundles the per-tenant operator overrides built from app_catalog:
+// a prefix catalog (IP→app) and a domain matcher (host→app), both SrcOperator
+// (authoritative). asn/port kinds are reserved for later phases.
+type tenantOverrides struct {
+	prefixes *appid.Catalog
+	domains  *appid.DomainIndex
+}
+
+// buildOverrides turns operator entries into the per-tenant override structures.
+func buildOverrides(entries []AppCatalogEntry) tenantOverrides {
 	ces := make([]appid.CatalogEntry, 0, len(entries))
+	di := appid.NewDomainIndex()
 	for _, e := range entries {
-		if e.MatchKind != "prefix" {
-			continue
+		switch e.MatchKind {
+		case "prefix":
+			ces = append(ces, appid.CatalogEntry{
+				Prefix: e.MatchValue, App: e.AppLabel, Source: appid.SrcOperator,
+				Feed: "operator", Confidence: 0.9,
+			})
+		case "domain":
+			di.Add(e.MatchValue, e.AppLabel, appid.SrcOperator, 0.9)
 		}
-		ces = append(ces, appid.CatalogEntry{
-			Prefix: e.MatchValue, App: e.AppLabel, Source: appid.SrcOperator,
-			Feed: "operator", Confidence: 0.9,
-		})
 	}
-	return appid.NewCatalog(ces)
+	return tenantOverrides{prefixes: appid.NewCatalog(ces), domains: di}
 }
 
 // ── in-memory backend ──────────────────────────────────────────────────────────
@@ -309,16 +318,16 @@ func (s *server) handleAppIDCatalogByID(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
-// overrideCatalogFor loads the caller's tenant override entries and builds a small
-// prefix catalog (SrcOperator). Returns nil on error/empty (resolve still works off
-// the global feeds + NGFW). Cheap: app_catalog is operator-curated and small.
-func (s *server) overrideCatalogFor(ctx context.Context, tenant string, cross bool) *appid.Catalog {
+// overridesFor loads the caller's tenant override entries and builds the per-tenant
+// prefix + domain override structures (SrcOperator). Empty on error/none (resolve
+// still works off the global feeds + NGFW). Cheap: app_catalog is operator-curated.
+func (s *server) overridesFor(ctx context.Context, tenant string, cross bool) tenantOverrides {
 	if s.appOverrides == nil {
-		return nil
+		return tenantOverrides{}
 	}
 	entries, err := s.appOverrides.List(ctx, tenant, cross)
 	if err != nil || len(entries) == 0 {
-		return nil
+		return tenantOverrides{}
 	}
-	return buildOverrideCatalog(entries)
+	return buildOverrides(entries)
 }

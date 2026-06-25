@@ -22,6 +22,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -32,16 +33,19 @@ import (
 // lock-free reads + atomic reload.
 type appCatalogHolder struct {
 	cur      atomic.Pointer[appid.Catalog]
+	dom      atomic.Pointer[appid.DomainIndex] // global domain matcher (#81 P2, from M365 urls)
 	feedsDir string
 }
 
 func newAppCatalogHolder() *appCatalogHolder {
 	h := &appCatalogHolder{feedsDir: os.Getenv("APPID_FEEDS_DIR")}
 	h.cur.Store(appid.NewCatalog(nil)) // empty until loaded; resolve is safe + unknown
+	h.dom.Store(appid.NewDomainIndex())
 	return h
 }
 
-func (h *appCatalogHolder) get() *appid.Catalog { return h.cur.Load() }
+func (h *appCatalogHolder) get() *appid.Catalog         { return h.cur.Load() }
+func (h *appCatalogHolder) domains() *appid.DomainIndex { return h.dom.Load() }
 
 // feedParsers maps a snapshot filename to its parser.
 var feedParsers = []struct {
@@ -77,6 +81,16 @@ func (h *appCatalogHolder) reload() (int, []error) {
 	}
 	cat := appid.NewCatalog(entries)
 	h.cur.Store(cat)
+	// #81 P2: build the global domain matcher from the M365 endpoints feed's urls[].
+	di := appid.NewDomainIndex()
+	if raw, err := os.ReadFile(filepath.Join(h.feedsDir, "m365.json")); err == nil {
+		if des, e := appid.M365Domains(raw); e == nil {
+			for _, de := range des {
+				di.Add(de.Pattern, de.App, appid.SrcDNS, 0) // a domain is a strong signal
+			}
+		}
+	}
+	h.dom.Store(di)
 	return cat.Size(), errs
 }
 
@@ -121,25 +135,35 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ipStr := r.URL.Query().Get("ip")
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, errors.New("a valid ?ip= is required"))
+	ipStr := strings.TrimSpace(r.URL.Query().Get("ip"))
+	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+	if ipStr == "" && domain == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a valid ?ip= or ?domain= is required"))
 		return
 	}
-	// Layer the operator-defined overrides (internal apps, authoritative) + the NGFW
-	// app-id (firewall-classified, authoritative) over the IP-catalog hit — all
-	// tenant-scoped, fused by Resolve.
-	var extra []appid.Signal
 	tenant, cross := principalTenant(claims)
-	if oc := s.overrideCatalogFor(r.Context(), tenant, cross); oc != nil {
-		extra = append(extra, oc.SignalsFor(ip)...)
+	ov := s.overridesFor(r.Context(), tenant, cross)
+
+	// Gather every signal (global IP catalog + operator prefix overrides + NGFW
+	// app-id for an IP; global + operator domain matchers for a domain) and fuse once.
+	var signals []appid.Signal
+	if ipStr != "" {
+		ip, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("invalid ?ip="))
+			return
+		}
+		signals = append(signals, s.appCatalog.get().SignalsFor(ip)...)
+		signals = append(signals, ov.prefixes.SignalsFor(ip)...)
+		if sig, has := s.ngfw.signalFor(tenant, cross, ipStr); has {
+			signals = append(signals, sig)
+		}
 	}
-	if sig, has := s.ngfw.signalFor(tenant, cross, ipStr); has {
-		extra = append(extra, sig)
+	if domain != "" {
+		signals = append(signals, s.appCatalog.domains().SignalsFor(domain)...)
+		signals = append(signals, ov.domains.SignalsFor(domain)...)
 	}
-	v := s.appCatalog.get().Resolve(ip, extra...)
-	writeJSON(w, http.StatusOK, v)
+	writeJSON(w, http.StatusOK, appid.Fuse(signals))
 }
 
 func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {

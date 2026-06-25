@@ -107,13 +107,11 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 
 	cat := s.appCatalog.get()
 	tenant, cross := principalTenant(claims)
-	overrideCat := s.overrideCatalogFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
+	ov := s.overridesFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
 	extraFor := func(dst string) []appid.Signal {
 		var extra []appid.Signal
-		if overrideCat != nil {
-			if ip, err := netip.ParseAddr(dst); err == nil {
-				extra = append(extra, overrideCat.SignalsFor(ip)...)
-			}
+		if ip, err := netip.ParseAddr(dst); err == nil {
+			extra = append(extra, ov.prefixes.SignalsFor(ip)...)
 		}
 		if sig, has := s.ngfw.signalFor(tenant, cross, dst); has {
 			extra = append(extra, sig)
