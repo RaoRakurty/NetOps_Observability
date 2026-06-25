@@ -173,6 +173,91 @@ func TestRcaPathView_NoBaseMutation(t *testing.T) {
 	}
 }
 
+// #81 P3G: cloud projection — a cloud symptom + an independent network probe
+// project the application + its cloud resources beyond the path, joined by a
+// provider boundary (the seam). Additive node/edge types, app-team owned.
+func TestRcaPathView_CloudProjection(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "c1", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:123:us-east-1", "attrs": `{"app":"billing","account":"123","region":"us-east-1"}`}),
+		pvSig(map[string]any{"signal_id": "c2", "source": "cloud", "entity_type": "cloud_resource", "entity_id": "billing-db", "kind": "database_metric", "modality_class": "device_telemetry", "observer_id": "cloud:123:us-east-1"}),
+		pvSig(map[string]any{"signal_id": "c3", "entity_type": "path", "entity_id": "branch->edge1", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "vantage", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
+	}
+	v := buildRcaPathView("obj", meta, sigs, nil)
+
+	// the app node exists and reads as a cloud-typed affected endpoint.
+	var appNode, resNode *rcaPathNode
+	for i := range v.Path.Nodes {
+		switch v.Path.Nodes[i].ID {
+		case "billing":
+			appNode = &v.Path.Nodes[i]
+		case "billing-db":
+			resNode = &v.Path.Nodes[i]
+		}
+	}
+	if appNode == nil || appNode.Type != "cloud" {
+		t.Fatalf("expected a cloud app node 'billing'; got nodes %+v", v.Path.Nodes)
+	}
+	if resNode == nil || resNode.Type != "cloud" {
+		t.Fatalf("expected a cloud resource node 'billing-db'; got %+v", v.Path.Nodes)
+	}
+	// the seam: a provider_boundary edge into the application.
+	boundary := false
+	for _, e := range v.Path.Edges {
+		if e.Type == "provider_boundary" && e.Target == "billing" {
+			boundary = true
+		}
+	}
+	if !boundary {
+		t.Fatalf("expected a provider_boundary (cloud seam) edge into the app; got %+v", v.Path.Edges)
+	}
+	// app annotation is app-team owned, the resource is grounded as a candidate fault.
+	if a := findAnn(v, "node", "billing"); a == nil || a.Owner != "app_team" {
+		t.Fatalf("expected an app_team-owned app annotation; got %+v", a)
+	}
+	if a := findAnn(v, "node", "billing-db"); a == nil || a.Status != "suspected_down" {
+		t.Fatalf("expected suspected_down resource annotation; got %+v", a)
+	}
+}
+
+// #81 P3G: when the probe destination IS the app, the endpoint is upgraded to a
+// cloud node in place — no duplicate billing node, no extra boundary edge.
+func TestRcaPathView_CloudAppIsProbeDestination(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "c3", "evidence_missing": "[]"}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
+		pvSig(map[string]any{"signal_id": "c3", "entity_type": "path", "entity_id": "branch->billing", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "vantage", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
+	}
+	v := buildRcaPathView("obj", meta, sigs, nil)
+	count, cloudTyped := 0, false
+	for _, n := range v.Path.Nodes {
+		if n.ID == "billing" {
+			count++
+			cloudTyped = n.Type == "cloud"
+		}
+	}
+	if count != 1 || !cloudTyped {
+		t.Fatalf("expected exactly one cloud-typed 'billing' node; got count=%d nodes=%+v", count, v.Path.Nodes)
+	}
+}
+
+// #81 P3G: no app/cloud_resource entities → the cloud projection is a no-op
+// (network RCA path is byte-identical to before).
+func TestRcaPathView_NoCloudProjectionForNetworkObject(t *testing.T) {
+	meta, sigs, edges := goldenInputs()
+	v := buildRcaPathView("obj", meta, sigs, edges)
+	for _, n := range v.Path.Nodes {
+		if n.Type == "cloud" {
+			t.Fatalf("network-only object grew a cloud node: %+v", n)
+		}
+	}
+	for _, e := range v.Path.Edges {
+		if e.Type == "provider_boundary" {
+			t.Fatalf("network-only object grew a provider_boundary edge: %+v", e)
+		}
+	}
+}
+
 // confirmed verdict → confirmed_down + "Likely fault location".
 func TestRcaPathView_ConfirmedTitleAndState(t *testing.T) {
 	meta, sigs, edges := goldenInputs()

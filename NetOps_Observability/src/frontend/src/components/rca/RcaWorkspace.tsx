@@ -242,6 +242,61 @@ export default function RcaWorkspace({
             </section>
           )}
 
+          {/* cloud application & resources (#81 P3G 1c) — additive; only present
+              when the object carries cloud-plane evidence. Network RCA renders
+              identically when this is absent. */}
+          {data.cloud && (
+            <>
+              <div className="rw-section-title">Cloud application &amp; resources</div>
+              <section className="rw-panel rw-cloud">
+                <div className="rw-cloud-head">
+                  <div className="rw-cloud-id">
+                    <span className="rw-cloud-app">{data.cloud.app || "Cloud application"}</span>
+                    <span className="rw-cloud-meta">
+                      {data.cloud.account && <span>Account {data.cloud.account}</span>}
+                      {data.cloud.region && <span>{data.cloud.region}</span>}
+                      <span>{data.cloud.signalCount} cloud {data.cloud.signalCount === 1 ? "signal" : "signals"}</span>
+                    </span>
+                  </div>
+                  <Pill p={data.cloud.crossPlane ? { tone: "green", text: "Corroborated cross-plane" } : { tone: "orange", text: "Single-plane · suspected" }} />
+                </div>
+
+                {data.cloud.resources.length > 0 && (
+                  <div className="rw-cloud-block">
+                    <h4>Affected cloud resources</h4>
+                    <div className="rw-cloud-res-grid">
+                      {data.cloud.resources.map((r, i) => (
+                        <div key={i} className="rw-cloud-res">
+                          <span className="rw-res-name"><span className={`rw-dot ${r.tone}`} />{r.name}</span>
+                          <span className="rw-res-kind">{r.kind}</span>
+                          <span className="rw-res-finding">{r.finding}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {data.cloud.changes.length > 0 && (
+                  <div className="rw-cloud-block">
+                    <h4>Cloud configuration changes</h4>
+                    <ul className="rw-cloud-changes">
+                      {data.cloud.changes.map((c, i) => <li key={i}><b>{c.name}</b> · {c.detail}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="rw-cloud-seam">
+                  <span className={`rw-dot ${data.cloud.crossPlane ? "green" : "orange"}`} />
+                  <b>Cloud ↔ network seam:</b>{" "}
+                  {data.cloud.crossPlane
+                    ? "an independent network observer grounds this across the path."
+                    : "no independent underlay or probe evidence in this window."}
+                </div>
+                <div className="rw-cloud-note">{data.cloud.note}</div>
+              </section>
+            </>
+          )}
+
           {/* evidence matrix */}
           <div className="rw-section-title">Evidence matrix</div>
           <section className="rw-evidence-grid">

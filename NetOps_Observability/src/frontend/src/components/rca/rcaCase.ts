@@ -33,6 +33,23 @@ export interface HypothesisRow { rank: string; hypo: string; sub: string; conf: 
 export interface NextAction { badge: string; tone?: "red" | "green" | ""; text: string; }
 export interface DebugRow { signal: string; used: RcaPill; weight: string; reason: string; }
 
+// Cloud App Observability projection (#81 P3G 1c). Additive: present ONLY when the
+// object carries cloud-plane evidence (source=cloud signals). `crossPlane` is true
+// when an INDEPENDENT non-cloud observer also attached — the basis for confirming
+// a cloud picture (a single cloud vantage is suspected-at-best by design).
+export interface CloudResourceRow { name: string; kind: string; tone: Tone; finding: string; }
+export interface CloudChangeRow { name: string; detail: string; }
+export interface RcaCloud {
+  app: string;            // the affected application (operator name), if the object names one
+  account: string;
+  region: string;
+  signalCount: number;
+  crossPlane: boolean;    // an independent (non-cloud) observer corroborates → can confirm
+  resources: CloudResourceRow[];
+  changes: CloudChangeRow[];
+  note: string;           // honest single-plane vs corroborated explanation
+}
+
 // Canonical verdict state (the full ladder the engine can reach). `confirmed`/
 // `suspected`/`undetermined` are the engine tiers; `contradicted` = the leading cause
 // was ruled OUT by discriminating evidence; `recovered` = the incident has cleared.
@@ -71,6 +88,9 @@ export interface RcaCase {
   ticket: { callout: { tone: "confirmed" | "" | "red"; strong: string; text: string }; rows: KV[] };
   nextActions: NextAction[];
   assistant: { questions: string[]; sampleAnswer: string };
+  // Cloud App Observability section — omitted entirely when the object carries no
+  // cloud evidence (network RCA renders exactly as before).
+  cloud?: RcaCloud;
   debug: { accounting: DebugRow[]; promotion: KV[]; reasoning: string; model: unknown };
 }
 
@@ -176,6 +196,17 @@ export const EXAMPLE_CASE: RcaCase = {
   assistant: {
     questions: ["Why is this confirmed instead of suspected?", "What evidence excludes a cloud outage?", "Which team owns the next action?", "What should I tell the customer?", "Show only evidence tied to Dallas branch."],
     sampleAnswer: "App errors are limited to Dallas source NAT users and start after WAN/BGP/SD-WAN loss. Cloud health and app node metrics are normal, so the app is impacted but is not the root cause.",
+  },
+  cloud: {
+    app: "Checkout API", account: "478221", region: "us-east-1",
+    signalCount: 3, crossPlane: true,
+    resources: [
+      { name: "checkout-alb", kind: "Load-balancer error rate", tone: "red", finding: "alb_5xx_pct = 6.4" },
+      { name: "checkout-ecs", kind: "Cloud resource health change", tone: "orange", finding: "task_restarts = 3" },
+      { name: "billing-db", kind: "Database metric change", tone: "gray", finding: "connections_pct = 41 (normal)" },
+    ],
+    changes: [{ name: "Cloud configuration change", detail: "checkout-svc · task-definition v37 deployed +2m before onset" }],
+    note: "Cloud evidence is corroborated by an independent network observer — confirmation does not rest on the cloud plane alone.",
   },
   debug: {
     accounting: [
@@ -444,6 +475,53 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     : (hasDevice && hasRouting) ? "Device-health and routing/link evidence"
       : hasRouting ? "Routing/link evidence" : "Limited evidence — single source";
 
+  // ── cloud projection (#81 P3G 1c) — additive. Surface the app / resources /
+  // config-changes the object carries on the cloud plane, and whether an
+  // INDEPENDENT non-cloud observer corroborates them. A cloud-only object is
+  // suspected-at-best by the engine's single-plane rule; we state that honestly.
+  // App/resource names are real identifiers (kept verbatim, not genericized).
+  let cloud: RcaCloud | undefined;
+  {
+    const cloudSigs = timeline.signals.filter((s) => s.source === "cloud" && s.attached && !s.kind.endsWith("_clear"));
+    if (cloudSigs.length) {
+      const CHANGE_KINDS = new Set(["cloud_change", "cloud_audit", "security_policy_change"]);
+      const sevTone = (sev: string): Tone => {
+        const v = (sev || "").toLowerCase();
+        return v === "crit" || v === "critical" || v === "high" || v === "error" ? "red"
+          : v === "warn" || v === "warning" ? "orange"
+            : v === "info" ? "blue" : "gray";
+      };
+      let app = "", account = "", region = "";
+      const resources: CloudResourceRow[] = [];
+      const changes: CloudChangeRow[] = [];
+      const seenRes = new Set<string>();
+      for (const s of cloudSigs) {
+        let a: Record<string, unknown> = {};
+        try { a = JSON.parse((s as { attrs?: string }).attrs || "{}"); } catch { /* attrs absent/malformed */ }
+        if (!account && a.account) account = String(a.account);
+        if (!region && a.region) region = String(a.region);
+        if (s.entity_type === "app" && !app) app = a.app ? String(a.app) : s.entity_id;
+        if (CHANGE_KINDS.has(s.kind)) {
+          changes.push({ name: kindLabel(s.kind), detail: s.entity_id });
+        } else if (s.entity_type === "cloud_resource" && !seenRes.has(s.entity_id)) {
+          seenRes.add(s.entity_id);
+          const m = s.metric_name;
+          resources.push({
+            name: s.entity_id, kind: kindLabel(s.kind), tone: sevTone(s.severity),
+            finding: m ? `${m}${typeof s.value === "number" && s.value ? ` = ${s.value}` : ""}` : kindLabel(s.kind),
+          });
+        }
+      }
+      // cross-plane = an attached NON-cloud signal exists → an independent observer
+      // can corroborate. cloud-only = one vantage → suspected at best, however strong.
+      const crossPlane = timeline.signals.some((s) => s.attached && !s.kind.endsWith("_clear") && s.source !== "cloud");
+      const note = crossPlane
+        ? "Cloud evidence is corroborated by an independent network observer — confirmation does not rest on the cloud plane alone."
+        : "Cloud-only evidence from a single cloud vantage. By the single-plane rule this is suspected at best; an independent observer (an active probe, the underlay path, or the firewall) is needed to confirm.";
+      cloud = { app, account, region, signalCount: cloudSigs.length, crossPlane, resources, changes, note };
+    }
+  }
+
   return {
     synthetic: false,
     title, subtitle,
@@ -479,6 +557,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       questions: ["Why is this not confirmed?", "What would confirm it?", `What should ${owner || "the team"} check first?`, "Why were active checks ignored?", "Should a ticket be opened?"],
       sampleAnswer: confirmed ? "Independent evidence aligns in the same window and scope, so customer impact is confirmed." : "This rests on a single observation; independent evidence (peer-side routing, traffic-flow loss, downstream impact, or an active check) is needed before confirming customer impact.",
     },
+    cloud,
     debug: {
       accounting: timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).slice(0, 8).map((s) => ({ signal: kindLabel(s.kind), used: { tone: "green", text: "Used" }, weight: "—", reason: `Attached ${isRoutingKind(s.kind) ? "routing/link" : modalityLabel(s.modality_class).toLowerCase()} evidence.` })),
       promotion: [

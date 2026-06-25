@@ -190,6 +190,47 @@ describe("EXAMPLE_CASE (synthetic golden)", () => {
   });
 });
 
+describe("buildRcaCase — cloud evidence section (#81 P3G 1c)", () => {
+  const cloudHealth = signal({ source: "cloud", kind: "cloud_health", modality_class: "device_telemetry", entity_type: "app", entity_id: "billing", attrs: '{"app":"billing","account":"123","region":"us-east-1"}', severity: "high" });
+  const cloudRes = signal({ source: "cloud", kind: "database_metric", modality_class: "device_telemetry", entity_type: "cloud_resource", entity_id: "billing-db", attrs: '{"account":"123","region":"us-east-1"}', metric_name: "connections_pct", value: 98, severity: "warn", is_trigger: false });
+  const cloudChange = signal({ source: "cloud", kind: "cloud_change", modality_class: "control_plane", entity_type: "cloud_resource", entity_id: "billing-svc", attrs: '{"account":"123","region":"us-east-1"}', is_trigger: false });
+
+  it("omits the cloud section when there is no cloud evidence (network RCA untouched)", () => {
+    const c = buildRcaCase(timeline({ signals: [signal({})] }), corrObject(), {}, "NetOps", []);
+    expect(c.cloud).toBeUndefined();
+  });
+
+  it("a cloud-only object builds a single-plane (not corroborated) section", () => {
+    const tl = timeline({ verdict_tier: "suspected", signals: [cloudHealth, cloudRes, cloudChange] });
+    const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", signal_count: 3 }), {}, "AppOps", []);
+    expect(c.cloud).toBeDefined();
+    expect(c.cloud!.app).toBe("billing");
+    expect(c.cloud!.account).toBe("123");
+    expect(c.cloud!.region).toBe("us-east-1");
+    expect(c.cloud!.crossPlane).toBe(false);
+    expect(c.cloud!.resources.map((r) => r.name)).toContain("billing-db");
+    expect(c.cloud!.resources[0].finding).toMatch(/connections_pct/);
+    expect(c.cloud!.changes).toHaveLength(1);
+    expect(c.cloud!.note).toMatch(/single|suspected at best/i);
+  });
+
+  it("a cloud symptom + an independent network observer reads as corroborated", () => {
+    const probe = signal({ source: "lab", kind: "probe_loss", modality_class: "active_probe", entity_type: "path", entity_id: "branch->billing", is_trigger: false });
+    const tl = timeline({ verdict_tier: "confirmed", signals: [cloudHealth, probe] });
+    const c = buildRcaCase(tl, corrObject({ verdict_tier: "confirmed", signal_count: 2 }), {}, "AppOps", []);
+    expect(c.cloud!.crossPlane).toBe(true);
+    expect(c.cloud!.note).toMatch(/corroborated|independent/i);
+  });
+
+  it("ignores cleared and unattached cloud signals in the count", () => {
+    const cleared = signal({ source: "cloud", kind: "cloud_health_clear", entity_type: "app", entity_id: "billing", attached: true });
+    const unattached = signal({ source: "cloud", kind: "cloud_health", entity_type: "app", entity_id: "ghost", attached: false });
+    const tl = timeline({ signals: [cloudHealth, cleared, unattached] });
+    const c = buildRcaCase(tl, corrObject({ signal_count: 1 }), {}, "AppOps", []);
+    expect(c.cloud!.signalCount).toBe(1);
+  });
+});
+
 describe("buildRcaCase — canonical 5-state verdict (convergence)", () => {
   const tl = timeline({
     verdict_tier: "suspected", top_hypothesis: "undetermined",

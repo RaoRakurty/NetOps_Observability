@@ -204,6 +204,12 @@ const KIND_NOC: Record<string, string> = {
   flow_volume_anomaly: "Traffic volume change", lb_5xx: "Gateway errors",
   cloud_gw_anomaly: "Cloud gateway change", cloud_health_event: "Cloud health event",
   tunnel_degraded: "Tunnel degraded", tunnel_flap: "Tunnel flap",
+  // Cloud App Observability kinds (#81 P3G) — operator language for the cloud plane.
+  cloud_health: "Cloud app health event", cloud_resource_health: "Cloud resource health change",
+  cloud_metric: "Cloud metric change", database_metric: "Database metric change",
+  cloud_flow_log: "Cloud flow-log change", cloud_lb_log: "Load-balancer error rate",
+  cloud_change: "Cloud configuration change", cloud_audit: "Cloud audit event",
+  security_policy_change: "Security policy change",
 };
 // "probe_latency_departure" → "Response-time change"; trims a trailing _clear.
 export function kindLabel(kind: string): string {

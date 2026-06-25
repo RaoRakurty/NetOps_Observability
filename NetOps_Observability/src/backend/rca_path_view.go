@@ -245,7 +245,10 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 	view.EvidenceSummary, view.MissingEvidenceSummary = summarizeEvidence(attached, meta, verdict)
 	view.Annotations = mapAnnotations(attached, edgeRows, locus, src, dst, verdict, conf, internal, seamRef)
 	view.Path = buildPath(attached, locus, src, dst, state, internal)
-	view.Title, view.Summary, view.RecommendedAction = narrate(verdict, internal, locus, view.Annotations)
+	// cloud objects often have no grounded network locus — fall back to the
+	// impacted application so the narration names a real subject, not "this path".
+	cloudApp, _ := cloudEntities(attached)
+	view.Title, view.Summary, view.RecommendedAction = narrate(verdict, internal, locus, cloudApp, view.Annotations)
 	view.LayerCoverage = parseLayerCoverage(meta) // C4: pass-through, engine-owned taxonomy
 	return view
 }
@@ -297,6 +300,19 @@ func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdic
 			tgt := dev + "->" + peer
 			add(rcaAnnotation{TargetType: "edge", TargetID: tgt, Status: st, Verdict: verdict, Confidence: conf,
 				Owner: owner, Visibility: visibility, Reason: "BGP adjacency change on this session", EvidenceRefs: []string{sid}, MissingEvidence: nil})
+		case et == "app":
+			// Cloud projection (#81 P3G): the application is the IMPACT surface —
+			// annotate the app node as degraded (symptom), owned by the app team.
+			ast := "degraded"
+			if internal {
+				ast = "internal_only"
+			}
+			add(rcaAnnotation{TargetType: "node", TargetID: eid, Status: ast, Verdict: verdict, Confidence: conf,
+				Owner: "app_team", Visibility: visibility, Reason: "cloud application impact observed", EvidenceRefs: []string{sid}, MissingEvidence: nil})
+		case et == "cloud_resource":
+			// a cloud resource health/metric/config change grounded on the resource node.
+			add(rcaAnnotation{TargetType: "node", TargetID: eid, Status: st, Verdict: verdict, Confidence: conf,
+				Owner: "app_team", Visibility: visibility, Reason: "cloud resource health change grounded here", EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		case et == "path":
 			// Example 3: probe loss → segment if locus known, else whole path.
 			tt, tid, reason := "path", eid, "active-check change on this path — location uncertain"
@@ -332,7 +348,14 @@ func locusOrEntity(locus, eid string) string {
 // states applied). BGP-only objects get device→peer (the "total path").
 func buildPath(attached []map[string]any, locus, src, dst, state string, internal bool) rcaPath {
 	p := rcaPath{Source: src, Destination: dst}
-	addNode := func(n rcaPathNode) { p.Nodes = append(p.Nodes, n) }
+	seen := map[string]bool{}
+	addNode := func(n rcaPathNode) {
+		if seen[n.ID] {
+			return
+		}
+		seen[n.ID] = true
+		p.Nodes = append(p.Nodes, n)
+	}
 	addEdge := func(e rcaPathEdge) { p.Edges = append(p.Edges, e) }
 
 	prev := ""
@@ -354,13 +377,78 @@ func buildPath(attached []map[string]any, locus, src, dst, state string, interna
 		if prev != "" {
 			addEdge(rcaPathEdge{ID: prev + "~" + peer, Source: prev, Target: peer, Type: "bgp_session", State: state, Label: "BGP session"})
 		}
+		prev = peer
 	} else if dst != "" && dst != locus {
 		addNode(rcaPathNode{ID: dst, Type: "endpoint", Kind: "target", Label: dst, Role: "destination"})
 		if prev != "" {
 			addEdge(rcaPathEdge{ID: prev + "~" + dst, Source: prev, Target: dst, Type: "path_segment", State: "healthy"})
 		}
+		prev = dst
+	}
+
+	// Cloud projection (#81 P3G) — append the impacted application and the cloud
+	// resources it depends on BEYOND the network path, joined by a provider
+	// boundary (the cloud↔network seam). Additive: a non-cloud object carries no
+	// app/cloud_resource entities → no extra nodes/edges (output is identical).
+	app, resources := cloudEntities(attached)
+	if app != "" {
+		appState := "degraded"
+		if internal {
+			appState = "unknown"
+		}
+		if dst == app {
+			// the probe destination already IS the app — upgrade that node to a
+			// cloud endpoint rather than drawing a duplicate.
+			for i := range p.Nodes {
+				if p.Nodes[i].ID == app {
+					p.Nodes[i].Type, p.Nodes[i].Kind, p.Nodes[i].Role, p.Nodes[i].Status = "cloud", "cloud", "affected", appState
+				}
+			}
+		} else {
+			addNode(rcaPathNode{ID: app, Type: "cloud", Kind: "cloud", Label: app, Role: "affected", Status: appState})
+			if prev != "" {
+				addEdge(rcaPathEdge{ID: prev + "~" + app, Source: prev, Target: app, Type: "provider_boundary", State: edgeStateInto(appState), Label: "cloud boundary"})
+			}
+		}
+		prev = app
+		for _, res := range resources {
+			if res == app {
+				continue
+			}
+			addNode(rcaPathNode{ID: res, Type: "cloud", Kind: "cloud", Label: res, Role: "affected", Status: state})
+			addEdge(rcaPathEdge{ID: app + "~" + res, Source: app, Target: res, Type: "path_segment", State: edgeStateInto(state)})
+		}
 	}
 	return p
+}
+
+// cloudEntities pulls the impacted application + its cloud resources from the
+// attached evidence (entity_type app / cloud_resource, or any source=cloud
+// signal). Deterministic order; resources de-duplicated. Empty for a non-cloud
+// object — the cloud projection is then a no-op.
+func cloudEntities(attached []map[string]any) (app string, resources []string) {
+	seenRes := map[string]bool{}
+	for _, sig := range attached {
+		et := fmt.Sprintf("%v", sig["entity_type"])
+		if et != "app" && et != "cloud_resource" && fmt.Sprintf("%v", sig["source"]) != "cloud" {
+			continue
+		}
+		eid := fmt.Sprintf("%v", sig["entity_id"])
+		if eid == "" || eid == "<nil>" {
+			continue
+		}
+		if et == "app" {
+			if app == "" {
+				app = eid
+			}
+			continue
+		}
+		if et == "cloud_resource" && !seenRes[eid] {
+			seenRes[eid] = true
+			resources = append(resources, eid)
+		}
+	}
+	return
 }
 
 func edgeStateInto(faultState string) string {
@@ -521,7 +609,7 @@ func distinctObserverClasses(attached []map[string]any) int {
 }
 
 // narrate produces the operator title/summary/next-action (NOC language).
-func narrate(verdict string, internal bool, locus string, ann []rcaAnnotation) (title, summary, action string) {
+func narrate(verdict string, internal bool, locus, cloudApp string, ann []rcaAnnotation) (title, summary, action string) {
 	switch {
 	case internal:
 		title = "Internal monitoring path"
@@ -533,6 +621,9 @@ func narrate(verdict string, internal bool, locus string, ann []rcaAnnotation) (
 		title = "Observed path relationship"
 	}
 	where := locus
+	if where == "" {
+		where = cloudApp // cloud object with no network locus → name the app
+	}
 	if where == "" {
 		where = "this path"
 	}

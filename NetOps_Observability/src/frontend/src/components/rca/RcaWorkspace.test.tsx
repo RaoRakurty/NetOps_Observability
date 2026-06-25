@@ -146,3 +146,26 @@ describe("RcaWorkspace — synthetic EXAMPLE_CASE shows the watermark", () => {
     expect(screen.getByText(/Synthetic data/)).toBeInTheDocument();
   });
 });
+
+describe("RcaWorkspace — cloud section (#81 P3G 1c)", () => {
+  it("is absent for a network-only object", () => {
+    renderWS(suspectedCase());
+    expect(screen.queryByText("Cloud application & resources")).not.toBeInTheDocument();
+  });
+
+  it("renders app, resources, changes and the corroboration seam when cloud evidence exists", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      signals: [
+        signal({ source: "cloud", kind: "cloud_health", modality_class: "device_telemetry", entity_type: "app", entity_id: "billing", attrs: '{"app":"billing","account":"123","region":"us-east-1"}', severity: "high" }),
+        signal({ source: "cloud", kind: "database_metric", modality_class: "device_telemetry", entity_type: "cloud_resource", entity_id: "billing-db", metric_name: "connections_pct", value: 98, severity: "warn", is_trigger: false }),
+      ],
+    });
+    renderWS(buildRcaCase(tl, corrObject({ verdict_tier: "suspected", signal_count: 2 }), {}, "AppOps", []));
+    expect(screen.getByText("Cloud application & resources")).toBeInTheDocument();
+    expect(screen.getByText("billing")).toBeInTheDocument();
+    expect(screen.getByText("billing-db")).toBeInTheDocument();
+    expect(screen.getByText("Single-plane · suspected")).toBeInTheDocument();
+    expect(screen.getByText(/Cloud ↔ network seam/)).toBeInTheDocument();
+  });
+});
