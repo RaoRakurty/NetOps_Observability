@@ -126,6 +126,7 @@ SETTINGS index_granularity = 8192`,
     topology_version LowCardinality(String),
     catalog_version  LowCardinality(String),
     layer_coverage   String DEFAULT '{}',
+    app_impact       String DEFAULT '{}',
     merged_into      Nullable(UUID),
     created_at       DateTime64(3) DEFAULT now64(3)
 )
@@ -138,6 +139,13 @@ ORDER BY (tenant_id, correlation_id, version)`,
 		// before C4 — a pure projection of the object's nodes, default '{}'.
 		`ALTER TABLE netops.corr_objects
     ADD COLUMN IF NOT EXISTS layer_coverage String DEFAULT '{}' AFTER catalog_version`,
+
+		// #81 P5: named application impact + honest evidence_missing (engine
+		// ObjectSnapshot.app_impact). Idempotent ADD for live deployments — a pure
+		// projection of the object's matched fused identities, default '{}', NOT in
+		// content_hash (never churns a version).
+		`ALTER TABLE netops.corr_objects
+    ADD COLUMN IF NOT EXISTS app_impact String DEFAULT '{}' AFTER layer_coverage`,
 
 		`CREATE VIEW IF NOT EXISTS netops.corr_objects_latest AS
 SELECT * FROM netops.corr_objects
@@ -171,7 +179,7 @@ ORDER BY (tenant_id, correlation_id, version, from_node, to_node)`,
     tenant_id       LowCardinality(String) DEFAULT '',
     correlation_id  UUID,
     version         UInt32,
-    subject_kind    Enum8('edge'=1,'hypothesis'=2),
+    subject_kind    Enum8('edge'=1,'hypothesis'=2,'app'=3),
     subject_id      String,
     signal_id       UUID,
     role            Enum8('supports'=1,'contradicts'=2,'discriminates'=3),
@@ -181,6 +189,12 @@ ORDER BY (tenant_id, correlation_id, version, from_node, to_node)`,
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
+
+		// #81 P5: subject_kind gains 'app'=3 — an app-impact supporting-evidence row
+		// (the fused identity that named an affected app). Additive Enum8 value-add;
+		// safe even though subject_kind is in the sort key (existing values keep their
+		// numbers → no reorder), mirroring the corr_signals.source widening.
+		`ALTER TABLE netops.corr_evidence MODIFY COLUMN subject_kind Enum8('edge'=1,'hypothesis'=2,'app'=3)`,
 
 		chRowPolicyDDL("corr_signals"),
 		chRowPolicyDDL("corr_signals_archive"),

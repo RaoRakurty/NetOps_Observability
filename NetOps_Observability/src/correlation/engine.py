@@ -29,7 +29,7 @@ from directed_topology import Oracle, RecordingOracle
 from directed_topology import Verdict as _Verdict
 from layers import CausalLayer, layer_of, osi_label
 from scoring import RankingResult, rank
-from signals import SIGNAL_NS, EntityType, Severity, Signal
+from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
 
 ENGINE_SEMVER = "2.2.0"  # 2.2.0: C7.3 live directed-topology vote #2 (NetFlow) + adjacency/orientation embedding
 # 2.1.0: C4 per-kind causal-layer direction prior (§4.3 vote #3)
@@ -182,6 +182,10 @@ def build_nodes(window: tuple[Signal, ...]) -> tuple[Node, ...]:
     for s in window:
         if s.kind.endswith("_clear"):
             continue  # clears close episodes; they are not evidence nodes
+        if s.source is Source.APP_IDENTITY:
+            continue  # #81 P5: identity is ENRICHMENT, never a graph node — it can
+            # never seed/extend an object (AD-5 "NO separate app RCA"). It is matched
+            # in as an app-impact PROJECTION on objects real faults already formed.
         by_key.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
     nodes = []
     for key in sorted(by_key):
@@ -435,6 +439,12 @@ class ObjectSnapshot:
     # must replay against the same topology, not live links. Empty when no adjacency
     # grounding was used → blob unchanged (seam/containment objects never churn).
     adjacency_pairs: tuple[tuple[str, str], ...] = ()
+    # #81 P5: fused application-identity signals (source=app_identity) whose tokens
+    # overlap this object's nodes — the ENRICHMENT pool, NOT graph nodes (they are
+    # excluded from build_nodes, so they never seed/extend an object). Used only by
+    # the app_impact() PROJECTION; deliberately NOT in content_hash, so an object
+    # with no matched identity is byte-identical to pre-P5 and replays unchanged.
+    identity_signals: tuple[Signal, ...] = ()
 
     def signal_count(self) -> int:
         return sum(len(n.signals) for n in self.nodes)
@@ -463,7 +473,58 @@ class ObjectSnapshot:
             col = out[key]
             if n.entity_id not in col:
                 col.append(n.entity_id)
+        # #81 P5: name the applications this object affects from the fused identities
+        # matched to it (the apps may not appear as graph nodes — a network fault
+        # rarely is — so the blast radius would otherwise miss them).
+        for app in self.app_impact().get("apps", []):
+            if app["app"] not in out["apps"]:
+                out["apps"].append(app["app"])
         return {k: sorted(v) for k, v in out.items() if v}
+
+    def app_impact(self) -> dict:
+        """The named application impact (#81 P5): which apps this object affects,
+        with fused-identity provenance (band/state/sources/score), plus honest
+        evidence_missing when a destination-bearing node has no admissible identity.
+
+        A PROJECTION of the attached identity signals + this object's nodes — like
+        layer_coverage, it is derived purely from already-hashed content and is NOT
+        in content_hash. An object with no matched identity yields {} → its blob and
+        affected() are byte-identical to pre-P5 (additive, replay-safe)."""
+        apps: dict[str, dict] = {}
+        for s in self.identity_signals:
+            a = s.entity_id
+            attrs = s.attrs if isinstance(s.attrs, dict) else {}
+            cand = {
+                "app": a,
+                "band": str(attrs.get("band", "")),
+                "state": str(attrs.get("state", "")),
+                "sources": [str(x) for x in (attrs.get("sources") or [])],
+                "evidence_score": int(attrs.get("evidence_score", 0) or 0),
+            }
+            for k in ("canonical_app_id", "provider", "component"):
+                if attrs.get(k):
+                    cand[k] = str(attrs[k])
+            cur = apps.get(a)
+            # strongest evidence_score wins when an app is asserted more than once.
+            if cur is None or cand["evidence_score"] > cur["evidence_score"]:
+                apps[a] = cand
+        out: dict = {"apps": [apps[a] for a in sorted(apps)]}
+        if not apps:
+            # honest unknown: nodes that plausibly front an application but for which
+            # no identity was admissible (unknown-first-class, never a guessed name).
+            impactable = sorted({
+                f"{n.entity_type.value}:{n.entity_id}" for n in self.nodes
+                if n.entity_type in (EntityType.APP, EntityType.SERVICE,
+                                     EntityType.PREFIX, EntityType.PATH,
+                                     EntityType.SEGMENT)
+            })
+            if impactable:
+                out["evidence_missing"] = [
+                    "application identity unavailable for " + e for e in impactable]
+        return out
+
+    def app_impact_blob(self) -> str:
+        return json.dumps(self.app_impact(), separators=(",", ":"), sort_keys=True)
 
     def layer_coverage(self) -> dict:
         """The causal-layer stack the RCA UI renders (C4): the FULL ladder
@@ -587,6 +648,10 @@ class ObjectSnapshot:
             # hypotheses blob), so it never enters content_hash — a pure projection of
             # the nodes can't change object identity or churn a version.
             "layer_coverage": self.layer_coverage_blob(),
+            # #81 P5: named application impact + honest evidence_missing. A separate
+            # column (NOT in the hypotheses blob / content_hash) — a pure projection
+            # of attached identities, so it never churns a version. '{}' when none.
+            "app_impact": self.app_impact_blob(),
         }
         if merged_into:
             row["merged_into"] = merged_into  # set ONLY on a terminal 'merged' snapshot
@@ -610,6 +675,24 @@ class ObjectSnapshot:
                          f"w={e.weight:.2f} (t={e.w_temporal:.2f} topo={e.w_topo:.2f} "
                          f"r={e.w_reinforce:.2f}) dir={e.direction_basis}"),
             })
+        # #81 P5: one explainable supporting-evidence row per fused identity that
+        # named an affected app — carrying the REAL identity signal_id (provenance)
+        # and its band/state/sources. role=supports: it supports the app-impact claim.
+        for s in self.identity_signals:
+            attrs = s.attrs if isinstance(s.attrs, dict) else {}
+            srcs = ",".join(str(x) for x in (attrs.get("sources") or [])) or "n/a"
+            rows.append({
+                "tenant_id": self.tenant_id,
+                "correlation_id": self.correlation_id,
+                "version": version,
+                "subject_kind": "app",
+                "subject_id": s.entity_id,
+                "signal_id": str(s.signal_id),
+                "role": "supports",
+                "note": (f"application identity: {s.entity_id} "
+                         f"band={attrs.get('band', '')} state={attrs.get('state', '')} "
+                         f"via {srcs}"),
+            })
         return rows
 
 
@@ -618,6 +701,24 @@ def _ch_dt(dt: datetime) -> str:
 
 
 # ── union-find components → objects ───────────────────────────────────────────
+
+
+def _identities_for(nodes: tuple[Node, ...],
+                    identity_sigs: tuple[Signal, ...]) -> tuple[Signal, ...]:
+    """The app-identity signals whose tokens overlap this component's node tokens —
+    the honest join that lets a real-fault object NAME the app it affects. An
+    identity that matches nothing is NOT attached (no app is asserted on an object
+    it has no token in common with — unknown stays first-class)."""
+    if not identity_sigs:
+        return ()
+    comp_tokens: set[str] = set()
+    for n in nodes:
+        comp_tokens |= n.tokens()
+    matched = [
+        s for s in identity_sigs
+        if (set(s.entity_tokens) | {s.entity_id}) & comp_tokens
+    ]
+    return tuple(sorted(matched, key=lambda s: (s.ts, str(s.signal_id))))
 
 
 def _components(nodes: tuple[Node, ...], edges: tuple[Edge, ...]) -> list[tuple[Node, ...]]:
@@ -667,6 +768,10 @@ def run_window(
     nodes = build_nodes(sigs)
     if not nodes:
         return []
+    # #81 P5: the app-identity ENRICHMENT pool — excluded from build_nodes (so it can
+    # never seed/extend an object), matched per-object below into an app-impact
+    # projection. An identity-only window has no nodes → returns above → no object.
+    identity_sigs = tuple(s for s in sigs if s.source is Source.APP_IDENTITY)
     # Wrap the direction oracle so we capture exactly the orientations the edges were
     # built on — embedded per snapshot for deterministic replay (C7), like seams.
     rec = RecordingOracle(directed) if directed is not None else None
@@ -718,6 +823,7 @@ def run_window(
             storm_mode=storm_mode,
             orientations=orientations,
             adjacency_pairs=adjacency_pairs,
+            identity_signals=_identities_for(comp, identity_sigs),
         ))
     return snapshots
 

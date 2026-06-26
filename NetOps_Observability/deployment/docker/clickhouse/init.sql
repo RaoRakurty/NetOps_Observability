@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_evidence
     tenant_id       LowCardinality(String) DEFAULT '',
     correlation_id  UUID,
     version         UInt32,
-    subject_kind    Enum8('edge'=1,'hypothesis'=2),
+    subject_kind    Enum8('edge'=1,'hypothesis'=2,'app'=3),  -- 'app' = #81 P5 app-impact evidence
     subject_id      String,
     signal_id       UUID,
     role            Enum8('supports'=1,'contradicts'=2,'discriminates'=3),
