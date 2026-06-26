@@ -297,6 +297,40 @@ BUILTIN_TEMPLATES: list[dict] = [
         },
     },
     {
+        # #81 — hybrid private-connectivity outage: Direct Connect / IPSec tunnel
+        # between on-prem and the cloud goes down → BGP drops, routes withdraw,
+        # the cloud app is unreachable FROM corporate (often still fine from the
+        # internet). Matches the real cloud signal kinds (cloud_change = DX/VPN
+        # state, cloud_flow_log = boundary REJECT, cloud_health = unreachable),
+        # corroborated by a customer-path probe. Without this, the bare probe_loss
+        # mis-matched 'dia-egress-latency' (a latency signature) — see the
+        # discriminator added there.
+        "id": "sig.ent.cloud.private-connectivity-down",
+        "title": "Private connectivity to cloud down (Direct Connect / IPSec)",
+        "domain": "ent.cloud",
+        "requires": [
+            # the root: a DX virtual-interface / VPN tunnel state change.
+            {"kind": "cloud_change|cloud_audit"},
+            # the impact: traffic rejected at the boundary, or the app unreachable.
+            {"kind": "cloud_flow_log|cloud_health"},
+            # independent customer-path witness (lifts to a confirmable verdict).
+            {"kind": "probe_loss|probe_rtt_anomaly", "optional": True},
+        ],
+        # confirmation needs the control-plane change AND an independent probe —
+        # a cloud-only picture (one vantage) stays suspected (verdict gate).
+        "required_modalities": ["control_plane", "active_probe"],
+        "direction_expect": "cloud-seam -> service",
+        "verdict": {
+            "owner": "carrier", "layer": "L3 (private connectivity — DX / IPSec)",
+            "first_steps": [
+                "Check the Direct Connect virtual interface + its BGP session (idle/withdrawn routes)",
+                "Check the backup IPSec tunnel (phase-1/phase-2, DPD) to the on-prem SD-WAN edge",
+                "Verify route propagation on-prem↔VPC; fail traffic to the alternate path if one exists",
+                "Confirm the cloud app is reachable from the internet (isolates connectivity vs app fault)",
+            ],
+        },
+    },
+    {
         "id": "sig.ent.wan-edge.tunnel-mtu-blackhole",
         "title": "Tunnel MTU blackhole",
         "domain": "ent.wan-edge",
@@ -347,6 +381,11 @@ BUILTIN_TEMPLATES: list[dict] = [
             # this isn't pure egress latency.
             {"absent": {"kind": "bgp_adjacency_change|bgp_state_anomaly"}, "within_s": 600,
              "else_prefer": "sig.ent.wan-edge.bgp-peer-flap"},
+            # #81 — a cloud DX/VPN state change present means this isn't ISP egress
+            # latency at all; it's a private-connectivity outage. Yield to it so a
+            # tunnel-down (probe_loss only, no real latency) stops reading as latency.
+            {"absent": {"kind": "cloud_change|cloud_audit"}, "within_s": 600,
+             "else_prefer": "sig.ent.cloud.private-connectivity-down"},
         ],
         "direction_expect": "path-egress -> service",
         "verdict": {

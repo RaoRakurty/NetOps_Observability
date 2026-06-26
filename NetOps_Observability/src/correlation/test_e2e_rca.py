@@ -54,6 +54,8 @@ EMITTED_KINDS = frozenset({
     "link_state_change", "bgp_adjacency_change", "bgp_state_anomaly",
     "ospf_adjacency_change", "isis_adjacency_change", "lldp_neighbor_change",
     "stp_topology_change", "device_restart",
+    # cloud lane (#81 P3G — emitted by handle_cloud)
+    "cloud_change", "cloud_audit", "cloud_flow_log", "cloud_health",
 })
 
 # The three signatures authored from real observed lab objects (P3, #67). These
