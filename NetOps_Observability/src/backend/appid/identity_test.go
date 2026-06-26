@@ -15,6 +15,7 @@ func TestExplanationCodeRegistryComplete(t *testing.T) {
 		ExSessionUpstream, ExVendorAliasCanon, ExWorkloadMatch, ExDNSTLSCorroboration,
 		ExMultiIndependent, ExProviderOnlyIP, ExPortOnlyFallback, ExAuthoritativeConflict,
 		ExStaleDNS, ExNATAmbiguity, ExSharedCDNAmbiguity, ExDuplicateIgnored, ExInsufficient,
+		ExDestinationDownranked, ExCatalogVersionUsed, ExLateEvidenceReplay,
 	}
 	for _, c := range required {
 		if !c.Valid() {

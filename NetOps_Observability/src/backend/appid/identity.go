@@ -143,6 +143,7 @@ type FusedIdentity struct {
 	Component         string            `json:"component,omitempty"`
 	AppProtocol       string            `json:"app_protocol,omitempty"`       // QUIC (a protocol, NOT the business app)
 	TransportProtocol string            `json:"transport_protocol,omitempty"` // UDP
+	EvidenceScore     int               `json:"evidence_score"`               // 0..100 (§G) — an evidence score, NOT a probability
 	Band              ConfidenceBand    `json:"band"`
 	State             ResolutionState   `json:"state"`
 	Alternatives      []Candidate       `json:"alternatives,omitempty"`

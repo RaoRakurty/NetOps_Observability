@@ -3,305 +3,218 @@ package appid
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
 
-// fusion.go — #81 Fusion Layer Phase 3. FuseObservations deepens Fuse over a SET of
-// provenance-bearing observations for ONE scope. It adds, AROUND the existing
-// strength-ladder confidence math (which it reuses via Fuse — not replaced):
-//   - duplicate-evidence dedup (copies never inflate confidence)
-//   - evidence freshness / DNS-TTL (stale DNS/SNI rejected)
-//   - exact-session > destination-only weighting
-//   - NAT-source ambiguity (dst-only inferential evidence not attributed under NAT)
-//   - shared-CDN ambiguity (a shared IP can't prove the app alone)
-//   - authoritative-source CONFLICT → state=conflicted, identity NOT asserted
-//   - vendor-alias canonicalization (original value preserved on the observation)
-//   - confidence bands, resolution state, alternative candidates, stable explanation
-//     codes, and catalog/fusion versioning for deterministic, idempotent replay.
+// fusion.go — #81 Fusion Layer §7A orchestrator + §J FusionDecisionEngine + §K
+// ExplanationBuilder. FuseObservations runs the composable modules (pipeline.go) in
+// the prescribed order; each module is separately unit-tested. Deterministic: same
+// (observations, Now, catalog version, policy) → identical result + fusion id.
 //
-// Deterministic: same (observations, Now, catalog version, options) → same result.
+//   collect → alias → candidate → dedup → temporal → score → guardrail → conflict → decide
 
 const defaultDNSTTL = 5 * time.Minute
 
-// FuseInput is everything FuseObservations needs — pure (no IO); the catalog/ambiguity
-// context is supplied by the caller (the resolver/catalog layer), so fusion stays testable.
+// FuseInput is the pure input to the fusion pipeline (no IO — the caller supplies the
+// catalog/ambiguity context so the engine stays testable).
 type FuseInput struct {
 	Scope          IdentityScope
 	Observations   []ApplicationObservation
 	Now            time.Time
 	CatalogVersion int
-	DNSTTL         time.Duration                   // freshness window for dns/sni (0 ⇒ default 5m)
-	SharedCDN      bool                            // dst is a shared CDN/cloud IP → ip/asn can't prove alone
-	NATSource      bool                            // src is NAT-collapsed → dst-only inferential evidence unattributable
-	Canon          func(vendor, app string) string // vendor alias → canonical display name (nil ⇒ identity)
+	DNSTTL         time.Duration                   // dns/sni freshness window (0 ⇒ 5m)
+	SharedCDN      bool                            // dst is a shared CDN/cloud IP
+	NATSource      bool                            // src is NAT-collapsed
+	Policy         ScoringPolicy                   // 0-value ⇒ DefaultScoringPolicy()
+	Canon          func(vendor, app string) string // vendor alias → canonical (nil ⇒ identity)
 }
 
-// FuseObservations fuses a scope's observations into one explainable FusedIdentity.
+// FuseObservations is the deterministic fusion pipeline (§7A).
 func FuseObservations(in FuseInput) FusedIdentity {
+	p := in.Policy
+	if p.Version == "" {
+		p = DefaultScoringPolicy()
+	}
 	ttl := in.DNSTTL
 	if ttl <= 0 {
 		ttl = defaultDNSTTL
 	}
-	canon := in.Canon
-	if canon == nil {
-		canon = func(_, app string) string { return app }
-	}
+	codes := codeSet{}
+	codes.add(ExCatalogVersionUsed) // always record which catalog version produced this (replay)
 
-	codes := map[ExplanationCode]bool{}
-	var signals []Signal
-	seen := map[string]bool{} // dedup key → already counted
+	ev := collectEvidence(in)
+	ev = resolveAliases(ev, in.Canon, codes)
+	cands := buildCandidates(ev)
+	dedupeEvidence(cands, codes)
+	cands = validateTemporal(cands, in.Now, ttl, codes)
+	scored := scoreEvidence(cands, p, codes)
+	scored = applyGuardrails(scored, in, codes)
+	conflict := detectConflicts(scored, p)
+	fi := decideIdentity(scored, conflict, codes)
 
-	for _, o := range in.Observations {
-		if o.VendorAppName == "" && o.VendorAppID == "" {
-			continue // no app opinion (still informs evidence-missing via Fuse)
-		}
-		// canonicalize (original vendor value stays on the observation, untouched).
-		app := canon(o.Vendor, o.VendorAppName)
-		if app == "" {
-			app = o.VendorAppName
-		}
-		if app != o.VendorAppName && o.VendorAppName != "" {
-			codes[ExVendorAliasCanon] = true
-		}
-
-		// freshness: stale DNS/SNI evidence is rejected (respect TTL + observation time).
-		if o.Source == SrcDNS || o.Source == SrcSNI {
-			if !o.EventTime.IsZero() && o.EventTime.Add(ttl).Before(in.Now) {
-				codes[ExStaleDNS] = true
-				continue
-			}
-		}
-		// NAT ambiguity: under a NAT-collapsed source, dst-only inferential evidence
-		// (no exact session) can't be attributed to THIS endpoint — drop it.
-		if in.NATSource && o.SessionID == "" && o.Source.strength() < 4 {
-			codes[ExNATAmbiguity] = true
-			continue
-		}
-		// shared-CDN ambiguity: a shared CDN/cloud IP can't independently prove an
-		// app — ip/asn evidence on it becomes context only (excluded from candidates).
-		if in.SharedCDN && (o.Source == SrcIPCatalog || o.Source == SrcASN) {
-			codes[ExSharedCDNAmbiguity] = true
-			continue
-		}
-
-		// dedup: same source + same canonical app + same session/tuple = one copy.
-		key := string(o.Source) + "|" + app + "|" + o.SessionID + "|" + o.DstIP
-		if seen[key] {
-			codes[ExDuplicateIgnored] = true
-			continue
-		}
-		seen[key] = true
-
-		conf := o.Confidence
-		if conf <= 0 {
-			conf = o.Source.baseConfidence()
-		}
-		// exact-session evidence outranks destination-only: a small edge so the Fuse
-		// tiebreak prefers it among equally-strong sources (never crosses a tier).
-		if o.SessionID != "" || o.FlowID != "" || in.Scope.ExactSession() {
-			conf = minF(0.99, conf+0.02)
-		}
-		signals = append(signals, Signal{Source: o.Source, App: app, Confidence: conf, Detail: o.Vendor})
-	}
-
-	// authoritative conflict: two+ DISTINCT apps each backed by an authoritative
-	// (strength-4) source — we do NOT pick a winner; the identity is conflicted.
-	authApps := map[string]bool{}
-	for _, s := range signals {
-		if s.Source.strength() >= 4 {
-			authApps[s.App] = true
-		}
-	}
-	conflicted := len(authApps) >= 2
-
-	base := Fuse(signals)
-	winStrength, winSources := backingFor(signals, base.App)
-
-	fi := FusedIdentity{
-		FusionID:       fusionID(in.Scope, in.CatalogVersion),
-		TenantID:       firstTenant(in.Observations),
-		Scope:          in.Scope,
-		CatalogVersion: in.CatalogVersion,
-		FusionVersion:  FusionEngineVersion,
-		FusedAt:        in.Now.UTC(),
-		Verdict:        base,
-		Alternatives:   alternatives(signals, base.App),
-	}
-
-	if conflicted {
-		// authoritative sources disagree — assert NOTHING (honest), surface candidates.
-		fi.App = "unknown"
-		fi.Tier = Undetermined
-		fi.Confidence = 0
-		fi.Band = BandUnresolved
-		fi.State = StateConflicted
-		codes[ExAuthoritativeConflict] = true
-	} else {
-		fi.Band = BandFor(base.Tier, winStrength)
-		fi.State = resolutionState(base, winStrength, len(winSources))
-	}
-
-	addWinnerCodes(codes, base, winSources, signals, in.Scope, conflicted)
-	fi.Explanations = sortedCodes(codes)
+	fi.TenantID = firstTenant(in.Observations)
+	fi.Scope = in.Scope
+	fi.CatalogVersion = in.CatalogVersion
+	fi.FusionVersion = FusionEngineVersion
+	fi.FusedAt = in.Now.UTC()
+	fi.FusionID = fusionID(in.Scope, in.CatalogVersion)
+	fi.Explanations = codes.sorted()
 	return fi
 }
 
-// backingFor returns the strongest source strength and the distinct sources backing app.
-func backingFor(signals []Signal, app string) (int, []Source) {
-	best := 0
-	set := map[Source]bool{}
-	for _, s := range signals {
-		if s.App == app && app != "" && app != "unknown" {
-			if st := s.Source.strength(); st > best {
-				best = st
-			}
-			set[s.Source] = true
+// ── §J FusionDecisionEngine ──────────────────────────────────────────────────
+func decideIdentity(scored []ScoredCandidate, conflict ConflictResult, codes codeSet) FusedIdentity {
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].Score != scored[j].Score {
+			return scored[i].Score > scored[j].Score
+		}
+		return scored[i].App < scored[j].App
+	})
+
+	if conflict.Type == ConflictAuthoritative {
+		codes.add(ExAuthoritativeConflict)
+		return FusedIdentity{
+			Verdict: Verdict{App: "unknown", Tier: Undetermined, Confidence: 0},
+			Band:    BandUnresolved, State: StateConflicted, EvidenceScore: 0,
+			Alternatives: candidatesFrom(scored),
 		}
 	}
-	out := make([]Source, 0, len(set))
-	for s := range set {
-		out = append(out, s)
+
+	if len(scored) == 0 || scored[0].Band == BandUnresolved {
+		// honest unknown — name why if the guardrails/temporal already did; else insufficient.
+		if !codes.has(ExPortOnlyFallback) && !codes.has(ExProviderOnlyIP) &&
+			!codes.has(ExSharedCDNAmbiguity) && !codes.has(ExNATAmbiguity) && !codes.has(ExStaleDNS) {
+			codes.add(ExInsufficient)
+		}
+		fi := FusedIdentity{Verdict: Verdict{App: "unknown", Tier: Undetermined}, Band: BandUnresolved, State: StateUnknown}
+		if len(scored) > 0 {
+			fi.Alternatives = candidatesFrom(scored)
+		}
+		return fi
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return best, out
+
+	win := scored[0]
+	addWinnerExplain(codes, win)
+	return FusedIdentity{
+		Verdict: Verdict{
+			App: win.App, Tier: tierForBand(win.Band),
+			Confidence: round2(float64(win.Score) / 100), Signals: signalsFrom(win),
+		},
+		EvidenceScore:     win.Score,
+		Band:              win.Band,
+		State:             stateFor(win),
+		AppProtocol:       win.AppProtocol,
+		TransportProtocol: win.Transport,
+		Alternatives:      candidatesFrom(scored[1:]),
+	}
 }
 
-// resolutionState classifies the (non-conflicted) outcome into the lifecycle state.
-func resolutionState(v Verdict, winStrength, distinctSources int) ResolutionState {
-	if v.App == "" || v.App == "unknown" || v.Tier == Undetermined {
-		return StateUnknown
-	}
-	if distinctSources >= 2 {
-		return StateFused
-	}
-	if winStrength >= 4 { // a single authoritative source reported it
-		return StateObserved
-	}
-	return StateInferred // single inferential source (dns/sni/ip/asn) — derived, not asserted by an authority
-}
-
-// alternatives lists the non-winning candidate apps for transparency.
-func alternatives(signals []Signal, winApp string) []Candidate {
-	type agg struct {
-		conf int // strength
-		c    float64
-		srcs map[Source]bool
-	}
-	by := map[string]*agg{}
-	var order []string
-	for _, s := range signals {
-		if s.App == "" || s.App == winApp {
-			continue
-		}
-		a := by[s.App]
-		if a == nil {
-			a = &agg{srcs: map[Source]bool{}}
-			by[s.App] = a
-			order = append(order, s.App)
-		}
-		if st := s.Source.strength(); st > a.conf {
-			a.conf = st
-		}
-		cf := s.Confidence
-		if cf <= 0 {
-			cf = s.Source.baseConfidence()
-		}
-		if cf > a.c {
-			a.c = cf
-		}
-		a.srcs[s.Source] = true
-	}
-	sort.SliceStable(order, func(i, j int) bool { return by[order[i]].conf > by[order[j]].conf })
-	out := make([]Candidate, 0, len(order))
-	for _, app := range order {
-		a := by[app]
-		srcs := make([]Source, 0, len(a.srcs))
-		for s := range a.srcs {
-			srcs = append(srcs, s)
-		}
-		sort.Slice(srcs, func(i, j int) bool { return srcs[i] < srcs[j] })
-		out = append(out, Candidate{App: app, Confidence: round2(a.c), Band: BandFor(tierForStrength(a.conf), a.conf), Sources: srcs})
-	}
-	return out
-}
-
-// tierForStrength is the standalone tier a single source of this strength implies.
-func tierForStrength(strength int) Tier {
-	switch {
-	case strength >= 4:
+func tierForBand(b ConfidenceBand) Tier {
+	switch b {
+	case BandAuthoritative, BandHigh:
 		return Confirmed
-	case strength >= 2:
+	case BandMedium, BandLow:
 		return Suspected
 	default:
 		return Undetermined
 	}
 }
 
-// addWinnerCodes appends the explanation codes implied by the winning evidence.
-func addWinnerCodes(codes map[ExplanationCode]bool, v Verdict, winSources []Source, signals []Signal, scope IdentityScope, conflicted bool) {
-	if conflicted {
-		return
+func stateFor(win ScoredCandidate) ResolutionState {
+	if len(win.Sources) >= 2 {
+		return StateFused
 	}
-	if v.App == "" || v.App == "unknown" {
-		// business app unknown — name WHY (a port/provider hint is still service-class info).
-		switch {
-		case anySource(signals, SrcPort):
-			codes[ExPortOnlyFallback] = true
-		case anySource(signals, SrcIPCatalog) || anySource(signals, SrcASN):
-			codes[ExProviderOnlyIP] = true
-		default:
-			codes[ExInsufficient] = true
-		}
-		return
+	if win.Sources[0].strength() >= 4 && win.BestScope.exact() {
+		return StateObserved // a single authoritative upstream classification on the exact session
 	}
+	return StateInferred
+}
+
+func addWinnerExplain(codes codeSet, win ScoredCandidate) {
 	has := func(s Source) bool {
-		for _, w := range winSources {
+		for _, w := range win.Sources {
 			if w == s {
 				return true
 			}
 		}
 		return false
 	}
-	auth := has(SrcNGFWAppID) || has(SrcIPFIXAppID) || has(SrcOperator) || has(SrcSoT) || has(SrcCloudTag)
-	if auth && scope.ExactSession() {
-		codes[ExSessionUpstream] = true
+	authClassifier := has(SrcNGFWAppID) || has(SrcIPFIXAppID) || has(SrcOperator) || has(SrcSoT) || has(SrcCloudTag)
+	if authClassifier && win.BestScope.exact() {
+		codes.add(ExSessionUpstream)
 	}
 	if has(SrcWorkload) {
-		codes[ExWorkloadMatch] = true
+		codes.add(ExWorkloadMatch)
 	}
 	if has(SrcDNS) && has(SrcSNI) {
-		codes[ExDNSTLSCorroboration] = true
+		codes.add(ExDNSTLSCorroboration)
 	}
-	if len(winSources) >= 2 {
-		codes[ExMultiIndependent] = true
-	}
-	// single-source-only weak cases:
-	if len(winSources) == 1 {
-		switch winSources[0] {
-		case SrcIPCatalog, SrcASN:
-			codes[ExProviderOnlyIP] = true
-		case SrcPort:
-			codes[ExPortOnlyFallback] = true
-		}
+	if len(win.Sources) >= 2 {
+		codes.add(ExMultiIndependent)
 	}
 }
 
-func anySource(signals []Signal, s Source) bool {
-	for _, x := range signals {
-		if x.Source == s {
-			return true
-		}
+func candidatesFrom(scored []ScoredCandidate) []Candidate {
+	out := make([]Candidate, 0, len(scored))
+	for _, c := range scored {
+		out = append(out, Candidate{App: c.App, Confidence: round2(float64(c.Score) / 100), Band: c.Band, Sources: c.Sources})
 	}
-	return false
+	return out
 }
 
-func sortedCodes(set map[ExplanationCode]bool) []ExplanationCode {
-	out := make([]ExplanationCode, 0, len(set))
-	for c := range set {
-		out = append(out, c)
+func signalsFrom(win ScoredCandidate) []Signal {
+	out := make([]Signal, 0, len(win.Supporting))
+	for _, e := range win.Supporting {
+		out = append(out, Signal{Source: e.Obs.Source, App: win.App, Role: Supports, Detail: e.Obs.Vendor})
+	}
+	return out
+}
+
+// ── §K ExplanationBuilder ────────────────────────────────────────────────────
+// Explanation is the machine + human readable account of a fused decision.
+type Explanation struct {
+	Conclusion      string            `json:"conclusion"`
+	Resolution      ResolutionState   `json:"resolution"`
+	Confidence      ConfidenceBand    `json:"confidence"`
+	EvidenceScore   int               `json:"evidence_score"`
+	Codes           []ExplanationCode `json:"codes"`
+	Reasons         []string          `json:"reasons"` // human-readable (code descriptions)
+	Alternatives    []Candidate       `json:"alternatives,omitempty"`
+	EvidenceMissing []string          `json:"evidence_missing,omitempty"`
+	CatalogVersion  int               `json:"catalog_version"`
+	FusionVersion   string            `json:"fusion_version"`
+}
+
+// BuildExplanation renders the fused identity's reasoning (§K).
+func BuildExplanation(fi FusedIdentity) Explanation {
+	reasons := make([]string, 0, len(fi.Explanations))
+	for _, c := range fi.Explanations {
+		if d := c.Description(); d != "" {
+			reasons = append(reasons, d)
+		}
+	}
+	concl := fi.App
+	if concl == "" {
+		concl = "unknown"
+	}
+	return Explanation{
+		Conclusion: concl, Resolution: fi.State, Confidence: fi.Band, EvidenceScore: fi.EvidenceScore,
+		Codes: fi.Explanations, Reasons: reasons, Alternatives: fi.Alternatives,
+		EvidenceMissing: fi.EvidenceMissing, CatalogVersion: fi.CatalogVersion, FusionVersion: fi.FusionVersion,
+	}
+}
+
+// ── shared ───────────────────────────────────────────────────────────────────
+type codeSet map[ExplanationCode]bool
+
+func (c codeSet) add(x ExplanationCode)      { c[x] = true }
+func (c codeSet) has(x ExplanationCode) bool { return c[x] }
+func (c codeSet) sorted() []ExplanationCode {
+	out := make([]ExplanationCode, 0, len(c))
+	for k := range c {
+		out = append(out, k)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
@@ -316,14 +229,14 @@ func firstTenant(obs []ApplicationObservation) string {
 	return ""
 }
 
-// fusionID is deterministic per (scope, catalog version) + engine version, so re-fusing
+// fusionID is deterministic per (scope, catalog version) + engine version — re-fusing
 // the same scope at the same versions yields the same id (idempotent replace on replay).
 func fusionID(s IdentityScope, catVer int) string {
-	parts := []string{
+	parts := strings.Join([]string{
 		s.SessionID, s.FlowID, s.WorkloadID, s.CorrelationID, s.SrcIP, s.DstIP,
-		fmt.Sprintf("%d/%s", s.DstPort, s.Proto), fmt.Sprintf("cat%d", catVer), FusionEngineVersion,
-	}
-	h := sha256.Sum256([]byte(strings.Join(parts, "|")))
+		itoa(s.DstPort), s.Proto, "cat" + itoa(catVer), FusionEngineVersion,
+	}, "|")
+	h := sha256.Sum256([]byte(parts))
 	b := h[:16]
 	b[6] = (b[6] & 0x0f) | 0x50
 	b[8] = (b[8] & 0x3f) | 0x80

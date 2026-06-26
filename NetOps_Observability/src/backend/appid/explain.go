@@ -23,6 +23,9 @@ const (
 	ExSharedCDNAmbiguity    ExplanationCode = "SHARED_CDN_AMBIGUITY"                  // shared CDN/cloud IP cannot prove the app alone
 	ExDuplicateIgnored      ExplanationCode = "DUPLICATE_EVIDENCE_IGNORED"            // duplicate copies did not inflate confidence
 	ExInsufficient          ExplanationCode = "INSUFFICIENT_EVIDENCE"                 // nothing admissible → unknown (first-class)
+	ExDestinationDownranked ExplanationCode = "DESTINATION_ONLY_DOWNRANKED"           // dst-only evidence downranked vs exact-session
+	ExCatalogVersionUsed    ExplanationCode = "CATALOG_VERSION_USED"                  // the catalog version valid at decision time was used
+	ExLateEvidenceReplay    ExplanationCode = "LATE_EVIDENCE_REPLAY_REQUIRED"         // late evidence arrived → a new fused version is needed
 )
 
 // explanationDescriptions is the authoritative registry. The contract test asserts
@@ -41,6 +44,9 @@ var explanationDescriptions = map[ExplanationCode]string{
 	ExSharedCDNAmbiguity:    "A shared CDN/cloud IP cannot independently prove the application.",
 	ExDuplicateIgnored:      "Duplicate copies of the same observation did not inflate confidence or impact.",
 	ExInsufficient:          "No admissible evidence — the application is unknown (a first-class outcome).",
+	ExDestinationDownranked: "Destination-only evidence was downranked relative to exact-session evidence.",
+	ExCatalogVersionUsed:    "The catalog version valid at the decision time was used (replay-reproducible).",
+	ExLateEvidenceReplay:    "Late evidence arrived after the decision — a new fused version is required.",
 }
 
 // Valid reports whether c is a known, supported explanation code.
