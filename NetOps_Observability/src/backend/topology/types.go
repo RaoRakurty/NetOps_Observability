@@ -148,20 +148,27 @@ type Coord struct {
 // ── output: edge ─────────────────────────────────────────────────────────────
 
 type Edge struct {
-	ID           string        `json:"id"`
-	Source       string        `json:"source"`
-	Target       string        `json:"target"`
-	SourcePort   string        `json:"source_port,omitempty"`
-	TargetPort   string        `json:"target_port,omitempty"`
-	Relationship string        `json:"relationship"`
-	Protocol     string        `json:"protocol,omitempty"`
-	Status       string        `json:"status,omitempty"`
-	Utilization  float64       `json:"utilization_pct,omitempty"`
-	Confidence   float64       `json:"confidence"`
-	FirstSeen    string        `json:"first_seen,omitempty"`
-	LastSeen     string        `json:"last_seen,omitempty"`
-	ChangeState  string        `json:"change_state,omitempty"`
-	Evidence     []EvidenceRef `json:"evidence"`
+	ID           string  `json:"id"`
+	Source       string  `json:"source"`
+	Target       string  `json:"target"`
+	SourcePort   string  `json:"source_port,omitempty"`
+	TargetPort   string  `json:"target_port,omitempty"`
+	Relationship string  `json:"relationship"`
+	Protocol     string  `json:"protocol,omitempty"`
+	Status       string  `json:"status,omitempty"`
+	Utilization  float64 `json:"utilization_pct,omitempty"`
+	// #85 per-hop path metrics — interface facts joined onto the path edge (same
+	// (device, ifName) join as Utilization). Omitted when not sourced so the UI
+	// renders an honest "—"; MTU stays unset until the ifMtu OID is polled.
+	BandwidthMbps  float64       `json:"bandwidth_mbps,omitempty"`  // interface link speed (ifSpeed)
+	ThroughputMbps float64       `json:"throughput_mbps,omitempty"` // busiest-direction octet rate
+	Reliability    float64       `json:"reliability_pct,omitempty"` // oper-status × (1 − error/discard ratio)
+	MTU            float64       `json:"mtu,omitempty"`             // interface MTU (ifMtu)
+	Confidence     float64       `json:"confidence"`
+	FirstSeen      string        `json:"first_seen,omitempty"`
+	LastSeen       string        `json:"last_seen,omitempty"`
+	ChangeState    string        `json:"change_state,omitempty"`
+	Evidence       []EvidenceRef `json:"evidence"`
 }
 
 // ── output: group ────────────────────────────────────────────────────────────

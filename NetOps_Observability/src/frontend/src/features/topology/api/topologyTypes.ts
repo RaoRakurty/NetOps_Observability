@@ -153,6 +153,11 @@ export type TopologyEdge = {
   protocol?: TopologySource;
   status?: EdgeStatus;
   utilization_pct?: number;
+  // #85 per-hop path metrics (interface facts on the path edge; omitted when unsourced)
+  bandwidth_mbps?: number;
+  throughput_mbps?: number;
+  reliability_pct?: number;
+  mtu?: number;
   confidence: number;
   first_seen?: string;
   last_seen?: string;

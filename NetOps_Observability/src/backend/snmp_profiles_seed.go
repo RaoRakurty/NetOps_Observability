@@ -90,6 +90,7 @@ func blkInterface() []SNMPMetric {
 		m("ifAlias", "1.3.6.1.2.1.31.1.1.1.18", "string", "", "Interface description"),
 		m("ifOperStatus", "1.3.6.1.2.1.2.2.1.8", "enum", "", "Operational status"),
 		m("ifAdminStatus", "1.3.6.1.2.1.2.2.1.7", "enum", "", "Admin status"),
+		m("ifMtu", "1.3.6.1.2.1.2.2.1.4", "gauge", "bytes", "Interface MTU"), // #85 per-hop MTU
 		m("ifHighSpeed", "1.3.6.1.2.1.31.1.1.1.15", "gauge", "Mbps", "Interface speed"),
 		m("ifHCInOctets", "1.3.6.1.2.1.31.1.1.1.6", "counter", "bytes", "64-bit ingress bytes"),
 		m("ifHCOutOctets", "1.3.6.1.2.1.31.1.1.1.10", "counter", "bytes", "64-bit egress bytes"),
@@ -216,13 +217,13 @@ func builtinSNMPProfiles() []SNMPProfile {
 		// OIDs are flagged in the description to layer in once verified on-device.
 		{ID: "extreme-exos", Vendor: "Extreme EXOS / VOSS", Category: "router_switch", SysObjectIDPrefix: "1.3.6.1.4.1.1916", Builtin: true,
 			Description: "Extreme Networks EXOS/VOSS. Standard MIBs cover interfaces, CPU, memory and temp/fan/PSU sensors. EXTREME-SOFTWARE-MONITOR-MIB (1.3.6.1.4.1.1916.1.32) adds enterprise CPU/mem — add via the UI once verified against the device.",
-			Metrics: std(blkHost())},
+			Metrics:     std(blkHost())},
 		{ID: "ubiquiti-edgeos", Vendor: "Ubiquiti EdgeOS / EdgeRouter", Category: "router_switch", SysObjectIDPrefix: "1.3.6.1.4.1.41112", Builtin: true,
 			Description: "Ubiquiti EdgeOS/EdgeRouter (Vyatta/Linux base) — full HOST-RESOURCES + IF-MIB. For AirMAX/UniFi radios, UBNT-MIB wireless OIDs (signal/noise/CCQ) apply — add when targeting APs (a controller/cloud API is the richer source for UniFi).",
-			Metrics: std(blkHost())},
+			Metrics:     std(blkHost())},
 		{ID: "versa-flexvnf", Vendor: "Versa FlexVNF (SD-WAN / NGFW)", Category: "firewall", SysObjectIDPrefix: "1.3.6.1.4.1.42359", Builtin: true,
 			Description: "Versa FlexVNF SD-WAN/NGFW box monitoring via standard MIBs. Deep SD-WAN telemetry (path SLA, traffic steering, overlay/tunnel state) is controller-API-sourced (Versa Director + Analytics), NOT box SNMP — see docs/design/multi-vendor-wifi-expansion.md.",
-			Metrics: std(blkHost())},
+			Metrics:     std(blkHost())},
 
 		// ---- servers / hosts ----
 		{ID: "server-host", Vendor: "Server / Host (net-snmp, Windows)", Category: "server", Builtin: true,

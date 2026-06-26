@@ -78,8 +78,8 @@ func (s *server) gatherTopoMetrics(ctx context.Context) topoMetrics {
 	cpu, _ := s.qVecBy(mctx, `max by (device) (device_cpu_percent)`, "device")
 	mem, _ := s.qVecBy(mctx, `max by (device) (device_mem_percent)`, "device")
 	return topoMetrics{
-		cpu:        cpu,
-		mem:        mem,
+		cpu: cpu,
+		mem: mem,
 		// Interface metrics are labeled by ifName (+ifAlias/index), NOT `interface` —
 		// keying by `interface` silently yields empty maps, so link utilization never
 		// binds to an edge and Capacity shows nothing. canonIfaceMap then collapses
@@ -154,6 +154,9 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
 	if mode == topology.ModePathTrace && len(view.Path) > 0 {
 		enrichPathStamp(&view, s.stampByDst(r.Context()))
+		// #85 — bandwidth/throughput/reliability/MTU onto the path edges (interface
+		// facts, same (device, ifName) join as Utilization).
+		enrichPathIfMetrics(&view, s.pathIfaceMetrics(r.Context()))
 	}
 	writeJSON(w, http.StatusOK, view)
 }

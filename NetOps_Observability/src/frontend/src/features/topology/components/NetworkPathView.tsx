@@ -77,6 +77,12 @@ function fmtMs(v: number): string {
   if (v < 1) return `${Math.round(v * 1000)} µs`;
   return `${v.toFixed(v < 10 ? 1 : 0)} ms`;
 }
+/** Mbps → human bitrate: Gbps when ≥1000, Kbps when <1, else Mbps (#85). */
+function fmtMbps(v: number): string {
+  if (v >= 1000) return `${(v / 1000).toFixed(v % 1000 ? 1 : 0)} Gbps`;
+  if (v < 1) return `${Math.round(v * 1000)} Kbps`;
+  return `${v.toFixed(v < 10 ? 1 : 0)} Mbps`;
+}
 /** A hop's end-to-end latency for segment-delta math: prefer one-way delay (OWD),
  *  fall back to RTT. The DIFFERENCE between two consecutive hops' values is that
  *  segment's added latency — an honest derivation of "where the delay enters". */
@@ -292,6 +298,11 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
           const outE = idx >= 0 && idx < path.length - 1 ? edgeBetween(view.edges, openHop, path[idx + 1]) : undefined;
           const inE = idx > 0 ? edgeBetween(view.edges, path[idx - 1], openHop) : undefined;
           const loadPct = outE?.utilization_pct ?? inE?.utilization_pct;
+          // #85 — interface facts on the hop's edge (egress preferred, ingress fallback).
+          const em = (k: "bandwidth_mbps" | "throughput_mbps" | "reliability_pct" | "mtu") =>
+            outE?.[k] ?? inE?.[k];
+          const bw = em("bandwidth_mbps"), thr = em("throughput_mbps");
+          const mtu = em("mtu"), rel = em("reliability_pct");
           const M = (label: string, value: string | null, hint?: string) => (
             <div className="netpath-hd-row" key={label}>
               <span className="netpath-hd-label">{label}</span>
@@ -314,12 +325,12 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                 {M("Packet loss", st.loss != null ? `${st.loss.toFixed(st.loss < 1 ? 2 : 1)}%` : null, "No STAMP probe targets this hop's IP yet")}
                 <div className="netpath-hd-group">Link</div>
                 {M("Load (utilization)", loadPct != null ? `${Math.round(loadPct)}%` : null)}
-                {M("Bandwidth", null, "Link-speed enrichment not wired yet")}
-                {M("Throughput", null, "Interface-rate enrichment not wired yet")}
-                {M("MTU", null, "Interface MTU enrichment not wired yet")}
+                {M("Bandwidth", bw != null ? fmtMbps(bw) : null, "Interface link speed (ifSpeed) — no series for this hop's interface")}
+                {M("Throughput", thr != null ? fmtMbps(thr) : null, "Interface octet rate — no series for this hop's interface")}
+                {M("MTU", mtu != null ? `${Math.round(mtu)} bytes` : null, "ifMtu added to the SNMP profile — populates on the next poll")}
                 <div className="netpath-hd-group">Path</div>
                 {M("Hop position", `${idx + 1} of ${path.length}`)}
-                {M("Reliability", null, "Reliability scoring not wired yet")}
+                {M("Reliability", rel != null ? `${rel.toFixed(2)}%` : null, "oper-status × error-free ratio — no series for this hop's interface")}
               </div>
             </div>
           );
