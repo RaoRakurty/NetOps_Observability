@@ -2,6 +2,7 @@ import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
 import { api } from "../../services/api";
 import type { RcaCase, RcaPill, KV, TopoNode, TopoEdge } from "./rcaCase";
+import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
 // template (light, single-column report). PURE PRESENTATION: it renders an
@@ -293,6 +294,32 @@ export default function RcaWorkspace({
                     : "no independent underlay or probe evidence in this window."}
                 </div>
                 <div className="rw-cloud-note">{data.cloud.note}</div>
+              </section>
+            </>
+          )}
+
+          {/* application impact (#81 P5) — additive; only present when the object
+              carries attached fused-identity evidence. Names which apps this incident
+              affects, with provenance; absent → network RCA renders identically. */}
+          {data.appImpact && data.appImpact.apps.length > 0 && (
+            <>
+              <div className="rw-section-title">Application impact</div>
+              <section className="rw-panel rw-appimpact">
+                <div className="rw-appimpact-grid">
+                  {data.appImpact.apps.map((a, i) => (
+                    <div key={i} className="rw-appimpact-row">
+                      <span className="rw-appimpact-name">
+                        <span className={`rw-dot ${bandTone(a.band)}`} />{a.app}
+                        {a.provider && <span className="rw-appimpact-provider">{a.provider}</span>}
+                      </span>
+                      <Pill p={{ tone: bandTone(a.band), text: `${bandLabel(a.band)}${a.evidenceScore ? ` · ${a.evidenceScore}` : ""}` }} />
+                      <span className="rw-appimpact-srcs">
+                        {a.sources.length ? a.sources.map((s) => appIdSourceLabel(s)).join(" · ") : "no source recorded"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="rw-cloud-note">{data.appImpact.note}</div>
               </section>
             </>
           )}

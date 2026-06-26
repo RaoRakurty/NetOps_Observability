@@ -50,6 +50,22 @@ export interface RcaCloud {
   note: string;           // honest single-plane vs corroborated explanation
 }
 
+// Application Impact (#81 P5) — which applications this incident affects, named from
+// fused identity with explainable provenance. Built from attached source=app_identity
+// signals (the engine's enrichment lane), exactly parallel to the cloud section.
+export interface RcaImpactedApp {
+  app: string;            // resolved application name (operator identifier, verbatim)
+  band: string;           // confidence band: unresolved|low|medium|high|authoritative
+  state: string;          // resolution state: observed|fused|inferred|conflicted|unknown
+  sources: string[];      // identification techniques that backed it (ngfw_app_id, …)
+  evidenceScore: number;  // 0..100 evidence score (NOT a probability)
+  provider?: string;
+}
+export interface RcaAppImpact {
+  apps: RcaImpactedApp[];
+  note: string;           // honest "names, does not confirm" explanation
+}
+
 // Canonical verdict state (the full ladder the engine can reach). `confirmed`/
 // `suspected`/`undetermined` are the engine tiers; `contradicted` = the leading cause
 // was ruled OUT by discriminating evidence; `recovered` = the incident has cleared.
@@ -91,6 +107,8 @@ export interface RcaCase {
   // Cloud App Observability section — omitted entirely when the object carries no
   // cloud evidence (network RCA renders exactly as before).
   cloud?: RcaCloud;
+  // Application Impact (#81 P5) — omitted when no fused identity is attached.
+  appImpact?: RcaAppImpact;
   debug: { accounting: DebugRow[]; promotion: KV[]; reasoning: string; model: unknown };
 }
 
@@ -538,6 +556,40 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     }
   }
 
+  // ── application impact (#81 P5) — additive. Name the apps this incident affects
+  // from attached fused-identity signals (source=app_identity), strongest evidence
+  // per app. Identity is enrichment: it names WHICH apps are hit, it does not by
+  // itself confirm the fault (stated honestly in the note). Names kept verbatim.
+  let appImpact: RcaAppImpact | undefined;
+  {
+    const idSigs = timeline.signals.filter(
+      (s) => s.source === "app_identity" && s.attached && !s.kind.endsWith("_clear"));
+    if (idSigs.length) {
+      const byApp = new Map<string, RcaImpactedApp>();
+      for (const s of idSigs) {
+        let a: Record<string, unknown> = {};
+        try { a = JSON.parse((s as { attrs?: string }).attrs || "{}"); } catch { /* attrs absent/malformed */ }
+        const cand: RcaImpactedApp = {
+          app: s.entity_id,
+          band: a.band ? String(a.band) : "",
+          state: a.state ? String(a.state) : "",
+          sources: Array.isArray(a.sources) ? (a.sources as unknown[]).map(String) : [],
+          evidenceScore: Number(a.evidence_score || 0),
+          provider: a.provider ? String(a.provider) : undefined,
+        };
+        const cur = byApp.get(cand.app);
+        if (!cur || cand.evidenceScore > cur.evidenceScore) byApp.set(cand.app, cand);
+      }
+      const apps = [...byApp.values()].sort((x, y) => x.app.localeCompare(y.app));
+      if (apps.length) {
+        appImpact = {
+          apps,
+          note: "Application identity is supplied by an upstream classifier (firewall App-ID, NBAR2, IP/CIDR catalog, or operator catalog) and fused into explainable evidence. It names which applications this incident affects; it does not, by itself, confirm the fault.",
+        };
+      }
+    }
+  }
+
   return {
     synthetic: false,
     title, subtitle,
@@ -574,6 +626,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       sampleAnswer: confirmed ? "Independent evidence aligns in the same window and scope, so customer impact is confirmed." : "This rests on a single observation; independent evidence (peer-side routing, traffic-flow loss, downstream impact, or an active check) is needed before confirming customer impact.",
     },
     cloud,
+    appImpact,
     debug: {
       accounting: timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).slice(0, 8).map((s) => ({ signal: kindLabel(s.kind), used: { tone: "green", text: "Used" }, weight: "—", reason: `Attached ${isRoutingKind(s.kind) ? "routing/link" : modalityLabel(s.modality_class).toLowerCase()} evidence.` })),
       promotion: [

@@ -67,6 +67,46 @@ type rcaPathView struct {
 	EvidenceSummary        map[string]any    `json:"evidence_summary"`
 	MissingEvidenceSummary []string          `json:"missing_evidence_summary"`
 	LayerCoverage          *rcaLayerCoverage `json:"layer_coverage,omitempty"`
+	AppImpact              *rcaAppImpact     `json:"app_impact,omitempty"`
+}
+
+// rcaAppImpact mirrors the engine's ObjectSnapshot.app_impact projection (#81 P5):
+// the applications this object affects, named from fused identity with explainable
+// provenance, plus honest evidence_missing when a destination-bearing entity had no
+// admissible identity. Pass-through only — the engine owns the fusion; the API never
+// re-derives an app name. Absent/empty column → nil → the section is hidden honestly.
+type rcaImpactedApp struct {
+	App            string   `json:"app"`
+	Band           string   `json:"band,omitempty"`
+	State          string   `json:"state,omitempty"`
+	Sources        []string `json:"sources,omitempty"`
+	EvidenceScore  int      `json:"evidence_score,omitempty"`
+	CanonicalAppID string   `json:"canonical_app_id,omitempty"`
+	Provider       string   `json:"provider,omitempty"`
+	Component      string   `json:"component,omitempty"`
+}
+
+type rcaAppImpact struct {
+	Apps            []rcaImpactedApp `json:"apps"`
+	EvidenceMissing []string         `json:"evidence_missing,omitempty"`
+}
+
+// parseAppImpact decodes the corr_objects.app_impact column. Returns nil when
+// absent/empty/malformed or when it names no app AND records no missing-evidence —
+// the section renders only on real content (unknown-first-class, never empty noise).
+func parseAppImpact(meta map[string]any) *rcaAppImpact {
+	s, _ := meta["app_impact"].(string)
+	if s == "" || s == "{}" {
+		return nil
+	}
+	var ai rcaAppImpact
+	if json.Unmarshal([]byte(s), &ai) != nil {
+		return nil
+	}
+	if len(ai.Apps) == 0 && len(ai.EvidenceMissing) == 0 {
+		return nil
+	}
+	return &ai
 }
 
 // rcaLayerCoverage mirrors the engine's ObjectSnapshot.layer_coverage projection
@@ -250,6 +290,7 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 	cloudApp, _ := cloudEntities(attached)
 	view.Title, view.Summary, view.RecommendedAction = narrate(verdict, internal, locus, cloudApp, view.Annotations)
 	view.LayerCoverage = parseLayerCoverage(meta) // C4: pass-through, engine-owned taxonomy
+	view.AppImpact = parseAppImpact(meta)         // #81 P5: named application impact, engine-owned
 	return view
 }
 

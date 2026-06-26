@@ -3,6 +3,7 @@
 // `sig.ent.middle-mile.dia-egress-latency` → "ISP / DIA egress latency" and
 // `probe_latency_departure` → "Probe latency departure — active probe", while the
 // raw id stays available (rendered small/gray) for debugging.
+import type { Tone } from "./rcaCase";
 
 // NOC color system — tuned for engineers on wall + desk monitors, 24/7 day/night.
 // Principle: the surface stays CALM (desaturated slate, off-white text, never pure
@@ -460,4 +461,45 @@ export function nocUnlinkedReason(s: {
       return "Happened in the same window, but on a different path or device area — not part of this issue.";
     }
   }
+}
+
+// ── Application identity (#81 P5) — confidence bands + identification techniques
+// in plain operator language (customer-facing rule: no raw enum tokens in the UI).
+export function bandLabel(b?: string): string {
+  switch ((b || "").toLowerCase()) {
+    case "authoritative": return "Authoritative";
+    case "high": return "High confidence";
+    case "medium": return "Medium confidence";
+    case "low": return "Low confidence";
+    default: return "Unresolved";
+  }
+}
+
+export function bandTone(b?: string): Tone {
+  switch ((b || "").toLowerCase()) {
+    case "authoritative": case "high": return "green";
+    case "medium": return "blue";
+    case "low": return "orange";
+    default: return "gray";
+  }
+}
+
+export const APP_ID_SOURCE_LABEL: Record<string, string> = {
+  ngfw_app_id: "Firewall App-ID",
+  ipfix_app_id: "NBAR2 / IPFIX App-ID",
+  operator: "Operator catalog",
+  sot: "Source of Truth",
+  cloud_tag: "Cloud tag",
+  cloud_graph: "Cloud resource graph",
+  workload: "Workload identity",
+  dns: "DNS",
+  sni: "TLS SNI",
+  ip_catalog: "IP / CIDR catalog",
+  asn: "ASN",
+  port: "Port heuristic",
+};
+
+export function appIdSourceLabel(s?: string): string {
+  const k = (s || "").toLowerCase();
+  return APP_ID_SOURCE_LABEL[k] || (s || "").replace(/_/g, " ");
 }

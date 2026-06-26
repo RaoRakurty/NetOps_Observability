@@ -324,3 +324,40 @@ func TestRcaPathView_MissingIndependentObserver(t *testing.T) {
 		t.Fatalf("expected an independent-observer missing-evidence note; got %v", v.MissingEvidenceSummary)
 	}
 }
+
+// #81 P5: the app_impact projection surfaces in the RCA detail payload.
+func TestRcaPathView_AppImpactSurfaced(t *testing.T) {
+	meta := map[string]any{
+		"verdict_tier": "suspected", "top_confidence": 0.5, "trigger_signal": "t3",
+		"evidence_missing": "[]",
+		"app_impact": `{"apps":[{"app":"Microsoft Teams","band":"authoritative","state":"fused",` +
+			`"sources":["ngfw_app_id","ip_catalog"],"evidence_score":92,"provider":"Microsoft"}]}`,
+	}
+	sigs := []map[string]any{
+		pvSig(map[string]any{"signal_id": "t3", "entity_type": "device", "entity_id": "edge1", "kind": "device_cpu_high"}),
+	}
+	v := buildRcaPathView("obj", meta, sigs, nil)
+	if v.AppImpact == nil || len(v.AppImpact.Apps) != 1 {
+		t.Fatalf("expected 1 impacted app, got %+v", v.AppImpact)
+	}
+	a := v.AppImpact.Apps[0]
+	if a.App != "Microsoft Teams" || a.Band != "authoritative" || a.EvidenceScore != 92 {
+		t.Errorf("app impact mismapped: %+v", a)
+	}
+	if len(a.Sources) != 2 || a.Sources[0] != "ngfw_app_id" {
+		t.Errorf("sources mismapped: %v", a.Sources)
+	}
+}
+
+func TestParseAppImpact_HidesEmptyAndMalformed(t *testing.T) {
+	for _, s := range []string{"", "{}", `{"apps":[]}`, "not-json", `{"apps":[],"evidence_missing":[]}`} {
+		if got := parseAppImpact(map[string]any{"app_impact": s}); got != nil {
+			t.Errorf("app_impact %q should yield nil, got %+v", s, got)
+		}
+	}
+	// evidence_missing alone (no apps) still renders — honest unknown.
+	got := parseAppImpact(map[string]any{"app_impact": `{"apps":[],"evidence_missing":["app unknown for prefix:10.0.0.0/8"]}`})
+	if got == nil || len(got.EvidenceMissing) != 1 {
+		t.Errorf("evidence_missing-only should surface, got %+v", got)
+	}
+}
