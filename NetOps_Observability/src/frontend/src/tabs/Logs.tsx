@@ -12,7 +12,7 @@ const EXPORT_FORMATS: { id: ExportFmt; label: string }[] = [
   { id: "ndjson", label: "NDJSON" },
   { id: "xlsx", label: "Excel" },
 ];
-const EXPORT_COLUMNS = ["time", "source", "level", "message"];
+const EXPORT_COLUMNS = ["time", "source", "level", "application", "message"];
 
 // triggerDownload navigates to a signed export URL; the server's
 // Content-Disposition: attachment makes the browser download (not navigate).
@@ -148,9 +148,15 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const source =
         flowHost || src.compose_service || src.container_name || src.hostname || src.appname || h._index;
       const level = src.level || src.severity || "";
+      // Application name (#81): the firewall/router/cloud classifier's app label,
+      // surfaced so app traffic reads as "Teams / Zoom / Dropbox" not a raw 5-tuple.
+      // Vendor-neutral app_id first (the fusion contract), then FortiGate's nested
+      // fgt.app, then a bare app field — "" when the record carries no app identity.
+      const fgt = (src.fgt && typeof src.fgt === "object") ? (src.fgt as Record<string, unknown>) : {};
+      const app = String(src.app_id || src.app || (fgt.app ?? "") || "");
       // Stable id so selection survives DataTable's internal sort (was index).
       const id = h._id || `${h._index}#${i}`;
-      return { id, ts: String(ts), message: String(message), source: String(source), level: String(level), index: h._index, raw: src };
+      return { id, ts: String(ts), message: String(message), source: String(source), level: String(level), app, index: h._index, raw: src };
     });
   }, [hits]);
   type Line = (typeof lines)[number];
@@ -180,7 +186,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
 
   // Mode A — render the selected (loaded) rows to a file via the server encoders.
   const exportSelected = async (format: ExportFmt) => {
-    const rows = lines.filter((l) => selected.has(l.id)).map((l) => [l.ts, l.source, l.level, l.message]);
+    const rows = lines.filter((l) => selected.has(l.id)).map((l) => [l.ts, l.source, l.level, l.app, l.message]);
     if (rows.length === 0) return;
     setExporting(true);
     setExportMsg(null);
@@ -253,6 +259,14 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       key: "level", header: "Level", width: 100, sortable: true,
       text: (l) => l.level, sortValue: (l) => severityRank(l.level),
       render: (l) => <LogLevel level={l.level} />,
+    },
+    {
+      // #81 — the identified application (firewall App-ID / NBAR2 / cloud), the
+      // payoff of the fusion engine: app traffic named, not a raw 5-tuple.
+      key: "app", header: "Application", width: 150, sortable: true, text: (l) => l.app,
+      render: (l) => l.app
+        ? <span title={l.app} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12, fontWeight: 600, color: "var(--accent, #2563eb)" }}>{l.app.replace(/_/g, " · ")}</span>
+        : <span style={{ color: "var(--muted, #8a94a6)" }}>—</span>,
     },
     {
       key: "message", header: "Message", text: (l) => l.message,
