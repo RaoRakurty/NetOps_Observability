@@ -126,6 +126,28 @@ def test_unmatched_impactable_node_records_evidence_missing():
     assert any("dallas-edge->equinix-pop" in m for m in miss), miss
 
 
+def test_mixed_tenant_window_rejected_including_identity():
+    # the single-tenant contract (§7) applies to identity too — an identity from a
+    # DIFFERENT tenant in the window is a hard error, never silently partitioned.
+    import pytest
+    foreign = app_identity_signal(
+        "evil-corp", T0, app="Exfil", band="high", state="fused",
+        fusion_version="appfuse-1", entity_tokens=("dallas-edge",))
+    with pytest.raises(ValueError):
+        run_window(tuple(_fault_window() + [foreign]), builtin_catalog(), ())
+
+
+def test_identity_enrichment_is_deterministic_under_input_shuffle():
+    # determinism (the replay contract): same window, any order ⇒ identical object
+    # identity AND identical app_impact projection.
+    win = _fault_window() + [ident("Payroll", tokens=("dallas-edge",))]
+    a = run_window(tuple(win), builtin_catalog(), ())[0]
+    b = run_window(tuple(reversed(win)), builtin_catalog(), ())[0]
+    assert a.content_hash() == b.content_hash()
+    assert a.app_impact_blob() == b.app_impact_blob()
+    assert a.to_object_row(1)["app_impact"] == b.to_object_row(1)["app_impact"]
+
+
 def test_strongest_score_wins_for_duplicate_app():
     win = _fault_window() + [
         ident("Payroll", tokens=("dallas-edge",), band="medium", state="inferred", score=40),

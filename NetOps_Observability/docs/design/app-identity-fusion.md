@@ -151,4 +151,41 @@ version churn.
 - **P5d — golden tests + live validation.** Golden fixtures (network fault + identity →
   named affected app w/ provenance; identity-only → NO object formed). Live: produce an
   identity event sharing an app token with a fault object → RCA names the app. Validate
-  fresh-install guardrail.
+  fresh-install guardrail. **DONE inline with P5c** (6 golden tests + live cloud-object
+  validation).
+
+---
+
+## PHASE 6 — API / UI (DONE 2026-06-26)
+
+Surfaces the engine's `app_impact` projection to operators.
+- **Backend:** `correlations.go` meta SELECT reads `corr_objects.app_impact`;
+  `rca_path_view.go` `parseAppImpact()` → `rcaPathView.app_impact` (pass-through,
+  engine-owned, nil-on-empty). `GET /api/correlations/{id}/rca-path-view` carries it.
+- **Frontend:** `rcaCase.ts` builds `RcaAppImpact` from attached `source=app_identity`
+  signals (strongest evidence per app), parallel to the cloud section; RcaWorkspace
+  renders an "Application impact" section (band chips + provenance) on existing `--rw-*`
+  tokens; `labels.ts` maps raw source tokens to plain language (customer-facing rule).
+- LIVE-VALIDATED: API returns structured `app_impact`; tsc+vite + 34 rca tests green.
+
+## PHASE 7 — Hardening (DONE 2026-06-26)
+
+- **Security/tenancy (§3a):** untenanted identity dropped + counted (default-closed);
+  mixed-tenant window rejected even when the foreign signal is an identity; `corr_signals`
+  RLS scopes reads. Tests: `test_app_identity_intake.py`, `test_app_impact.py`.
+- **Replay/perf:** `app_impact` is a projection (outside `content_hash`) → no version
+  churn, deterministic under input shuffle (`test_identity_enrichment_is_deterministic`).
+- **Runbook:** `docs/runbooks/app-identity-fusion.md` (enable, validate, troubleshoot).
+
+## ADR closure
+
+AD-1…AD-6 all held as designed. Notable refinements proven in build:
+- **AD-5 made concrete:** identity is excluded from `build_nodes` (cannot seed/extend
+  an object) and joins as an `app_impact` PROJECTION matched by shared `entity_tokens`
+  — strictly "attaches to EXISTING objects", no separate app RCA.
+- **AD-4 transport:** Go→engine uses Redpanda's HTTP proxy (pandaproxy), honoring the
+  stdlib-only "REST, not Kafka bus" rule (§6) — no new dependency.
+- **Two additive CH enum value-adds** required and shipped (idempotent self-heal):
+  `corr_signals.source += app_identity`, `corr_evidence.subject_kind += app`.
+
+**#81 Fusion Layer status: P0–P7 COMPLETE + LIVE.**
