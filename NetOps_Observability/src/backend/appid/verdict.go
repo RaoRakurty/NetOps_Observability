@@ -45,6 +45,7 @@ const (
 	SrcOperator   Source = "operator"     // #69 operator-declared service selector — authoritative (internal)
 	SrcSoT        Source = "sot"          // SoT/NetBox IP→app mapping — authoritative (internal)
 	SrcCloudTag   Source = "cloud_tag"    // cloud resource tag (operator) via the cloud inventory — authoritative
+	SrcWorkload   Source = "workload"     // workload/process identity (K8s/OTel service) tied to the endpoint — authoritative
 	SrcCloudGraph Source = "cloud_graph"  // cloud resource-graph name via the cloud inventory — strong
 	SrcDNS        Source = "dns"          // DNS-flow correlation — strong
 	SrcSNI        Source = "sni"          // TLS SNI — strong
@@ -58,7 +59,7 @@ const (
 //	4 authoritative · 3 strong · 2 medium · 1 weak · 0 hint
 func (s Source) strength() int {
 	switch s {
-	case SrcNGFWAppID, SrcIPFIXAppID, SrcOperator, SrcSoT, SrcCloudTag:
+	case SrcNGFWAppID, SrcIPFIXAppID, SrcOperator, SrcSoT, SrcCloudTag, SrcWorkload:
 		return 4
 	case SrcDNS, SrcSNI, SrcCloudGraph:
 		return 3
