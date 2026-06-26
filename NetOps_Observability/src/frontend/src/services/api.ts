@@ -343,6 +343,7 @@ export type CorrObject = {
   hypotheses?: string;        // ranking + embedded grounding context (JSON)
   evidence_missing: string;   // JSON array of named shortfalls
   affected: string;           // JSON {devices, paths, interfaces, ...}
+  app_impact?: string;        // #81 P5: JSON {apps:[{app,band,state,sources,evidence_score,...}], evidence_missing?}
   signal_count: number;
   node_count: number;
   engine_version: string;

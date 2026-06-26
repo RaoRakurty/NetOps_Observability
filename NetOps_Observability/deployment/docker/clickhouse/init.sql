@@ -288,7 +288,7 @@ ORDER BY (tenant_id, correlation_id, version);
 
 -- "latest snapshot per object" convenience view (plain view: row policies on the
 -- base table evaluate in the reader's context — safe, unlike an MV).
-CREATE VIEW IF NOT EXISTS netops.corr_objects_latest AS
+CREATE OR REPLACE VIEW netops.corr_objects_latest AS
 SELECT * FROM netops.corr_objects
 ORDER BY tenant_id, correlation_id, version DESC
 LIMIT 1 BY tenant_id, correlation_id;

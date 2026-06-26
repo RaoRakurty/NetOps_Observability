@@ -147,7 +147,11 @@ ORDER BY (tenant_id, correlation_id, version)`,
 		`ALTER TABLE netops.corr_objects
     ADD COLUMN IF NOT EXISTS app_impact String DEFAULT '{}' AFTER layer_coverage`,
 
-		`CREATE VIEW IF NOT EXISTS netops.corr_objects_latest AS
+		// CREATE OR REPLACE (not IF NOT EXISTS): a SELECT * view freezes its column
+		// list at creation, so adding a base column (e.g. #81 P5 app_impact) would
+		// otherwise leave the view stale and queries selecting the new column fail.
+		// Replacing on every boot keeps the view's columns in lockstep with the table.
+		`CREATE OR REPLACE VIEW netops.corr_objects_latest AS
 SELECT * FROM netops.corr_objects
 ORDER BY tenant_id, correlation_id, version DESC
 LIMIT 1 BY tenant_id, correlation_id`,

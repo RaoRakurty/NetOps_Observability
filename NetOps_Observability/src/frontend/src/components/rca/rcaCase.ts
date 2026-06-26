@@ -556,37 +556,32 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     }
   }
 
-  // ── application impact (#81 P5) — additive. Name the apps this incident affects
-  // from attached fused-identity signals (source=app_identity), strongest evidence
-  // per app. Identity is enrichment: it names WHICH apps are hit, it does not by
-  // itself confirm the fault (stated honestly in the note). Names kept verbatim.
+  // ── application impact (#81 P5) — additive. Read the engine's AUTHORITATIVE
+  // app_impact projection off the object (corr_objects.app_impact): the apps this
+  // incident affects, named from fused identity with provenance. Reading the
+  // engine's own projection (not re-deriving from signals) keeps the UI in lockstep
+  // with the persisted RCA + the rca-path-view API. Identity is enrichment: it names
+  // WHICH apps are hit, it does not by itself confirm the fault (note states this).
   let appImpact: RcaAppImpact | undefined;
   {
-    const idSigs = timeline.signals.filter(
-      (s) => s.source === "app_identity" && s.attached && !s.kind.endsWith("_clear"));
-    if (idSigs.length) {
-      const byApp = new Map<string, RcaImpactedApp>();
-      for (const s of idSigs) {
-        let a: Record<string, unknown> = {};
-        try { a = JSON.parse((s as { attrs?: string }).attrs || "{}"); } catch { /* attrs absent/malformed */ }
-        const cand: RcaImpactedApp = {
-          app: s.entity_id,
-          band: a.band ? String(a.band) : "",
-          state: a.state ? String(a.state) : "",
-          sources: Array.isArray(a.sources) ? (a.sources as unknown[]).map(String) : [],
-          evidenceScore: Number(a.evidence_score || 0),
-          provider: a.provider ? String(a.provider) : undefined,
-        };
-        const cur = byApp.get(cand.app);
-        if (!cur || cand.evidenceScore > cur.evidenceScore) byApp.set(cand.app, cand);
-      }
-      const apps = [...byApp.values()].sort((x, y) => x.app.localeCompare(y.app));
-      if (apps.length) {
-        appImpact = {
-          apps,
-          note: "Application identity is supplied by an upstream classifier (firewall App-ID, NBAR2, IP/CIDR catalog, or operator catalog) and fused into explainable evidence. It names which applications this incident affects; it does not, by itself, confirm the fault.",
-        };
-      }
+    let parsed: { apps?: Array<Record<string, unknown>> } = {};
+    try { parsed = JSON.parse(obj.app_impact || "{}"); } catch { /* absent/malformed → no section */ }
+    const rawApps = Array.isArray(parsed.apps) ? parsed.apps : [];
+    const apps: RcaImpactedApp[] = rawApps
+      .map((a) => ({
+        app: String(a.app || ""),
+        band: a.band ? String(a.band) : "",
+        state: a.state ? String(a.state) : "",
+        sources: Array.isArray(a.sources) ? (a.sources as unknown[]).map(String) : [],
+        evidenceScore: Number(a.evidence_score || 0),
+        provider: a.provider ? String(a.provider) : undefined,
+      }))
+      .filter((a) => a.app);
+    if (apps.length) {
+      appImpact = {
+        apps,
+        note: "Application identity is supplied by an upstream classifier (firewall App-ID, NBAR2, IP/CIDR catalog, or operator catalog) and fused into explainable evidence. It names which applications this incident affects; it does not, by itself, confirm the fault.",
+      };
     }
   }
 

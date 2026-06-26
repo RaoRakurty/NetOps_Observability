@@ -31,6 +31,12 @@ func TestCorrSchemaIdempotent(t *testing.T) {
 		if strings.Contains(s, "MODIFY COLUMN") {
 			continue
 		}
+		// CREATE OR REPLACE VIEW is idempotent (re-runnable) AND, unlike CREATE VIEW
+		// IF NOT EXISTS, refreshes a SELECT * view's columns when the base table gains
+		// one (#81 P5 app_impact) — so a stale view can't shadow a new column.
+		if strings.Contains(s, "CREATE OR REPLACE") {
+			continue
+		}
 		if !strings.Contains(s, "IF NOT EXISTS") {
 			t.Errorf("statement not idempotent (missing IF NOT EXISTS): %.80s", s)
 		}

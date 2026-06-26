@@ -242,16 +242,18 @@ describe("buildRcaCase — cloud evidence section (#81 P3G 1c)", () => {
 });
 
 describe("buildRcaCase — application impact section (#81 P5)", () => {
-  const idTeams = signal({ source: "app_identity", kind: "app_identity", modality_class: "control_plane", entity_type: "app", entity_id: "Microsoft Teams", severity: "info", is_trigger: false, attrs: '{"band":"authoritative","state":"fused","sources":["ngfw_app_id","ip_catalog"],"evidence_score":92,"provider":"Microsoft"}' });
+  // The UI reads the engine's authoritative app_impact projection off the object.
+  const teamsImpact = JSON.stringify({
+    apps: [{ app: "Microsoft Teams", band: "authoritative", state: "fused", sources: ["ngfw_app_id", "ip_catalog"], evidence_score: 92, provider: "Microsoft" }],
+  });
 
-  it("omits the section when no fused identity is attached (network RCA untouched)", () => {
+  it("omits the section when the object carries no app_impact (network RCA untouched)", () => {
     const c = buildRcaCase(timeline({ signals: [signal({})] }), corrObject(), {}, "NetOps", []);
     expect(c.appImpact).toBeUndefined();
   });
 
-  it("names the affected app with provenance", () => {
-    const tl = timeline({ verdict_tier: "suspected", signals: [signal({ kind: "if_errors", entity_type: "interface", entity_id: "edge1:Gi0/1" }), idTeams] });
-    const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", signal_count: 2 }), {}, "NetOps", []);
+  it("names the affected app with provenance from the engine projection", () => {
+    const c = buildRcaCase(timeline({ signals: [signal({})] }), corrObject({ app_impact: teamsImpact }), {}, "NetOps", []);
     expect(c.appImpact).toBeDefined();
     expect(c.appImpact!.apps).toHaveLength(1);
     const a = c.appImpact!.apps[0];
@@ -263,20 +265,20 @@ describe("buildRcaCase — application impact section (#81 P5)", () => {
     expect(a.provider).toBe("Microsoft");
   });
 
-  it("keeps the strongest evidence score when an app is asserted twice", () => {
-    const weak = signal({ source: "app_identity", kind: "app_identity", entity_type: "app", entity_id: "Zoom", attrs: '{"band":"low","state":"inferred","evidence_score":40,"sources":["port"]}' });
-    const strong = signal({ source: "app_identity", kind: "app_identity", entity_type: "app", entity_id: "Zoom", attrs: '{"band":"high","state":"fused","evidence_score":88,"sources":["ngfw_app_id"]}' });
-    const c = buildRcaCase(timeline({ signals: [weak, strong] }), corrObject({ signal_count: 2 }), {}, "NetOps", []);
-    expect(c.appImpact!.apps).toHaveLength(1);
+  it("renders multiple impacted apps verbatim", () => {
+    const impact = JSON.stringify({ apps: [
+      { app: "Zoom", band: "high", state: "fused", sources: ["ngfw_app_id"], evidence_score: 88 },
+      { app: "Salesforce", band: "medium", state: "inferred", sources: ["ip_catalog"], evidence_score: 55 },
+    ] });
+    const c = buildRcaCase(timeline({ signals: [signal({})] }), corrObject({ app_impact: impact }), {}, "NetOps", []);
+    expect(c.appImpact!.apps.map((a) => a.app)).toEqual(["Zoom", "Salesforce"]);
     expect(c.appImpact!.apps[0].evidenceScore).toBe(88);
-    expect(c.appImpact!.apps[0].band).toBe("high");
   });
 
-  it("ignores cleared and unattached identity signals", () => {
-    const cleared = signal({ source: "app_identity", kind: "app_identity_clear", entity_type: "app", entity_id: "Teams", attached: true });
-    const unattached = signal({ source: "app_identity", kind: "app_identity", entity_type: "app", entity_id: "Ghost", attached: false });
-    const c = buildRcaCase(timeline({ signals: [idTeams, cleared, unattached] }), corrObject({ signal_count: 1 }), {}, "NetOps", []);
-    expect(c.appImpact!.apps.map((a) => a.app)).toEqual(["Microsoft Teams"]);
+  it("tolerates absent/malformed app_impact (no section, no crash)", () => {
+    expect(buildRcaCase(timeline({ signals: [signal({})] }), corrObject({ app_impact: "" }), {}, "NetOps", []).appImpact).toBeUndefined();
+    expect(buildRcaCase(timeline({ signals: [signal({})] }), corrObject({ app_impact: "not-json" }), {}, "NetOps", []).appImpact).toBeUndefined();
+    expect(buildRcaCase(timeline({ signals: [signal({})] }), corrObject({ app_impact: "{}" }), {}, "NetOps", []).appImpact).toBeUndefined();
   });
 });
 
