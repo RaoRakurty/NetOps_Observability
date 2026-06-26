@@ -32,13 +32,24 @@ const RANGES: { label: string; minutes: number }[] = [
   { label: "Last 24h", minutes: 1440 },
 ];
 
-const SIGNALS: { id: "" | "applogs" | "syslog" | "snmptrap" | "flows"; label: string }[] = [
+type SignalId = "" | "applogs" | "syslog" | "snmptrap" | "flows" | "firewall";
+
+const SIGNALS: { id: SignalId; label: string }[] = [
   { id: "", label: "All" },
   { id: "applogs", label: "App logs" },
   { id: "syslog", label: "Syslog (devices)" },
+  { id: "firewall", label: "Firewall (all vendors)" },
   { id: "snmptrap", label: "SNMP traps" },
   { id: "flows", label: "Flows" },
 ];
+
+// #81 — "Firewall (all vendors)" is a convenience filter over the syslog index:
+// it narrows to records a firewall vendor parser produced (FortiGate .fgt,
+// Palo Alto .pan, Versa .versa) or that carry the vendor-neutral app contract
+// (.app_id). Vendor-agnostic by construction; new vendors slot in by adding their
+// parsed namespace here. (The bare `vendor` field is on every device, so it can't
+// mark "firewall" — the parsed namespace is the reliable signal.)
+const FIREWALL_FILTER = "(_exists_:fgt OR _exists_:pan OR _exists_:versa OR _exists_:app_id)";
 
 type Props = {
   // Supplied by the shell so the global omni-search and time-range govern
@@ -48,12 +59,12 @@ type Props = {
   // Device/alert pivots set this so the drawer opens scoped to the device's own
   // syslog (signal=syslog + a host: field query), NOT a free-text all-signals
   // search that would also surface internal app-logs mentioning the device.
-  initialSignal?: "" | "applogs" | "syslog" | "snmptrap" | "flows";
+  initialSignal?: SignalId;
 };
 
 export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Props = {}) {
   const [query, setQuery] = useState(initialQuery ?? "*");
-  const [signal, setSignal] = useState<"" | "applogs" | "syslog" | "snmptrap" | "flows">(initialSignal ?? "");
+  const [signal, setSignal] = useState<SignalId>(initialSignal ?? "");
   const [minutes, setMinutes] = useState(rangeMinutes ?? 15);
   const [size, setSize] = useState(200);
   const [hits, setHits] = useState<OSHit[]>([]);
@@ -80,12 +91,18 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     try {
       const end = new Date();
       const start = new Date(end.getTime() - m * 60_000);
+      // "Firewall (all vendors)" is a syslog query with a vendor-agnostic narrowing
+      // filter applied — combine it with whatever the operator typed.
+      const backendSignal = sig === "firewall" ? "syslog" : sig;
+      const effQuery = sig === "firewall"
+        ? (q && q.trim() && q.trim() !== "*" ? `(${q}) AND ${FIREWALL_FILTER}` : FIREWALL_FILTER)
+        : q;
       const r = await api.searchLogs({
-        query: q,
+        query: effQuery,
         from: start.toISOString(),
         to: end.toISOString(),
         size: sz,
-        signal: sig,
+        signal: backendSignal,
       });
       setHits(r?.hits?.hits ?? []);
       setTotal(r?.hits?.total?.value ?? null);
@@ -207,10 +224,15 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     try {
       const end = new Date();
       const start = new Date(end.getTime() - minutes * 60_000);
+      // Mirror run()'s "firewall" translation so an export matches the on-screen view.
+      const backendSignal = signal === "firewall" ? "syslog" : signal;
+      const effQuery = signal === "firewall"
+        ? (query && query.trim() && query.trim() !== "*" ? `(${query}) AND ${FIREWALL_FILTER}` : FIREWALL_FILTER)
+        : query;
       const { executionId, matched } = await api.exportLogQuery({
         format,
-        query,
-        signal,
+        query: effQuery,
+        signal: backendSignal,
         from: start.toISOString(),
         to: end.toISOString(),
       });
