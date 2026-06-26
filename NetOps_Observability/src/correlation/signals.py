@@ -37,6 +37,7 @@ class Source(str, Enum):
     TRAP = "trap"
     SOT_DRIFT = "sot_drift"
     CLOUD = "cloud"  # #81 P3G: Cloud App Observability plane (cloud APIs + cloud logs)
+    APP_IDENTITY = "app_identity"  # #81 P5: fused application identity (enrichment, not a fault)
 
 
 class ObserverType(str, Enum):

@@ -96,3 +96,59 @@ React `Correlations.tsx`, `RcaWorkspace.tsx`, `rcaCase.ts`, App Observability `p
   `FusedIdentity` type wraps/embeds `Verdict`; keep `Fuse` signature, add `FuseObservations`.
 - CH/PG migrations must be idempotent + self-heal (follow init.sql `MODIFY COLUMN` pattern).
 - Vendor parsers must dead-letter, never crash the pipeline (§7).
+
+---
+
+## PHASE 5 — Correlation integration (detailed)
+
+**Status:** P5a SHIPPED 2026-06-26 · P5b–P5d planned. Mirrors the cloud lane (#81 P3G).
+
+### Principle (AD-5 made concrete)
+App identity is **enrichment, not a fault.** A fused identity answers *"WHICH app is
+this traffic?"* — it must NAME the applications an object affects, but must NEVER seed
+an object on its own (no "app identified" RCA objects). So identity rides the EXISTING
+spine: a low-severity enrichment signal that attaches to objects the engine already
+formed from real faults. Confirmation of a fault still requires an independent fault
+observer — identity is one platform-derived vantage and cannot self-confirm.
+
+### Seam decisions
+- **New `Source.APP_IDENTITY`** (`signals.py`) — filterable, never mistaken for a fault.
+  Reuses `EntityType.APP` + `ModalityClass.CONTROL_PLANE` (AD-2, no new enum).
+- **One observer** `appid:fusion` (ObserverType.PLATFORM) → independence gate treats
+  fused identity as a single derived observer (cannot confirm alone).
+- **Severity always INFO** → guarantees identity can't open an object (engine seeds
+  objects from fault severity; P5c adds an explicit guard too).
+- **Join key = shared `entity_tokens`** (app + dst_ip + flow/session id) → an identity
+  signal grounds onto the SAME nodes a flow/network fault touches; that overlap is how
+  an object names its affected app.
+- **Topic** `netops.app.identities.v1` (versioned, AD-4) — the Go fusion worker emits
+  fused identities; `main.py` adds `handle_app_identity`. Vendor logs keep flowing via
+  syslog/Vector untouched.
+
+### Replay / versioning invariants (must hold)
+The engine is built around `content_hash` stability ("byte-identical to pre-CX"). P5c
+integration must be **additive and no-churn**: identity contributes EVIDENCE rows
+(`role=supports`) + named affected apps, but must not alter `content_hash`
+(nodes/signals/edges/hypotheses/engine) for objects that have no identity signal. An
+object with zero identity signals stays byte-identical to pre-P5 → replay-safe, no
+version churn.
+
+### Increments
+- **P5a — pure producer (DONE).** `app_producers.py`: `app_identity_signal()` +
+  `app_identity_from_event()` wire adapter (DeadLetter on no-app / invalid band-state).
+  `Source.APP_IDENTITY` added. 14 unit tests; full suite 293 green. NOT wired into
+  main.py → zero runtime risk.
+- **P5b — ingestion lane.** Add `netops.app.identities.v1` to `TOPICS` + `handle_app_identity`
+  (tenancy EXPLICIT/default-closed, untenanted dropped, dead-letter counters on /healthz,
+  insert corr_signals + buffer_signal). Widen CH `corr_signals.source` Enum to include
+  `app_identity` (idempotent `MODIFY COLUMN`, like cloud=9). Go: fusion worker emits to the
+  topic alongside the CH `app_identities` persist (new producer seam, opt-in).
+- **P5c — engine enrichment + app impact.** Engine treats `source=app_identity` as
+  enrichment: it attaches to existing objects via shared tokens, NEVER seeds one (guard +
+  test). App-impact calc names affected apps on network-fault objects from the grounded
+  identity signals; emit supporting `corr_evidence` rows + honest `evidence_missing`
+  ("flow present, app unknown") — unknown first-class. All additive / no content_hash churn.
+- **P5d — golden tests + live validation.** Golden fixtures (network fault + identity →
+  named affected app w/ provenance; identity-only → NO object formed). Live: produce an
+  identity event sharing an app token with a fault object → RCA names the app. Validate
+  fresh-install guardrail.
