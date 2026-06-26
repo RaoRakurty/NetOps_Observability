@@ -40,9 +40,10 @@ type ApplicationObservation struct {
 	VendorRisk     string `json:"vendor_risk,omitempty"`
 
 	// classification
-	Method     string  `json:"method,omitempty"`     // identification method as reported / inferred
-	Source     Source  `json:"source"`               // mapped onto the Correlix trust ladder (authority)
-	Confidence float64 `json:"confidence,omitempty"` // source's own confidence (0 ⇒ use baseConfidence)
+	Method      string  `json:"method,omitempty"`       // identification method as reported / inferred
+	Source      Source  `json:"source"`                 // mapped onto the Correlix trust ladder (authority)
+	Confidence  float64 `json:"confidence,omitempty"`   // source's own confidence (0 ⇒ use baseConfidence)
+	AppProtocol string  `json:"app_protocol,omitempty"` // L7 protocol (HTTPS/QUIC) — a protocol, NOT the business app
 
 	// context (joined from topology/inventory where available)
 	Site      string `json:"site,omitempty"`

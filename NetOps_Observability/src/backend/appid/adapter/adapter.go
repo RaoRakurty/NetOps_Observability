@@ -54,7 +54,11 @@ type Registry struct{ adapters []Adapter }
 // is detection precedence; add new adapters here (the fusion core never changes).
 func New() *Registry {
 	r := &Registry{}
+	// More-specific vendor matchers first; NBAR/IPFIX last (its markers are generic).
 	r.Register(fortiGate{})
+	r.Register(paloAlto{})
+	r.Register(ciscoFW{})
+	r.Register(nbarIPFIX{})
 	return r
 }
 
