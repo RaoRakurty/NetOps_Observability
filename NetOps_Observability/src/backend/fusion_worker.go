@@ -51,6 +51,8 @@ type fusionMetrics struct {
 	Conflict         int64
 	DeadLetter       int64
 	Unsupported      int64
+	Emitted          int64 // identities published to the correlation topic (P5b)
+	EmitErrors       int64 // emit attempts that failed (best-effort; CH persist still holds)
 	LastError        string
 	LastCycleUnixSec int64
 }
@@ -74,17 +76,23 @@ func (m *fusionMetrics) snapshot() map[string]any {
 		"cycles": m.Cycles, "observations": m.Observations, "identities": m.Identities,
 		"by_vendor": bv, "by_band": bb, "unknown": m.Unknown, "conflict": m.Conflict,
 		"dead_letter": m.DeadLetter, "unsupported": m.Unsupported,
+		"emitted": m.Emitted, "emit_errors": m.EmitErrors,
 		"last_error": m.LastError, "last_cycle_unix": m.LastCycleUnixSec,
 	}
 }
 
-// fusionWorker is the pipeline orchestrator. persist funcs are injectable for tests.
+// appIdentityTopic is the versioned correlation feed for fused application identity
+// (AD-4). The Python engine (main.py) consumes it as an enrichment evidence lane.
+const appIdentityTopic = "netops.app.identities.v1"
+
+// fusionWorker is the pipeline orchestrator. persist/emit funcs are injectable for tests.
 type fusionWorker struct {
 	reg        *adapter.Registry
 	source     FusionSource
 	canon      func(vendor, app string) string
 	persistObs func(context.Context, []appid.ApplicationObservation) error
 	persistID  func(context.Context, []appid.FusedIdentity) error
+	emitID     func(context.Context, []appid.FusedIdentity) (int, error)
 	window     time.Duration
 	catVer     int
 	metrics    *fusionMetrics
@@ -94,8 +102,76 @@ func newFusionWorker(src FusionSource) *fusionWorker {
 	return &fusionWorker{
 		reg: adapter.New(), source: src,
 		persistObs: insertObservations, persistID: insertIdentities,
+		emitID: emitIdentities,
 		window: 10 * time.Minute, catVer: 1, metrics: newFusionMetrics(),
 	}
+}
+
+// identityEvent maps a fused identity to the netops.app.identities.v1 wire contract
+// consumed by correlation's app_identity_from_event(). Returns ok=false for an
+// identity with no nameable app ("unknown"/empty) — those carry no enrichment value
+// and the consumer would dead-letter them, so they are never emitted (unknown stays
+// first-class in the catalog/CH, just not pushed as correlation evidence).
+func identityEvent(fi appid.FusedIdentity) (map[string]any, bool) {
+	app := strings.TrimSpace(fi.App)
+	if app == "" || strings.EqualFold(app, "unknown") {
+		return nil, false
+	}
+	// Distinct evidence sources, in deterministic order (the verdict ranks them).
+	seen := map[string]bool{}
+	sources := make([]string, 0, len(fi.Signals))
+	for _, s := range fi.Signals {
+		v := string(s.Source)
+		if v != "" && !seen[v] {
+			seen[v] = true
+			sources = append(sources, v)
+		}
+	}
+	ev := map[string]any{
+		"tenant_id":       fi.TenantID,
+		"app":             app,
+		"band":            string(fi.Band),
+		"state":           string(fi.State),
+		"evidence_score":  fi.EvidenceScore,
+		"sources":         sources,
+		"fusion_version":  fi.FusionVersion,
+		"catalog_version": fi.CatalogVersion,
+		"ts":              fi.FusedAt.UTC().Format(time.RFC3339),
+	}
+	// Optional provenance / scope — only when present (keeps the wire dict lean and
+	// the consumer's honest defaults intact).
+	put := func(k, v string) {
+		if v != "" {
+			ev[k] = v
+		}
+	}
+	put("canonical_app_id", fi.CanonicalAppID)
+	put("provider", fi.Provider)
+	put("component", fi.Component)
+	put("dst_ip", fi.Scope.DstIP)
+	put("proto", fi.Scope.Proto)
+	put("flow_id", fi.Scope.FlowID)
+	put("session_id", fi.Scope.SessionID)
+	if fi.Scope.DstPort != 0 {
+		ev["dst_port"] = fi.Scope.DstPort
+	}
+	return ev, true
+}
+
+// emitIdentities publishes nameable fused identities to the correlation topic via the
+// Redpanda REST proxy (P5b). Best-effort: returns the count actually produced. The
+// partition key is the tenant, so one tenant's identities stay ordered. Skipped
+// (returns 0) when the topic transport is disabled — offline-safe.
+func emitIdentities(ctx context.Context, ids []appid.FusedIdentity) (int, error) {
+	recs := make([]proxyRecord, 0, len(ids))
+	for _, fi := range ids {
+		ev, ok := identityEvent(fi)
+		if !ok {
+			continue
+		}
+		recs = append(recs, proxyRecord{Key: fi.TenantID, Value: ev})
+	}
+	return produceJSON(ctx, appIdentityTopic, recs)
 }
 
 // cycle runs one pass deterministically at `now`. Returns the persisted identity count.
@@ -132,6 +208,18 @@ func (w *fusionWorker) cycle(ctx context.Context, now time.Time) (int, error) {
 	if err := w.persistID(ctx, ids); err != nil {
 		w.recordErr(err)
 		return 0, err
+	}
+	// Emit to the correlation feed — BEST-EFFORT (§9/§10). The ClickHouse persist
+	// above is the source of truth; the topic is only the enrichment lane for the
+	// engine. A transport failure is counted + logged, never an aborted cycle (the
+	// next cycle re-emits — the consumer is idempotent on deterministic signal_id).
+	if w.emitID != nil {
+		if n, err := w.emitID(ctx, ids); err != nil {
+			w.bump(func(m *fusionMetrics) { m.EmitErrors++ })
+			log.Printf("fusion: identity emit error: %v", err)
+		} else {
+			w.bump(func(m *fusionMetrics) { m.Emitted += int64(n) })
+		}
 	}
 	w.bump(func(m *fusionMetrics) {
 		m.Cycles++

@@ -98,9 +98,11 @@ SETTINGS index_granularity = 8192`,
 		// gains 'cloud'=9, entity_type gains 'app'=8/'cloud_resource'=9. MODIFY COLUMN
 		// is safe for an Enum8 value-add (existing rows keep their mapping). Idempotent
 		// self-heal for live tables (both signals + archive share signalColumns).
-		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9)`,
+		// #81 P5: source gains 'app_identity'=10 — fused application identity as an
+		// enrichment evidence producer on the SAME spine (additive Enum8 value-add).
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9)`,
-		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9)`,
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_objects

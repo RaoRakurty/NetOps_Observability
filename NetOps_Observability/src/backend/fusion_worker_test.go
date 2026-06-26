@@ -28,6 +28,9 @@ func newTestWorker(src FusionSource) (*fusionWorker, *[]appid.ApplicationObserva
 		return nil
 	}
 	w.persistID = func(_ context.Context, i []appid.FusedIdentity) error { gotID = append(gotID, i...); return nil }
+	// Stub emit so the suite never makes a real pandaproxy HTTP call. The real
+	// emitIdentities is covered by the dedicated identityEvent + cycle-emit tests.
+	w.emitID = func(_ context.Context, i []appid.FusedIdentity) (int, error) { return len(i), nil }
 	return w, &gotObs, &gotID
 }
 
@@ -85,6 +88,80 @@ func TestWorkerCycle_SourceErrorReported(t *testing.T) {
 	}
 	if w.metrics.snapshot()["last_error"] == "" {
 		t.Error("source error should be recorded in metrics")
+	}
+}
+
+func TestIdentityEvent_MapsContractAndDedupsSources(t *testing.T) {
+	fi := appid.FusedIdentity{
+		TenantID: "acme", Band: appid.BandAuthoritative, State: appid.StateFused,
+		EvidenceScore: 92, FusionVersion: "appfuse-1", CatalogVersion: 7,
+		CanonicalAppID: "app-123", Provider: "Microsoft",
+		Scope: appid.IdentityScope{DstIP: "13.107.6.152", DstPort: 443, Proto: "6", FlowID: "f-1"},
+		Verdict: appid.Verdict{App: "Microsoft Teams", Signals: []appid.Signal{
+			{Source: appid.SrcNGFWAppID}, {Source: appid.SrcIPCatalog}, {Source: appid.SrcNGFWAppID},
+		}},
+	}
+	ev, ok := identityEvent(fi)
+	if !ok {
+		t.Fatal("nameable identity should map")
+	}
+	if ev["app"] != "Microsoft Teams" || ev["tenant_id"] != "acme" {
+		t.Errorf("core fields wrong: %v", ev)
+	}
+	if ev["band"] != "authoritative" || ev["state"] != "fused" || ev["evidence_score"] != 92 {
+		t.Errorf("provenance wrong: %v", ev)
+	}
+	srcs, _ := ev["sources"].([]string)
+	if len(srcs) != 2 || srcs[0] != "ngfw_app_id" || srcs[1] != "ip_catalog" {
+		t.Errorf("sources should dedup preserving order: %v", srcs)
+	}
+	if ev["dst_ip"] != "13.107.6.152" || ev["dst_port"] != 443 || ev["flow_id"] != "f-1" {
+		t.Errorf("scope wrong: %v", ev)
+	}
+	if _, present := ev["session_id"]; present {
+		t.Error("empty optional fields must be omitted (honest defaults on the consumer)")
+	}
+}
+
+func TestIdentityEvent_SkipsUnknown(t *testing.T) {
+	for _, app := range []string{"", "unknown", "Unknown", "  "} {
+		if _, ok := identityEvent(appid.FusedIdentity{Verdict: appid.Verdict{App: app}}); ok {
+			t.Errorf("app %q must not be emitted (no enrichment value)", app)
+		}
+	}
+}
+
+func TestWorkerCycle_EmitErrorDoesNotAbort(t *testing.T) {
+	src := fakeFusionSource{events: []map[string]any{
+		{"vendor": "fortinet", "devname": "FGT", "app": "Microsoft.Teams", "appcat": "Collaboration",
+			"sessionid": "s1", "srcip": "10.0.0.1", "dstip": "52.1.1.1", "dstport": "443", "proto": "6", "tenant_id": "acme"},
+	}}
+	w, _, gotID := newTestWorker(src)
+	w.emitID = func(_ context.Context, _ []appid.FusedIdentity) (int, error) { return 0, errors.New("proxy down") }
+	n, err := w.cycle(context.Background(), time.Unix(1782460000, 0).UTC())
+	if err != nil {
+		t.Fatalf("emit failure must NOT abort the cycle: %v", err)
+	}
+	if n != 1 || len(*gotID) != 1 {
+		t.Fatalf("persist still happened (source of truth): n=%d ids=%d", n, len(*gotID))
+	}
+	if w.metrics.snapshot()["emit_errors"].(int64) != 1 {
+		t.Error("emit error should be counted")
+	}
+}
+
+func TestWorkerCycle_EmitCounts(t *testing.T) {
+	src := fakeFusionSource{events: []map[string]any{
+		{"vendor": "fortinet", "devname": "FGT", "app": "Microsoft.Teams", "appcat": "Collaboration",
+			"sessionid": "s1", "srcip": "10.0.0.1", "dstip": "52.1.1.1", "dstport": "443", "proto": "6", "tenant_id": "acme"},
+	}}
+	w, _, _ := newTestWorker(src)
+	w.emitID = func(_ context.Context, i []appid.FusedIdentity) (int, error) { return len(i), nil }
+	if _, err := w.cycle(context.Background(), time.Unix(1782460000, 0).UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if w.metrics.snapshot()["emitted"].(int64) != 1 {
+		t.Errorf("emitted count wrong: %v", w.metrics.snapshot()["emitted"])
 	}
 }
 

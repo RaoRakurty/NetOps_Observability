@@ -49,6 +49,7 @@ from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
 from cloud_log_parsers import cloud_log_event
 from cloud_producers import cloud_signal_from_event
+from app_producers import app_identity_from_event
 from producers import (
     episode_signal,
     flow_sample,
@@ -84,7 +85,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1"]
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -194,6 +195,9 @@ TRAPS_DROPPED = 0              # unclassified — kept searchable, no RCA signal
 CLOUD_RECEIVED = 0             # consumed from netops.cloud (#81 P3G ingestion lane)
 CLOUD_SIGNALS = 0             # source=cloud signals written to corr_signals + buffered
 CLOUD_DROPPED = 0             # dropped: no tenant (default-closed) / malformed (dead-letter)
+APP_ID_RECEIVED = 0           # consumed from netops.app.identities.v1 (#81 P5 fusion lane)
+APP_ID_SIGNALS = 0            # source=app_identity enrichment signals written + buffered
+APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
 
 # Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
 # stamp beyond this, or a stamp older than the correlation window, is dropped
@@ -882,6 +886,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_snmptrap(event)
     elif topic == "netops.cloud":
         await handle_cloud(event)
+    elif topic == "netops.app.identities.v1":
+        await handle_app_identity(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -1178,6 +1184,41 @@ async def handle_cloud(ev: dict) -> None:
              sig.attrs.get("account", ""), sig.attrs.get("region", ""))
 
 
+async def handle_app_identity(ev: dict) -> None:
+    """Fused application-identity events (netops.app.identities.v1) → canonical
+    enrichment signals on the SAME spine (#81 P5). Identity is ENRICHMENT, not a
+    fault (AD-5): an INFO signal that attaches to objects the engine ALREADY formed
+    from real faults, naming the app they affect — it can never seed an object or
+    self-confirm a verdict (one platform vantage). Additive lane: the existing
+    engine grounds it with no identity-specific code path.
+
+    Tenancy is EXPLICIT — an identity event carries its own tenant_id (there is no
+    device to infer it from); an untenanted event is DROPPED, never guessed
+    (default-closed isolation, §3a). A malformed event dead-letters (counted)."""
+    global DEADLETTER_COUNT, APP_ID_RECEIVED, APP_ID_SIGNALS, APP_ID_DROPPED
+    APP_ID_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        APP_ID_DROPPED += 1
+        log.warning("app-identity event dropped: no tenant_id (app=%s)", ev.get("app"))
+        return
+    try:
+        sig = app_identity_from_event(ev, tenant, datetime.now(timezone.utc))
+    except DeadLetter as exc:
+        DEADLETTER_COUNT += 1
+        APP_ID_DROPPED += 1
+        log.warning("dead-letter (app-identity): %s", exc)
+        return
+    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    APP_ID_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("app-identity signal %s: app=%s band=%s state=%s",
+             sig.kind, sig.entity_id,
+             sig.attrs.get("band", ""), sig.attrs.get("state", ""))
+
+
 async def handle_syslog(ev: dict) -> None:
     # Control-plane extraction first (#67 build ⑦): adjacency / link-state
     # events become control_plane signals on the spine regardless of burst
@@ -1378,6 +1419,10 @@ async def health() -> dict:
             "cloud_received": CLOUD_RECEIVED,
             "cloud_signals": CLOUD_SIGNALS,
             "cloud_dropped": CLOUD_DROPPED,
+            # #81 P5 fusion identity lane: proves netops.app.identities.v1 is consumed.
+            "app_identity_received": APP_ID_RECEIVED,
+            "app_identity_signals": APP_ID_SIGNALS,
+            "app_identity_dropped": APP_ID_DROPPED,
         },
     }
 
