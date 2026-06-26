@@ -74,6 +74,7 @@ type server struct {
 	applications     applicationStore      // Application Identification registry #81 P0 (in-memory or pg)
 	appCatalog       *appCatalogHolder     // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
 	ngfw             *ngfwAppResolver      // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
+	fusion           *fusionWorker         // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
 	appOverrides     appCatalogStore       // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
 	cloud            cloudStore            // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
 	cloudApp         *cloudAppResolver     // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
@@ -519,6 +520,13 @@ func main() {
 	// (private-IP/ENI/resource → app) mappings into the shared resolver so flows/logs
 	// to cloud resources name their app. Runs after the fixture load above.
 	srv.cloudApp.startRefresh(ctx)
+	// Application Identity Fusion worker (#81 P4): pull vendor app events → adapters →
+	// observations → fuse → persist app_observations/app_identities. Opt-in + default-off
+	// (FUSION_WORKER_ENABLED=true) so it never runs unasked; metrics at /api/appid/fusion/status.
+	srv.fusion = newFusionWorker(openSearchSource{})
+	if envOr("FUSION_WORKER_ENABLED", "") == "true" {
+		srv.fusion.start(ctx)
+	}
 	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
@@ -787,6 +795,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
 	mux.HandleFunc("/api/appid/resolve", s.handleAppIDResolve)
 	mux.HandleFunc("/api/appid/status", s.handleAppIDStatus)
+	mux.HandleFunc("/api/appid/fusion/status", s.handleFusionStatus)
 	mux.HandleFunc("/api/appid/catalog", s.handleAppIDCatalog)
 	mux.HandleFunc("/api/appid/catalog/", s.handleAppIDCatalogByID)
 	mux.HandleFunc("/api/flows/apps", s.handleFlowsApps)
