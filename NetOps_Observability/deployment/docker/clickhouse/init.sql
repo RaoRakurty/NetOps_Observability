@@ -336,6 +336,91 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id);
 
+-- 2.4 Application Identity Fusion (#81) — high-volume, vendor-NEUTRAL.
+-- app_observations: one upstream identity opinion with full provenance (the ORIGINAL
+-- vendor values are preserved; the raw log stays in OpenSearch — only a ref+hash here).
+CREATE TABLE IF NOT EXISTS netops.app_observations
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    observation_id   UUID,                     -- deterministic per (source, scope, app, event_time)
+    event_time       DateTime64(3),
+    ingest_time      DateTime64(3) DEFAULT now64(3),
+    source_type      LowCardinality(String),   -- ngfw|ipfix|proxy|ndr|workload|cloud|dns|sni|...
+    vendor           LowCardinality(String) DEFAULT '',
+    product          LowCardinality(String) DEFAULT '',
+    device           LowCardinality(String) DEFAULT '',
+    collector_version LowCardinality(String) DEFAULT '',
+    parser_version   LowCardinality(String) DEFAULT '',
+    flow_id          String DEFAULT '',
+    session_id       String DEFAULT '',
+    src_ip           String DEFAULT '',
+    dst_ip           String DEFAULT '',
+    src_port         UInt16 DEFAULT 0,
+    dst_port         UInt16 DEFAULT 0,
+    proto            LowCardinality(String) DEFAULT '',
+    vendor_app_id    String DEFAULT '',        -- ORIGINAL vendor app-id (never discarded)
+    vendor_app_name  String DEFAULT '',        -- ORIGINAL vendor name
+    vendor_category  LowCardinality(String) DEFAULT '',
+    vendor_risk      LowCardinality(String) DEFAULT '',
+    method           LowCardinality(String) DEFAULT '',
+    source           LowCardinality(String) DEFAULT '',  -- mapped onto the appid trust ladder
+    confidence       Float64 DEFAULT 0,
+    site             LowCardinality(String) DEFAULT '',
+    interface        LowCardinality(String) DEFAULT '',
+    user             String DEFAULT '',
+    workload         String DEFAULT '',
+    path             String DEFAULT '',
+    seam             LowCardinality(String) DEFAULT '',
+    raw_ref          String DEFAULT '',        -- pointer to the raw event (OpenSearch doc id)
+    raw_hash         String DEFAULT '',        -- integrity hash, NOT the raw body
+    bytes            UInt64 DEFAULT 0,
+    packets          UInt64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(ingest_time)       -- dedup by observation_id (idempotent re-ingest)
+PARTITION BY (tenant_id, toYYYYMMDD(event_time))
+ORDER BY (tenant_id, observation_id)
+TTL toDateTime(event_time) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192;
+
+-- app_identities: the fused, explainable result per scope + fusion version. Keyed by
+-- (scope, catalog_version, fusion_version) so a catalog/engine bump yields a NEW
+-- versioned row (replay reproducible) rather than rewriting history.
+CREATE TABLE IF NOT EXISTS netops.app_identities
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    fusion_id        UUID,
+    fused_at         DateTime64(3) DEFAULT now64(3),
+    flow_id          String DEFAULT '',
+    session_id       String DEFAULT '',
+    workload_id      String DEFAULT '',
+    correlation_id   String DEFAULT '',
+    src_ip           String DEFAULT '',
+    dst_ip           String DEFAULT '',
+    dst_port         UInt16 DEFAULT 0,
+    proto            LowCardinality(String) DEFAULT '',
+    canonical_app_id String DEFAULT '',
+    app              String DEFAULT 'unknown',          -- canonical name; 'unknown' first-class
+    provider         LowCardinality(String) DEFAULT '',
+    component        String DEFAULT '',
+    app_protocol     LowCardinality(String) DEFAULT '', -- QUIC (a protocol, not the business app)
+    transport        LowCardinality(String) DEFAULT '',
+    tier             Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
+    band             Enum8('unresolved'=0,'low'=1,'medium'=2,'high'=3,'authoritative'=4),
+    state            Enum8('unknown'=0,'observed'=1,'inferred'=2,'fused'=3,'conflicted'=4),
+    confidence       Float64 DEFAULT 0,
+    contradicted     UInt8 DEFAULT 0,
+    explanations     Array(LowCardinality(String)),
+    alternatives     String DEFAULT '[]',               -- JSON [{app,confidence,band,sources}]
+    evidence_missing Array(String),
+    catalog_version  UInt32 DEFAULT 0,
+    fusion_version   LowCardinality(String) DEFAULT ''
+)
+ENGINE = ReplacingMergeTree(fused_at)
+PARTITION BY (tenant_id, toYYYYMMDD(fused_at))
+ORDER BY (tenant_id, fusion_id)
+TTL toDateTime(fused_at) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
+
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_flows ON netops.flows
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
@@ -346,6 +431,12 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_tunnels ON netops.tunnels
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals ON netops.corr_signals
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_app_observations ON netops.app_observations
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_app_identities ON netops.app_identities
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals_archive ON netops.corr_signals_archive
