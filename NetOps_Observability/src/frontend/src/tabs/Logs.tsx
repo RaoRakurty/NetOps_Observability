@@ -38,7 +38,7 @@ const SIGNALS: { id: SignalId; label: string }[] = [
   { id: "", label: "All" },
   { id: "applogs", label: "App logs" },
   { id: "syslog", label: "Syslog (devices)" },
-  { id: "firewall", label: "Firewall (all vendors)" },
+  { id: "firewall", label: "fw_logs" },
   { id: "snmptrap", label: "SNMP traps" },
   { id: "flows", label: "Flows" },
 ];
