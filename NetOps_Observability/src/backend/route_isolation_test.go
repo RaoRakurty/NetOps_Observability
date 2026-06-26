@@ -125,6 +125,7 @@ var routeIsolationLedger = map[string]string{
 	// (TestCloudStoreIsolation, appid_isolation_test.go, cloud_appid_resolver_test.go).
 	"/api/appid/resolve":               "scoped",
 	"/api/appid/status":                "scoped",
+	"/api/appid/fusion/status":         "scoped",
 	"/api/appid/catalog":               "scoped",
 	"/api/appid/catalog/":              "scoped",
 	"/api/applications":                "scoped",
