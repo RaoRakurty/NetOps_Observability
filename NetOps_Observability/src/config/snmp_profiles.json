@@ -20,6 +20,7 @@
       { "name": "device_if_in_bcast_pkts",  "oid": "1.3.6.1.2.1.31.1.1.1.9",  "table": true },
       { "name": "device_if_out_bcast_pkts", "oid": "1.3.6.1.2.1.31.1.1.1.13", "table": true },
       { "name": "device_if_speed",        "oid": "1.3.6.1.2.1.31.1.1.1.15",    "table": true },
+      { "name": "device_if_mtu",          "oid": "1.3.6.1.2.1.2.2.1.4",        "table": true },
       { "name": "device_cpu_percent",     "oid": "1.3.6.1.2.1.25.3.3.1.2",     "table": true },
       { "name": "device_mem_total_kb",    "oid": "1.3.6.1.2.1.25.2.2" },
       { "name": "device_storage_size",    "oid": "1.3.6.1.2.1.25.2.3.1.5",     "table": true },
