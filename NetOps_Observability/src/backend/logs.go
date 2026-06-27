@@ -322,13 +322,17 @@ func appLogPatternAllowed(index string, c jwtClaims) bool {
 }
 
 func tenantIndexPattern(signal, tenant string, cross bool) string {
-	// Empty/"all" = DEVICE TELEMETRY only (syslog + SNMP traps + flows). App logs
-	// are the platform's own internal container/API logs — they must NEVER appear
-	// in an "all" search (not even for the platform owner, who would otherwise see
-	// stack internals mixed into device logs). App logs are reachable ONLY via an
-	// explicit signal="applogs", which is gated to the platform owner in the handler.
+	// Empty/"all" = LOG signals only (device syslog + SNMP traps). Flows are
+	// deliberately EXCLUDED from "all": they're 5-tuple telemetry records (no
+	// message/level), they outnumber real logs by ~1000:1, and a flat
+	// timestamp-sorted top-N "all" view drowns out sparse-but-important log
+	// sources (e.g. firewall/fw_logs records in syslog) behind a wall of flows.
+	// Flows remain reachable via the explicit signal="flows" filter. App logs are
+	// the platform's own internal container/API logs — they must NEVER appear in an
+	// "all" search; they're reachable ONLY via signal="applogs", gated to the
+	// platform owner in the handler.
 	if s := strings.ToLower(strings.TrimSpace(signal)); s == "" || s == "all" {
-		bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows"}
+		bases := []string{"netops-syslog", "netops-snmptrap"}
 		parts := make([]string, 0, len(bases)*2)
 		for _, b := range bases {
 			if cross {

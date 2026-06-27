@@ -117,8 +117,10 @@ func TestOSTenantFilterNoDevices(t *testing.T) {
 // platform↔tenant boundary: an "all"/default search must NEVER touch the
 // platform's own app-log indices — for ANY caller, platform owner included (no
 // mixing stack internals into device logs). It must, however, still cover all
-// device-telemetry signals. If a future change reintroduces applogs into "all",
-// or drops a telemetry signal, this fails.
+// device-telemetry LOG signals. If a future change reintroduces applogs into
+// "all", or drops a log signal, this fails. Flows are intentionally NOT in "all"
+// (5-tuple records, no message/level, ~1000:1 volume drowns real logs incl.
+// firewall/fw_logs) — reachable only via signal="flows".
 func TestTenantIndexPattern_AllExcludesAppLogs(t *testing.T) {
 	for _, sig := range []string{"", "all"} {
 		for _, cross := range []bool{true, false} {
@@ -126,9 +128,12 @@ func TestTenantIndexPattern_AllExcludesAppLogs(t *testing.T) {
 			if containsSub(pat, "applogs") {
 				t.Errorf("tenantIndexPattern(%q, acme, cross=%v) LEAKED app logs into 'all': %q", sig, cross, pat)
 			}
-			for _, want := range []string{"netops-syslog", "netops-snmptrap", "netops-flows"} {
+			if containsSub(pat, "netops-flows") {
+				t.Errorf("tenantIndexPattern(%q, acme, cross=%v) must NOT include flows in 'all' (drowns real logs): %q", sig, cross, pat)
+			}
+			for _, want := range []string{"netops-syslog", "netops-snmptrap"} {
 				if !containsSub(pat, want) {
-					t.Errorf("tenantIndexPattern(%q, acme, cross=%v) missing device telemetry %q: %q", sig, cross, want, pat)
+					t.Errorf("tenantIndexPattern(%q, acme, cross=%v) missing log signal %q: %q", sig, cross, want, pat)
 				}
 			}
 		}
