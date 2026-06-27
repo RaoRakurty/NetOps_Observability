@@ -1,6 +1,18 @@
-# RCA-Driven Auto-Ticketing (Correlix → ServiceNow) — QUEUED
+# RCA-Driven Auto-Ticketing (Correlix → ServiceNow) — IN PROGRESS
 
-**Status: design captured, NOT started.** Queued 2026-06-16.
+**Status: P1 + P2 SHIPPED.** Queued 2026-06-16.
+
+- **P1 (`a1ca360`, 2026-06-27):** data model (migration `0016`, 4 net-new tenant
+  tables + FORCE RLS), `buildTicketPayload` (reuses `buildRcaPathView`), pure
+  `evalTicketDecision` policy engine, in-mem/pg `ticketingStore` seam, tests +
+  cross-tenant isolation.
+- **P2 (2026-06-27):** `serviceNowAdapter` (Table API, SSRF-guarded, secret-safe
+  errors, RCA `correlation_id` dedupe + `u_correlix_*` fields), httptest mock
+  ServiceNow, outbox `ticketWorker` (SKIP-LOCKED claim, exp-backoff+jitter,
+  dead-letter, never-double-create via correlation-id lookup, audit + link
+  advance). `make test-ticketing-unit` / `test-servicenow-mock`.
+- **NEXT — P3:** conn resolver (itsm_config) + worker wiring (flag-gated) +
+  policy→enqueue path + REST APIs + `ticket_status` on correlation detail.
 
 ## Goal & core principle
 

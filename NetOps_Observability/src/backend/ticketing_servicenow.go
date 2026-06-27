@@ -1,0 +1,376 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"netops/backend/safehttp"
+)
+
+// ticketing_servicenow.go — the RCA-object ServiceNow adapter (#78 P2). Unlike
+// notify.ServiceNow (one incident per ALERT fingerprint), this adapter speaks
+// the ticketPayload built from ONE RCA correlation object and uses ServiceNow's
+// native correlation_id as the dedupe anchor (= corr_object_id). The worker
+// (ticketing_worker.go) drives it; ticketing never blocks correlation.
+//
+// Zero-trust outbound (CLAUDE.md §3/§8): the HTTP client is SSRF-guarded
+// (safehttp), every request URL is checked to belong to the configured instance
+// host, secrets travel only in the Authorization header and are NEVER logged or
+// echoed in errors, and the request/response bodies are bounded.
+
+// ticketAdapter is the provider-agnostic ticketing port (§5 interfaces for
+// external deps). ServiceNow is the first impl; Jira/PagerDuty reuse the same
+// outbox + worker against this interface.
+type ticketAdapter interface {
+	Name() string
+	ValidateConfig(cfg ticketSystemConfig) error
+	HealthCheck(ctx context.Context, cfg ticketSystemConfig) error
+	CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error)
+	UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketPayload) error
+	AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
+	ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
+	LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error)
+}
+
+// ticketSystemConfig is the connection for one external system. Secrets
+// (Password/APIToken) are write-only and never serialized back out.
+type ticketSystemConfig struct {
+	System          string `json:"system"` // servicenow
+	InstanceURL     string `json:"instance_url"`
+	AuthType        string `json:"auth_type"` // basic | token
+	User            string `json:"user"`
+	Password        string `json:"-"`
+	APIToken        string `json:"-"`
+	AssignmentGroup string `json:"assignment_group"`
+}
+
+// ticketRef identifies a created external ticket.
+type ticketRef struct {
+	Number string `json:"number"`
+	SysID  string `json:"sys_id"`
+	URL    string `json:"url"`
+}
+
+const snowMaxRespBytes = 1 << 20 // 1 MiB cap on a Table API response
+
+// serviceNowAdapter implements ticketAdapter against the ServiceNow Table API.
+// httpClient is injectable so tests drive it against an httptest mock.
+type serviceNowAdapter struct {
+	httpClient *http.Client
+}
+
+func newServiceNowAdapter() *serviceNowAdapter {
+	return &serviceNowAdapter{httpClient: safehttp.Client(20 * time.Second)}
+}
+
+func (a *serviceNowAdapter) Name() string { return "servicenow" }
+
+func (a *serviceNowAdapter) client() *http.Client {
+	if a.httpClient != nil {
+		return a.httpClient
+	}
+	return safehttp.Client(20 * time.Second)
+}
+
+// ValidateConfig checks the connection is well-formed and the instance host is a
+// public, resolvable target (SSRF). Pure-ish (one DNS resolve, no ServiceNow call).
+func (a *serviceNowAdapter) ValidateConfig(cfg ticketSystemConfig) error {
+	u, err := parseInstanceURL(cfg.InstanceURL)
+	if err != nil {
+		return err
+	}
+	switch strings.ToLower(orDefault(cfg.AuthType, "basic")) {
+	case "basic":
+		if cfg.User == "" || cfg.Password == "" {
+			return fmt.Errorf("servicenow: basic auth requires user and password")
+		}
+	case "token":
+		if cfg.APIToken == "" {
+			return fmt.Errorf("servicenow: token auth requires an API token")
+		}
+	default:
+		return fmt.Errorf("servicenow: unsupported auth_type %q", cfg.AuthType)
+	}
+	return safehttp.ValidateURL(u.Hostname())
+}
+
+// HealthCheck does a cheap, bounded GET that proves auth + reachability.
+func (a *serviceNowAdapter) HealthCheck(ctx context.Context, cfg ticketSystemConfig) error {
+	_, _, err := a.do(ctx, cfg, http.MethodGet, "/api/now/table/incident?sysparm_limit=1&sysparm_fields=sys_id", nil)
+	return err
+}
+
+func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error) {
+	body := snowIncidentFields(cfg, p)
+	body["work_notes"] = snowWorkNote("Correlix opened this incident from RCA correlation object "+p.CorrObjectID, p)
+	raw, _, err := a.do(ctx, cfg, http.MethodPost, "/api/now/table/incident", body)
+	if err != nil {
+		return ticketRef{}, err
+	}
+	return a.parseRef(cfg, raw)
+}
+
+func (a *serviceNowAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketPayload) error {
+	if ref.SysID == "" {
+		return fmt.Errorf("servicenow: update requires sys_id")
+	}
+	body := snowIncidentFields(cfg, p)
+	body["work_notes"] = snowWorkNote("RCA verdict updated", p)
+	_, _, err := a.do(ctx, cfg, http.MethodPatch, "/api/now/table/incident/"+url.PathEscape(ref.SysID), body)
+	return err
+}
+
+func (a *serviceNowAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error {
+	if ref.SysID == "" {
+		return fmt.Errorf("servicenow: work note requires sys_id")
+	}
+	_, _, err := a.do(ctx, cfg, http.MethodPatch, "/api/now/table/incident/"+url.PathEscape(ref.SysID),
+		map[string]any{"work_notes": note})
+	return err
+}
+
+func (a *serviceNowAdapter) ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error {
+	if ref.SysID == "" {
+		return fmt.Errorf("servicenow: resolve requires sys_id")
+	}
+	// state 6 = Resolved; close_code is required by most ServiceNow instances.
+	_, _, err := a.do(ctx, cfg, http.MethodPatch, "/api/now/table/incident/"+url.PathEscape(ref.SysID),
+		map[string]any{"state": "6", "close_code": "Resolved by caller", "close_notes": note, "work_notes": note})
+	return err
+}
+
+// LookupByCorrelationID finds an existing incident by ServiceNow's native
+// correlation_id (= corr_object_id). This is the recovery path when a create
+// succeeded but our link store didn't persist — we never create a second ticket.
+func (a *serviceNowAdapter) LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error) {
+	q := "/api/now/table/incident?sysparm_limit=1&sysparm_fields=number,sys_id&sysparm_query=correlation_id=" +
+		url.QueryEscape(corrID)
+	raw, _, err := a.do(ctx, cfg, http.MethodGet, q, nil)
+	if err != nil {
+		return ticketRef{}, false, err
+	}
+	var resp struct {
+		Result []struct {
+			Number string `json:"number"`
+			SysID  string `json:"sys_id"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return ticketRef{}, false, fmt.Errorf("servicenow: decode lookup: %w", err)
+	}
+	if len(resp.Result) == 0 || resp.Result[0].SysID == "" {
+		return ticketRef{}, false, nil
+	}
+	return ticketRef{Number: resp.Result[0].Number, SysID: resp.Result[0].SysID,
+		URL: incidentURL(cfg.InstanceURL, resp.Result[0].SysID)}, true, nil
+}
+
+// ── HTTP plumbing ────────────────────────────────────────────────────────────
+
+// do performs one bounded, SSRF-guarded, authenticated Table API request. It
+// returns the response body (capped) and status. Errors never contain secrets.
+func (a *serviceNowAdapter) do(ctx context.Context, cfg ticketSystemConfig, method, path string, body map[string]any) ([]byte, int, error) {
+	base, err := parseInstanceURL(cfg.InstanceURL)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := safehttp.ValidateURL(base.Hostname()); err != nil {
+		return nil, 0, err
+	}
+	full := strings.TrimRight(base.String(), "/") + path
+	reqURL, err := url.Parse(full)
+	if err != nil {
+		return nil, 0, fmt.Errorf("servicenow: bad request url")
+	}
+	// Defense in depth: the composed URL must stay on the configured instance host.
+	if !strings.EqualFold(reqURL.Hostname(), base.Hostname()) {
+		return nil, 0, fmt.Errorf("servicenow: request host %q escaped configured instance", reqURL.Hostname())
+	}
+
+	var rdr *bytes.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("servicenow: encode body: %w", err)
+		}
+		rdr = bytes.NewReader(b)
+	} else {
+		rdr = bytes.NewReader(nil)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, reqURL.String(), rdr)
+	if err != nil {
+		return nil, 0, fmt.Errorf("servicenow: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	switch strings.ToLower(orDefault(cfg.AuthType, "basic")) {
+	case "token":
+		req.Header.Set("Authorization", "Bearer "+cfg.APIToken)
+	default:
+		req.SetBasicAuth(cfg.User, cfg.Password)
+	}
+
+	resp, err := a.client().Do(req)
+	if err != nil {
+		// net/url errors can embed the URL but never the auth header/secret.
+		return nil, 0, fmt.Errorf("servicenow: %s %s: request failed", method, path)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, snowMaxRespBytes))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return raw, resp.StatusCode, fmt.Errorf("servicenow: %s %s returned %d: %s",
+			method, redactPath(path), resp.StatusCode, snowError(raw))
+	}
+	return raw, resp.StatusCode, nil
+}
+
+func (a *serviceNowAdapter) parseRef(cfg ticketSystemConfig, raw []byte) (ticketRef, error) {
+	var resp struct {
+		Result struct {
+			Number string `json:"number"`
+			SysID  string `json:"sys_id"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return ticketRef{}, fmt.Errorf("servicenow: decode create: %w", err)
+	}
+	if resp.Result.SysID == "" {
+		return ticketRef{}, fmt.Errorf("servicenow: create returned no sys_id")
+	}
+	return ticketRef{Number: resp.Result.Number, SysID: resp.Result.SysID,
+		URL: incidentURL(cfg.InstanceURL, resp.Result.SysID)}, nil
+}
+
+// ── field mapping ────────────────────────────────────────────────────────────
+
+// snowIncidentFields maps the RCA payload onto ServiceNow incident fields,
+// including the native correlation_id dedupe key and the u_correlix_* custom
+// fields the design specifies. Never carries raw-alert text.
+func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any {
+	group := p.AssignmentGroup
+	if group == "" {
+		group = cfg.AssignmentGroup
+	}
+	f := map[string]any{
+		"short_description":     truncate(p.Title, 160),
+		"description":           snowDescription(p),
+		"correlation_id":        p.CorrObjectID,
+		"correlation_display":   "Correlix RCA",
+		"u_correlix_object_id":  p.CorrObjectID,
+		"u_correlix_verdict":    p.Verdict,
+		"u_correlix_confidence": strconv.FormatFloat(p.Confidence, 'f', 2, 64),
+		"u_correlix_signature":  p.Signature,
+		"u_correlix_owner":      p.Owner,
+		"u_correlix_affected":   p.AffectedScope,
+		"u_correlix_rca_url":    p.RCAURL,
+	}
+	if p.Impact > 0 {
+		f["impact"] = strconv.Itoa(p.Impact)
+	}
+	if p.Urgency > 0 {
+		f["urgency"] = strconv.Itoa(p.Urgency)
+	}
+	if group != "" {
+		f["assignment_group"] = group
+	}
+	return f
+}
+
+// snowDescription is the human-readable RCA body (the diagnosis, not raw alerts).
+func snowDescription(p ticketPayload) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", p.Summary)
+	fmt.Fprintf(&b, "Verdict: %s (confidence %.0f%%)\n", p.Verdict, p.Confidence*100)
+	if p.AffectedScope != "" {
+		fmt.Fprintf(&b, "Affected: %s\n", p.AffectedScope)
+	}
+	if len(p.ImpactedApps) > 0 {
+		fmt.Fprintf(&b, "Impacted applications: %s\n", strings.Join(p.ImpactedApps, ", "))
+	}
+	if len(p.EvidenceUsed) > 0 {
+		fmt.Fprintf(&b, "\nEvidence used:\n- %s\n", strings.Join(p.EvidenceUsed, "\n- "))
+	}
+	if len(p.MissingEvidence) > 0 {
+		fmt.Fprintf(&b, "\nMissing evidence:\n- %s\n", strings.Join(p.MissingEvidence, "\n- "))
+	}
+	if p.RecommendedAction != "" {
+		fmt.Fprintf(&b, "\nRecommended action: %s\n", p.RecommendedAction)
+	}
+	if p.RCAURL != "" {
+		fmt.Fprintf(&b, "\nFull RCA: %s\n", p.RCAURL)
+	}
+	return b.String()
+}
+
+func snowWorkNote(headline string, p ticketPayload) string {
+	if p.RCAURL == "" {
+		return headline
+	}
+	return headline + " — " + p.RCAURL
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+func parseInstanceURL(raw string) (*url.URL, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return nil, fmt.Errorf("servicenow: instance_url is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("servicenow: invalid instance_url")
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("servicenow: instance_url must be http(s)")
+	}
+	return u, nil
+}
+
+func incidentURL(instanceURL, sysID string) string {
+	return strings.TrimRight(strings.TrimSpace(instanceURL), "/") + "/nav_to.do?uri=incident.do?sys_id=" + url.QueryEscape(sysID)
+}
+
+// snowError extracts ServiceNow's {error:{message}} without leaking a huge body.
+func snowError(raw []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &e) == nil && e.Error.Message != "" {
+		return truncate(e.Error.Message, 240)
+	}
+	return truncate(strings.TrimSpace(string(raw)), 240)
+}
+
+// redactPath drops the query string from a logged path (correlation ids/filters
+// are not secret, but keep error strings tight and free of injected values).
+func redactPath(path string) string {
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		return path[:i]
+	}
+	return path
+}
+
+func truncate(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+var _ ticketAdapter = (*serviceNowAdapter)(nil)

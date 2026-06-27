@@ -33,6 +33,14 @@ type ticketingStore interface {
 	// outbox + audit
 	EnqueueOutbox(ctx context.Context, item ticketOutboxItem) error
 	ListOutbox(ctx context.Context, tenant string, cross bool) ([]ticketOutboxItem, error)
+	// ClaimDueOutbox atomically leases up to n due items (status pending/retrying
+	// AND next_retry_at <= now) for the worker, advancing next_retry_at by lease so
+	// a concurrent/abandoned claim re-runs only after the lease expires. Runs at
+	// platform scope (the worker spans all tenants; each row carries its tenant_id).
+	ClaimDueOutbox(ctx context.Context, workerID string, n int, lease time.Duration) ([]ticketOutboxItem, error)
+	// FinishOutbox writes a claimed item's terminal/next state back (status,
+	// retry_count, next_retry_at, last_error), keyed by (tenant_id, id).
+	FinishOutbox(ctx context.Context, item ticketOutboxItem) error
 	AppendAudit(ctx context.Context, e ticketAuditEntry) error
 	ListAudit(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketAuditEntry, error)
 }
@@ -207,6 +215,46 @@ func (m *memTicketingStore) ListOutbox(_ context.Context, tenant string, cross b
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+
+func (m *memTicketingStore) ClaimDueOutbox(_ context.Context, _ string, n int, lease time.Duration) ([]ticketOutboxItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	var due []ticketOutboxItem
+	for _, it := range m.outbox {
+		if (it.Status == "pending" || it.Status == "retrying") && !it.NextRetryAt.After(now) {
+			due = append(due, it)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool { return due[i].NextRetryAt.Before(due[j].NextRetryAt) })
+	if n > 0 && len(due) > n {
+		due = due[:n]
+	}
+	for i := range due {
+		due[i].Status = "retrying"
+		due[i].NextRetryAt = now.Add(lease)
+		due[i].UpdatedAt = now
+		m.outbox[memKey(due[i].TenantID, due[i].ID)] = due[i]
+	}
+	return due, nil
+}
+
+func (m *memTicketingStore) FinishOutbox(_ context.Context, item ticketOutboxItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := memKey(item.TenantID, item.ID)
+	cur, ok := m.outbox[key]
+	if !ok {
+		return nil
+	}
+	cur.Status = item.Status
+	cur.RetryCount = item.RetryCount
+	cur.NextRetryAt = item.NextRetryAt
+	cur.LastError = item.LastError
+	cur.UpdatedAt = time.Now().UTC()
+	m.outbox[key] = cur
+	return nil
 }
 
 func (m *memTicketingStore) AppendAudit(_ context.Context, e ticketAuditEntry) error {
@@ -417,6 +465,60 @@ func (s *pgTicketingStore) ListOutbox(ctx context.Context, tenant string, cross 
 		return rows.Err()
 	})
 	return out, err
+}
+
+// claimOutboxSQL leases due rows with FOR UPDATE SKIP LOCKED (the report-queue
+// pattern): the CTE selects+locks candidates another worker isn't holding, the
+// UPDATE advances next_retry_at by the lease so an abandoned claim re-runs only
+// after it expires, and RETURNING hands back exactly this worker's rows.
+const claimOutboxSQL = `
+WITH claimable AS (
+    SELECT id FROM ticket_outbox
+     WHERE status IN ('pending','retrying') AND next_retry_at <= now()
+     ORDER BY next_retry_at
+     FOR UPDATE SKIP LOCKED
+     LIMIT $1)
+UPDATE ticket_outbox o
+   SET status='retrying', next_retry_at = now() + make_interval(secs => $2), updated_at = now()
+  FROM claimable c
+ WHERE o.id = c.id
+RETURNING ` + outboxCols
+
+func (s *pgTicketingStore) ClaimDueOutbox(ctx context.Context, _ string, n int, lease time.Duration) ([]ticketOutboxItem, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var out []ticketOutboxItem
+	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, claimOutboxSQL, n, lease.Seconds())
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			it, err := scanOutbox(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, it)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+func (s *pgTicketingStore) FinishOutbox(ctx context.Context, item ticketOutboxItem) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.db.withTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+UPDATE ticket_outbox SET status=$3, retry_count=$4, next_retry_at=$5, last_error=$6, updated_at=now()
+ WHERE tenant_id=$1 AND id=$2`,
+			normTenant(item.TenantID), item.ID, item.Status, item.RetryCount, item.NextRetryAt, item.LastError)
+		return err
+	})
 }
 
 func (s *pgTicketingStore) AppendAudit(ctx context.Context, e ticketAuditEntry) error {
