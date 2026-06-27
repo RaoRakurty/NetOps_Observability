@@ -1,0 +1,220 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+)
+
+// ticketing_sweeper.go — the policy→enqueue path for RCA auto-ticketing (#78 P3).
+//
+// The sweeper is the bridge between the correlation engine and the outbox: on an
+// interval it scans recently-active correlation objects ACROSS ALL TENANTS, and
+// for each one evaluates the owning tenant's incident policy. Objects that pass
+// get a create (or, for an already-open ticket whose RCA state changed, an
+// update) ENQUEUED into ticket_outbox. It NEVER calls ServiceNow itself — the
+// outbox worker (ticketing_worker.go) drains the queue — and it NEVER blocks
+// correlation. Dormant unless FEATURE_RCA_TICKETING.
+//
+// Reuse, no second brain: the ticket payload + policy facts come straight from
+// buildRcaPathView (the single RCA decision) via the request-free chRowsScope /
+// loadCorrSlice read path, so the sweeper re-derives no RCA verdict.
+//
+// Tenant isolation (CLAUDE.md §3a): the candidate scan reads cross-tenant
+// ("__all__") because the worker spans every tenant, but each object carries its
+// own tenant_id from the corr_objects row, and EVERY downstream write (link
+// lookup, outbox enqueue) is stamped + scoped to that owning tenant — never a
+// request body. A tenant can only ever ticket its own correlation objects.
+
+type ticketSweeper struct {
+	srv     *server
+	store   ticketingStore
+	since   time.Duration // look-back window for "recently active" objects
+	limit   int           // max candidates per tick (bounds work)
+	baseURL string        // RCA deep-link base (RCA_BASE_URL); "" → "/app"
+}
+
+// sweepCandidate is one recently-active object the sweeper will evaluate. tenant
+// is the object's OWNER (from the corr_objects row), the authority for every
+// downstream tenant-scoped write.
+type sweepCandidate struct {
+	id     string
+	tenant string
+}
+
+func newTicketSweeper(srv *server, store ticketingStore) *ticketSweeper {
+	since := 30 * time.Minute
+	if v := os.Getenv("RCA_TICKETING_LOOKBACK"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			since = d
+		}
+	}
+	return &ticketSweeper{
+		srv:     srv,
+		store:   store,
+		since:   since,
+		limit:   500,
+		baseURL: envOr("RCA_BASE_URL", ""),
+	}
+}
+
+// Run drives tick() on an interval until ctx is cancelled. Dormant unless wired
+// in (FEATURE_RCA_TICKETING) — ticketing is opt-in.
+func (sw *ticketSweeper) Run(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if n, err := sw.tick(ctx, time.Now().UTC()); err != nil {
+				logWarn("ticketing", "sweep failed", map[string]any{"error": err.Error()})
+			} else if n > 0 {
+				logInfo("ticketing", "sweep enqueued ticket actions", map[string]any{"count": n})
+			}
+		}
+	}
+}
+
+// tick scans one batch of candidates and evaluates each. Returns the number of
+// ticket actions enqueued.
+func (sw *ticketSweeper) tick(ctx context.Context, now time.Time) (int, error) {
+	cands, err := sw.candidates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, c := range cands {
+		if err := ctx.Err(); err != nil {
+			return n, err
+		}
+		if sw.evaluate(ctx, c, now) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// candidates lists recently-active, customer-relevant objects across all tenants.
+// Only suspected/confirmed, non-merged objects in the look-back window — the
+// policy still re-checks every gate; this is just a cheap pre-filter that keeps
+// the per-object loadCorrSlice work bounded.
+func (sw *ticketSweeper) candidates(ctx context.Context) ([]sweepCandidate, error) {
+	sql := `
+SELECT toString(correlation_id) AS correlation_id,
+       tenant_id                AS tenant_id
+  FROM netops.corr_objects_latest
+ WHERE window_start >= now() - INTERVAL ` + intToString(int(sw.since.Seconds())) + ` SECOND
+   AND verdict_tier IN ('suspected','confirmed')
+   AND merged_into IS NULL
+ ORDER BY window_start ASC
+ LIMIT ` + intToString(sw.limit) + `
+ FORMAT JSON`
+	rows, err := sw.srv.chRowsScope(ctx, "__all__", sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]sweepCandidate, 0, len(rows))
+	for _, row := range rows {
+		id := asString(row["correlation_id"])
+		if !isUUIDToken(id) {
+			continue
+		}
+		out = append(out, sweepCandidate{id: id, tenant: asString(row["tenant_id"])})
+	}
+	return out, nil
+}
+
+// evaluate loads one object's RCA slice, decides via the owning tenant's policy,
+// and enqueues a create (or an update when an open ticket's RCA state changed).
+// Returns true when it enqueued an action.
+func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now time.Time) bool {
+	// Load the latest slice cross-tenant; the object's tenant authority comes from
+	// the candidate row (c.tenant), never from this read.
+	meta, sigRows, evRows, edgeRows, _, err := sw.srv.loadCorrSlice(ctx, "__all__", c.id, 0)
+	if err != nil {
+		logWarn("ticketing", "sweep load slice failed",
+			map[string]any{"corr_object_id": c.id, "error": err.Error()})
+		return false
+	}
+	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
+	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+	view := buildRcaPathView(c.id, meta, sigRows, edgeRows)
+	facts := buildCorrTicketFacts(meta, sigRows, view)
+
+	policy := sw.resolvePolicy(ctx, c.tenant)
+	system := orDefault(policy.ExternalSystem, "servicenow")
+
+	link, found, err := sw.store.GetLink(ctx, c.tenant, false, c.id, system)
+	if err != nil {
+		logWarn("ticketing", "sweep link lookup failed",
+			map[string]any{"corr_object_id": c.id, "error": err.Error()})
+		return false
+	}
+	var lp *ticketLink
+	if found {
+		lp = &link
+	}
+
+	act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now)
+	switch act.kind {
+	case "create":
+		if err := enqueueTicketCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+			logWarn("ticketing", "sweep enqueue create failed",
+				map[string]any{"corr_object_id": c.id, "error": err.Error()})
+			return false
+		}
+		return true
+	case "update":
+		if err := enqueueTicketUpdate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+			logWarn("ticketing", "sweep enqueue update failed",
+				map[string]any{"corr_object_id": c.id, "error": err.Error()})
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// sweepAction is the pure outcome of evaluating one object: enqueue nothing, a
+// create, or an update — with the assembled payload for the latter two.
+type sweepAction struct {
+	kind    string // "" | "create" | "update"
+	payload ticketPayload
+}
+
+// decideSweepAction is the I/O-free decision for one already-loaded object. A
+// create when the incident policy opens a ticket; otherwise an update when an
+// already-open ticket's RCA state moved on (payload hash changed) so an unchanged
+// state is a no-op. Deterministic, so it is unit-tested in isolation.
+func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentPolicy, link *ticketLink, baseURL string, now time.Time) sweepAction {
+	if dec := evalTicketDecision(facts, policy, link, now); dec.Create {
+		return sweepAction{kind: "create", payload: buildTicketPayload(view, facts, policy, baseURL)}
+	}
+	if link != nil && link.openTicket() {
+		p := buildTicketPayload(view, facts, policy, baseURL)
+		if payloadHash(p) != link.LastPayloadHash {
+			return sweepAction{kind: "update", payload: p}
+		}
+	}
+	return sweepAction{}
+}
+
+// resolvePolicy returns the incident policy that governs a tenant: a configured
+// enabled policy wins; an explicitly configured (but disabled) policy is honored
+// so a tenant can opt OUT; only a tenant with NO policy at all falls back to the
+// default-on MVP policy.
+func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant string) incidentPolicy {
+	policies, err := sw.store.ListPolicies(ctx, tenant, false)
+	if err != nil || len(policies) == 0 {
+		return defaultIncidentPolicy(tenant)
+	}
+	for _, p := range policies {
+		if p.Enabled {
+			return p
+		}
+	}
+	return policies[0]
+}

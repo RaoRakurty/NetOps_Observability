@@ -67,6 +67,7 @@ type server struct {
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics       *incidentMetrics
+	ticketing        ticketingStore // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
 	seams            *pgSeamStore          // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services         *pgServiceStore       // service catalog #69 §2 P2 (nil on file backend)
 	topology         topologyGraphStore    // persistent topology graph #77 (in-memory or pg)
@@ -422,6 +423,10 @@ func newServer() *server {
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
 	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
+	// RCA auto-ticketing store (#78): RLS-scoped pg repo, else in-memory. Always
+	// non-nil; the outbox worker + policy sweeper start in main() only under
+	// FEATURE_RCA_TICKETING (ticketing is opt-in and never blocks correlation).
+	srv.ticketing = newTicketingStore()
 	// Incident system (Postgres only) + its alert-ingestion hook.
 	srv.incidents = newIncidentStore()
 	// Seam inventory (#67 build ⑤): the correlation engine's grounding targets.
@@ -560,6 +565,23 @@ func main() {
 		} else {
 			srv.reports.Start(ctx)
 		}
+	}
+	// RCA auto-ticketing (#78 P3): the sweeper enqueues policy-passing correlation
+	// objects → the outbox worker drains them to ServiceNow. Opt-in + default-off
+	// (FEATURE_RCA_TICKETING) so external ticketing never runs unasked, and it
+	// never blocks correlation. The conn resolver reads each tenant's OWN ITSM
+	// connection (a tenant can only ticket via its own ServiceNow).
+	if os.Getenv("FEATURE_RCA_TICKETING") == "true" {
+		resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
+			if srv.itsmCfg == nil {
+				return ticketSystemConfig{}, false, nil
+			}
+			cfg, ok := srv.itsmCfg.ticketSystemConfig(tenant, system)
+			return cfg, ok, nil
+		}
+		go newTicketWorker(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_WORKER_INTERVAL", 15*time.Second))
+		go newTicketSweeper(srv, srv.ticketing).Run(ctx, durationOr("RCA_TICKETING_SWEEP_INTERVAL", 60*time.Second))
+		logInfo("ticketing", "RCA auto-ticketing enabled", nil)
 	}
 	go srv.startBroadcaster(ctx.Done())
 	go srv.watchAlertsForBroadcast(ctx)

@@ -266,6 +266,35 @@ func (s *itsmConfigStore) jiraFor(tenant string) *notify.Jira {
 	return nil
 }
 
+// ticketSystemConfig resolves one tenant's external-ticketing connection for the
+// RCA auto-ticketing worker (#78). It returns the tenant's OWN ServiceNow config
+// (incl. write-only secrets, used only to dispatch) or ok=false when that tenant
+// has no enabled, configured connection — a transient hold, not a failure. Only
+// ServiceNow is wired today; other systems return ok=false.
+func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSystemConfig, bool) {
+	if system != "" && system != "servicenow" {
+		return ticketSystemConfig{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.cfgs[itsmKey(tenant)]
+	if !ok {
+		return ticketSystemConfig{}, false
+	}
+	sn := cfg.ServiceNow
+	if !sn.Enabled || sn.InstanceURL == "" {
+		return ticketSystemConfig{}, false
+	}
+	return ticketSystemConfig{
+		System:          "servicenow",
+		InstanceURL:     sn.InstanceURL,
+		AuthType:        "basic",
+		User:            sn.User,
+		Password:        sn.Password,
+		AssignmentGroup: sn.AssignmentGroup,
+	}, true
+}
+
 // public returns one tenant's redacted config for the admin UI — secrets become
 // has_* flags; configured reflects whether that tenant's live connector is up.
 func (s *itsmConfigStore) public(tenant string) map[string]any {
