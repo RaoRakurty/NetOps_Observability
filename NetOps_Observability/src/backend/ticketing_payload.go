@@ -1,0 +1,264 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+// ticketing_payload.go — pure assembly of the RCA correlation object into the
+// facts the incident policy decides on, and the provider-agnostic ticket body.
+//
+// Single source of truth: buildRcaPathView already maps (meta, signals, edges)
+// into the operator-facing RCA diagnosis (verdict, confidence, internal, title,
+// summary, action, evidence, missing evidence, affected path, impacted apps).
+// We REUSE that view rather than re-deriving any RCA decision here (no second
+// brain that can drift). The functions below are deterministic and I/O-free, so
+// they are unit-tested in isolation.
+
+// corrTicketFacts is the minimal, decision-relevant projection of one RCA
+// object: enough for the policy to decide ticket-worthiness without re-running
+// correlation. Derived from the same (meta, signals) the RCA view consumes.
+type corrTicketFacts struct {
+	Verdict            string    // undetermined | suspected | confirmed
+	Confidence         float64
+	Internal           bool      // internal/debug-only monitoring (kept out of customer tickets)
+	ProbeOnly          bool      // every attached signal is an active probe
+	LowAuthorityProbe  bool      // probe-only AND no probe carried real authority
+	PeakSeverity       string    // info | warn | high | crit (max over attached signals)
+	HasAffectedEntity  bool      // a meaningful affected device/interface/path/app exists
+	AffectedScope      string    // human scope, e.g. "leaf1 → wan-r2" or "edge1 Gi0/1"
+	AffectedEntities   []string
+	ImpactedApps       []string
+	Signature          string
+	WindowStart        time.Time
+	WindowEnd          time.Time
+}
+
+// persistenceSeconds is how long the incident has been observed (window span).
+func (f corrTicketFacts) persistenceSeconds() int {
+	if f.WindowStart.IsZero() || f.WindowEnd.IsZero() || !f.WindowEnd.After(f.WindowStart) {
+		return 0
+	}
+	return int(f.WindowEnd.Sub(f.WindowStart).Seconds())
+}
+
+var corrSevRank = map[string]int{"info": 0, "warn": 1, "high": 2, "crit": 3}
+
+// buildCorrTicketFacts projects the RCA object into policy-relevant facts. It
+// takes the already-built rcaPathView (the RCA decision) plus the raw meta/
+// signals it was built from (for severity, authority and window, which the view
+// doesn't surface). No RCA re-decision — verdict/confidence/internal come
+// straight from the view.
+func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rcaPathView) corrTicketFacts {
+	f := corrTicketFacts{
+		Verdict:    view.Verdict,
+		Confidence: view.Confidence,
+		Internal:   view.Internal,
+		Signature:  strings.TrimSpace(fmt.Sprintf("%v", meta["top_hypothesis"])),
+	}
+	if f.Signature == "<nil>" {
+		f.Signature = ""
+	}
+
+	// attached, non-clear signals = the evidence the engine actually used (same
+	// filter buildRcaPathView applies).
+	attached := attachedTicketSignals(sigRows)
+	probes, others, authority := 0, 0, false
+	peak := -1
+	for _, sig := range attached {
+		if r, ok := corrSevRank[strings.ToLower(fmt.Sprintf("%v", sig["severity"]))]; ok && r > peak {
+			peak = r
+		}
+		if fmt.Sprintf("%v", sig["modality_class"]) == "active_probe" {
+			probes++
+			if a := strings.ToLower(fmt.Sprintf("%v", sig["probe_authority"])); a != "" && a != "none" && a != "low" && a != "<nil>" {
+				authority = true
+			}
+		} else {
+			others++
+		}
+	}
+	for sev, r := range corrSevRank {
+		if r == peak {
+			f.PeakSeverity = sev
+		}
+	}
+	f.ProbeOnly = probes > 0 && others == 0
+	f.LowAuthorityProbe = f.ProbeOnly && !authority
+
+	// affected scope/entities come from the object's authoritative `affected`
+	// projection (the engine's blast radius) plus the impacted apps the view
+	// already named. Path src→dst is the most operator-legible scope.
+	devices, paths, ifaces := parseAffectedScope(meta)
+	f.AffectedEntities = dedupeNonEmpty(append(append(append([]string{}, devices...), ifaces...), paths...))
+	for _, a := range view.AppImpact.apps() {
+		f.ImpactedApps = append(f.ImpactedApps, a)
+	}
+	switch {
+	case view.Path.Source != "" && view.Path.Destination != "":
+		f.AffectedScope = view.Path.Source + " → " + view.Path.Destination
+	case len(ifaces) > 0:
+		f.AffectedScope = ifaces[0]
+	case len(devices) > 0:
+		f.AffectedScope = devices[0]
+	case len(paths) > 0:
+		f.AffectedScope = paths[0]
+	case len(f.ImpactedApps) > 0:
+		f.AffectedScope = f.ImpactedApps[0]
+	}
+	f.HasAffectedEntity = len(f.AffectedEntities) > 0 || len(f.ImpactedApps) > 0 ||
+		(view.Path.Source != "" || view.Path.Destination != "")
+
+	// observed window → persistence.
+	f.WindowStart = parseCorrTime(meta["window_start"])
+	f.WindowEnd = parseCorrTime(meta["window_end"])
+	return f
+}
+
+// buildTicketPayload assembles the provider-agnostic ticket body from the RCA
+// view + facts + the deciding policy. Title is the RCA narration's title
+// (already "Suspected|Confirmed <fault> on <entity>"); the body carries the
+// diagnosis and a deep link, never raw alert text.
+func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incidentPolicy, rcaBaseURL string) ticketPayload {
+	p := ticketPayload{
+		CorrObjectID:      view.CorrObjectID,
+		ExternalSystem:    policy.ExternalSystem,
+		Title:             view.Title,
+		Verdict:           view.Verdict,
+		Confidence:        view.Confidence,
+		Signature:         facts.Signature,
+		Summary:           view.Summary,
+		RecommendedAction: view.RecommendedAction,
+		Owner:             ownerOf(view.Annotations),
+		AffectedScope:     facts.AffectedScope,
+		AffectedEntities:  facts.AffectedEntities,
+		MissingEvidence:   view.MissingEvidenceSummary,
+		ImpactedApps:      facts.ImpactedApps,
+		RCAURL:            rcaDeepLink(rcaBaseURL, view.CorrObjectID),
+		Impact:            policy.DefaultImpact,
+		Urgency:           policy.DefaultUrgency,
+		AssignmentGroup:   policy.AssignmentGroup,
+	}
+	p.EvidenceUsed = evidenceUsedLines(view.EvidenceSummary)
+	if p.Title == "" {
+		// Defensive: never ship a blank short description.
+		verb := "Suspected"
+		if view.Verdict == "confirmed" {
+			verb = "Confirmed"
+		}
+		subj := facts.AffectedScope
+		if subj == "" {
+			subj = "network path"
+		}
+		p.Title = verb + " network fault on " + subj
+	}
+	return p
+}
+
+// ── helpers (pure) ───────────────────────────────────────────────────────────
+
+// attachedTicketSignals mirrors buildRcaPathView's attached filter: signals the
+// engine attached, excluding *_clear recoveries.
+func attachedTicketSignals(sigRows []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, sig := range sigRows {
+		if b, _ := sig["attached"].(bool); !b {
+			continue
+		}
+		if strings.HasSuffix(fmt.Sprintf("%v", sig["kind"]), "_clear") {
+			continue
+		}
+		out = append(out, sig)
+	}
+	return out
+}
+
+// parseAffectedScope reads the object's `affected` JSON projection.
+func parseAffectedScope(meta map[string]any) (devices, paths, ifaces []string) {
+	s, _ := meta["affected"].(string)
+	if s == "" || s == "{}" {
+		return nil, nil, nil
+	}
+	var af struct {
+		Devices    []string `json:"devices"`
+		Paths      []string `json:"paths"`
+		Interfaces []string `json:"interfaces"`
+	}
+	if json.Unmarshal([]byte(s), &af) != nil {
+		return nil, nil, nil
+	}
+	return af.Devices, af.Paths, af.Interfaces
+}
+
+// apps returns the named impacted application labels (nil-safe).
+func (ai *rcaAppImpact) apps() []string {
+	if ai == nil {
+		return nil
+	}
+	out := make([]string, 0, len(ai.Apps))
+	for _, a := range ai.Apps {
+		if a.App != "" {
+			out = append(out, a.App)
+		}
+	}
+	return out
+}
+
+// evidenceUsedLines surfaces the human-legible evidence the engine actually used
+// (verdict reason + the independent confirming pair + decisive modalities),
+// pulled from the RCA view's evidence_summary. Order is stable for hashing.
+func evidenceUsedLines(summary map[string]any) []string {
+	if summary == nil {
+		return nil
+	}
+	var out []string
+	if r, ok := summary["verdict_reason"].(string); ok && r != "" {
+		out = append(out, r)
+	}
+	if pair, ok := summary["confirming_pair"].([]string); ok && len(pair) == 2 {
+		out = append(out, "confirmed by "+pair[0]+" ⟂ "+pair[1])
+	}
+	if mods, ok := summary["decisive_modalities"].([]string); ok && len(mods) > 0 {
+		out = append(out, "decisive: "+strings.Join(mods, ", "))
+	}
+	return out
+}
+
+func rcaDeepLink(base, id string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = "/app"
+	}
+	return base + "/correlations/" + id
+}
+
+func parseCorrTime(v any) time.Time {
+	s := strings.TrimSpace(fmt.Sprintf("%v", v))
+	if s == "" || s == "<nil>" {
+		return time.Time{}
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05", time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+func dedupeNonEmpty(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
