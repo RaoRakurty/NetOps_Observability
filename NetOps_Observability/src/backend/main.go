@@ -67,7 +67,7 @@ type server struct {
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics       *incidentMetrics
-	ticketing        ticketingStore // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	ticketing        ticketingStore        // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
 	seams            *pgSeamStore          // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services         *pgServiceStore       // service catalog #69 §2 P2 (nil on file backend)
 	topology         topologyGraphStore    // persistent topology graph #77 (in-memory or pg)
@@ -782,6 +782,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sites", s.handleSites)          // internal SoT sites: GET list / POST upsert
 	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE
 	mux.HandleFunc("/api/sot/import", s.handleSoTImport) // external SoT one-way import (sites / device→site)
+	// RCA auto-ticketing (#78 P3): incident-policy CRUD + simulator, tenant-scoped
+	// outbox/audit observability. Per-correlation ticket actions ride the
+	// /api/correlations/{id}/{tickets,ticket,ticket/sync} router (correlations.go).
+	mux.HandleFunc("/api/incident-policies", s.handleIncidentPolicies)
+	mux.HandleFunc("/api/incident-policies/", s.handleIncidentPolicyByID)
+	mux.HandleFunc("/api/tickets/outbox", s.handleTicketsOutbox)
+	mux.HandleFunc("/api/tickets/audit", s.handleTicketsAudit)
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
 	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)

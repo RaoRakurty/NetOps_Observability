@@ -1,6 +1,6 @@
 # RCA-Driven Auto-Ticketing (Correlix → ServiceNow) — IN PROGRESS
 
-**Status: P1 + P2 SHIPPED.** Queued 2026-06-16.
+**Status: P1 + P2 + P3 (backend) SHIPPED.** Queued 2026-06-16.
 
 - **P1 (`a1ca360`, 2026-06-27):** data model (migration `0016`, 4 net-new tenant
   tables + FORCE RLS), `buildTicketPayload` (reuses `buildRcaPathView`), pure
@@ -11,8 +11,20 @@
   ServiceNow, outbox `ticketWorker` (SKIP-LOCKED claim, exp-backoff+jitter,
   dead-letter, never-double-create via correlation-id lookup, audit + link
   advance). `make test-ticketing-unit` / `test-servicenow-mock`.
-- **NEXT — P3:** conn resolver (itsm_config) + worker wiring (flag-gated) +
-  policy→enqueue path + REST APIs + `ticket_status` on correlation detail.
+- **P3 backend (2026-06-27):** request-free `chRowsScope`/`loadCorrSlice`
+  (`552c7a2`) so background jobs build payloads off-request; conn resolver
+  (`itsmConfigStore.ticketSystemConfig` — each tenant's OWN ServiceNow);
+  `ticketSweeper` (`efb7a88`) = the policy→enqueue path (scan recent corr objects
+  across tenants → `buildRcaPathView`→facts→payload → `evalTicketDecision` →
+  enqueue create/update; pure `decideSweepAction`, tenant-scoped `resolvePolicy`
+  w/ default-on fallback + explicit-disable opt-out); worker + sweeper started in
+  `main()` under `FEATURE_RCA_TICKETING`. REST APIs: incident-policy CRUD +
+  `/{id}/test` simulator, `/api/correlations/{id}/{tickets,ticket,ticket/sync}`,
+  `/api/tickets/{outbox,audit}`, and `ticket_status` on `GET
+  /api/correlations/{id}`. Tenant-isolation tests (store + HTTP: token-stamped
+  owner, own-only list, cross-tenant 404, no outbox leak).
+- **NEXT — P4:** RCA Inspector "Ticket" card (status/number→link/Create+Sync) +
+  admin Incident-Policy editor + ServiceNow setup. **P5:** E2E on golden object.
 
 ## Goal & core principle
 

@@ -258,6 +258,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleCorrelationTimeEvents(w, r, id, strings.TrimPrefix(strings.TrimPrefix(sub, "time-events"), "/"))
 		return
 	}
+	// RCA auto-ticketing subresources (#78 P3) — GET tickets, POST ticket[/sync],
+	// own auth (read/write) inside the handler since they mix GET + POST.
+	if sub == "tickets" || sub == "ticket" || sub == "ticket/sync" {
+		s.handleCorrelationTickets(w, r, id, sub)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
@@ -757,7 +763,11 @@ SELECT from_node, to_node, grounding_kind, grounding_ref,
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": objRows[0], "edges": edgeRows})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object":        objRows[0],
+		"edges":         edgeRows,
+		"ticket_status": s.ticketStatusForObject(r, id),
+	})
 }
 
 // proxyCorrelationReplay fronts the correlation service's internal replay
