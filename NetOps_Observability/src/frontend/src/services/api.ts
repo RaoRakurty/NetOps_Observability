@@ -357,7 +357,61 @@ export type CorrObject = {
   owner?: string;              // verdict owner (netops/isp/…)
   debug_excluded?: number;     // 0/1
   low_authority?: number;      // 0/1
+  ticket_status?: TicketStatus; // #78: external ticket state for this RCA object
 };
+
+// External ticket state for one RCA correlation object (#78). state is
+// not_created | pending | open | updated | resolved | failed; url is a ready
+// deep-link into the external system when a ticket exists.
+export type TicketStatus = {
+  state: string;
+  system?: string;
+  ticket_number?: string;
+  sys_id?: string;
+  instance_url?: string;
+  last_verdict?: string;
+  last_synced_at?: string | null;
+  url?: string;
+};
+export type TicketAuditEntry = {
+  action: string;
+  actor: string;
+  old_status?: string;
+  new_status?: string;
+  result: string;
+  error?: string;
+  at: string;
+};
+export type CorrelationTickets = { status: TicketStatus; audit: TicketAuditEntry[] };
+
+// Incident policy (#78) — decides when an RCA object opens an external ticket.
+export type IncidentPolicy = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  external_system: string; // "servicenow"
+  enabled: boolean;
+  min_verdict: string;     // "suspected" | "confirmed"
+  require_customer_facing: boolean;
+  allow_probe_only: boolean;
+  allow_internal_monitoring: boolean;
+  suspected_requires_critical: boolean;
+  require_persistence_seconds: number;
+  suppress_flapping_seconds: number;
+  assignment_group?: string;
+  default_impact: number;  // 1..4
+  default_urgency: number; // 1..4
+};
+export type IncidentPolicyTestFacts = {
+  verdict: string;
+  peak_severity?: string;
+  internal?: boolean;
+  probe_only?: boolean;
+  low_authority_probe?: boolean;
+  has_affected_entity?: boolean;
+  persistence_seconds?: number;
+};
+export type TicketPolicyDecision = { create: boolean; reason: string };
 
 // RCA path overlay (#77) — UI-ready path + annotations for a correlation object
 // (GET /api/correlations/{id}/rca-path-view; backend rca_path_view.go).
@@ -1334,6 +1388,27 @@ export const api = {
   // RCA Time Intelligence — incident time decomposition (phases + time-loss driver).
   correlationTimeMetrics: (id: string) =>
     request<TimeIntel>(`/api/correlations/${encodeURIComponent(id)}/time-metrics`),
+  // RCA auto-ticketing (#78): the external ticket link + audit history for one
+  // RCA object, and operator-initiated create / sync (enqueued to the outbox).
+  correlationTickets: (id: string) =>
+    request<CorrelationTickets>(`/api/correlations/${encodeURIComponent(id)}/tickets`),
+  correlationTicketCreate: (id: string) =>
+    request<{ enqueued: string; corr_object_id: string; system: string }>(
+      `/api/correlations/${encodeURIComponent(id)}/ticket`, { method: "POST", body: "{}" }),
+  correlationTicketSync: (id: string) =>
+    request<{ enqueued: string; corr_object_id: string; system: string }>(
+      `/api/correlations/${encodeURIComponent(id)}/ticket/sync`, { method: "POST", body: "{}" }),
+  // Incident-policy CRUD + pure simulator (#78). Per-tenant: the backend scopes
+  // by the caller and stamps the owner from the token.
+  incidentPolicies: () => request<{ policies: IncidentPolicy[] }>("/api/incident-policies"),
+  incidentPolicyCreate: (p: Partial<IncidentPolicy>) =>
+    request<IncidentPolicy>("/api/incident-policies", { method: "POST", body: JSON.stringify(p) }),
+  incidentPolicyUpdate: (id: string, p: Partial<IncidentPolicy>) =>
+    request<IncidentPolicy>(`/api/incident-policies/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(p) }),
+  incidentPolicyDelete: (id: string) =>
+    request<{ deleted: boolean }>(`/api/incident-policies/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  incidentPolicyTest: (id: string, facts: IncidentPolicyTestFacts) =>
+    request<TicketPolicyDecision>(`/api/incident-policies/${encodeURIComponent(id)}/test`, { method: "POST", body: JSON.stringify(facts) }),
   // Reliability rollups (Operational Recovery Scorecard).
   reliabilityRollups: (sinceSeconds = 2592000, f: ReliabilityQuery = {}) =>
     request<ReliabilityRollupResp>(`/api/reliability/rollups?since=${sinceSeconds}${reliabilityQS(f)}`),

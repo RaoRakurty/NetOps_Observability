@@ -46,6 +46,7 @@ import {
   ApiAccessAdmin,
   IntegrationsAdmin,
   NotificationsAdmin,
+  IncidentPoliciesAdmin,
   GraphQLExplorer,
 } from "./tabs/admin";
 import { DashboardList } from "./pages/Placeholders";
@@ -149,6 +150,7 @@ export const NAV: NavSection[] = [
       { id: "overview", label: "Command Center", render: () => <CommandCenter /> },
       { id: "notifications", label: "Notifications", render: () => <NotificationsAdmin /> },
       { id: "integrations", label: "Integrations", render: () => <IntegrationsAdmin /> },
+      { id: "rca-ticketing", label: "RCA Auto-Ticketing", render: () => <IncidentPoliciesAdmin /> },
     ],
   },
   // Automation — system-of-record (Source of Truth) + automation integrations.

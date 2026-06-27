@@ -139,7 +139,7 @@ function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[]
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot, timeImpactSlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot, timeImpactSlot, ticketSlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -149,6 +149,7 @@ export default function RcaWorkspace({
   debugExtra?: ReactNode;
   topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
+  ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -222,6 +223,14 @@ export default function RcaWorkspace({
             <>
               <div className="rw-section-title">Time impact</div>
               <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
+            </>
+          )}
+
+          {/* RCA auto-ticketing (#78) — live external ticket status + Create/Sync. */}
+          {ticketSlot && (
+            <>
+              <div className="rw-section-title">External ticket</div>
+              <section style={{ marginBottom: 4 }}>{ticketSlot}</section>
             </>
           )}
 

@@ -382,6 +382,38 @@ export function ownerLabel(o?: string): string {
   return o ? (OWNER_LABEL[o] ?? o) : "";
 }
 
+// External-ticket state → operator wording (#78). Keeps engine enum tokens
+// (not_created/open/…) out of the UI; plain NOC phrasing instead.
+export const TICKET_STATE_LABEL: Record<string, string> = {
+  not_created: "No ticket",
+  pending: "Creation queued",
+  open: "Open",
+  updated: "Updated",
+  resolved: "Resolved",
+  failed: "Failed",
+};
+export function ticketStateLabel(s?: string): string {
+  return s ? (TICKET_STATE_LABEL[s] ?? s) : "No ticket";
+}
+// Ticket state → pill tone (matches the rw-pill tones: green/orange/red/blue/gray).
+export function ticketStateTone(s?: string): "green" | "orange" | "red" | "blue" | "gray" {
+  switch ((s ?? "").toLowerCase()) {
+    case "open":
+    case "updated": return "blue";
+    case "resolved": return "green";
+    case "pending": return "orange";
+    case "failed": return "red";
+    default: return "gray";
+  }
+}
+// Ticket audit action → operator wording.
+export const TICKET_ACTION_LABEL: Record<string, string> = {
+  create: "Created", update: "Updated", add_work_note: "Work note", resolve: "Resolved", reopen: "Reopened",
+};
+export function ticketActionLabel(a?: string): string {
+  return a ? (TICKET_ACTION_LABEL[a] ?? a) : "—";
+}
+
 // --- Operator wording for the causal-graph / boundary view (item 10) ----------
 // Engine vocabulary ("seam", "topo", "grounding", "visibility partial/blind") is
 // backend language; Operator View uses plain NOC phrasing. Debug View keeps raw.

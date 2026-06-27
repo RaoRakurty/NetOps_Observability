@@ -10,7 +10,7 @@
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus } from "../services/api";
+import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
@@ -3355,6 +3355,222 @@ export function NotificationsAdmin() {
           {msg.cp && <span className="mini-meta">{msg.cp}</span>}
         </div>
       </div>
+    </>
+  );
+}
+
+// ---- RCA Auto-Ticketing — Incident Policies (#78) --------------------------
+// Per-tenant policies that decide when an RCA correlation object opens an
+// external (ServiceNow) ticket. Tenant-scoped + administration-gated by the API;
+// the connection itself is configured in Incident Response → Integrations.
+
+function PolicyCheck({ label, info, checked, onChange, disabled }: {
+  label: string; info?: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
+}) {
+  return (
+    <label className="scope-chip" style={{ opacity: disabled ? 0.6 : 1 }}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <FieldLabel label={label} info={info} />
+    </label>
+  );
+}
+
+function blankPolicy(): IncidentPolicy {
+  return {
+    id: "", name: "", external_system: "servicenow", enabled: true, min_verdict: "suspected",
+    require_customer_facing: true, allow_probe_only: false, allow_internal_monitoring: false,
+    suspected_requires_critical: true, require_persistence_seconds: 0, suppress_flapping_seconds: 0,
+    assignment_group: "", default_impact: 2, default_urgency: 2,
+  };
+}
+
+// gate summary chips for the list row.
+function policyGates(p: IncidentPolicy): string[] {
+  const g: string[] = [`≥ ${p.min_verdict}`];
+  if (p.suspected_requires_critical) g.push("suspected needs critical");
+  if (p.require_customer_facing) g.push("customer-facing");
+  if (p.allow_probe_only) g.push("probe-only allowed");
+  if (p.allow_internal_monitoring) g.push("internal allowed");
+  if (p.require_persistence_seconds > 0) g.push(`persist ${p.require_persistence_seconds}s`);
+  return g;
+}
+
+function PolicyEditor({ policy, canWrite, onSaved, onCancel }: {
+  policy: IncidentPolicy; canWrite: boolean; onSaved: () => void; onCancel: () => void;
+}) {
+  const [p, setP] = useState<IncidentPolicy>(policy);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const set = <K extends keyof IncidentPolicy>(k: K, v: IncidentPolicy[K]) => setP((cur) => ({ ...cur, [k]: v }));
+
+  // Simulator (only meaningful for a saved policy — /test loads it server-side).
+  const [facts, setFacts] = useState<IncidentPolicyTestFacts>({ verdict: "confirmed", peak_severity: "crit", has_affected_entity: true });
+  const [decision, setDecision] = useState<TicketPolicyDecision | null>(null);
+
+  const save = async () => {
+    if (!p.name.trim()) { setErr("Name is required."); return; }
+    setBusy(true); setErr(null);
+    try {
+      if (p.id) await api.incidentPolicyUpdate(p.id, p);
+      else await api.incidentPolicyCreate(p);
+      onSaved();
+    } catch (e: any) { setErr(String(e?.message ?? e)); } finally { setBusy(false); }
+  };
+  const del = async () => {
+    if (!p.id) { onCancel(); return; }
+    if (!window.confirm(`Delete policy "${p.name}"? RCA objects will stop auto-ticketing under it.`)) return;
+    setBusy(true); setErr(null);
+    try { await api.incidentPolicyDelete(p.id); onSaved(); } catch (e: any) { setErr(String(e?.message ?? e)); } finally { setBusy(false); }
+  };
+  const simulate = async () => {
+    if (!p.id) { setErr("Save the policy first, then simulate."); return; }
+    setErr(null);
+    try { setDecision(await api.incidentPolicyTest(p.id, facts)); } catch (e: any) { setErr(String(e?.message ?? e)); }
+  };
+
+  return (
+    <div className="card" style={{ padding: "var(--sp-4)" }}>
+      <div className="admin-head-row">
+        <h3 style={{ margin: 0 }}>{p.id ? "Edit incident policy" : "New incident policy"}</h3>
+        <button className="btn" onClick={onCancel}>← Back to list</button>
+      </div>
+      <ErrLine msg={err} />
+
+      <div className="form-grid" style={{ marginTop: "var(--sp-3)" }}>
+        <LabeledInput label="Policy name" required value={p.name} onChange={(v) => set("name", v)}
+          placeholder="e.g. Customer-impacting outages" info="A label for this policy; shown in the list and audit." />
+        <LabeledSelect label="External system" value={p.external_system} onChange={(v) => set("external_system", v)}
+          options={["servicenow"]} info="The ticketing system tickets open in. ServiceNow today." />
+        <LabeledSelect label="Minimum verdict" value={p.min_verdict} onChange={(v) => set("min_verdict", v)}
+          options={["suspected", "confirmed"]} info="The lowest RCA verdict that may open a ticket." />
+        <LabeledInput label="Assignment group" value={p.assignment_group ?? ""} onChange={(v) => set("assignment_group", v)}
+          placeholder="(optional) ServiceNow group" info="Routes the incident to a ServiceNow assignment group." />
+        <LabeledInput label="Default impact (1–4)" type="number" value={String(p.default_impact)} onChange={(v) => set("default_impact", Number(v) || 0)} />
+        <LabeledInput label="Default urgency (1–4)" type="number" value={String(p.default_urgency)} onChange={(v) => set("default_urgency", Number(v) || 0)} />
+        <LabeledInput label="Min persistence (seconds)" type="number" value={String(p.require_persistence_seconds)} onChange={(v) => set("require_persistence_seconds", Number(v) || 0)}
+          info="Hold a fault this long before ticketing (flap suppression on the way in). 0 = off." />
+        <LabeledInput label="Flap suppression (seconds)" type="number" value={String(p.suppress_flapping_seconds)} onChange={(v) => set("suppress_flapping_seconds", Number(v) || 0)}
+          info="After a ticket resolves, suppress re-opening within this window. 0 = off." />
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}>
+        <PolicyCheck label="Enabled" info="When off, this policy never opens tickets (a tenant opt-out)." checked={p.enabled} onChange={(v) => set("enabled", v)} />
+        <PolicyCheck label="Require customer-facing" info="Only ticket objects with a meaningful affected device/path/app." checked={p.require_customer_facing} onChange={(v) => set("require_customer_facing", v)} />
+        <PolicyCheck label="Suspected needs critical" info="A suspected (not yet confirmed) verdict only tickets at critical severity." checked={p.suspected_requires_critical} onChange={(v) => set("suspected_requires_critical", v)} />
+        <PolicyCheck label="Allow probe-only" info="Allow ticketing when the only evidence is an active probe (overrides the ≥2-stream rule)." checked={p.allow_probe_only} onChange={(v) => set("allow_probe_only", v)} />
+        <PolicyCheck label="Allow internal monitoring" info="Allow ticketing internal/debug-only monitoring (off keeps non-customer noise out)." checked={p.allow_internal_monitoring} onChange={(v) => set("allow_internal_monitoring", v)} />
+      </div>
+      <RequiredLegend />
+
+      {canWrite && (
+        <div className="admin-actions" style={{ marginTop: "var(--sp-3)" }}>
+          <button className="btn primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save policy"}</button>
+          {p.id && <button className="btn" disabled={busy} onClick={del} style={{ color: "var(--bad)" }}>Delete</button>}
+        </div>
+      )}
+
+      {/* Simulator — a pure dry-run: would a hypothetical object ticket under this policy? */}
+      <div className="card" style={{ padding: "var(--sp-3)", marginTop: "var(--sp-4)", background: "var(--bg)" }}>
+        <h4 style={{ margin: "0 0 var(--sp-2)" }}>Simulate a decision</h4>
+        <p className="mini-meta" style={{ marginTop: 0 }}>Dry-run this policy against a hypothetical RCA object — no ticket is created.</p>
+        <div className="form-grid">
+          <LabeledSelect label="Verdict" value={facts.verdict} onChange={(v) => setFacts((f) => ({ ...f, verdict: v }))} options={["undetermined", "suspected", "confirmed"]} />
+          <LabeledSelect label="Peak severity" value={facts.peak_severity ?? "crit"} onChange={(v) => setFacts((f) => ({ ...f, peak_severity: v }))} options={["info", "warn", "high", "crit"]} />
+          <LabeledInput label="Persistence (seconds)" type="number" value={String(facts.persistence_seconds ?? 0)} onChange={(v) => setFacts((f) => ({ ...f, persistence_seconds: Number(v) || 0 }))} />
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-2)", marginTop: "var(--sp-2)" }}>
+          <PolicyCheck label="Internal monitoring" checked={!!facts.internal} onChange={(v) => setFacts((f) => ({ ...f, internal: v }))} />
+          <PolicyCheck label="Probe-only" checked={!!facts.probe_only} onChange={(v) => setFacts((f) => ({ ...f, probe_only: v }))} />
+          <PolicyCheck label="Low-authority probe" checked={!!facts.low_authority_probe} onChange={(v) => setFacts((f) => ({ ...f, low_authority_probe: v }))} />
+          <PolicyCheck label="Has affected entity" checked={!!facts.has_affected_entity} onChange={(v) => setFacts((f) => ({ ...f, has_affected_entity: v }))} />
+        </div>
+        <div className="admin-actions" style={{ marginTop: "var(--sp-2)" }}>
+          <button className="btn" onClick={simulate} disabled={!p.id} title={p.id ? "" : "Save the policy first"}>Simulate</button>
+        </div>
+        {decision && (
+          <p style={{ marginTop: "var(--sp-2)" }}>
+            <span className={`badge ${decision.create ? "good" : "warn"}`}>{decision.create ? "Would open a ticket" : "Held"}</span>{" "}
+            <span className="mini-meta">{decision.reason}</span>
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function IncidentPoliciesAdmin() {
+  const { user } = useAuth();
+  const [policies, setPolicies] = useState<IncidentPolicy[] | null>(null);
+  const [sel, setSel] = useState<IncidentPolicy | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [canWrite, setCanWrite] = useState(false);
+
+  const load = useCallback(() => {
+    setErr(null);
+    api.incidentPolicies().then((r) => setPolicies(r.policies ?? [])).catch((e) => {
+      setPolicies([]);
+      setErr(String(e?.message ?? e).includes("403") ? "You need administration access to manage incident policies." : String(e?.message ?? e));
+    });
+  }, []);
+  useEffect(() => {
+    load();
+    api.permissions().then((p) => setCanWrite((p.permissions?.administration ?? 0) >= 2)).catch(() => setCanWrite(false));
+  }, [load]);
+
+  if (sel) {
+    return (
+      <>
+        <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA object opens a ServiceNow ticket." />
+        <PolicyEditor policy={sel} canWrite={canWrite} onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket — one ticket per root cause, never per raw alert." />
+      <p className="mini-meta" style={{ marginTop: "calc(-1 * var(--sp-2))" }}>
+        Configure the ServiceNow connection in <b>Incident Response → Integrations</b>. A tenant with no policy uses a safe default
+        (customer-facing confirmed faults open an incident; internal / probe-only / undetermined are held).
+      </p>
+      <ErrLine msg={err} />
+
+      <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
+        <StatStrip>
+          <Stat label="Policies" value={policies?.length ?? "—"} />
+          <Stat label="Enabled" value={policies ? policies.filter((p) => p.enabled).length : "—"} tone="good" />
+        </StatStrip>
+        {canWrite && <button className="btn primary" onClick={() => setSel(blankPolicy())}>+ New policy</button>}
+      </div>
+
+      {policies === null ? (
+        <Skeleton h={120} style={{ marginTop: "var(--sp-3)" }} />
+      ) : policies.length === 0 ? (
+        <p className="mini-meta" style={{ marginTop: "var(--sp-3)" }}>
+          No policies yet — the safe default applies. {canWrite ? "Create one to tune ticketing for this tenant." : ""}
+        </p>
+      ) : (
+        <table className="ds-table" style={{ marginTop: "var(--sp-3)" }}>
+          <thead>
+            <tr><th>Name</th><th>Status</th><th>Gates</th><th>Routing</th><th /></tr>
+          </thead>
+          <tbody>
+            {policies.map((p) => (
+              <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => setSel(p)}>
+                <td><b>{p.name || "(unnamed)"}</b></td>
+                <td><span className={`badge ${p.enabled ? "good" : ""}`}>{p.enabled ? "Enabled" : "Disabled"}</span></td>
+                <td className="mini-meta">{policyGates(p).join(" · ")}</td>
+                <td className="mini-meta">{p.assignment_group || "—"}</td>
+                <td style={{ textAlign: "right" }}><button className="btn" onClick={(e) => { e.stopPropagation(); setSel(p); }}>{canWrite ? "Edit" : "View"}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {!canWrite && policies && policies.length >= 0 && (
+        <p className="mini-meta" style={{ marginTop: "var(--sp-2)" }}>Read-only — administration write access is required to change policies.</p>
+      )}
+      {user && null}
     </>
   );
 }

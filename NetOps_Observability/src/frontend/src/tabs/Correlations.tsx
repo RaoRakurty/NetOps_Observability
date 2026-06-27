@@ -5,6 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
 import RcaTopology from "../components/rca/RcaTopology";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
+import RcaTicketCard from "../components/rca/RcaTicketCard";
 import { buildRcaCase } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
@@ -370,6 +371,7 @@ export function CorrelationDetail({ id }: { id: string }) {
           probePaths={probePaths} deviceByIp={deviceByIp} height={300} />
       }
       timeImpactSlot={obj.correlation_id ? <RcaTimeImpact correlationId={obj.correlation_id} /> : null}
+      ticketSlot={obj.correlation_id ? <RcaTicketCard correlationId={obj.correlation_id} /> : null}
     />
   );
 }
