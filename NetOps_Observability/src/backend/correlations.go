@@ -15,6 +15,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,17 +29,27 @@ import (
 
 // chRows runs one tenant-scoped ClickHouse query and returns the parsed JSON
 // rows — the composable sibling of proxyClickHouse for handlers that combine
-// multiple result sets into one response.
+// multiple result sets into one response. The scope is derived from the request
+// principal (chTenantScope); chRowsScope is the request-free form background jobs
+// (the auto-ticketing sweeper, #78 P3) use with an explicit scope.
 func (s *server) chRows(r *http.Request, sql string) ([]map[string]any, error) {
+	return s.chRowsScope(r.Context(), chTenantScope(r), sql)
+}
+
+// chRowsScope runs one ClickHouse query at an explicit tenant_scope ("__all__"
+// for cross-tenant background jobs, a tenant id for one tenant, "__none__" to
+// see nothing). The row policies enforce isolation server-side regardless of the
+// caller's SQL — same defense-in-depth as chRows.
+func (s *server) chRowsScope(ctx context.Context, scope, sql string) ([]map[string]any, error) {
 	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
 	u, err := url.Parse(base)
 	if err != nil {
 		return nil, err
 	}
 	q := u.Query()
-	q.Set("tenant_scope", chTenantScope(r))
+	q.Set("tenant_scope", scope)
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +310,7 @@ func isDatetimeToken(s string) bool {
 // order key) AND archived_for/version — never a full-table scan.
 func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request, id string) {
 	version := intQuery(r, "version", 0, 0, 1<<30)
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r, id, version)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -329,7 +340,7 @@ func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request
 // the evidence rows, and the edges of that version. Shared by the timeline and
 // rca-path-view endpoints so the (bounded, RLS-scoped) read SQL lives once.
 // Returns an HTTP status + error for the caller to surface.
-func (s *server) loadCorrSlice(r *http.Request, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
+func (s *server) loadCorrSlice(ctx context.Context, scope, id string, version int) (map[string]any, []map[string]any, []map[string]any, []map[string]any, int, error) {
 	verCond := ""
 	if version > 0 {
 		verCond = " AND version = " + intToString(version)
@@ -347,7 +358,7 @@ SELECT version,
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`
-	metaRows, err := s.chRows(r, metaSQL)
+	metaRows, err := s.chRowsScope(ctx, scope, metaSQL)
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
@@ -374,7 +385,7 @@ SELECT version,
 	}
 	avSQL := `SELECT max(archived_version) AS av FROM netops.corr_signals_archive
  WHERE archived_for = '` + id + `'` + avCond + ` FORMAT JSON`
-	avRows, err := s.chRows(r, avSQL)
+	avRows, err := s.chRowsScope(ctx, scope, avSQL)
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
@@ -403,7 +414,7 @@ SELECT toString(signal_id)  AS signal_id,
    AND ts >= '` + ws + `' AND ts <= '` + we + `'
  ORDER BY ts ASC, signal_id ASC
  FORMAT JSON`
-	sigRows, err := s.chRows(r, sigSQL)
+	sigRows, err := s.chRowsScope(ctx, scope, sigSQL)
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
@@ -415,7 +426,7 @@ SELECT toString(signal_id) AS signal_id, subject_kind, subject_id, role, note
   FROM netops.corr_evidence
  WHERE correlation_id = '` + id + `' AND toString(version) = '` + ver + `'
  FORMAT JSON`
-	evRows, err := s.chRows(r, evSQL)
+	evRows, err := s.chRowsScope(ctx, scope, evSQL)
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
@@ -431,7 +442,7 @@ SELECT from_node, to_node, grounding_kind, grounding_ref,
  WHERE correlation_id = '` + id + `' AND toString(version) = '` + ver + `'
  ORDER BY from_node, to_node
  FORMAT JSON`
-	edgeRows, err := s.chRows(r, edgeSQL)
+	edgeRows, err := s.chRowsScope(ctx, scope, edgeSQL)
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}

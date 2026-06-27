@@ -154,7 +154,7 @@ type rcaPath struct {
 
 func (s *server) serveRcaPathView(w http.ResponseWriter, r *http.Request, id string) {
 	version := intQuery(r, "version", 0, 0, 1<<30)
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r, id, version)
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
 	if err != nil {
 		writeError(w, status, err)
 		return
