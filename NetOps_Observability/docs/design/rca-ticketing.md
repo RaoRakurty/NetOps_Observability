@@ -1,6 +1,7 @@
 # RCA-Driven Auto-Ticketing (Correlix → ServiceNow) — IN PROGRESS
 
-**Status: P1 + P2 + P3 (backend) SHIPPED.** Queued 2026-06-16.
+**Status: P1–P5 SHIPPED (P5 = live-validated; external ServiceNow create needs a
+real/mock SNOW target to exercise the last leg).** Queued 2026-06-16.
 
 - **P1 (`a1ca360`, 2026-06-27):** data model (migration `0016`, 4 net-new tenant
   tables + FORCE RLS), `buildTicketPayload` (reuses `buildRcaPathView`), pure
@@ -23,8 +24,26 @@
   `/api/tickets/{outbox,audit}`, and `ticket_status` on `GET
   /api/correlations/{id}`. Tenant-isolation tests (store + HTTP: token-stamped
   owner, own-only list, cross-tenant 404, no outbox leak).
-- **NEXT — P4:** RCA Inspector "Ticket" card (status/number→link/Create+Sync) +
-  admin Incident-Policy editor + ServiceNow setup. **P5:** E2E on golden object.
+- **P4 UI (2026-06-27, `b7bf4f3`):** RCA Inspector **Ticket card**
+  (`RcaTicketCard`, a self-contained slot on the correlation detail) — live
+  state (No ticket / Creation queued / Open / Updated / Resolved / Failed),
+  number→deep-link, last-synced + verdict, action audit trail, and
+  perm-gated (infrastructure:write) Create/Sync that enqueue + re-poll;
+  read-only callers see status only. Admin **RCA Auto-Ticketing** page
+  (`IncidentPoliciesAdmin`, under Incident Response) — per-tenant incident-policy
+  CRUD + a pure decision **Simulator** (`/{id}/test`). ServiceNow connection
+  reuses the existing Integrations connector. Label maps keep engine enums out of
+  the UI; 3 new component tests.
+- **P5 live E2E (2026-06-28, `73b29ee`+`270f625`):** deployed to the running
+  stack with `FEATURE_RCA_TICKETING=true`; migration 0016 applied; sweeper+worker
+  started; incident-policy CRUD + simulator + outbox/audit + `ticket_status`
+  validated on REAL data; manual create → 202 → outbox row → worker claim → conn
+  resolver correctly **held** ("no ticketing connection configured") with no link
+  / no double-anything. **Found + fixed a latent P2 bug** (the outbox claim SQL's
+  ambiguous `id` in `RETURNING`, invisible to the in-mem tests) and added a
+  `DATABASE_URL_TEST`-gated Postgres regression test that fails on the bug and
+  passes on the fix. **Remaining:** the external ServiceNow Table-API create leg
+  needs a real or mock SNOW instance configured for a tenant to exercise.
 
 ## Goal & core principle
 
