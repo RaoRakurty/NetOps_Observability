@@ -770,6 +770,13 @@ services:
       # alert). DORMANT unless FEATURE_RCA_TICKETING=true; the connection is the
       # per-tenant ServiceNow configured in Incident Response → Integrations.
       FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
+      # SSRF allowlist for outbound integrations (ITSM/webhooks). The outbound
+      # guard (safehttp) refuses private/internal targets by default; add a
+      # self-hosted/lab ServiceNow or the bundled mock-servicenow fixture here
+      # (comma-separated hostnames/IPs/CIDRs) so the RCA-ticketing worker can
+      # reach it. Empty ⇒ public targets only. e.g. SSRF_ALLOWED_HOSTS=mock-servicenow
+      SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS:-}
+      SSRF_ALLOW_PRIVATE: ${SSRF_ALLOW_PRIVATE:-false}
       # SSO — OIDC/SAML/LDAP brokered by Keycloak (the API only verifies tokens).
       # Bring Keycloak up with: docker compose --profile sso up -d keycloak
       OIDC_ENABLED: ${OIDC_ENABLED:-false}
@@ -950,6 +957,37 @@ services:
       PROBER_ID: prober
     depends_on:
       redis: { condition: service_healthy }
+    networks: [netops]
+    restart: *restart
+
+  # Mock ServiceNow (#78) — a stdlib-only stand-in for the ServiceNow incident
+  # Table API, used to exercise the RCA auto-ticketing CREATE leg end-to-end with
+  # NO real ServiceNow instance. TEST FIXTURE, off by default:
+  #   docker compose --profile mock-snow up -d --build mock-servicenow
+  # Then point a tenant's Incident-Response → Integrations connection at
+  #   http://mock-servicenow:8090  (user/pass = MOCK_SNOW_USER/MOCK_SNOW_PASSWORD)
+  # and allow the api to reach this private host:
+  #   SSRF_ALLOWED_HOSTS=mock-servicenow  + FEATURE_RCA_TICKETING=true
+  # Watch incidents land:  curl -u $MOCK_SNOW_USER:$MOCK_SNOW_PASSWORD \
+  #   http://localhost:8099/inspect  (host port below). See README for the full run.
+  mock-servicenow:
+    profiles: ["mock-snow"]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/mock-servicenow/Dockerfile
+    mem_limit: ${MOCK_SNOW_MEM_LIMIT:-64m}
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      MOCK_SNOW_ADDR: ":8090"
+      MOCK_SNOW_USER: ${MOCK_SNOW_USER:-correlix}
+      MOCK_SNOW_PASSWORD: ${MOCK_SNOW_PASSWORD:-correlix-mock-secret}
+      # Optional Bearer token (token-auth connections); empty ⇒ Basic only.
+      MOCK_SNOW_TOKEN: ${MOCK_SNOW_TOKEN:-}
+    # Host port for /inspect convenience (NOT used by the api, which reaches it
+    # in-network on :8090). Off the public surface — bind localhost only.
+    ports:
+      - "127.0.0.1:${MOCK_SNOW_HOST_PORT:-8099}:8090"
     networks: [netops]
     restart: *restart
 

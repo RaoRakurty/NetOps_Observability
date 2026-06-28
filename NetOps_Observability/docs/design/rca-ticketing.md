@@ -1,7 +1,10 @@
-# RCA-Driven Auto-Ticketing (Correlix → ServiceNow) — IN PROGRESS
+# RCA-Driven Auto-Ticketing (Correlix → ServiceNow) — DONE (loop closed)
 
-**Status: P1–P5 SHIPPED (P5 = live-validated; external ServiceNow create needs a
-real/mock SNOW target to exercise the last leg).** Queued 2026-06-16.
+**Status: P1–P6 SHIPPED. P6 (2026-06-28) closed the last leg — the external
+ServiceNow Table-API CREATE was exercised end-to-end on the running stack against
+a bundled mock ServiceNow: a real `suspected` correlation object auto-filed
+`INC0000001` over real HTTP, with the Correlix ticket link advancing to
+`state=open`.** Queued 2026-06-16.
 
 - **P1 (`a1ca360`, 2026-06-27):** data model (migration `0016`, 4 net-new tenant
   tables + FORCE RLS), `buildTicketPayload` (reuses `buildRcaPathView`), pure
@@ -42,8 +45,31 @@ real/mock SNOW target to exercise the last leg).** Queued 2026-06-16.
   / no double-anything. **Found + fixed a latent P2 bug** (the outbox claim SQL's
   ambiguous `id` in `RETURNING`, invisible to the in-mem tests) and added a
   `DATABASE_URL_TEST`-gated Postgres regression test that fails on the bug and
-  passes on the fix. **Remaining:** the external ServiceNow Table-API create leg
-  needs a real or mock SNOW instance configured for a tenant to exercise.
+  passes on the fix.
+- **P6 external create leg validated (2026-06-28):** a standalone, stdlib-only
+  **mock ServiceNow** (`deployment/docker/mock-servicenow/`, incident Table API
+  subset + Basic/Bearer auth + `/inspect` + a chaos knob) is shipped as an opt-in
+  compose service (`--profile mock-snow`, off by default → fresh-install safe).
+  The api reaches it via `SSRF_ALLOWED_HOSTS=mock-servicenow`. The repeatable
+  driver `scripts/validate-rca-ticketing-e2e.sh` configures the global tenant's
+  connection → mock, installs a permissive policy, and drives a REAL correlation
+  through sweeper→outbox→worker→**HTTP create**→ticket link. **Live result:** a
+  `suspected` object (`sig.ent.middle-mile.dia-egress-latency`) filed
+  `INC0000001` carrying `correlation_id` + `u_correlix_*`, and
+  `GET /api/correlations/{id}/tickets` reported `state=open number=INC0000001`.
+  **Found + fixed a second latent bug** (again invisible to the in-process
+  tests): the platform/global tenant's correlation objects are written with
+  `tenant_id=""`, but its incident policy is stored under the canonical id
+  `"global"` (principalTenant), so `resolvePolicy("")` missed it and the sweeper
+  silently fell back to the DEFAULT policy — a configured global policy could
+  never take effect. Fixed by canonicalizing the sweeper's candidate tenant
+  (`canonicalCorrTenant`, `""`→`global`) so policy, link, outbox, and connection
+  all key the same tenant the operator configured; guarded by
+  `TestSweeperCanonicalizesGlobalTenant`. See
+  `deployment/docker/mock-servicenow/README.md` for the run.
+
+  **Remaining (optional, not blocking):** point at a real ServiceNow PDI for a
+  vendor-side confirmation; per-tenant connections beyond the global tenant.
 
 ## Goal & core principle
 

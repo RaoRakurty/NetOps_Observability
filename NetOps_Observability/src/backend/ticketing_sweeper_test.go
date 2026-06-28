@@ -106,6 +106,42 @@ func TestSweeperResolvePolicy(t *testing.T) {
 	}
 }
 
+// TestSweeperCanonicalizesGlobalTenant is a regression guard for the silent
+// global-tenant policy miss caught during the live #78 create-leg validation: the
+// engine writes a platform/global object with tenant_id="", but the platform admin
+// configures that tenant's incident policy under the canonical id "global"
+// (principalTenant). Before the fix the sweeper resolved policy for "" and, finding
+// no row (RLS / scopeVisible "" != "global"), silently fell back to the default
+// policy — so a configured global policy could never take effect.
+func TestSweeperCanonicalizesGlobalTenant(t *testing.T) {
+	if got := canonicalCorrTenant(""); got != TenantGlobal {
+		t.Fatalf("canonicalCorrTenant(%q) = %q, want %q", "", got, TenantGlobal)
+	}
+	if got := canonicalCorrTenant("  "); got != TenantGlobal {
+		t.Fatalf("blank tenant must canonicalize to global, got %q", got)
+	}
+	if got := canonicalCorrTenant("t_a"); got != "t_a" {
+		t.Fatalf("a real tenant id must pass through unchanged, got %q", got)
+	}
+
+	ctx := context.Background()
+	st := newMemTicketingStore()
+	sw := &ticketSweeper{store: st}
+
+	// The platform admin's global policy is stored under the canonical "global" id.
+	gp := incidentPolicy{ID: "g1", TenantID: TenantGlobal, ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
+	if err := st.PutPolicy(ctx, gp); err != nil {
+		t.Fatal(err)
+	}
+	// Raw "" misses it (the bug); the canonicalized tenant resolves it (the fix).
+	if p := sw.resolvePolicy(ctx, ""); p.ID == "g1" {
+		t.Fatal("precondition: raw \"\" must NOT match the global policy (else the bug never existed)")
+	}
+	if p := sw.resolvePolicy(ctx, canonicalCorrTenant("")); p.ID != "g1" {
+		t.Fatalf("global object must resolve the configured global policy, got id=%q (default fallback?)", p.ID)
+	}
+}
+
 func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	st := newMemTicketingStore()

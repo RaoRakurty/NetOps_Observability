@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -122,9 +123,27 @@ SELECT toString(correlation_id) AS correlation_id,
 		if !isUUIDToken(id) {
 			continue
 		}
-		out = append(out, sweepCandidate{id: id, tenant: asString(row["tenant_id"])})
+		out = append(out, sweepCandidate{id: id, tenant: canonicalCorrTenant(asString(row["tenant_id"]))})
 	}
 	return out, nil
+}
+
+// canonicalCorrTenant maps a correlation object's stored tenant to the canonical
+// app tenant key used by the ticketing stores. The correlation engine writes ""
+// for platform/global-owned (untagged) telemetry, but the platform admin manages
+// that tenant's incident policy + ServiceNow connection under the canonical global
+// id (principalTenant → "global"). Collapse ""→global here so policy resolution,
+// the ticket link, and the outbox all key the SAME tenant the operator configured.
+// A real (non-global) tenant id passes through unchanged, so isolation is intact.
+//
+// Without this, a GLOBAL object (tenant_id="") never matched a configured global
+// policy (stored under "global") and the sweeper silently fell back to the default
+// policy — i.e. a platform-tenant policy could never take effect.
+func canonicalCorrTenant(t string) string {
+	if strings.TrimSpace(t) == "" {
+		return TenantGlobal
+	}
+	return t
 }
 
 // evaluate loads one object's RCA slice, decides via the owning tenant's policy,
