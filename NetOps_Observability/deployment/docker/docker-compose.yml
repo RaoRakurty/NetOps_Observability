@@ -765,6 +765,11 @@ services:
       JIRA_MIN_SEVERITY: ${JIRA_MIN_SEVERITY:-critical}
       JIRA_RESOLVE_TRANSITION: ${JIRA_RESOLVE_TRANSITION:-}
       JIRA_STATE_FILE: /data/jira_tickets.json
+      # RCA-driven auto-ticketing (#78): the policy sweeper + outbox worker that
+      # open ONE ServiceNow incident per RCA correlation object (not per raw
+      # alert). DORMANT unless FEATURE_RCA_TICKETING=true; the connection is the
+      # per-tenant ServiceNow configured in Incident Response → Integrations.
+      FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
       # SSO — OIDC/SAML/LDAP brokered by Keycloak (the API only verifies tokens).
       # Bring Keycloak up with: docker compose --profile sso up -d keycloak
       OIDC_ENABLED: ${OIDC_ENABLED:-false}

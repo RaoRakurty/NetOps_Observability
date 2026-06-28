@@ -471,9 +471,14 @@ func (s *pgTicketingStore) ListOutbox(ctx context.Context, tenant string, cross 
 // pattern): the CTE selects+locks candidates another worker isn't holding, the
 // UPDATE advances next_retry_at by the lease so an abandoned claim re-runs only
 // after it expires, and RETURNING hands back exactly this worker's rows.
+//
+// The CTE projects `id AS claim_id` (not bare `id`): the UPDATE joins
+// `ticket_outbox o` to `claimable c`, so an unqualified `id` in RETURNING (part
+// of the shared outboxCols list) would be ambiguous between the two relations.
+// Renaming the CTE column keeps `id` resolving unambiguously to o.id.
 const claimOutboxSQL = `
 WITH claimable AS (
-    SELECT id FROM ticket_outbox
+    SELECT id AS claim_id FROM ticket_outbox
      WHERE status IN ('pending','retrying') AND next_retry_at <= now()
      ORDER BY next_retry_at
      FOR UPDATE SKIP LOCKED
@@ -481,7 +486,7 @@ WITH claimable AS (
 UPDATE ticket_outbox o
    SET status='retrying', next_retry_at = now() + make_interval(secs => $2), updated_at = now()
   FROM claimable c
- WHERE o.id = c.id
+ WHERE o.id = c.claim_id
 RETURNING ` + outboxCols
 
 func (s *pgTicketingStore) ClaimDueOutbox(ctx context.Context, _ string, n int, lease time.Duration) ([]ticketOutboxItem, error) {
