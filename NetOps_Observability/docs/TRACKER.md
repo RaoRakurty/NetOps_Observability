@@ -138,7 +138,7 @@ pending · ✅ shipped+deployed.
 | 3 | UI-14 | **Monitor Rules — "Add rule" as a self-guided window.** Inline form → guided modal/wizard, app theme (Flows/`xpl-`/Wizard vocabulary), elegant. | ✅ done |
 | 4 | UI-18 | **Guided Report Setup — elegance pass.** Spread the page full-width, refine fonts/sizes, organize elegantly, sync with the app theme. | ✅ done |
 | 5 | 1D | **Organize the Administrator window.** Remove Theme + Accent prefs from Admin (they're user prefs, already in the rail account menu); focus Admin on per-user auth + SSO config. | ✅ done (theme+accent removed from account menus) |
-| 6 | BRAND-1 | **Terminology / IP audit.** Vet ALL product vocabulary ("Fleet Pulse", "Fleet aggregates", section/feature/metric names) against vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik…). Flag collisions, propose distinct synonyms for sign-off before any rename. | ⏳ |
+| 6 | BRAND-1 | **Terminology / IP audit.** Vet ALL product vocabulary ("Fleet Pulse", "Fleet aggregates", section/feature/metric names) against vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik…). Flag collisions, propose distinct synonyms for sign-off before any rename. | ✅ audit report delivered (`docs/brand/terminology-audit-2026-06-29.md`) — awaiting owner pick before any rename |
 
 > Process (owner directive 2026-06-29): do them in this order, nail one by one,
 > deploy + verify each. UI-16b/UI-15/UI-19 are coded and ship in the next deploy
