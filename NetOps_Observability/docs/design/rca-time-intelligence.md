@@ -1,8 +1,36 @@
 # RCA Time Intelligence — Incident Time Decomposition
 
-**Tracker:** #84 · **Status:** P1a + P1b + P1c + P2 + P3 SHIPPED & live · P1d (persistence/RLS/
-manual-edit/backfill) + docs page REMAINING.
+**Tracker:** #84 · **Status:** P1a + P1b + P1c + P2 + P3 + **ITSM phase-link** SHIPPED & live ·
+P1d (persistence/RLS/manual-edit/backfill) + docs page REMAINING.
 **Owner spec:** 2026-06-24 (chat). **This doc** is the durable design of record.
+
+> **ITSM phase-link (2026-06-29) — the human-response phases now derive from #78.**
+> The `ticket_audit_log` (#78) is an append-only, tenant-scoped event ledger; the
+> incident timeline reads it through one seam (`ticketAuditToITSMFacts` →
+> `s.itsmTimeFacts`). With NO real ServiceNow, the outbound worker's `create`/
+> `resolve` rows already populate **ticket filed** + **resolved** and flip
+> `workflowConnected` true (validated live: `ticket_created` itsm-sourced on a real
+> incident). **Forward-compatible by design:** the granular human phases light up
+> the moment an INBOUND ServiceNow state sync appends audit rows with the canonical
+> actions below — the reader, derive path, and UI are already ready, so connecting
+> ServiceNow "just works" with no #84 rework. **Write-contract** (`action` +
+> `result="ok"`, emitted by the future inbound sync):
+>
+> | audit `action` | timeline phase | source today |
+> |----------------|----------------|--------------|
+> | `create` | `ticket_created` | outbound worker (live) |
+> | `resolve` | `resolved` | outbound worker (live) |
+> | `acknowledged` | `acknowledged` | inbound sync (dormant) |
+> | `mitigation_started` | `mitigation_started` | inbound sync (dormant) |
+> | `mitigated` | `mitigated` | inbound sync (dormant) |
+> | `recovered` | `recovered` | inbound sync (dormant) |
+> | `closed` | `closed` | inbound sync (dormant) |
+>
+> Constants live in `ticketing_lifecycle.go`; guarded by
+> `TestTicketAudit_SeamlessWhenServiceNowConnected`. **The ONLY remaining piece for
+> full human-phase timing is the inbound ServiceNow state sync** (poll/webhook that
+> appends those rows) — buildable + testable against the bundled mock, no real
+> instance required to develop.
 
 ---
 

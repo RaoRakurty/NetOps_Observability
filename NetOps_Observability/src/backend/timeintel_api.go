@@ -174,11 +174,13 @@ SELECT toString(window_start) AS window_start,
 	}
 	ownerDomain, _ := timeintel.ClassifyOwnerDomain(owner, group)
 
-	// ITSM facts: per-correlation ticket lifecycle. The hub-and-spoke ticket linkage
-	// (#78) is not wired yet → workflowConnected=false, so the bottleneck says
-	// "workflow not connected" instead of inventing a ticket phase that can't move.
-	itsm := s.itsmTimeFacts(r, id)
-	workflowConnected := false
+	// ITSM facts: per-correlation ticket lifecycle, derived from the #78 ticket
+	// audit ledger (tenant-scoped). "ticket filed" + "resolved" populate from the
+	// outbound worker today; the human phases (acknowledged/mitigated/…) populate
+	// the moment an inbound ServiceNow sync appends those audit rows. workflow
+	// Connected is true once a ticket exists, so the bottleneck logic stops reading
+	// "workflow not connected" instead of inventing a phase that can't move.
+	itsm, workflowConnected := s.itsmTimeFacts(r, id)
 
 	lc := deriveLifecycle(facts, itsm)
 	// Overlay the caller's stored MANUAL events (operator-supplied recovery/closure/
@@ -239,9 +241,29 @@ func (s *server) minIngestTS(r *http.Request, id string) time.Time {
 	return parseCHTime(rows[0]["fi"])
 }
 
-// itsmTimeFacts resolves the per-correlation ticket lifecycle from the integration
-// event ledger. Empty until per-correlation ticket linkage (#78) is wired; the
-// calculator then leaves the human-phase metrics INCOMPLETE rather than guessing.
-func (s *server) itsmTimeFacts(_ *http.Request, _ string) itsmTimeFacts {
-	return itsmTimeFacts{}
+// itsmTimeFacts resolves the per-correlation ticket lifecycle from the #78 ticket
+// audit ledger + link, scoped to the caller's tenant (a cross-tenant id simply
+// resolves to no link → empty facts, never a leak). Returns the human-phase
+// timestamps plus whether the ITSM workflow is connected (a ticket exists).
+// Best-effort: any store error degrades to empty/unconnected rather than failing
+// the whole time-metrics read. Phases with no timestamp stay INCOMPLETE in the
+// calculator — honest, never guessed.
+func (s *server) itsmTimeFacts(r *http.Request, id string) (itsmTimeFacts, bool) {
+	if s.ticketing == nil {
+		return itsmTimeFacts{}, false
+	}
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		return itsmTimeFacts{}, false
+	}
+	tenant, cross := principalTenant(claims)
+	link, found, err := s.ticketing.GetLink(r.Context(), tenant, cross, id, "servicenow")
+	if err != nil {
+		return itsmTimeFacts{}, false
+	}
+	audit, err := s.ticketing.ListAudit(r.Context(), tenant, cross, id)
+	if err != nil {
+		audit = nil
+	}
+	return ticketAuditToITSMFacts(audit, link, found)
 }
