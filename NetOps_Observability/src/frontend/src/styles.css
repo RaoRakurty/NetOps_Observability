@@ -3353,13 +3353,13 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .cc-btn-primary { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .cc-btn-warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); color: var(--warn); }
 /* Dashboard List — thin, elegant directory rows (UI-8). */
-.dash-card { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: 8px;
+.dash-card { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 7px;
   background: var(--surface); border: 1px solid var(--border); text-decoration: none; color: var(--fg);
   cursor: pointer; transition: border-color .12s, background .12s, transform .06s; }
 .dash-card:hover { border-color: var(--accent); background: var(--surface-2); }
 .dash-card:active { transform: translateY(1px); }
-.dash-card .dash-card-label { font-size: 12.5px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dash-card .dash-card-go { font-size: 13px; font-weight: 700; color: var(--fg-subtle); transition: color .12s, transform .12s; }
+.dash-card .dash-card-label { font-size: 12px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-card .dash-card-go { font-size: 12px; font-weight: 700; color: var(--fg-subtle); transition: color .12s, transform .12s; }
 .dash-card:hover .dash-card-go { color: var(--accent); transform: translateX(2px); }
 
 /* Clickable impacted-entity pill → topology canvas (UI-3). */
