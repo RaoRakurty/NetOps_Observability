@@ -86,10 +86,21 @@ function tierFromHash(): string {
   return ["confirmed", "suspected", "undetermined"].includes(t) ? t : "";
 }
 
+// Deep-link target id (#/monitoring/correlations?id=<correlation_id>). Command
+// Center / other surfaces link here to open ONE specific RCA.
+function idFromHash(): string {
+  const q = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
+  return new URLSearchParams(q).get("id") || "";
+}
+
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
   const [state, setState] = useState("");
   const [tier, setTier] = useState(tierFromHash);
+  // When arriving via a deep link (?id=…), the target RCA can be older than the
+  // default 24h list window (Command Center spans 30 days). Widen the fetch so
+  // the target is always present and the auto-select below can find it.
+  const deepId = useMemo(idFromHash, []);
   const [showInternal, setShowInternal] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const ws = useWorkspace();
@@ -136,9 +147,13 @@ export default function Correlations() {
 
   useEffect(() => {
     let alive = true;
+    // Deep link: span 30 days (matches Command Center) and drop the tier filter
+    // so the linked correlation is always in the list, whatever its age/tier.
+    const win = deepId ? 2592000 : 86400;
+    const tierFilter = deepId ? undefined : tier || undefined;
     const tick = async () => {
       try {
-        const r = await api.correlations(200, 86400, state || undefined, tier || undefined);
+        const r = await api.correlations(200, win, state || undefined, tierFilter);
         if (alive) setItems(r?.data ?? []);
       } catch {
         if (alive) setItems([]);
@@ -147,7 +162,7 @@ export default function Correlations() {
     tick();
     const id = setInterval(tick, 15_000);
     return () => { alive = false; clearInterval(id); };
-  }, [state, tier]);
+  }, [state, tier, deepId]);
 
   const select = (o: CorrObject) => {
     setSel(o.correlation_id);
@@ -162,20 +177,33 @@ export default function Correlations() {
     }
   };
 
-  // Deep link by id (#81 P3G): App Observability links here as
-  // #/monitoring/correlations?id=<correlation_id> to open the app's real RCA.
-  // Fires once, after the list loads and contains the target.
+  // Deep link by id (#81 P3G + UI-1): App Observability / Command Center link
+  // here as #/monitoring/correlations?id=<correlation_id> to open ONE RCA.
+  // Fires once, after the list loads and contains the target (the fetch above
+  // widens its window when deepId is set so the target is guaranteed present).
   const deepLinked = useRef(false);
   useEffect(() => {
-    if (deepLinked.current || !items.length) return;
-    const q = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
-    const id = new URLSearchParams(q).get("id");
-    if (!id) return;
-    const o = items.find((x) => x.correlation_id === id);
-    if (!o) return;
+    if (deepLinked.current || !deepId || !items.length) return;
     deepLinked.current = true;
-    select(o);
-  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
+    const o = items.find((x) => x.correlation_id === deepId);
+    if (o) {
+      select(o);
+      return;
+    }
+    // Not in the (windowed, capped) list — fetch the one object directly so the
+    // deep link always resolves to the exact RCA, then merge it in so the v1
+    // inline detail can render it too.
+    let alive = true;
+    api.correlationDetail(deepId)
+      .then((r) => {
+        const obj = r?.object;
+        if (!alive || !obj) return;
+        setItems((prev) => (prev.some((x) => x.correlation_id === obj.correlation_id) ? prev : [obj, ...prev]));
+        select(obj);
+      })
+      .catch(() => { /* unknown/forbidden id — leave the list as-is */ });
+    return () => { alive = false; };
+  }, [items, deepId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = !ws.enabled && sel ? items.find((o) => o.correlation_id === sel) : undefined;
 
