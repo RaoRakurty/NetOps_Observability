@@ -68,7 +68,7 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 ### Command Center → Action Queue (per-action correctness)
 | # | Item | Status |
 |---|------|--------|
-| UI-1 | **"Open RCA"** on an action opens the WHOLE RCA candidate list, not the corresponding correlation — must deep-link to that specific RCA. Verify across ALL severities. | ✅ `6f292fe` |
+| UI-1 | **"Open RCA"** on an action opens the WHOLE RCA candidate list, not the corresponding correlation — must deep-link to that specific RCA. Verify across ALL severities. | ✅ `6f292fe` + root-cause fix `9356c9a` (real bug = RCA list's 200-row cap; deep-link now fetches the exact object by id, list-independent) |
 | UI-2 | **"View Topology"** navigates to Inventory→Devices instead of the Topology canvas — fix to open topology (ideally focused on the incident). | ✅ `6f292fe` |
 | UI-3 | **Impacted Entities** — make them clickable so clicking shows the issue on that entity. | ✅ `6f292fe` |
 | UI-4 | **Evidence** says "correlated signal" but doesn't show WHAT — add a brief inline display of the actual signal(s). | ✅ `6f292fe` |
@@ -79,7 +79,7 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 | # | Item | Status |
 |---|------|--------|
 | UI-7 | **Home** doesn't reliably resolve to Command Center — Dashboards→Home sometimes shows Operations Overview until a refresh. Fix default route resolution (race/redirect). | ✅ `6f292fe` |
-| UI-8 | **Dashboard list** — audit each listed dashboard actually works; for working ones, convert to THIN elegant boxes (drop the sub-text, e.g. "Device Metrics" title is enough), and order them in an organized, modern way. | ✅ `eff6107` |
+| UI-8 | **Dashboard list** — audit each listed dashboard actually works; for working ones, convert to THIN elegant boxes (drop the sub-text, e.g. "Device Metrics" title is enough), and order them in an organized, modern way. | ✅ `eff6107` + `414a137` (owner: descriptions removed entirely — not even a tooltip; smaller boxes, kept 3 organized groups) |
 | UI-13 | **Inventory & Devices** — make slicker / more modern. | ⏳ |
 
 ### Reports
@@ -102,6 +102,16 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 > UI-7 routing, UI-10 modal), then the cross-cutting refactors (UI-11 table
 > kit, UI-12 explorer theme), then the visual passes (UI-8/13/9). Each lands as its
 > own commit referencing its UI-#.
+>
+> ⚠️ **Deploy gotcha (2026-06-29):** `Dockerfile.frontend` does `COPY src/frontend/dist`
+> — it ships a PRE-BUILT bundle, and `dist/` is gitignored. `tsc -b` only type-checks;
+> it does NOT regenerate `dist/`. To actually deploy a frontend change you MUST run
+> `npm run build` in `src/frontend/` FIRST, then `docker compose build frontend` +
+> `up -d --force-recreate frontend` + `restart nginx`. Source commits alone don't
+> change the running UI. (Cost a round-trip on UI-1/UI-8 — both were committed correctly
+> but the running image kept serving the morning bundle.)
+>
+> **Remaining: UI-9 (reports), UI-12 (explorer theme), UI-13 (Inventory & Devices).**
 
 ---
 
