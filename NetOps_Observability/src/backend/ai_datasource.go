@@ -31,7 +31,7 @@ func (d aiDataSource) GetProblem(_ context.Context, _ ai.Principal, id string) (
 SELECT toString(correlation_id) AS correlation_id,
        top_hypothesis, top_confidence, verdict_tier,
        evidence_missing, affected, hypotheses,
-       signal_count, node_count, owner,
+       signal_count, node_count,
        toString(created_at) AS created_at
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'
@@ -53,7 +53,6 @@ SELECT toString(correlation_id) AS correlation_id,
 		Confidence:      asFloat(r["top_confidence"]),
 		SignalCount:     int(asFloat(r["signal_count"])),
 		NodeCount:       int(asFloat(r["node_count"])),
-		Owner:           asStr(r["owner"]),
 		CreatedAt:       asStr(r["created_at"]),
 		Devices:         affectedDevices(r["affected"]),
 		MissingEvidence: jsonStrings(r["evidence_missing"]),
