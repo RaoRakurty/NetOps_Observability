@@ -58,6 +58,53 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 
 ---
 
+## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
+
+Owner queued these late on 2026-06-28→29 with "keep working, don't wait for
+approval; I'll check progress in the morning." Worked autonomously, committing
+each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progress ·
+✅ done · 🔎 needs investigation.
+
+### Command Center → Action Queue (per-action correctness)
+| # | Item | Status |
+|---|------|--------|
+| UI-1 | **"Open RCA"** on an action opens the WHOLE RCA candidate list, not the corresponding correlation — must deep-link to that specific RCA. Verify across ALL severities. | ⏳ |
+| UI-2 | **"View Topology"** navigates to Inventory→Devices instead of the Topology canvas — fix to open topology (ideally focused on the incident). | ⏳ |
+| UI-3 | **Impacted Entities** — make them clickable so clicking shows the issue on that entity. | ⏳ |
+| UI-4 | **Evidence** says "correlated signal" but doesn't show WHAT — add a brief inline display of the actual signal(s). | ⏳ |
+| UI-5 | **"Create Ticket"** button does nothing — wire it to the #78 RCA ticket-create path. | ⏳ |
+| UI-6 | **"Recommended next action / Open Ticket / Escalate"** should be clickable → take to where a ticket can be created. | ⏳ |
+
+### Shell / navigation / dashboards
+| # | Item | Status |
+|---|------|--------|
+| UI-7 | **Home** doesn't reliably resolve to Command Center — Dashboards→Home sometimes shows Operations Overview until a refresh. Fix default route resolution (race/redirect). | ⏳ |
+| UI-8 | **Dashboard list** — audit each listed dashboard actually works; for working ones, convert to THIN elegant boxes (drop the sub-text, e.g. "Device Metrics" title is enough), and order them in an organized, modern way. | ⏳ |
+| UI-13 | **Inventory & Devices** — make slicker / more modern. | ⏳ |
+
+### Reports
+| # | Item | Status |
+|---|------|--------|
+| UI-9 | **Create-a-Report templates** — modernize ALL default report templates: elegant font, font sizes matching the theme, and ensure reports use VALUABLE data. | ⏳ |
+
+### RCA Auto-ticketing
+| # | Item | Status |
+|---|------|--------|
+| UI-10 | **New incident-policy** creation → make it a popup/modal window (not inline). | ⏳ |
+
+### Cross-cutting (whole application)
+| # | Item | Status |
+|---|------|--------|
+| UI-11 | **All tables app-wide** → resizable columns (drag the border line) + sortable headers (click column header). Make every tabular surface flexible/extensible. | ⏳ |
+| UI-12 | **Explorers unify on Openflow's look** — Metrics Explorer + Logs Explorer + Openflow should share Openflow's modern font/interface theme. In Logs, the log BODY can keep a mono font (evaluate a better log-friendly font; coloring is fine). | ⏳ |
+
+> Approach: tackle the self-contained, high-value ones first (UI-1/2/5/6 wire-ups,
+> UI-7 routing, UI-10 modal), then the cross-cutting refactors (UI-11 table
+> kit, UI-12 explorer theme), then the visual passes (UI-8/13/9). Each lands as its
+> own commit referencing its UI-#.
+
+---
+
 ## ✅ Done (shipped + deployed on this branch)
 
 ### Tenancy & isolation
