@@ -865,6 +865,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/notify/contact-points/", s.handleContactPointByID)
 	mux.HandleFunc("/api/copilot/chat", s.handleCopilot)
 	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
+	// Correlix AI — application-aware NOC assistant (orchestrator + governed tools).
+	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
+	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

@@ -5,6 +5,7 @@ import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
 import RcaTopology from "../components/rca/RcaTopology";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
+import RcaAskAi from "../components/rca/RcaAskAi";
 import RcaTicketCard from "../components/rca/RcaTicketCard";
 import { buildRcaCase } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
@@ -409,6 +410,7 @@ export function CorrelationDetail({ id }: { id: string }) {
         <RcaTopology timeline={timeline} seams={seams} view={view}
           probePaths={probePaths} deviceByIp={deviceByIp} height={300} />
       }
+      aiSlot={obj.correlation_id ? <RcaAskAi correlationId={obj.correlation_id} /> : null}
       timeImpactSlot={obj.correlation_id ? <RcaTimeImpact correlationId={obj.correlation_id} /> : null}
       ticketSlot={obj.correlation_id ? <RcaTicketCard correlationId={obj.correlation_id} /> : null}
     />

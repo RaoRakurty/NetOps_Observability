@@ -139,7 +139,7 @@ function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[]
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot, timeImpactSlot, ticketSlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot, timeImpactSlot, ticketSlot, aiSlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -150,6 +150,7 @@ export default function RcaWorkspace({
   topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
+  aiSlot?: ReactNode;         // Correlix AI — grounded "Ask AI" RCA explanation card
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -217,6 +218,9 @@ export default function RcaWorkspace({
               <KeyVal rows={data.impact} />
             </div>
           </section>
+
+          {/* Correlix AI — grounded, cited "Ask AI" explanation of this RCA. */}
+          {aiSlot && <section style={{ marginBottom: 4 }}>{aiSlot}</section>}
 
           {/* RCA Time Intelligence — where this incident's time was spent. */}
           {timeImpactSlot && (

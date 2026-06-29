@@ -1442,6 +1442,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ messages, system }),
     }),
+
+  // Correlix AI — application-aware assistant. Ask a question (optionally with a
+  // context id like the open RCA's correlation_id); returns a grounded, cited
+  // answer in a typed answer-mode schema. Read-only (FEATURE_AI gated server-side).
+  aiAsk: (question: string, context?: Record<string, string>) =>
+    request<AiAnswer>("/api/ai/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, context }),
+    }),
   // (Re)issue the embedded-console gate cookie for the current session so a raw
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
   ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),
@@ -2436,4 +2445,33 @@ export type CloudIdentityMappingRow = {
   confidence: CloudConfidence;
   attribution_reason: string;
   updated_at: string;
+};
+
+// ── Correlix AI ───────────────────────────────────────────────────────────────
+export type AiCitation = { id: string; kind: string; label: string; href: string };
+export type AiProblemExplanation = {
+  problem_id: string;
+  title: string;
+  verdict: string;
+  confidence: string;
+  summary: string;
+  root_cause_hypothesis: string;
+  timeline: string[];
+  supporting_evidence: string[];
+  contradicting_evidence: string[];
+  missing_evidence: string[];
+  recommended_owner: string;
+  itsm_note: string;
+};
+export type AiNavEntry = { feature: string; ui_route: string; required_permission: string; explanation: string; related_module: string };
+export type AiAnswer = {
+  mode: string;
+  intent: string;
+  modules: string[];
+  text: string;
+  problem?: AiProblemExplanation;
+  navigation?: AiNavEntry[];
+  citations: AiCitation[];
+  disclaimers: string[];
+  provider?: string;
 };
