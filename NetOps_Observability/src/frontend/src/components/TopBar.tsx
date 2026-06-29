@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
 import { useShell } from "../context/shell";
-import { usePrefs, CHROME_PRESETS, THEME_PRESETS } from "../theme/prefs";
+import { usePrefs } from "../theme/prefs";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
 import Icon from "./Icon";
 import { Modal } from "./ui";
@@ -41,7 +41,7 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // so it behaves like a true global search, not just a log query.
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate } = useShell();
-  const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
+  const { density, setDensity } = usePrefs();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
@@ -227,32 +227,6 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
               <div className="menu-head">
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
-              </div>
-              <div className="pref-row">
-                <span className="pref-label">Theme</span>
-                <span className="pref-seg pref-seg-wrap">
-                  {THEME_PRESETS.map((t) => (
-                    <button key={t.id} className={theme === t.id ? "on" : ""} onClick={() => setTheme(t.id)}>
-                      <span className="pref-swatch" style={{ background: t.swatch }} />{t.label}
-                    </button>
-                  ))}
-                </span>
-              </div>
-              <div className="pref-row">
-                <span className="pref-label">Accent</span>
-                <span className="chrome-seg">
-                  {CHROME_PRESETS.map((c) => (
-                    <button
-                      key={c.id}
-                      className={`chrome-dot${chrome === c.id ? " on" : ""}`}
-                      style={{ ["--dot" as any]: c.swatch }}
-                      title={c.label}
-                      aria-label={`${c.label} accent`}
-                      aria-pressed={chrome === c.id}
-                      onClick={() => setChrome(c.id)}
-                    />
-                  ))}
-                </span>
               </div>
               <div className="pref-row">
                 <span className="pref-label">Density</span>

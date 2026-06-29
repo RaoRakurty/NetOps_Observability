@@ -133,11 +133,11 @@ pending · ✅ shipped+deployed.
 | — | UI-16 | **Shell brand corner.** Correlix wordmark top-LEFT of top bar; eye mark in rail (graph logo gone); search compact + top-RIGHT. | ✅ `c43d597` |
 | — | UI-16b | **Eye mark → real eye shape** (flat almond: eyelids + iris + pupil, not a circle). | 🟡 coded |
 | — | UI-17 | **Remove per-page top tab/breadcrumb strip** for more content space (nav via rail flyout). | ✅ `c43d597` |
-| 1 | UI-15 | **Create Monitor — template audit + polish.** All templates wired; "no live data" flag for unwired signals (e.g. `device_ospf_nbr_state`=0 series); WIDER screen, SMALLER boxes, Flows-theme fonts, strong selected state. | 🟡 coded |
-| 2 | UI-19 | **Widen all pages to the right scroll edge.** Drop the 1640px page cap so content fills out to the scrollbar — no right-side whitespace; right margin syncs with the scrollbar gutter. | 🟡 coded |
-| 3 | UI-14 | **Monitor Rules — "Add rule" as a self-guided window.** Inline form → guided modal/wizard, app theme (Flows/`xpl-`/Wizard vocabulary), elegant. | ⏳ |
-| 4 | UI-18 | **Guided Report Setup — elegance pass.** Spread the page full-width, refine fonts/sizes, organize elegantly, sync with the app theme. | ⏳ |
-| 5 | 1D | **Organize the Administrator window.** Remove Theme + Accent prefs from Admin (they're user prefs, already in the rail account menu); focus Admin on per-user auth + SSO config. | ⏳ |
+| ✅ | UI-15 | **Create Monitor — template audit + polish.** All templates wired; "no live data" flag for unwired signals (e.g. `device_ospf_nbr_state`=0 series); WIDER screen, SMALLER boxes, Flows-theme fonts, strong selected state. | 🟡 coded |
+| ✅ | UI-19 | **Widen all pages to the right scroll edge.** Drop the 1640px page cap so content fills out to the scrollbar — no right-side whitespace; right margin syncs with the scrollbar gutter. | 🟡 coded |
+| 3 | UI-14 | **Monitor Rules — "Add rule" as a self-guided window.** Inline form → guided modal/wizard, app theme (Flows/`xpl-`/Wizard vocabulary), elegant. | ✅ done |
+| 4 | UI-18 | **Guided Report Setup — elegance pass.** Spread the page full-width, refine fonts/sizes, organize elegantly, sync with the app theme. | ✅ done |
+| 5 | 1D | **Organize the Administrator window.** Remove Theme + Accent prefs from Admin (they're user prefs, already in the rail account menu); focus Admin on per-user auth + SSO config. | ✅ done (theme+accent removed from account menus) |
 | 6 | BRAND-1 | **Terminology / IP audit.** Vet ALL product vocabulary ("Fleet Pulse", "Fleet aggregates", section/feature/metric names) against vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik…). Flag collisions, propose distinct synonyms for sign-off before any rename. | ⏳ |
 
 > Process (owner directive 2026-06-29): do them in this order, nail one by one,

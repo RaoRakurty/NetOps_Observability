@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
-import { usePrefs, CHROME_PRESETS, THEME_PRESETS } from "../theme/prefs";
+import { usePrefs } from "../theme/prefs";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
@@ -72,7 +72,7 @@ type OpenState = { id: string; top: number } | null;
 // foot — replacing the top-right user menu.
 export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, homeRoute }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
-  const { theme, setTheme, density, setDensity, chrome, setChrome } = usePrefs();
+  const { density, setDensity } = usePrefs();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const [mfaOpen, setMfaOpen] = useState(false);
@@ -234,32 +234,6 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
               <div className="menu-head">
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
-              </div>
-              <div className="pref-row">
-                <span className="pref-label">Theme</span>
-                <span className="pref-seg pref-seg-wrap">
-                  {THEME_PRESETS.map((t) => (
-                    <button key={t.id} className={theme === t.id ? "on" : ""} onClick={() => setTheme(t.id)}>
-                      <span className="pref-swatch" style={{ background: t.swatch }} />{t.label}
-                    </button>
-                  ))}
-                </span>
-              </div>
-              <div className="pref-row">
-                <span className="pref-label">Accent</span>
-                <span className="chrome-seg">
-                  {CHROME_PRESETS.map((c) => (
-                    <button
-                      key={c.id}
-                      className={`chrome-dot${chrome === c.id ? " on" : ""}`}
-                      style={{ ["--dot" as any]: c.swatch }}
-                      title={c.label}
-                      aria-label={`${c.label} accent`}
-                      aria-pressed={chrome === c.id}
-                      onClick={() => setChrome(c.id)}
-                    />
-                  ))}
-                </span>
               </div>
               <div className="pref-row">
                 <span className="pref-label">Density</span>

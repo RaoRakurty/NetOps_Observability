@@ -573,12 +573,13 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
     finally { setBusy(false); }
   };
 
-  const cardBtn = (active: boolean): React.CSSProperties => ({ textAlign: "left", padding: 14, borderColor: active ? "var(--accent)" : undefined });
-
   return (
-    <div className="card" style={{ maxWidth: 760 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2 style={{ margin: 0 }}>Guided report setup</h2>
+    <div className="card report-wiz">
+      <div className="report-wiz-head">
+        <div>
+          <div className="report-wiz-eyebrow">Reports</div>
+          <h2 className="report-wiz-title">Guided report setup</h2>
+        </div>
         <button className="dash-btn" onClick={onCancel}>Close</button>
       </div>
       <div style={{ display: "flex", gap: 14, margin: "14px 0 18px", flexWrap: "wrap" }}>
@@ -592,13 +593,13 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
 
       {step === 0 && (
         <div>
-          <p className="mini-meta">What's the goal of this report?</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 10 }}>
+          <div className="report-wiz-q">What's the goal of this report?</div>
+          <div className="tpl-grid report-wiz-grid">
             {GOALS.map((g) => (
-              <button key={g.label} className="dash-btn" style={cardBtn(draft.kind === g.kind)} onClick={() => pickGoal(g)}>
-                <div style={{ fontSize: 22 }}>{g.icon}</div>
-                <div style={{ fontWeight: 700, marginTop: 4 }}>{g.label}</div>
-                <div className="mini-meta">{g.blurb}</div>
+              <button key={g.label} type="button" className={`tpl-card${draft.kind === g.kind ? " on" : ""}`} onClick={() => pickGoal(g)}>
+                <div className="report-wiz-goal-ic" aria-hidden>{g.icon}</div>
+                <div className="tpl-card-title"><span>{g.label}</span></div>
+                <div className="tpl-card-desc">{g.blurb}</div>
               </button>
             ))}
           </div>
@@ -607,12 +608,12 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
 
       {step === 1 && (
         <div>
-          <p className="mini-meta">Who is this report for?</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 10 }}>
+          <div className="report-wiz-q">Who is this report for?</div>
+          <div className="tpl-grid report-wiz-grid">
             {AUDIENCES.map((a) => (
-              <button key={a.label} className="dash-btn" style={cardBtn(draft.description === a.note)} onClick={() => pickAudience(a)}>
-                <div style={{ fontWeight: 700 }}>{a.label}</div>
-                <div className="mini-meta">{a.note}</div>
+              <button key={a.label} type="button" className={`tpl-card${draft.description === a.note ? " on" : ""}`} onClick={() => pickAudience(a)}>
+                <div className="tpl-card-title"><span>{a.label}</span></div>
+                <div className="tpl-card-desc">{a.note}</div>
               </button>
             ))}
           </div>
@@ -621,15 +622,15 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
 
       {step === 2 && (
         <div>
-          <p className="mini-meta">How often should it go out?</p>
+          <div className="report-wiz-q">How often should it go out?</div>
           <ScheduleControl body={draft} onChange={setDraft} />
         </div>
       )}
 
       {step === 3 && (
-        <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ display: "grid", gap: 16 }}>
           <div>
-            <p className="mini-meta">Who receives it? (contact points)</p>
+            <div className="report-wiz-q">Who receives it? (contact points)</div>
             {contactPoints.length === 0 ? (
               <span className="mini-meta">No contact points yet — add email groups in Administration → Notifications.</span>
             ) : (
@@ -642,7 +643,7 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
             )}
           </div>
           <div>
-            <p className="mini-meta">Formats</p>
+            <div className="report-wiz-q">Formats</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {FORMATS.map((f) => {
                 const on = (draft.formats ?? ["html"]).includes(f.value);
@@ -661,10 +662,15 @@ function ReportWizard({ contactPoints, onCancel, onDone }: { contactPoints: Cont
       )}
 
       {step === 4 && (
-        <div style={{ display: "grid", gap: 10 }}>
-          <input placeholder="Report name" value={name} onChange={(e) => setName(e.target.value)} />
-          <div className="mini-meta">{nlSchedule(draft)} · {(draft.formats ?? ["html"]).join(", ")} · {(draft.contact_points ?? []).length} recipient group(s)</div>
-          <div style={{ height: 360, border: "1px solid var(--panel-border)", borderRadius: 8, background: "#fff", overflow: "hidden" }}>
+        <div style={{ display: "grid", gap: 12 }}>
+          <div className="form-field" style={{ maxWidth: 420 }}>
+            <label className="form-label" htmlFor="rpt-wiz-name">Report name<span className="form-req">*</span></label>
+            <input id="rpt-wiz-name" className="form-input" placeholder="e.g. Weekly exec health" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="report-wiz-q" style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>
+            {nlSchedule(draft)} · {(draft.formats ?? ["html"]).join(", ")} · {(draft.contact_points ?? []).length} recipient group(s)
+          </div>
+          <div style={{ height: 480, border: "1px solid var(--panel-border)", borderRadius: 10, background: "#fff", overflow: "hidden" }}>
             {previewing ? <div className="empty">Rendering preview…</div> : previewHtml ? <iframe title="preview" sandbox="" srcDoc={previewHtml} style={{ width: "100%", height: "100%", border: 0 }} /> : <div className="empty">No preview</div>}
           </div>
         </div>

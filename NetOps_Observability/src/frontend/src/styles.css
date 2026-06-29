@@ -3480,6 +3480,22 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .report-launch-sub { font-size: 13px; color: var(--fg-muted); }
 .report-launch-go { font-weight: 600; font-size: 13px; color: var(--accent); white-space: nowrap; }
 
+/* Guided report setup (UI-18) — spread full-width, theme-synced type. Reuses the
+   .tpl-card vocabulary from the Monitor builder for visual consistency. */
+.report-wiz { max-width: none; }
+.report-wiz-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.report-wiz-eyebrow {
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent);
+}
+.report-wiz-title {
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  margin: 2px 0 0; font-size: 22px; font-weight: 680; letter-spacing: -0.01em;
+}
+.report-wiz-q { font-size: 13px; font-weight: 600; color: var(--fg); margin: 0 0 11px; }
+.report-wiz-grid { max-width: 980px; }
+.report-wiz-goal-ic { font-size: 22px; line-height: 1; margin-bottom: 6px; }
+
 /* Event detail inspector (Events tab — rows now clickable, #25) */
 .ev-detail-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.42); display: flex; justify-content: flex-end; }
 .ev-detail { width: min(520px, 92vw); height: 100%; overflow-y: auto; background: var(--glass-bg-strong, var(--surface)); border-left: 1px solid var(--border);
