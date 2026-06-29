@@ -80,12 +80,12 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 |---|------|--------|
 | UI-7 | **Home** doesn't reliably resolve to Command Center — Dashboards→Home sometimes shows Operations Overview until a refresh. Fix default route resolution (race/redirect). | ✅ `6f292fe` |
 | UI-8 | **Dashboard list** — audit each listed dashboard actually works; for working ones, convert to THIN elegant boxes (drop the sub-text, e.g. "Device Metrics" title is enough), and order them in an organized, modern way. | ✅ `eff6107` + `414a137` (owner: descriptions removed entirely — not even a tooltip; smaller boxes, kept 3 organized groups) |
-| UI-13 | **Inventory & Devices** — make slicker / more modern. | ⏳ |
+| UI-13 | **Inventory & Devices** — make slicker / more modern. | ✅ `(UI-13)` instrument-grade NOC header + 4-up KPI strip (Inventory/Up/Degraded/Down) + cc-panel table, refined filter chips |
 
 ### Reports
 | # | Item | Status |
 |---|------|--------|
-| UI-9 | **Create-a-Report templates** — modernize ALL default report templates: elegant font, font sizes matching the theme, and ensure reports use VALUABLE data. | ⏳ |
+| UI-9 | **Create-a-Report templates** — modernize ALL default report templates: elegant font, font sizes matching the theme, and ensure reports use VALUABLE data. | ✅ `(UI-9)` shared HTML/PDF template reworked to theme type (Inter + Space Grotesk) + navy/indigo NOC palette + tabular-num zebra tables, email-safe (no web fonts/links) |
 
 ### RCA Auto-ticketing
 | # | Item | Status |
@@ -96,7 +96,7 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 | # | Item | Status |
 |---|------|--------|
 | UI-11 | **All tables app-wide** → resizable columns (drag the border line) + sortable headers (click column header). Make every tabular surface flexible/extensible. | ✅ `f7992c3` |
-| UI-12 | **Explorers unify on Openflow's look** — Metrics Explorer + Logs Explorer + Openflow should share Openflow's modern font/interface theme. In Logs, the log BODY can keep a mono font (evaluate a better log-friendly font; coloring is fine). | ⏳ |
+| UI-12 | **Explorers unify on Openflow's look** — Metrics Explorer + Logs Explorer + Openflow should share Openflow's modern font/interface theme. In Logs, the log BODY can keep a mono font (evaluate a better log-friendly font; coloring is fine). | ✅ `(UI-12)` Metrics + Logs explorers adopt the Flows filter-bar vocabulary (xpl-head/xpl-bar/seg-mini, 12.5px mono query, btn-primary); log body keeps mono + tokenized coloring |
 
 > Approach: tackle the self-contained, high-value ones first (UI-1/2/5/6 wire-ups,
 > UI-7 routing, UI-10 modal), then the cross-cutting refactors (UI-11 table
@@ -111,7 +111,13 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 > change the running UI. (Cost a round-trip on UI-1/UI-8 — both were committed correctly
 > but the running image kept serving the morning bundle.)
 >
-> **Remaining: UI-9 (reports), UI-12 (explorer theme), UI-13 (Inventory & Devices).**
+> **✅ Punch-list COMPLETE (UI-1…UI-13 all done, 2026-06-29).** All 13 items
+> shipped + deployed on `:8000` (frontend `dist/` rebuilt, frontend + api images
+> recreated). UI-1 needed a real root-cause fix (the RCA list's 200-row cap, not
+> the time window). Deeper follow-ups if owner wants them: per-report-kind data
+> richness audit (UI-9 "VALUABLE data" — the template is modern; the queries are
+> real but could surface more), and a log-body web font (UI-12 — deferred, needs
+> a bundled font; the mono+tokenized coloring is already legible).
 
 ---
 
