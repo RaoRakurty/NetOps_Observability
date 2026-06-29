@@ -267,7 +267,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
     <>
       <div className="card">
         <div className="xpl-head">
-          <h2>Metrics Explorer</h2>
+          <h2>Metric Workbench</h2>
           <span className="xpl-sub">Pick a metric or write PromQL · queries <code>/api/metrics/query_range</code></span>
         </div>
 

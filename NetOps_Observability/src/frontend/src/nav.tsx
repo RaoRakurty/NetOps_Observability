@@ -138,7 +138,7 @@ export const NAV: NavSection[] = [
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
       { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
-      { id: "appobs", label: "App Observability", group: "Event Management", render: () => <AppObservability />, subItems: [
+      { id: "appobs", label: "Service View", group: "Event Management", render: () => <AppObservability />, subItems: [
         { id: "overview", label: "Overview" }, { id: "applications", label: "Applications" },
         { id: "attribution", label: "Attribution" }, { id: "unknowns", label: "Unknowns" },
         { id: "evidence", label: "Evidence" },
@@ -192,7 +192,7 @@ export const NAV: NavSection[] = [
       // Correlix Topology Operating Canvas (React Flow + ELK). Evidence-backed,
       // renderer-agnostic; see docs/Correlix_Topology_Operating_Canvas_Guide.
       // Now the SINGLE topology view — the legacy Device Topology Map was retired.
-      { id: "topology-canvas", label: "Topology Canvas", group: "Maps", render: () => <TopologyCanvas /> },
+      { id: "topology-canvas", label: "Topology Map", group: "Maps", render: () => <TopologyCanvas /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
       // Paths & overlays — how traffic actually traverses the network:
       // hop-by-hop active paths (Flow Trace) and overlay circuits (Tunnels).
@@ -229,7 +229,7 @@ export const NAV: NavSection[] = [
     label: "Logs",
     icon: "logs",
     children: [
-      { id: "logs", label: "Log Explorer", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
+      { id: "logs", label: "Log Search", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
     ],
   },

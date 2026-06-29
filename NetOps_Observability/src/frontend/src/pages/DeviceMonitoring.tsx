@@ -289,7 +289,7 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
   const m = rangeMinutes;
   return (
     <div className="dm-board">
-      <Group title="Fleet pulse & reachability" hue="#22C55E">
+      <Group title="Fleet vitals &amp; reachability" hue="#22C55E">
         <FleetPulse />
       </Group>
 

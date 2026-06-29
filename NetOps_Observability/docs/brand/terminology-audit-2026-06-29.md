@@ -1,6 +1,25 @@
 # Correlix — Terminology / IP Audit (BRAND-1)
 
-**Date:** 2026-06-29 · **Status:** proposal for owner sign-off (NO renames applied yet).
+**Date:** 2026-06-29 · **Status:** owner approved → recommendations APPLIED (UI strings only; route ids unchanged).
+
+## ✅ Applied 2026-06-29 (user-facing display strings; route ids/components/CSS unchanged)
+
+| Was | Now | Where |
+|---|---|---|
+| Log Explorer | **Log Search** | nav (Metrics → Logs) |
+| Metrics Explorer | **Metric Workbench** | Metrics tab heading |
+| App Observability | **Service View** | nav (Event Management) — chose this over "Application Insight" because that itself collides with **Azure Application Insights** |
+| Topology Canvas | **Topology Map** | nav (Infrastructure → Maps) |
+| Fleet pulse & reachability | **Fleet vitals & reachability** | Device Monitoring panel |
+
+**Deferred (need careful per-occurrence review — broad/internal, low demo benefit):**
+- **Watchdog** (`scripts/stack-watchdog`) — internal cron script, no UI surface; rename optional (→ Stack Sentinel) when convenient.
+- **"Canvas"** (125 code refs) / **"Pulse"** (20) / **"Fleet"** as a noun — blanket renames risk breaking component/class names; left for a deliberate pass.
+- **Time Intelligence** — already not user-facing (only code comments); UI already says "Incident Time Decomposition".
+
+---
+
+**Original proposal (for reference):**
 
 Goal: make sure Correlix's product vocabulary isn't (a) a trademarked feature
 name of another observability/network vendor, or (b) so strongly associated with
