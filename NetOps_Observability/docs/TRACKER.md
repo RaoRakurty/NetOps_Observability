@@ -127,23 +127,29 @@ Follow-ups raised during punch-list review; demo is very soon. Executed in the
 ORDER the owner provided, one at a time. **Legend:** ⏳ open · 🟡 coded, deploy
 pending · ✅ shipped+deployed.
 
-| Order | # | Item | Status |
-|---|---|------|--------|
-| — | UI-9b | **Reports — richer VALUABLE data.** Text-blob reports → real tables + rollups for every kind, live data. | ✅ `9059b51` |
-| — | UI-16 | **Shell brand corner.** Correlix wordmark top-LEFT of top bar; eye mark in rail (graph logo gone); search compact + top-RIGHT. | ✅ `c43d597` |
-| — | UI-16b | **Eye mark → real eye shape** (flat almond: eyelids + iris + pupil, not a circle). | 🟡 coded |
-| — | UI-17 | **Remove per-page top tab/breadcrumb strip** for more content space (nav via rail flyout). | ✅ `c43d597` |
-| ✅ | UI-15 | **Create Monitor — template audit + polish.** All templates wired; "no live data" flag for unwired signals (e.g. `device_ospf_nbr_state`=0 series); WIDER screen, SMALLER boxes, Flows-theme fonts, strong selected state. | 🟡 coded |
-| ✅ | UI-19 | **Widen all pages to the right scroll edge.** Drop the 1640px page cap so content fills out to the scrollbar — no right-side whitespace; right margin syncs with the scrollbar gutter. | 🟡 coded |
-| 3 | UI-14 | **Monitor Rules — "Add rule" as a self-guided window.** Inline form → guided modal/wizard, app theme (Flows/`xpl-`/Wizard vocabulary), elegant. | ✅ done |
-| 4 | UI-18 | **Guided Report Setup — elegance pass.** Spread the page full-width, refine fonts/sizes, organize elegantly, sync with the app theme. | ✅ done |
-| 5 | 1D | **Organize the Administrator window.** Remove Theme + Accent prefs from Admin (they're user prefs, already in the rail account menu); focus Admin on per-user auth + SSO config. | ✅ done (theme+accent removed from account menus) |
-| 6 | BRAND-1 | **Terminology / IP audit.** Vet ALL product vocabulary ("Fleet Pulse", "Fleet aggregates", section/feature/metric names) against vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik…). Flag collisions, propose distinct synonyms for sign-off before any rename. | ✅ audit report delivered (`docs/brand/terminology-audit-2026-06-29.md`) — awaiting owner pick before any rename |
+| # | Item | Status |
+|---|------|--------|
+| UI-9b | **Reports — richer VALUABLE data.** Text-blob reports → real tables + rollups for every kind, live data. | ✅ `9059b51` |
+| UI-16 | **Shell brand corner.** Correlix wordmark top-LEFT of top bar; eye mark in rail (graph logo gone); search compact + top-RIGHT. | ✅ `c43d597` |
+| UI-16b | **Eye mark → real eye shape** (flat almond: eyelids + iris + pupil). | ✅ `dc5c330` |
+| UI-17 | **Remove per-page top tab/breadcrumb strip** for more content space (nav via rail flyout). | ✅ `c43d597` |
+| UI-15 | **Create Monitor — template audit + polish.** Wired templates; "no live data" flag (e.g. `device_ospf_nbr_state`=0 series); wider, smaller Flows-theme boxes, strong selected state. | ✅ `dc5c330` |
+| UI-19 | **Widen all pages to the right scroll edge.** Dropped the 1640px page cap; content fills to the scrollbar. | ✅ `dc5c330` |
+| UI-14 | **Monitor Rules — "Add rule" as a self-guided window** (guided modal wizard, app theme). | ✅ `0db4684` |
+| UI-18 | **Guided Report Setup — elegance pass** (full-width, Space-Grotesk header, tpl-card grid, bigger preview). | ✅ `0db4684` |
+| 1D | **Organize the Administrator window** — Theme + Accent removed from both account popovers. | ✅ `0db4684` |
+| BRAND-1 | **Terminology / IP audit** + apply renames (Log Search, Metric Workbench, Service View, Topology Map, Fleet vitals). | ✅ audit `252754e` + renames `b21771d` |
 
-> Process (owner directive 2026-06-29): do them in this order, nail one by one,
-> deploy + verify each. UI-16b/UI-15/UI-19 are coded and ship in the next deploy
-> batch. BRAND-1 is a research+report deliverable — no renames until owner approves
-> the proposed words.
+### ⏳ TO BE WORKED (open)
+
+| # | Item | Status |
+|---|------|--------|
+| UI-20 | **Per-user + per-SSO appearance (DEFERRED — after demo).** Admin sets an INITIAL theme/accent at user creation (user can still change it → needs a user-facing Preferences control re-added, NOT the admin account menu). SSO: ONE default theme/accent per IdP/SSO config, applied to users it provisions. Full-stack: User model fields (Theme/Accent) on file+PG stores → createUser/updateUser → whoami/claims → Create-User dialog + SSO config pickers → apply-on-login in usePrefs. Design Qs answered 2026-06-29. | ⏳ deferred |
+| BRAND-1b | **Deferred terminology renames** (optional): internal `Watchdog` script → Stack Sentinel; deliberate per-occurrence pass on bulk `Canvas`/`Pulse`/`Fleet` code refs (blanket sweep unsafe — would hit component/class names). | ⏳ optional |
+
+> Process (owner directive 2026-06-29): tasks done in provided order, nailed one by
+> one, deployed + verified. Demo-prep batch COMPLETE; only UI-20 (deferred to
+> post-demo) + optional BRAND-1b remain.
 
 ## ✅ Done (shipped + deployed on this branch)
 
