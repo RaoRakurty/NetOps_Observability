@@ -123,22 +123,27 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 
 ## 🎬 Owner demo-prep tasks (queued 2026-06-29 — demo imminent)
 
-Follow-ups raised during punch-list review; demo is very soon, so these are
-high-priority. **Legend:** ⏳ open · 🟡 in progress · ✅ done.
+Follow-ups raised during punch-list review; demo is very soon. Executed in the
+ORDER the owner provided, one at a time. **Legend:** ⏳ open · 🟡 coded, deploy
+pending · ✅ shipped+deployed.
 
-| # | Item | Status |
-|---|------|--------|
-| UI-9b | **Reports — richer VALUABLE data.** Turn the text-blob reports into real tables + add rollups for every report kind, all backed by live stores. | ✅ `9059b51` — device_util & latency now real tables; +fleet-status/by-vendor/by-type (inventory), exec summary (health), top-rules+device+age (alerts), latency/jitter (WAN), top-affected-devices (security). Verified rendering all 7 kinds on live data. |
-| UI-14 | **Monitors → Monitor Rules — "Add rule" as a self-guided wizard.** Convert the inline Add-rule form into a guided modal/wizard window, in sync with the app theme: modern fonts, elegant structure (match the Flows/`xpl-`/Wizard vocabulary). | ⏳ |
-| UI-15 | **Monitors → Create Monitor (New Monitor) — template audit + polish.** Review ALL default signal templates; ensure every one is WIRED (some appear to do nothing on click) and backed by telemetry the stack actually collects (note: `device_ospf_nbr_state` has 0 live series; others OK). Add meaningful templates. Make the screen WIDER, the template boxes SMALLER, and fonts elegant — match the Flows theme. Stronger selected-state feedback. | ⏳ |
-| BRAND-1 | **Terminology / IP audit — avoid mimicking market vendors.** Deep investigation of ALL product vocabulary (e.g. "Fleet Pulse", "Fleet aggregates", section/feature/metric names) against observability vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik, …). Flag any term that collides with a vendor's product/trademark, compile a matching list, and PROPOSE distinct synonyms for owner sign-off before any rename. | ⏳ |
-| UI-16 | **Shell top-left brand corner.** Correlix wordmark TOP-LEFT of the top bar; eye-in-O mark in the rail (graph logo removed); search compact + TOP-RIGHT. | ✅ done |
-| 1D | **Organize the Administrator window.** Remove the Theme + Accent preference controls from the Admin window (they're user prefs, already in the rail account menu). The Admin area should focus on where we configure authentication per-user and SSO. | ⏳ |
-| UI-17 | **Remove the per-page top tab/breadcrumb strip** (`.main-head` / SubNav) for more content space. Sub-views remain reachable via the rail hover-flyout (same children). Reversible (one CSS rule). | ✅ done |
+| Order | # | Item | Status |
+|---|---|------|--------|
+| — | UI-9b | **Reports — richer VALUABLE data.** Text-blob reports → real tables + rollups for every kind, live data. | ✅ `9059b51` |
+| — | UI-16 | **Shell brand corner.** Correlix wordmark top-LEFT of top bar; eye mark in rail (graph logo gone); search compact + top-RIGHT. | ✅ `c43d597` |
+| — | UI-16b | **Eye mark → real eye shape** (flat almond: eyelids + iris + pupil, not a circle). | 🟡 coded |
+| — | UI-17 | **Remove per-page top tab/breadcrumb strip** for more content space (nav via rail flyout). | ✅ `c43d597` |
+| 1 | UI-15 | **Create Monitor — template audit + polish.** All templates wired; "no live data" flag for unwired signals (e.g. `device_ospf_nbr_state`=0 series); WIDER screen, SMALLER boxes, Flows-theme fonts, strong selected state. | 🟡 coded |
+| 2 | UI-19 | **Widen all pages to the right scroll edge.** Drop the 1640px page cap so content fills out to the scrollbar — no right-side whitespace; right margin syncs with the scrollbar gutter. | 🟡 coded |
+| 3 | UI-14 | **Monitor Rules — "Add rule" as a self-guided window.** Inline form → guided modal/wizard, app theme (Flows/`xpl-`/Wizard vocabulary), elegant. | ⏳ |
+| 4 | UI-18 | **Guided Report Setup — elegance pass.** Spread the page full-width, refine fonts/sizes, organize elegantly, sync with the app theme. | ⏳ |
+| 5 | 1D | **Organize the Administrator window.** Remove Theme + Accent prefs from Admin (they're user prefs, already in the rail account menu); focus Admin on per-user auth + SSO config. | ⏳ |
+| 6 | BRAND-1 | **Terminology / IP audit.** Vet ALL product vocabulary ("Fleet Pulse", "Fleet aggregates", section/feature/metric names) against vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik…). Flag collisions, propose distinct synonyms for sign-off before any rename. | ⏳ |
 
-> Approach: UI-15 + UI-14 share the Monitors area and the same theme target — do
-> them together. BRAND-1 is a research+report deliverable (no renames until owner
-> approves the proposed words).
+> Process (owner directive 2026-06-29): do them in this order, nail one by one,
+> deploy + verify each. UI-16b/UI-15/UI-19 are coded and ship in the next deploy
+> batch. BRAND-1 is a research+report deliverable — no renames until owner approves
+> the proposed words.
 
 ## ✅ Done (shipped + deployed on this branch)
 

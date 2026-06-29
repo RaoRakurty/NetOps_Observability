@@ -51,6 +51,16 @@ const TEMPLATES: Template[] = [
 
 const CATEGORIES = [...new Set(TEMPLATES.map((t) => t.category))];
 
+// Underlying metric each template watches — used to flag a template whose signal
+// the stack isn't currently collecting (so "nothing happens" is explained, not a
+// silent dead end). Custom has no fixed base.
+const BASE_METRIC: Record<string, string> = {
+  unreachable: "collector_target_up", ifdown: "device_if_oper_status", flap: "device_if_oper_status",
+  cpu: "device_cpu_percent", mem: "device_mem_percent", iferr: "device_if_in_errors",
+  ifdisc: "device_if_in_discards", ifutil: "device_if_in_octets", bgp: "device_bgp_peer_state",
+  ospf: "device_ospf_nbr_state", rtt: "probe_rtt_ms", loss: "probe_loss_pct",
+};
+
 // buildExpr renders a template's placeholders. The device scope becomes a
 // PromQL label matcher; quotes/backslashes are stripped so a pasted value
 // can't break out of the selector string.
@@ -70,6 +80,15 @@ export default function NewMonitor() {
   const [name, setName] = useState("");
   const [customExpr, setCustomExpr] = useState("");
   const [created, setCreated] = useState<Rule | null>(null);
+  // Live metric catalog — lets us flag templates whose base signal isn't flowing.
+  const [metricNames, setMetricNames] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    api.metricNames().then((r) => setMetricNames(new Set(r?.data ?? []))).catch(() => {});
+  }, []);
+  const hasLiveData = (t: Template): boolean => {
+    const base = BASE_METRIC[t.id];
+    return !base || metricNames.size === 0 || metricNames.has(base);
+  };
 
   const pick = (t: Template) => {
     setTpl(t);
@@ -84,7 +103,7 @@ export default function NewMonitor() {
 
   if (created) {
     return (
-      <div className="card form-card">
+      <div className="card form-card form-card-wide">
         <div className="form-head">
           <span className="form-head-icon"><Icon name="check" size={18} /></span>
           <div>
@@ -104,7 +123,7 @@ export default function NewMonitor() {
   }
 
   return (
-    <div className="card form-card">
+    <div className="card form-card form-card-wide">
       <div className="form-head">
         <span className="form-head-icon"><Icon name="alerts" size={18} /></span>
         <div>
@@ -124,25 +143,33 @@ export default function NewMonitor() {
             render: () => (
               <div>
                 {CATEGORIES.map((cat) => (
-                  <div key={cat} style={{ marginBottom: 10 }}>
-                    <div className="mini-meta" style={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, margin: "0 0 6px" }}>{cat}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 8 }}>
-                      {TEMPLATES.filter((t) => t.category === cat).map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() => pick(t)}
-                          className="panel"
-                          style={{
-                            textAlign: "left", cursor: "pointer", padding: "10px 12px",
-                            border: tpl?.id === t.id ? "1.5px solid var(--accent)" : "1px solid var(--panel-border, #e2e6ee)",
-                            background: tpl?.id === t.id ? "color-mix(in srgb, var(--accent) 7%, transparent)" : undefined,
-                          }}
-                        >
-                          <div style={{ fontWeight: 700, fontSize: 13 }}>{t.title}</div>
-                          <div className="mini-meta" style={{ margin: "3px 0 0" }}>{t.desc}</div>
-                        </button>
-                      ))}
+                  <div key={cat} className="tpl-cat">
+                    <div className="tpl-cat-label">{cat}</div>
+                    <div className="tpl-grid">
+                      {TEMPLATES.filter((t) => t.category === cat).map((t) => {
+                        const sel = tpl?.id === t.id;
+                        const live = hasLiveData(t);
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => pick(t)}
+                            className={`tpl-card${sel ? " on" : ""}`}
+                            aria-pressed={sel}
+                          >
+                            <div className="tpl-card-title">
+                              <span>{t.title}</span>
+                              {sel && <span className="tpl-card-check"><Icon name="check" size={13} /></span>}
+                            </div>
+                            <div className="tpl-card-desc">{t.desc}</div>
+                            {!live && (
+                              <span className="tpl-card-nodata" title="No matching telemetry is arriving yet — the monitor is valid, but won't fire until this signal is collected.">
+                                no live data
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}

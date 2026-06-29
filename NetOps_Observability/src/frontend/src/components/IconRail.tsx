@@ -165,10 +165,20 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         title={BRAND}
         aria-label={BRAND}
       >
-        {/* Eye-in-O brand mark (placeholder for the final logo): a ring with an
-            iris/pupil so it reads as an eye. The "Correlix" wordmark lives in the
-            top bar (UI-16); the rail carries just this mark. */}
-        <span className="brand-eye" aria-hidden="true" />
+        {/* Eye brand mark (placeholder for the final logo): a flat almond eye —
+            eyelids (the outline), an iris ring and a pupil. The "Correlix"
+            wordmark lives in the top bar (UI-16); the rail carries just this mark. */}
+        <span className="brand-eye" aria-hidden="true">
+          <svg viewBox="0 0 28 28" width="26" height="26" fill="none">
+            {/* Eyelids — symmetric almond/lens */}
+            <path d="M2 14 C 7 6.5, 21 6.5, 26 14 C 21 21.5, 7 21.5, 2 14 Z"
+              stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+            {/* Iris ring */}
+            <circle cx="14" cy="14" r="4.2" stroke="currentColor" strokeWidth="1.8" />
+            {/* Pupil */}
+            <circle cx="14" cy="14" r="1.7" fill="currentColor" />
+          </svg>
+        </span>
         <span className="rail-brand-name">{BRAND}</span>
       </button>
 
