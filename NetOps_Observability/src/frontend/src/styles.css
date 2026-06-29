@@ -2933,6 +2933,37 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .seg-mini button:hover { background: var(--surface-2); color: var(--fg); }
 .seg-mini button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
+/* ── Unified Explorer chrome (UI-12) — Metrics Explorer + Logs Explorer share
+   the Flows ("Openflow") filter-bar look: compact, refined controls and a panel
+   header, instead of raw default inputs under a big card heading. ─────────── */
+.xpl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.xpl-head h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+.xpl-head .xpl-sub { color: var(--muted); font-size: 12px; }
+.xpl-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.xpl-bar input, .xpl-bar select {
+  padding: 6px 9px; font-size: 12.5px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--fg);
+}
+.xpl-bar input:focus, .xpl-bar select:focus { outline: none; border-color: var(--accent); }
+.xpl-bar .xpl-q { flex: 1 1 280px; min-width: 200px; font-family: var(--font-mono); font-size: 12.5px; }
+.xpl-bar .btn-primary {
+  padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: var(--accent); color: #fff;
+}
+.xpl-bar .btn-primary:hover { filter: brightness(1.06); }
+.xpl-bar .btn-primary:disabled { opacity: .6; cursor: default; filter: none; }
+.xpl-bar .btn-ghost {
+  padding: 6px 12px; font-size: 12.5px; cursor: pointer; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted);
+}
+.xpl-bar .btn-ghost:hover { color: var(--fg); border-color: var(--border-strong); }
+.xpl-hint { color: var(--muted); font-size: 12px; margin: 8px 2px 0; }
+.xpl-picks { display: flex; flex-direction: column; gap: 7px; margin-bottom: 11px; }
+.xpl-pick-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.xpl-pick-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; min-width: 124px; }
+.xpl-query-title { margin: 0; font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--fg); }
+
 /* ============================================================================
    Device Monitoring — fleet board (collapsible section groups + panels)
    ========================================================================== */

@@ -266,19 +266,16 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
   return (
     <>
       <div className="card">
-        <h2>Metrics Explorer</h2>
-        <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-          Pick a metric below or write PromQL. Charts query <code>/api/metrics/query_range</code> and
-          follow the global time range.
-        </p>
+        <div className="xpl-head">
+          <h2>Metrics Explorer</h2>
+          <span className="xpl-sub">Pick a metric or write PromQL · queries <code>/api/metrics/query_range</code></span>
+        </div>
 
-        {/* reference-grade categorized quick-picks of real telemetry. */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+        {/* categorized quick-picks of real telemetry. */}
+        <div className="xpl-picks">
           {groups.map((g) => (
-            <div key={g.group} style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, minWidth: 130 }}>
-                {g.group}
-              </span>
+            <div key={g.group} className="xpl-pick-row">
+              <span className="xpl-pick-label">{g.group}</span>
               {g.items.map((it) => {
                 const active = query === it.q;
                 return (
@@ -297,39 +294,33 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
           ))}
         </div>
 
-        <form
-          onSubmit={(e) => { e.preventDefault(); run(); }}
-          style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 8 }}
-        >
+        <form className="xpl-bar" onSubmit={(e) => { e.preventDefault(); run(); }}>
           <MetricPicker
             names={names}
             onPick={(n) => { setQuery(n); run(n, rangeMinutes, unitFor(n)); }}
           />
           <input
+            className="xpl-q"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="PromQL, e.g. rate(device_if_in_octets[5m]) * 8"
-            style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
           />
-          <button disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
-          <button
-            type="button"
-            onClick={() => setLive((l) => !l)}
-            className={live ? "chip chip-active" : "chip"}
-            title="Stream the chart live (refresh every 5s)"
-          >
-            {live ? "● Live" : "○ Live"}
-          </button>
+          <button className="btn-primary" disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
+          <div className="seg-mini" role="group" aria-label="Live streaming">
+            <button type="button" className={live ? "on" : ""} onClick={() => setLive((l) => !l)} title="Stream the chart live (refresh every 5s)">
+              {live ? "● Live" : "○ Live"}
+            </button>
+          </div>
         </form>
         {error && (
-          <p style={{ color: "var(--bad)", marginTop: 12 }}>
+          <p style={{ color: "var(--bad)", marginTop: 10, fontSize: 13 }}>
             <strong>Error:</strong> {error}
           </p>
         )}
       </div>
 
       <div className="card">
-        <h2 style={{ fontFamily: "var(--font-mono)", fontSize: 14 }}>{query}</h2>
+        <h2 className="xpl-query-title">{query}</h2>
         {series.length === 0 ? (
           <div className="empty">
             {busy ? "Loading…" : (

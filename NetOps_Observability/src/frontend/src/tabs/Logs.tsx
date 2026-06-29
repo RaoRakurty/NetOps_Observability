@@ -299,25 +299,18 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   return (
     <>
       <div className="card">
-        <h2>Log search (OpenSearch)</h2>
-        <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-          Lucene <code>query_string</code> syntax. Examples:{" "}
-          <code>severity:err AND host:router-01</code>,{" "}
-          <code>level:error</code>,{" "}
-          <code>src_addr:10.0.0.5 AND dst_port:22</code>.
-        </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            run();
-          }}
-          style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto auto", gap: 8 }}
-        >
+        <div className="xpl-head">
+          <h2>Log search</h2>
+          <span className="xpl-sub">
+            Lucene <code>query_string</code> · e.g. <code>level:error</code>, <code>src_addr:10.0.0.5 AND dst_port:22</code>
+          </span>
+        </div>
+        <form className="xpl-bar" onSubmit={(e) => { e.preventDefault(); run(); }}>
           <input
+            className="xpl-q"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder='*  or  level:error  or  src_addr:10.0.0.5'
-            style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
           />
           <select value={signal} onChange={(e) => setSignal(e.target.value as any)}>
             {signals.map((s) => (
@@ -342,15 +335,15 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
               </option>
             ))}
           </select>
-          <button disabled={busy} type="submit">
+          <button className="btn-primary" disabled={busy} type="submit">
             {busy ? "Searching…" : "Search"}
           </button>
-          <button type="button" onClick={saveSearch} title="Save this search">
+          <button className="btn-ghost" type="button" onClick={saveSearch} title="Save this search">
             ★ Save
           </button>
         </form>
         {error && (
-          <p style={{ color: "var(--bad)", marginTop: 12 }}>
+          <p style={{ color: "var(--bad)", marginTop: 10, fontSize: 13 }}>
             <strong>Error:</strong> {error}
           </p>
         )}
