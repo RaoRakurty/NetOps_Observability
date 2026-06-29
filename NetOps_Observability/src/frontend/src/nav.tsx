@@ -98,7 +98,13 @@ export const NAV: NavSection[] = [
     label: "Dashboards",
     icon: "dashboards",
     children: [
-      { id: "home", label: "Home", render: () => <FrontPage /> },
+      // Home IS the operational control plane (Command Center) — consistently, on
+      // first load, in-app navigation, and refresh alike. Previously Home rendered
+      // the Operations Overview while a configured default-landing redirected to
+      // Command Center only on reload, so Home flipped between the two (UI-7).
+      // Operations Overview keeps its own leaf below.
+      { id: "home", label: "Home", render: () => <CommandCenter /> },
+      { id: "operations", label: "Operations Overview", render: () => <FrontPage /> },
       { id: "board", label: "My Dashboard", render: () => <Dashboard /> },
       {
         id: "list",

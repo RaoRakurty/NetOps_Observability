@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { api, Incident, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel } from "../components/rca/labels";
 import {
@@ -111,20 +111,91 @@ function QueueRow({ it, expanded, onToggle }: { it: ActionItem; expanded: boolea
   );
 }
 
+// Deep-links — the Action Queue is a launch pad, so every affordance jumps to the
+// exact place that resolves it (never a bare list/section).
+const rcaHref = (corrId: string) => `#/monitoring/correlations?id=${encodeURIComponent(corrId)}`;
+// Topology Canvas leaf is infrastructure/topology-canvas; the old infrastructure/
+// topology route does not exist and silently fell back to Inventory→Devices.
+const topoHref = (focus?: string) =>
+  `#/infrastructure/topology-canvas${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+
+// CreateTicketButton enqueues a ServiceNow incident for this correlation (#78),
+// permission-gated (infrastructure:write). Without write it deep-links to the RCA
+// detail where the ticket card explains status. The action is enqueued, not
+// synchronous — the outbox worker opens it shortly.
+function CreateTicketButton({ corrId, label = "Create ticket", cls = "cc-btn cc-btn-warn" }: { corrId: string; label?: string; cls?: string }) {
+  const [canWrite, setCanWrite] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.permissions()
+      .then((p) => { if (live) setCanWrite((p.permissions?.infrastructure ?? 0) >= 2); })
+      .catch(() => { if (live) setCanWrite(false); });
+    return () => { live = false; };
+  }, []);
+  const create = async (e: MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true); setMsg("");
+    try {
+      await api.correlationTicketCreate(corrId);
+      setMsg("Ticket creation queued ✓ — the worker will open it shortly.");
+    } catch (err) {
+      setMsg(`Could not queue: ${String((err as Error)?.message ?? err)}`);
+    } finally { setBusy(false); }
+  };
+  if (canWrite === false) {
+    return <a className={cls} href={rcaHref(corrId)} onClick={(e) => e.stopPropagation()}>Open ticket…</a>;
+  }
+  return (
+    <span className="cc-ticket-cta">
+      <button className={cls} type="button" disabled={busy || canWrite === null} onClick={create}>
+        {busy ? "Queuing…" : label}
+      </button>
+      {msg && <span className="cc-ticket-msg">{msg}</span>}
+    </span>
+  );
+}
+
 function ExpandPanel({ it }: { it: ActionItem }) {
   const c = it.corr;
   const devs = [...new Set([...it.affected.devices, ...it.affected.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))])].filter(Boolean);
+  // Evidence brief (UI-4): lazily pull the same RCA path view the detail renders and
+  // surface WHAT correlated — the lead human reason — not just a signal count.
+  const [ev, setEv] = useState<{ reason: string; domains: string[] } | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.rcaPathView(c.correlation_id)
+      .then((v) => {
+        if (!live) return;
+        const edges = v.path?.edges ?? [];
+        const reason = (v.summary && v.summary.trim()) || (v.title && v.title.trim()) || "";
+        const domains = [...new Set(edges.map((e) => e.label).filter((l): l is string => !!l && !!l.trim()))].slice(0, 4);
+        setEv({ reason, domains });
+      })
+      .catch(() => { if (live) setEv({ reason: "", domains: [] }); });
+    return () => { live = false; };
+  }, [c.correlation_id]);
+  const ticketCTA = it.ticket === "Ticket needed" || /ticket|escalat/i.test(it.nextAction);
   return (
     <div className="cc-expand">
       <div className="cc-expand-grid">
         <div>
           <h5 className="cc-eh">Impacted entities</h5>
-          {devs.length ? <div className="cc-chips">{devs.slice(0, 12).map((d) => <span key={d} className="cc-pill cc-mono">{entityLabel(d)}</span>)}</div>
+          {devs.length ? <div className="cc-chips">{devs.slice(0, 12).map((d) => (
+            <a key={d} className="cc-pill cc-mono cc-pill-link" href={topoHref(d)}
+              title={`Show ${entityLabel(d)} on the topology canvas`} onClick={(e) => e.stopPropagation()}>{entityLabel(d)}</a>
+          ))}</div>
             : <p className="cc-dim">Blast radius pending topology mapping.</p>}
         </div>
         <div>
           <h5 className="cc-eh">Evidence</h5>
           <p className="cc-dim">{c.signal_count} correlated signal{c.signal_count > 1 ? "s" : ""} across {c.node_count} node{c.node_count > 1 ? "s" : ""}.</p>
+          {ev === null
+            ? <p className="cc-dim">Reading correlated evidence…</p>
+            : ev.reason
+              ? <p className="cc-evtext">{ev.reason}{ev.domains.length ? <> <span className="cc-dim">— {ev.domains.join(", ")}</span></> : null}</p>
+              : null}
           {it.missing.length > 0
             ? <div className="cc-chips">{it.missing.map((m) => <span key={m} className="cc-pill cc-miss">missing: {m}</span>)}</div>
             : <p className="cc-ok">All expected evidence streams present.</p>}
@@ -139,13 +210,14 @@ function ExpandPanel({ it }: { it: ActionItem }) {
                 ? "Customer impact confirmed by correlated evidence. Eligible for ticketing and escalation."
                 : "Correlated group still gathering evidence."}
           </p>
+          {ticketCTA && <div style={{ marginTop: 8 }}><CreateTicketButton corrId={c.correlation_id} label="Open ticket" cls="cc-btn cc-btn-warn" /></div>}
         </div>
       </div>
       <div className="cc-actions">
-        <a className="cc-btn cc-btn-primary" href={`#/monitoring/correlations`}>Open RCA</a>
-        <a className="cc-btn" href="#/infrastructure/topology">View topology</a>
-        {it.owner === "Missing" && <button className="cc-btn" type="button">Assign owner</button>}
-        {it.ticket === "Ticket needed" && <button className="cc-btn cc-btn-warn" type="button">Create ticket</button>}
+        <a className="cc-btn cc-btn-primary" href={rcaHref(c.correlation_id)}>Open RCA</a>
+        <a className="cc-btn" href={topoHref(devs[0])}>View topology</a>
+        {it.owner === "Missing" && <a className="cc-btn" href={rcaHref(c.correlation_id)}>Assign owner</a>}
+        {it.ticket === "Ticket needed" && <CreateTicketButton corrId={c.correlation_id} />}
       </div>
     </div>
   );

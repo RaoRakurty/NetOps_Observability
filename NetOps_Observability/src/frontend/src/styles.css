@@ -3352,6 +3352,14 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .cc-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cc-btn-primary { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .cc-btn-warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); color: var(--warn); }
+/* Clickable impacted-entity pill → topology canvas (UI-3). */
+.cc-pill-link { cursor: pointer; text-decoration: none; transition: border-color .12s, color .12s; }
+.cc-pill-link:hover { border-color: var(--accent); color: var(--accent); }
+/* Inline ticket-create CTA in the Action Queue (UI-5/UI-6). */
+.cc-ticket-cta { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cc-ticket-msg { font-size: 11.5px; color: var(--fg-muted); }
+/* Evidence brief — the lead human reason (UI-4). */
+.cc-evtext { font-size: 12px; color: var(--fg); margin: 4px 0 6px; line-height: 1.45; }
 
 /* Reports — self-guided launcher box (clickable card → guided wizard). #19 */
 .report-launch { display: flex; align-items: center; gap: 16px; width: 100%; text-align: left; cursor: pointer;
