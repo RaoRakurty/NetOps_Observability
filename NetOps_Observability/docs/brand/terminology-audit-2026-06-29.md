@@ -9,7 +9,7 @@
 | Log Explorer | **Log Search** | nav (Metrics → Logs) |
 | Metrics Explorer | **Metric Workbench** | Metrics tab heading |
 | App Observability | **Service View** | nav (Event Management) — chose this over "Application Insight" because that itself collides with **Azure Application Insights** |
-| Topology Canvas | **Topology Map** | nav (Infrastructure → Maps) |
+| Topology Canvas | **Topo** | nav (Infrastructure → Maps) — coined short form (owner-picked); replaced interim "Topology Map" |
 | Fleet pulse & reachability | **Fleet vitals & reachability** | Device Monitoring panel |
 
 **Deferred (need careful per-occurrence review — broad/internal, low demo benefit):**

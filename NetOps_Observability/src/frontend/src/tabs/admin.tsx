@@ -42,7 +42,7 @@ export const LANDING_OPTIONS: { route: string; label: string }[] = [
   { route: "#/dashboards/home", label: "Dashboards · Home" },
   { route: "#/monitoring/correlations", label: "Correlations" },
   { route: "#/monitoring/incidents", label: "Incidents" },
-  { route: "#/infrastructure/topology-canvas", label: "Topology Canvas" },
+  { route: "#/infrastructure/topology-canvas", label: "Topo" },
 ];
 
 function useReload<T>(loader: () => Promise<T>): [T | undefined, string | null, () => void, (e: string | null) => void] {
