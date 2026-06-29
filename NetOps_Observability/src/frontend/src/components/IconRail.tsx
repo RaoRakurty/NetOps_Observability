@@ -165,9 +165,10 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         title={BRAND}
         aria-label={BRAND}
       >
-        <span className="rail-brand-mark">
-          <Icon name="logo" size={22} />
-        </span>
+        {/* Eye-in-O brand mark (placeholder for the final logo): a ring with an
+            iris/pupil so it reads as an eye. The "Correlix" wordmark lives in the
+            top bar (UI-16); the rail carries just this mark. */}
+        <span className="brand-eye" aria-hidden="true" />
         <span className="rail-brand-name">{BRAND}</span>
       </button>
 

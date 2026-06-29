@@ -7,6 +7,7 @@ import Icon from "./Icon";
 import { Modal } from "./ui";
 import MfaCard from "./MfaCard";
 import ScopeSelector from "./ScopeSelector";
+import { BRAND } from "../brand";
 
 type Props = {
   health: Health | null;
@@ -134,42 +135,51 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
 
   return (
     <header className="topbar">
-      <form className="omni" onSubmit={submitSearch} ref={omniRef}>
-        <span className="omni-icon"><Icon name="search" size={15} /></span>
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onFocus={() => results.length && setOpen(true)}
-          onKeyDown={onKeyDown}
-          placeholder="Search logs, devices, alerts, saved…"
-          spellCheck={false}
-        />
-        <kbd className="omni-kbd" title="Command palette">⌘K</kbd>
-        {open && results.length > 0 && (
-          <div className="omni-pop">
-            {results.map((g, i) => (
-              <button
-                type="button"
-                key={`${g.kind}:${g.id}:${i}`}
-                className={`omni-item${i === active ? " active" : ""}`}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => choose(g)}
-              >
-                <span className={`omni-kind k-${g.kind}`}>
-                  <Icon name={KIND_ICON[g.kind]} size={13} />
-                </span>
-                <span className="omni-text">
-                  <span className="omni-title">{g.title}</span>
-                  {g.sub && <span className="omni-sub">{g.sub}</span>}
-                </span>
-                <span className="omni-tag">{KIND_LABEL[g.kind]}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </form>
+      <button
+        className="topbar-brand"
+        type="button"
+        onClick={() => navigate("dashboards/home")}
+        title={BRAND}
+        aria-label={`${BRAND} — home`}
+      >
+        {BRAND}
+      </button>
 
       <div className="topbar-right">
+        <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
+          <span className="omni-icon"><Icon name="search" size={14} /></span>
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => results.length && setOpen(true)}
+            onKeyDown={onKeyDown}
+            placeholder="Search…"
+            spellCheck={false}
+          />
+          <kbd className="omni-kbd" title="Command palette">⌘K</kbd>
+          {open && results.length > 0 && (
+            <div className="omni-pop">
+              {results.map((g, i) => (
+                <button
+                  type="button"
+                  key={`${g.kind}:${g.id}:${i}`}
+                  className={`omni-item${i === active ? " active" : ""}`}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => choose(g)}
+                >
+                  <span className={`omni-kind k-${g.kind}`}>
+                    <Icon name={KIND_ICON[g.kind]} size={13} />
+                  </span>
+                  <span className="omni-text">
+                    <span className="omni-title">{g.title}</span>
+                    {g.sub && <span className="omni-sub">{g.sub}</span>}
+                  </span>
+                  <span className="omni-tag">{KIND_LABEL[g.kind]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </form>
         <ScopeSelector />
         <select
           className="range-picker"

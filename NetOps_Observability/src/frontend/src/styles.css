@@ -455,6 +455,10 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   padding: var(--sp-2) var(--sp-5) 0 64px;
   background: var(--rail-bg); border-bottom: 1px solid var(--rail-border);
 }
+/* Per-page top tab/breadcrumb strip removed (owner request) to reclaim vertical
+   space — sub-views are reached via the rail's hover flyout, which renders the
+   same section children. Revert by removing this one rule. */
+.shell-v2 .main-head { display: none; }
 .shell-v2 .crumbs { display: none; }
 .shell-v2 .subnav { margin-top: 2px; }
 .shell-v2 .subnav button {
@@ -1097,6 +1101,40 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+/* ── Brand corner (UI-16) — Correlix wordmark in the top bar's top-left; the
+   eye-in-O mark lives in the rail. Search bar is compact + sits top-right. ── */
+.topbar-brand {
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 19px; font-weight: 700; letter-spacing: -0.015em;
+  color: var(--fg); background: transparent; border: 0; cursor: pointer;
+  padding: 0 2px; line-height: 1; white-space: nowrap;
+  transition: color .12s ease, opacity .12s ease;
+}
+.topbar-brand:hover { color: var(--accent); }
+.topbar-brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+/* On the v2 dark-glass top bar the wordmark reads light, with the accent eye-dot. */
+.shell-v2 .topbar-brand { color: var(--rail-fg); }
+
+/* Eye-in-O brand mark — a ring with a centered pupil (placeholder for the final
+   logo). Used in the rail; swap the element for the real asset when ready. */
+.brand-eye {
+  width: 23px; height: 23px; border-radius: 50%;
+  border: 2.5px solid var(--rail-accent); position: relative;
+  display: inline-block; flex: none;
+}
+.brand-eye::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--rail-accent); transform: translate(-50%, -50%);
+}
+
+/* Compact search — thinner bar, fixed width, parked in the top-right cluster
+   (no longer flex-grows across the bar). */
+.omni-compact { flex: 0 1 240px; max-width: 240px; }
+.shell-v2 .omni.omni-compact { height: 28px; max-width: 240px; }
+.omni-compact input { padding: 6px 0; font-size: 12.5px; }
+.omni-compact .omni-pop { left: auto; right: 0; min-width: 340px; }
 .range-picker {
   background: var(--bg); color: var(--fg); border: 1px solid var(--panel-border);
   border-radius: 8px; padding: 6px 8px; font-size: 12px;
