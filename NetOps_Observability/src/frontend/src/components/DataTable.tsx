@@ -80,7 +80,7 @@ export default function DataTable<T>({
   rowActions,
   empty,
   ariaLabel,
-  resizable = false,
+  resizable = true,
 }: DataTableProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -220,17 +220,21 @@ export default function DataTable<T>({
       <div className="dtv-head" role="row" style={{ gridTemplateColumns: template }}>
         {columns.map((c) => {
           const sorted = sort?.key === c.key;
+          // A column is sortable if it opted in, OR (default) if it declares a
+          // sort/text accessor — so any data column is click-to-sort without per-
+          // call boilerplate, while render-only columns (dots, actions) stay inert.
+          const sortable = c.sortable ?? (c.sortValue != null || c.text != null);
           return (
             <div
               key={c.key}
               role="columnheader"
               aria-sort={sorted ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined}
-              className={`dtv-th${c.sortable ? " sortable" : ""}${sorted ? " sorted" : ""}`}
+              className={`dtv-th${sortable ? " sortable" : ""}${sorted ? " sorted" : ""}`}
               style={{ textAlign: c.align ?? "left", position: resizable ? "relative" : undefined }}
-              onClick={c.sortable ? () => toggleSort(c.key) : undefined}
+              onClick={sortable ? () => toggleSort(c.key) : undefined}
             >
               {c.header}
-              {c.sortable && (
+              {sortable && (
                 <span className="dtv-arrow">{sorted ? (sort!.dir === "asc" ? "▲" : "▼") : "↕"}</span>
               )}
               {resizable && (
