@@ -57,24 +57,17 @@ export function DashboardList() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-                gap: 12,
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: 8,
               }}
             >
               {g.cards.map((d) => (
-                <a
-                  key={d.id}
-                  id={d.id}
-                  href={d.href}
-                  className="panel"
-                  style={{ padding: 14, display: "flex", flexDirection: "column", gap: 6, textDecoration: "none", color: "inherit", cursor: "pointer" }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Icon name={d.icon} size={16} />
-                    <strong style={{ fontSize: 13 }}>{d.label}</strong>
-                  </div>
-                  <span style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.5 }}>{d.desc}</span>
-                  <span style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>Open →</span>
+                // Thin, single-line directory rows (UI-8): the label is enough; the
+                // longer description moves to a hover tooltip so the grid stays slim.
+                <a key={d.id} id={d.id} href={d.href} className="dash-card" title={d.desc}>
+                  <Icon name={d.icon} size={15} />
+                  <strong className="dash-card-label">{d.label}</strong>
+                  <span className="dash-card-go" aria-hidden>→</span>
                 </a>
               ))}
             </div>
