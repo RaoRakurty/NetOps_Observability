@@ -112,6 +112,11 @@ export default function Devices() {
   useEffect(() => {
     const d = takeDrill().devices;
     if (d === "down") setFilter("down");
+    // Deep link from Command Center "Impacted entities" → pre-filter to that
+    // entity so its status row is shown immediately (#/infrastructure/devices?q=…).
+    const qs = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
+    const dq = new URLSearchParams(qs).get("q");
+    if (dq) setQ(dq);
   }, []);
 
   const load = async () => {

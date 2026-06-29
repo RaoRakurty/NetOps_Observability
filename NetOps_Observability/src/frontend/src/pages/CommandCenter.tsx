@@ -118,6 +118,12 @@ const rcaHref = (corrId: string) => `#/monitoring/correlations?id=${encodeURICom
 // topology route does not exist and silently fell back to Inventory→Devices.
 const topoHref = (focus?: string) =>
   `#/infrastructure/topology-canvas${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+// Impacted entity → its OWN status (not a generic topology view). Deep-links to
+// the device inventory pre-filtered to the entity, where its live health
+// (up/degraded/down) shows and one click opens its full detail. End-to-end:
+// the action's impacted entity wires straight to that entity's state.
+const deviceStatusHref = (entity: string) =>
+  `#/infrastructure/devices?q=${encodeURIComponent(entity)}`;
 
 // CreateTicketButton enqueues a ServiceNow incident for this correlation (#78),
 // permission-gated (infrastructure:write). Without write it deep-links to the RCA
@@ -183,19 +189,30 @@ function ExpandPanel({ it }: { it: ActionItem }) {
         <div>
           <h5 className="cc-eh">Impacted entities</h5>
           {devs.length ? <div className="cc-chips">{devs.slice(0, 12).map((d) => (
-            <a key={d} className="cc-pill cc-mono cc-pill-link" href={topoHref(d)}
-              title={`Show ${entityLabel(d)} on the topology canvas`} onClick={(e) => e.stopPropagation()}>{entityLabel(d)}</a>
+            <a key={d} className="cc-pill cc-mono cc-pill-link" href={deviceStatusHref(d)}
+              title={`Open ${entityLabel(d)} status`} onClick={(e) => e.stopPropagation()}>{entityLabel(d)}</a>
           ))}</div>
             : <p className="cc-dim">Blast radius pending topology mapping.</p>}
         </div>
         <div>
           <h5 className="cc-eh">Evidence</h5>
-          <p className="cc-dim">{c.signal_count} correlated signal{c.signal_count > 1 ? "s" : ""} across {c.node_count} node{c.node_count > 1 ? "s" : ""}.</p>
+          {/* The whole evidence brief drills into the RCA Inspector's full evidence
+              ledger — count, reason and each signal domain are clickable. */}
+          <a className="cc-evlink" href={rcaHref(c.correlation_id)} onClick={(e) => e.stopPropagation()}
+            title="Open the full evidence ledger for this correlation">
+            {c.signal_count} correlated signal{c.signal_count > 1 ? "s" : ""} across {c.node_count} node{c.node_count > 1 ? "s" : ""} →
+          </a>
           {ev === null
             ? <p className="cc-dim">Reading correlated evidence…</p>
             : ev.reason
-              ? <p className="cc-evtext">{ev.reason}{ev.domains.length ? <> <span className="cc-dim">— {ev.domains.join(", ")}</span></> : null}</p>
+              ? <p className="cc-evtext">{ev.reason}</p>
               : null}
+          {ev && ev.domains.length > 0 && (
+            <div className="cc-chips">{ev.domains.map((dom) => (
+              <a key={dom} className="cc-pill cc-pill-link" href={rcaHref(c.correlation_id)}
+                title={`See the ${dom} evidence`} onClick={(e) => e.stopPropagation()}>{dom}</a>
+            ))}</div>
+          )}
           {it.missing.length > 0
             ? <div className="cc-chips">{it.missing.map((m) => <span key={m} className="cc-pill cc-miss">missing: {m}</span>)}</div>
             : <p className="cc-ok">All expected evidence streams present.</p>}
