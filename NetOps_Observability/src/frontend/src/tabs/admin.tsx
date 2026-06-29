@@ -3395,8 +3395,8 @@ function policyGates(p: IncidentPolicy): string[] {
   return g;
 }
 
-function PolicyEditor({ policy, canWrite, onSaved, onCancel }: {
-  policy: IncidentPolicy; canWrite: boolean; onSaved: () => void; onCancel: () => void;
+function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
+  policy: IncidentPolicy; canWrite: boolean; onSaved: () => void; onCancel: () => void; inModal?: boolean;
 }) {
   const [p, setP] = useState<IncidentPolicy>(policy);
   const [err, setErr] = useState<string | null>(null);
@@ -3429,11 +3429,13 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel }: {
   };
 
   return (
-    <div className="card" style={{ padding: "var(--sp-4)" }}>
-      <div className="admin-head-row">
-        <h3 style={{ margin: 0 }}>{p.id ? "Edit incident policy" : "New incident policy"}</h3>
-        <button className="btn" onClick={onCancel}>← Back to list</button>
-      </div>
+    <div className={inModal ? "" : "card"} style={inModal ? undefined : { padding: "var(--sp-4)" }}>
+      {!inModal && (
+        <div className="admin-head-row">
+          <h3 style={{ margin: 0 }}>{p.id ? "Edit incident policy" : "New incident policy"}</h3>
+          <button className="btn" onClick={onCancel}>← Back to list</button>
+        </div>
+      )}
       <ErrLine msg={err} />
 
       <div className="form-grid" style={{ marginTop: "var(--sp-3)" }}>
@@ -3517,17 +3519,18 @@ export function IncidentPoliciesAdmin() {
     api.permissions().then((p) => setCanWrite((p.permissions?.administration ?? 0) >= 2)).catch(() => setCanWrite(false));
   }, [load]);
 
-  if (sel) {
-    return (
-      <>
-        <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA object opens a ServiceNow ticket." />
-        <PolicyEditor policy={sel} canWrite={canWrite} onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
-      </>
-    );
-  }
-
   return (
     <>
+      {sel && (
+        <Modal
+          title={sel.id ? "Edit incident policy" : "New incident policy"}
+          subtitle="Decide when an RCA correlation object opens a ServiceNow ticket — one ticket per root cause."
+          wide
+          onClose={() => setSel(null)}
+        >
+          <PolicyEditor policy={sel} canWrite={canWrite} inModal onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
+        </Modal>
+      )}
       <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket — one ticket per root cause, never per raw alert." />
       <p className="mini-meta" style={{ marginTop: "calc(-1 * var(--sp-2))" }}>
         Configure the ServiceNow connection in <b>Incident Response → Integrations</b>. A tenant with no policy uses a safe default
