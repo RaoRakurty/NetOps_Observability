@@ -34,15 +34,32 @@ type Citation struct {
 // model's grounded narrative; the structured fields are built DETERMINISTICALLY
 // from tools (not trusted to the model), with Citations + Disclaimers always set.
 type Answer struct {
-	Mode        AnswerMode          `json:"mode"`
-	Intent      string              `json:"intent"`
-	Modules     []string            `json:"modules"`
-	Text        string              `json:"text"`              // model narrative (escaped on render)
-	Problem     *ProblemExplanation `json:"problem,omitempty"` // for ModeProblemExplanation
-	Navigation  []ProductNavEntry   `json:"navigation,omitempty"`
-	Citations   []Citation          `json:"citations"`
-	Disclaimers []string            `json:"disclaimers"`
-	Provider    string              `json:"provider,omitempty"` // which LLM answered (audit)
+	Mode         AnswerMode           `json:"mode"`
+	Intent       string               `json:"intent"`
+	Modules      []string             `json:"modules"`
+	Text         string               `json:"text"`                    // model narrative (escaped on render)
+	Problem      *ProblemExplanation  `json:"problem,omitempty"`       // for ModeProblemExplanation
+	CurrentState *CurrentStateSummary `json:"current_state,omitempty"` // for ModeCurrentStateSummary
+	Navigation   []ProductNavEntry    `json:"navigation,omitempty"`
+	Citations    []Citation           `json:"citations"`
+	Disclaimers  []string             `json:"disclaimers"`
+	Provider     string               `json:"provider,omitempty"` // which LLM answered (audit)
+}
+
+// CurrentStateSummary is the P2 Command Center answer-mode schema: a NOC
+// at-a-glance built deterministically from active correlations, with a
+// model-written headline. Answers "what is going on right now / what should the
+// NOC focus on first?"
+type CurrentStateSummary struct {
+	Summary          string   `json:"summary"` // model narrative
+	ActiveIncidents  []string `json:"active_incidents"`
+	Confirmed        int      `json:"confirmed"`
+	Suspected        int      `json:"suspected"`
+	Undetermined     int      `json:"undetermined"`
+	ImpactedEntities []string `json:"impacted_entities"`
+	RecommendedFocus []string `json:"recommended_focus"`
+	ConfidenceNotes  []string `json:"confidence_notes"`
+	MissingData      []string `json:"missing_data"`
 }
 
 // ProblemExplanation is the P1 RCA answer-mode schema. The narrative fields the

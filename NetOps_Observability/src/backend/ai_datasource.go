@@ -112,6 +112,43 @@ SELECT hypotheses, affected
 	return items, nil
 }
 
+// ListActiveProblems returns the tenant-scoped recent correlation problems
+// (newest first) for the Command Center summary (P2). Bounded by limit; the
+// corr_objects row policy keeps it to the caller's tenant.
+func (d aiDataSource) ListActiveProblems(_ context.Context, _ ai.Principal, limit int) ([]ai.Problem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	sql := fmt.Sprintf(`
+SELECT toString(correlation_id) AS correlation_id,
+       top_hypothesis, top_confidence, verdict_tier,
+       affected, signal_count, node_count
+  FROM netops.corr_objects
+ WHERE state = 'open'
+ ORDER BY created_at DESC
+ LIMIT 1 BY correlation_id
+ LIMIT %d
+ FORMAT JSON`, limit)
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ai.Problem, 0, len(rows))
+	for _, r := range rows {
+		id := asStr(r["correlation_id"])
+		out = append(out, ai.Problem{
+			ID:          id,
+			Title:       aiFirst(asStr(r["top_hypothesis"]), "Correlation "+shortID(id)),
+			Verdict:     asStr(r["verdict_tier"]),
+			Confidence:  asFloat(r["top_confidence"]),
+			SignalCount: int(asFloat(r["signal_count"])),
+			NodeCount:   int(asFloat(r["node_count"])),
+			Devices:     affectedDevices(r["affected"]),
+		})
+	}
+	return out, nil
+}
+
 // ---- small JSON/value helpers (ClickHouse FORMAT JSON yields any-typed cells) ----
 
 func asStr(v any) string {

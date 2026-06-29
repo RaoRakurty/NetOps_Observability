@@ -115,6 +115,9 @@ type DataSource interface {
 	GetProblem(ctx context.Context, p Principal, id string) (*Problem, error)
 	// GetProblemEvidence returns the cited evidence items for the problem.
 	GetProblemEvidence(ctx context.Context, p Principal, id string) ([]EvidenceItem, error)
+	// ListActiveProblems returns the tenant-scoped recent/active correlation
+	// problems (newest first), bounded by limit — for Command Center summaries (P2).
+	ListActiveProblems(ctx context.Context, p Principal, limit int) ([]Problem, error)
 }
 
 // ---- RCA read tools (HLD P1, module correlations_rca) -----------------------
@@ -171,6 +174,50 @@ func (t getProblemEvidenceTool) Run(ctx context.Context, p Principal, args ToolA
 	return tr, nil
 }
 
+// ---- Command Center read tools (HLD P2, module command_center) --------------
+
+type activeIncidentsTool struct{ ds DataSource }
+
+func (t activeIncidentsTool) Name() string            { return "get_active_major_incidents" }
+func (t activeIncidentsTool) Module() string          { return "command_center" }
+func (t activeIncidentsTool) Capability() Capability  { return CapRead }
+func (t activeIncidentsTool) RequiredPerms() []string { return []string{"correlations:read"} }
+func (t activeIncidentsTool) Freshness() Freshness    { return FreshnessLive }
+func (t activeIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArgs) (ToolResult, error) {
+	probs, err := t.ds.ListActiveProblems(ctx, p, 25)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	items := make([]EvidenceItem, 0, len(probs))
+	for _, pr := range probs {
+		items = append(items, EvidenceItem{
+			CitationID: "problem:" + pr.ID, Kind: "finding",
+			Text: fmt.Sprintf("%s — %s (%s, %.0f%%)", shortIDFor(pr.ID), pr.Title, pr.Verdict, pr.Confidence*100),
+			Href: "#/monitoring/correlations?id=" + pr.ID,
+		})
+	}
+	return ToolResult{Items: items}, nil
+}
+
+func shortIDFor(id string) string {
+	if i := indexByte(id, '-'); i > 0 {
+		return id[:i]
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
 // Tools builds the tool registry. P1 wires the RCA tools to the DataSource;
 // other modules' tools are catalog entries that return ErrNotImplemented until
 // their phase lands (HLD P2–P4), so routing knows they exist without faking data.
@@ -178,6 +225,7 @@ func Tools(ds DataSource) *ToolRegistry {
 	reg := &ToolRegistry{byName: map[string]AITool{}}
 	reg.add(getProblemTool{ds})
 	reg.add(getProblemEvidenceTool{ds})
+	reg.add(activeIncidentsTool{ds})
 	return reg
 }
 

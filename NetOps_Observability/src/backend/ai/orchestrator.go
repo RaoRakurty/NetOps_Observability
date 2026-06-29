@@ -121,15 +121,17 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	switch plan.Mode {
 	case ModeProblemExplanation:
 		return o.answerProblem(ctx, p, question, plan, disc)
+	case ModeCurrentStateSummary:
+		return o.answerCurrentState(ctx, p, question, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	default:
-		// Honest disclosure for not-yet-built answer modes (HLD P2–P4).
+		// Honest disclosure for not-yet-built answer modes (HLD P3–P4).
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: allowed,
-			Text:        "That question type isn't available in this build yet. I can explain a specific problem (open an RCA candidate and ask 'explain this'), or help you navigate Correlix.",
+			Text:        "That question type isn't available in this build yet. I can explain a specific problem, summarize what's going on right now, or help you navigate Correlix.",
 			Citations:   []Citation{},
-			Disclaimers: append(disc, "current_state / time-range summaries land in a later phase."),
+			Disclaimers: append(disc, "time-range / module-specific summaries land in a later phase."),
 		}, nil
 	}
 }
@@ -217,6 +219,120 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 		Text: pe.Summary, Problem: pe, Citations: cites,
 		Disclaimers: disc, Provider: provider,
 	}, nil
+}
+
+// answerCurrentState builds the P2 Command Center "what's going on right now"
+// summary: structured counts + impacted entities + priority focus from the
+// active correlations (deterministic), with a model-written headline.
+func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, error) {
+	probs, err := o.DS.ListActiveProblems(ctx, p, 25)
+	if err != nil {
+		return Answer{}, err
+	}
+	cs := &CurrentStateSummary{}
+	impact := map[string]int{}
+	var cites []Citation
+	for _, pr := range probs {
+		switch strings.ToLower(pr.Verdict) {
+		case "confirmed":
+			cs.Confirmed++
+		case "suspected":
+			cs.Suspected++
+		default:
+			cs.Undetermined++
+		}
+		line := fmt.Sprintf("%s — %s (%s, %.0f%%)", shortIDFor(pr.ID), pr.Title, pr.Verdict, pr.Confidence*100)
+		cs.ActiveIncidents = append(cs.ActiveIncidents, line)
+		// Confirmed incidents lead the recommended focus.
+		if strings.EqualFold(pr.Verdict, "confirmed") {
+			cs.RecommendedFocus = append(cs.RecommendedFocus, line)
+		}
+		for _, d := range pr.Devices {
+			impact[d]++
+		}
+		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: line, Href: "#/monitoring/correlations?id=" + pr.ID})
+	}
+	cs.ImpactedEntities = topKeys(impact, 8)
+	if len(cs.RecommendedFocus) == 0 && len(cs.ActiveIncidents) > 0 {
+		cs.RecommendedFocus = []string{cs.ActiveIncidents[0]} // nothing confirmed → newest
+	}
+	if len(probs) == 0 {
+		cs.Summary = "No active correlations right now — the fleet is quiet."
+		disc = append(disc, "Nothing active in scope.")
+	}
+
+	// Model headline grounded in the structured counts (deterministic fallback).
+	if len(probs) > 0 {
+		system := o.systemPrompt()
+		user := o.currentStatePrompt(question, cs)
+		text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+		if lerr != nil {
+			cs.Summary = o.deterministicStateSummary(cs)
+			provider = "none"
+			disc = append(disc, "AI provider unavailable — showing a deterministic summary.")
+			return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
+				Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc, Provider: provider}, nil
+		}
+		cs.Summary = strings.TrimSpace(text)
+		return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
+			Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc, Provider: provider}, nil
+	}
+	return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
+		Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc}, nil
+}
+
+func (o *Orchestrator) currentStatePrompt(question string, cs *CurrentStateSummary) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
+	fmt.Fprintf(&b, "ACTIVE CORRELATIONS: %d confirmed, %d suspected, %d undetermined.\n",
+		cs.Confirmed, cs.Suspected, cs.Undetermined)
+	if len(cs.ImpactedEntities) > 0 {
+		fmt.Fprintf(&b, "Most impacted entities: %s\n", strings.Join(cs.ImpactedEntities, ", "))
+	}
+	b.WriteString("\nINCIDENTS (cite ids):\n")
+	for _, l := range cs.ActiveIncidents {
+		fmt.Fprintf(&b, "- [problem] %s\n", l)
+	}
+	b.WriteString("\nWrite a 2–3 sentence NOC situation summary grounded in the above: what's happening and what the NOC should focus on FIRST. Be concise.")
+	return o.redact(b.String())
+}
+
+func (o *Orchestrator) deterministicStateSummary(cs *CurrentStateSummary) string {
+	s := fmt.Sprintf("%d active correlation(s): %d confirmed, %d suspected, %d undetermined.",
+		len(cs.ActiveIncidents), cs.Confirmed, cs.Suspected, cs.Undetermined)
+	if len(cs.RecommendedFocus) > 0 {
+		s += " Focus first: " + cs.RecommendedFocus[0] + "."
+	}
+	if len(cs.ImpactedEntities) > 0 {
+		s += " Most impacted: " + strings.Join(cs.ImpactedEntities, ", ") + "."
+	}
+	return s
+}
+
+// topKeys returns the top-n keys of a count map, count-desc then key-asc.
+func topKeys(m map[string]int, n int) []string {
+	type kv struct {
+		k string
+		v int
+	}
+	pairs := make([]kv, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, kv{k, v})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].v != pairs[j].v {
+			return pairs[i].v > pairs[j].v
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	var out []string
+	for i, p := range pairs {
+		if i >= n {
+			break
+		}
+		out = append(out, p.k)
+	}
+	return out
 }
 
 // answerNavigation is deterministic (no LLM): map the question to UI locations.

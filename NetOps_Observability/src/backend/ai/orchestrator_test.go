@@ -42,6 +42,14 @@ func (m *mockDS) GetProblemEvidence(_ context.Context, p Principal, id string) (
 	return m.evidence[id], nil
 }
 
+func (m *mockDS) ListActiveProblems(_ context.Context, p Principal, _ int) ([]Problem, error) {
+	var out []Problem
+	for _, pr := range m.problems[p.Tenant] {
+		out = append(out, *pr)
+	}
+	return out, nil
+}
+
 func newOrch(ds DataSource) *Orchestrator {
 	return &Orchestrator{DS: ds, Tools: Tools(ds), LLM: MockLLM{Reply: "Likely BGP session loss on edge-1 [log:os:1]. Next: check the peering link."},
 		Flags: func(string) bool { return false }}
@@ -146,6 +154,34 @@ func TestProviderDownDegrades(t *testing.T) {
 	}
 	if ans.Provider != "none" {
 		t.Fatalf("expected provider=none on fallback, got %q", ans.Provider)
+	}
+}
+
+func TestCurrentStateSummary(t *testing.T) {
+	o := newOrch(newMockDS())
+	ans, err := o.Ask(context.Background(), tenantA(), "what is going on right now?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != ModeCurrentStateSummary || ans.CurrentState == nil {
+		t.Fatalf("expected a current_state_summary, got %+v", ans)
+	}
+	if ans.CurrentState.Confirmed != 1 {
+		t.Fatalf("tenant A has 1 confirmed problem, got %d", ans.CurrentState.Confirmed)
+	}
+	if len(ans.Citations) == 0 {
+		t.Fatal("current-state must cite the active incidents")
+	}
+}
+
+// Cross-tenant: B's current-state must never include A's problem.
+func TestCurrentStateIsolation(t *testing.T) {
+	o := newOrch(newMockDS())
+	ans, _ := o.Ask(context.Background(), tenantB(), "what should the NOC focus on first?", nil)
+	for _, l := range ans.CurrentState.ActiveIncidents {
+		if strings.Contains(l, "edge-1") || strings.Contains(l, "BGP peer down") {
+			t.Fatalf("LEAK: tenant A incident surfaced to tenant B: %q", l)
+		}
 	}
 }
 
