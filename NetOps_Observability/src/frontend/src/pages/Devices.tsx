@@ -5,6 +5,7 @@ import DeviceDetailPage from "./DeviceDetailPage";
 import DeviceTerminal from "./DeviceTerminal";
 import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
+import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 
 const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="required">*</span>;
 
@@ -282,39 +283,57 @@ export default function Devices() {
 
   const chip = (key: Filter, label: string, n: number, color?: string) => (
     <button
-      className={filter === key ? "btn accent" : "btn"}
+      className={filter === key ? "chip chip-active" : "chip"}
       onClick={() => setFilter(key)}
       style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
     >
-      {color && <span style={{ width: 8, height: 8, borderRadius: 999, background: color }} />}
-      {label} {n}
+      {color && <span style={{ width: 8, height: 8, borderRadius: 999, background: color, flex: "none" }} />}
+      {label} <span style={{ opacity: 0.65, fontVariantNumeric: "tabular-nums" }}>{n}</span>
     </button>
   );
 
   return (
-    <>
-      <div className="card" style={{ paddingBottom: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {chip("all", "All", devices.length)}
-            {chip("up", "Up", counts.up, HEALTH_META.up.color)}
-            {chip("degraded", "Degraded", counts.degraded, HEALTH_META.degraded.color)}
-            {chip("down", "Down", counts.down, HEALTH_META.down.color)}
-          </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              className="form-input"
-              placeholder="Filter devices…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              style={{ width: 200, height: 34 }}
-            />
-            <button className="btn" onClick={() => setShowAdd((v) => !v)}>{showAdd ? "Cancel" : "+ Add device"}</button>
-          </div>
+    <div className="dm-board">
+      <NocHeader
+        title="Inventory & Devices"
+        subtitle="Every discovered and declared device, with live reachability health, type and source — click any row to drill into its telemetry."
+        chips={<><Chip label={`${devices.length} devices`} /><LiveChip detail="30s poll" /></>}
+      >
+        <NocKpis cols={4}>
+          <NocKpi n={devices.length} label="Inventory" interp="devices tracked" />
+          <NocKpi n={counts.up} label="Up" interp="fresh heartbeat" tone={counts.up ? "var(--ok)" : undefined} />
+          <NocKpi n={counts.degraded} label="Degraded" interp="stale or alerting" tone={counts.degraded ? "var(--warn)" : undefined} />
+          <NocKpi n={counts.down} label="Down" interp="no heartbeat" tone={counts.down ? "var(--crit)" : undefined} />
+        </NocKpis>
+      </NocHeader>
+
+      <div className="cc-panel">
+        <div className="cc-panel-h">
+          <h3 className="cc-panel-t">Device inventory</h3>
+          <span className="cc-panel-meta">{rows.length} shown · click a row for the device workspace</span>
         </div>
+        <div style={{ padding: "11px 13px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 11 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {chip("all", "All", devices.length)}
+              {chip("up", "Up", counts.up, HEALTH_META.up.color)}
+              {chip("degraded", "Degraded", counts.degraded, HEALTH_META.degraded.color)}
+              {chip("down", "Down", counts.down, HEALTH_META.down.color)}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                className="form-input"
+                placeholder="Filter devices…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                style={{ width: 200, height: 32 }}
+              />
+              <button className="btn" onClick={() => setShowAdd((v) => !v)}>{showAdd ? "Cancel" : "+ Add device"}</button>
+            </div>
+          </div>
 
         {showAdd && (
-          <div style={{ marginTop: 12, borderTop: "1px solid var(--panel-border, #e2e6ee)", paddingTop: 12 }}>
+          <div style={{ marginBottom: 12, borderBottom: "1px solid var(--panel-border, #e2e6ee)", paddingBottom: 12 }}>
             <Wizard
               finishLabel="Add device"
               onCancel={() => { setShowAdd(false); setDraft({ id: "", name: "", address: "", vendor: "" }); }}
@@ -360,38 +379,37 @@ export default function Devices() {
             />
           </div>
         )}
-        {error && <p style={{ color: "var(--bad)", marginBottom: 0 }}>{error}</p>}
-      </div>
+        {error && <p style={{ color: "var(--bad)", margin: "0 0 10px" }}>{error}</p>}
 
-      <div className="card">
-        {devices.length === 0 ? (
-          <div className="empty">No devices yet — discovery hasn't returned anything.</div>
-        ) : (
-          <DataTable<Device>
-            rows={rows}
-            columns={columns}
-            rowKey={(d) => d.id}
-            filter={q}
-            height="62vh"
-            ariaLabel="Devices"
-            initialSort={{ key: "vendor", dir: "asc" }}
-            onRowClick={(d) => openDevice(d)}
-            empty="No devices match this filter."
-            rowActions={(d) => (
-              <>
-                {sshEnabled && (
-                  <button className="btn" title="SSH to device" onClick={() => setTerm(d)}>Connect</button>
-                )}
-                <button className="btn danger" onClick={() => remove(d.id)}>Delete</button>
-              </>
-            )}
-          />
-        )}
+          {devices.length === 0 ? (
+            <div className="empty">No devices yet — discovery hasn't returned anything.</div>
+          ) : (
+            <DataTable<Device>
+              rows={rows}
+              columns={columns}
+              rowKey={(d) => d.id}
+              filter={q}
+              height="58vh"
+              ariaLabel="Devices"
+              initialSort={{ key: "vendor", dir: "asc" }}
+              onRowClick={(d) => openDevice(d)}
+              empty="No devices match this filter."
+              rowActions={(d) => (
+                <>
+                  {sshEnabled && (
+                    <button className="btn" title="SSH to device" onClick={() => setTerm(d)}>Connect</button>
+                  )}
+                  <button className="btn danger" onClick={() => remove(d.id)}>Delete</button>
+                </>
+              )}
+            />
+          )}
+        </div>
       </div>
 
       {detail && <DeviceDetailPage device={detail} onClose={() => setDetail(null)} />}
       {term && <DeviceTerminal device={term} onClose={() => setTerm(null)} />}
-    </>
+    </div>
   );
 }
 
