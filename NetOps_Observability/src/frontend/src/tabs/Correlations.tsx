@@ -147,13 +147,9 @@ export default function Correlations() {
 
   useEffect(() => {
     let alive = true;
-    // Deep link: span 30 days (matches Command Center) and drop the tier filter
-    // so the linked correlation is always in the list, whatever its age/tier.
-    const win = deepId ? 2592000 : 86400;
-    const tierFilter = deepId ? undefined : tier || undefined;
     const tick = async () => {
       try {
-        const r = await api.correlations(200, win, state || undefined, tierFilter);
+        const r = await api.correlations(200, 86400, state || undefined, tier || undefined);
         if (alive) setItems(r?.data ?? []);
       } catch {
         if (alive) setItems([]);
@@ -162,7 +158,7 @@ export default function Correlations() {
     tick();
     const id = setInterval(tick, 15_000);
     return () => { alive = false; clearInterval(id); };
-  }, [state, tier, deepId]);
+  }, [state, tier]);
 
   const select = (o: CorrObject) => {
     setSel(o.correlation_id);
@@ -179,33 +175,39 @@ export default function Correlations() {
 
   // Deep link by id (#81 P3G + UI-1): App Observability / Command Center link
   // here as #/monitoring/correlations?id=<correlation_id> to open ONE RCA.
-  // Fires once, after the list loads and contains the target (the fetch above
-  // widens its window when deepId is set so the target is guaranteed present).
+  //
+  // Connect DIRECTLY via the unique id — fire once on mount, independent of the
+  // candidate list, its 24h window, its 200-row cap, or its load timing. The
+  // previous version gated on the list CONTAINING the target, so any item the
+  // windowed/capped list didn't include (e.g. an 11-day-old correlation, or a
+  // slow/empty list) silently failed and dumped the user on the full candidate
+  // list. Fetching the object by its id can't miss; we keep it in its own state
+  // (not the polled list) so the 15s refresh can't drop it and the list's own
+  // state/status filters keep working normally.
   const deepLinked = useRef(false);
+  const [deepObj, setDeepObj] = useState<CorrObject | null>(null);
+  const [deepErr, setDeepErr] = useState<string | null>(null);
   useEffect(() => {
-    if (deepLinked.current || !deepId || !items.length) return;
+    if (deepLinked.current || !deepId) return;
     deepLinked.current = true;
-    const o = items.find((x) => x.correlation_id === deepId);
-    if (o) {
-      select(o);
-      return;
-    }
-    // Not in the (windowed, capped) list — fetch the one object directly so the
-    // deep link always resolves to the exact RCA, then merge it in so the v1
-    // inline detail can render it too.
     let alive = true;
     api.correlationDetail(deepId)
       .then((r) => {
         const obj = r?.object;
-        if (!alive || !obj) return;
-        setItems((prev) => (prev.some((x) => x.correlation_id === obj.correlation_id) ? prev : [obj, ...prev]));
+        if (!alive) return;
+        if (!obj) { setDeepErr(deepId); return; }
+        setDeepObj(obj);
         select(obj);
       })
-      .catch(() => { /* unknown/forbidden id — leave the list as-is */ });
+      .catch(() => { if (alive) setDeepErr(deepId); });
     return () => { alive = false; };
-  }, [items, deepId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deepId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const selected = !ws.enabled && sel ? items.find((o) => o.correlation_id === sel) : undefined;
+  // v1 inline detail: prefer the row from the list, but fall back to the
+  // directly-fetched deep-link object so a linked RCA outside the list still renders.
+  const selected = !ws.enabled && sel
+    ? (items.find((o) => o.correlation_id === sel) ?? (deepObj?.correlation_id === sel ? deepObj : undefined))
+    : undefined;
 
   const rConfirmed = visible.filter((o) => o.verdict_tier === "confirmed").length;
   const rSuspected = visible.filter((o) => o.verdict_tier === "suspected").length;
@@ -224,6 +226,15 @@ export default function Correlations() {
           <NocKpi n={rUndet} label="Not confirmed" interp="gathering evidence" />
         </NocKpis>
       </NocHeader>
+      {deepErr && (
+        <div className="cc-panel" style={{ borderColor: "var(--warn)", padding: "10px 13px", marginBottom: 10 }}>
+          <span style={{ color: "var(--warn)", fontWeight: 600 }}>RCA not found.</span>{" "}
+          <span style={{ color: "var(--muted)", fontSize: 13 }}>
+            The linked correlation (<code style={mono}>{deepErr}</code>) is no longer available — it may have been
+            resolved and aged out, or you don't have access to it. Showing all current candidates below.
+          </span>
+        </div>
+      )}
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Candidate queue</h3>
