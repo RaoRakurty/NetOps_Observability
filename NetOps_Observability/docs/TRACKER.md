@@ -121,6 +121,22 @@ each as it lands; status updated in place. **Legend:** ⏳ open · 🟡 in progr
 
 ---
 
+## 🎬 Owner demo-prep tasks (queued 2026-06-29 — demo imminent)
+
+Follow-ups raised during punch-list review; demo is very soon, so these are
+high-priority. **Legend:** ⏳ open · 🟡 in progress · ✅ done.
+
+| # | Item | Status |
+|---|------|--------|
+| UI-9b | **Reports — richer VALUABLE data.** Turn the text-blob reports into real tables + add rollups for every report kind, all backed by live stores. | ✅ `9059b51` — device_util & latency now real tables; +fleet-status/by-vendor/by-type (inventory), exec summary (health), top-rules+device+age (alerts), latency/jitter (WAN), top-affected-devices (security). Verified rendering all 7 kinds on live data. |
+| UI-14 | **Monitors → Monitor Rules — "Add rule" as a self-guided wizard.** Convert the inline Add-rule form into a guided modal/wizard window, in sync with the app theme: modern fonts, elegant structure (match the Flows/`xpl-`/Wizard vocabulary). | ⏳ |
+| UI-15 | **Monitors → Create Monitor (New Monitor) — template audit + polish.** Review ALL default signal templates; ensure every one is WIRED (some appear to do nothing on click) and backed by telemetry the stack actually collects (note: `device_ospf_nbr_state` has 0 live series; others OK). Add meaningful templates. Make the screen WIDER, the template boxes SMALLER, and fonts elegant — match the Flows theme. Stronger selected-state feedback. | ⏳ |
+| BRAND-1 | **Terminology / IP audit — avoid mimicking market vendors.** Deep investigation of ALL product vocabulary (e.g. "Fleet Pulse", "Fleet aggregates", section/feature/metric names) against observability vendors (Datadog, Dynatrace, ThousandEyes, NetBrain, New Relic, Splunk, Cisco, Kentik, …). Flag any term that collides with a vendor's product/trademark, compile a matching list, and PROPOSE distinct synonyms for owner sign-off before any rename. | ⏳ |
+
+> Approach: UI-15 + UI-14 share the Monitors area and the same theme target — do
+> them together. BRAND-1 is a research+report deliverable (no renames until owner
+> approves the proposed words).
+
 ## ✅ Done (shipped + deployed on this branch)
 
 ### Tenancy & isolation
