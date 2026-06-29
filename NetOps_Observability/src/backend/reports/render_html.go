@@ -24,6 +24,8 @@ type htmlRenderer struct {
 func NewHTMLRenderer() (Renderer, error) {
 	t, err := template.New("report.tmpl.html").Funcs(template.FuncMap{
 		"fmtTime": func(tm time.Time) string { return tm.UTC().Format("2006-01-02 15:04 MST") },
+		// odd drives zebra striping in the section tables (1-based visual rows).
+		"odd": func(i int) bool { return i%2 == 1 },
 	}).ParseFS(templatesFS, "templates/report.tmpl.html")
 	if err != nil {
 		return nil, err

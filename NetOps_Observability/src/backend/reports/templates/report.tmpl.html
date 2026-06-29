@@ -5,33 +5,38 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{.ReportName}}</title>
 </head>
-<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a2e;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;">
+<body style="margin:0;padding:0;background:#eceff3;font-family:Inter,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#16203a;-webkit-font-smoothing:antialiased;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eceff3;padding:28px 0;">
 <tr><td align="center">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-  <tr><td style="background:#5b5bd6;padding:20px 28px;">
-    <div style="color:#ffffff;font-size:18px;font-weight:700;">{{.ReportName}}</div>
-    <div style="color:#e0e0f5;font-size:12px;margin-top:4px;">{{.Kind}} &middot; generated {{fmtTime .GeneratedAt}}</div>
+<table role="presentation" width="620" cellpadding="0" cellspacing="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #e6e9f0;border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,0.04),0 8px 24px rgba(16,24,40,0.06);">
+  <tr><td style="height:3px;background:#4f6bed;font-size:0;line-height:0;">&nbsp;</td></tr>
+  <tr><td style="background:#0e1a33;padding:24px 30px;">
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.16em;color:#7f9bd1;">{{.Kind}}</div>
+    <div style="font-family:'Space Grotesk',Inter,system-ui,sans-serif;color:#ffffff;font-size:21px;font-weight:680;letter-spacing:-0.01em;margin-top:5px;">{{.ReportName}}</div>
+    <div style="color:#9fb3d1;font-size:12px;margin-top:6px;">Generated {{fmtTime .GeneratedAt}}</div>
   </td></tr>
-  {{if .Summary}}<tr><td style="padding:20px 28px 0;">
-    <div style="font-size:15px;font-weight:600;color:#1a1a2e;line-height:1.4;">{{.Summary}}</div>
+  {{if .Summary}}<tr><td style="padding:22px 30px 0;">
+    <div style="font-size:15px;font-weight:600;color:#16203a;line-height:1.45;">{{.Summary}}</div>
   </td></tr>{{end}}
-  {{if .Description}}<tr><td style="padding:8px 28px 0;">
-    <div style="font-size:13px;color:#55556a;line-height:1.5;">{{.Description}}</div>
+  {{if .Description}}<tr><td style="padding:8px 30px 0;">
+    <div style="font-size:13px;color:#5b6678;line-height:1.55;">{{.Description}}</div>
   </td></tr>{{end}}
   {{range .Sections}}
-  <tr><td style="padding:20px 28px 0;">
-    {{if .Title}}<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#8888a0;border-bottom:1px solid #ececf2;padding-bottom:6px;margin-bottom:10px;">{{.Title}}</div>{{end}}
+  <tr><td style="padding:22px 30px 0;">
+    {{if .Title}}<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#4f6bed;padding-bottom:8px;margin-bottom:12px;border-bottom:1px solid #eceef3;">{{.Title}}</div>{{end}}
     {{if or .Header .Rows}}
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#1a1a2e;border-collapse:collapse;">
-      {{if .Header}}<tr>{{range .Header}}<td style="padding:6px 10px;border-bottom:2px solid #e0e0ea;font-weight:700;color:#55556a;text-align:left;">{{.}}</td>{{end}}</tr>{{end}}
-      {{range .Rows}}<tr>{{range .}}<td style="padding:6px 10px;border-bottom:1px solid #f0f0f5;vertical-align:top;">{{.}}</td>{{end}}</tr>{{end}}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#16203a;border-collapse:collapse;font-variant-numeric:tabular-nums;">
+      {{if .Header}}<tr>{{range .Header}}<td style="padding:7px 11px;border-bottom:1.5px solid #d8dce6;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:#7a8499;text-align:left;">{{.}}</td>{{end}}</tr>{{end}}
+      {{range $i, $row := .Rows}}<tr style="background:{{if odd $i}}#f7f8fb{{else}}#ffffff{{end}};">{{range $row}}<td style="padding:8px 11px;border-bottom:1px solid #eef0f5;vertical-align:top;line-height:1.4;">{{.}}</td>{{end}}</tr>{{end}}
     </table>{{end}}
-    {{if .Note}}<div style="font-size:13px;color:#55556a;white-space:pre-wrap;line-height:1.5;">{{.Note}}</div>{{end}}
+    {{if .Note}}<div style="font-size:13px;color:#5b6678;white-space:pre-wrap;line-height:1.55;">{{.Note}}</div>{{end}}
   </td></tr>
   {{end}}
-  <tr><td style="padding:24px 28px;">
-    <div style="font-size:11px;color:#a0a0b0;border-top:1px solid #ececf2;padding-top:14px;">Automated report &middot; severity {{.Severity}} &middot; please do not reply to this message.</div>
+  <tr><td style="padding:26px 30px 24px;">
+    <div style="font-size:11px;color:#9aa3b3;border-top:1px solid #eceef3;padding-top:16px;line-height:1.5;">
+      <span style="font-weight:600;color:#7a8499;">Correlix</span> &middot; automated report &middot; severity {{.Severity}}<br>
+      Please do not reply to this message.
+    </div>
   </td></tr>
 </table>
 </td></tr>
