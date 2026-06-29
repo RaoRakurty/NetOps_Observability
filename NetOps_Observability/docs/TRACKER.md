@@ -144,12 +144,14 @@ pending · ✅ shipped+deployed.
 
 | # | Item | Status |
 |---|------|--------|
-| UI-20 | **Per-user + per-SSO appearance (DEFERRED — after demo).** Admin sets an INITIAL theme/accent at user creation (user can still change it → needs a user-facing Preferences control re-added, NOT the admin account menu). SSO: ONE default theme/accent per IdP/SSO config, applied to users it provisions. Full-stack: User model fields (Theme/Accent) on file+PG stores → createUser/updateUser → whoami/claims → Create-User dialog + SSO config pickers → apply-on-login in usePrefs. Design Qs answered 2026-06-29. | ⏳ deferred |
-| BRAND-1b | **Deferred terminology renames** (optional): internal `Watchdog` script → Stack Sentinel; deliberate per-occurrence pass on bulk `Canvas`/`Pulse`/`Fleet` code refs (blanket sweep unsafe — would hit component/class names). | ⏳ optional |
+| CC-WIRE | **Command Center end-to-end wiring.** Impacted-entity pills → the entity's STATUS (Devices inventory pre-filtered, `?q=`), not a generic topology view; Evidence brief → drillable into the RCA Inspector's full evidence ledger (count + each signal-domain chip clickable). | ✅ `56cf18f` |
+| **AI EPIC** | **Correlix AI — application-aware NOC copilot.** HLD written (`docs/design/correlix-ai-hld.md`) merging the research proposal (`ai-strategy-and-guardrails-2026-06-29.md`) + owner scope expansion (Module Registry, dynamic intent routing, answer modes, guardrails). **MCP verdict: NO until P7.** Build P0 (AI platform foundation: AKL + Module/Tool Registry + orchestrator + guardrails + mock LLM + audit) and P1 (RCA/Problem Explainer end-to-end + Ask-AI on RCA page); design so P2–P4 are registry entries, not rewrites. | 🟡 HLD done — P0/P1 build queued |
+| UI-20 | **Per-user + per-SSO appearance (DEFERRED — after demo).** Admin sets an INITIAL theme/accent at user creation (user can still change it → needs a user-facing Preferences control re-added). SSO: ONE default per IdP/SSO config. Full-stack (User model fields → both stores → createUser/whoami → dialogs → apply-on-login). Design Qs answered 2026-06-29. | ⏳ deferred |
+| BRAND-1b | **Deferred terminology renames** (optional): internal `Watchdog` script → Stack Sentinel; deliberate per-occurrence pass on bulk `Canvas`/`Pulse`/`Fleet` code refs. | ⏳ optional |
 
 > Process (owner directive 2026-06-29): tasks done in provided order, nailed one by
-> one, deployed + verified. Demo-prep batch COMPLETE; only UI-20 (deferred to
-> post-demo) + optional BRAND-1b remain.
+> one, deployed + verified. Demo-prep batch COMPLETE. Next big effort = the AI EPIC
+> (HLD approved → build P0/P1). UI-20 deferred post-demo; BRAND-1b optional.
 
 ## ✅ Done (shipped + deployed on this branch)
 
