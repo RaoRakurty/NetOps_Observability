@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { api, Incident, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel } from "../components/rca/labels";
+import CommandCenterAi from "../components/CommandCenterAi";
 import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
   type FaultDomain, type EvidenceState, type CcFilters,
@@ -334,6 +335,8 @@ export default function CommandCenter() {
         <div className="cc-decision">{decision}</div>
         {err && <p className="cc-err">{err}</p>}
       </div>
+
+      <CommandCenterAi />
 
       <div className="cc-panel">
         <div className="cc-panel-h">

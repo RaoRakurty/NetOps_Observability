@@ -2464,12 +2464,24 @@ export type AiProblemExplanation = {
   itsm_note: string;
 };
 export type AiNavEntry = { feature: string; ui_route: string; required_permission: string; explanation: string; related_module: string };
+export type AiCurrentState = {
+  summary: string;
+  active_incidents: string[];
+  confirmed: number;
+  suspected: number;
+  undetermined: number;
+  impacted_entities: string[];
+  recommended_focus: string[];
+  confidence_notes: string[];
+  missing_data: string[];
+};
 export type AiAnswer = {
   mode: string;
   intent: string;
   modules: string[];
   text: string;
   problem?: AiProblemExplanation;
+  current_state?: AiCurrentState;
   navigation?: AiNavEntry[];
   citations: AiCitation[];
   disclaimers: string[];
