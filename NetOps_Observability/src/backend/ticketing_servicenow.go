@@ -38,7 +38,38 @@ type ticketAdapter interface {
 	AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
 	ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
 	LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error)
+	// FetchIncident reads an incident's current state + lifecycle timestamps back
+	// from the provider (the inbound state sync, #84). found=false when the record
+	// no longer exists. Read-only.
+	FetchIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef) (snowIncident, bool, error)
 }
+
+// snowIncident is the subset of incident fields the inbound state sync reads to map
+// a ticket's ServiceNow progress onto the RCA incident timeline. Times are UTC
+// (zero when unset). State is the numeric ServiceNow incident state.
+type snowIncident struct {
+	Number     string
+	SysID      string
+	State      int       // 1 New · 2 In Progress · 3 On Hold · 6 Resolved · 7 Closed
+	OpenedAt   time.Time // standard field
+	WorkStart  time.Time // standard field (work began)
+	ResolvedAt time.Time // standard field
+	ClosedAt   time.Time // standard field
+	UpdatedAt  time.Time // sys_updated_on
+	// Optional Correlix custom fields — let a customer drive the Correlix-specific
+	// phases precisely; absent ⇒ that phase stays honestly incomplete.
+	AcknowledgedAt      time.Time
+	MitigationStartedAt time.Time
+	MitigatedAt         time.Time
+	RecoveredAt         time.Time
+}
+
+// ServiceNow incident state codes (default set).
+const (
+	snowStateInProgress = 2
+	snowStateResolved   = 6
+	snowStateClosed     = 7
+)
 
 // ticketSystemConfig is the connection for one external system. Secrets
 // (Password/APIToken) are write-only and never serialized back out.
@@ -171,6 +202,81 @@ func (a *serviceNowAdapter) LookupByCorrelationID(ctx context.Context, cfg ticke
 	}
 	return ticketRef{Number: resp.Result[0].Number, SysID: resp.Result[0].SysID,
 		URL: incidentURL(cfg.InstanceURL, resp.Result[0].SysID)}, true, nil
+}
+
+// FetchIncident reads one incident's state + lifecycle timestamps back from the
+// Table API (the inbound state sync). found=false on a 404 (record gone). The
+// composed query stays on the configured instance host (do() enforces it).
+func (a *serviceNowAdapter) FetchIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef) (snowIncident, bool, error) {
+	if ref.SysID == "" {
+		return snowIncident{}, false, fmt.Errorf("servicenow: fetch requires sys_id")
+	}
+	fields := "number,sys_id,state,opened_at,work_start,resolved_at,closed_at,sys_updated_on," +
+		"u_correlix_acknowledged_at,u_correlix_mitigation_started_at,u_correlix_mitigated_at,u_correlix_recovered_at"
+	path := "/api/now/table/incident/" + url.PathEscape(ref.SysID) +
+		"?sysparm_display_value=false&sysparm_fields=" + url.QueryEscape(fields)
+	raw, status, err := a.do(ctx, cfg, http.MethodGet, path, nil)
+	if err != nil {
+		if status == http.StatusNotFound {
+			return snowIncident{}, false, nil
+		}
+		return snowIncident{}, false, err
+	}
+	var resp struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return snowIncident{}, false, fmt.Errorf("servicenow: decode incident: %w", err)
+	}
+	r := resp.Result
+	if len(r) == 0 {
+		return snowIncident{}, false, nil
+	}
+	inc := snowIncident{
+		Number:              asString(r["number"]),
+		SysID:               orDefault(asString(r["sys_id"]), ref.SysID),
+		State:               snowStateCode(r["state"]),
+		OpenedAt:            parseSnowTime(r["opened_at"]),
+		WorkStart:           parseSnowTime(r["work_start"]),
+		ResolvedAt:          parseSnowTime(r["resolved_at"]),
+		ClosedAt:            parseSnowTime(r["closed_at"]),
+		UpdatedAt:           parseSnowTime(r["sys_updated_on"]),
+		AcknowledgedAt:      parseSnowTime(r["u_correlix_acknowledged_at"]),
+		MitigationStartedAt: parseSnowTime(r["u_correlix_mitigation_started_at"]),
+		MitigatedAt:         parseSnowTime(r["u_correlix_mitigated_at"]),
+		RecoveredAt:         parseSnowTime(r["u_correlix_recovered_at"]),
+	}
+	return inc, true, nil
+}
+
+// snowStateCode coerces the Table API state (a string with sysparm_display_value=
+// false, but tolerate a number) to its numeric code; 0 when absent/unparseable.
+func snowStateCode(v any) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// parseSnowTime parses a ServiceNow timestamp ("2006-01-02 15:04:05", UTC) or an
+// RFC3339 string; returns the zero time for empty/unparseable input.
+func parseSnowTime(v any) time.Time {
+	s := strings.TrimSpace(asString(v))
+	if s == "" {
+		return time.Time{}
+	}
+	if ts, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.UTC); err == nil {
+		return ts.UTC()
+	}
+	if ts, err := time.Parse(time.RFC3339, s); err == nil {
+		return ts.UTC()
+	}
+	return time.Time{}
 }
 
 // ── HTTP plumbing ────────────────────────────────────────────────────────────

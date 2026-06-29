@@ -29,6 +29,11 @@ type ticketingStore interface {
 	// RCA object ↔ ticket links (the dedupe anchor)
 	GetLink(ctx context.Context, tenant string, cross bool, corrID, system string) (ticketLink, bool, error)
 	PutLink(ctx context.Context, l ticketLink) error
+	// ListSyncableLinks returns the live, externally-filed links the inbound state
+	// syncer should poll (a real sys_id, non-terminal status, touched since `since`).
+	// Runs at platform scope (the syncer spans all tenants; each row carries its
+	// tenant_id) — like ClaimDueOutbox.
+	ListSyncableLinks(ctx context.Context, since time.Time) ([]ticketLink, error)
 
 	// outbox + audit
 	EnqueueOutbox(ctx context.Context, item ticketOutboxItem) error
@@ -58,6 +63,32 @@ func newTicketingStore() ticketingStore {
 // by rowTenant. The single rule both in-mem reads and writes use.
 func scopeVisible(tenant string, cross bool, rowTenant string) bool {
 	return cross || normTenant(tenant) == normTenant(rowTenant)
+}
+
+// syncableLink reports whether the inbound state syncer should poll a link: it must
+// be an externally-filed ticket (a real sys_id), in a non-terminal status (closed/
+// failed/pending are skipped), and touched since `since` (bounds the poll set). A
+// zero `since` includes everything (used by the in-memory store in tests).
+func syncableLink(l ticketLink, since time.Time) bool {
+	if l.SysID == "" {
+		return false
+	}
+	switch l.Status {
+	case "open", "updated", "resolved":
+	default:
+		return false
+	}
+	if since.IsZero() {
+		return true
+	}
+	rec := l.CreatedAt
+	if l.UpdatedAt.After(rec) {
+		rec = l.UpdatedAt
+	}
+	if l.LastSyncedAt != nil && l.LastSyncedAt.After(rec) {
+		rec = *l.LastSyncedAt
+	}
+	return rec.IsZero() || !rec.Before(since)
 }
 
 // ── in-memory backend ────────────────────────────────────────────────────────
@@ -185,6 +216,18 @@ func (m *memTicketingStore) PutLink(_ context.Context, l ticketLink) error {
 	l.UpdatedAt = time.Now().UTC()
 	m.links[memKey(l.TenantID, l.CorrObjectID, l.ExternalSystem)] = l
 	return nil
+}
+
+func (m *memTicketingStore) ListSyncableLinks(_ context.Context, since time.Time) ([]ticketLink, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []ticketLink
+	for _, l := range m.links {
+		if syncableLink(l, since) {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }
 
 func (m *memTicketingStore) EnqueueOutbox(_ context.Context, item ticketOutboxItem) error {
@@ -417,6 +460,34 @@ ON CONFLICT (tenant_id, corr_object_id, external_system) DO UPDATE SET
 			l.LastConfidence, l.LastPayloadHash, l.LastSyncedAt)
 		return err
 	})
+}
+
+func (s *pgTicketingStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]ticketLink, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var out []ticketLink
+	// Platform scope (cross=true): the syncer spans all tenants; each row carries
+	// its tenant_id, used to scope every downstream write. Mirrors ClaimDueOutbox.
+	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
+            WHERE sys_id <> '' AND status IN ('open','updated','resolved')
+              AND COALESCE(last_synced_at, updated_at, created_at) >= $1
+            ORDER BY COALESCE(last_synced_at, updated_at, created_at) ASC
+            LIMIT 1000`, since)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			l, err := scanLink(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, l)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 func (s *pgTicketingStore) EnqueueOutbox(ctx context.Context, item ticketOutboxItem) error {

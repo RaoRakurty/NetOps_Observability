@@ -119,17 +119,22 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	// PATCH /api/now/table/incident/{sys_id}
+	// GET/PATCH /api/now/table/incident/{sys_id} — read one incident (inbound state
+	// sync) or update it (also used to SIMULATE a human moving the ticket through
+	// ServiceNow states during validation).
 	mux.HandleFunc("/api/now/table/incident/", func(w http.ResponseWriter, r *http.Request) {
 		if !authOK(cfg, r) {
 			unauthorized(w)
 			return
 		}
-		if r.Method != http.MethodPatch && r.Method != http.MethodPut {
+		switch r.Method {
+		case http.MethodGet:
+			st.handleGetOne(w, r)
+		case http.MethodPatch, http.MethodPut:
+			st.handlePatch(w, r)
+		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
 		}
-		st.handlePatch(w, r)
 	})
 
 	srv := &http.Server{
@@ -192,6 +197,21 @@ func (st *store) handleCreate(w http.ResponseWriter, r *http.Request) {
 	log.Printf("CREATE %s (%s) correlation_id=%v verdict=%v short_description=%q",
 		number, sysID, body["correlation_id"], body["u_correlix_verdict"], body["short_description"])
 	writeJSON(w, http.StatusCreated, map[string]any{"result": map[string]any{"number": number, "sys_id": sysID}})
+}
+
+// handleGetOne serves GET /api/now/table/incident/{sys_id} — the single record the
+// inbound state sync reads back. Honors sysparm_fields by returning the whole
+// record (a faithful-enough subset for the stub); 404 for an unknown sys_id.
+func (st *store) handleGetOne(w http.ResponseWriter, r *http.Request) {
+	sysID := strings.TrimPrefix(r.URL.Path, "/api/now/table/incident/")
+	st.mu.Lock()
+	inc, ok := st.incidents[sysID]
+	st.mu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, snowError("no record for "+sysID))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"result": inc})
 }
 
 func (st *store) handlePatch(w http.ResponseWriter, r *http.Request) {

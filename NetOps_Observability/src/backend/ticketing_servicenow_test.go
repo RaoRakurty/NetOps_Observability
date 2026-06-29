@@ -22,7 +22,7 @@ type mockServiceNow struct {
 	incidents map[string]map[string]any // sys_id -> fields
 	byCorr    map[string]string         // correlation_id -> sys_id
 	seq       int
-	failNext  int  // return 500 for the next N create/patch calls
+	failNext  int // return 500 for the next N create/patch calls
 	wantUser  string
 	wantPass  string
 	creates   int
@@ -61,6 +61,16 @@ func (m *mockServiceNow) handle(w http.ResponseWriter, r *http.Request) {
 	defer m.mu.Unlock()
 
 	switch {
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/now/table/incident/"):
+		// Single-record read (inbound state sync): GET .../incident/{sys_id}.
+		sysID := strings.TrimPrefix(r.URL.Path, "/api/now/table/incident/")
+		inc, ok := m.incidents[sysID]
+		if !ok {
+			writeMockJSON(w, 404, map[string]any{"error": map[string]any{"message": "no record"}})
+			return
+		}
+		writeMockJSON(w, 200, map[string]any{"result": inc})
+
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/now/table/incident"):
 		q := r.URL.Query().Get("sysparm_query")
 		var res []map[string]any

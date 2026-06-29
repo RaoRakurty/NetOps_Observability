@@ -27,10 +27,25 @@ P1d (persistence/RLS/manual-edit/backfill) + docs page REMAINING.
 > | `closed` | `closed` | inbound sync (dormant) |
 >
 > Constants live in `ticketing_lifecycle.go`; guarded by
-> `TestTicketAudit_SeamlessWhenServiceNowConnected`. **The ONLY remaining piece for
-> full human-phase timing is the inbound ServiceNow state sync** (poll/webhook that
-> appends those rows) — buildable + testable against the bundled mock, no real
-> instance required to develop.
+> `TestTicketAudit_SeamlessWhenServiceNowConnected`.
+>
+> **Inbound state sync (2026-06-29) — full human-phase timing now closed.**
+> `ticketing_inbound.go` `ticketStateSyncer` polls each live ticket's CURRENT
+> ServiceNow state back (`serviceNowAdapter.FetchIncident` → `snowIncident`) and
+> appends the human-phase audit rows the table above expects — honest (emits a
+> phase ONLY where ServiceNow gives a real timestamp) + idempotent (deduped against
+> the ledger, at-most-once per action) + tenant-scoped (links listed at platform
+> scope, every write scoped to the row's tenant). State→phase mapping: In Progress
+> (2)/`work_start` → acknowledged + mitigation_started; Resolved (6)/`resolved_at`
+> → resolved; Closed (7)/`closed_at` → closed; optional `u_correlix_*` custom fields
+> drive mitigated/recovered precisely. It also reflects resolve/close back onto the
+> link status. Started in `main()` under `FEATURE_RCA_TICKETING`
+> (`RCA_TICKETING_INBOUND_INTERVAL`, default 45s); self-dormant when no connection
+> is configured. The bundled mock serves single-record GET so the whole loop is
+> developed/tested with NO real ServiceNow. Guarded by
+> `TestInboundSyncer_AppendsPhasesAndDedupes` + the pure `snowIncidentObservations`
+> tests. **With this, connecting a real ServiceNow lights up the entire incident
+> timeline end-to-end with zero further work.**
 
 ---
 

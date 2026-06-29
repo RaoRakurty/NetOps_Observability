@@ -581,6 +581,10 @@ func main() {
 		}
 		go newTicketWorker(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_WORKER_INTERVAL", 15*time.Second))
 		go newTicketSweeper(srv, srv.ticketing).Run(ctx, durationOr("RCA_TICKETING_SWEEP_INTERVAL", 60*time.Second))
+		// Inbound state sync (#84): poll each live ticket's ServiceNow state back and
+		// append the human-phase lifecycle events (acknowledged/resolved/closed/…) the
+		// incident time-decomposition renders. Self-dormant when no connection is set.
+		go newTicketStateSyncer(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_INBOUND_INTERVAL", 45*time.Second))
 		logInfo("ticketing", "RCA auto-ticketing enabled", nil)
 	}
 	go srv.startBroadcaster(ctx.Done())
