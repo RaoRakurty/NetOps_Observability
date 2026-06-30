@@ -71,20 +71,6 @@ func (s *server) vmInstant(ctx context.Context, query string) ([]vmSample, error
 	return samples, nil
 }
 
-// pathAgentDst extracts (agent, dst) — STAMP series carry {probe,dst}, synthetic
-// carry {check,dst}. The agent label keeps STAMP and synthetic paths to the same
-// dst distinct (different vantage / method).
-func pathAgentDst(m map[string]string) (agent, dst string) {
-	dst = m["dst"]
-	if p := m["probe"]; p != "" {
-		return p, dst
-	}
-	if c := m["check"]; c != "" {
-		return c, dst
-	}
-	return "probe", dst
-}
-
 // durationToken validates a PromQL range token from env (e.g. "7d") so it can be
 // interpolated safely; falls back to "7d" on anything malformed.
 func durationToken(v, def string) string {
@@ -108,6 +94,7 @@ func durationToken(v, def string) string {
 // pathAcc accumulates the metrics for one path across the VM queries.
 type pathAcc struct {
 	agent, dst                     string
+	source                         PathSource // winning measurement source (provenance #3)
 	curLat, curJit, curLoss        float64
 	hasLat, hasJit, hasLoss        bool
 	latP50, latP99, jitP50, jitP99 float64
@@ -168,47 +155,46 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	paths := map[string]*pathAcc{}
-	get := func(agent, dst string) *pathAcc {
-		k := agent + ":" + dst
+	get := func(dst string) *pathAcc {
+		k := hostOnly(dst)
 		a := paths[k]
 		if a == nil {
-			a = &pathAcc{agent: agent, dst: dst}
+			a = &pathAcc{dst: dst}
 			paths[k] = a
 		}
 		return a
 	}
-	// apply runs one VM vector query and folds each series into its path. Best-effort
-	// per metric (a missing metric leaves its fields unset → excluded from scoring).
+	// apply runs one VM vector query and folds each series into its path by
+	// destination host. Best-effort (a missing metric leaves its fields unset).
 	apply := func(query string, f func(a *pathAcc, v float64)) {
 		samples, err := s.vmInstant(ctx, query)
 		if err != nil {
 			return
 		}
 		for _, sm := range samples {
-			agent, dst := pathAgentDst(sm.Labels)
+			dst := sm.Labels["dst"]
 			if dst == "" {
 				continue
 			}
-			f(get(agent, dst), sm.Value)
+			f(get(dst), sm.Value)
 		}
 	}
 
-	// current 5-min p95 (latency, jitter) + 5-min avg loss
-	apply(`quantile_over_time(0.95, probe_rtt_ms[5m])`, func(a *pathAcc, v float64) { a.curLat = v; a.hasLat = true })
-	apply(`quantile_over_time(0.95, synthetic_icmp_rtt_ms[5m])`, func(a *pathAcc, v float64) {
-		if !a.hasLat {
-			a.curLat = v
-			a.hasLat = true
+	// current latency / jitter / loss come from the ONE source-agnostic resolver
+	// (#3): STAMP → wan-echo → synthetic ICMP → traceroute, with provenance. The
+	// path row carries the winning source so the UI shows HOW it was measured.
+	for h, m := range s.resolveCurrentByDst(ctx) {
+		a := paths[h]
+		if a == nil {
+			a = &pathAcc{dst: h}
+			paths[h] = a
 		}
-	})
-	apply(`quantile_over_time(0.95, probe_pdv_ms[5m])`, func(a *pathAcc, v float64) { a.curJit = v; a.hasJit = true })
-	apply(`avg_over_time(probe_loss_pct[5m])`, func(a *pathAcc, v float64) { a.curLoss = v; a.hasLoss = true })
-	apply(`avg_over_time(synthetic_icmp_loss_pct[5m])`, func(a *pathAcc, v float64) {
-		if !a.hasLoss {
-			a.curLoss = v
-			a.hasLoss = true
-		}
-	})
+		a.curLat, a.hasLat = m.Latency, m.HasLatency
+		a.curJit, a.hasJit = m.Jitter, m.HasJitter
+		a.curLoss, a.hasLoss = m.Loss, m.HasLoss
+		a.source = m.Source()
+		a.agent = string(a.source) // back-compat: the `agent` field now names the source
+	}
 	// per-path baseline percentiles over the baseline window
 	apply(`quantile_over_time(0.50, probe_rtt_ms[`+win+`])`, func(a *pathAcc, v float64) { a.latP50 = v })
 	apply(`quantile_over_time(0.99, probe_rtt_ms[`+win+`])`, func(a *pathAcc, v float64) { a.latP99 = v })
@@ -232,11 +218,13 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 	})
 
 	type item struct {
-		PathID  string         `json:"path_id"`
-		Agent   string         `json:"agent"`
-		Dst     string         `json:"dst"`
-		Current map[string]any `json:"current"`
-		Base    map[string]any `json:"baseline"`
+		PathID      string         `json:"path_id"`
+		Agent       string         `json:"agent"`
+		Dst         string         `json:"dst"`
+		Source      string         `json:"source"`       // measurement provenance (#3)
+		SourceLabel string         `json:"source_label"` // customer-facing source name
+		Current     map[string]any `json:"current"`
+		Base        map[string]any `json:"baseline"`
 		PathHealth
 	}
 	items := make([]item, 0, len(paths))
@@ -265,6 +253,7 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 		h := ScorePathHealth(cur, base, weightsForClass(""))
 		items = append(items, item{
 			PathID: k, Agent: a.agent, Dst: a.dst,
+			Source: string(a.source), SourceLabel: a.source.Label(),
 			Current: map[string]any{
 				"latency_p95_5m": round1(a.curLat), "jitter_p95_5m": round1(a.curJit), "loss_pct_5m": round2(a.curLoss),
 			},

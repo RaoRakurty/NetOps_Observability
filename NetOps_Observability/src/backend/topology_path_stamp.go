@@ -23,44 +23,39 @@ type stampSample struct {
 // (hostOnly — strip a :port from a probe dst so it matches a device address — is
 // defined in health_score.go and shared here.)
 
-// stampByDst queries the active-measurement metrics and folds them into one sample
-// per destination host. Best-effort: a missing metric/series leaves its field unset
-// (a query error returns whatever was gathered so far, never a hard failure).
+// stampByDst folds the active-measurement metrics into one sample per destination
+// host, via the shared source-agnostic resolver (#3): latency/jitter/loss cascade
+// STAMP → wan-echo → synthetic ICMP → traceroute, so a path-trace hop picks up
+// whatever method measured it — not STAMP only. One-way delay (OWD) is
+// STAMP-specific (no resolver field), so it's filled directly where present.
+// Best-effort: a missing metric/series leaves its field unset (honest "—").
 func (s *server) stampByDst(ctx context.Context) map[string]stampSample {
 	out := map[string]stampSample{}
-	apply := func(query string, set func(a *stampSample, v float64)) {
-		samples, err := s.vmInstant(ctx, query)
-		if err != nil {
-			return
+	for h, m := range s.resolveCurrentByDst(ctx) {
+		ss := stampSample{}
+		if m.HasLatency {
+			ss.rtt, ss.hasRTT = m.Latency, true
 		}
+		if m.HasJitter {
+			ss.pdv, ss.hasPDV = m.Jitter, true
+		}
+		if m.HasLoss {
+			ss.loss, ss.hasLoss = m.Loss, true
+		}
+		out[h] = ss
+	}
+	// OWD is STAMP-only (two-way timestamps) — no resolver field; fill directly.
+	if samples, err := s.vmInstant(ctx, `quantile_over_time(0.95, probe_owd_ms[5m])`); err == nil {
 		for _, sm := range samples {
 			h := hostOnly(sm.Labels["dst"])
 			if h == "" {
 				continue
 			}
-			cur := out[h]
-			set(&cur, sm.Value)
-			out[h] = cur
+			ss := out[h]
+			ss.owd, ss.hasOWD = sm.Value, true
+			out[h] = ss
 		}
 	}
-	// STAMP: 5-min p95 latency/jitter/delay + 5-min avg loss (mirrors path-health).
-	apply(`quantile_over_time(0.95, probe_rtt_ms[5m])`, func(a *stampSample, v float64) { a.rtt = v; a.hasRTT = true })
-	apply(`quantile_over_time(0.95, probe_owd_ms[5m])`, func(a *stampSample, v float64) { a.owd = v; a.hasOWD = true })
-	apply(`quantile_over_time(0.95, probe_pdv_ms[5m])`, func(a *stampSample, v float64) { a.pdv = v; a.hasPDV = true })
-	apply(`avg_over_time(probe_loss_pct[5m])`, func(a *stampSample, v float64) { a.loss = v; a.hasLoss = true })
-	// ICMP synthetic fallback for a hop with no STAMP probe (latency + loss only).
-	apply(`quantile_over_time(0.95, synthetic_icmp_rtt_ms[5m])`, func(a *stampSample, v float64) {
-		if !a.hasRTT {
-			a.rtt = v
-			a.hasRTT = true
-		}
-	})
-	apply(`avg_over_time(synthetic_icmp_loss_pct[5m])`, func(a *stampSample, v float64) {
-		if !a.hasLoss {
-			a.loss = v
-			a.hasLoss = true
-		}
-	})
 	return out
 }
 

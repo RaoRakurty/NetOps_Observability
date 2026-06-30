@@ -129,8 +129,8 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 			reachable++
 		}
 		lbl := fmt.Sprintf(
-			`circuit=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
-			tgt.CircuitID, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
+			`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
+			tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
 			res.method, boolLabel(res.sourceBound))
 		if res.recv > 0 {
 			lines = append(lines,
