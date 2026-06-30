@@ -1616,8 +1616,10 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    gradient signature on the drawer edge, glass answer cards with a left accent
    rail, mono ids, and a glowing send control. Tuned for both light + dark. */
 
-/* Thin animated accent signature down the drawer's left edge — quiet, premium. */
-.op-drawer { position: relative; }
+/* Thin animated accent signature down the drawer's left edge — quiet, premium.
+   NB: do NOT set position here — `.drawer` is already position:fixed (the slide-
+   over), which is the containing block for this ::before. Overriding it to
+   relative drops the drawer into normal flow and blacks out the app. */
 .op-drawer::before {
   content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; z-index: 1;
   background: linear-gradient(180deg, transparent, var(--accent), color-mix(in srgb, var(--accent) 50%, transparent), transparent);
