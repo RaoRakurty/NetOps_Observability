@@ -103,7 +103,7 @@ var modules = []Module{
 		ResponseModes: []string{"problem_explanation", "evidence_explanation", "missing_evidence_explanation"},
 	},
 	{
-		ID: "topology", DisplayName: "Topo",
+		ID: "topology", DisplayName: "Topology Canvas",
 		Description:        "Network/service topology: paths, neighbors, dependency maps, and blast radius for an incident.",
 		Entities:           []string{"node", "link", "path", "service_dependency", "blast_radius"},
 		QuestionCategories: []string{"topology_path", "blast_radius", "neighbors", "dependency"},

@@ -25,7 +25,18 @@ const SUGGESTIONS = [
   "Summarize the most recent critical alerts",
 ];
 
-export default function Opsis() {
+// Slash commands — pre-made, grounded questions so the operator can pick instead
+// of typing (Claude-Code style). `kind` routes to the right grounded action.
+type SlashCmd = { cmd: string; title: string; desc: string; kind: "grounded" | "topIncident" | "send"; text?: string };
+const SLASH_COMMANDS: SlashCmd[] = [
+  { cmd: "/status", title: "What's going on right now", desc: "Live NOC situation + what to focus on first", kind: "grounded" },
+  { cmd: "/top-incident", title: "Explain the top incident", desc: "RCA on the highest-priority correlation", kind: "topIncident" },
+  { cmd: "/talkers", title: "Top talkers", desc: "Heaviest conversations (flow analytics)", kind: "send", text: "Show me the top talkers" },
+  { cmd: "/anomalies", title: "Metric anomalies", desc: "Detected device anomalies right now (telemetry)", kind: "send", text: "Any metric anomalies right now?" },
+  { cmd: "/flows", title: "Flow summary", desc: "Traffic volume over the recent window", kind: "send", text: "Give me a flow summary" },
+];
+
+export default function Opsis({ split, onToggleSplit }: { split?: boolean; onToggleSplit?: () => void }) {
   const { setCopilotOpen } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [history, setHistory] = useState<CopilotMessage[]>([]);
@@ -41,8 +52,19 @@ export default function Opsis() {
 
   const [cfg, setCfg] = useState<CopilotConfig | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [savingCfg, setSavingCfg] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
+  // Slash-command menu (like Claude Code): typing "/" surfaces pre-made questions.
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashIdx, setSlashIdx] = useState(0);
+
+  // New conversation — clear the thread + transient panels, focus the composer.
+  const newConversation = () => {
+    setHistory([]); setGrounded({}); setDraft(""); setError(null);
+    setShowSettings(false); setShowHelp(false); setSlashOpen(false);
+    taRef.current?.focus();
+  };
 
   useEffect(() => {
     api.credentials().then((c) => setEnabled(Boolean(c?.copilot))).catch(() => setEnabled(false));
@@ -166,24 +188,67 @@ export default function Opsis() {
 
   const ready = !!cfg?.feature_enabled && !!cfg?.key_present;
 
+  // Slash menu: filter the pre-made questions by what's typed after "/".
+  const slashQuery = draft.startsWith("/") ? draft.slice(1).toLowerCase().trim() : "";
+  const slashMatches = !slashOpen ? [] : SLASH_COMMANDS.filter((c) =>
+    !slashQuery || c.cmd.slice(1).includes(slashQuery) || c.title.toLowerCase().includes(slashQuery));
+
+  // runSlash dispatches a pre-made question to the right grounded action.
+  const runSlash = (c: SlashCmd) => {
+    setSlashOpen(false); setDraft("");
+    if (c.kind === "grounded") askGrounded();
+    else if (c.kind === "topIncident") askTopIncident();
+    else if (c.kind === "send" && c.text) send(c.text);
+  };
+
   return (
     <div className="op-chat">
-      {/* Slim status toolbar (the drawer header already carries the title). */}
-      <div className="op-toolbar">
-        {cfg && (
-          <span className="op-status" title={cfg.key_present ? "Connected" : "No API key — add one in settings"}>
-            <span className={`op-dot ${ready ? "ok" : "warn"}`} />
-            {cfg.provider === "anthropic" ? "Claude" : cfg.provider} · {cfg.model}
+      {/* Header — brand + control cluster: New · Split · Settings · Help · Close. */}
+      <div className="op-hd">
+        <span className="op-hd-brand">
+          <span className="op-hd-logo"><Icon name="copilot" size={15} /></span>
+          <span className="op-hd-text">
+            <span className="op-hd-title">Correlix AI</span>
+            <span className="op-hd-sub">
+              <span className={`op-dot ${ready ? "ok" : "warn"}`} />
+              {cfg ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free") : "Network assistant"}
+            </span>
           </span>
-        )}
-        <span style={{ flex: 1 }} />
-        <button className="op-iconbtn" title="Clear conversation" onClick={() => { setHistory([]); setGrounded({}); }} disabled={busy || history.length === 0}>
-          <Icon name="refresh" size={15} />
-        </button>
-        <button className="op-iconbtn" title="Assistant settings" onClick={() => setShowSettings((v) => !v)}>
-          <Icon name="settings" size={15} />
-        </button>
+        </span>
+        <span className="op-hd-actions">
+          <button className="op-hd-btn op-hd-new" title="New conversation" onClick={newConversation}>+</button>
+          {onToggleSplit && (
+            <button className={`op-hd-btn${split ? " on" : ""}`} onClick={() => onToggleSplit()}
+              title={split ? "Overlay mode — float over the page" : "Split screen — dock beside the page"}>
+              <Icon name="maximize" size={15} />
+            </button>
+          )}
+          <button className={`op-hd-btn${showSettings ? " on" : ""}`} title="Assistant settings"
+            onClick={() => { setShowSettings((v) => !v); setShowHelp(false); }}>
+            <Icon name="settings" size={15} />
+          </button>
+          <button className={`op-hd-btn${showHelp ? " on" : ""}`} title="Help & documentation"
+            onClick={() => { setShowHelp((v) => !v); setShowSettings(false); }}>
+            <Icon name="help" size={15} />
+          </button>
+          <button className="op-hd-btn" title="Close (Esc)" onClick={() => setCopilotOpen(false)}>
+            <Icon name="close" size={15} />
+          </button>
+        </span>
       </div>
+
+      {showHelp && (
+        <div className="op-settings op-help">
+          <div className="op-help-h">What Correlix AI can do</div>
+          <ul className="op-help-list">
+            <li><b>Live state</b> — “what’s going on right now”, what to focus on first.</li>
+            <li><b>RCA</b> — “explain this incident”, root cause, evidence, missing streams.</li>
+            <li><b>Modules</b> — top talkers, metric anomalies, flow summary (more coming).</li>
+            <li><b>Navigation</b> — “where do I configure ServiceNow?”.</li>
+          </ul>
+          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Answers are grounded, tenant-scoped and cited. Full documentation is coming soon.</div>
+        </div>
+      )}
 
       {showSettings && cfg && (
         <div className="op-settings">
@@ -289,15 +354,44 @@ export default function Opsis() {
       {error && <div className="op-error">{error}</div>}
 
       {/* Composer */}
-      <form className="op-composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
+      <form className="op-composer" onSubmit={(e) => { e.preventDefault(); if (!slashOpen) send(); }}>
+        {/* Slash menu — pre-made questions, Claude-Code style. */}
+        {slashOpen && slashMatches.length > 0 && (
+          <div className="op-slash" role="listbox">
+            <div className="op-slash-h">Quick questions</div>
+            {slashMatches.map((c, i) => (
+              <button type="button" key={c.cmd} role="option" aria-selected={i === slashIdx}
+                className={`op-slash-item${i === slashIdx ? " on" : ""}`}
+                onMouseEnter={() => setSlashIdx(i)} onClick={() => runSlash(c)}>
+                <span className="op-slash-cmd">{c.cmd}</span>
+                <span className="op-slash-title">{c.title}</span>
+                <span className="op-slash-desc">{c.desc}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           ref={taRef}
           className="op-input"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask Correlix AI…  (⏎ to send, ⇧⏎ for newline)"
+          onChange={(e) => {
+            const v = e.target.value;
+            setDraft(v);
+            const open = v.startsWith("/");
+            setSlashOpen(open);
+            if (open) setSlashIdx(0);
+          }}
+          placeholder="Ask Correlix AI…   ( / for quick questions · ⏎ send · ⇧⏎ newline )"
           rows={1}
           onKeyDown={(e) => {
+            if (slashOpen && slashMatches.length > 0) {
+              if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
+              if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); runSlash(slashMatches[slashIdx]); return; }
+              // stopPropagation so Esc dismisses the menu WITHOUT the global
+              // handler also closing the whole panel.
+              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setSlashOpen(false); return; }
+            }
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
           }}
         />

@@ -1704,6 +1704,92 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* Cite chips: tabular, hairline, futuristic. */
 .op-cite { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 
+/* ===== Correlix AI — LEFT-docked panel (attached to the rail knob) ===========
+   Slides in from the icon rail; overlay by default, or split (page reflows). */
+:root { --ai-panel-w: 432px; }
+
+.op-panel {
+  position: fixed; z-index: 95;
+  left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); bottom: 0;
+  width: min(var(--ai-panel-w), calc(100vw - var(--sidebar-w, 64px) - 8px));
+  display: flex; flex-direction: column;
+  background: var(--panel-solid); border-right: 1px solid var(--panel-border);
+  box-shadow: 18px 0 48px -28px rgba(0,0,0,.65);
+  /* closed → tucked behind the rail, faded out, inert */
+  transform: translateX(-18px); opacity: 0; visibility: hidden; pointer-events: none;
+  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s linear .28s;
+}
+.op-panel.open {
+  transform: none; opacity: 1; visibility: visible; pointer-events: auto;
+  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s;
+}
+/* The animated accent signature now rides the panel's left edge. */
+.op-panel::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; z-index: 1;
+  background: linear-gradient(180deg, transparent, var(--accent), color-mix(in srgb, var(--accent) 50%, transparent), transparent);
+  background-size: 100% 220%; animation: opEdge 7s linear infinite; opacity: .85;
+}
+.op-panel .op-chat { flex: 1; min-height: 0; }
+
+/* Light scrim (overlay mode only) over the page area right of the rail. */
+.op-scrim {
+  position: fixed; left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); right: 0; bottom: 0;
+  background: rgba(8,11,20,.32); opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 94;
+}
+.op-scrim.open { opacity: 1; pointer-events: auto; }
+
+/* SPLIT mode — the page reflows beside the panel (no scrim, both usable). */
+.main { transition: padding-left .28s cubic-bezier(.22,.61,.36,1); }
+body.ai-split .main { padding-left: var(--ai-panel-w); }
+
+/* Header: brand + control cluster (New · Split · Settings · Help · Close). */
+.op-hd {
+  display: flex; align-items: center; gap: 10px; padding: 11px 12px 11px 14px;
+  border-bottom: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, var(--panel-solid)), var(--panel-solid));
+}
+.op-hd-brand { display: inline-flex; align-items: center; gap: 9px; min-width: 0; }
+.op-hd-logo {
+  width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto;
+  color: #fff; background: var(--accent-grad, var(--accent)); box-shadow: 0 0 14px var(--accent-soft, rgba(79,70,229,.5));
+}
+.op-hd-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.op-hd-title { font-weight: 700; font-size: 13.5px; letter-spacing: -.01em; }
+.op-hd-sub { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.op-hd-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+.op-hd-btn {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  color: var(--muted); background: transparent; border: 1px solid transparent;
+  font-size: 18px; line-height: 1; transition: color .12s, background .12s, border-color .12s;
+}
+.op-hd-btn:hover { color: var(--fg); background: var(--hover); }
+.op-hd-btn.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
+.op-hd-new { font-weight: 400; }
+
+/* Help panel (reuses .op-settings chrome). */
+.op-help-h { font-weight: 700; font-size: 12.5px; margin-bottom: 6px; }
+.op-help-list { margin: 0 0 8px; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg); }
+.op-help-list b { color: var(--accent); font-weight: 600; }
+.op-help-tip { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.op-help-tip kbd { font-family: var(--font-mono, monospace); background: var(--panel); border: 1px solid var(--panel-border); border-radius: 4px; padding: 0 5px; }
+
+/* Slash menu — pre-made questions above the composer (Claude-Code style). */
+.op-composer { position: relative; }
+.op-slash {
+  position: absolute; left: 12px; right: 12px; bottom: calc(100% - 4px); z-index: 20;
+  background: var(--panel-solid); border: 1px solid var(--panel-border); border-radius: 12px;
+  box-shadow: 0 -8px 28px -14px rgba(0,0,0,.6); padding: 6px; max-height: 280px; overflow-y: auto;
+}
+.op-slash-h { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 4px 8px 6px; }
+.op-slash-item {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; width: 100%; text-align: left;
+  padding: 7px 9px; border-radius: 8px; cursor: pointer; background: transparent; border: 0; color: var(--fg);
+}
+.op-slash-item.on { background: var(--accent-soft); }
+.op-slash-cmd { grid-row: span 2; align-self: center; font-family: var(--font-mono, monospace); font-size: 11.5px; font-weight: 600; color: var(--accent); }
+.op-slash-title { font-size: 12.5px; font-weight: 600; }
+.op-slash-desc { grid-column: 2; font-size: 11px; color: var(--muted); }
+
 /* ----- Overview dashboard — reference-grade panel grid, clean flat bg ----- */
 .ov-head {
   display: flex; align-items: center; justify-content: space-between;

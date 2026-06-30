@@ -192,7 +192,7 @@ export const NAV: NavSection[] = [
       // Correlix Topology Operating Canvas (React Flow + ELK). Evidence-backed,
       // renderer-agnostic; see docs/Correlix_Topology_Operating_Canvas_Guide.
       // Now the SINGLE topology view — the legacy Device Topology Map was retired.
-      { id: "topology-canvas", label: "Topo", group: "Maps", render: () => <TopologyCanvas /> },
+      { id: "topology-canvas", label: "Topology Canvas", group: "Maps", render: () => <TopologyCanvas /> },
       { id: "geomap", label: "Device Geomap", group: "Maps", render: () => <DeviceGeomap /> },
       // Paths & overlays — how traffic actually traverses the network:
       // hop-by-hop active paths (Flow Trace) and overlay circuits (Tunnels).
