@@ -210,7 +210,7 @@ export default function Devices() {
   // filter, `sortValue` the header sort, `sev` the conditional cell tint.
   const columns = useMemo<Column<Device>[]>(() => [
     {
-      key: "id", header: "Device", width: "16%", sortable: true,
+      key: "id", header: "Device", width: "14%", sortable: true,
       text: (d) => d.id, sortValue: (d) => d.id,
       render: (d) => (
         <>
@@ -221,16 +221,16 @@ export default function Devices() {
       ),
     },
     {
-      key: "name", header: "Name", width: "16%", sortable: true,
+      key: "name", header: "Name", width: "14%", sortable: true,
       text: (d) => d.name ?? "", render: (d) => <span title={d.name || ""}>{d.name || "—"}</span>,
     },
     {
-      key: "address", header: "IP address", width: 148,
+      key: "address", header: "IP address", width: "12%",
       text: (d) => d.address,
       render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12 }}>{d.address}</span>,
     },
     {
-      key: "type", header: "Type", width: "12%", sortable: true,
+      key: "type", header: "Type", width: "11%", sortable: true,
       text: (d) => typeMeta(d.type).label, sortValue: (d) => d.type || "~",
       render: (d) => {
         const m = typeMeta(d.type);
@@ -243,7 +243,7 @@ export default function Devices() {
       },
     },
     {
-      key: "vendor", header: "Manufacturer", width: "12%", sortable: true,
+      key: "vendor", header: "Manufacturer", width: "11%", sortable: true,
       text: (d) => d.vendor ?? "", sortValue: (d) => (d.vendor || "~").toLowerCase(),
       render: (d) => {
         const v = (d.vendor || "").trim() || "Unknown";
@@ -256,7 +256,7 @@ export default function Devices() {
       },
     },
     {
-      key: "location", header: "Site", width: "15%", sortable: true,
+      key: "location", header: "Site", width: "13%", sortable: true,
       text: (d) => siteText(locs.get(d.id), siteName),
       sortValue: (d) => siteText(locs.get(d.id), siteName) || "~",
       render: (d) => (
@@ -270,16 +270,16 @@ export default function Devices() {
       ),
     },
     {
-      key: "model", header: "Description", width: "14%",
+      key: "model", header: "Description", width: "13%",
       text: (d) => d.model ?? d.os ?? "", render: (d) => <span title={d.model || d.os || ""} style={{ color: "var(--fg-muted)" }}>{d.model || d.os || "—"}</span>,
     },
     {
-      key: "source", header: "Source", width: 88,
+      key: "source", header: "Source", width: "6%",
       text: (d) => sourceLabel(d.source),
       render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
     },
     {
-      key: "last_seen", header: "Polled", width: 100, sortable: true,
+      key: "last_seen", header: "Polled", width: "6%", sortable: true,
       sortValue: (d) => new Date(d.last_seen).getTime() || 0,
       sev: (d) => healthSev(health.get(d.id) ?? "up"),
       render: (d) => <span title={new Date(d.last_seen).toLocaleString()}>{relTime(d.last_seen)}</span>,
@@ -311,6 +311,8 @@ export default function Devices() {
           <NocKpi n={counts.down} label="Down" interp="no heartbeat" tone={counts.down ? "var(--crit)" : undefined} />
         </NocKpis>
       </NocHeader>
+
+      {devices.length > 0 && <FleetComposition devices={devices} locs={locs} siteName={siteName} />}
 
       <div className="cc-panel">
         <div className="cc-panel-h">
@@ -482,4 +484,116 @@ function relTime(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+// ── Fleet composition ────────────────────────────────────────────────────────
+// A compact, evidence-only read on the SHAPE of the fleet — derived entirely
+// from the already-loaded inventory (no extra fetch, no mock data). It turns the
+// empty space below the KPIs into an at-a-glance operator briefing: what kinds of
+// devices, from which vendors, via which discovery source, and how much of the
+// fleet is placed at a known site.
+
+type Slice = { key: string; label: string; n: number; color: string };
+
+// tally groups rows by a key accessor, returns the top slices (rest folded into
+// "Other"), each carrying a stable colour from `color`. Empty keys → "Unknown".
+function tally(
+  devices: Device[],
+  keyOf: (d: Device) => string,
+  label: (k: string) => string,
+  color: (k: string) => string,
+  top = 5,
+): Slice[] {
+  const counts = new Map<string, number>();
+  for (const d of devices) {
+    const k = keyOf(d) || "unknown";
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const head = sorted.slice(0, top).map(([k, n]) => ({ key: k, label: label(k), n, color: color(k) }));
+  const rest = sorted.slice(top).reduce((s, [, n]) => s + n, 0);
+  if (rest > 0) head.push({ key: "__other", label: "Other", n: rest, color: "var(--muted)" });
+  return head;
+}
+
+// A labelled distribution: a thin stacked bar + a legend of the slices. Honest
+// empty state when there's nothing to show for this dimension.
+function DistroBar({ title, slices, total }: { title: string; slices: Slice[]; total: number }) {
+  return (
+    <div className="fc-distro">
+      <div className="fc-distro-h">
+        <span className="fc-distro-t">{title}</span>
+        <span className="fc-distro-n">{slices.length} {slices.length === 1 ? "kind" : "kinds"}</span>
+      </div>
+      {total === 0 ? (
+        <div className="fc-distro-empty">No data</div>
+      ) : (
+        <>
+          <div className="fc-bar" role="img" aria-label={`${title} distribution`}>
+            {slices.map((s) => (
+              <span key={s.key} className="fc-bar-seg" title={`${s.label}: ${s.n}`}
+                style={{ width: `${(s.n / total) * 100}%`, background: s.color }} />
+            ))}
+          </div>
+          <ul className="fc-legend">
+            {slices.map((s) => (
+              <li key={s.key} className="fc-legend-i" title={`${s.label}: ${s.n} of ${total}`}>
+                <span className="fc-legend-dot" style={{ background: s.color }} />
+                <span className="fc-legend-l">{s.label}</span>
+                <span className="fc-legend-n">{s.n}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function FleetComposition({
+  devices, locs, siteName,
+}: {
+  devices: Device[];
+  locs: Map<string, DeviceLocationRow>;
+  siteName: Map<string, string>;
+}) {
+  const byType = useMemo(
+    () => tally(devices, (d) => d.type || "generic", (k) => typeMeta(k).label, (k) => typeMeta(k).color),
+    [devices],
+  );
+  const byVendor = useMemo(
+    () => tally(devices, (d) => (d.vendor || "").trim() || "Unknown",
+      (k) => k.charAt(0).toUpperCase() + k.slice(1), (k) => vendorColor(k)),
+    [devices],
+  );
+  const bySource = useMemo(
+    () => tally(devices, (d) => d.source || "unknown", (k) => sourceLabel(k),
+      (k) => SOURCE_META[k]?.tone === "good" ? "var(--good)" : SOURCE_META[k]?.tone === "accent" ? "var(--accent)" : SOURCE_META[k]?.tone === "warn" ? "var(--warn)" : "var(--muted)"),
+    [devices],
+  );
+  // Site placement coverage — declared site vs. unplaced. Directly actionable:
+  // unplaced devices won't roll up into any site view.
+  const placed = useMemo(
+    () => devices.filter((d) => { const sl = locs.get(d.id)?.site; return !!sl && siteName.has(sl); }).length,
+    [devices, locs, siteName],
+  );
+  const placement: Slice[] = [
+    { key: "placed", label: "Placed at a site", n: placed, color: "var(--good, #16a34a)" },
+    { key: "unplaced", label: "Unplaced", n: devices.length - placed, color: "var(--muted)" },
+  ];
+
+  return (
+    <div className="cc-panel fc-panel">
+      <div className="cc-panel-h">
+        <h3 className="cc-panel-t">Fleet composition</h3>
+        <span className="cc-panel-meta">{devices.length} devices · derived live from inventory</span>
+      </div>
+      <div className="fc-grid">
+        <DistroBar title="By type" slices={byType} total={devices.length} />
+        <DistroBar title="By manufacturer" slices={byVendor} total={devices.length} />
+        <DistroBar title="By discovery source" slices={bySource} total={devices.length} />
+        <DistroBar title="Site placement" slices={placement} total={devices.length} />
+      </div>
+    </div>
+  );
 }

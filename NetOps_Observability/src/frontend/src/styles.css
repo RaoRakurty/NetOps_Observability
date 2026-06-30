@@ -563,12 +563,17 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .nav-flyout-subitem {
   display: flex; align-items: center; height: 23px; padding: 0 10px 0 32px;
   background: transparent; border: 0; border-radius: var(--r-1);
-  color: var(--rail-fg-muted, var(--rail-fg)); font-family: var(--font-sans, system-ui); font-size: 12px; font-weight: 500; text-align: left;
+  /* sub-items are interactive, not disabled — keep them clearly readable
+     (a notch below the leaf, not "greyed out"). */
+  color: color-mix(in srgb, var(--rail-fg) 82%, transparent);
+  font-family: var(--font-sans, system-ui); font-size: 12px; font-weight: 500; text-align: left;
   white-space: nowrap; cursor: pointer; position: relative;
 }
 .nav-flyout-subitem::before { content: ""; position: absolute; left: 21px; top: 50%; width: 4px; height: 4px;
-  transform: translateY(-50%); border-radius: 50%; background: currentColor; opacity: .5; }
+  transform: translateY(-50%); border-radius: 50%; background: currentColor; opacity: .55; }
 .nav-flyout-subitem:hover { background: var(--rail-hover); color: var(--rail-fg); }
+.nav-flyout-subitem.active { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 22%, transparent); color: var(--rail-active-fg, #fff); }
+.nav-flyout-subitem.active::before { opacity: 1; }
 .nav-flyout-subitem:focus-visible { outline: 2px solid var(--mod, var(--rail-accent)); outline-offset: -2px; }
 /* labelled group divider (tier-1, e.g. "Monitors") — display face, flush-left so
    the indented items below read as its children. */
@@ -3288,6 +3293,26 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    Device Monitoring — fleet board (collapsible section groups + panels)
    ========================================================================== */
 .dm-board { display: flex; flex-direction: column; gap: 14px; }
+/* Fleet composition — derived distribution strip on the Devices board. */
+.fc-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px 26px; padding: 14px 16px 16px;
+}
+.fc-distro { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fc-distro-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.fc-distro-t { font-size: 12px; font-weight: 650; letter-spacing: .01em; color: var(--fg, #0f172a); }
+.fc-distro-n { font-size: 11px; color: var(--fg-muted, var(--muted)); font-variant-numeric: tabular-nums; }
+.fc-distro-empty { font-size: 12px; color: var(--fg-subtle, var(--muted)); padding: 4px 0; }
+.fc-bar {
+  display: flex; height: 8px; border-radius: 999px; overflow: hidden;
+  background: var(--surface-2, var(--hover)); gap: 1px;
+}
+.fc-bar-seg { height: 100%; min-width: 2px; }
+.fc-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.fc-legend-i { display: flex; align-items: center; gap: 7px; font-size: 12px; min-width: 0; }
+.fc-legend-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.fc-legend-l { color: var(--fg, #0f172a); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-legend-n { margin-left: auto; color: var(--fg-muted, var(--muted)); font-variant-numeric: tabular-nums; font-weight: 600; }
 .dm-group { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
 .dm-group-head {
   display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
