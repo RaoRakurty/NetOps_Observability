@@ -1509,9 +1509,39 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .op-iconbtn:hover:not(:disabled) { background: var(--hover); border-color: var(--accent-ring); }
 .op-iconbtn:disabled { opacity: .45; cursor: default; }
 
-.op-settings { padding: 12px 14px; border-bottom: 1px solid var(--panel-border); background: var(--bg); }
-.op-field { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
-.op-field input, .op-field select { font-size: 13px; }
+.op-settings { padding: 14px; border-bottom: 1px solid var(--panel-border); background: var(--bg); }
+.op-field { display: grid; gap: 6px; margin-bottom: 13px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.op-field > span { display: inline-flex; align-items: center; gap: 6px; }
+/* Modern input boxes — rounded, hairline, accent focus glow (matches the panel). */
+.op-field input, .op-field select {
+  font-size: 13px; font-weight: 400; text-transform: none; letter-spacing: normal;
+  width: 100%; padding: 9px 11px; border-radius: 9px; color: var(--fg);
+  background: var(--panel-solid); border: 1px solid var(--panel-border);
+  transition: border-color .12s, box-shadow .12s;
+}
+.op-field input:focus, .op-field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft, rgba(79,70,229,.15)); }
+.op-field input:disabled { opacity: .6; }
+
+/* Provider selection — modern segmented tiles instead of a <select>. */
+.op-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.op-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; cursor: pointer; text-align: left;
+  padding: 9px 12px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--panel-border);
+  transition: border-color .12s, background .12s, transform .1s;
+}
+.op-tile:hover { border-color: var(--accent-ring); transform: translateY(-1px); }
+.op-tile.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+.op-tile-name { font-size: 13px; font-weight: 700; color: var(--fg); text-transform: none; letter-spacing: normal; }
+.op-tile-sub { font-size: 10.5px; color: var(--muted); text-transform: none; letter-spacing: normal; font-weight: 500; }
+
+/* Model quick-pick chips under the input. */
+.op-modelchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.op-modelchip {
+  font-family: var(--font-mono, monospace); font-size: 10.5px; font-weight: 500; cursor: pointer; text-transform: none; letter-spacing: normal;
+  color: var(--muted); background: transparent; border: 1px solid var(--panel-border); border-radius: 999px; padding: 3px 9px; transition: all .12s;
+}
+.op-modelchip:hover { color: var(--accent); border-color: var(--accent-ring); }
+.op-modelchip.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
 
 .op-msgs { flex: 1; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 14px; }
 
@@ -1800,15 +1830,14 @@ body.ai-split .main { padding-left: var(--ai-panel-w); }
 }
 .op-slash-h { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 4px 8px 6px; }
 .op-slash-item {
-  display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; width: 100%; text-align: left;
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
   padding: 7px 9px; border-radius: 8px; cursor: pointer; background: transparent; border: 0; color: var(--fg);
 }
 .op-slash-item.on { background: var(--accent-soft); }
-.op-slash-cmd { grid-row: span 2; align-self: center; font-family: var(--font-mono, monospace); font-size: 11.5px; font-weight: 600; color: var(--accent); }
-.op-slash-title { font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
-.op-slash-mod { font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-ring); border-radius: 4px; padding: 1px 5px; }
-.op-slash-soon { font-size: 9px; font-weight: 700; text-transform: uppercase; color: var(--muted); border: 1px solid var(--panel-border); border-radius: 4px; padding: 1px 5px; }
-.op-slash-desc { grid-column: 2; font-size: 11px; color: var(--muted); }
+.op-slash-cmd { font-family: var(--font-mono, monospace); font-size: 11.5px; font-weight: 600; color: var(--accent); flex: 0 0 auto; }
+.op-slash-title { font-size: 12.5px; font-weight: 600; }
+.op-slash-mod { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-ring); border-radius: 4px; padding: 1px 5px; flex: 0 0 auto; }
+.op-slash-soon { font-size: 9px; font-weight: 700; text-transform: uppercase; color: var(--muted); border: 1px solid var(--panel-border); border-radius: 4px; padding: 1px 5px; flex: 0 0 auto; }
 
 /* ----- Overview dashboard — reference-grade panel grid, clean flat bg ----- */
 .ov-head {

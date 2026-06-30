@@ -297,17 +297,31 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
               <span style={{ color: "var(--muted)", fontSize: 11 }}>Set via environment; clear it from <code>.env</code> to manage it here.</span>
             )}
           </label>
-          <label className="op-field">
+          <div className="op-field">
             <span>Provider</span>
-            <select value={cfg.provider} onChange={(e) => { const provider = e.target.value; const s = cfg.model_suggestions?.[provider] ?? []; setCfg({ ...cfg, provider, model: s[0] ?? cfg.model }); }}>
-              {(cfg.providers ?? ["anthropic", "openai"]).map((p) => <option key={p} value={p}>{p === "anthropic" ? "Anthropic (Claude)" : p}</option>)}
-            </select>
-          </label>
-          <label className="op-field">
+            <div className="op-tiles">
+              {(cfg.providers ?? ["anthropic", "openai"]).map((pv) => (
+                <button type="button" key={pv}
+                  className={`op-tile${cfg.provider === pv ? " on" : ""}`}
+                  onClick={() => { const s = cfg.model_suggestions?.[pv] ?? []; setCfg({ ...cfg, provider: pv, model: s[0] ?? cfg.model }); }}>
+                  <span className="op-tile-name">{pv === "anthropic" ? "Anthropic" : pv === "openai" ? "OpenAI" : pv}</span>
+                  <span className="op-tile-sub">{pv === "anthropic" ? "Claude" : pv === "openai" ? "GPT" : ""}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="op-field">
             <span>Model</span>
-            <input list="copilot-models" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} placeholder="model id" />
+            <input className="op-modelinput" list="copilot-models" value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} placeholder="model id" />
             <datalist id="copilot-models">{modelChoices.map((m) => <option key={m} value={m} />)}</datalist>
-          </label>
+            {modelChoices.length > 0 && (
+              <div className="op-modelchips">
+                {modelChoices.slice(0, 4).map((m) => (
+                  <button type="button" key={m} className={`op-modelchip${cfg.model === m ? " on" : ""}`} onClick={() => setCfg({ ...cfg, model: m })}>{m}</button>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button className="dash-btn accent" onClick={saveCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
@@ -387,11 +401,9 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
                 className={`op-slash-item${i === slashIdx ? " on" : ""}`}
                 onMouseEnter={() => setSlashIdx(i)} onClick={() => runSlash(c)}>
                 <span className="op-slash-cmd">{c.cmd}</span>
-                <span className="op-slash-title">{c.title}
-                  <span className="op-slash-mod">{c.module}</span>
-                  {c.soon && <span className="op-slash-soon">soon</span>}
-                </span>
-                <span className="op-slash-desc">{c.desc}</span>
+                <span className="op-slash-title">{c.title}</span>
+                <span className="op-slash-mod">{c.module}</span>
+                {c.soon && <span className="op-slash-soon">soon</span>}
               </button>
             ))}
           </div>
