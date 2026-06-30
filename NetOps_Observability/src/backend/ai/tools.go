@@ -295,6 +295,9 @@ var moduleTools = []struct {
 	{"get_flow_summary", "flow_analytics", "flow_summary", []string{"flows:read"}, FreshnessRecent},
 	// Telemetry (CH netops.findings, tenant_iso row policy — detected anomalies).
 	{"get_metric_anomalies", "telemetry", "metric_anomalies", []string{"infrastructure:read"}, FreshnessRecent},
+	// App Identification (CH netops.app_identities, tenant_iso row policy).
+	{"get_app_identity_summary", "app_identification", "app_identity_summary", []string{"applications:read"}, FreshnessRecent},
+	{"get_low_confidence_app_matches", "app_identification", "low_confidence_apps", []string{"applications:read"}, FreshnessRecent},
 }
 
 // Tools builds the tool registry. P1 wires the RCA tools to the DataSource;

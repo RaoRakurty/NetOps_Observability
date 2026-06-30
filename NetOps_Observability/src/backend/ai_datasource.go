@@ -169,9 +169,49 @@ func (d aiDataSource) ModuleQuery(_ context.Context, _ ai.Principal, query strin
 		return d.moduleFlowSummary()
 	case "metric_anomalies":
 		return d.moduleMetricAnomalies()
+	case "app_identity_summary":
+		return d.moduleAppIdentity(false)
+	case "low_confidence_apps":
+		return d.moduleAppIdentity(true)
 	default:
 		return ai.ToolResult{}, ai.ErrNotImplemented
 	}
+}
+
+// moduleAppIdentity summarizes identified applications (App Identification) from
+// the tenant-scoped netops.app_identities table. lowConfidence=true narrows to
+// weak matches (the "which apps have low identification confidence?" question).
+func (d aiDataSource) moduleAppIdentity(lowConfidence bool) (ai.ToolResult, error) {
+	having := ""
+	if lowConfidence {
+		having = "HAVING conf < 0.5"
+	}
+	sql := `
+SELECT app, count() AS flows, round(avg(confidence), 2) AS conf, any(provider) AS provider
+  FROM netops.app_identities
+ WHERE fused_at >= now() - INTERVAL 24 HOUR AND app != ''
+ GROUP BY app
+ ` + having + `
+ ORDER BY flows DESC
+ LIMIT 10
+ FORMAT JSON`
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	items := make([]ai.EvidenceItem, 0, len(rows))
+	for i, r := range rows {
+		app, conf := asStr(r["app"]), asFloat(r["conf"])
+		text := fmt.Sprintf("%s — %s flows, %.0f%% identification confidence", app, humanCount(asFloat(r["flows"])), conf*100)
+		if prov := asStr(r["provider"]); prov != "" {
+			text += " (" + prov + ")"
+		}
+		items = append(items, ai.EvidenceItem{
+			CitationID: fmt.Sprintf("appid:%d", i), Kind: "app",
+			Text: text, Href: "#/monitoring/appobs",
+		})
+	}
+	return ai.ToolResult{Items: items}, nil
 }
 
 // moduleTopTalkers — the heaviest conversations (bidirectional pairs) over the

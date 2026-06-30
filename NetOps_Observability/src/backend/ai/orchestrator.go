@@ -83,6 +83,11 @@ var moduleRoutes = []moduleRoute{
 		module: "telemetry", tools: []string{"get_metric_anomalies"},
 		mode: ModeModuleHealthSummary, intent: "telemetry_summary", fresh: FreshnessRecent,
 	},
+	{ // App Identification — which apps are identified / low-confidence matches.
+		re:     regexp.MustCompile(`(?i)\b(app identi|application identi|low.confidence app|which app|app name|identified app|app match|vendor match)`),
+		module: "app_identification", tools: []string{"get_app_identity_summary", "get_low_confidence_app_matches"},
+		mode: ModeModuleHealthSummary, intent: "app_identification_summary", fresh: FreshnessRecent,
+	},
 	{ // Cloud App Observability — registered FUTURE module: route so the
 		// availability gate fires an honest "not enabled yet" disclosure.
 		re:     regexp.MustCompile(`(?i)\b(saas|cloud app|cloud application|office ?365|salesforce|dropbox|cloud (health|dependency))`),
