@@ -2481,6 +2481,9 @@ export type AiCurrentState = {
   undetermined: number;
   impacted_entities: string[];
   recommended_focus: string[];
+  focus_reason?: string;
+  watch_note?: string;
+  actionable_count?: number;
   confidence_notes: string[];
   missing_data: string[];
 };
@@ -2496,4 +2499,12 @@ export type AiAnswer = {
   citations: AiCitation[];
   disclaimers: string[];
   provider?: string;
+  // Universal Response-Quality fields (rendered as badges + sections).
+  status?: string;
+  confidence_label?: string;
+  recommended_owner?: string;
+  next_actions?: string[];
+  missing_evidence?: string[];
+  mode_badges?: string[];
+  evidence_only?: boolean;
 };

@@ -1773,6 +1773,24 @@ body.ai-split .main { padding-left: var(--ai-panel-w); }
 .op-help-tip { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .op-help-tip kbd { font-family: var(--font-mono, monospace); background: var(--panel); border: 1px solid var(--panel-border); border-radius: 4px; padding: 0 5px; }
 
+/* Reusable AI answer card sections (Response-Quality layer, spec §19). */
+.op-badges { display: flex; flex-wrap: wrap; gap: 5px; margin: 1px 0 2px; }
+.op-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 5px; border: 1px solid var(--panel-border); color: var(--muted); background: var(--panel);
+}
+.op-badge.tone-crit { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.op-badge.tone-warn { color: var(--warn, #d4a017); border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, transparent); background: color-mix(in srgb, var(--warn, #d4a017) 12%, transparent); }
+.op-badge.tone-accent { color: var(--accent); border-color: var(--accent-ring); background: var(--accent-soft); }
+.op-badge.tone-muted { color: var(--muted); }
+.op-section { margin-top: 2px; }
+.op-sec-h { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+.op-sec-note { font-size: 12px; line-height: 1.5; color: var(--fg-muted, var(--muted)); }
+.op-focus { font-size: 12.5px; font-weight: 600; color: var(--fg); margin-bottom: 2px; }
+.op-bullets, .op-actions { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; line-height: 1.45; color: var(--fg); }
+.op-bullets li::marker { color: var(--warn, #d4a017); }
+.op-actions li::marker { color: var(--accent); font-weight: 700; }
+
 /* Slash menu — pre-made questions above the composer (Claude-Code style). */
 .op-composer { position: relative; }
 .op-slash {

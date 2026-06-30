@@ -440,13 +440,25 @@ export function topProblemId(ans: AiAnswer): string {
 // formatted card inside the chat: the narrative, per-mode structured facts, and
 // clickable citations that deep-link into the source view. Model text is escaped
 // React text (OWASP LLM02) — never HTML.
+// badgeTone maps a mode badge to a severity tone class for its pill.
+function badgeTone(b: string): string {
+  const l = b.toLowerCase();
+  if (l === "confirmed") return "crit";
+  if (l === "suspected" || l === "candidate" || l === "low evidence" || l === "missing evidence") return "warn";
+  if (l === "evidence-only mode" || l.startsWith("ai provider")) return "muted";
+  return "accent";
+}
+
 function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () => void; onClose: () => void }) {
   const cs = ans.current_state;
   const pr = ans.problem;
   const mod = ans.module;
-  // A short, human label for the answer kind — a quiet futuristic header chip.
   const kind =
     pr ? "RCA" : cs ? "Live state" : mod ? (mod.display_name || "Module") : ans.mode === "unavailable" ? "Notice" : "Answer";
+  // Universal fields (Response-Quality layer) — fall back to the per-mode payload.
+  const missing = ans.missing_evidence?.length ? ans.missing_evidence : pr?.missing_evidence;
+  const owner = ans.recommended_owner || pr?.recommended_owner;
+  const badges = ans.mode_badges ?? [];
   return (
     <div className="op-grounded">
       <div className="op-ans-head">
@@ -458,8 +470,17 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         </button>
       </div>
 
+      {/* Badge row — status / confidence / evidence-only / low-evidence (spec §19). */}
+      {(badges.length > 0 || ans.confidence_label) && (
+        <div className="op-badges">
+          {badges.map((b) => <span key={b} className={`op-badge tone-${badgeTone(b)}`}>{b}</span>)}
+          {ans.confidence_label && <span className="op-badge tone-muted">Confidence: {ans.confidence_label}</span>}
+        </div>
+      )}
+
       {ans.text && <div className="op-text">{ans.text}</div>}
 
+      {/* Live-state briefing: counts → focus + why → watch items → impacted. */}
       {cs && (
         <div className="op-facts">
           <span className="op-fact op-fact-ok"><b>{cs.confirmed}</b> confirmed</span>
@@ -467,22 +488,29 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
           <span className="op-fact"><b>{cs.undetermined}</b> undetermined</span>
         </div>
       )}
+      {cs?.recommended_focus && cs.recommended_focus.length > 0 && (
+        <div className="op-section">
+          <div className="op-sec-h">Recommended focus</div>
+          <div className="op-focus">{cs.recommended_focus[0]}</div>
+          {cs.focus_reason && <div className="op-sec-note">{cs.focus_reason}</div>}
+        </div>
+      )}
+      {cs?.watch_note && (
+        <div className="op-section"><div className="op-sec-h">Watch items</div><div className="op-sec-note">{cs.watch_note}</div></div>
+      )}
       {cs?.impacted_entities && cs.impacted_entities.length > 0 && (
         <div className="op-kv"><span className="op-kv-k">Most impacted</span> {cs.impacted_entities.slice(0, 8).join(", ")}</div>
       )}
-      {cs?.recommended_focus && cs.recommended_focus.length > 0 && (
-        <div className="op-kv"><span className="op-kv-k">Focus first</span> {cs.recommended_focus[0]}</div>
-      )}
 
-      {pr && (
-        <div className="op-facts">
-          <span className={`op-fact verdict-${pr.verdict.toLowerCase()}`}>{pr.verdict}</span>
-          <span className="op-fact"><b>{pr.confidence}</b> confidence</span>
-          {pr.recommended_owner && <span className="op-fact">owner: {pr.recommended_owner}</span>}
+      {/* Recommended owner (inferred when unassigned). */}
+      {owner && <div className="op-kv"><span className="op-kv-k">Recommended owner</span> {owner}</div>}
+
+      {/* Missing evidence — clean operational bullets. */}
+      {missing && missing.length > 0 && (
+        <div className="op-section">
+          <div className="op-sec-h">Missing evidence</div>
+          <ul className="op-bullets">{missing.map((m, i) => <li key={i}>{m}</li>)}</ul>
         </div>
-      )}
-      {pr?.missing_evidence && pr.missing_evidence.length > 0 && (
-        <div className="op-kv"><span className="op-kv-k">Missing evidence</span> {pr.missing_evidence.join(", ")}</div>
       )}
 
       {/* P4 module-aware answer — a focused read of one module's tools. */}
@@ -497,6 +525,14 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         <div className="op-kv"><span className="op-kv-k">Note</span> {mod.notes.join(" ")}</div>
       )}
 
+      {/* Recommended next actions — numbered. */}
+      {ans.next_actions && ans.next_actions.length > 0 && (
+        <div className="op-section">
+          <div className="op-sec-h">Recommended next actions</div>
+          <ol className="op-actions">{ans.next_actions.map((a, i) => <li key={i}>{a}</li>)}</ol>
+        </div>
+      )}
+
       {ans.citations && ans.citations.length > 0 && (
         <div className="op-cites">
           {ans.citations.slice(0, 12).map((c: AiCitation) => (
@@ -507,29 +543,20 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         </div>
       )}
 
+      {/* Disclaimers stay small; provider state is a badge above, not a sentence. */}
       {ans.disclaimers && ans.disclaimers.length > 0 && (
         <div className="op-disc">{ans.disclaimers.join(" ")}</div>
-      )}
-      {ans.provider === "none" && (
-        <div className="op-disc">Evidence-only summary — no AI provider configured.</div>
       )}
     </div>
   );
 }
 
-// groundedToText flattens a grounded AiAnswer into a clean chat bubble: the
-// model (or evidence-only) narrative, then a compact, deterministic state line.
+// groundedToText is the plain-text fallback stored as the chat-bubble content
+// (the rich card renders from the structured answer when present). It is just the
+// narrative summary — badges/sections/provider-state are rendered by the card,
+// not flattened into the text (no duplication).
 export function groundedToText(ans: AiAnswer): string {
-  let t = (ans.text || "").trim();
-  const cs = ans.current_state;
-  if (cs) {
-    const lines = [`Confirmed ${cs.confirmed} · Suspected ${cs.suspected} · Undetermined ${cs.undetermined}`];
-    if (cs.impacted_entities?.length) lines.push(`Most impacted: ${cs.impacted_entities.slice(0, 6).join(", ")}`);
-    if (cs.recommended_focus?.length) lines.push(`Focus first: ${cs.recommended_focus[0]}`);
-    t += (t ? "\n\n" : "") + lines.join("\n");
-  }
-  if (ans.provider === "none") t += "\n\n(Evidence-only summary — no AI provider configured.)";
-  return t || "No active correlations right now — the fleet is quiet.";
+  return (ans.text || "").trim() || "No active correlations right now — the fleet is quiet.";
 }
 
 function extractAssistantText(r: CopilotChatResponse): string {
