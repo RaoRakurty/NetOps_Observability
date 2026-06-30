@@ -1529,6 +1529,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   transition: background .12s, border-color .12s, transform .12s;
 }
 .op-chip:hover { background: var(--hover); border-color: var(--accent-ring); transform: translateY(-1px); }
+/* Primary grounded action — the live NOC summary; accent-tinted with a leading icon. */
+.op-chip-primary {
+  display: inline-flex; align-items: center; gap: 8px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring);
+}
+.op-chip-primary:hover { background: var(--accent-soft-2, var(--accent-soft)); }
 .op-nokey {
   display: inline-flex; align-items: center; gap: 7px; margin-top: 16px; font-size: 13px;
   color: var(--fg); background: var(--accent-soft, rgba(79,70,229,.08));

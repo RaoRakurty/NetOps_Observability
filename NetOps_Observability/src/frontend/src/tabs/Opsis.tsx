@@ -6,6 +6,7 @@ import {
   AnthropicChatResponse,
   OpenAIChatResponse,
   CopilotConfig,
+  AiAnswer,
 } from "../services/api";
 import Icon from "../components/Icon";
 
@@ -80,6 +81,26 @@ export default function Opsis() {
     try {
       const r = await api.copilotChat(newHistory);
       setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Grounded "what's going on right now" — routes through the evidence-grounded
+  // /api/ai/ask orchestrator (NOT the free-form proxy), so it works even before a
+  // provider key is set (deterministic, tenant-scoped, cited). Rendered inline as
+  // an ordinary assistant turn so the chat stays a single clean surface.
+  const askGrounded = async () => {
+    if (busy) return;
+    const newHistory = [...history, { role: "user", content: "What's going on right now?" } as CopilotMessage];
+    setHistory(newHistory);
+    setBusy(true);
+    setError(null);
+    try {
+      const ans = await api.aiAsk("What is going on right now? What should the NOC focus on first?");
+      setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -189,9 +210,16 @@ export default function Opsis() {
             <div className="op-welcome-icon"><Icon name="copilot" size={26} /></div>
             <div className="op-welcome-title">How can I help?</div>
             <div className="op-welcome-sub">Ask about your network, troubleshoot an issue, or get setup help.</div>
+            {/* Grounded NOC summary — works without a provider key (evidence-only
+                fallback), so it's always offered as the first action. */}
+            <div className="op-chips">
+              <button className="op-chip op-chip-primary" onClick={askGrounded}>
+                <Icon name="copilot" size={14} /> What&apos;s going on right now?
+              </button>
+            </div>
             {cfg && !cfg.key_present ? (
               <div className="op-nokey">
-                <Icon name="key" size={15} /> Add an AI provider API key to start.
+                <Icon name="key" size={15} /> Connect a provider key for free-form chat.
                 <button className="dash-btn accent" style={{ marginLeft: 6 }} onClick={() => setShowSettings(true)}>Add API key</button>
               </div>
             ) : (
@@ -258,6 +286,21 @@ function renderContent(text: string) {
       ? <pre key={i} className="op-code">{p.replace(/^[a-zA-Z0-9_-]*\n/, "")}</pre>
       : <span key={i} className="op-text">{p}</span>,
   );
+}
+
+// groundedToText flattens a grounded AiAnswer into a clean chat bubble: the
+// model (or evidence-only) narrative, then a compact, deterministic state line.
+function groundedToText(ans: AiAnswer): string {
+  let t = (ans.text || "").trim();
+  const cs = ans.current_state;
+  if (cs) {
+    const lines = [`Confirmed ${cs.confirmed} · Suspected ${cs.suspected} · Undetermined ${cs.undetermined}`];
+    if (cs.impacted_entities?.length) lines.push(`Most impacted: ${cs.impacted_entities.slice(0, 6).join(", ")}`);
+    if (cs.recommended_focus?.length) lines.push(`Focus first: ${cs.recommended_focus[0]}`);
+    t += (t ? "\n\n" : "") + lines.join("\n");
+  }
+  if (ans.provider === "none") t += "\n\n(Evidence-only summary — no AI provider configured.)";
+  return t || "No active correlations right now — the fleet is quiet.";
 }
 
 function extractAssistantText(r: CopilotChatResponse): string {
