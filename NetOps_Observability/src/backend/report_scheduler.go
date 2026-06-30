@@ -316,9 +316,15 @@ func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time
 // deliverToContactPoints resolves the report's email contact points (tenant-
 // scoped) and emails the report to them. Returns the recipient count and a short
 // status note for the run detail. No-op (0, "") when the report has no contact
-// points. "link" delivery is Phase 3 — until then it is recorded as pending and
-// the report body is NOT emailed (so tenant data isn't leaked while the secure
-// link is unbuilt).
+// points.
+//
+// "link" delivery (signed report-view URL) is served by the ASYNC pipeline
+// (`reportDelivery.Deliver`, Postgres backend) — that path stores an execution +
+// artifact and emails a `reportViewLink` to it. This legacy synchronous
+// file-backend scheduler has no execution/artifact store to anchor a token to,
+// so it cannot mint a secure link; rather than email the report body (and leak
+// tenant data in what the operator asked to be link-only), it records that link
+// mode needs the async pipeline. Switch STORE_BACKEND=postgres to use it.
 func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o SavedObject, spec reportSpec) (int, string) {
 	if len(spec.ContactPoints) == 0 || rs.srv == nil || rs.srv.contactPoints == nil || rs.srv.notifyCfg == nil {
 		return 0, ""
@@ -330,9 +336,9 @@ func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o SavedObjec
 		return 0, "contact points resolved to no email recipients"
 	}
 	if strings.EqualFold(spec.DeliveryMode, deliverLink) {
-		// Phase 3 builds the signed report-view link; until then do not email the
-		// report body in link mode.
-		return 0, fmt.Sprintf("secure-link delivery to %d recipient(s) pending (phase 3)", len(recipients))
+		// Secure-link delivery requires the async (Postgres) report pipeline,
+		// which stores the artifact the link serves. Don't email the body here.
+		return 0, fmt.Sprintf("secure-link delivery to %d recipient(s) needs the async report pipeline (STORE_BACKEND=postgres)", len(recipients))
 	}
 	sender, ok := rs.srv.notifyCfg.emailSenderTo(recipients)
 	if !ok {
