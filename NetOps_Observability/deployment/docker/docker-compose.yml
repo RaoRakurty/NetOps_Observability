@@ -951,6 +951,13 @@ services:
       SYNTHETIC_ICMP_TARGETS: ${SYNTHETIC_ICMP_TARGETS:-}
       SYNTHETIC_TCP_TARGETS: ${SYNTHETIC_TCP_TARGETS:-}
       SYNTHETIC_INTERVAL: ${SYNTHETIC_INTERVAL:-60s}
+      # WAN circuit SLA — SD-WAN/BFD-style source-bound echo (#2). Targets are the
+      # circuits the API publishes to Redis; WAN_ECHO_TARGETS is the standalone
+      # fallback. ICMP uses the NET_RAW above; TCP-SYN fallback for filtered paths.
+      FEATURE_WAN_ECHO: ${FEATURE_WAN_ECHO:-false}
+      WAN_ECHO_TARGETS: ${WAN_ECHO_TARGETS:-}
+      WAN_ECHO_TCP_PORT: ${WAN_ECHO_TCP_PORT:-443}
+      WAN_ECHO_INTERVAL: ${WAN_ECHO_INTERVAL:-30s}
       # Probe-event bus lane (#67 build ⑦) — distinct observer id from the api
       # collector so the independence gate never merges the two vantage points.
       PROBE_EVENT_SINK_URL: ${PROBE_EVENT_SINK_URL:-http://vector-aggregator:8689/}
