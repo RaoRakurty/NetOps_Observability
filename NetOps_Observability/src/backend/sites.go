@@ -22,16 +22,21 @@ import (
 // (a non-owner principal only ever sees/edits its own tenant's sites; "" /
 // TenantGlobal is platform-owned, visible only to the cross-tenant platform owner).
 type Site struct {
-	TenantID  string    `json:"tenant_id,omitempty"`
-	Slug      string    `json:"slug"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status,omitempty"`
-	Lat       float64   `json:"lat"`
-	Lng       float64   `json:"lng"`
-	HasCoords bool      `json:"has_coords"`
+	TenantID  string  `json:"tenant_id,omitempty"`
+	Slug      string  `json:"slug"`
+	Name      string  `json:"name"`
+	Status    string  `json:"status,omitempty"`
+	Lat       float64 `json:"lat"`
+	Lng       float64 `json:"lng"`
+	HasCoords bool    `json:"has_coords"`
 	// Owner is operator-declared ownership intent (team / on-call / business unit
 	// responsible for the site) — the ownership seam projected through SoTSite.Owner.
-	Owner     string    `json:"owner,omitempty"`
+	Owner string `json:"owner,omitempty"`
+	// Role is the site's place in the WAN topology — "hub" | "spoke" | "" (unset).
+	// Declared intent (an SD-WAN site-ID analog): the WAN devices at this site
+	// inherit it, and the circuit mesh is built hub⇄spoke around it. "" means
+	// undecided → the WAN projector falls back to suggestion, then default-spoke.
+	Role      string    `json:"role,omitempty"`
 	UpdatedBy string    `json:"updated_by,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -48,6 +53,9 @@ func (s Site) validate() error {
 	}
 	if len(s.Owner) > 120 {
 		return errors.New("site owner too long (max 120)")
+	}
+	if s.Role != "" && s.Role != "hub" && s.Role != "spoke" {
+		return errors.New(`site role must be "hub", "spoke" or empty`)
 	}
 	if s.HasCoords {
 		if s.Lat < -90 || s.Lat > 90 {
@@ -246,6 +254,7 @@ func (s *server) decodeSite(w http.ResponseWriter, r *http.Request, claims jwtCl
 		Name   string   `json:"name"`
 		Status string   `json:"status"`
 		Owner  string   `json:"owner"`
+		Role   string   `json:"role"`
 		Lat    *float64 `json:"lat"`
 		Lng    *float64 `json:"lng"`
 	}
@@ -266,6 +275,7 @@ func (s *server) decodeSite(w http.ResponseWriter, r *http.Request, claims jwtCl
 		Name:      strings.TrimSpace(req.Name),
 		Status:    strings.TrimSpace(req.Status),
 		Owner:     strings.TrimSpace(req.Owner),
+		Role:      strings.ToLower(strings.TrimSpace(req.Role)),
 		UpdatedBy: claims.Sub,
 	}
 	if req.Lat != nil && req.Lng != nil {

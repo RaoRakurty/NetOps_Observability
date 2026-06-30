@@ -63,6 +63,11 @@ type server struct {
 	deviceLocations  *deviceLocationStore
 	sites            *sitesStore      // internal SoT sites (default provider)
 	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
+	wanPolicy        *wanPolicyStore  // WAN circuits topology policy (operator intent) #wan-path-metrics
+	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
+	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
+	// so the projector's tenant-filter is unit-testable without Redis (§5).
+	wanIfAddr func(context.Context) (map[string]map[string]string, error)
 	reports          *reportScheduler
 	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents        incidentsRepo   // incident system of record (nil on file backend)
@@ -384,6 +389,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("device sites store: %v", err)
 	}
+	wanPolicy, err := newWanPolicyStore(envOr("WAN_POLICY_FILE", "/data/wan_policy.json"))
+	if err != nil {
+		log.Fatalf("wan policy store: %v", err)
+	}
 	contactPoints, err := newContactPointStore(envOr("CONTACT_POINTS_FILE", "/data/contact_points.json"))
 	if err != nil {
 		log.Fatalf("contact point store: %v", err)
@@ -415,6 +424,7 @@ func newServer() *server {
 		deviceLocations:  deviceLocations,
 		sites:            sites,
 		deviceSites:      deviceSites,
+		wanPolicy:        wanPolicy,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -786,6 +796,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sites", s.handleSites)          // internal SoT sites: GET list / POST upsert
 	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE
 	mux.HandleFunc("/api/sot/import", s.handleSoTImport) // external SoT one-way import (sites / device→site)
+	// WAN circuits (#1): controller-style endpoint registry + topology policy.
+	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints) // derived WAN endpoint registry (read)
+	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)   // derived circuit mesh (read)
+	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)       // topology policy: GET / PUT (intent)
 	// RCA auto-ticketing (#78 P3): incident-policy CRUD + simulator, tenant-scoped
 	// outbox/audit observability. Per-correlation ticket actions ride the
 	// /api/correlations/{id}/{tickets,ticket,ticket/sync} router (correlations.go).
