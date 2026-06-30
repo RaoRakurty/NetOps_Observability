@@ -106,7 +106,7 @@
   --rail-bg-2:      #4d5462;
   --rail-fg-muted:  #c7cdd8;
   --rail-active-bg: rgba(203,213,225,0.20);
-  --rail-accent:    #e2e8f0;
+  --rail-accent:    #f8fafc;             /* lightest grey, almost white */
   --rail-glass:     rgba(203,213,225,0.12);
   /* content accent — refined neutral slate, AA-legible on the light canvas */
   --accent:          #475569;
@@ -292,7 +292,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   box-shadow: inset 0 1px 0 var(--rail-sheen), inset -1px 0 0 rgba(0,0,0,0.18);
   backdrop-filter: blur(12px) saturate(128%);
   -webkit-backdrop-filter: blur(12px) saturate(128%);
-  padding: var(--sp-2) 0; overflow: visible;
+  padding: var(--sp-4) 0 var(--sp-2); overflow: visible;  /* extra top breathing room above the brand row */
   /* backdrop-filter makes .rail a containing block + stacking context, which
      traps the position:fixed NavFlyout and the account/accent popover inside
      the rail — they paint UNDER the later-in-DOM .main. Lift the whole rail
