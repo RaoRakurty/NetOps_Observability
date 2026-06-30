@@ -839,7 +839,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	// correlation engine pulls ?state=active as its grounding targets.
 	// Correlation Engine v2 objects — read-only inspector + replay proxy (#67).
 	mux.HandleFunc("/api/correlations", s.handleCorrelations)
-	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats) // exact path wins over the prefix below
+	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats)                       // exact path wins over the prefix below
+	mux.HandleFunc("/api/correlations/undetermined-frequency", s.handleUndeterminedFrequency) // #80 signature-governance: ranked recurring undetermined gap-shapes
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	mux.HandleFunc("/api/events/feed", s.handleEventsFeed)
 	mux.HandleFunc("/api/paths/health", s.handlePathsHealth)

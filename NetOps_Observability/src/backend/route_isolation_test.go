@@ -41,13 +41,14 @@ var routeIsolationLedger = map[string]string{
 	// tenant-scoped aiDataSource (corr_objects/flows/findings row policies; scope
 	// from chTenantScope), proven by ai/orchestrator_test.go cross-tenant tests.
 	// /modules lists the caller's enabled modules (tenant config).
-	"/api/ai/ask":             "scoped",
-	"/api/ai/modules":         "scoped",
-	"/api/alerts":             "scoped",
-	"/api/compliance":         "scoped",
-	"/api/correlations":       "scoped",
-	"/api/correlations/":      "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
-	"/api/correlations/stats": "scoped",
+	"/api/ai/ask":                              "scoped",
+	"/api/ai/modules":                          "scoped",
+	"/api/alerts":                              "scoped",
+	"/api/compliance":                          "scoped",
+	"/api/correlations":                        "scoped",
+	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
+	"/api/correlations/stats":                  "scoped",
+	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's
 	// own incidents: chRows injects chTenantScope, ClickHouse row policies enforce it
 	// (TestChTenantScope). A tenant never sees another tenant's MTTI/MTBF/offenders.
@@ -58,26 +59,26 @@ var routeIsolationLedger = map[string]string{
 	// default-closed filter / RLS); POST triggers the cross-tenant backfill worker
 	// behind requirePlatformAdmin. The data surface is tenant-scoped.
 	"/api/reliability/time-metrics": "scoped",
-	"/api/credentials":                   "scoped",
-	"/api/devices":                       "scoped",
-	"/api/devices/":                      "scoped",
-	"/api/events":                        "scoped",
-	"/api/events/feed":                   "scoped",
-	"/api/findings":                      "scoped",
-	"/api/flows/by-proto":                "scoped",
-	"/api/flows/by-type":                 "scoped",
-	"/api/flows/fanout":                  "scoped",
-	"/api/flows/flags":                   "scoped",
-	"/api/flows/geo":                     "scoped",
-	"/api/flows/services":                "scoped",
-	"/api/flows/timeseries":              "scoped",
-	"/api/flows/top":                     "scoped",
-	"/api/flows/topn":                    "scoped",
-	"/api/geomap":                        "scoped",
-	"/api/graphql":                       "scoped",
-	"/api/health/score":                  "scoped",
-	"/api/incidents":                     "scoped",
-	"/api/incidents/":                    "scoped",
+	"/api/credentials":              "scoped",
+	"/api/devices":                  "scoped",
+	"/api/devices/":                 "scoped",
+	"/api/events":                   "scoped",
+	"/api/events/feed":              "scoped",
+	"/api/findings":                 "scoped",
+	"/api/flows/by-proto":           "scoped",
+	"/api/flows/by-type":            "scoped",
+	"/api/flows/fanout":             "scoped",
+	"/api/flows/flags":              "scoped",
+	"/api/flows/geo":                "scoped",
+	"/api/flows/services":           "scoped",
+	"/api/flows/timeseries":         "scoped",
+	"/api/flows/top":                "scoped",
+	"/api/flows/topn":               "scoped",
+	"/api/geomap":                   "scoped",
+	"/api/graphql":                  "scoped",
+	"/api/health/score":             "scoped",
+	"/api/incidents":                "scoped",
+	"/api/incidents/":               "scoped",
 	// RCA auto-ticketing #78 P3: incident policies + outbox/audit are per-tenant
 	// data — requirePerm + principalTenant scope, tenant stamped from token, store
 	// isolation + HTTP cross-tenant tests (ticketing_isolation_test/ticketing_http_test).

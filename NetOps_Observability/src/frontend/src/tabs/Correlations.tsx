@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -284,6 +284,91 @@ export default function Correlations() {
             </div>
           )}
         </div>
+      </div>
+      <SignatureGaps />
+    </div>
+  );
+}
+
+// SignatureGaps — the #80 undetermined-frequency feed: which recurring evidence
+// gap is keeping the engine from a verdict, ranked by how often it happens. Turns
+// "we couldn't tell" into a prioritized signature-coverage backlog. Read-only;
+// honest empty state when there's nothing undetermined.
+function SignatureGaps() {
+  const [clusters, setClusters] = useState<UndeterminedCluster[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await api.undeterminedFrequency(604800, 12);
+        if (!alive) return;
+        setClusters(r?.clusters ?? []);
+        setTotal(r?.total_undetermined ?? 0);
+      } catch {
+        if (alive) { setClusters([]); setTotal(0); }
+      } finally {
+        if (alive) setLoaded(true);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  return (
+    <div className="cc-panel" style={{ marginTop: 12 }}>
+      <div className="cc-panel-h">
+        <h3 className="cc-panel-t">Signature coverage gaps</h3>
+        <span className="cc-panel-meta">
+          {total > 0 ? `${total} not-confirmed in 7d · ranked by recurrence` : "last 7 days"}
+        </span>
+      </div>
+      <div style={{ padding: "11px 13px" }}>
+        {!loaded ? (
+          <div className="empty">Loading…</div>
+        ) : clusters.length === 0 ? (
+          <div className="empty">
+            No recurring not-confirmed patterns — the engine is reaching a verdict on what it sees.
+            Clusters appear here when incidents repeatedly fall short of a confirmable signature.
+          </div>
+        ) : (
+          <>
+            <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--muted)" }}>
+              Each row is a recurring shape the engine <em>almost</em> matched but couldn't confirm — the
+              nearest signature and what it lacked. Highest-recurrence first: the best candidates to write
+              or strengthen next.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {clusters.map((c) => (
+                <div key={c.fingerprint} style={{
+                  display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 12, alignItems: "center",
+                  padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 8,
+                  background: "var(--surface-2, var(--hover))",
+                }}>
+                  <span title="times this gap-shape recurred" style={{
+                    fontVariantNumeric: "tabular-nums", fontWeight: 700, fontSize: 18,
+                    minWidth: 34, textAlign: "right", color: "var(--accent)",
+                  }}>{c.count}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{c.label}</div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.top_gaps.length > 0
+                        ? <>Missing: {c.top_gaps.map((g) => g.clause).join(" · ")}</>
+                        : "no evidence-gap detail recorded"}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 11, color: "var(--fg-subtle, var(--muted))", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
+                    title={c.last_seen ? new Date(c.last_seen).toLocaleString() : ""}>
+                    {Number.isFinite(c.avg_signals) ? `${c.avg_signals.toFixed(1)} sig/incident` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

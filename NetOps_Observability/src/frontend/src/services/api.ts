@@ -464,6 +464,14 @@ export type CorrStats = {
   open: number; open_confirmed: number; open_suspected: number; open_undetermined: number;
   actionable_pct: number; confirmed_7d_pct: number; total_window: number; signatures_matched: number; window_days: number;
 };
+// #80 — recurring undetermined gap-shapes (which signature to write/strengthen next).
+export type UndeterminedGap = { clause: string; count: number };
+export type UndeterminedCluster = {
+  fingerprint: string; label: string;
+  nearest_signatures: string[]; top_gaps: UndeterminedGap[]; entity_types: string[];
+  count: number; last_seen?: string; examples: string[]; avg_signals: number;
+};
+export type UndeterminedFeed = { window: string; total_undetermined: number; clusters: UndeterminedCluster[] };
 export type ForecastRow = {
   device: string; interface: string; current_util_pct: number; slope_per_day_pct: number;
   days_to_90: number; status: "saturated" | "trending" | "stable" | "building_baseline"; history_days: number;
@@ -1463,6 +1471,9 @@ export const api = {
     request<EventsFeedResp>(`/api/events/feed?${new URLSearchParams(params)}`),
   correlationsStats: (sinceSeconds = 604800) =>
     request<CorrStats>(`/api/correlations/stats?since=${sinceSeconds}s`),
+  // #80 signature-governance: recurring undetermined gap-shapes ranked by frequency.
+  undeterminedFrequency: (sinceSeconds = 604800, top = 20) =>
+    request<UndeterminedFeed>(`/api/correlations/undetermined-frequency?since=${sinceSeconds}s&top=${top}`),
   metricsForecast: (days = 28) => request<ForecastResp>(`/api/metrics/forecast?days=${days}`),
   // Path Behavior Health — adaptive baseline-relative path scoring (worst-first).
   pathsHealth: () => request<PathHealthResponse>(`/api/paths/health`),
