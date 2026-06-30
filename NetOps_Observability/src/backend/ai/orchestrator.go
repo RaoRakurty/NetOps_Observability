@@ -58,6 +58,39 @@ var (
 	reHistorical = regexp.MustCompile(`(?i)(last night|overnight|yesterday|earlier today|this (morning|afternoon|evening)|over the weekend|last (week|weekend)|(last|past|previous)\s+\d+\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)|in the last \d+|during the (night|outage|incident)|what happened|happened (last|earlier|overnight|yesterday))`)
 )
 
+// moduleRoute maps a module-specific question (HLD P4) to its module + the
+// governed tools that answer it. Order matters: the first matching route wins,
+// so more specific phrasings come first. Each route is checked only AFTER the
+// problem/shift/historical/navigation intents, so RCA and time-range questions
+// are never mis-routed to a module summary.
+type moduleRoute struct {
+	re     *regexp.Regexp
+	module string
+	tools  []string
+	mode   AnswerMode
+	intent string
+	fresh  Freshness
+}
+
+var moduleRoutes = []moduleRoute{
+	{ // Flow Analytics — top talkers / bandwidth / conversations.
+		re:     regexp.MustCompile(`(?i)\b(top talker|talkers|top sources|top destinations|bandwidth|biggest (talker|consumer|user)s?|who('?s| is) (talking|using)|heavy hitter|flow (summary|volume|traffic)|netflow|east-?west|top (flow|conversation))`),
+		module: "flow_analytics", tools: []string{"get_top_talkers", "get_flow_summary"},
+		mode: ModeModuleHealthSummary, intent: "flow_analytics_summary", fresh: FreshnessRecent,
+	},
+	{ // Telemetry — metric anomalies / device health / flapping / CPU·mem.
+		re:     regexp.MustCompile(`(?i)\b(metric anomal|anomal(y|ies)|flapping|flap\b|(high |spiking |elevated )?(cpu|memory|mem|temperature|interface error|errors?)\b|device (health|telemetry)|what('?s| is) (wrong|unhealthy|spiking)|z-?score)`),
+		module: "telemetry", tools: []string{"get_metric_anomalies"},
+		mode: ModeModuleHealthSummary, intent: "telemetry_summary", fresh: FreshnessRecent,
+	},
+	{ // Cloud App Observability — registered FUTURE module: route so the
+		// availability gate fires an honest "not enabled yet" disclosure.
+		re:     regexp.MustCompile(`(?i)\b(saas|cloud app|cloud application|office ?365|salesforce|dropbox|cloud (health|dependency))`),
+		module: "cloud_app_observability", tools: nil,
+		mode: ModeModuleHealthSummary, intent: "cloud_app_summary", fresh: FreshnessRecent,
+	},
+}
+
 // Classify maps a free-text question (+ UI context like the open RCA's id) to a
 // Plan. P0/P1 uses a deterministic rule classifier (testable, no LLM cost on the
 // hot path); later phases can swap in an LLM classifier behind this same shape.
@@ -103,6 +136,17 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Tools: []string{"find_feature"},
 		}
 	default:
+		// Module-aware routes (HLD P4): a question scoped to one module's data
+		// (flows, telemetry, cloud-app, …). Checked before the Command Center
+		// fallback so "show me top talkers" gets a focused module answer.
+		for _, mr := range moduleRoutes {
+			if mr.re.MatchString(q) {
+				return Plan{
+					Intent: mr.intent, Modules: []string{mr.module},
+					Mode: mr.mode, Entities: ent, Freshness: mr.fresh, Tools: mr.tools,
+				}
+			}
+		}
 		// P2 surface (Command Center "what's going on") — registered intent, but the
 		// answering tools land in a later phase; respond with an honest disclosure.
 		return Plan{
@@ -153,6 +197,8 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 		return o.answerProblem(ctx, p, question, plan, disc)
 	case ModeCurrentStateSummary:
 		return o.answerCurrentState(ctx, p, question, plan, disc)
+	case ModeModuleHealthSummary:
+		return o.answerModuleHealth(ctx, p, question, plan, allowed, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	default:
@@ -311,6 +357,105 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc}, nil
 }
 
+// answerModuleHealth builds the P4 module-aware summary: run ONE module's
+// governed read tools (each gated by the Policy Engine), assemble their cited
+// evidence into a deterministic ModuleHealthSummary, and let the model write a
+// grounded headline (deterministic fallback if the provider is down). Tenant
+// scoping is enforced inside each tool's DataSource query, never here. Modules
+// whose answering tools aren't built yet (no registered tool) get an honest
+// "not available yet" — never faked data.
+func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, question string, plan Plan, allowed []string, disc []string) (Answer, error) {
+	modID := allowed[0] // governance already dropped disallowed/future modules
+	mod, _ := ModuleByID(modID)
+	mh := &ModuleHealthSummary{Module: modID, DisplayName: aiDisplayName(mod, modID)}
+
+	pol := o.policy()
+	var bundle []EvidenceItem
+	ran := 0
+	for _, name := range plan.Tools {
+		tool, ok := o.Tools.Get(name)
+		if !ok {
+			continue // tool for this module not built yet — degrade honestly
+		}
+		if d := pol.EvaluateTool(tool, p); !d.Allow {
+			disc = append(disc, capitalize(d.Reason)+".")
+			continue
+		}
+		res, terr := tool.Run(ctx, p, ToolArgs{})
+		if terr != nil {
+			continue // a tool failure degrades gracefully
+		}
+		ran++
+		bundle = append(bundle, res.Items...)
+		if res.Truncated {
+			mh.Notes = append(mh.Notes, res.Notes...)
+		}
+	}
+
+	if ran == 0 {
+		// No answering tool is wired for this module yet (HLD P4 increment gap).
+		return Answer{
+			Mode: ModeUnavailable, Intent: plan.Intent, Modules: allowed,
+			Text:        mh.DisplayName + " questions aren't answerable in this build yet. I can summarize what's going on right now or explain a specific problem.",
+			Citations:   []Citation{},
+			Disclaimers: append(disc, "This module's AI tools land in a later increment."),
+		}, nil
+	}
+
+	cites := make([]Citation, 0, len(bundle))
+	for _, ev := range bundle {
+		mh.Items = append(mh.Items, ev.Text)
+		cites = append(cites, Citation{ID: ev.CitationID, Kind: ev.Kind, Label: ev.Text, Href: ev.Href})
+	}
+	if len(bundle) == 0 {
+		mh.Headline = "No " + strings.ToLower(mh.DisplayName) + " signal in the current window for your scope."
+		disc = append(disc, "Nothing to report in the window.")
+		return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
+			Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: disc}, nil
+	}
+
+	// Model headline grounded ONLY in the tool evidence (deterministic fallback).
+	system := o.systemPrompt()
+	user := o.moduleHealthPrompt(question, mh, bundle)
+	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	if lerr != nil {
+		mh.Headline = o.deterministicModuleSummary(mh, bundle)
+		provider = "none"
+		disc = append(disc, "AI provider unavailable — showing an evidence-only summary.")
+	} else {
+		mh.Headline = strings.TrimSpace(text)
+	}
+	return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
+		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: disc, Provider: provider}, nil
+}
+
+func (o *Orchestrator) moduleHealthPrompt(question string, mh *ModuleHealthSummary, bundle []EvidenceItem) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
+	fmt.Fprintf(&b, "MODULE: %s\n\nEVIDENCE (cite ids):\n", mh.DisplayName)
+	for _, ev := range bundle {
+		fmt.Fprintf(&b, "- [%s] %s\n", ev.CitationID, ev.Text)
+	}
+	b.WriteString("\nWrite a 2–3 sentence NOC summary grounded ONLY in the evidence above, citing ids. Lead with what matters most. Be concise. If the evidence shows nothing notable, say so plainly.")
+	return o.redact(b.String())
+}
+
+func (o *Orchestrator) deterministicModuleSummary(mh *ModuleHealthSummary, bundle []EvidenceItem) string {
+	s := fmt.Sprintf("%s: %d item(s) in the current window.", mh.DisplayName, len(bundle))
+	if len(bundle) > 0 {
+		s += " Top: " + bundle[0].Text + "."
+	}
+	return s
+}
+
+// aiDisplayName returns the module's human label, falling back to its id.
+func aiDisplayName(m Module, id string) string {
+	if m.DisplayName != "" {
+		return m.DisplayName
+	}
+	return id
+}
+
 func (o *Orchestrator) currentStatePrompt(question string, cs *CurrentStateSummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
@@ -425,7 +570,7 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	var b strings.Builder
 	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
 	fmt.Fprintf(&b, "PROBLEM %s — %s\nverdict: %s (%.0f%% confidence); %d signals across %d nodes\ndevices: %s\n",
-		pr.ID, pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, strings.Join(pr.Devices, ", "))
+		pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, strings.Join(pr.Devices, ", "))
 	if len(pr.MissingEvidence) > 0 {
 		fmt.Fprintf(&b, "missing evidence: %s\n", strings.Join(pr.MissingEvidence, ", "))
 	}
@@ -441,16 +586,24 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 }
 
 // deterministicProblemSummary is the provider-down fallback (no model): a plain,
-// honest statement of what the evidence says.
+// honest statement of what the evidence says — in NOC language, using the
+// friendly problem id. It does NOT echo the problem-header evidence item (that
+// would restate the first sentence verbatim — the redundant "Problem X … Evidence:
+// Problem X —" the operator flagged); it folds in only the FIRST non-header
+// evidence item (a candidate cause / impacted entities) when present.
 func (o *Orchestrator) deterministicProblemSummary(pr *Problem, bundle []EvidenceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Problem %s (%s): %s, %.0f%% confidence across %d signals / %d nodes.",
-		pr.ID, pr.Verdict, pr.Title, pr.Confidence*100, pr.SignalCount, pr.NodeCount)
-	if len(bundle) > 0 {
-		b.WriteString(" Evidence: " + bundle[0].Text + ".")
+	fmt.Fprintf(&b, "%s (%s): %s — %.0f%% confidence across %d signals on %d nodes.",
+		pr.Display(), pr.Verdict, pr.Title, pr.Confidence*100, pr.SignalCount, pr.NodeCount)
+	for _, ev := range bundle {
+		if strings.HasPrefix(ev.CitationID, "problem:") {
+			continue // skip the header item — it restates the line above
+		}
+		b.WriteString(" " + ev.Text + ".")
+		break
 	}
 	if len(pr.MissingEvidence) > 0 {
-		b.WriteString(" Missing: " + strings.Join(pr.MissingEvidence, ", ") + ".")
+		b.WriteString(" Missing evidence: " + strings.Join(pr.MissingEvidence, ", ") + ".")
 	}
 	return b.String()
 }

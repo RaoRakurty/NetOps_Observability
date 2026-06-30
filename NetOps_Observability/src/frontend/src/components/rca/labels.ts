@@ -131,6 +131,19 @@ export const PLANE_NOC_TITLE: Record<string, string> = {
 // SD-WAN/tunnel are tested BEFORE the generic WAN/provider catch, so a cloud or
 // overlay fault is never mislabelled "WAN / provider path change" (the bug the
 // old single `cloud`-in-WAN branch caused).
+// friendlyProblemId turns a correlation UUID into a stable, NOC-readable handle
+// (P-5564D1). The scheme is byte-identical to the Go backend's problemDisplayID
+// ("P-" + first 6 hex of the UUID, uppercased) so an operator sees ONE consistent
+// id across the Action Queue, the RCA inspector and Correlix AI. Display-only:
+// callers keep the full UUID for routes/API/citation ids. A non-UUID input
+// (already-friendly id, empty) is returned unchanged so it's safe to call twice.
+export function friendlyProblemId(corrId: string): string {
+  if (!corrId || corrId.startsWith("P-")) return corrId;
+  const hex = corrId.replace(/-/g, "");
+  if (hex.length < 6) return corrId;
+  return "P-" + hex.slice(0, 6).toUpperCase();
+}
+
 export function signatureNocTitle(id: string): string {
   if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
   if (/cloud/.test(id)) return "Cloud service-path change";

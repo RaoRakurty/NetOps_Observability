@@ -48,13 +48,14 @@ SELECT toString(correlation_id) AS correlation_id,
 	r := rows[0]
 	pr := &ai.Problem{
 		ID:              id,
-		Title:           aiFirst(asStr(r["top_hypothesis"]), "Correlation "+shortID(id)),
+		DisplayID:       problemDisplayID(id),
+		Title:           aiProblemTitle(asStr(r["top_hypothesis"]), id),
 		Verdict:         asStr(r["verdict_tier"]),
 		Confidence:      asFloat(r["top_confidence"]),
 		SignalCount:     int(asFloat(r["signal_count"])),
 		NodeCount:       int(asFloat(r["node_count"])),
 		CreatedAt:       asStr(r["created_at"]),
-		Devices:         affectedDevices(r["affected"]),
+		Devices:         aiEntityLabels(affectedDevices(r["affected"])),
 		MissingEvidence: jsonStrings(r["evidence_missing"]),
 	}
 	return pr, nil
@@ -93,6 +94,9 @@ SELECT hypotheses, affected
 		if name == "" {
 			continue
 		}
+		if strings.HasPrefix(name, "sig.") { // humanize the engine signature to NOC language
+			name = signatureNocTitle(name)
+		}
 		text := "candidate cause: " + name
 		if sc := asFloat(h["score"]); sc > 0 {
 			text += fmt.Sprintf(" (score %.2f)", sc)
@@ -102,8 +106,8 @@ SELECT hypotheses, affected
 			Kind:       "finding", Text: text, Href: href,
 		})
 	}
-	// Affected entities.
-	if devs := affectedDevices(rows[0]["affected"]); len(devs) > 0 {
+	// Affected entities — humanized + de-duplicated for NOC readability.
+	if devs := aiEntityLabels(affectedDevices(rows[0]["affected"])); len(devs) > 0 {
 		items = append(items, ai.EvidenceItem{
 			CitationID: "affected:" + shortID(id), Kind: "topology",
 			Text: "impacted entities: " + strings.Join(devs, ", "), Href: href,
@@ -138,7 +142,8 @@ SELECT toString(correlation_id) AS correlation_id,
 		id := asStr(r["correlation_id"])
 		out = append(out, ai.Problem{
 			ID:          id,
-			Title:       aiFirst(asStr(r["top_hypothesis"]), "Correlation "+shortID(id)),
+			DisplayID:   problemDisplayID(id),
+			Title:       aiProblemTitle(asStr(r["top_hypothesis"]), id),
 			Verdict:     asStr(r["verdict_tier"]),
 			Confidence:  asFloat(r["top_confidence"]),
 			SignalCount: int(asFloat(r["signal_count"])),
@@ -147,6 +152,124 @@ SELECT toString(correlation_id) AS correlation_id,
 		})
 	}
 	return out, nil
+}
+
+// ModuleQuery is the server-side ModuleDataSource seam (HLD P4). It maps a FIXED,
+// allowlisted query name (chosen by the AI tool, never by the model) to exactly
+// ONE tenant-scoped ClickHouse read, so a module-aware answer ("top talkers",
+// "metric anomalies") is grounded in the caller's own data. Isolation is the
+// netops.flows / netops.findings tenant_iso row policy via d.scope (a non-cross
+// caller sees only its own + untagged rows). Unknown query → ErrNotImplemented;
+// no data → empty result (honest, not an error).
+func (d aiDataSource) ModuleQuery(_ context.Context, _ ai.Principal, query string, _ ai.ToolArgs) (ai.ToolResult, error) {
+	switch query {
+	case "top_talkers":
+		return d.moduleTopTalkers()
+	case "flow_summary":
+		return d.moduleFlowSummary()
+	case "metric_anomalies":
+		return d.moduleMetricAnomalies()
+	default:
+		return ai.ToolResult{}, ai.ErrNotImplemented
+	}
+}
+
+// moduleTopTalkers — the heaviest conversations (bidirectional pairs) over the
+// recent window, sampling-rate corrected, tenant-scoped.
+func (d aiDataSource) moduleTopTalkers() (ai.ToolResult, error) {
+	const sql = `
+SELECT least(src_addr, dst_addr)  AS a,
+       greatest(src_addr, dst_addr) AS b,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL 24 HOUR
+ GROUP BY a, b
+ ORDER BY bytes_total DESC
+ LIMIT 8
+ FORMAT JSON`
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	items := make([]ai.EvidenceItem, 0, len(rows))
+	for i, r := range rows {
+		a, b := asStr(r["a"]), asStr(r["b"])
+		items = append(items, ai.EvidenceItem{
+			CitationID: fmt.Sprintf("flow:talker:%d", i), Kind: "flow",
+			Text: fmt.Sprintf("%s ↔ %s — %s over 24h", a, b, humanBytes(asFloat(r["bytes_total"]))),
+			Href: "#/flows",
+		})
+	}
+	return ai.ToolResult{Items: items}, nil
+}
+
+// moduleFlowSummary — one-line traffic totals over the recent window.
+func (d aiDataSource) moduleFlowSummary() (ai.ToolResult, error) {
+	const sql = `
+SELECT sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
+       sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
+       count() AS flows,
+       uniqExact(src_addr) AS sources
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL 24 HOUR
+ FORMAT JSON`
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	if len(rows) == 0 || asFloat(rows[0]["flows"]) == 0 {
+		return ai.ToolResult{}, nil // honest empty — no flow data in window
+	}
+	r := rows[0]
+	return ai.ToolResult{Items: []ai.EvidenceItem{{
+		CitationID: "flow:summary", Kind: "flow",
+		Text: fmt.Sprintf("24h flow volume: %s across %s flows from %d sources",
+			humanBytes(asFloat(r["bytes_total"])), humanCount(asFloat(r["flows"])), int(asFloat(r["sources"]))),
+		Href: "#/flows",
+	}}}, nil
+}
+
+// moduleMetricAnomalies — recent detected metric anomalies (z-score findings),
+// worst-first, tenant-scoped via the findings row policy.
+func (d aiDataSource) moduleMetricAnomalies() (ai.ToolResult, error) {
+	const sql = `
+SELECT toString(ts) AS ts, id, severity, score, device, component, summary
+  FROM netops.findings
+ WHERE kind = 'anomaly' AND ts >= now() - INTERVAL 6 HOUR
+ ORDER BY score DESC, ts DESC
+ LIMIT 10
+ FORMAT JSON`
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	items := make([]ai.EvidenceItem, 0, len(rows))
+	for _, r := range rows {
+		dev, comp := asStr(r["device"]), asStr(r["component"])
+		text := aiFirst(asStr(r["summary"]), comp+" on "+dev)
+		if sev := asStr(r["severity"]); sev != "" {
+			text = "[" + sev + "] " + text
+		}
+		items = append(items, ai.EvidenceItem{
+			CitationID: "finding:" + asStr(r["id"]), Kind: "metric",
+			Text: text, Href: "#/monitoring/findings",
+		})
+	}
+	return ai.ToolResult{Items: items}, nil
+}
+
+// humanCount renders large counts compactly (humanBytes lives in dependency_view.go).
+func humanCount(v float64) string {
+	switch {
+	case v >= 1e9:
+		return fmt.Sprintf("%.1fB", v/1e9)
+	case v >= 1e6:
+		return fmt.Sprintf("%.1fM", v/1e6)
+	case v >= 1e3:
+		return fmt.Sprintf("%.1fk", v/1e3)
+	default:
+		return fmt.Sprintf("%.0f", v)
+	}
 }
 
 // ---- small JSON/value helpers (ClickHouse FORMAT JSON yields any-typed cells) ----

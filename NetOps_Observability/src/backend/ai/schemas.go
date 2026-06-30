@@ -40,6 +40,7 @@ type Answer struct {
 	Text         string               `json:"text"`                    // model narrative (escaped on render)
 	Problem      *ProblemExplanation  `json:"problem,omitempty"`       // for ModeProblemExplanation
 	CurrentState *CurrentStateSummary `json:"current_state,omitempty"` // for ModeCurrentStateSummary
+	Module       *ModuleHealthSummary `json:"module,omitempty"`        // for ModeModuleHealthSummary
 	Navigation   []ProductNavEntry    `json:"navigation,omitempty"`
 	Citations    []Citation           `json:"citations"`
 	Disclaimers  []string             `json:"disclaimers"`
@@ -60,6 +61,19 @@ type CurrentStateSummary struct {
 	RecommendedFocus []string `json:"recommended_focus"`
 	ConfidenceNotes  []string `json:"confidence_notes"`
 	MissingData      []string `json:"missing_data"`
+}
+
+// ModuleHealthSummary is the P4 module-aware answer-mode schema: a focused,
+// evidence-grounded read of ONE Correlix module (flow analytics, telemetry,
+// app-identification, …) built deterministically from that module's governed
+// read tools, with a model-written headline. Answers "show me top talkers",
+// "any metric anomalies?", "what's flapping?" — scoped to the caller's tenant.
+type ModuleHealthSummary struct {
+	Module      string   `json:"module"`       // module id, e.g. "flow_analytics"
+	DisplayName string   `json:"display_name"` // human label, e.g. "Flow Analytics"
+	Headline    string   `json:"headline"`     // model narrative (escaped on render)
+	Items       []string `json:"items"`        // bullet facts from the tools (cited)
+	Notes       []string `json:"notes"`        // caps/freshness disclosures from tools
 }
 
 // ProblemExplanation is the P1 RCA answer-mode schema. The narrative fields the

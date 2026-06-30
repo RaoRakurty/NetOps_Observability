@@ -50,6 +50,29 @@ func (m *mockDS) ListActiveProblems(_ context.Context, p Principal, _ int) ([]Pr
 	return out, nil
 }
 
+// ModuleQuery makes mockDS a ModuleDataSource (P4) so the module read tools
+// register. It returns per-tenant data keyed on the principal so the isolation
+// tests can prove a module summary never crosses tenants: t-a sees edge-1,
+// t-b sees leaf-2.
+func (m *mockDS) ModuleQuery(_ context.Context, p Principal, query string, _ ToolArgs) (ToolResult, error) {
+	dev := map[string]string{"t-a": "edge-1", "t-b": "leaf-2"}[p.Tenant]
+	if dev == "" {
+		return ToolResult{}, nil
+	}
+	switch query {
+	case "top_talkers":
+		return ToolResult{Items: []EvidenceItem{{CitationID: "flow:talker:0", Kind: "flow",
+			Text: dev + " ↔ 10.0.0.9 — 4.2 GB over 24h", Href: "#/flows"}}}, nil
+	case "flow_summary":
+		return ToolResult{Items: []EvidenceItem{{CitationID: "flow:summary", Kind: "flow",
+			Text: "24h flow volume: 9.0 GB across 1.2k flows from 7 sources (" + dev + ")", Href: "#/flows"}}}, nil
+	case "metric_anomalies":
+		return ToolResult{Items: []EvidenceItem{{CitationID: "finding:1", Kind: "metric",
+			Text: "[warning] device_cpu_percent on " + dev + " z=3.3", Href: "#/monitoring/findings"}}}, nil
+	}
+	return ToolResult{}, ErrNotImplemented
+}
+
 func newOrch(ds DataSource) *Orchestrator {
 	return &Orchestrator{DS: ds, Tools: Tools(ds), LLM: MockLLM{Reply: "Likely BGP session loss on edge-1 [log:os:1]. Next: check the peering link."},
 		Flags: func(string) bool { return false }}
@@ -60,6 +83,15 @@ func tenantA() Principal {
 }
 func tenantB() Principal {
 	return Principal{Tenant: "t-b", Perms: map[string]bool{"correlations:read": true}}
+}
+
+// opsA/opsB hold the broader operational perms the P4 module tools gate on
+// (flows:read, infrastructure:read) so module routes are allowed.
+func opsA() Principal {
+	return Principal{Tenant: "t-a", Perms: map[string]bool{"correlations:read": true, "flows:read": true, "infrastructure:read": true}}
+}
+func opsB() Principal {
+	return Principal{Tenant: "t-b", Perms: map[string]bool{"correlations:read": true, "flows:read": true, "infrastructure:read": true}}
 }
 
 func TestModuleRegistry(t *testing.T) {
@@ -315,6 +347,117 @@ func TestRandomQuestionsWellFormed(t *testing.T) {
 		if strings.Contains(ans.Text, "leaf-2") {
 			t.Fatalf("%q: leaked tenant B's device into tenant A's answer", q)
 		}
+	}
+}
+
+// TestModuleRoutingClassify pins the P4 classifier routes: module-specific
+// phrasings land on the right module + module_health_summary mode, and don't
+// steal RCA / time-range / navigation intents.
+func TestModuleRoutingClassify(t *testing.T) {
+	cases := []struct {
+		q      string
+		module string
+	}{
+		{"show me the top talkers", "flow_analytics"},
+		{"who is using the most bandwidth?", "flow_analytics"},
+		{"any metric anomalies right now?", "telemetry"},
+		{"is anything flapping?", "telemetry"},
+		{"how is office365 doing?", "cloud_app_observability"},
+	}
+	for _, c := range cases {
+		p := Classify(c.q, nil)
+		if p.Mode != ModeModuleHealthSummary {
+			t.Fatalf("%q: expected module_health_summary, got %s", c.q, p.Mode)
+		}
+		if len(p.Modules) != 1 || p.Modules[0] != c.module {
+			t.Fatalf("%q: expected module %s, got %v", c.q, c.module, p.Modules)
+		}
+	}
+	// Regression: an RCA / time-range question must NOT be swept into a module route.
+	if Classify("explain this incident", nil).Mode != ModeProblemExplanation {
+		t.Fatal("RCA intent regressed into a module route")
+	}
+	if Classify("what happened last night?", nil).Mode != ModeTimeRangeOutageSummary {
+		t.Fatal("time-range intent regressed into a module route")
+	}
+}
+
+// TestModuleHealthAnswer: a module question returns a grounded module_health_summary
+// card with cited items from the module's tools.
+func TestModuleHealthAnswer(t *testing.T) {
+	o := newOrch(newMockDS())
+	ans, err := o.Ask(context.Background(), opsA(), "show me the top talkers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != ModeModuleHealthSummary || ans.Module == nil {
+		t.Fatalf("expected a module_health_summary, got %+v", ans)
+	}
+	if ans.Module.Module != "flow_analytics" || ans.Module.DisplayName == "" {
+		t.Fatalf("module payload not populated: %+v", ans.Module)
+	}
+	if len(ans.Module.Items) == 0 || len(ans.Citations) == 0 {
+		t.Fatal("module answer must carry cited evidence items")
+	}
+}
+
+// TestModuleIsolation is the mandatory §3a.5 cross-tenant test for P4 module
+// tools: tenant B's module summary must never contain tenant A's device. The
+// LLM is in echo mode (Reply:"") so the model "headline" is exactly the grounded
+// prompt — proving the prompt we hand the provider carries ONLY tenant B's data
+// (a hardcoded canned reply would mask this).
+func TestModuleIsolation(t *testing.T) {
+	ds := newMockDS()
+	o := &Orchestrator{DS: ds, Tools: Tools(ds), LLM: MockLLM{}, Flags: func(string) bool { return false }}
+	for _, q := range []string{"show me the top talkers", "any metric anomalies?"} {
+		ans, err := o.Ask(context.Background(), opsB(), q, nil)
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		blob := ans.Text
+		for _, it := range ans.Module.Items {
+			blob += " " + it
+		}
+		if strings.Contains(blob, "edge-1") {
+			t.Fatalf("%q: LEAK — tenant A device edge-1 surfaced to tenant B: %q", q, blob)
+		}
+		if !strings.Contains(blob, "leaf-2") {
+			t.Fatalf("%q: tenant B should see its own device leaf-2, got %q", q, blob)
+		}
+	}
+}
+
+// TestModulePermissionGate: a caller lacking the module perm is refused (not
+// silently shown another scope's data).
+func TestModulePermissionGate(t *testing.T) {
+	o := newOrch(newMockDS())
+	noFlows := Principal{Tenant: "t-a", Perms: map[string]bool{"correlations:read": true}} // no flows:read
+	ans, err := o.Ask(context.Background(), noFlows, "show me the top talkers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != ModeUnavailable {
+		t.Fatalf("a caller without flows:read must be refused, got %s", ans.Mode)
+	}
+	if ans.Module != nil {
+		t.Fatal("refused module answer must not carry a module payload")
+	}
+}
+
+// TestFutureModuleDisclosure: a question for a FUTURE/flagged module
+// (cloud_app_observability, flag off) gets an honest "not available yet", never
+// faked data.
+func TestFutureModuleDisclosure(t *testing.T) {
+	o := newOrch(newMockDS()) // Flags returns false → ENABLE_CLOUD_APP_OBS off
+	ans, err := o.Ask(context.Background(), opsA(), "how is office365 doing?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != ModeUnavailable {
+		t.Fatalf("a future module must disclose unavailability, got %s", ans.Mode)
+	}
+	if ans.Module != nil {
+		t.Fatal("future-module disclosure must not fabricate a module payload")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Sentinel errors. Cross-tenant / unknown ids return ErrNotFound (never reveal
@@ -49,7 +50,8 @@ func (p Principal) HasAnyPerm(perms []string) bool {
 // Problem is the RCA correlation object the assistant explains, in AI-package
 // terms. The server maps its CorrObject → Problem (tenant-scoped fetch).
 type Problem struct {
-	ID              string
+	ID              string // real correlation UUID — the key for routes/API/citation ids
+	DisplayID       string // friendly NOC handle (P-5564D1) for narrative text; "" → falls back to ID
 	Title           string
 	Verdict         string // confirmed | suspected | undetermined
 	Confidence      float64
@@ -60,6 +62,16 @@ type Problem struct {
 	NodeCount       int
 	CreatedAt       string
 	Timeline        []string // optional human-readable timeline lines
+}
+
+// Display returns the operator-facing problem handle for NARRATIVE text — the
+// friendly P-XXXXXX id when set, else the raw id. Citation ids / deep links keep
+// the real UUID (pr.ID); only human prose uses this.
+func (pr *Problem) Display() string {
+	if pr.DisplayID != "" {
+		return pr.DisplayID
+	}
+	return pr.ID
 }
 
 // EvidenceItem is one grounded fact handed to the model, each with a stable
@@ -105,6 +117,18 @@ type AITool interface {
 	Run(ctx context.Context, p Principal, args ToolArgs) (ToolResult, error)
 }
 
+// ModuleDataSource is the P4 seam for module-specific reads (flow analytics,
+// telemetry, app-identification, …). It is kept SEPARATE from DataSource so the
+// stable P1/P2 RCA contract never churns as modules are added; the server's
+// aiDataSource implements both. Each module tool calls ModuleQuery with a FIXED,
+// allowlisted query name it owns (never model-supplied free text), and the
+// trusted server maps that name to exactly ONE tenant-scoped store query. A
+// query that has no data returns an empty ToolResult (not an error); an unknown
+// query name returns ErrNotImplemented so the tool degrades honestly.
+type ModuleDataSource interface {
+	ModuleQuery(ctx context.Context, p Principal, query string, args ToolArgs) (ToolResult, error)
+}
+
 // DataSource is the seam the SERVER implements over the real, tenant-scoped
 // stores (correlation store / rca-path-view, ClickHouse, OpenSearch, VM, PG).
 // The ai package depends only on this interface — no import of the http server,
@@ -141,8 +165,8 @@ func (t getProblemTool) Run(ctx context.Context, p Principal, args ToolArgs) (To
 	item := EvidenceItem{
 		CitationID: "problem:" + pr.ID,
 		Kind:       "finding",
-		Text: fmt.Sprintf("Problem %s — %s; verdict %s (%.0f%% confidence); %d signals across %d nodes; devices: %v",
-			pr.ID, pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, pr.Devices),
+		Text: fmt.Sprintf("%s — %s; verdict %s (%.0f%% confidence); %d signals across %d nodes; devices: %s",
+			pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, strings.Join(pr.Devices, ", ")),
 		Href: "#/monitoring/correlations?id=" + pr.ID,
 	}
 	return ToolResult{Items: []EvidenceItem{item}}, nil
@@ -192,7 +216,7 @@ func (t activeIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArgs) (
 	for _, pr := range probs {
 		items = append(items, EvidenceItem{
 			CitationID: "problem:" + pr.ID, Kind: "finding",
-			Text: fmt.Sprintf("%s — %s (%s, %.0f%%)", shortIDFor(pr.ID), pr.Title, pr.Verdict, pr.Confidence*100),
+			Text: fmt.Sprintf("%s — %s (%s, %.0f%%)", pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100),
 			Href: "#/monitoring/correlations?id=" + pr.ID,
 		})
 	}
@@ -218,14 +242,67 @@ func indexByte(s string, b byte) int {
 	return -1
 }
 
+// ---- Module read tools (HLD P4, generic governed wrapper) -------------------
+
+// moduleReadTool is one governed, read-only tool over the ModuleDataSource seam.
+// All P4 module tools are instances of this single type — the tool contract
+// (name/module/perms/freshness) is data, the data fetch is the one ModuleQuery
+// seam — so adding a module is a registry line, not a new type (HLD: P2–P4 add
+// without rewrites). The query name is fixed by the tool, never the model, so it
+// is injection-safe by construction.
+type moduleReadTool struct {
+	mds       ModuleDataSource
+	name      string
+	module    string
+	perms     []string
+	freshness Freshness
+	query     string // the fixed ModuleQuery name this tool runs
+}
+
+func (t moduleReadTool) Name() string            { return t.name }
+func (t moduleReadTool) Module() string          { return t.module }
+func (t moduleReadTool) Capability() Capability  { return CapRead }
+func (t moduleReadTool) RequiredPerms() []string { return t.perms }
+func (t moduleReadTool) Freshness() Freshness    { return t.freshness }
+func (t moduleReadTool) Run(ctx context.Context, p Principal, args ToolArgs) (ToolResult, error) {
+	return t.mds.ModuleQuery(ctx, p, t.query, args)
+}
+
+// moduleTools is the catalog of P4 module read tools wired to real data. Each
+// entry names the module it serves, the perm gate (any-of), how fresh its data
+// is, and the allowlisted ModuleQuery it runs. Modules whose tools are not yet
+// listed here route to an honest disclosure (the orchestrator skips unregistered
+// tool names) — no faked data.
+var moduleTools = []struct {
+	name, module, query string
+	perms               []string
+	freshness           Freshness
+}{
+	// Flow Analytics (CH netops.flows, tenant_iso row policy).
+	{"get_top_talkers", "flow_analytics", "top_talkers", []string{"flows:read"}, FreshnessRecent},
+	{"get_flow_summary", "flow_analytics", "flow_summary", []string{"flows:read"}, FreshnessRecent},
+	// Telemetry (CH netops.findings, tenant_iso row policy — detected anomalies).
+	{"get_metric_anomalies", "telemetry", "metric_anomalies", []string{"infrastructure:read"}, FreshnessRecent},
+}
+
 // Tools builds the tool registry. P1 wires the RCA tools to the DataSource;
-// other modules' tools are catalog entries that return ErrNotImplemented until
-// their phase lands (HLD P2–P4), so routing knows they exist without faking data.
+// when the DataSource also implements ModuleDataSource (the real server does),
+// the P4 module read tools are wired too. Module tools whose names are NOT
+// registered route to an honest disclosure, so routing always knows a module
+// exists without faking data.
 func Tools(ds DataSource) *ToolRegistry {
 	reg := &ToolRegistry{byName: map[string]AITool{}}
 	reg.add(getProblemTool{ds})
 	reg.add(getProblemEvidenceTool{ds})
 	reg.add(activeIncidentsTool{ds})
+	if mds, ok := ds.(ModuleDataSource); ok {
+		for _, mt := range moduleTools {
+			reg.add(moduleReadTool{
+				mds: mds, name: mt.name, module: mt.module,
+				perms: mt.perms, freshness: mt.freshness, query: mt.query,
+			})
+		}
+	}
 	return reg
 }
 

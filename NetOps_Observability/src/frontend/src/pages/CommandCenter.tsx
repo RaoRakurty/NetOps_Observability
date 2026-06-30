@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { api, Incident, CorrObject } from "../services/api";
-import { signatureNocTitle, entityLabel } from "../components/rca/labels";
+import { signatureNocTitle, entityLabel, friendlyProblemId } from "../components/rca/labels";
 import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
   type FaultDomain, type EvidenceState, type CcFilters,
@@ -86,6 +86,10 @@ function QueueRow({ it, expanded, onToggle }: { it: ActionItem; expanded: boolea
     <>
       <tr className={`cc-row sev-${it.sev}`} onClick={onToggle}>
         <td><span className="cc-sevdot" style={{ background: SEV_TONE[it.sev] }} /></td>
+        <td className="cc-pid">
+          <a className="cc-pid-link" href={rcaHref(c.correlation_id)} title={`Problem ${c.correlation_id} — open RCA`}
+            onClick={(e) => e.stopPropagation()}>{shortProblemId(c.correlation_id)}</a>
+        </td>
         <td className="cc-title">
           <span className="cc-caret">{expanded ? "▾" : "▸"}</span>
           {signatureNocTitle(c.top_hypothesis)}
@@ -102,7 +106,7 @@ function QueueRow({ it, expanded, onToggle }: { it: ActionItem; expanded: boolea
       </tr>
       {expanded && (
         <tr className="cc-expand-row">
-          <td colSpan={10}>
+          <td colSpan={11}>
             <ExpandPanel it={it} />
           </td>
         </tr>
@@ -114,6 +118,12 @@ function QueueRow({ it, expanded, onToggle }: { it: ActionItem; expanded: boolea
 // Deep-links — the Action Queue is a launch pad, so every affordance jumps to the
 // exact place that resolves it (never a bare list/section).
 const rcaHref = (corrId: string) => `#/monitoring/correlations?id=${encodeURIComponent(corrId)}`;
+// shortProblemId renders a correlation UUID as a friendly, stable NOC handle
+// (P-5564D1) — the SAME scheme the backend AI cites (problemDisplayID in Go) so
+// an operator sees one consistent id across the queue, the RCA inspector and
+// Correlix AI. Display-only: the full UUID stays in the hover title + the RCA
+// deep link, which is what the routes/API key on.
+const shortProblemId = (corrId: string): string => friendlyProblemId(corrId);
 // Topology Canvas leaf is infrastructure/topology-canvas; the old infrastructure/
 // topology route does not exist and silently fell back to Inventory→Devices.
 const topoHref = (focus?: string) =>
@@ -354,7 +364,7 @@ export default function CommandCenter() {
             <table className="cc-table">
               <thead>
                 <tr>
-                  <th aria-label="severity" /><th>Incident / correlation group</th><th>RCA state</th><th>Impact</th>
+                  <th aria-label="severity" /><th>Problem ID</th><th>Incident / correlation group</th><th>RCA state</th><th>Impact</th>
                   <th>Fault domain</th><th>Evidence</th><th>Owner</th><th style={{ textAlign: "right" }}>Age</th><th>Ticket</th><th>Next action</th>
                 </tr>
               </thead>

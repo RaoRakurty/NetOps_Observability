@@ -3456,6 +3456,14 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .cc-row.sev-major { box-shadow: inset 3px 0 0 var(--warn); }
 .cc-sevdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
 .cc-title { font-weight: 600; color: var(--fg); min-width: 220px; }
+/* Problem ID column — compact mono handle (P-5564D1), clickable to the RCA. */
+.cc-pid { white-space: nowrap; }
+.cc-pid-link {
+  font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
+  color: var(--accent); text-decoration: none; padding: 2px 7px; border-radius: 5px;
+  background: var(--accent-soft); border: 1px solid transparent; transition: border-color .12s, background .12s;
+}
+.cc-pid-link:hover { border-color: var(--accent); background: var(--surface); }
 .cc-caret { color: var(--fg-subtle); margin-right: 7px; font-size: 10px; }
 .cc-occ-inline { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); margin-left: 8px; }
 .cc-next { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
