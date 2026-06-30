@@ -20,7 +20,7 @@ const DASHBOARD_GROUPS: { title: string; cards: DashboardCard[] }[] = [
       { id: "interface-metric", label: "Interface Metrics", href: "#/infrastructure/ifperf", icon: "metrics" },
       { id: "bgp-metric", label: "BGP Metrics", href: "#/infrastructure/bgpospf", icon: "topology" },
       { id: "bandwidth", label: "Bandwidth Utilization", href: "#/infrastructure/monitoring", icon: "metrics" },
-      { id: "wan-circuit", label: "WAN Circuit Utilization", href: "#/infrastructure/tunnels", icon: "stack" },
+      { id: "wan-circuit", label: "WAN Circuit Utilization", href: "#/infrastructure/wan-circuits", icon: "stack" },
     ],
   },
   {

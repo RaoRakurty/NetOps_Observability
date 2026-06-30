@@ -28,6 +28,7 @@ import Logs from "./tabs/Logs";
 import SavedSearches from "./tabs/SavedSearches";
 import Flows from "./tabs/Flows";
 import Tunnels from "./tabs/Tunnels";
+import WanCircuits from "./pages/WanCircuits";
 import MetricsExplorer from "./tabs/MetricsExplorer";
 import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
@@ -119,7 +120,7 @@ export const NAV: NavSection[] = [
           { id: "interface-metric", label: "Interface Metrics", route: "infrastructure/ifperf" },
           { id: "bgp-metric", label: "BGP Metrics", route: "infrastructure/bgpospf" },
           { id: "bandwidth", label: "Bandwidth Utilization", route: "infrastructure/monitoring" },
-          { id: "wan-circuit", label: "WAN Circuit Utilization", route: "infrastructure/tunnels" },
+          { id: "wan-circuit", label: "WAN Circuit Utilization", route: "infrastructure/wan-circuits" },
         ],
       },
       { id: "reports", label: "Reports", render: () => <Reports /> },
@@ -201,6 +202,7 @@ export const NAV: NavSection[] = [
       // Paths & overlays — how traffic actually traverses the network:
       // hop-by-hop active paths (Flow Trace) and overlay circuits (Tunnels).
       { id: "flowtrace", label: "Flow Trace", group: "Paths & Overlays", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
+      { id: "wan-circuits", label: "WAN Circuit Utilization", group: "Paths & Overlays", render: () => <WanCircuits /> },
       { id: "tunnels", label: "Tunnels", group: "Paths & Overlays", render: () => <Tunnels /> },
     ],
   },
