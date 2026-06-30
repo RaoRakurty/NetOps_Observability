@@ -37,6 +37,12 @@ import (
 
 var routeIsolationLedger = map[string]string{
 	// ── per-tenant data (scoped) ──
+	// Correlix AI: /ask is tenant DATA — the orchestrator reads only via the
+	// tenant-scoped aiDataSource (corr_objects/flows/findings row policies; scope
+	// from chTenantScope), proven by ai/orchestrator_test.go cross-tenant tests.
+	// /modules lists the caller's enabled modules (tenant config).
+	"/api/ai/ask":             "scoped",
+	"/api/ai/modules":         "scoped",
 	"/api/alerts":             "scoped",
 	"/api/compliance":         "scoped",
 	"/api/correlations":       "scoped",

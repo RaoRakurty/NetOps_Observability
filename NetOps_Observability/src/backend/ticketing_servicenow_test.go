@@ -168,6 +168,28 @@ func samplePayload(corrID string) ticketPayload {
 	}
 }
 
+// TestSnowFriendlyProblemID: the friendly Correlix Problem ID (P-XXXXXX) is
+// stamped into short_description, a custom field, and the body, so NOC and
+// ServiceNow share one handle (#10).
+func TestSnowFriendlyProblemID(t *testing.T) {
+	corrID := "5564d162-c891-5480-800b-9b7fbcdd59b2"
+	pid := problemDisplayID(corrID) // P-5564D1
+	f := snowIncidentFields(ticketSystemConfig{}, samplePayload(corrID))
+	sd, _ := f["short_description"].(string)
+	if !strings.HasPrefix(sd, "["+pid+"] ") {
+		t.Fatalf("short_description must lead with the friendly id, got %q", sd)
+	}
+	if f["u_correlix_problem_id"] != pid {
+		t.Fatalf("u_correlix_problem_id = %v, want %s", f["u_correlix_problem_id"], pid)
+	}
+	if f["correlation_id"] != corrID || f["u_correlix_object_id"] != corrID {
+		t.Fatal("the UUID must stay the dedupe anchor")
+	}
+	if desc, _ := f["description"].(string); !strings.Contains(desc, "Correlix Problem: "+pid) {
+		t.Fatalf("description must name the problem id, got %q", desc)
+	}
+}
+
 func TestServiceNowAdapter_CreateLookupUpdateResolve(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	m := newMockServiceNow()
