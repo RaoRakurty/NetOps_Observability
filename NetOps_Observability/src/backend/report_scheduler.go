@@ -517,7 +517,9 @@ func (rs *reportScheduler) datasetDevices(tenant string) (string, []reports.Sect
 	}
 	// Inventory table — name, address, classification, live health and freshness.
 	var rows [][]string
-	sort.Slice(devs, func(i, j int) bool { return firstNonEmpty(devs[i].Name, devs[i].ID) < firstNonEmpty(devs[j].Name, devs[j].ID) })
+	sort.Slice(devs, func(i, j int) bool {
+		return firstNonEmpty(devs[i].Name, devs[i].ID) < firstNonEmpty(devs[j].Name, devs[j].ID)
+	})
 	now := time.Now()
 	for _, d := range devs {
 		name := firstNonEmpty(d.Name, d.ID)
