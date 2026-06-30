@@ -100,10 +100,18 @@ export default function AppObservability() {
   const [sel, setSel] = useState<App | null>(null);
   const shell = useCloudShell();
 
-  // deep-link: #/monitoring/appobs/applications → opens that tab
+  // deep-link: #/monitoring/appobs/applications → opens that tab. Re-read on
+  // hashchange too, so clicking a flyout sub-item while ALREADY on this page
+  // switches tabs (the leaf component stays mounted, so a mount-only effect
+  // would never see the new suffix → the click looked dead).
   useEffect(() => {
-    const suffix = location.hash.split("/").pop() as Tab;
-    if (TABS.includes(suffix)) setTab(suffix);
+    const apply = () => {
+      const suffix = location.hash.split("?")[0].split("/").pop() as Tab;
+      if (TABS.includes(suffix)) setTab(suffix);
+    };
+    apply();
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
   }, []);
 
   if (sel) return <AppDetail app={sel} onBack={() => setSel(null)} />;

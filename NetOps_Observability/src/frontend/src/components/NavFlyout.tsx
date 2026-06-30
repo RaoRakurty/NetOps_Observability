@@ -46,6 +46,15 @@ export default function NavFlyout({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Current route path (sans leading #/ and ?query), tracked so the active
+  // sub-item highlights — and updates if a sub-item is clicked while open.
+  const [curPath, setCurPath] = useState(() => location.hash.replace(/^#\/?/, "").split("?")[0]);
+  useEffect(() => {
+    const onHash = () => setCurPath(location.hash.replace(/^#\/?/, "").split("?")[0]);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   const children = section.children ?? [];
 
   return (
@@ -87,17 +96,22 @@ export default function NavFlyout({
                   >
                     {leaf.label}
                   </button>
-                  {(leaf.subItems ?? []).map((sub) => (
-                    <button
-                      key={sub.id}
-                      type="button"
-                      role="menuitem"
-                      className="nav-flyout-subitem"
-                      onClick={() => onNavigate(sub.route ?? `${section.id}/${leaf.id}/${sub.id}`)}
-                    >
-                      {sub.label}
-                    </button>
-                  ))}
+                  {(leaf.subItems ?? []).map((sub) => {
+                    const target = sub.route ?? `${section.id}/${leaf.id}/${sub.id}`;
+                    const subActive = curPath === target;
+                    return (
+                      <button
+                        key={sub.id}
+                        type="button"
+                        role="menuitem"
+                        aria-current={subActive ? "true" : undefined}
+                        className={`nav-flyout-subitem${subActive ? " active" : ""}`}
+                        onClick={() => onNavigate(target)}
+                      >
+                        {sub.label}
+                      </button>
+                    );
+                  })}
                 </Fragment>
               );
             });
