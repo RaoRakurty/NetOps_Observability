@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -371,6 +373,59 @@ func (s *server) wanMesh(byDevice map[string][]WanEndpoint, wanDev map[string]mo
 		}
 	}
 	return out
+}
+
+// ---- circuit-target publisher (→ Redis, for the wan-echo collector #2) ----
+
+// startWANCircuitPublish periodically projects every tenant's circuit mesh and
+// publishes it to Redis as the wan-echo collector's target list. The prober is
+// platform infrastructure, so it probes across tenants (cross-tenant projection);
+// each EchoTarget carries its Tenant label so the resulting metric stays scoped.
+// Gated by FEATURE_WAN_ECHO; a no-op without it (or without Redis configured).
+func (s *server) startWANCircuitPublish(ctx context.Context) {
+	if os.Getenv("FEATURE_WAN_ECHO") != "true" || collectors.RedisAddr() == "" {
+		return
+	}
+	interval := envDuration("WAN_ECHO_PUBLISH_INTERVAL", 60*time.Second)
+	publish := func() {
+		_, circuits := s.wanProject(ctx, TenantGlobal, true)
+		targets := make([]collectors.EchoTarget, 0, len(circuits))
+		for _, c := range circuits {
+			if !c.Enabled || c.Remote.Measurable == "" {
+				continue
+			}
+			targets = append(targets, collectors.EchoTarget{
+				CircuitID:    c.ID,
+				Tenant:       c.Local.TenantID,
+				LocalDevice:  c.Local.Device,
+				LocalIf:      c.Local.Interface,
+				LocalAddr:    c.Local.Measurable,
+				RemoteDevice: c.Remote.Device,
+				RemoteIf:     c.Remote.Interface,
+				RemoteAddr:   c.Remote.Measurable,
+			})
+		}
+		// TTL > 2× publish interval so a brief API hiccup doesn't starve the
+		// collector, but a stopped API self-clears the targets.
+		if err := collectors.PublishWANCircuits(ctx, targets, int(3*interval/time.Second)); err != nil {
+			log.Printf("wan-echo: publish circuits: %v", err)
+			return
+		}
+		log.Printf("wan-echo: published %d circuit target(s)", len(targets))
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		publish()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				publish()
+			}
+		}
+	}()
 }
 
 // ---- HTTP handlers ----

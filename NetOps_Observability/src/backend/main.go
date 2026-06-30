@@ -256,6 +256,10 @@ func newServer() *server {
 	// SYNTHETIC_*_TARGETS lists. HTTP/TCP need no privileges; ICMP falls back
 	// to raw only where CAP_NET_RAW exists (prober sidecar).
 	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
+	// WAN circuit SLA — SD-WAN/BFD-style source-bound echo (ICMP, TCP-SYN
+	// fallback) between WAN-interface endpoints. Targets are the circuits the
+	// projector publishes to Redis. Opt-in; ICMP raw needs CAP_NET_RAW.
+	pool.Enable("wan-echo", os.Getenv("FEATURE_WAN_ECHO") == "true")
 
 	notifier := notify.NewDispatcher()
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
@@ -559,6 +563,9 @@ func main() {
 	// Computed forwarding direction (BGP-LS/IGP SPF) for the C7.5 routing source —
 	// the lowest-precedence (computed) signal; empty until the LSDB has data.
 	srv.startRoutingDirectionEnrichment(ctx)
+	// WAN circuit SLA targets: publish the projected circuit mesh to Redis for
+	// the wan-echo collector (#2). Gated by FEATURE_WAN_ECHO; no-op without Redis.
+	srv.startWANCircuitPublish(ctx)
 	if os.Getenv("ENABLE_REPORT_SCHEDULER") != "false" {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process
@@ -687,6 +694,7 @@ func runProber() {
 	pool.Enable("stamp-reflector", os.Getenv("FEATURE_STAMP_REFLECTOR") == "true")
 	pool.Enable("traceroute", os.Getenv("FEATURE_TRACEROUTE") == "true")
 	pool.Enable("synthetics", os.Getenv("FEATURE_SYNTHETICS") == "true")
+	pool.Enable("wan-echo", os.Getenv("FEATURE_WAN_ECHO") == "true")
 	pool.Start(ctx)
 	log.Printf("netops-prober %s started (active measurement only)", version)
 

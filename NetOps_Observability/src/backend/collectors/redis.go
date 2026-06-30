@@ -216,3 +216,54 @@ func FetchIfIndexMap(ctx context.Context) (map[string]map[string]string, error) 
 	_ = json.Unmarshal([]byte(raw), &out)
 	return out, nil
 }
+
+// wanCircuitsKey holds the WAN circuit list the API's circuit projector
+// publishes for the wan-echo collector to probe (TTL'd so it self-clears if the
+// API stops publishing).
+const wanCircuitsKey = "netops:wan:circuits"
+
+// EchoTarget is one WAN circuit to actively probe: the local (source-bind)
+// endpoint and the remote (destination) endpoint, with enough labels to tag the
+// emitted per-circuit metrics. Published by the API circuit projector, consumed
+// by the wan-echo collector. Network-level (cross-tenant) by design — the prober
+// is platform infrastructure; the Tenant label scopes the resulting metric.
+type EchoTarget struct {
+	CircuitID    string `json:"circuit_id"`
+	Tenant       string `json:"tenant,omitempty"`
+	LocalDevice  string `json:"local_device"`
+	LocalIf      string `json:"local_if"`
+	LocalAddr    string `json:"local_addr"` // source-bind address (best-effort)
+	RemoteDevice string `json:"remote_device"`
+	RemoteIf     string `json:"remote_if"`
+	RemoteAddr   string `json:"remote_addr"` // probe destination (the measurable address)
+}
+
+// PublishWANCircuits writes the circuit list for the echo collector. Best-effort;
+// no-op when Redis isn't configured (the collector then falls back to env).
+func PublishWANCircuits(ctx context.Context, targets []EchoTarget, ttlSec int) error {
+	if RedisAddr() == "" {
+		return nil
+	}
+	body, err := json.Marshal(targets)
+	if err != nil {
+		return err
+	}
+	return redisSetEX(ctx, wanCircuitsKey, string(body), ttlSec)
+}
+
+// FetchWANCircuits reads the circuit list published by the API. Empty (not an
+// error) when absent — the collector then falls back to WAN_ECHO_TARGETS.
+func FetchWANCircuits(ctx context.Context) ([]EchoTarget, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	raw, err := redisCmd(c, "GET", wanCircuitsKey)
+	if err != nil || raw == "" {
+		return nil, nil
+	}
+	var out []EchoTarget
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out, nil
+}
