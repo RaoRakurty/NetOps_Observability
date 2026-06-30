@@ -68,7 +68,11 @@ export type NavLeaf = {
   // subItems: in-page sub-categories shown (small) beneath this leaf in the
   // flyout. They deep-link to `#/section/leaf/<subId>`; the page reads the
   // suffix to open the matching tile/modal. Not separate routes.
-  subItems?: { id: string; label: string }[];
+  // `route` (optional): when set, the flyout sub-item navigates to that full
+  // hash route (e.g. "infrastructure/monitoring") instead of scrolling to an
+  // in-page anchor — used by the Dashboard List directory to deep-link to the
+  // real board each name opens.
+  subItems?: { id: string; label: string; route?: string }[];
 };
 
 export type NavSection = {
@@ -111,11 +115,11 @@ export const NAV: NavSection[] = [
         label: "Dashboard List",
         render: () => <DashboardList />,
         subItems: [
-          { id: "device-metric", label: "Device Metrics" },
-          { id: "interface-metric", label: "Interface Metrics" },
-          { id: "bgp-metric", label: "BGP Metrics" },
-          { id: "bandwidth", label: "Bandwidth Utilization" },
-          { id: "wan-circuit", label: "WAN Circuit Utilization" },
+          { id: "device-metric", label: "Device Metrics", route: "infrastructure/monitoring" },
+          { id: "interface-metric", label: "Interface Metrics", route: "infrastructure/ifperf" },
+          { id: "bgp-metric", label: "BGP Metrics", route: "infrastructure/bgpospf" },
+          { id: "bandwidth", label: "Bandwidth Utilization", route: "infrastructure/monitoring" },
+          { id: "wan-circuit", label: "WAN Circuit Utilization", route: "infrastructure/tunnels" },
         ],
       },
       { id: "reports", label: "Reports", render: () => <Reports /> },
@@ -377,7 +381,7 @@ export function navDestinations(nav: NavSection[] = NAV): NavDestination[] {
         out.push({ label, section: s.label, route: `${s.id}/${l.id}` });
         // Deep-link sub-categories (e.g. API Access ▸ Token Policy) into ⌘K.
         for (const sub of l.subItems ?? []) {
-          out.push({ label: `${s.label} · ${sub.label}`, section: s.label, route: `${s.id}/${l.id}/${sub.id}` });
+          out.push({ label: `${s.label} · ${sub.label}`, section: s.label, route: sub.route ?? `${s.id}/${l.id}/${sub.id}` });
         }
       }
     } else {

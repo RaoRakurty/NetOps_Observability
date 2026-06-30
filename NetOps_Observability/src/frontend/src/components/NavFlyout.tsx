@@ -93,7 +93,7 @@ export default function NavFlyout({
                       type="button"
                       role="menuitem"
                       className="nav-flyout-subitem"
-                      onClick={() => onNavigate(`${section.id}/${leaf.id}/${sub.id}`)}
+                      onClick={() => onNavigate(sub.route ?? `${section.id}/${leaf.id}/${sub.id}`)}
                     >
                       {sub.label}
                     </button>

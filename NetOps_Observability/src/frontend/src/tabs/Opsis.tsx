@@ -25,15 +25,36 @@ const SUGGESTIONS = [
   "Summarize the most recent critical alerts",
 ];
 
-// Slash commands — pre-made, grounded questions so the operator can pick instead
-// of typing (Claude-Code style). `kind` routes to the right grounded action.
-type SlashCmd = { cmd: string; title: string; desc: string; kind: "grounded" | "topIncident" | "send"; text?: string };
+// Slash commands — guided shortcuts into the SAME grounded AI flow as free text
+// (Claude-Code style). Each carries a module badge + availability so the menu is
+// discoverable; `kind` routes to the right action. Commands not yet wired route
+// to the honest "available soon" disclosure via a natural-language send.
+type SlashCmd = {
+  cmd: string;
+  title: string;
+  desc: string;
+  module: string; // short module badge
+  kind: "grounded" | "topIncident" | "send";
+  text?: string; // the NL question this expands to (kind:"send")
+  soon?: boolean; // answering tools land later — still routes (honest disclosure)
+};
 const SLASH_COMMANDS: SlashCmd[] = [
-  { cmd: "/status", title: "What's going on right now", desc: "Live NOC situation + what to focus on first", kind: "grounded" },
-  { cmd: "/top-incident", title: "Explain the top incident", desc: "RCA on the highest-priority correlation", kind: "topIncident" },
-  { cmd: "/talkers", title: "Top talkers", desc: "Heaviest conversations (flow analytics)", kind: "send", text: "Show me the top talkers" },
-  { cmd: "/anomalies", title: "Metric anomalies", desc: "Detected device anomalies right now (telemetry)", kind: "send", text: "Any metric anomalies right now?" },
-  { cmd: "/flows", title: "Flow summary", desc: "Traffic volume over the recent window", kind: "send", text: "Give me a flow summary" },
+  // Live operations
+  { cmd: "/status", title: "Current NOC status", desc: "Active incidents, priority focus, impact, next actions", module: "Command Center", kind: "grounded" },
+  { cmd: "/top", title: "Explain the top incident", desc: "RCA on the highest-priority correlation", module: "RCA", kind: "topIncident" },
+  { cmd: "/critical", title: "Critical incidents", desc: "Confirmed / suspected incidents that need action", module: "Events", kind: "send", text: "Show me the recent critical incidents" },
+  // RCA
+  { cmd: "/explain", title: "Explain a problem", desc: "RCA, evidence, owner, next actions — open a problem first", module: "RCA", kind: "send", text: "Explain this incident" },
+  // Modules
+  { cmd: "/talkers", title: "Top talkers", desc: "Heaviest conversations (flow analytics)", module: "Flows", kind: "send", text: "Show me the top talkers" },
+  { cmd: "/anomalies", title: "Metric anomalies", desc: "Detected device anomalies right now", module: "Telemetry", kind: "send", text: "Any metric anomalies right now?" },
+  { cmd: "/flows", title: "Flow summary", desc: "Traffic volume over the recent window", module: "Flows", kind: "send", text: "Give me a flow summary" },
+  // Output generation (draft-only; honest disclosure until built)
+  { cmd: "/handoff", title: "Shift handoff", desc: "Draft a NOC shift pass-down summary", module: "Reports", kind: "send", text: "Generate a shift handoff summary", soon: true },
+  { cmd: "/itsm", title: "ITSM update", desc: "Draft a ticket-ready update for the top incident", module: "ITSM", kind: "send", text: "Generate an ITSM-ready update", soon: true },
+  // Help / navigation
+  { cmd: "/where", title: "Where do I…", desc: "Find a feature and its page in Correlix", module: "Navigation", kind: "send", text: "Where do I configure ServiceNow?" },
+  { cmd: "/help", title: "Help", desc: "What Correlix AI can do", module: "Help", kind: "send", text: "What can you do?" },
 ];
 
 export default function Opsis({ split, onToggleSplit }: { split?: boolean; onToggleSplit?: () => void }) {
@@ -193,9 +214,11 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   const slashMatches = !slashOpen ? [] : SLASH_COMMANDS.filter((c) =>
     !slashQuery || c.cmd.slice(1).includes(slashQuery) || c.title.toLowerCase().includes(slashQuery));
 
-  // runSlash dispatches a pre-made question to the right grounded action.
+  // runSlash dispatches a guided command to the right grounded action — the same
+  // backend flow free-form questions use (commands are shortcuts, not bypasses).
   const runSlash = (c: SlashCmd) => {
     setSlashOpen(false); setDraft("");
+    if (c.cmd === "/help") { setShowHelp(true); return; }
     if (c.kind === "grounded") askGrounded();
     else if (c.kind === "topIncident") askTopIncident();
     else if (c.kind === "send" && c.text) send(c.text);
@@ -364,7 +387,10 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
                 className={`op-slash-item${i === slashIdx ? " on" : ""}`}
                 onMouseEnter={() => setSlashIdx(i)} onClick={() => runSlash(c)}>
                 <span className="op-slash-cmd">{c.cmd}</span>
-                <span className="op-slash-title">{c.title}</span>
+                <span className="op-slash-title">{c.title}
+                  <span className="op-slash-mod">{c.module}</span>
+                  {c.soon && <span className="op-slash-soon">soon</span>}
+                </span>
                 <span className="op-slash-desc">{c.desc}</span>
               </button>
             ))}
