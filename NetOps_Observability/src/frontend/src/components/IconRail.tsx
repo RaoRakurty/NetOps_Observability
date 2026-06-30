@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
-import { usePrefs } from "../theme/prefs";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
 import MfaCard from "./MfaCard";
+import AppearanceControls from "./AppearanceControls";
 
 // Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
 // only tints the active indicator + the flyout header; severity colours stay
@@ -72,7 +72,6 @@ type OpenState = { id: string; top: number } | null;
 // foot — replacing the top-right user menu.
 export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, homeRoute }: Props) {
   const { navigate, setCopilotOpen, copilotOpen } = useShell();
-  const { density, setDensity } = usePrefs();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const [mfaOpen, setMfaOpen] = useState(false);
@@ -235,13 +234,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
               </div>
-              <div className="pref-row">
-                <span className="pref-label">Density</span>
-                <span className="pref-seg">
-                  <button className={density === "comfortable" ? "on" : ""} onClick={() => setDensity("comfortable")}>Cozy</button>
-                  <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Compact</button>
-                </span>
-              </div>
+              <AppearanceControls />
               <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
               <button onClick={() => { setAcctOpen(false); setMfaOpen(true); }}>Two-factor authentication</button>
               {onChangePassword && (

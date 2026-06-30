@@ -18,17 +18,17 @@ export const THEME_PRESETS: { id: Theme; label: string; swatch: string }[] = [
 ];
 const THEME_IDS: Theme[] = THEME_PRESETS.map((t) => t.id);
 export type Density = "comfortable" | "compact";
-// Chrome = the accent hue of the always-dark, glassy nav rail + topbar. The
-// frosted-glass treatment is shared; only the hue/lightness shifts. "navy" is
-// the bare :root tokens (default), so it needs no override block. `swatch` is
-// the picker dot's base color. Three curated options: Navy (default), a mild
-// ocean-ish blue, and an elegant dark graphite.
-export type Chrome = "navy" | "pink" | "graphite";
+// Chrome = the accent hue of the glassy nav rail + topbar. The frosted-glass
+// treatment is shared; only the hue/lightness shifts. "navy" is the bare :root
+// tokens (default), so it needs no override block. `swatch` is the picker dot's
+// base color. Three curated, professional options: Navy (default), a dark
+// graphite, and a soft light-grey "Mist".
+export type Chrome = "navy" | "graphite" | "mist";
 
 export const CHROME_PRESETS: { id: Chrome; label: string; swatch: string }[] = [
   { id: "navy", label: "Navy", swatch: "#20283c" },
-  { id: "pink", label: "Rosé", swatch: "#be185d" },
   { id: "graphite", label: "Graphite", swatch: "#23262d" },
+  { id: "mist", label: "Mist", swatch: "#cbd5e1" },
 ];
 const CHROME_IDS = CHROME_PRESETS.map((c) => c.id);
 

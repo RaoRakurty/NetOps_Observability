@@ -101,21 +101,21 @@
 /* Chrome presets (data-chrome on <html>) — the rail/topbar share one frosted-
    glass treatment; each preset only shifts the hue/lightness. navy == the :root
    defaults above (no block). */
-:root[data-chrome="pink"] {               /* elegant rosé — deep wine rail */
-  --rail-bg:        #2a1623;
-  --rail-bg-2:      #3a1f30;
-  --rail-fg-muted:  #c2a3b2;
-  --rail-active-bg: rgba(236,72,153,0.22);
-  --rail-accent:    #f9a8c9;
-  --rail-glass:     rgba(236,72,153,0.13);
-  /* content accent follows the rail — refined rose, AA-legible on the light canvas */
-  --accent:          #be185d;
-  --accent-bright:   #db2777;
-  --accent-2:        #e11d48;
-  --accent-grad:     linear-gradient(135deg, #db2777 0%, #e11d48 100%);
-  --accent-soft:     rgba(219, 39, 119, 0.12);
-  --accent-soft-2:   rgba(225, 29, 72, 0.12);
-  --accent-ring:     rgba(219, 39, 119, 0.38);
+:root[data-chrome="mist"] {               /* soft light-grey — pale slate rail */
+  --rail-bg:        #424855;
+  --rail-bg-2:      #4d5462;
+  --rail-fg-muted:  #c7cdd8;
+  --rail-active-bg: rgba(203,213,225,0.20);
+  --rail-accent:    #e2e8f0;
+  --rail-glass:     rgba(203,213,225,0.12);
+  /* content accent — refined neutral slate, AA-legible on the light canvas */
+  --accent:          #475569;
+  --accent-bright:   #64748b;
+  --accent-2:        #334155;
+  --accent-grad:     linear-gradient(135deg, #64748b 0%, #475569 100%);
+  --accent-soft:     rgba(100, 116, 139, 0.12);
+  --accent-soft-2:   rgba(71, 85, 105, 0.12);
+  --accent-ring:     rgba(100, 116, 139, 0.38);
 }
 :root[data-chrome="graphite"] {           /* elegant dark graphite */
   --rail-bg:        #23262d;
@@ -1104,19 +1104,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
-/* ── Brand corner (UI-16) — Correlix wordmark in the top bar's top-left; the
-   eye-in-O mark lives in the rail. Search bar is compact + sits top-right. ── */
-.topbar-brand {
-  font-family: "Space Grotesk", var(--font-sans, sans-serif);
-  font-size: 19px; font-weight: 700; letter-spacing: -0.015em;
-  color: var(--fg); background: transparent; border: 0; cursor: pointer;
-  padding: 0 2px; line-height: 1; white-space: nowrap;
-  transition: color .12s ease, opacity .12s ease;
-}
-.topbar-brand:hover { color: var(--accent); }
-.topbar-brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
-/* On the v2 dark-glass top bar the wordmark reads light, with the accent eye-dot. */
-.shell-v2 .topbar-brand { color: var(--rail-fg); }
+/* The Correlix wordmark was removed from the top bar (it duplicated the rail's
+   eye-in-O brand mark + name); the rail remains the single brand surface. */
 
 /* Eye brand mark — a flat almond eye (eyelids + iris + pupil) drawn as inline
    SVG (placeholder for the final logo). The span just sizes + colours it. */
@@ -2326,6 +2315,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .pref-seg-wrap { flex-wrap: wrap; gap: 1px; }
 .pref-seg-wrap button { display: inline-flex; align-items: center; gap: 6px; }
 .pref-swatch { width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(127,127,127,0.4); flex: 0 0 auto; }
+/* Appearance picker (account menu): the 6-way theme + 3-way accent swatches need
+   room, so each wrap-row drops its label onto its own line and the v1 TopBar pop
+   widens to match the roomier rail pop. */
+.menu-pop .appearance { min-width: 232px; }
+.appearance .pref-row { flex-wrap: wrap; row-gap: 4px; }
+.appearance .pref-row > .pref-label { flex: 1 0 100%; }
 
 /* Chrome (rail accent) picker — glassy reflective dots. Each dot is the preset's
    color with a diagonal highlight so it reads like a bead of glass. */
