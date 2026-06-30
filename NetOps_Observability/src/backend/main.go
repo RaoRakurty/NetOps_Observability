@@ -67,35 +67,36 @@ type server struct {
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
-	wanIfAddr func(context.Context) (map[string]map[string]string, error)
-	reports          *reportScheduler
-	reportPipeline   *reportPipeline // async PG-backed pipeline (nil on file backend)
-	incidents        incidentsRepo   // incident system of record (nil on file backend)
-	incMetrics       *incidentMetrics
-	ticketing        ticketingStore        // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
-	seams            *pgSeamStore          // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services         *pgServiceStore       // service catalog #69 §2 P2 (nil on file backend)
-	topology         topologyGraphStore    // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline incidentTimelineStore // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
-	applications     applicationStore      // Application Identification registry #81 P0 (in-memory or pg)
-	appCatalog       *appCatalogHolder     // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
-	ngfw             *ngfwAppResolver      // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
-	fusion           *fusionWorker         // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
-	appOverrides     appCatalogStore       // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
-	cloud            cloudStore            // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
-	cloudApp         *cloudAppResolver     // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
-	integrations     *integrationStore     // integration-platform persistence (nil on file backend)
-	providers        *integration.Registry // inbound provider translators (registry)
-	intMetrics       *integrationMetrics   // integration-platform Prometheus counters
-	vault            *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv           *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	exportPolicy     *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter    *tenantRateLimiter    // per-tenant export rate limit
-	copilotLimiter   *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
-	copilotCfg       *copilotConfigStore
-	netboxCfg        *netboxConfigStore // NetBox source-of-truth discovery config
-	netboxSync       *netboxSyncer      // reconciles discovered devices INTO NetBox (write-through)
-	vulns            *vulnFeed          // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	wanIfAddr           func(context.Context) (map[string]map[string]string, error)
+	reports             *reportScheduler
+	reportPipeline      *reportPipeline // async PG-backed pipeline (nil on file backend)
+	incidents           incidentsRepo   // incident system of record (nil on file backend)
+	incMetrics          *incidentMetrics
+	ticketing           ticketingStore           // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	seams               *pgSeamStore             // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services            *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
+	topology            topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
+	incidentTimeline    incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeMetrics incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	applications        applicationStore         // Application Identification registry #81 P0 (in-memory or pg)
+	appCatalog          *appCatalogHolder        // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
+	ngfw                *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
+	fusion              *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
+	appOverrides        appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
+	cloud               cloudStore               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	cloudApp            *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
+	integrations        *integrationStore        // integration-platform persistence (nil on file backend)
+	providers           *integration.Registry    // inbound provider translators (registry)
+	intMetrics          *integrationMetrics      // integration-platform Prometheus counters
+	vault               *Vault                   // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv              *tlsServer               // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	exportPolicy        *exportPolicyStore       // runtime-tunable log-export limits
+	exportLimiter       *tenantRateLimiter       // per-tenant export rate limit
+	copilotLimiter      *tenantRateLimiter       // per-principal copilot rate limit (SR-021)
+	copilotCfg          *copilotConfigStore
+	netboxCfg           *netboxConfigStore // NetBox source-of-truth discovery config
+	netboxSync          *netboxSyncer      // reconciles discovered devices INTO NetBox (write-through)
+	vulns               *vulnFeed          // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -447,14 +448,15 @@ func newServer() *server {
 	// Postgres only, like incidents; the bootstrap loop starts in main().
 	srv.seams = newSeamStore()
 	srv.services = newServiceStore()
-	srv.topology = newTopologyStore()                 // persistent topology graph (#77); reconciler starts in main()
-	srv.incidentTimeline = newIncidentTimelineStore() // RCA Time Intelligence manual lifecycle events (#84)
-	srv.applications = newApplicationStore()          // Application Identification registry (#81 P0)
-	srv.appCatalog = newAppCatalogHolder()            // Application Identification IP→app resolver (#81 P1)
-	srv.ngfw = newNgfwAppResolver()                   // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
-	srv.appOverrides = newAppCatalogStore()           // Application Identification operator-defined overrides (#81 P1c)
-	srv.cloud = newCloudStore()                       // Cloud App Observability inventory (#81 P3A)
-	srv.cloudApp = newCloudAppResolver(srv.cloud)     // Cloud identity-map → appid bridge (#81 P3F+1)
+	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
+	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
+	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
+	srv.applications = newApplicationStore()                // Application Identification registry (#81 P0)
+	srv.appCatalog = newAppCatalogHolder()                  // Application Identification IP→app resolver (#81 P1)
+	srv.ngfw = newNgfwAppResolver()                         // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
+	srv.appOverrides = newAppCatalogStore()                 // Application Identification operator-defined overrides (#81 P1c)
+	srv.cloud = newCloudStore()                             // Cloud App Observability inventory (#81 P3A)
+	srv.cloudApp = newCloudAppResolver(srv.cloud)           // Cloud identity-map → appid bridge (#81 P3F+1)
 	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
 	}
@@ -610,7 +612,8 @@ func main() {
 	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
 	// replica converges here (no-op for the single-writer file backend).
 	srv.startCredCacheReload(ctx)
-	srv.startTopologyReconciler(ctx) // #77: keep the persistent topology graph fresh
+	srv.startTopologyReconciler(ctx)          // #77: keep the persistent topology graph fresh
+	srv.startIncidentTimeMetricsBackfill(ctx) // #84: persist phase-metric snapshots (incl. seam_type)
 
 	mux := http.NewServeMux()
 	srv.routes(mux)
@@ -807,8 +810,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	// WAN circuits (#1): controller-style endpoint registry + topology policy.
 	mux.HandleFunc("/api/wan/interfaces", s.handleWanInterfaces) // per-WAN-interface table: util + circuit SLA + source
 	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)   // derived WAN endpoint registry (read)
-	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)   // derived circuit mesh (read)
-	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)       // topology policy: GET / PUT (intent)
+	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)     // derived circuit mesh (read)
+	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)         // topology policy: GET / PUT (intent)
 	// RCA auto-ticketing (#78 P3): incident-policy CRUD + simulator, tenant-scoped
 	// outbox/audit observability. Per-correlation ticket actions ride the
 	// /api/correlations/{id}/{tickets,ticket,ticket/sync} router (correlations.go).
@@ -843,6 +846,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/reliability/rollups", s.handleReliabilityRollups)                    // RCA Time Intelligence reliability rollups (#84)
 	mux.HandleFunc("/api/reliability/trends", s.handleReliabilityTrends)                      // bucketed phase-metric trends (#84)
 	mux.HandleFunc("/api/reliability/chronic-offenders", s.handleReliabilityChronicOffenders) // recurring-object ranking (#84)
+	mux.HandleFunc("/api/reliability/time-metrics", s.handleReliabilityTimeMetrics)           // persisted phase-metric snapshots: GET (tenant) / POST backfill (platform admin) (#84)
 	mux.HandleFunc("/api/health/score", s.handleHealthScore)
 	mux.HandleFunc("/api/metrics/forecast", s.handleMetricsForecast)
 	mux.HandleFunc("/api/services", s.handleServices)

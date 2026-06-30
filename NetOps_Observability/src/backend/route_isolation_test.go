@@ -54,6 +54,10 @@ var routeIsolationLedger = map[string]string{
 	"/api/reliability/rollups":           "scoped",
 	"/api/reliability/trends":            "scoped",
 	"/api/reliability/chronic-offenders": "scoped",
+	// GET lists the caller's OWN persisted snapshots (principalTenant + store
+	// default-closed filter / RLS); POST triggers the cross-tenant backfill worker
+	// behind requirePlatformAdmin. The data surface is tenant-scoped.
+	"/api/reliability/time-metrics": "scoped",
 	"/api/credentials":                   "scoped",
 	"/api/devices":                       "scoped",
 	"/api/devices/":                      "scoped",
