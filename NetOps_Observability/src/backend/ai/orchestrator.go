@@ -258,42 +258,63 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 		disc = append(disc, res.Notes...)
 	}
 
-	// Structured fields come from the problem object (deterministic, not the model).
+	// Response-Quality layer (spec §8-15): NOC-friendly, deterministic structured
+	// fields — built from the problem object + evidence, NEVER the model.
+	status := StatusLabel(pr.Verdict)
+	confLabel := ConfidenceLabel(pr.Confidence, pr.Verdict)
+	missing := FormatMissingEvidence(pr.MissingEvidence)
+	ownerHints := append(append([]string{pr.Title}, pr.MissingEvidence...), pr.Devices...)
+	owner := InferOwner(pr.Owner, ownerHints...)
+	nextActions := NextActionsRCA(pr.Verdict, pr.Devices, pr.MissingEvidence)
+
 	pe := &ProblemExplanation{
 		ProblemID: pr.ID, Title: pr.Title, Verdict: pr.Verdict,
 		Confidence:       fmt.Sprintf("%.0f%%", pr.Confidence*100),
 		Timeline:         pr.Timeline,
-		MissingEvidence:  pr.MissingEvidence,
-		RecommendedOwner: firstNonEmpty(pr.Owner, "unassigned"),
+		MissingEvidence:  missing,
+		RecommendedOwner: owner,
 	}
 	for _, ev := range bundle {
-		pe.SupportingEvidence = append(pe.SupportingEvidence, ev.Text)
+		if !strings.HasPrefix(ev.CitationID, "problem:") { // header item is restated in the summary
+			pe.SupportingEvidence = append(pe.SupportingEvidence, ev.Text)
+		}
 	}
 
-	// Grounded narrative from the model.
+	// Grounded narrative from the model; degrade to a polished evidence-only
+	// summary (NOT a raw "provider unavailable" line) when the provider is absent.
+	var badges []string
 	system := o.systemPrompt()
 	user := o.problemPrompt(question, pr, bundle)
 	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
-	if lerr != nil {
-		// Degrade to a deterministic, evidence-only summary if the provider is down.
-		text = o.deterministicProblemSummary(pr, bundle)
+	evidenceOnly := false
+	if lerr != nil || strings.TrimSpace(text) == "" {
+		text = o.deterministicProblemSummary(pr, missing, owner)
 		provider = "none"
-		disc = append(disc, "AI provider unavailable — showing an evidence-only summary.")
+		evidenceOnly = true
+		badges = append(badges, FallbackBadges(false)...) // provider-unavailable → metadata badge
 	}
-	pe.Summary = strings.TrimSpace(text)
+	pe.Summary = Scrub(strings.TrimSpace(text))
+
+	// Status/evidence-strength badges (spec §19) — small, not the main answer.
+	badges = append([]string{status}, badges...)
+	if pr.SignalCount <= 1 && pr.NodeCount <= 1 {
+		badges = append(badges, "Low evidence")
+	}
+	if len(missing) > 0 {
+		badges = append(badges, "Missing evidence")
+	}
 
 	cites := make([]Citation, 0, len(bundle))
 	for _, ev := range bundle {
 		cites = append(cites, Citation{ID: ev.CitationID, Kind: ev.Kind, Label: ev.Text, Href: ev.Href})
 	}
-	if len(pr.MissingEvidence) > 0 {
-		disc = append(disc, "Missing evidence: "+strings.Join(pr.MissingEvidence, ", ")+".")
-	}
 
 	return Answer{
 		Mode: ModeProblemExplanation, Intent: plan.Intent, Modules: plan.Modules,
-		Text: pe.Summary, Problem: pe, Citations: cites,
-		Disclaimers: disc, Provider: provider,
+		Text: pe.Summary, Problem: pe, Citations: cites, Disclaimers: disc, Provider: provider,
+		Status: status, ConfidenceLabel: confLabel, RecommendedOwner: owner,
+		NextActions: nextActions, MissingEvidence: missing,
+		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly,
 	}, nil
 }
 
@@ -305,9 +326,21 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	if err != nil {
 		return Answer{}, err
 	}
+	if len(probs) == 0 {
+		cs := &CurrentStateSummary{Summary: "No active correlations right now — the fleet is quiet."}
+		return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
+			Text: cs.Summary, CurrentState: cs, Citations: []Citation{},
+			Disclaimers: append(disc, "Nothing active in scope.")}, nil
+	}
+
+	// Rank by OPERATIONAL priority (spec §16) — never recency. Stable sort so ties
+	// keep store order (newest-first from ListActiveProblems).
+	ranked := make([]Problem, len(probs))
+	copy(ranked, probs)
+	sort.SliceStable(ranked, func(i, j int) bool { return PriorityScore(ranked[i]) > PriorityScore(ranked[j]) })
+
 	cs := &CurrentStateSummary{}
 	impact := map[string]int{}
-	var cites []Citation
 	for _, pr := range probs {
 		switch strings.ToLower(pr.Verdict) {
 		case "confirmed":
@@ -317,44 +350,103 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		default:
 			cs.Undetermined++
 		}
-		line := fmt.Sprintf("%s — %s (%s, %.0f%%)", shortIDFor(pr.ID), pr.Title, pr.Verdict, pr.Confidence*100)
-		cs.ActiveIncidents = append(cs.ActiveIncidents, line)
-		// Confirmed incidents lead the recommended focus.
-		if strings.EqualFold(pr.Verdict, "confirmed") {
-			cs.RecommendedFocus = append(cs.RecommendedFocus, line)
-		}
 		for _, d := range pr.Devices {
 			impact[d]++
 		}
+	}
+	cs.ActionableCount = cs.Confirmed + cs.Suspected
+	cs.ImpactedEntities = topKeys(impact, 8)
+
+	// Focus = the highest-priority incident (not the newest).
+	focus := ranked[0]
+	focusStatus := StatusLabel(focus.Verdict)
+	focusConf := ConfidenceLabel(focus.Confidence, focus.Verdict)
+	focusOwner := InferOwner(focus.Owner, append([]string{focus.Title}, focus.Devices...)...)
+	cs.RecommendedFocus = []string{fmt.Sprintf("%s — %s (%s, confidence %s)", focus.Display(), focus.Title, focusStatus, strings.ToLower(focusConf))}
+	cs.FocusReason = currentStateFocusReason(focus, cs)
+
+	// List ONLY the actionable incidents (confirmed+suspected), ranked, capped —
+	// not a dump of every low-evidence undetermined item. Undetermined → watch note.
+	var cites []Citation
+	for _, pr := range ranked {
+		if cs.ActionableCount > 0 && strings.EqualFold(pr.Verdict, "undetermined") {
+			continue // grouped into the watch note instead
+		}
+		if len(cs.ActiveIncidents) >= 8 {
+			break
+		}
+		cl := ConfidenceLabel(pr.Confidence, pr.Verdict)
+		line := fmt.Sprintf("%s — %s (%s, %s)", pr.Display(), pr.Title, StatusLabel(pr.Verdict), strings.ToLower(cl))
+		cs.ActiveIncidents = append(cs.ActiveIncidents, line)
 		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: line, Href: "#/monitoring/correlations?id=" + pr.ID})
 	}
-	cs.ImpactedEntities = topKeys(impact, 8)
-	if len(cs.RecommendedFocus) == 0 && len(cs.ActiveIncidents) > 0 {
-		cs.RecommendedFocus = []string{cs.ActiveIncidents[0]} // nothing confirmed → newest
-	}
-	if len(probs) == 0 {
-		cs.Summary = "No active correlations right now — the fleet is quiet."
-		disc = append(disc, "Nothing active in scope.")
+	if cs.Undetermined > 0 {
+		cs.WatchNote = fmt.Sprintf("%s active. Most are low-evidence patterns — treat as watch items unless they gain supporting evidence or map to service impact.",
+			plural(cs.Undetermined, "undetermined correlation"))
 	}
 
-	// Model headline grounded in the structured counts (deterministic fallback).
-	if len(probs) > 0 {
-		system := o.systemPrompt()
-		user := o.currentStatePrompt(question, cs)
-		text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
-		if lerr != nil {
-			cs.Summary = o.deterministicStateSummary(cs)
-			provider = "none"
-			disc = append(disc, "AI provider unavailable — showing a deterministic summary.")
-			return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
-				Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc, Provider: provider}, nil
-		}
-		cs.Summary = strings.TrimSpace(text)
-		return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
-			Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc, Provider: provider}, nil
+	nextActions := currentStateNextActions(focus, cs)
+
+	// Headline: model-written (grounded in the ranked structure) or a polished
+	// deterministic briefing. Provider-unavailable is a badge, not body text.
+	var badges []string
+	evidenceOnly := false
+	system := o.systemPrompt()
+	user := o.currentStatePrompt(question, cs)
+	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	if lerr != nil || strings.TrimSpace(text) == "" {
+		text = o.deterministicStateSummary(cs)
+		provider = "none"
+		evidenceOnly = true
+		badges = append(badges, FallbackBadges(false)...)
 	}
-	return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
-		Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc}, nil
+	cs.Summary = Scrub(strings.TrimSpace(text))
+
+	badges = append([]string{focusStatus}, badges...)
+	if cs.ActionableCount == 0 {
+		badges = append(badges, "Low evidence")
+	}
+
+	return Answer{
+		Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
+		Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc, Provider: provider,
+		Status: focusStatus, ConfidenceLabel: focusConf, RecommendedOwner: focusOwner,
+		NextActions: nextActions, ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly,
+	}, nil
+}
+
+// currentStateFocusReason explains WHY the focus incident is first (spec): a
+// classified, higher-evidence incident is more actionable than low-evidence
+// undetermined ones; honest when the best available is itself low-evidence.
+func currentStateFocusReason(focus Problem, cs *CurrentStateSummary) string {
+	if !IsClassified(focus.Title) && strings.EqualFold(focus.Verdict, "undetermined") {
+		return "This is the highest-priority available incident, but its RCA evidence is currently low — there is no confirmed or suspected incident to lead with."
+	}
+	r := "This incident has "
+	if IsClassified(focus.Title) {
+		r += "a classified RCA pattern and "
+	}
+	r += "stronger evidence than the undetermined correlations, so it is the most actionable"
+	if o := InferOwner(focus.Owner, focus.Title); o != "Needs triage" {
+		r += " and maps to a clear ownership domain (" + strings.TrimSuffix(o, ", pending confirmation") + ")"
+	}
+	return r + "."
+}
+
+// currentStateNextActions generates NOC next steps for the live-state briefing.
+func currentStateNextActions(focus Problem, cs *CurrentStateSummary) []string {
+	acts := []string{"Review " + focus.Display() + " — " + focus.Title + " first."}
+	dom := missingEvidenceDomain([]string{focus.Title})
+	if strings.Contains(strings.ToLower(focus.Title), "dia") || strings.Contains(strings.ToLower(focus.Title), "provider") || strings.Contains(strings.ToLower(focus.Title), "isp") {
+		acts = append(acts, "Check the affected path, probes, WAN edge and provider-facing telemetry.", "Confirm whether the latency maps to user or application impact.")
+	} else if dom != "" {
+		acts = append(acts, "Collect the missing "+dom+" and confirm service impact.")
+	}
+	if cs.Undetermined > 0 {
+		acts = append(acts, "Keep undetermined low-evidence correlations in watch mode unless they gain supporting evidence.")
+	}
+	acts = append(acts, "Use this summary for shift handoff or an ITSM update if the issue stays active.")
+	return dedupeLines(acts)
 }
 
 // answerModuleHealth builds the P4 module-aware summary: run ONE module's
@@ -466,27 +558,43 @@ func aiDisplayName(m Module, id string) string {
 func (o *Orchestrator) currentStatePrompt(question string, cs *CurrentStateSummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Question: %s\n\n", strings.TrimSpace(question))
-	fmt.Fprintf(&b, "ACTIVE CORRELATIONS: %d confirmed, %d suspected, %d undetermined.\n",
-		cs.Confirmed, cs.Suspected, cs.Undetermined)
+	fmt.Fprintf(&b, "ACTIVE CORRELATIONS: %d confirmed, %d suspected, %d undetermined (total %d).\n",
+		cs.Confirmed, cs.Suspected, cs.Undetermined, cs.Confirmed+cs.Suspected+cs.Undetermined)
+	if len(cs.RecommendedFocus) > 0 {
+		fmt.Fprintf(&b, "RECOMMENDED FOCUS (highest operational priority): %s\n", cs.RecommendedFocus[0])
+		fmt.Fprintf(&b, "Why first: %s\n", cs.FocusReason)
+	}
+	if len(cs.ActiveIncidents) > 0 {
+		b.WriteString("Other actionable incidents:\n")
+		for _, l := range cs.ActiveIncidents[1:] {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+	}
+	if cs.WatchNote != "" {
+		fmt.Fprintf(&b, "WATCH ITEMS: %s\n", cs.WatchNote)
+	}
 	if len(cs.ImpactedEntities) > 0 {
-		fmt.Fprintf(&b, "Most impacted entities: %s\n", strings.Join(cs.ImpactedEntities, ", "))
+		fmt.Fprintf(&b, "Most impacted: %s\n", strings.Join(cs.ImpactedEntities, ", "))
 	}
-	b.WriteString("\nINCIDENTS (cite ids):\n")
-	for _, l := range cs.ActiveIncidents {
-		fmt.Fprintf(&b, "- [problem] %s\n", l)
-	}
-	b.WriteString("\nWrite a 2–3 sentence NOC situation summary grounded in the above: what's happening and what the NOC should focus on FIRST. Be concise.")
+	b.WriteString("\nWrite a 2–3 sentence NOC shift-lead briefing grounded ONLY in the above: the overall picture, then what to work FIRST and why. Treat undetermined low-evidence items as watch items, not equal priorities. Be concise and operational; do not invent severity or impact not stated.")
 	return o.redact(b.String())
 }
 
+// deterministicStateSummary is the polished evidence-only NOC briefing (no model):
+// overall picture → recommended focus + why → watch items. Non-repetitive; the
+// structured sections carry the lists (spec: current-state issue).
 func (o *Orchestrator) deterministicStateSummary(cs *CurrentStateSummary) string {
-	s := fmt.Sprintf("%d active correlation(s): %d confirmed, %d suspected, %d undetermined.",
-		len(cs.ActiveIncidents), cs.Confirmed, cs.Suspected, cs.Undetermined)
+	total := cs.Confirmed + cs.Suspected + cs.Undetermined
+	s := fmt.Sprintf("Correlix currently sees %s — %d confirmed, %d suspected, %d undetermined.",
+		plural(total, "active correlation group"), cs.Confirmed, cs.Suspected, cs.Undetermined)
 	if len(cs.RecommendedFocus) > 0 {
-		s += " Focus first: " + cs.RecommendedFocus[0] + "."
+		s += " Start with " + cs.RecommendedFocus[0] + "."
+		if cs.FocusReason != "" {
+			s += " " + cs.FocusReason
+		}
 	}
-	if len(cs.ImpactedEntities) > 0 {
-		s += " Most impacted: " + strings.Join(cs.ImpactedEntities, ", ") + "."
+	if cs.WatchNote != "" {
+		s += " " + cs.WatchNote
 	}
 	return s
 }
@@ -592,27 +700,52 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	return o.redact(b.String())
 }
 
-// deterministicProblemSummary is the provider-down fallback (no model): a plain,
-// honest statement of what the evidence says — in NOC language, using the
-// friendly problem id. It does NOT echo the problem-header evidence item (that
-// would restate the first sentence verbatim — the redundant "Problem X … Evidence:
-// Problem X —" the operator flagged); it folds in only the FIRST non-header
-// evidence item (a candidate cause / impacted entities) when present.
-func (o *Orchestrator) deterministicProblemSummary(pr *Problem, bundle []EvidenceItem) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s (%s): %s — %.0f%% confidence across %s on %s.",
-		pr.Display(), pr.Verdict, pr.Title, pr.Confidence*100, plural(pr.SignalCount, "signal"), plural(pr.NodeCount, "node"))
-	for _, ev := range bundle {
-		if strings.HasPrefix(ev.CitationID, "problem:") {
-			continue // skip the header item — it restates the line above
-		}
-		b.WriteString(" " + ev.Text + ".")
-		break
+// deterministicProblemSummary is the polished evidence-only fallback (no model):
+// a NOC-friendly, non-repetitive prose summary built from the Response-Quality
+// layer. It reads like an operations note, NOT debug output — the structured
+// fields (status, owner, missing evidence, next actions) carry the rest, so this
+// stays to 2-3 sentences and never repeats them verbatim (spec §3, §9, §15).
+func (o *Orchestrator) deterministicProblemSummary(pr *Problem, missing []string, owner string) string {
+	ent := "the affected entity"
+	if len(pr.Devices) == 1 {
+		ent = pr.Devices[0]
+	} else if len(pr.Devices) > 1 {
+		ent = strings.Join(pr.Devices, ", ")
 	}
-	if len(pr.MissingEvidence) > 0 {
-		b.WriteString(" Missing evidence: " + strings.Join(pr.MissingEvidence, ", ") + ".")
+	lowEvidence := pr.SignalCount <= 1 && pr.NodeCount <= 1
+	lead := "Correlix detected an incident on " + ent + ". "
+	if lowEvidence {
+		lead = "Correlix detected a low-evidence incident on " + ent + ". "
 	}
-	return b.String()
+	s := lead + MaturitySentence(pr.Verdict, pr.SignalCount, pr.NodeCount)
+	if dom := missingEvidenceDomain(pr.MissingEvidence); dom != "" {
+		s += " Expected " + dom + " was not found."
+	}
+	if owner != "" && owner != "Needs triage" {
+		s += " Recommended owner: " + owner + "."
+	}
+	return s
+}
+
+// missingEvidenceDomain summarizes the missing-evidence keys into a short domain
+// phrase for prose ("routing-adjacency evidence (OSPF/IS-IS)") instead of listing
+// every key — the structured Missing-Evidence section lists them in full.
+func missingEvidenceDomain(missingRaw []string) string {
+	hay := strings.ToLower(strings.Join(missingRaw, " "))
+	switch {
+	case strings.Contains(hay, "ospf") || strings.Contains(hay, "isis") || strings.Contains(hay, "bgp") || strings.Contains(hay, "adjacency"):
+		return "routing-adjacency evidence (OSPF/IS-IS/BGP)"
+	case strings.Contains(hay, "probe") || strings.Contains(hay, "rtt") || strings.Contains(hay, "loss"):
+		return "probe (loss/latency) evidence"
+	case strings.Contains(hay, "firewall") || strings.Contains(hay, "deny"):
+		return "firewall evidence"
+	case strings.Contains(hay, "flow") || strings.Contains(hay, "retr"):
+		return "flow evidence"
+	case len(missingRaw) > 0:
+		return "supporting evidence"
+	default:
+		return ""
+	}
 }
 
 // ---- small helpers ----------------------------------------------------------

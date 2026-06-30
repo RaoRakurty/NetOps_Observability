@@ -45,6 +45,15 @@ type Answer struct {
 	Citations    []Citation           `json:"citations"`
 	Disclaimers  []string             `json:"disclaimers"`
 	Provider     string               `json:"provider,omitempty"` // which LLM answered (audit)
+	// Universal Response-Quality fields (spec §6) — reusable across every answer
+	// mode, rendered by the generic AI answer card as badges + sections.
+	Status           string   `json:"status,omitempty"`           // NOC status word (Confirmed/Suspected/…)
+	ConfidenceLabel  string   `json:"confidence_label,omitempty"` // "Not established"/"Low"/"High" (never bare 0%)
+	RecommendedOwner string   `json:"recommended_owner,omitempty"`
+	NextActions      []string `json:"next_actions,omitempty"`
+	MissingEvidence  []string `json:"missing_evidence,omitempty"` // clean operational bullets
+	ModeBadges       []string `json:"mode_badges,omitempty"`      // e.g. ["Evidence-only mode","Low evidence"]
+	EvidenceOnly     bool     `json:"evidence_only,omitempty"`    // true → deterministic (no LLM) answer
 }
 
 // CurrentStateSummary is the P2 Command Center answer-mode schema: a NOC
@@ -59,6 +68,9 @@ type CurrentStateSummary struct {
 	Undetermined     int      `json:"undetermined"`
 	ImpactedEntities []string `json:"impacted_entities"`
 	RecommendedFocus []string `json:"recommended_focus"`
+	FocusReason      string   `json:"focus_reason,omitempty"` // "why this is first"
+	WatchNote        string   `json:"watch_note,omitempty"`   // grouped undetermined / evidence-gap note
+	ActionableCount  int      `json:"actionable_count"`       // confirmed + suspected (need review)
 	ConfidenceNotes  []string `json:"confidence_notes"`
 	MissingData      []string `json:"missing_data"`
 }

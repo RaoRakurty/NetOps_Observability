@@ -99,7 +99,7 @@ func aiProblemTitle(rawHypothesis, corrID string) string {
 		// shown alongside, so don't repeat it here; avoids "P-x: … P-x" and the
 		// confusing "undetermined: undetermined").
 		_ = corrID
-		return "Unclassified correlation"
+		return "Low-evidence correlation"
 	case strings.HasPrefix(h, "sig."):
 		return signatureNocTitle(h)
 	default:

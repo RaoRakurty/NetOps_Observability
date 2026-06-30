@@ -131,15 +131,14 @@ func TestAnswerProblemHappyPath(t *testing.T) {
 	if len(ans.Citations) == 0 {
 		t.Fatal("answer must be grounded with citations")
 	}
-	// Missing-evidence disclosure (DoD #10).
-	found := false
-	for _, d := range ans.Disclaimers {
-		if strings.Contains(d, "Missing evidence") {
-			found = true
-		}
+	// Missing-evidence now lives in the structured field (clean bullets), not a
+	// raw disclaimer (Response-Quality layer).
+	if len(ans.MissingEvidence) == 0 {
+		t.Fatalf("must surface missing evidence in the structured field, got %+v", ans)
 	}
-	if !found {
-		t.Fatalf("must disclose missing evidence, disclaimers=%v", ans.Disclaimers)
+	// Status + confidence label are populated for the card badges.
+	if ans.Status != "Confirmed" || ans.ConfidenceLabel == "" {
+		t.Fatalf("status/confidence label must be set, got status=%q conf=%q", ans.Status, ans.ConfidenceLabel)
 	}
 }
 
