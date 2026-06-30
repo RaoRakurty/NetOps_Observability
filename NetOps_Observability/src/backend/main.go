@@ -805,7 +805,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE
 	mux.HandleFunc("/api/sot/import", s.handleSoTImport) // external SoT one-way import (sites / device→site)
 	// WAN circuits (#1): controller-style endpoint registry + topology policy.
-	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints) // derived WAN endpoint registry (read)
+	mux.HandleFunc("/api/wan/interfaces", s.handleWanInterfaces) // per-WAN-interface table: util + circuit SLA + source
+	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)   // derived WAN endpoint registry (read)
 	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)   // derived circuit mesh (read)
 	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)       // topology policy: GET / PUT (intent)
 	// RCA auto-ticketing (#78 P3): incident-policy CRUD + simulator, tenant-scoped

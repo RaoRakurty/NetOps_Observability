@@ -428,7 +428,162 @@ func (s *server) startWANCircuitPublish(ctx context.Context) {
 	}()
 }
 
+// ---- per-WAN-interface rows (#4): registry × circuit × resolved SLA × util ----
+
+// WanInterfaceRow is one WAN-device interface = its circuit, fully enriched for
+// the table: live utilization/status (device_if_*), the circuit far-end, and the
+// SLA resolved through the source ladder (#3) with provenance. Every WAN
+// interface appears; SLA/circuit fields stay zero/empty (honest "—") where no
+// circuit or measurement exists yet.
+type WanInterfaceRow struct {
+	Device     string     `json:"device"`
+	Interface  string     `json:"interface"`
+	Address    string     `json:"address"`
+	Site       string     `json:"site,omitempty"`
+	Role       WanRole    `json:"role"`
+	RoleSource RoleSource `json:"role_source"`
+
+	// live interface load/state (VictoriaMetrics device_if_*)
+	InBps   float64 `json:"in_bps"`
+	OutBps  float64 `json:"out_bps"`
+	Util    float64 `json:"util_pct"`
+	HasUtil bool    `json:"has_util"`
+	OperUp  bool    `json:"oper_up"`
+	HasOper bool    `json:"has_oper"`
+
+	// circuit far-end (the remote WAN interface this circuit measures to)
+	RemoteDevice string `json:"remote_device,omitempty"`
+	RemoteIf     string `json:"remote_if,omitempty"`
+	RemoteAddr   string `json:"remote_addr,omitempty"`
+	HasCircuit   bool   `json:"has_circuit"`
+
+	// resolved circuit SLA + provenance (#3)
+	Latency     float64    `json:"latency_ms"`
+	Jitter      float64    `json:"jitter_ms"`
+	Loss        float64    `json:"loss_pct"`
+	QoE         float64    `json:"qoe"`
+	HasLatency  bool       `json:"has_latency"`
+	HasJitter   bool       `json:"has_jitter"`
+	HasLoss     bool       `json:"has_loss"`
+	HasQoE      bool       `json:"has_qoe"`
+	Source      PathSource `json:"source,omitempty"`
+	SourceLabel string     `json:"source_label,omitempty"`
+}
+
+// wanIfKey indexes a device_if_* sample / endpoint by device + interface name.
+func wanIfKey(device, iface string) string { return device + "\x00" + iface }
+
+// wanInterfaceRows builds the per-interface table: every WAN interface for the
+// principal, joined with its circuit far-end, the resolved SLA, and live util.
+func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool) []WanInterfaceRow {
+	endpoints, circuits := s.wanProject(ctx, tenant, cross)
+	if len(endpoints) == 0 {
+		return nil
+	}
+
+	// local (device,if) → circuit far-end, so each interface finds its circuit.
+	circByLocal := map[string]WanCircuit{}
+	for _, c := range circuits {
+		k := wanIfKey(c.Local.Device, c.Local.Interface)
+		if _, seen := circByLocal[k]; !seen {
+			circByLocal[k] = c
+		}
+	}
+
+	resolved := s.resolveCurrentByDst(ctx)
+
+	// live interface load/state from VM, keyed by device+ifName.
+	type util struct {
+		in, out, speedMbps float64
+		hasIn, hasOut      bool
+		oper               float64
+		hasOper            bool
+	}
+	uMap := map[string]*util{}
+	getU := func(k string) *util {
+		u := uMap[k]
+		if u == nil {
+			u = &util{}
+			uMap[k] = u
+		}
+		return u
+	}
+	foldUtil := func(query string, set func(u *util, v float64)) {
+		samples, err := s.vmInstant(ctx, query)
+		if err != nil {
+			return
+		}
+		for _, sm := range samples {
+			dev, ifn := sm.Labels["device"], sm.Labels["ifName"]
+			if dev == "" || ifn == "" {
+				continue
+			}
+			set(getU(wanIfKey(dev, ifn)), sm.Value)
+		}
+	}
+	foldUtil(`rate(device_if_in_octets[2m])*8`, func(u *util, v float64) { u.in, u.hasIn = v, true })
+	foldUtil(`rate(device_if_out_octets[2m])*8`, func(u *util, v float64) { u.out, u.hasOut = v, true })
+	foldUtil(`device_if_speed`, func(u *util, v float64) { u.speedMbps = v })
+	foldUtil(`device_if_oper_status`, func(u *util, v float64) { u.oper, u.hasOper = v, true })
+
+	rows := make([]WanInterfaceRow, 0, len(endpoints))
+	for _, e := range endpoints {
+		row := WanInterfaceRow{
+			Device: e.Device, Interface: e.Interface, Address: e.Address,
+			Site: e.Site, Role: e.Role, RoleSource: e.RoleSource,
+		}
+		if u, ok := uMap[wanIfKey(e.Device, e.Interface)]; ok {
+			row.InBps, row.OutBps = u.in, u.out
+			row.HasUtil = u.hasIn || u.hasOut
+			if sp := u.speedMbps * 1e6; sp > 0 {
+				mx := u.in
+				if u.out > mx {
+					mx = u.out
+				}
+				row.Util = mx / sp * 100
+			}
+			if u.hasOper {
+				row.OperUp, row.HasOper = u.oper == 1, true
+			}
+		}
+		if c, ok := circByLocal[wanIfKey(e.Device, e.Interface)]; ok {
+			row.HasCircuit = true
+			row.RemoteDevice, row.RemoteIf, row.RemoteAddr = c.Remote.Device, c.Remote.Interface, c.Remote.Measurable
+			if m, ok := resolved[hostOnly(c.Remote.Measurable)]; ok {
+				row.Latency, row.HasLatency = m.Latency, m.HasLatency
+				row.Jitter, row.HasJitter = m.Jitter, m.HasJitter
+				row.Loss, row.HasLoss = m.Loss, m.HasLoss
+				row.QoE, row.HasQoE = m.QoE, m.HasQoE
+				row.Source = m.Source()
+				row.SourceLabel = row.Source.Label()
+			}
+		}
+		rows = append(rows, row)
+	}
+	// busiest first, then by name for stability.
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Util != rows[j].Util {
+			return rows[i].Util > rows[j].Util
+		}
+		if rows[i].Device != rows[j].Device {
+			return rows[i].Device < rows[j].Device
+		}
+		return rows[i].Interface < rows[j].Interface
+	})
+	return rows
+}
+
 // ---- HTTP handlers ----
+
+// handleWanInterfaces: GET /api/wan/interfaces — the per-WAN-interface table.
+func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), tenant, cross)})
+}
 
 // handleWanEndpoints: GET /api/wan/endpoints — the derived WAN endpoint registry.
 func (s *server) handleWanEndpoints(w http.ResponseWriter, r *http.Request) {

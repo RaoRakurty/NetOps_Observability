@@ -116,40 +116,70 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	prober := proberID()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
-	reachable := 0
-	var lines []string
-	var events []ProbeEvent
 
-	for _, tgt := range targets {
+	// Probe circuits CONCURRENTLY with a bounded worker pool — a real WAN has
+	// hundreds of circuits, and an unreachable one costs packets×timeout; serial
+	// probing would stall a whole cycle. Cap keeps socket/CPU use bounded. Each
+	// goroutine writes only its own results[i] slot, so no lock is needed.
+	type outcome struct {
+		lines []string
+		event ProbeEvent
+		reach bool
+		valid bool
+	}
+	sem := make(chan struct{}, echoConcurrency)
+	results := make([]outcome, len(targets))
+	var wg sync.WaitGroup
+	for i, tgt := range targets {
 		if tgt.RemoteAddr == "" {
 			continue
 		}
-		res := s.measure(ctx, tgt)
-		if res.recv > 0 {
+		wg.Add(1)
+		go func(i int, tgt EchoTarget) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res := s.measure(ctx, tgt)
+			lbl := fmt.Sprintf(
+				`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
+				tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
+				res.method, boolLabel(res.sourceBound))
+			out := outcome{valid: true, reach: res.recv > 0}
+			if res.recv > 0 {
+				out.lines = append(out.lines,
+					fmt.Sprintf(`circuit_latency_ms{%s} %.3f %d`, lbl, res.latencyMs, now),
+					fmt.Sprintf(`circuit_jitter_ms{%s} %.3f %d`, lbl, res.jitterMs, now),
+					fmt.Sprintf(`circuit_qoe{%s} %.2f %d`, lbl, res.qoe, now),
+				)
+			}
+			// Loss/sent/recv are meaningful even on total loss (the outage signal).
+			out.lines = append(out.lines,
+				fmt.Sprintf(`circuit_loss_pct{%s} %.2f %d`, lbl, res.lossPct, now),
+				fmt.Sprintf(`circuit_sent{%s} %d %d`, lbl, res.sent, now),
+				fmt.Sprintf(`circuit_recv{%s} %d %d`, lbl, res.recv, now),
+			)
+			out.event = ProbeEvent{
+				Kind: res.method, Prober: prober, Target: tgt.RemoteAddr,
+				OK: res.recv > 0, RTTms: res.latencyMs, JitterMs: res.jitterMs,
+				LossPct: res.lossPct, TS: ts,
+			}
+			results[i] = out
+		}(i, tgt)
+	}
+	wg.Wait()
+
+	reachable := 0
+	var lines []string
+	var events []ProbeEvent
+	for _, out := range results {
+		if !out.valid {
+			continue
+		}
+		if out.reach {
 			reachable++
 		}
-		lbl := fmt.Sprintf(
-			`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
-			tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
-			res.method, boolLabel(res.sourceBound))
-		if res.recv > 0 {
-			lines = append(lines,
-				fmt.Sprintf(`circuit_latency_ms{%s} %.3f %d`, lbl, res.latencyMs, now),
-				fmt.Sprintf(`circuit_jitter_ms{%s} %.3f %d`, lbl, res.jitterMs, now),
-				fmt.Sprintf(`circuit_qoe{%s} %.2f %d`, lbl, res.qoe, now),
-			)
-		}
-		// Loss/sent/recv are meaningful even on total loss (the outage signal).
-		lines = append(lines,
-			fmt.Sprintf(`circuit_loss_pct{%s} %.2f %d`, lbl, res.lossPct, now),
-			fmt.Sprintf(`circuit_sent{%s} %d %d`, lbl, res.sent, now),
-			fmt.Sprintf(`circuit_recv{%s} %d %d`, lbl, res.recv, now),
-		)
-		events = append(events, ProbeEvent{
-			Kind: res.method, Prober: prober, Target: tgt.RemoteAddr,
-			OK: res.recv > 0, RTTms: res.latencyMs, JitterMs: res.jitterMs,
-			LossPct: res.lossPct, TS: ts,
-		})
+		lines = append(lines, out.lines...)
+		events = append(events, out.event)
 	}
 
 	if len(lines) > 0 {
@@ -164,6 +194,11 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 	s.status.Healthy = true
 	s.mu.Unlock()
 }
+
+// echoConcurrency bounds in-flight circuit probes. Each probe holds one socket
+// for up to packets×timeout; a few dozen in flight keeps a large WAN's cycle
+// short without exhausting fds or CPU.
+const echoConcurrency = 32
 
 // measure runs the ICMP burst; if every echo is lost (ICMP filtered) it falls
 // back to a TCP-SYN burst so a firewalled WAN path still yields latency + loss.

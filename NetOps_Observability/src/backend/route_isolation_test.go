@@ -121,6 +121,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/snmp/credentials/":      "scoped",
 	"/api/snmp/options":           "scoped",
 	"/api/tunnels":                "scoped",
+	"/api/wan/interfaces":         "scoped",
 	"/api/wan/endpoints":          "scoped",
 	"/api/wan/circuits":           "scoped",
 	"/api/wan/policy":             "scoped",

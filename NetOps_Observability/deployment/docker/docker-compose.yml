@@ -705,6 +705,13 @@ services:
       SYNTHETIC_ICMP_TARGETS: ${SYNTHETIC_ICMP_TARGETS:-}
       SYNTHETIC_TCP_TARGETS: ${SYNTHETIC_TCP_TARGETS:-}
       SYNTHETIC_INTERVAL: ${SYNTHETIC_INTERVAL:-60s}
+      # WAN circuit SLA (#wan-path-metrics): the API projects the circuit mesh and
+      # publishes it to Redis for the prober (which has NET_RAW for ICMP echo).
+      # Enabling it here also runs the API's own TCP-fallback echo. Dormant by default.
+      FEATURE_WAN_ECHO: ${FEATURE_WAN_ECHO:-false}
+      WAN_ECHO_TARGETS: ${WAN_ECHO_TARGETS:-}
+      WAN_ECHO_TCP_PORT: ${WAN_ECHO_TCP_PORT:-443}
+      WAN_ECHO_INTERVAL: ${WAN_ECHO_INTERVAL:-30s}
       # Probe-event bus lane (#67 build ⑦): each STAMP/synthetics observation is
       # POSTed to Vector → netops.probes → correlation engine (active_probe
       # evidence). PROBER_ID is the observer identity for independence analysis.

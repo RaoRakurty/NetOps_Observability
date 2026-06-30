@@ -702,6 +702,38 @@ export type Finding = {
 // Overlay tunnel (IPsec / SD-WAN / GRE) — one current row per tunnel, served
 // from netops.tunnels. Numeric fields may arrive as JSON strings from
 // ClickHouse (UInt64), so coerce with Number() at the call site.
+// Per-WAN-interface row (GET /api/wan/interfaces, #4) — one WAN interface = its
+// circuit, with live util/status, the circuit far-end, and the SLA resolved
+// through the source ladder (#3). Has* flags distinguish a real 0 from "no data".
+export type WanInterfaceRow = {
+  device: string;
+  interface: string;
+  address: string;
+  site?: string;
+  role: "hub" | "spoke" | string;
+  role_source: string;
+  in_bps: number;
+  out_bps: number;
+  util_pct: number;
+  has_util: boolean;
+  oper_up: boolean;
+  has_oper: boolean;
+  remote_device?: string;
+  remote_if?: string;
+  remote_addr?: string;
+  has_circuit: boolean;
+  latency_ms: number;
+  jitter_ms: number;
+  loss_pct: number;
+  qoe: number;
+  has_latency: boolean;
+  has_jitter: boolean;
+  has_loss: boolean;
+  has_qoe: boolean;
+  source?: string;
+  source_label?: string;
+};
+
 export type Tunnel = {
   ts: string;
   id: string;
@@ -1362,6 +1394,7 @@ export const api = {
     if (status) p.set("status", status);
     return request<ClickHouseResponse<Tunnel>>(`/api/tunnels?${p}`);
   },
+  wanInterfaces: () => request<{ interfaces: WanInterfaceRow[] }>(`/api/wan/interfaces`),
   findings: (limit = 100, severity?: string) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (severity) p.set("severity", severity);
