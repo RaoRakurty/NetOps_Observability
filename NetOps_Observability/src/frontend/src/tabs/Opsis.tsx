@@ -7,8 +7,10 @@ import {
   OpenAIChatResponse,
   CopilotConfig,
   AiAnswer,
+  AiCitation,
 } from "../services/api";
 import Icon from "../components/Icon";
+import { useShell } from "../context/shell";
 
 // Opsis Ai — the in-app assistant chat. Posts to /api/copilot/chat (provider
 // fallback chain server-side). Rendered inside the right-side drawer.
@@ -25,8 +27,13 @@ const SUGGESTIONS = [
 ];
 
 export default function Opsis() {
+  const { setCopilotOpen } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [history, setHistory] = useState<CopilotMessage[]>([]);
+  // Grounded answers (from /api/ai/ask) keyed by their assistant-message index in
+  // `history`, so those turns render the rich, cited card instead of plain text.
+  // History only ever grows by append (or full clear), so the index stays stable.
+  const [grounded, setGrounded] = useState<Record<number, AiAnswer>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,13 +81,23 @@ export default function Opsis() {
     const content = (text ?? draft).trim();
     if (!content || busy) return;
     const newHistory = [...history, { role: "user", content } as CopilotMessage];
+    const idx = newHistory.length; // index the assistant reply will land at
     setHistory(newHistory);
     setDraft("");
     setBusy(true);
     setError(null);
     try {
-      const r = await api.copilotChat(newHistory);
-      setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
+      if (ready) {
+        // Free-form LLM chat — a provider key is configured.
+        const r = await api.copilotChat(newHistory);
+        setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
+      } else {
+        // No provider key: answer from the grounded engine instead of erroring, so
+        // any typed question still gets a tenant-scoped, evidence-cited answer.
+        const ans = await api.aiAsk(content);
+        setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
+        setGrounded((g) => ({ ...g, [idx]: ans }));
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -95,12 +112,41 @@ export default function Opsis() {
   const askGrounded = async () => {
     if (busy) return;
     const newHistory = [...history, { role: "user", content: "What's going on right now?" } as CopilotMessage];
+    const idx = newHistory.length;
     setHistory(newHistory);
     setBusy(true);
     setError(null);
     try {
       const ans = await api.aiAsk("What is going on right now? What should the NOC focus on first?");
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
+      setGrounded((g) => ({ ...g, [idx]: ans }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Grounded deep-dive on the highest-priority active incident: get the current
+  // state, resolve its recommended-focus problem id, then ask the engine to
+  // explain that specific correlation. Works key-free (evidence-only fallback).
+  const askTopIncident = async () => {
+    if (busy) return;
+    const newHistory = [...history, { role: "user", content: "Explain the top incident" } as CopilotMessage];
+    const idx = newHistory.length;
+    setHistory(newHistory);
+    setBusy(true);
+    setError(null);
+    try {
+      const state = await api.aiAsk("What is going on right now?");
+      const id = topProblemId(state);
+      if (!id) {
+        setHistory([...newHistory, { role: "assistant", content: "No active correlations right now — there's no incident to explain." }]);
+        return;
+      }
+      const ans = await api.aiAsk("Explain this incident: the likely root cause and the recommended next action.", { correlation_id: id });
+      setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
+      setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -153,7 +199,7 @@ export default function Opsis() {
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button className="op-iconbtn" title="Clear conversation" onClick={() => setHistory([])} disabled={busy || history.length === 0}>
+        <button className="op-iconbtn" title="Clear conversation" onClick={() => { setHistory([]); setGrounded({}); }} disabled={busy || history.length === 0}>
           <Icon name="refresh" size={15} />
         </button>
         <button className="op-iconbtn" title="Assistant settings" onClick={() => setShowSettings((v) => !v)}>
@@ -216,6 +262,9 @@ export default function Opsis() {
               <button className="op-chip op-chip-primary" onClick={askGrounded}>
                 <Icon name="copilot" size={14} /> What&apos;s going on right now?
               </button>
+              <button className="op-chip op-chip-primary" onClick={askTopIncident}>
+                <Icon name="alerts" size={14} /> Explain the top incident
+              </button>
             </div>
             {cfg && !cfg.key_present ? (
               <div className="op-nokey">
@@ -235,7 +284,11 @@ export default function Opsis() {
         {history.map((m, i) => (
           <div key={i} className={`op-row ${m.role}`}>
             {m.role === "assistant" && <span className="op-avatar"><Icon name="copilot" size={14} /></span>}
-            <div className={`op-bubble ${m.role}`}>{renderContent(m.content)}</div>
+            <div className={`op-bubble ${m.role}`}>
+              {m.role === "assistant" && grounded[i]
+                ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} />
+                : renderContent(m.content)}
+            </div>
           </div>
         ))}
 
@@ -288,9 +341,81 @@ function renderContent(text: string) {
   );
 }
 
+// topProblemId resolves the highest-priority active problem's id from a
+// current-state answer: prefer the recommended-focus line (matched to its full
+// citation id), else the first cited problem. Returns "" when nothing is active.
+export function topProblemId(ans: AiAnswer): string {
+  const cs = ans.current_state;
+  const focus = (cs?.recommended_focus?.[0] || cs?.active_incidents?.[0] || "").trim();
+  const short = focus.split(/[\s—-]+/)[0]; // leading short id, e.g. "614896e5"
+  const cites = ans.citations || [];
+  if (short) {
+    const byFocus = cites.find((c) => c.id.startsWith("problem:") && c.id.slice(8).startsWith(short));
+    if (byFocus) return byFocus.id.slice(8);
+  }
+  const first = cites.find((c) => c.id.startsWith("problem:"));
+  return first ? first.id.slice(8) : "";
+}
+
+// GroundedAnswer renders an evidence-grounded answer (from /api/ai/ask) as a
+// formatted card inside the chat: the narrative, per-mode structured facts, and
+// clickable citations that deep-link into the source view. Model text is escaped
+// React text (OWASP LLM02) — never HTML.
+function GroundedAnswer({ ans, onCite }: { ans: AiAnswer; onCite: () => void }) {
+  const cs = ans.current_state;
+  const pr = ans.problem;
+  return (
+    <div className="op-grounded">
+      {ans.text && <div className="op-text">{ans.text}</div>}
+
+      {cs && (
+        <div className="op-facts">
+          <span className="op-fact"><b>{cs.confirmed}</b> confirmed</span>
+          <span className="op-fact"><b>{cs.suspected}</b> suspected</span>
+          <span className="op-fact"><b>{cs.undetermined}</b> undetermined</span>
+        </div>
+      )}
+      {cs?.impacted_entities && cs.impacted_entities.length > 0 && (
+        <div className="op-kv"><span className="op-kv-k">Most impacted</span> {cs.impacted_entities.slice(0, 8).join(", ")}</div>
+      )}
+      {cs?.recommended_focus && cs.recommended_focus.length > 0 && (
+        <div className="op-kv"><span className="op-kv-k">Focus first</span> {cs.recommended_focus[0]}</div>
+      )}
+
+      {pr && (
+        <div className="op-facts">
+          <span className={`op-fact verdict-${pr.verdict.toLowerCase()}`}>{pr.verdict}</span>
+          <span className="op-fact"><b>{pr.confidence}</b> confidence</span>
+          {pr.recommended_owner && <span className="op-fact">owner: {pr.recommended_owner}</span>}
+        </div>
+      )}
+      {pr?.missing_evidence && pr.missing_evidence.length > 0 && (
+        <div className="op-kv"><span className="op-kv-k">Missing evidence</span> {pr.missing_evidence.join(", ")}</div>
+      )}
+
+      {ans.citations && ans.citations.length > 0 && (
+        <div className="op-cites">
+          {ans.citations.slice(0, 12).map((c: AiCitation) => (
+            <a key={c.id} className="op-cite" href={c.href} title={c.label} onClick={onCite}>
+              <Icon name="external" size={11} /> {c.label || c.id}
+            </a>
+          ))}
+        </div>
+      )}
+
+      {ans.disclaimers && ans.disclaimers.length > 0 && (
+        <div className="op-disc">{ans.disclaimers.join(" ")}</div>
+      )}
+      {ans.provider === "none" && (
+        <div className="op-disc">Evidence-only summary — no AI provider configured.</div>
+      )}
+    </div>
+  );
+}
+
 // groundedToText flattens a grounded AiAnswer into a clean chat bubble: the
 // model (or evidence-only) narrative, then a compact, deterministic state line.
-function groundedToText(ans: AiAnswer): string {
+export function groundedToText(ans: AiAnswer): string {
   let t = (ans.text || "").trim();
   const cs = ans.current_state;
   if (cs) {

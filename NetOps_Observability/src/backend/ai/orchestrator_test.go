@@ -252,6 +252,72 @@ func TestPresentTenseStillCurrentState(t *testing.T) {
 	}
 }
 
+func knownMode(m AnswerMode) bool {
+	switch m {
+	case ModeProblemExplanation, ModeCurrentStateSummary, ModeProductNavigationHelp, ModeUnavailable:
+		return true
+	}
+	return false
+}
+
+// TestRandomQuestionsWellFormed fires a broad spread of phrasings (the "keep
+// asking random questions" check) and asserts every answer is well-formed: a
+// known mode, non-empty narrative text, and mode-consistent structure — so no
+// question yields a blank or malformed card in the UI.
+func TestRandomQuestionsWellFormed(t *testing.T) {
+	o := newOrch(newMockDS())
+	p := tenantA()
+	questions := []string{
+		"What is going on right now?",
+		"what should the NOC focus on first?",
+		"give me a status update",
+		"is everything healthy?",
+		"show me the worst incident",
+		"asdfqwer random gibberish 123",
+		"explain problem",
+		"explain this incident",
+		"explain the rca",
+		"summarize the outage last night",
+		"what happened overnight",
+		"recap the last 4 hours",
+		"give me the shift handoff",
+		"end of shift summary",
+		"where do I configure servicenow",
+		"how do I set up SNMP discovery",
+	}
+	for _, q := range questions {
+		ans, err := o.Ask(context.Background(), p, q, nil)
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		if !knownMode(ans.Mode) {
+			t.Fatalf("%q: unknown answer mode %q", q, ans.Mode)
+		}
+		if strings.TrimSpace(ans.Text) == "" {
+			t.Fatalf("%q: produced empty narrative text (mode=%s)", q, ans.Mode)
+		}
+		switch ans.Mode {
+		case ModeCurrentStateSummary:
+			cs := ans.CurrentState
+			if cs == nil {
+				t.Fatalf("%q: current_state mode without a CurrentState payload", q)
+			}
+			if cs.Confirmed+cs.Suspected+cs.Undetermined != len(cs.ActiveIncidents) {
+				t.Fatalf("%q: verdict counts %d/%d/%d don't sum to %d active incidents",
+					q, cs.Confirmed, cs.Suspected, cs.Undetermined, len(cs.ActiveIncidents))
+			}
+		case ModeUnavailable:
+			if ans.CurrentState != nil {
+				t.Fatalf("%q: an unavailable answer must not carry live current_state", q)
+			}
+		}
+		// No answer, whatever the phrasing, may leak another tenant's device.
+		if strings.Contains(ans.Text, "leaf-2") {
+			t.Fatalf("%q: leaked tenant B's device into tenant A's answer", q)
+		}
+	}
+}
+
 func TestNavigation(t *testing.T) {
 	o := newOrch(newMockDS())
 	ans, err := o.Ask(context.Background(), tenantA(), "where do I configure servicenow", nil)
