@@ -56,7 +56,7 @@ SELECT toString(correlation_id) AS correlation_id,
 		NodeCount:       int(asFloat(r["node_count"])),
 		CreatedAt:       asStr(r["created_at"]),
 		Devices:         aiEntityLabels(affectedDevices(r["affected"])),
-		MissingEvidence: jsonStrings(r["evidence_missing"]),
+		MissingEvidence: aiHumanizeMissing(jsonStrings(r["evidence_missing"])),
 	}
 	return pr, nil
 }
@@ -232,8 +232,10 @@ SELECT sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
 // moduleMetricAnomalies — recent detected metric anomalies (z-score findings),
 // worst-first, tenant-scoped via the findings row policy.
 func (d aiDataSource) moduleMetricAnomalies() (ai.ToolResult, error) {
+	// NB: don't alias toString(ts) AS ts — a String alias named `ts` collides with
+	// the DateTime `ts` in ORDER BY (NO_COMMON_TYPE). ts isn't shown, so omit it.
 	const sql = `
-SELECT toString(ts) AS ts, id, severity, score, device, component, summary
+SELECT id, severity, score, device, component, summary
   FROM netops.findings
  WHERE kind = 'anomaly' AND ts >= now() - INTERVAL 6 HOUR
  ORDER BY score DESC, ts DESC
@@ -244,12 +246,17 @@ SELECT toString(ts) AS ts, id, severity, score, device, component, summary
 		return ai.ToolResult{}, err
 	}
 	items := make([]ai.EvidenceItem, 0, len(rows))
+	seen := map[string]bool{} // collapse identical anomaly lines (the engine writes repeats)
 	for _, r := range rows {
 		dev, comp := asStr(r["device"]), asStr(r["component"])
 		text := aiFirst(asStr(r["summary"]), comp+" on "+dev)
 		if sev := asStr(r["severity"]); sev != "" {
 			text = "[" + sev + "] " + text
 		}
+		if seen[text] {
+			continue
+		}
+		seen[text] = true
 		items = append(items, ai.EvidenceItem{
 			CitationID: "finding:" + asStr(r["id"]), Kind: "metric",
 			Text: text, Href: "#/monitoring/findings",

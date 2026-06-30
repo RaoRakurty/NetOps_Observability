@@ -371,19 +371,21 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 
 	pol := o.policy()
 	var bundle []EvidenceItem
-	ran := 0
+	ran, found, errored := 0, 0, 0
 	for _, name := range plan.Tools {
 		tool, ok := o.Tools.Get(name)
 		if !ok {
 			continue // tool for this module not built yet — degrade honestly
 		}
+		found++
 		if d := pol.EvaluateTool(tool, p); !d.Allow {
 			disc = append(disc, capitalize(d.Reason)+".")
 			continue
 		}
 		res, terr := tool.Run(ctx, p, ToolArgs{})
 		if terr != nil {
-			continue // a tool failure degrades gracefully
+			errored++ // a tool failure degrades gracefully — but is NOT "not built"
+			continue
 		}
 		ran++
 		bundle = append(bundle, res.Items...)
@@ -393,12 +395,17 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	}
 
 	if ran == 0 {
-		// No answering tool is wired for this module yet (HLD P4 increment gap).
+		// Distinguish a real error (tool exists, query failed) from a not-yet-built
+		// module — conflating them would mislead (the operator's flagged exactly this).
+		text := mh.DisplayName + " questions aren't answerable in this build yet. I can summarize what's going on right now or explain a specific problem."
+		note := "This module's AI tools land in a later increment."
+		if found > 0 && errored > 0 {
+			text = "I couldn't read " + strings.ToLower(mh.DisplayName) + " right now — the data source didn't respond. Try again shortly."
+			note = "Module read failed (transient); not a coverage gap."
+		}
 		return Answer{
 			Mode: ModeUnavailable, Intent: plan.Intent, Modules: allowed,
-			Text:        mh.DisplayName + " questions aren't answerable in this build yet. I can summarize what's going on right now or explain a specific problem.",
-			Citations:   []Citation{},
-			Disclaimers: append(disc, "This module's AI tools land in a later increment."),
+			Text: text, Citations: []Citation{}, Disclaimers: append(disc, note),
 		}, nil
 	}
 
@@ -593,8 +600,8 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 // evidence item (a candidate cause / impacted entities) when present.
 func (o *Orchestrator) deterministicProblemSummary(pr *Problem, bundle []EvidenceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s (%s): %s — %.0f%% confidence across %d signals on %d nodes.",
-		pr.Display(), pr.Verdict, pr.Title, pr.Confidence*100, pr.SignalCount, pr.NodeCount)
+	fmt.Fprintf(&b, "%s (%s): %s — %.0f%% confidence across %s on %s.",
+		pr.Display(), pr.Verdict, pr.Title, pr.Confidence*100, plural(pr.SignalCount, "signal"), plural(pr.NodeCount, "node"))
 	for _, ev := range bundle {
 		if strings.HasPrefix(ev.CitationID, "problem:") {
 			continue // skip the header item — it restates the line above

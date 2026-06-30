@@ -1,5 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { signatureNocTitle } from "./labels";
+import { signatureNocTitle, friendlyProblemId } from "./labels";
+
+// Friendly Problem ID — the NOC handle shown in the Action Queue, RCA inspector
+// and Correlix AI. MUST stay byte-identical to the Go backend problemDisplayID
+// ("P-" + first 6 hex of the UUID, uppercased) so one id reads the same
+// everywhere. Display-only; the raw UUID stays the routing/API key.
+describe("friendlyProblemId — P-XXXXXX handle", () => {
+  it("derives P- + first 6 hex, uppercased", () => {
+    expect(friendlyProblemId("5564d162-c891-5480-800b-9b7fbcdd59b2")).toBe("P-5564D1");
+    expect(friendlyProblemId("9f0537bd-0000-0000-0000-000000000000")).toBe("P-9F0537");
+  });
+  it("is idempotent and safe on already-friendly / empty input", () => {
+    expect(friendlyProblemId("P-5564D1")).toBe("P-5564D1");
+    expect(friendlyProblemId("")).toBe("");
+  });
+});
 
 // #8 — the scenario → NOC-title library. Pins the mapped scenarios, the
 // domain-correct fallback, and the specific cloud-mislabel bug fix.

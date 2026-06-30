@@ -93,6 +93,14 @@ type ToolResult struct {
 // ToolArgs are validated, simple string args (no free-form SQL/shell — ever).
 type ToolArgs map[string]string
 
+// plural renders "1 node" / "3 nodes" so AI narrative text reads naturally.
+func plural(n int, singular string) string {
+	if n == 1 {
+		return "1 " + singular
+	}
+	return fmt.Sprintf("%d %ss", n, singular)
+}
+
 // Capability classifies what a tool DOES — the axis the Policy Engine gates on.
 // v1 permits only CapRead; CapWrite/CapExecute are hard-denied until the gated
 // action subsystem exists (HLD P6).
@@ -162,12 +170,16 @@ func (t getProblemTool) Run(ctx context.Context, p Principal, args ToolArgs) (To
 	if err != nil {
 		return ToolResult{}, err
 	}
+	text := fmt.Sprintf("%s — %s; verdict %s (%.0f%% confidence); %s across %s",
+		pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, plural(pr.SignalCount, "signal"), plural(pr.NodeCount, "node"))
+	if len(pr.Devices) > 0 { // omit a trailing "devices:" when there are none (paths-only incidents)
+		text += "; devices: " + strings.Join(pr.Devices, ", ")
+	}
 	item := EvidenceItem{
 		CitationID: "problem:" + pr.ID,
 		Kind:       "finding",
-		Text: fmt.Sprintf("%s — %s; verdict %s (%.0f%% confidence); %d signals across %d nodes; devices: %s",
-			pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, pr.SignalCount, pr.NodeCount, strings.Join(pr.Devices, ", ")),
-		Href: "#/monitoring/correlations?id=" + pr.ID,
+		Text:       text,
+		Href:       "#/monitoring/correlations?id=" + pr.ID,
 	}
 	return ToolResult{Items: []EvidenceItem{item}}, nil
 }

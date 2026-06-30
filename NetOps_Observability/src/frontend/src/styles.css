@@ -1611,6 +1611,97 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .op-send:hover:not(:disabled) { background: var(--accent-bright, var(--accent)); }
 .op-send:disabled { opacity: .4; cursor: default; }
 
+/* ===== Correlix AI — futuristic refinement (P4-UI) ============================
+   A calm, instrument-grade surface with a single accent system: a hairline
+   gradient signature on the drawer edge, glass answer cards with a left accent
+   rail, mono ids, and a glowing send control. Tuned for both light + dark. */
+
+/* Thin animated accent signature down the drawer's left edge — quiet, premium. */
+.op-drawer { position: relative; }
+.op-drawer::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; z-index: 1;
+  background: linear-gradient(180deg, transparent, var(--accent), color-mix(in srgb, var(--accent) 50%, transparent), transparent);
+  background-size: 100% 220%; animation: opEdge 7s linear infinite; opacity: .85;
+}
+@keyframes opEdge { 0% { background-position: 0 0; } 100% { background-position: 0 -220%; } }
+
+/* Header: deeper gradient + uppercase, tracked sub-label for a console feel. */
+.op-head { backdrop-filter: blur(8px); }
+.op-head-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 9.5px; font-weight: 600; opacity: .8; }
+.op-head-logo { position: relative; }
+.op-head-logo::after {
+  content: ""; position: absolute; inset: -2px; border-radius: inherit;
+  box-shadow: 0 0 16px var(--accent-soft, rgba(79,70,229,.5)); pointer-events: none;
+}
+
+/* Welcome — tighter, more deliberate type. */
+.op-welcome-title { letter-spacing: -0.015em; }
+.op-examplerow { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 12px; }
+.op-example {
+  font-size: 11.5px; color: var(--muted); cursor: pointer;
+  background: transparent; border: 1px dashed var(--panel-border); border-radius: 999px; padding: 5px 11px;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.op-example:hover { color: var(--accent); border-color: var(--accent-ring); border-style: solid; background: var(--accent-soft); }
+
+/* When the assistant bubble wraps a grounded card, strip the bubble's own chrome
+   so the card is the only surface (no double border / nested padding). */
+.op-bubble-grounded { max-width: 92%; padding: 0; border: 0; background: transparent; }
+
+/* Grounded answer → an elevated glass card with a left accent rail. */
+.op-grounded {
+  position: relative; gap: 10px; padding: 12px 13px 12px 15px; border-radius: 13px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel-solid));
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 12%, transparent) inset, 0 8px 24px -18px rgba(0,0,0,.6);
+}
+.op-grounded::before {
+  content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 40%, transparent));
+}
+/* Answer header row: kind chip · mono id · close. */
+.op-ans-head { display: flex; align-items: center; gap: 8px; margin: -1px 0 1px; }
+.op-ans-kind {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-ring);
+  border-radius: 5px; padding: 2px 7px;
+}
+.op-ans-id {
+  font-family: var(--font-mono, monospace); font-size: 11px; font-weight: 600; letter-spacing: .03em;
+  color: var(--fg); opacity: .85;
+}
+.op-ans-spacer { flex: 1; }
+.op-ans-x {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  color: var(--muted); background: transparent; border: 1px solid transparent; transition: all .12s;
+}
+.op-ans-x:hover { color: var(--fg); background: var(--hover); border-color: var(--panel-border); }
+
+/* Severity-tinted state facts. */
+.op-fact-ok b { color: var(--good); }
+.op-fact-warn b { color: var(--warn, #d4a017); }
+
+/* Module-aware answer item list. */
+.op-modlist { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.op-moditem {
+  position: relative; font-size: 12.5px; line-height: 1.45; color: var(--fg);
+  padding: 5px 9px 5px 22px; border-radius: 8px; background: var(--panel); border: 1px solid var(--panel-border);
+}
+.op-moditem::before {
+  content: ""; position: absolute; left: 9px; top: 11px; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 6px var(--accent-soft, rgba(79,70,229,.6));
+}
+
+/* Composer: trust cue with a soft pulsing dot; send control gets a glow ring. */
+.op-composer-hint { display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--muted); letter-spacing: .02em; }
+.op-composer-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: opPulse 2.4s ease-out infinite; }
+@keyframes opPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.op-send { border-radius: 50%; box-shadow: 0 0 0 4px var(--accent-soft, rgba(79,70,229,.16)); transition: background .12s, box-shadow .12s, transform .12s; }
+.op-send:hover:not(:disabled) { box-shadow: 0 0 0 5px var(--accent-soft, rgba(79,70,229,.28)); transform: rotate(90deg) scale(1.06); }
+
+/* Cite chips: tabular, hairline, futuristic. */
+.op-cite { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
 /* ----- Overview dashboard — reference-grade panel grid, clean flat bg ----- */
 .ov-head {
   display: flex; align-items: center; justify-content: space-between;

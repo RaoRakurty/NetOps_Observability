@@ -9,7 +9,24 @@ var (
 	aiEntityPrefix = regexp.MustCompile(`(?i)^(?:path|device|host|node|segment|site|service|prefix):`)
 	aiIPv4         = regexp.MustCompile(`^\d{1,3}(?:\.\d{1,3}){3}$`)
 	aiInternalHint = regexp.MustCompile(`(?i)(?:^|[-_.])(?:demo|scratch|sidecar|dummy|sandbox|fixture|selftest|test)(?:[-_.]|$)`)
+	// a signature token embedded in free text (e.g. a missing-evidence line).
+	aiSigToken = regexp.MustCompile(`sig\.[A-Za-z0-9_.-]+`)
 )
+
+// aiHumanizeMissing rewrites engine signature tokens inside missing-evidence
+// lines to NOC language ("sig.ent.middle-mile.dia-egress-latency: single
+// modality…" → "ISP / DIA egress latency: single modality…"), so the operator
+// never sees a raw signature id in an AI answer.
+func aiHumanizeMissing(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = aiSigToken.ReplaceAllStringFunc(l, signatureNocTitle)
+	}
+	return out
+}
 
 // aiEntityLabel humanizes ONE raw entity token for NOC-facing AI text — a server
 // mirror of the UI mapToken: strip the entity-type prefix, take the base before
@@ -76,13 +93,18 @@ func problemDisplayID(corrID string) string {
 // unchanged; fall back to a friendly "Correlation P-XXXXXX" when neither exists.
 func aiProblemTitle(rawHypothesis, corrID string) string {
 	h := strings.TrimSpace(rawHypothesis)
-	if h == "" {
-		return "Correlation " + problemDisplayID(corrID)
-	}
-	if strings.HasPrefix(h, "sig.") {
+	switch {
+	case h == "", strings.EqualFold(h, "undetermined"), strings.EqualFold(h, "none"):
+		// No signature matched yet — a neutral title (the friendly id is already
+		// shown alongside, so don't repeat it here; avoids "P-x: … P-x" and the
+		// confusing "undetermined: undetermined").
+		_ = corrID
+		return "Unclassified correlation"
+	case strings.HasPrefix(h, "sig."):
 		return signatureNocTitle(h)
+	default:
+		return h
 	}
-	return h
 }
 
 // sigNocTitle maps a signature id to a plain-English NOC headline. Mirrors the

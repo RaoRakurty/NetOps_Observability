@@ -2464,6 +2464,15 @@ export type AiProblemExplanation = {
   itsm_note: string;
 };
 export type AiNavEntry = { feature: string; ui_route: string; required_permission: string; explanation: string; related_module: string };
+// P4 module-aware answer schema (flow analytics, telemetry, …): a focused,
+// evidence-grounded read of ONE module's governed tools, with a model headline.
+export type AiModuleHealth = {
+  module: string;
+  display_name: string;
+  headline: string;
+  items: string[];
+  notes: string[];
+};
 export type AiCurrentState = {
   summary: string;
   active_incidents: string[];
@@ -2482,6 +2491,7 @@ export type AiAnswer = {
   text: string;
   problem?: AiProblemExplanation;
   current_state?: AiCurrentState;
+  module?: AiModuleHealth;
   navigation?: AiNavEntry[];
   citations: AiCitation[];
   disclaimers: string[];

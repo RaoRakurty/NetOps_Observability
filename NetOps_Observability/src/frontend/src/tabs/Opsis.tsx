@@ -10,14 +10,13 @@ import {
   AiCitation,
 } from "../services/api";
 import Icon from "../components/Icon";
+import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
 // Opsis Ai — the in-app assistant chat. Posts to /api/copilot/chat (provider
-// fallback chain server-side). Rendered inside the right-side drawer.
-//
-// Context is never pulled automatically: the "+ Logs" action attaches the most
-// recent 50 log lines to the next turn. Assistant output is rendered as ESCAPED
-// React text only (OWASP LLM02 — never dangerouslySetInnerHTML).
+// fallback chain server-side); key-free questions fall through to the grounded
+// /api/ai/ask engine. Rendered inside the right-side drawer. Assistant output is
+// rendered as ESCAPED React text only (OWASP LLM02 — never dangerouslySetInnerHTML).
 
 const SUGGESTIONS = [
   "Why might my edge router be dropping BGP sessions?",
@@ -154,27 +153,6 @@ export default function Opsis() {
     }
   };
 
-  const addRecentLogContext = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await api.searchLogs({ query: "*", size: 50, signal: "" });
-      const hits = (r?.hits?.hits ?? []).map((h) => {
-        const src = h._source || {};
-        return `[${src["@timestamp"] ?? ""}] ${src.message ?? src.msg ?? JSON.stringify(src)}`;
-      });
-      setHistory((h) => [
-        ...h,
-        { role: "user", content: "Context — last 50 log lines:\n```\n" + hits.join("\n") + "\n```\nUse these when answering my next question." },
-      ]);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (enabled === false) {
     return (
       <div className="op-chat" style={{ padding: 20 }}>
@@ -266,6 +244,13 @@ export default function Opsis() {
                 <Icon name="alerts" size={14} /> Explain the top incident
               </button>
             </div>
+            {/* Module-aware example questions (P4) — grounded + key-free, so they
+                showcase what Correlix AI can read across modules. */}
+            <div className="op-examplerow">
+              {["Show me the top talkers", "Any metric anomalies right now?"].map((s) => (
+                <button key={s} className="op-example" onClick={() => send(s)}>{s}</button>
+              ))}
+            </div>
             {cfg && !cfg.key_present ? (
               <div className="op-nokey">
                 <Icon name="key" size={15} /> Connect a provider key for free-form chat.
@@ -284,9 +269,9 @@ export default function Opsis() {
         {history.map((m, i) => (
           <div key={i} className={`op-row ${m.role}`}>
             {m.role === "assistant" && <span className="op-avatar"><Icon name="copilot" size={14} /></span>}
-            <div className={`op-bubble ${m.role}`}>
+            <div className={`op-bubble ${m.role}${m.role === "assistant" && grounded[i] ? " op-bubble-grounded" : ""}`}>
               {m.role === "assistant" && grounded[i]
-                ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} />
+                ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
                 : renderContent(m.content)}
             </div>
           </div>
@@ -317,10 +302,10 @@ export default function Opsis() {
           }}
         />
         <div className="op-composer-actions">
-          <button type="button" className="op-iconbtn" title="Attach the last 50 log lines" onClick={addRecentLogContext} disabled={busy}>
-            <Icon name="explore" size={15} /> Logs
-          </button>
-          <button type="submit" className="op-send" disabled={busy || !draft.trim()} title="Send">
+          <span className="op-composer-hint">
+            <span className="op-composer-dot" /> Grounded · tenant-scoped · cited
+          </span>
+          <button type="submit" className="op-send" disabled={busy || !draft.trim()} title="Send (⏎)">
             <Icon name="chevron" size={16} />
           </button>
         </div>
@@ -361,17 +346,30 @@ export function topProblemId(ans: AiAnswer): string {
 // formatted card inside the chat: the narrative, per-mode structured facts, and
 // clickable citations that deep-link into the source view. Model text is escaped
 // React text (OWASP LLM02) — never HTML.
-function GroundedAnswer({ ans, onCite }: { ans: AiAnswer; onCite: () => void }) {
+function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () => void; onClose: () => void }) {
   const cs = ans.current_state;
   const pr = ans.problem;
+  const mod = ans.module;
+  // A short, human label for the answer kind — a quiet futuristic header chip.
+  const kind =
+    pr ? "RCA" : cs ? "Live state" : mod ? (mod.display_name || "Module") : ans.mode === "unavailable" ? "Notice" : "Answer";
   return (
     <div className="op-grounded">
+      <div className="op-ans-head">
+        <span className="op-ans-kind">{kind}</span>
+        {pr && <span className="op-ans-id" title={pr.problem_id}>{friendlyProblemId(pr.problem_id)}</span>}
+        <span className="op-ans-spacer" />
+        <button type="button" className="op-ans-x" title="Close Correlix AI" aria-label="Close" onClick={onClose}>
+          <Icon name="close" size={13} />
+        </button>
+      </div>
+
       {ans.text && <div className="op-text">{ans.text}</div>}
 
       {cs && (
         <div className="op-facts">
-          <span className="op-fact"><b>{cs.confirmed}</b> confirmed</span>
-          <span className="op-fact"><b>{cs.suspected}</b> suspected</span>
+          <span className="op-fact op-fact-ok"><b>{cs.confirmed}</b> confirmed</span>
+          <span className="op-fact op-fact-warn"><b>{cs.suspected}</b> suspected</span>
           <span className="op-fact"><b>{cs.undetermined}</b> undetermined</span>
         </div>
       )}
@@ -391,6 +389,18 @@ function GroundedAnswer({ ans, onCite }: { ans: AiAnswer; onCite: () => void }) 
       )}
       {pr?.missing_evidence && pr.missing_evidence.length > 0 && (
         <div className="op-kv"><span className="op-kv-k">Missing evidence</span> {pr.missing_evidence.join(", ")}</div>
+      )}
+
+      {/* P4 module-aware answer — a focused read of one module's tools. */}
+      {mod && mod.items && mod.items.length > 0 && (
+        <ul className="op-modlist">
+          {mod.items.slice(0, 8).map((it, i) => (
+            <li key={i} className="op-moditem">{it}</li>
+          ))}
+        </ul>
+      )}
+      {mod?.notes && mod.notes.length > 0 && (
+        <div className="op-kv"><span className="op-kv-k">Note</span> {mod.notes.join(" ")}</div>
       )}
 
       {ans.citations && ans.citations.length > 0 && (
