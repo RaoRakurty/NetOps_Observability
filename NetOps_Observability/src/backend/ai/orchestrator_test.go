@@ -185,6 +185,73 @@ func TestCurrentStateIsolation(t *testing.T) {
 	}
 }
 
+// TestHistoricalNotAnsweredWithLiveState is the honesty guard: a PAST-window
+// question ("the outage last night") must NOT be silently answered with live
+// current-state data. It routes to an honest "planned, not enabled" disclosure
+// and leaks none of the active correlation's facts.
+func TestHistoricalNotAnsweredWithLiveState(t *testing.T) {
+	o := newOrch(newMockDS())
+	for _, q := range []string{
+		"explain the outage last night",
+		"what happened overnight?",
+		"summarize the last 4 hours",
+		"give me yesterday's incidents",
+	} {
+		ans, err := o.Ask(context.Background(), tenantA(), q, nil)
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		if ans.Mode != ModeUnavailable {
+			t.Fatalf("%q: a time-range question must get an honest disclosure, got mode=%s", q, ans.Mode)
+		}
+		if ans.Intent != "time_range_summary" {
+			t.Fatalf("%q: intent should record the demand, got %q", q, ans.Intent)
+		}
+		if ans.CurrentState != nil {
+			t.Fatalf("%q: must NOT answer a past question with live current-state data", q)
+		}
+		if strings.Contains(ans.Text, "BGP peer down") || strings.Contains(ans.Text, "edge-1") {
+			t.Fatalf("%q: leaked live correlation data into a historical answer: %q", q, ans.Text)
+		}
+	}
+}
+
+// TestShiftHandoffFuturePhase: a shift pass-down request is honestly disclosed,
+// not silently faked from live data.
+func TestShiftHandoffFuturePhase(t *testing.T) {
+	o := newOrch(newMockDS())
+	ans, err := o.Ask(context.Background(), tenantA(), "give me the shift handoff", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != ModeUnavailable || ans.Intent != "shift_handoff" {
+		t.Fatalf("expected an honest shift_handoff disclosure, got mode=%s intent=%s", ans.Mode, ans.Intent)
+	}
+	if ans.CurrentState != nil {
+		t.Fatal("shift handoff is not built — must not answer with live state")
+	}
+}
+
+// TestPresentTenseStillCurrentState is the regression guard for the historical
+// detector: present-tense phrasing must STILL route to the live current-state
+// summary, not get swept into the time-range disclosure.
+func TestPresentTenseStillCurrentState(t *testing.T) {
+	o := newOrch(newMockDS())
+	for _, q := range []string{
+		"what's happening right now?",
+		"what is going on currently?",
+		"what should the NOC focus on at the moment?",
+	} {
+		ans, err := o.Ask(context.Background(), tenantA(), q, nil)
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		if ans.Mode != ModeCurrentStateSummary || ans.CurrentState == nil {
+			t.Fatalf("%q: present-tense must stay live current-state, got mode=%s", q, ans.Mode)
+		}
+	}
+}
+
 func TestNavigation(t *testing.T) {
 	o := newOrch(newMockDS())
 	ans, err := o.Ask(context.Background(), tenantA(), "where do I configure servicenow", nil)

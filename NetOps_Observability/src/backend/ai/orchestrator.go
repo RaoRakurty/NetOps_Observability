@@ -51,6 +51,11 @@ type Plan struct {
 var (
 	reUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	rePID  = regexp.MustCompile(`(?i)\bP-?[0-9A-Z]{4,}\b`)
+	// Shift-handoff intent (HLD P3, reports module): a NOC pass-down request.
+	reShift = regexp.MustCompile(`(?i)\b(shift\s*(handoff|hand-?off|handover|summary|report|change)|hand-?off|handover|pass-?down|(end|start) of (the )?shift)\b`)
+	// Historical / time-range intent (HLD P3): an explicit PAST window. Keyed on
+	// past-time markers only, so present-tense "right now / currently" never matches.
+	reHistorical = regexp.MustCompile(`(?i)(last night|overnight|yesterday|earlier today|this (morning|afternoon|evening)|over the weekend|last (week|weekend)|(last|past|previous)\s+\d+\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)|in the last \d+|during the (night|outage|incident)|what happened|happened (last|earlier|overnight|yesterday))`)
 )
 
 // Classify maps a free-text question (+ UI context like the open RCA's id) to a
@@ -76,6 +81,21 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
 			Tools: []string{"get_problem", "get_problem_evidence"},
 		}
+	case reShift.MatchString(q):
+		// Shift pass-down summary (HLD P3, reports module) — answering tools not
+		// built yet; routed to an honest "planned, not enabled" disclosure rather
+		// than silently answered with live state.
+		return Plan{
+			Intent: "shift_handoff", Modules: []string{"reports"},
+			Mode: ModeShiftHandoff, Entities: ent, Freshness: FreshnessHistorical,
+		}
+	case reHistorical.MatchString(q):
+		// Time-range / "what happened last night" summary (HLD P3). Same honest
+		// disclosure — answering a PAST-window question with LIVE data would mislead.
+		return Plan{
+			Intent: "time_range_summary", Modules: []string{"reports"},
+			Mode: ModeTimeRangeOutageSummary, Entities: ent, Freshness: FreshnessHistorical,
+		}
 	case strings.Contains(q, "where") || strings.Contains(q, "how do i") || strings.Contains(q, "navigate") || strings.Contains(q, "find ") && strings.Contains(q, "settings"):
 		return Plan{
 			Intent: "product_navigation", Modules: []string{"product_navigation"},
@@ -96,6 +116,16 @@ func Classify(question string, uiContext map[string]string) Plan {
 // dispatch by answer mode → ground → return a typed Answer.
 func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, uiContext map[string]string) (Answer, error) {
 	plan := Classify(question, uiContext)
+
+	// Answer modes whose answering tools land in a later phase (HLD P3+): respond
+	// honestly and uniformly — the feature isn't built yet for ANYONE — and record
+	// the demand (intent) for audit. We short-circuit BEFORE the permission/
+	// availability gate so the disclosure never reads as an access problem, and so
+	// a past-window question is never silently answered with live current state.
+	switch plan.Mode {
+	case ModeTimeRangeOutageSummary, ModeShiftHandoff:
+		return o.answerFuturePhase(plan), nil
+	}
 
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
@@ -353,6 +383,26 @@ func (o *Orchestrator) answerNavigation(question string, plan Plan, disc []strin
 		Mode: ModeProductNavigationHelp, Intent: plan.Intent, Modules: plan.Modules,
 		Text:       fmt.Sprintf("Found %d place(s) in Correlix.", len(hits)),
 		Navigation: hits, Citations: cites, Disclaimers: disc,
+	}
+}
+
+// answerFuturePhase is the honest disclosure for answer modes that are designed
+// (registry entries + schemas) but whose answering tools land in a later phase
+// (HLD P3+). It NEVER fabricates a summary and NEVER falls back to live data, so a
+// past-window or shift question is answered truthfully instead of misleadingly.
+func (o *Orchestrator) answerFuturePhase(plan Plan) Answer {
+	what, alt := "That summary", "summarize what's going on right now, or explain a specific problem"
+	switch plan.Mode {
+	case ModeShiftHandoff:
+		what = "Shift handoff summaries"
+	case ModeTimeRangeOutageSummary:
+		what = `Time-range summaries (for example, "the outage last night")`
+	}
+	return Answer{
+		Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+		Text:        what + " aren't available yet. For now I can " + alt + ".",
+		Citations:   []Citation{},
+		Disclaimers: []string{"This answer mode is planned but not enabled in this build."},
 	}
 }
 
