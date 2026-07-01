@@ -196,6 +196,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/system/network/test":    "platform",
 	"/api/automation/netbox":      "platform",
 	"/api/automation/netbox/sync": "platform",
+	"/api/discovery/config":       "platform", // subnet-scan scope: directs the platform prober (#91)
 	"/api/notify/smtp":            "platform",
 	"/api/notify/smtp/test":       "platform",
 	"/api/notify/slack":           "platform",

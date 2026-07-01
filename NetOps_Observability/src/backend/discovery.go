@@ -582,30 +582,9 @@ func unquoteValue(s string) string {
 }
 
 // =============================================================================
-// SNMP source — real implementation lives in Telegraf now (SNMP polling
-// is its job, not ours). Keep this stub for the diagram completeness;
-// it never returns devices.
+// SNMP subnet-scan source lives in snmp_discovery.go (real prober + its
+// platform-owner runtime config; was a no-op stub until #91).
 // =============================================================================
-
-type SNMPSource struct {
-	cidrRanges []string
-}
-
-func NewSNMPSource(cidrs string) *SNMPSource {
-	ranges := strings.Split(cidrs, ",")
-	clean := ranges[:0]
-	for _, r := range ranges {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			clean = append(clean, r)
-		}
-	}
-	return &SNMPSource{cidrRanges: clean}
-}
-
-func (s *SNMPSource) Name() string                                    { return "snmp" }
-func (s *SNMPSource) Interval() time.Duration                         { return 5 * time.Minute }
-func (s *SNMPSource) Poll(_ context.Context) ([]models.Device, error) { return nil, nil }
 
 // =============================================================================
 // Netbox source — real HTTP client.

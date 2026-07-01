@@ -16,6 +16,28 @@ export type Device = {
   last_seen: string;
 };
 
+// Subnet discovery scan scope (platform-owner; GET is redacted — the probe
+// community is write-only).
+export type DiscoveryConfig = {
+  enabled: boolean;
+  ranges: string[];
+  community_set: boolean;
+  allow_non_private: boolean;
+  interval_sec: number;
+};
+export type DiscoveryConfigInput = {
+  enabled: boolean;
+  ranges: string[];
+  community?: string; // comma-separated priority list; blank preserves the stored secret
+  allow_non_private?: boolean;
+  interval_sec?: number;
+};
+export type DiscoveryConfigEnvelope = {
+  config: DiscoveryConfig;
+  limits?: { max_hosts: number; max_ranges: number };
+  stats?: { last_poll?: string; last_error?: string; devices?: number };
+};
+
 export type CollectorStatus = {
   kind?: string; // "protocol" | "discovery"
   name: string;
@@ -1292,6 +1314,9 @@ export const api = {
   deleteDevice: (id: string) =>
     request<void>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
   collectors: () => request<CollectorStatus[]>("/api/collectors"),
+  discoveryConfig: () => request<DiscoveryConfigEnvelope>("/api/discovery/config"),
+  saveDiscoveryConfig: (c: DiscoveryConfigInput) =>
+    request<DiscoveryConfigEnvelope>("/api/discovery/config", { method: "PUT", body: JSON.stringify(c) }),
   alerts: () => request<Alert[]>("/api/alerts"),
   rules: () => request<Rule[]>("/api/rules"),
   addRule: (r: Rule) =>

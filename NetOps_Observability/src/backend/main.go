@@ -103,9 +103,10 @@ type server struct {
 	exportLimiter       *tenantRateLimiter       // per-tenant export rate limit
 	copilotLimiter      *tenantRateLimiter       // per-principal copilot rate limit (SR-021)
 	copilotCfg          *copilotConfigStore
-	netboxCfg           *netboxConfigStore // NetBox source-of-truth discovery config
-	netboxSync          *netboxSyncer      // reconciles discovered devices INTO NetBox (write-through)
-	vulns               *vulnFeed          // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
+	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
+	netboxSync          *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
+	vulns               *vulnFeed             // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -173,9 +174,11 @@ func newServer() *server {
 
 	d := NewDiscoveryAggregator()
 	d.Register(NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
-	if os.Getenv("ENABLE_SNMP_DISCOVERY") == "true" {
-		d.Register(NewSNMPSource(os.Getenv("SNMP_CIDR_RANGES")))
-	}
+	// SNMP subnet discovery: registered always with a LIVE config getter
+	// (console-set store, env bootstrap fallback) so operators can scope and
+	// enable it at runtime without a restart. Poll is a no-op while disabled.
+	discoveryCfg := newDiscoveryConfigStore(envOr("DISCOVERY_CONFIG_FILE", "/data/discovery_config.json"), vault)
+	d.Register(NewSNMPSource(discoveryCfg.effective, d.Devices))
 	// NetBox source-of-truth: registered always with a LIVE config getter (UI-set
 	// store, env fallback). Poll is a no-op while unconfigured/disabled, so it
 	// honors runtime changes from Automation → Source of Truth without a restart.
@@ -491,6 +494,7 @@ func newServer() *server {
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.netboxCfg = netboxCfg
+	srv.discoveryCfg = discoveryCfg
 	// Write-through: reconcile discovered devices INTO NetBox (the source of truth),
 	// reading the deduped inventory. No-op while NetBox is disabled.
 	srv.netboxSync = newNetboxSyncer(netboxCfg.effective, srv.discovery.Devices)
@@ -805,6 +809,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
+	mux.HandleFunc("/api/discovery/config", s.handleDiscoveryConfig)  // subnet-scan scope (platform-owner)
 	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig)    // Source-of-Truth config (platform-owner)
 	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
@@ -823,11 +828,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sites/", s.handleSiteByID)      // /api/sites/{slug}: PUT / DELETE
 	mux.HandleFunc("/api/sot/import", s.handleSoTImport) // external SoT one-way import (sites / device→site)
 	// WAN circuits (#1): controller-style endpoint registry + topology policy.
-	mux.HandleFunc("/api/wan/interfaces", s.handleWanInterfaces) // per-WAN-interface table: util + circuit SLA + source
-	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)   // derived WAN endpoint registry (read)
-	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)     // derived circuit mesh (read)
-	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)         // topology policy: GET / PUT (intent)
-	mux.HandleFunc("/api/system/network", s.handleSystemNetwork)      // platform DNS + NTP settings (GET/PUT, platform-admin)
+	mux.HandleFunc("/api/wan/interfaces", s.handleWanInterfaces)          // per-WAN-interface table: util + circuit SLA + source
+	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)            // derived WAN endpoint registry (read)
+	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)              // derived circuit mesh (read)
+	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)                  // topology policy: GET / PUT (intent)
+	mux.HandleFunc("/api/system/network", s.handleSystemNetwork)          // platform DNS + NTP settings (GET/PUT, platform-admin)
 	mux.HandleFunc("/api/system/network/test", s.handleSystemNetworkTest) // resolve + NTP-offset probe
 	// RCA auto-ticketing (#78 P3): incident-policy CRUD + simulator, tenant-scoped
 	// outbox/audit observability. Per-correlation ticket actions ride the

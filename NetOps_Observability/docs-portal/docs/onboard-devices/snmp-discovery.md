@@ -45,25 +45,26 @@ Discovery authenticates with the credentials you've stored:
 
 If most of the fleet shares one community, one profile is enough; add per-group profiles for exceptions.
 
-## Step 3 — Set the discovery range
+## Step 3 — Set the discovery scope
 
-Discovery is scoped by **network ranges in CIDR notation**, configured per instance in the deployment settings (`.env` on a self-hosted install):
+Discovery is scoped by **network ranges in CIDR notation**, configured from the console (platform administrator only):
 
-```bash
-# deployment/docker/.env
-ENABLE_SNMP_DISCOVERY=true          # on by default
-SNMP_CIDR_RANGES=10.20.0.0/24,10.30.5.0/26   # comma-separated, YOUR management subnets
-```
+1. Go to <kbd>Administration → Data Collection → Collectors</kbd> → **Subnet discovery** card.
+2. Enter your management subnets, comma-separated — e.g. `10.20.0.0/24, 10.30.5.0/26`.
+3. Enter the **probe communities** — a comma-separated priority list if different device families use different read-only communities (each address is tried in order until one answers). Communities are stored encrypted and never shown again.
+4. Tick **Enabled** and **Save**. A sweep starts immediately; changes apply without a restart.
 
-Apply the change by recreating the service:
-
-```bash
-docker compose up -d
-```
-
-:::warning Narrow the range before scanning
-The shipped default range is `10.0.0.0/8` — an entire private class A. **Replace it with your actual management subnets** before pointing discovery at a real network. Scanning too-wide ranges wastes poll capacity, trips IDS/ACL alarms, and can sweep hosts you don't own.
+:::note Discovery probes with SNMP v2c
+The subnet sweep identifies devices with a v2c read-only community. **v3-only devices won't be found by the sweep** — add them manually or via a [Source of Truth import](/automation/overview); once inventoried, their metrics collect with the v3 profile from Step 2 as normal.
 :::
+
+Guardrails enforced by the server:
+
+- **Private (RFC 1918) ranges only** by default. If your network uses public address space internally, tick **Allow non-private ranges** to acknowledge it — loopback, link-local, and multicast space is always refused.
+- Ranges may expand to at most **4,096 addresses** in total (a `/20` is the widest single range). Oversized ranges are refused with a clear error instead of being swept — scanning too-wide ranges wastes poll capacity, trips IDS/ACL alarms, and can sweep hosts you don't own.
+- Sweeps are rate-limited to **one per minute** regardless of how often a refresh is requested.
+
+On a self-hosted install, `ENABLE_SNMP_DISCOVERY` / `SNMP_CIDR_RANGES` / `SNMP_COMMUNITY` in `deployment/docker/.env` serve as the bootstrap default until a configuration is saved from the console; the console configuration then wins.
 
 ## Step 4 — Watch devices arrive
 
@@ -91,7 +92,7 @@ Work down this table in order; the causes are listed by how often they're the cu
 | --- | --- | --- | --- |
 | 1 | Device absent from inventory | Not reachable on **UDP 161** from Correlix | Firewall/ACL in the path — check [Connectivity requirements](/reference/connectivity-requirements); test with `snmpwalk` from a host beside Correlix (below) |
 | 2 | Device absent | **Credential mismatch** — community/user doesn't match, or the device is v3-only and you stored v2c | Re-check the stored profile against the device config; version must match |
-| 3 | Device absent | **Outside the scanned range** | Add its subnet to `SNMP_CIDR_RANGES` and re-apply |
+| 3 | Device absent | **Outside the scanned range** | Add its subnet on the **Subnet discovery** card (<kbd>Administration → Data Collection → Collectors</kbd>) and save |
 | 4 | Device absent | **SNMP not enabled** on the device | Configure it (Step 1) |
 | 5 | Device present but **Down** | Answered once, now unreachable or credential rotated | Check the device's SNMP ACL and the profile's secrets |
 | 6 | Present but vendor/type = Unknown | Device answered but its identity isn't in the recognition table | Cosmetic only — metrics still collect via the Universal profiles; set the vendor manually on the device record if you want |

@@ -15,6 +15,23 @@ import (
 
 var sysObjectIDOID = []int{1, 3, 6, 1, 2, 1, 1, 2, 0} // SNMPv2-MIB::sysObjectID.0
 var sysDescrOID = []int{1, 3, 6, 1, 2, 1, 1, 1, 0}    // SNMPv2-MIB::sysDescr.0
+var sysNameOID = []int{1, 3, 6, 1, 2, 1, 1, 5, 0}     // SNMPv2-MIB::sysName.0
+
+// ProbeIdentity is the subnet-discovery probe: one sysName GET decides whether
+// an address is an SNMP-speaking device (a UDP timeout or SNMP error means "not
+// ours" — discovery treats every host as untrusted until it answers), then
+// DetectVendor fills in vendor/sysDescr. ok is false when the host didn't
+// answer the initial GET; err carries the transport detail for diagnostics.
+func ProbeIdentity(ctx context.Context, addr, community string) (sysName, vendor, sysDescr string, ok bool) {
+	target := withPort(addr, 161)
+	v, err := snmpGet(ctx, target, v2c(community), sysNameOID)
+	if err != nil {
+		return "", "", "", false
+	}
+	sysName = strings.TrimSpace(v.str())
+	vendor, sysDescr = DetectVendor(ctx, addr, community)
+	return sysName, vendor, sysDescr, true
+}
 
 // enterpriseVendor maps IANA Private Enterprise Numbers (the 7th arc of a
 // sysObjectID under 1.3.6.1.4.1.<ENT>) to a normalized vendor name. Extend as
