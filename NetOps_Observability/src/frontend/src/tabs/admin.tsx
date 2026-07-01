@@ -492,7 +492,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   // When embedded under an organization, the org is fixed to that org.
-  const [org, setOrg] = useState(orgId ?? "");
+  const [org, setOrg] = useState(orgId ?? "global");
   const [region, setRegion] = useState("");
   const [hideGlobal, setHideGlobal] = useState(false);
   const [adding, setAdding] = useState(false); // create form hidden until clicked
@@ -534,7 +534,7 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
     const useOrg = orgId || org;
     if (!name.trim() || !useOrg) return;
     setErr(null);
-    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, useOrg, region); setName(""); setNote(""); setOrg(orgId ?? ""); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr((e as Error).message); }
+    try { await api.createTenant(name.trim(), note.trim(), hideGlobal, useOrg, region); setName(""); setNote(""); setOrg(orgId ?? "global"); setRegion(""); setHideGlobal(false); setAdding(false); reload(); } catch (e) { setErr((e as Error).message); }
   };
   const openDelete = (t: Tenant) => { setDelTarget(t); setDelTyped(""); setDelForce(false); setDelErr(null); };
   const confirmDelete = async () => {
@@ -584,11 +584,11 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
             {orgId ? (
               <label><span>Organization</span><div className="uf-fixed">{orgName(orgId)}</div></label>
             ) : (
-              <label className="req-field">
-                <span>Organization <Req /></span>
-                <select value={org} onChange={(e) => { setOrg(e.target.value); setRegion(""); }}>
-                  <option value="">Select organization…</option>
-                  {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              <label title="Optional — leave as Provider unless you're grouping tenants into a customer/BU org.">
+                <span>Organization <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span>
+                <select value={org || "global"} onChange={(e) => { setOrg(e.target.value); setRegion(""); }}>
+                  {!(orgs ?? []).some((o) => o.id === "global") && <option value="global">Provider (default)</option>}
+                  {(orgs ?? []).map((o) => <option key={o.id} value={o.id}>{o.id === "global" ? `${o.name} (default)` : o.name}</option>)}
                 </select>
               </label>
             )}
@@ -603,8 +603,8 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
               <span>Note</span>
               <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
             </label>
-            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setOrg(orgId ?? ""); setRegion(""); setNote(""); setHideGlobal(false); setErr(null); }}>Cancel</button>
-            <button className="dash-btn accent" disabled={!name.trim() || !(orgId || org)} onClick={create}>Create tenant</button>
+            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setOrg(orgId ?? "global"); setRegion(""); setNote(""); setHideGlobal(false); setErr(null); }}>Cancel</button>
+            <button className="dash-btn accent" disabled={!name.trim()} onClick={create}>Create tenant</button>
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
             <input type="checkbox" checked={hideGlobal} onChange={(e) => setHideGlobal(e.target.checked)} />
@@ -1476,6 +1476,120 @@ function SsoRolesPanel() {
   );
 }
 
+// ReqChip — a Required / Optional / Inherited marker used across the IAM map+forms.
+function ReqChip({ kind }: { kind: "req" | "opt" | "inh" }) {
+  const map = {
+    req: { label: "Required", bg: "var(--accent-soft)", fg: "var(--accent)" },
+    opt: { label: "Optional", bg: "var(--surface-2)", fg: "var(--muted)" },
+    inh: { label: "Inherited", bg: "var(--surface-2)", fg: "var(--muted)" },
+  }[kind];
+  return <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase", padding: "1px 6px", borderRadius: 5, background: map.bg, color: map.fg }}>{map.label}</span>;
+}
+
+// IAMHierarchyMap — the "how it all ties together" box at the top of Identity &
+// Access (platform view). Read-only: a flow strip (create-down, assign-at-end)
+// + a live tree Provider → Orgs → Tenants, so "where do I start / what's
+// required vs optional" is answered at a glance. Grounded in the real model:
+// Provider is the root, Org is OPTIONAL (blank ⇒ Provider/Global), Tenant is the
+// REQUIRED unit, Region is inherited placement.
+function IAMHierarchyMap() {
+  const [orgs, setOrgs] = useState<Org[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [regions, setRegions] = useState<Region[]>([]);
+  useEffect(() => {
+    Promise.all([
+      api.listOrgs().catch(() => [] as Org[]),
+      api.listTenants().catch(() => [] as Tenant[]),
+      api.listUsers().catch(() => [] as AdminUser[]),
+      api.listRegions().catch(() => [] as Region[]),
+    ]).then(([o, t, u, r]) => { setOrgs(o); setTenants(t); setUsers(u); setRegions(r); });
+  }, []);
+
+  const orgKey = (id?: string) => (id && id !== "" ? id : "global");
+  const tByOrg: Record<string, Tenant[]> = {};
+  tenants.forEach((t) => { (tByOrg[orgKey(t.org_id)] ||= []).push(t); });
+  // Ensure the Provider/Global org node exists even with no custom orgs.
+  const orgList = orgs.length ? orgs : [{ id: "global", name: "Provider", slug: "global", home_region: "us-east" } as Org];
+  const usersByTenant: Record<string, number> = {};
+  users.forEach((u) => { if (u.tenant_id) usersByTenant[u.tenant_id] = (usersByTenant[u.tenant_id] || 0) + 1; });
+
+  const arrow = <span style={{ color: "var(--muted)", margin: "0 2px" }}>→</span>;
+  const step = (label: string, chip?: "req" | "opt", note?: string) => (
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 9px", borderRadius: 8, background: "var(--surface-2)", border: "1px solid var(--border, var(--panel-border))", fontSize: 12.5, fontWeight: 600 }}>
+        {label}{chip && <ReqChip kind={chip} />}
+      </span>
+      {note && <span style={{ fontSize: 10, color: "var(--muted)" }}>{note}</span>}
+    </span>
+  );
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        <div>
+          <div style={{ fontWeight: 700 }}>How your account is organized</div>
+          <div className="mini-meta">Create flows down; you grant access at the end. A tenant is the unit that holds devices &amp; data — an org is an optional grouping.</div>
+        </div>
+      </div>
+
+      {/* Flow strip — the ordered create-then-assign path. */}
+      <div style={{ display: "flex", alignItems: "flex-start", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
+        {step("Provider", undefined, "you")}{arrow}
+        {step("Organization", "opt", "→ default Provider")}{arrow}
+        {step("Tenant", "req", "holds devices/data")}{arrow}
+        {step("User")}{arrow}
+        {step("Assign access", undefined, "user → role → scope")}
+      </div>
+
+      {/* Live tree — Provider → Orgs → Tenants. */}
+      <div style={{ borderTop: "1px solid var(--border, var(--panel-border))", paddingTop: 12, fontSize: 13 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+          <span>Provider</span>
+          <span className="mini-meta" style={{ fontWeight: 400 }}>the root · {regions.length || 5} regions · {users.length} users · {tenants.length} tenants</span>
+        </div>
+        <div style={{ marginLeft: 6, marginTop: 8, display: "grid", gap: 8 }}>
+          {orgList.map((o) => {
+            const ots = tByOrg[orgKey(o.id === "global" ? "" : o.id)] || tByOrg[o.id] || (o.id === "global" ? tByOrg["global"] : []) || [];
+            return (
+              <div key={o.id} style={{ borderLeft: "2px solid var(--border, var(--panel-border))", paddingLeft: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600 }}>{o.name}</span>
+                  {o.id === "global" && <ReqChip kind="opt" />}
+                  <span className="mini-meta">{o.home_region || "us-east"} · {ots.length} tenant{ots.length === 1 ? "" : "s"}{o.sso_connection ? ` · SSO: ${o.sso_connection}` : ""}</span>
+                </div>
+                {ots.length > 0 && (
+                  <div style={{ marginLeft: 10, marginTop: 4, display: "grid", gap: 3 }}>
+                    {ots.slice(0, 6).map((t) => (
+                      <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--fg)" }}>
+                        <span style={{ color: "var(--muted)" }}>›</span>
+                        <span style={{ fontWeight: 500 }}>{t.name}</span>
+                        <span className="mini-meta">
+                          {t.region ? t.region : `${o.home_region || "us-east"} (inherited)`}
+                          {usersByTenant[t.id] ? ` · ${usersByTenant[t.id]} users` : ""}
+                          {t.status === "suspended" ? " · suspended" : ""}
+                        </span>
+                      </div>
+                    ))}
+                    {ots.length > 6 && <span className="mini-meta" style={{ marginLeft: 18 }}>+{ots.length - 6} more</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Legend. */}
+      <div style={{ display: "flex", gap: 14, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}><ReqChip kind="req" /><span className="mini-meta">the unit you must create (Tenant)</span></span>
+        <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}><ReqChip kind="opt" /><span className="mini-meta">grouping you can skip (Org → defaults to Provider)</span></span>
+        <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}><ReqChip kind="inh" /><span className="mini-meta">a tenant inherits its org's region</span></span>
+      </div>
+    </div>
+  );
+}
+
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
@@ -1494,7 +1608,8 @@ export function IdentityAccess() {
 
   return (
     <>
-      <AdminHead title="Identity & Access" sub="People, roles and security — for the Provider (platform) or per organization. Tenants are optional units inside an organization." />
+      <AdminHead title="Identity & Access" sub="People, roles and security — for the Provider (platform) or per organization. A tenant is the required unit that holds data; an organization is an optional grouping." />
+      <IAMHierarchyMap />
       <div style={{ marginBottom: 12 }}>
         <Segmented
           ariaLabel="Identity scope"
