@@ -20,7 +20,18 @@ const (
 	ModeProductNavigationHelp    AnswerMode = "product_navigation_help"
 	ModeProductAnswer            AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge
 	ModeInvestigationPlan        AnswerMode = "investigation_plan"
-	ModeUnavailable              AnswerMode = "unavailable" // module disabled / future
+	// NOC-focus + status-breakdown answer modes (spec §4/§5). Both are backed by
+	// the CurrentStateSummary schema (they read the same active-correlation set),
+	// but render a recommendation-first / two-section card rather than the generic
+	// current-state briefing.
+	ModeNocFocusRecommendation  AnswerMode = "noc_focus_recommendation"
+	ModeIncidentStatusBreakdown AnswerMode = "incident_status_breakdown"
+	// ModeTopIncidentExplanation is a ROUTING mode (spec §4): "explain the top
+	// incident" resolves rank #1 from the priority queue, then answers as a normal
+	// ModeProblemExplanation card — so the produced Answer.Mode is
+	// ModeProblemExplanation, this value only selects the resolve-first dispatch.
+	ModeTopIncidentExplanation AnswerMode = "top_incident_explanation"
+	ModeUnavailable            AnswerMode = "unavailable" // module disabled / future
 )
 
 // Citation links an answer back to the evidence it used (clickable in the UI).
@@ -53,8 +64,34 @@ type Answer struct {
 	RecommendedOwner string   `json:"recommended_owner,omitempty"`
 	NextActions      []string `json:"next_actions,omitempty"`
 	MissingEvidence  []string `json:"missing_evidence,omitempty"` // clean operational bullets
-	ModeBadges       []string `json:"mode_badges,omitempty"`      // e.g. ["Evidence-only mode","Low evidence"]
+	ModeBadges       []string `json:"mode_badges,omitempty"`      // e.g. ["Low evidence"] — status/provider live elsewhere
 	EvidenceOnly     bool     `json:"evidence_only,omitempty"`    // true → deterministic (no LLM) answer
+	// ProviderNote is the SINGLE, small provider-fallback line (spec §1/§8). It is
+	// rendered once as a footer/badge — never as the main answer sentence, never
+	// repeated in Text or Disclaimers. Empty when a live provider answered.
+	ProviderNote string `json:"provider_note,omitempty"`
+	// Title is the card-level heading for a mode (spec §2) — e.g. "Current
+	// Operations Summary" — so the UI never labels the whole card with a single
+	// incident's status.
+	Title string `json:"title,omitempty"`
+	// Counts is the normalized, labeled incident-count set (spec §6). One place
+	// defines what each number means, so no two answers show conflicting counts.
+	Counts *IncidentCounts `json:"counts,omitempty"`
+}
+
+// IncidentCounts is the normalized incident-count set (spec §6). Every count
+// category has ONE definition here, and CountsLegend() explains them, so a
+// card can show several numbers without them reading as conflicting. Derived
+// from the tenant-scoped active-correlation set — never fabricated.
+type IncidentCounts struct {
+	ActiveCorrelationGroups    int  `json:"active_correlation_groups"`     // all active correlation groups in the live RCA view
+	ConfirmedCount             int  `json:"confirmed_count"`               //
+	SuspectedCount             int  `json:"suspected_count"`               //
+	CandidateCount             int  `json:"candidate_count"`               //
+	UndeterminedCount          int  `json:"undetermined_count"`            // low-evidence, under investigation
+	ActionableIncidentsCount   int  `json:"actionable_incidents_count"`    // confirmed + suspected (+ candidate) — the NOC queue
+	LowEvidenceWatchItemsCount int  `json:"low_evidence_watch_items_count"` // == undetermined in our model
+	Capped                     bool `json:"capped,omitempty"`              // true → counts are a lower bound (list was capped)
 }
 
 // CurrentStateSummary is the P2 Command Center answer-mode schema: a NOC
@@ -62,8 +99,10 @@ type Answer struct {
 // model-written headline. Answers "what is going on right now / what should the
 // NOC focus on first?"
 type CurrentStateSummary struct {
-	Summary          string   `json:"summary"` // model narrative
-	ActiveIncidents  []string `json:"active_incidents"`
+	Summary          string          `json:"summary"`          // model narrative
+	Title            string          `json:"title,omitempty"`  // card heading (spec §2)
+	Counts           *IncidentCounts `json:"counts,omitempty"` // normalized counts (spec §6)
+	ActiveIncidents  []string        `json:"active_incidents"`
 	Confirmed        int      `json:"confirmed"`
 	Suspected        int      `json:"suspected"`
 	Undetermined     int      `json:"undetermined"`
@@ -74,6 +113,20 @@ type CurrentStateSummary struct {
 	ActionableCount  int      `json:"actionable_count"`       // confirmed + suspected (need review)
 	ConfidenceNotes  []string `json:"confidence_notes"`
 	MissingData      []string `json:"missing_data"`
+	// FocusStatus / FocusConfidence label the RECOMMENDED-FOCUS incident's status
+	// and evidence confidence (spec §2). They are rendered INSIDE the focus section
+	// ("Recommended focus status: Suspected"), never as the whole card's status —
+	// only the one focus incident is suspected, not the entire live state.
+	FocusStatus     string `json:"focus_status,omitempty"`
+	FocusConfidence string `json:"focus_confidence,omitempty"`
+	// SuspectedIncidents is the confirmed+suspected list rendered under an explicit
+	// "Active suspected incidents" header (spec §5 breakdown; §4 noc-focus "other").
+	// Kept SEPARATE from the undetermined watch note so the two never mix.
+	SuspectedIncidents []string `json:"suspected_incidents,omitempty"`
+	// WhyFirst are the bullet reasons the focus incident leads (spec §4/§5).
+	WhyFirst []string `json:"why_first,omitempty"`
+	// CountsLegend explains the count categories shown on this card (spec §6).
+	CountsLegend []string `json:"counts_legend,omitempty"`
 }
 
 // ModuleHealthSummary is the P4 module-aware answer-mode schema: a focused,
@@ -105,4 +158,5 @@ type ProblemExplanation struct {
 	MissingEvidence       []string `json:"missing_evidence"`
 	RecommendedOwner      string   `json:"recommended_owner"`
 	ItsmNote              string   `json:"itsm_note"`
+	WhyFirst              []string `json:"why_first,omitempty"` // "why this is the top incident" (spec §4)
 }

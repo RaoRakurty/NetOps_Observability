@@ -82,6 +82,23 @@ var (
 	reProduct = regexp.MustCompile(`(?i)(\bwhat (is|are|does)\b|\bwhat.?s (a|an|the)\b|\bwhat does\b.*\bmean\b|\bhow does\b|\bhow do(es)? (correlix|the (engine|platform|product|system))\b|\bhow do i (set ?up|configure|enable|create|add|onboard|connect|turn on|register|provision|import|schedule|invite)\b|\bhow to (set ?up|configure|enable|create|add|onboard|connect|import)\b|\bexplain (the|how|correlix)\b|\btell me about\b|\bwhat (can|do) you (do|know)\b|\bwhat is correlix\b)`)
 	// Explicit "last/past N <unit>" window for the time-range summary parser.
 	reLookbackNum = regexp.MustCompile(`(?i)(?:last|past|previous)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
+
+	// TOP-INCIDENT explanation (spec §4): "explain the top incident", "/top",
+	// "what is the highest-priority incident". Resolve rank #1 from the priority
+	// queue and explain it — never dead-end asking for an id. A verb (explain/show/
+	// describe/what-is) + a superlative (top/highest-priority/worst/#1/main) + an
+	// incident noun; OR the bare "top incident(s)" phrase. Kept NARROW so it doesn't
+	// swallow the plain incident LIST ("show me the critical incidents").
+	reTopIncident = regexp.MustCompile(`(?i)((explain|describe|detail|walk me through|tell me about)\s+(the\s+)?(top|highest[-\s]?priority|number[-\s]?one|#?1|worst|biggest|main|most (critical|urgent|important|severe|pressing))\s+(incident|problem|correlation|issue|priority)\b|(what('?s| is)|which is)\s+(the\s+)?(top|highest[-\s]?priority|number[-\s]?one|#?1)\s+(incident|problem|correlation|priority)\b|\btop incidents?\b)`)
+	// NOC-FOCUS recommendation (spec §5): "which incident should the NOC focus on
+	// first and why" — an EXPLANATION of what to work first, not just a list.
+	// Checked before reIncidents/reStatus so "which incident … focus … first"
+	// doesn't fall into the plain list or the generic briefing.
+	reNocFocus = regexp.MustCompile(`(?i)((which|what)\s+(incident|problem|correlation|issue|one)s?\s+(should|do|to|does|would)\b[^?]*\b(focus|work|prioriti[sz]e|start|tackle|address|action|handle)\b|what should (the noc|i|we|the team)\b[^?]*\b(focus|work|prioriti[sz]e|tackle|address|action|handle|do)\b[^?]*\bfirst\b|where should (the noc|we|i|the team) start|what (do i|should i|to) (work on|do) first|how should (i|we|the noc) prioriti[sz]e)`)
+	// STATUS-BREAKDOWN (spec §6): "show active suspected incidents and separate
+	// them from undetermined watch items" — two explicit sections, never one mixed
+	// list. Checked before reIncidents so it isn't flattened into the actionable list.
+	reBreakdown = regexp.MustCompile(`(?i)((separate|split|break\s?down|distinguish|differentiate|group|categori[sz]e|contrast)\b[^?]*\b(suspected|undetermined|watch|confirmed|candidate)\b|\bsuspected\b[^?]*\b(from|versus|vs\.?|and)\b[^?]*\b(undetermined|watch|candidate)\b|\bactive suspected incidents\b|\bsuspected (vs\.?|versus) (undetermined|watch))`)
 )
 
 // moduleRoute maps a module-specific question (HLD P4) to its module + the
@@ -144,7 +161,36 @@ func Classify(question string, uiContext map[string]string) Plan {
 	}
 
 	switch {
-	case ent["problem_id"] != "" || (strings.Contains(q, "explain") && (strings.Contains(q, "problem") || strings.Contains(q, "incident") || strings.Contains(q, "rca"))):
+	case ent["problem_id"] != "":
+		// A specific problem id (from the UI or the text) → explain THAT problem.
+		return Plan{
+			Intent: "problem_explanation", Modules: []string{"correlations_rca"},
+			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
+			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
+		}
+	case reTopIncident.MatchString(q):
+		// "explain the top incident" / "/top" → resolve rank #1 from the priority
+		// queue and explain it (spec §4). No id needed; never dead-ends.
+		return Plan{
+			Intent: "top_incident", Modules: []string{"correlations_rca"},
+			Mode: ModeTopIncidentExplanation, Entities: ent, Freshness: FreshnessLive,
+			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
+		}
+	case reNocFocus.MatchString(q):
+		// "which incident should the NOC focus on first and why" → a recommendation
+		// with reasoning (spec §5), gated on event_management (the data owner).
+		return Plan{
+			Intent: "noc_focus", Modules: []string{"event_management"},
+			Mode: ModeNocFocusRecommendation, Entities: ent, Freshness: FreshnessLive,
+		}
+	case reBreakdown.MatchString(q):
+		// "show suspected incidents and separate them from undetermined watch items"
+		// → two explicit sections (spec §6), gated on event_management.
+		return Plan{
+			Intent: "incident_breakdown", Modules: []string{"event_management"},
+			Mode: ModeIncidentStatusBreakdown, Entities: ent, Freshness: FreshnessLive,
+		}
+	case strings.Contains(q, "explain") && (strings.Contains(q, "problem") || strings.Contains(q, "incident") || strings.Contains(q, "rca")):
 		return Plan{
 			Intent: "problem_explanation", Modules: []string{"correlations_rca"},
 			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
@@ -263,6 +309,12 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	switch plan.Mode {
 	case ModeProblemExplanation:
 		return o.answerProblem(ctx, p, question, plan, disc)
+	case ModeTopIncidentExplanation:
+		return o.answerTopIncident(ctx, p, question, plan, disc)
+	case ModeNocFocusRecommendation:
+		return o.answerNocFocus(ctx, p, question, plan, disc)
+	case ModeIncidentStatusBreakdown:
+		return o.answerIncidentBreakdown(ctx, p, plan, disc)
 	case ModeCurrentStateSummary:
 		return o.answerCurrentState(ctx, p, question, plan, disc)
 	case ModeModuleHealthSummary:
@@ -288,8 +340,8 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	}
 }
 
-// answerProblem builds the P1 RCA explanation: structured facts from our tools
-// (never the model), a model-written narrative grounded in the cited evidence.
+// answerProblem builds the P1 RCA explanation for a SPECIFIC problem id: fetch
+// the tenant-scoped problem, then hand off to explainProblem.
 func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, error) {
 	id := plan.Entities["problem_id"]
 	if id == "" {
@@ -311,7 +363,72 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 	if err != nil {
 		return Answer{}, err
 	}
+	return o.explainProblem(ctx, p, question, plan, pr, disc, nil, nil)
+}
 
+// answerTopIncident resolves rank #1 from the priority queue and explains it
+// (spec §4) — so "explain the top incident" / "/top" never dead-ends asking for
+// an id. It ranks the tenant-scoped active correlations by PriorityScore (never
+// recency), picks the leader, and explains it with a "why this is top" preface.
+// Only asks for an id when the queue is genuinely EMPTY.
+func (o *Orchestrator) answerTopIncident(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, error) {
+	probs, err := o.DS.ListActiveProblems(ctx, p, 100)
+	if err != nil {
+		return Answer{}, err
+	}
+	if len(probs) == 0 {
+		return Answer{
+			Mode: ModeProblemExplanation, Intent: plan.Intent, Modules: plan.Modules,
+			Text:      "No active correlations right now — there's no top incident to explain.",
+			Citations: []Citation{}, Disclaimers: append(disc, "The priority queue is empty."),
+		}, nil
+	}
+	ranked := make([]Problem, len(probs))
+	copy(ranked, probs)
+	sort.SliceStable(ranked, func(i, j int) bool { return PriorityScore(ranked[i]) > PriorityScore(ranked[j]) })
+	top := ranked[0]
+
+	counts := ComputeCounts(probs, len(probs) >= 100)
+	why := topIncidentReasons(top, counts)
+	plan.Entities["problem_id"] = top.ID // so the evidence tools fetch the right one
+	return o.explainProblem(ctx, p, question, plan, &top, disc, why, []string{"Top incident"})
+}
+
+// topIncidentReasons explains WHY this incident is #1 in the queue (spec §4).
+func topIncidentReasons(top Problem, counts IncidentCounts) []string {
+	var r []string
+	switch StatusLabel(top.Verdict) {
+	case "Confirmed":
+		r = append(r, "It is a confirmed incident — the strongest evidence class.")
+	case "Suspected":
+		r = append(r, "It is suspected, not undetermined — it has supporting evidence, unlike the low-evidence watch items.")
+	case "Candidate":
+		r = append(r, "It is a candidate incident with more evidence than the undetermined watch items.")
+	default:
+		r = append(r, "It is the highest-priority available correlation, though its evidence is still low.")
+	}
+	if IsClassified(top.Title) {
+		r = append(r, "It matches a classified RCA pattern.")
+	}
+	if o := InferOwner(top.Owner, append([]string{top.Title}, top.Devices...)...); o != "Needs triage" {
+		r = append(r, "It maps to a clear ownership domain ("+strings.TrimSuffix(o, ", pending confirmation")+").")
+	}
+	if top.SignalCount > 1 || top.NodeCount > 1 {
+		r = append(r, fmt.Sprintf("It has stronger evidence — %s across %s.", plural(top.SignalCount, "signal"), plural(top.NodeCount, "node")))
+	}
+	if counts.UndeterminedCount > 0 {
+		r = append(r, fmt.Sprintf("It outranks %s under investigation (low evidence).", plural(counts.UndeterminedCount, "correlation")))
+	}
+	return r
+}
+
+// explainProblem builds the RCA explanation for an already-fetched problem:
+// structured facts from our tools (never the model), a model-written narrative
+// grounded in the cited evidence, degrading to a polished evidence-only summary
+// when the provider is absent. whyFirst (optional) prefaces the narrative with
+// "why this is the top incident"; extraBadges add mode chips (e.g. "Top incident").
+func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question string, plan Plan, pr *Problem, disc, whyFirst, extraBadges []string) (Answer, error) {
+	id := pr.ID
 	// Build the evidence bundle from governed read-only tools — each tool call
 	// passes the Policy Engine gate (capability=read, allow/deny, RBAC) first.
 	pol := o.policy()
@@ -365,6 +482,7 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 	// Grounded narrative from the model; degrade to a polished evidence-only
 	// summary (NOT a raw "provider unavailable" line) when the provider is absent.
 	var badges []string
+	var providerNote string
 	system := o.systemPrompt()
 	user := o.problemPrompt(question, pr, bundle)
 	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
@@ -373,17 +491,24 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 		text = o.deterministicProblemSummary(pr, missing, owner)
 		provider = "none"
 		evidenceOnly = true
-		badges = append(badges, FallbackBadges(false)...) // provider-unavailable → metadata badge
+		badges = append(badges, FallbackBadges(false)...) // neutral evidence-only chip
+		providerNote = ProviderFallbackNote(false)        // the REASON is a single footer note
 	}
 	// Unsupported-claim guard (§11/§16): strip any citation the MODEL invented.
 	// The deterministic fallback is already grounded, so only verify model output.
 	if !evidenceOnly {
 		text, badges, disc = verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
 	}
+	// Preface with the "why this is the top incident" reasons (spec §4) so they
+	// show regardless of provider.
+	if len(whyFirst) > 0 {
+		text = "This is the top incident to work first. " + strings.TrimSpace(text)
+	}
 	pe.Summary = Scrub(strings.TrimSpace(text))
+	pe.WhyFirst = whyFirst
 
 	// Status/evidence-strength badges (spec §19) — small, not the main answer.
-	badges = append([]string{status}, badges...)
+	badges = append(append(extraBadges, status), badges...)
 	if pr.SignalCount <= 1 && pr.NodeCount <= 1 {
 		badges = append(badges, "Low evidence")
 	}
@@ -398,10 +523,10 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 
 	return Answer{
 		Mode: ModeProblemExplanation, Intent: plan.Intent, Modules: plan.Modules,
-		Text: pe.Summary, Problem: pe, Citations: cites, Disclaimers: disc, Provider: provider,
+		Text: pe.Summary, Problem: pe, Citations: cites, Disclaimers: dedupeLines(disc), Provider: provider,
 		Status: status, ConfidenceLabel: confLabel, RecommendedOwner: owner,
 		NextActions: nextActions, MissingEvidence: missing,
-		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly,
+		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote,
 	}, nil
 }
 
@@ -409,14 +534,14 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 // summary: structured counts + impacted entities + priority focus from the
 // active correlations (deterministic), with a model-written headline.
 func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, error) {
-	probs, err := o.DS.ListActiveProblems(ctx, p, 25)
+	probs, err := o.DS.ListActiveProblems(ctx, p, 100)
 	if err != nil {
 		return Answer{}, err
 	}
 	if len(probs) == 0 {
-		cs := &CurrentStateSummary{Summary: "No active correlations right now — the fleet is quiet."}
+		cs := &CurrentStateSummary{Summary: "No active correlations right now — the fleet is quiet.", Title: "Current Operations Summary"}
 		return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
-			Text: cs.Summary, CurrentState: cs, Citations: []Citation{},
+			Title: cs.Title, Text: cs.Summary, CurrentState: cs, Citations: []Citation{},
 			Disclaimers: append(disc, "Nothing active in scope.")}, nil
 	}
 
@@ -444,12 +569,22 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	cs.ActionableCount = cs.Confirmed + cs.Suspected
 	cs.ImpactedEntities = topKeys(impact, 8)
 
-	// Focus = the highest-priority incident (not the newest).
+	// Normalized, labeled counts (spec §6) — one definition, no conflicting numbers.
+	cs.Title = "Current Operations Summary"
+	counts := ComputeCounts(probs, len(probs) >= 100)
+	cs.Counts = &counts
+	cs.CountsLegend = counts.CountsLegend()
+
+	// Focus = the highest-priority incident (not the newest). Its status/confidence
+	// label the FOCUS only — carried inside the payload, never as the card status
+	// (spec §2/§3): only this one incident is suspected, not the whole live state.
 	focus := ranked[0]
 	focusStatus := StatusLabel(focus.Verdict)
 	focusConf := ConfidenceLabel(focus.Confidence, focus.Verdict)
 	focusOwner := InferOwner(focus.Owner, append([]string{focus.Title}, focus.Devices...)...)
-	cs.RecommendedFocus = []string{fmt.Sprintf("%s — %s (%s, confidence %s)", focus.Display(), focus.Title, focusStatus, strings.ToLower(focusConf))}
+	cs.FocusStatus = focusStatus
+	cs.FocusConfidence = focusConf
+	cs.RecommendedFocus = []string{fmt.Sprintf("%s — %s", focus.Display(), focus.Title)}
 	cs.FocusReason = currentStateFocusReason(focus, cs)
 
 	// List ONLY the actionable incidents (confirmed+suspected), ranked, capped —
@@ -475,8 +610,9 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	nextActions := currentStateNextActions(focus, cs)
 
 	// Headline: model-written (grounded in the ranked structure) or a polished
-	// deterministic briefing. Provider-unavailable is a badge, not body text.
+	// deterministic briefing. Provider-unavailable is a footer note, not body text.
 	var badges []string
+	var providerNote string
 	evidenceOnly := false
 	system := o.systemPrompt()
 	user := o.currentStatePrompt(question, cs)
@@ -486,6 +622,7 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		provider = "none"
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...)
+		providerNote = ProviderFallbackNote(false)
 	} else {
 		// Unsupported-claim guard (§11/§16) — verify the model didn't cite an id
 		// that isn't among this answer's citations.
@@ -493,16 +630,191 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	}
 	cs.Summary = Scrub(strings.TrimSpace(text))
 
-	badges = append([]string{focusStatus}, badges...)
+	// NO card-level status badge: the focus status lives in cs.FocusStatus and is
+	// rendered inside the Recommended-focus section, so the card never labels the
+	// whole live state "Suspected" (spec §2/§3).
 	if cs.ActionableCount == 0 {
 		badges = append(badges, "Low evidence")
 	}
 
 	return Answer{
 		Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
-		Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: disc, Provider: provider,
-		Status: focusStatus, ConfidenceLabel: focusConf, RecommendedOwner: focusOwner,
-		NextActions: nextActions, ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly,
+		Title: cs.Title, Text: cs.Summary, CurrentState: cs, Citations: cites, Disclaimers: dedupeLines(disc), Provider: provider,
+		RecommendedOwner: focusOwner, Counts: &counts,
+		NextActions: nextActions, ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote,
+	}, nil
+}
+
+// incidentLine renders one incident as a NOC list line: friendly id — title
+// (Status, confidence). Reused by the focus/breakdown lists so wording is uniform.
+func incidentLine(pr Problem) string {
+	return fmt.Sprintf("%s — %s (%s, %s)", pr.Display(), pr.Title, StatusLabel(pr.Verdict),
+		strings.ToLower(ConfidenceLabel(pr.Confidence, pr.Verdict)))
+}
+
+// splitActive partitions the active set into actionable (confirmed+suspected+
+// candidate, ranked by PriorityScore) and undetermined, and tallies the devices
+// impacted by the undetermined watch items (for grouping — spec §6).
+func splitActive(probs []Problem) (actionable []Problem, undetermined []Problem, watchImpact map[string]int) {
+	watchImpact = map[string]int{}
+	for _, pr := range probs {
+		switch strings.ToLower(strings.TrimSpace(pr.Verdict)) {
+		case "confirmed", "suspected", "candidate":
+			actionable = append(actionable, pr)
+		default:
+			undetermined = append(undetermined, pr)
+			for _, d := range pr.Devices {
+				watchImpact[d]++
+			}
+		}
+	}
+	sort.SliceStable(actionable, func(i, j int) bool { return PriorityScore(actionable[i]) > PriorityScore(actionable[j]) })
+	return actionable, undetermined, watchImpact
+}
+
+// watchNote groups the undetermined set into a single watch-items note (count +
+// top impacted entities), never a dump of individual lines (spec §5/§6).
+func watchNote(undetermined []Problem, watchImpact map[string]int) string {
+	if len(undetermined) == 0 {
+		return ""
+	}
+	s := fmt.Sprintf("%s active — low-evidence patterns under investigation. Keep in watch mode unless they gain supporting evidence or map to service impact.",
+		plural(len(undetermined), "undetermined correlation"))
+	if ent := topKeys(watchImpact, 4); len(ent) > 0 {
+		s += " Most-touched: " + strings.Join(ent, ", ") + "."
+	}
+	return s
+}
+
+// answerNocFocus answers "which incident should the NOC focus on first and why"
+// (spec §5): a recommendation FIRST, the reasoning, a short list of the other
+// suspected incidents, the watch-items note, and the next action — not a raw
+// dump. Deterministic (works key-free); gated on correlations:read.
+func (o *Orchestrator) answerNocFocus(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, error) {
+	if !p.Can("correlations:read") {
+		return Answer{Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+			Text: "You don't have permission to read incidents.", Citations: []Citation{},
+			Disclaimers: append(disc, "correlations:read required.")}, nil
+	}
+	probs, err := o.DS.ListActiveProblems(ctx, p, 100)
+	if err != nil {
+		return Answer{}, err
+	}
+	counts := ComputeCounts(probs, len(probs) >= 100)
+	actionable, undetermined, watchImpact := splitActive(probs)
+
+	cs := &CurrentStateSummary{
+		Title: "Recommended NOC Focus", Confirmed: counts.ConfirmedCount, Suspected: counts.SuspectedCount,
+		Undetermined: counts.UndeterminedCount, ActionableCount: counts.ActionableIncidentsCount,
+		Counts: &counts, CountsLegend: counts.CountsLegend(),
+	}
+
+	if len(actionable) == 0 {
+		cs.Summary = "No confirmed or suspected incidents to focus on right now."
+		if len(undetermined) > 0 {
+			cs.WatchNote = watchNote(undetermined, watchImpact)
+			cs.Summary += " " + plural(len(undetermined), "correlation") + " under investigation (low evidence) — keep in watch mode."
+		}
+		return Answer{Mode: ModeNocFocusRecommendation, Intent: plan.Intent, Modules: plan.Modules,
+			Title: cs.Title, Text: cs.Summary, CurrentState: cs, Citations: []Citation{},
+			Counts: &counts, ModeBadges: []string{"NOC focus"}, Disclaimers: dedupeLines(disc)}, nil
+	}
+
+	focus := actionable[0]
+	cs.FocusStatus = StatusLabel(focus.Verdict)
+	cs.FocusConfidence = ConfidenceLabel(focus.Confidence, focus.Verdict)
+	cs.RecommendedFocus = []string{fmt.Sprintf("%s — %s", focus.Display(), focus.Title)}
+	cs.WhyFirst = topIncidentReasons(focus, counts)
+
+	// The OTHER suspected incidents (top 5, focus excluded) — a short list, not a dump.
+	var cites []Citation
+	cites = append(cites, Citation{ID: "problem:" + focus.ID, Kind: "finding", Label: incidentLine(focus), Href: "#/monitoring/correlations?id=" + focus.ID})
+	const otherCap = 5
+	for _, pr := range actionable[1:] {
+		if len(cs.ActiveIncidents) >= otherCap {
+			cs.WatchNote = strings.TrimSpace(cs.WatchNote + " " + fmt.Sprintf("Showing the top %d of %d actionable incidents.", otherCap+1, len(actionable)))
+			break
+		}
+		cs.ActiveIncidents = append(cs.ActiveIncidents, incidentLine(pr))
+		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: incidentLine(pr), Href: "#/monitoring/correlations?id=" + pr.ID})
+	}
+	if wn := watchNote(undetermined, watchImpact); wn != "" {
+		cs.WatchNote = strings.TrimSpace(wn + " " + cs.WatchNote)
+	}
+
+	cs.Summary = fmt.Sprintf("The NOC should focus first on %s — %s. %s", focus.Display(), focus.Title, currentStateFocusReason(focus, cs))
+	nextActions := currentStateNextActions(focus, cs)
+
+	return Answer{
+		Mode: ModeNocFocusRecommendation, Intent: plan.Intent, Modules: plan.Modules,
+		Title: cs.Title, Text: cs.Summary, CurrentState: cs, Citations: cites, Counts: &counts,
+		RecommendedOwner: InferOwner(focus.Owner, append([]string{focus.Title}, focus.Devices...)...),
+		NextActions:      nextActions, ModeBadges: []string{"NOC focus"}, Disclaimers: dedupeLines(disc),
+	}, nil
+}
+
+// answerIncidentBreakdown answers "show active suspected incidents and separate
+// them from undetermined watch items" (spec §6): TWO explicit sections — the
+// suspected list and the grouped undetermined watch note — never one mixed list,
+// never the suspected list twice. Deterministic; gated on correlations:read.
+func (o *Orchestrator) answerIncidentBreakdown(ctx context.Context, p Principal, plan Plan, disc []string) (Answer, error) {
+	if !p.Can("correlations:read") {
+		return Answer{Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+			Text: "You don't have permission to read incidents.", Citations: []Citation{},
+			Disclaimers: append(disc, "correlations:read required.")}, nil
+	}
+	probs, err := o.DS.ListActiveProblems(ctx, p, 100)
+	if err != nil {
+		return Answer{}, err
+	}
+	counts := ComputeCounts(probs, len(probs) >= 100)
+	actionable, undetermined, watchImpact := splitActive(probs)
+
+	cs := &CurrentStateSummary{
+		Title: "Suspected Incidents vs Watch Items", Confirmed: counts.ConfirmedCount, Suspected: counts.SuspectedCount,
+		Undetermined: counts.UndeterminedCount, ActionableCount: counts.ActionableIncidentsCount,
+		Counts: &counts, CountsLegend: counts.CountsLegend(),
+	}
+
+	// Section 1 — active suspected (confirmed+suspected+candidate) incidents.
+	var cites []Citation
+	const cap = 5
+	for i, pr := range actionable {
+		if i >= cap {
+			cs.WatchNote = fmt.Sprintf("Showing the top %d of %d actionable incidents. ", cap, len(actionable))
+			break
+		}
+		cs.SuspectedIncidents = append(cs.SuspectedIncidents, incidentLine(pr))
+		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: incidentLine(pr), Href: "#/monitoring/correlations?id=" + pr.ID})
+	}
+
+	// Section 2 — undetermined watch items, GROUPED (count + top impacted), never
+	// interleaved with the suspected list.
+	cs.WatchNote = strings.TrimSpace(cs.WatchNote + " " + watchNote(undetermined, watchImpact))
+
+	// Deterministic two-section narrative.
+	switch {
+	case len(actionable) == 0 && len(undetermined) == 0:
+		cs.Summary = "No active incidents or watch items right now — the fleet is quiet."
+	case len(actionable) == 0:
+		cs.Summary = fmt.Sprintf("No suspected incidents right now. %s are under investigation as low-evidence watch items.", plural(len(undetermined), "correlation"))
+	default:
+		cs.Summary = fmt.Sprintf("%s to action (confirmed/suspected), kept separate from %s in watch mode. Work the suspected incidents first; keep watch items visible but do not escalate them unless impact or evidence increases.",
+			plural(len(actionable), "active incident"), plural(len(undetermined), "undetermined correlation"))
+	}
+
+	var nextActions []string
+	if len(actionable) > 0 {
+		nextActions = append(nextActions, "Work the suspected incidents first — confirm ownership and impact.")
+	}
+	if len(undetermined) > 0 {
+		nextActions = append(nextActions, "Keep the undetermined watch items visible; escalate only if they gain evidence or map to service impact.")
+	}
+
+	return Answer{
+		Mode: ModeIncidentStatusBreakdown, Intent: plan.Intent, Modules: plan.Modules,
+		Title: cs.Title, Text: cs.Summary, CurrentState: cs, Citations: cites, Counts: &counts,
+		NextActions: nextActions, ModeBadges: []string{"Status breakdown"}, Disclaimers: dedupeLines(disc),
 	}, nil
 }
 
@@ -617,17 +929,21 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	user := o.moduleHealthPrompt(question, mh, bundle)
 	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
 	var badges []string
+	var providerNote string
+	evidenceOnly := false
 	if lerr != nil {
 		mh.Headline = o.deterministicModuleSummary(mh, bundle)
 		provider = "none"
-		disc = append(disc, "AI provider unavailable — showing an evidence-only summary.")
+		evidenceOnly = true
+		badges = append(badges, FallbackBadges(false)...) // neutral chip; reason is the footer note
+		providerNote = ProviderFallbackNote(false)
 	} else {
 		// Unsupported-claim guard (§11/§16) on the model headline.
 		mh.Headline, badges, disc = verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)
 	}
 	return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
-		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: disc, Provider: provider,
-		ModeBadges: badges}, nil
+		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: dedupeLines(disc), Provider: provider,
+		ModeBadges: sortedUnique(badges), EvidenceOnly: evidenceOnly, ProviderNote: providerNote}, nil
 }
 
 func (o *Orchestrator) moduleHealthPrompt(question string, mh *ModuleHealthSummary, bundle []EvidenceItem) string {

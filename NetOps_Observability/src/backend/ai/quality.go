@@ -300,15 +300,65 @@ func dedupeLines(lines []string) []string {
 	return out
 }
 
+// ---- incident counts (spec §6) ----------------------------------------------
+
+// ComputeCounts derives the normalized, labeled incident-count set from the
+// tenant-scoped active-correlation list. `capped` records that the list itself
+// was capped by the store limit, so the counts are a lower bound (disclosed, not
+// silently truncated — spec §7). Every category has ONE definition here so no two
+// answers can show conflicting numbers.
+func ComputeCounts(probs []Problem, capped bool) IncidentCounts {
+	c := IncidentCounts{ActiveCorrelationGroups: len(probs), Capped: capped}
+	for _, pr := range probs {
+		switch strings.ToLower(strings.TrimSpace(pr.Verdict)) {
+		case "confirmed":
+			c.ConfirmedCount++
+		case "suspected":
+			c.SuspectedCount++
+		case "candidate":
+			c.CandidateCount++
+		default:
+			c.UndeterminedCount++
+		}
+	}
+	c.ActionableIncidentsCount = c.ConfirmedCount + c.SuspectedCount + c.CandidateCount
+	// In our model an undetermined correlation IS a low-evidence watch item.
+	c.LowEvidenceWatchItemsCount = c.UndeterminedCount
+	return c
+}
+
+// CountsLegend explains the count categories a card shows, so multiple numbers
+// never read as conflicting (spec §6). Only the lines relevant to the non-zero
+// categories are returned.
+func (c IncidentCounts) CountsLegend() []string {
+	var out []string
+	out = append(out, "Active correlation groups: every correlation the engine is currently tracking.")
+	if c.ActionableIncidentsCount > 0 {
+		out = append(out, "Actionable incidents: confirmed or suspected — the prioritized NOC work queue.")
+	}
+	if c.UndeterminedCount > 0 {
+		out = append(out, "Low-evidence watch items: undetermined correlations under investigation, not yet actionable.")
+	}
+	return out
+}
+
 // ---- evidence-only fallback badges (spec §3) --------------------------------
 
-// FallbackBadges returns the small mode badges for an evidence-only answer — so
-// "AI provider unavailable" becomes metadata, never the main answer text.
+// FallbackBadges returns the small mode badge for an evidence-only answer. Just
+// the neutral "Evidence-only mode" chip — the provider REASON ("not configured"
+// / "unavailable") is carried once in Answer.ProviderNote as a small footer, so
+// it is never a loud top badge or a main answer sentence (spec §1/§8).
 func FallbackBadges(providerConfigured bool) []string {
+	return []string{"Evidence-only mode"}
+}
+
+// ProviderFallbackNote is the SINGLE small provider-fallback line rendered once
+// as a footer/badge (spec §1). Never used as the main answer sentence.
+func ProviderFallbackNote(providerConfigured bool) string {
 	if providerConfigured {
-		return []string{"Evidence-only mode", "AI provider unavailable"}
+		return "Evidence-only mode: AI provider unavailable."
 	}
-	return []string{"Evidence-only mode", "AI provider not configured"}
+	return "Evidence-only mode: AI provider not configured."
 }
 
 // sortedUnique is a small helper for badge/label sets.

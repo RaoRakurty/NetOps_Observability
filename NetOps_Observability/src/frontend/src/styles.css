@@ -1831,6 +1831,15 @@ body.ai-split .main { padding-left: var(--ai-panel-w); }
 .op-bullets, .op-actions { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; line-height: 1.45; color: var(--fg); }
 .op-bullets li::marker { color: var(--warn, #d4a017); }
 .op-actions li::marker { color: var(--accent); font-weight: 700; }
+/* Card title (spec §2): the mode heading (e.g. "Current Operations Summary"). */
+.op-ans-cardtitle { font-size: 13px; font-weight: 700; color: var(--fg); margin: 2px 0 4px; letter-spacing: .01em; }
+/* Focus status/confidence — rendered INSIDE the recommended-focus section. */
+.op-focus-meta { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 2px; }
+/* Count legend (spec §6): small explanatory lines beneath the count chips. */
+.op-legend { margin: 2px 0 4px; padding-left: 15px; display: flex; flex-direction: column; gap: 1px; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.op-legend li::marker { color: var(--muted); }
+/* Provider fallback — a single small footer note (spec §1/§8), never a headline. */
+.op-provnote { margin-top: 6px; font-size: 11px; color: var(--muted); opacity: .85; }
 
 /* Slash menu — pre-made questions above the composer (Claude-Code style). */
 .op-composer { position: relative; }

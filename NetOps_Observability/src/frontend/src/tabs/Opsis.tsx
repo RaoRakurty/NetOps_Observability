@@ -220,9 +220,10 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     }
   };
 
-  // Grounded deep-dive on the highest-priority active incident: get the current
-  // state, resolve its recommended-focus problem id, then ask the engine to
-  // explain that specific correlation. Works key-free (evidence-only fallback).
+  // Grounded deep-dive on the highest-priority active incident. The backend now
+  // resolves rank #1 from the priority queue itself (answerTopIncident), so a
+  // single grounded ask both picks and explains the top incident — no client-side
+  // two-step resolve, and it never dead-ends asking for an id. Works key-free.
   const askTopIncident = async () => {
     if (busy) return;
     const newHistory = [...history, { role: "user", content: "Explain the top incident" } as CopilotMessage];
@@ -231,13 +232,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     setBusy(true);
     setError(null);
     try {
-      const state = await api.aiAsk("What is going on right now?");
-      const id = topProblemId(state);
-      if (!id) {
-        setHistory([...newHistory, { role: "assistant", content: "No active correlations right now — there's no incident to explain." }]);
-        return;
-      }
-      const ans = await api.aiAsk("Explain this incident: the likely root cause and the recommended next action.", { correlation_id: id });
+      const ans = await api.aiAsk("Explain the top incident");
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
@@ -564,7 +559,11 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
   // Universal fields (Response-Quality layer) — fall back to the per-mode payload.
   const missing = ans.missing_evidence?.length ? ans.missing_evidence : pr?.missing_evidence;
   const owner = ans.recommended_owner || pr?.recommended_owner;
-  const badges = ans.mode_badges ?? [];
+  // Provider-fallback chips are pulled OUT of the top badge row and shown once as
+  // a small footer note (spec §1/§8) — never a loud top badge or a headline.
+  const badges = (ans.mode_badges ?? []).filter((b) => !/^(evidence-only|ai provider)/i.test(b));
+  const providerNote = ans.provider_note || (ans.evidence_only ? "Evidence-only mode: AI provider not configured." : "");
+  const whyFirst = pr?.why_first ?? cs?.why_first;
   return (
     <div className="op-grounded">
       <div className="op-ans-head">
@@ -576,7 +575,12 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         </button>
       </div>
 
-      {/* Badge row — status / confidence / evidence-only / low-evidence (spec §19). */}
+      {/* Card title (spec §2) — e.g. "Current Operations Summary" — so the card is
+          never labelled by a single incident's status. */}
+      {ans.title && <div className="op-ans-cardtitle">{ans.title}</div>}
+
+      {/* Badge row — status / confidence / low-evidence (spec §19). Provider
+          fallback is NOT here; it is a footer note below. */}
       {(badges.length > 0 || ans.confidence_label) && (
         <div className="op-badges">
           {badges.map((b) => <span key={b} className={`op-badge tone-${badgeTone(b)}`}>{b}</span>)}
@@ -586,7 +590,7 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
 
       {ans.text && <div className="op-text">{ans.text}</div>}
 
-      {/* Live-state briefing: counts → focus + why → watch items → impacted. */}
+      {/* Live-state briefing: counts → focus + why → suspected list → watch items. */}
       {cs && (
         <div className="op-facts">
           <span className="op-fact op-fact-ok"><b>{cs.confirmed}</b> confirmed</span>
@@ -594,15 +598,43 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
           <span className="op-fact"><b>{cs.undetermined}</b> undetermined</span>
         </div>
       )}
+      {/* Count legend (spec §6) — so several numbers never read as conflicting. */}
+      {cs?.counts_legend && cs.counts_legend.length > 0 && (
+        <ul className="op-legend">{cs.counts_legend.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      )}
       {cs?.recommended_focus && cs.recommended_focus.length > 0 && (
         <div className="op-section">
           <div className="op-sec-h">Recommended focus</div>
           <div className="op-focus">{cs.recommended_focus[0]}</div>
+          {/* Status/confidence label the FOCUS only, inside the section (spec §2/§3). */}
+          {(cs.focus_status || cs.focus_confidence) && (
+            <div className="op-focus-meta">
+              {cs.focus_status && <span className={`op-badge tone-${badgeTone(cs.focus_status)}`}>Recommended focus status: {cs.focus_status}</span>}
+              {cs.focus_confidence && <span className="op-badge tone-muted">Evidence confidence: {cs.focus_confidence}</span>}
+            </div>
+          )}
           {cs.focus_reason && <div className="op-sec-note">{cs.focus_reason}</div>}
+          {whyFirst && whyFirst.length > 0 && (
+            <ul className="op-bullets" style={{ marginTop: 6 }}>{whyFirst.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          )}
+        </div>
+      )}
+      {/* Section: active suspected incidents (breakdown) — kept SEPARATE from watch. */}
+      {cs?.suspected_incidents && cs.suspected_incidents.length > 0 && (
+        <div className="op-section">
+          <div className="op-sec-h">Active suspected incidents</div>
+          <ol className="op-actions">{cs.suspected_incidents.map((it, i) => <li key={i}>{it}</li>)}</ol>
+        </div>
+      )}
+      {/* Section: the other suspected incidents (NOC-focus "other" — spec §5). */}
+      {ans.mode === "noc_focus_recommendation" && cs?.active_incidents && cs.active_incidents.length > 0 && (
+        <div className="op-section">
+          <div className="op-sec-h">Other active suspected incidents</div>
+          <ol className="op-actions">{cs.active_incidents.map((it, i) => <li key={i}>{it}</li>)}</ol>
         </div>
       )}
       {cs?.watch_note && (
-        <div className="op-section"><div className="op-sec-h">Watch items</div><div className="op-sec-note">{cs.watch_note}</div></div>
+        <div className="op-section"><div className="op-sec-h">Undetermined watch items</div><div className="op-sec-note">{cs.watch_note}</div></div>
       )}
       {cs?.impacted_entities && cs.impacted_entities.length > 0 && (
         <div className="op-kv"><span className="op-kv-k">Most impacted</span> {cs.impacted_entities.slice(0, 8).join(", ")}</div>
@@ -649,10 +681,12 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         </div>
       )}
 
-      {/* Disclaimers stay small; provider state is a badge above, not a sentence. */}
+      {/* Disclaimers stay small; provider state is a single footer note, not a sentence. */}
       {ans.disclaimers && ans.disclaimers.length > 0 && (
         <div className="op-disc">{ans.disclaimers.join(" ")}</div>
       )}
+      {/* Provider fallback — shown ONCE, small, as a footer note (spec §1/§8). */}
+      {providerNote && <div className="op-provnote">{providerNote}</div>}
 
       {/* Answer feedback (privacy-safe: rating + intent only). */}
       {ans.mode !== "unavailable" && (

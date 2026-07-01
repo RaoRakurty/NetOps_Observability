@@ -2518,8 +2518,20 @@ export type AiProblemExplanation = {
   missing_evidence: string[];
   recommended_owner: string;
   itsm_note: string;
+  why_first?: string[]; // "why this is the top incident" (spec §4)
 };
 export type AiNavEntry = { feature: string; ui_route: string; required_permission: string; explanation: string; related_module: string };
+// Normalized, labeled incident counts (spec §6) — one definition per number.
+export type AiIncidentCounts = {
+  active_correlation_groups: number;
+  confirmed_count: number;
+  suspected_count: number;
+  candidate_count: number;
+  undetermined_count: number;
+  actionable_incidents_count: number;
+  low_evidence_watch_items_count: number;
+  capped?: boolean;
+};
 // P4 module-aware answer schema (flow analytics, telemetry, …): a focused,
 // evidence-grounded read of ONE module's governed tools, with a model headline.
 export type AiModuleHealth = {
@@ -2531,6 +2543,8 @@ export type AiModuleHealth = {
 };
 export type AiCurrentState = {
   summary: string;
+  title?: string;
+  counts?: AiIncidentCounts;
   active_incidents: string[];
   confirmed: number;
   suspected: number;
@@ -2542,6 +2556,13 @@ export type AiCurrentState = {
   actionable_count?: number;
   confidence_notes: string[];
   missing_data: string[];
+  // Focus status/confidence label the RECOMMENDED-FOCUS incident only (spec §2/§3)
+  // — rendered inside the focus section, never as the whole card's status.
+  focus_status?: string;
+  focus_confidence?: string;
+  suspected_incidents?: string[]; // "Active suspected incidents" section (spec §5/§6)
+  why_first?: string[]; // reasons the focus leads (spec §4/§5)
+  counts_legend?: string[]; // explains the count categories (spec §6)
 };
 export type AiCommand = {
   command: string;
@@ -2572,4 +2593,7 @@ export type AiAnswer = {
   missing_evidence?: string[];
   mode_badges?: string[];
   evidence_only?: boolean;
+  provider_note?: string; // single small provider-fallback footer (spec §1)
+  title?: string; // card heading (spec §2)
+  counts?: AiIncidentCounts; // normalized counts (spec §6)
 };
