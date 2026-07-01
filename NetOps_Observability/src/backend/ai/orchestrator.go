@@ -19,6 +19,7 @@ type Orchestrator struct {
 	Flags    FlagLookup
 	Policy   *PolicyEngine       // the gate for what the AI may run; nil = safe default
 	Redactor func(string) string // strips secrets/PII before egress (LLM02); nil = identity
+	KB       *KB                 // Network Expert KB (curated playbooks); nil = no supporting knowledge
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -56,6 +57,9 @@ var (
 	// Historical / time-range intent (HLD P3): an explicit PAST window. Keyed on
 	// past-time markers only, so present-tense "right now / currently" never matches.
 	reHistorical = regexp.MustCompile(`(?i)(last night|overnight|yesterday|earlier today|this (morning|afternoon|evening)|over the weekend|last (week|weekend)|(last|past|previous)\s+\d+\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)|in the last \d+|during the (night|outage|incident)|what happened|happened (last|earlier|overnight|yesterday))`)
+	// Network Expert KB intent (HLD §8): a "how do I troubleshoot / what should I
+	// check" question — answered from curated playbooks, NOT live tenant data.
+	reTroubleshoot = regexp.MustCompile(`(?i)\b(troubleshoot|playbook|runbook|how (do i|to) (fix|resolve|debug|diagnose|troubleshoot)|next actions|checklist|steps to (fix|resolve|debug)|what (do i|should i) check|how do i diagnose)\b`)
 )
 
 // moduleRoute maps a module-specific question (HLD P4) to its module + the
@@ -73,10 +77,15 @@ type moduleRoute struct {
 }
 
 var moduleRoutes = []moduleRoute{
-	{ // Flow Analytics — top talkers / bandwidth / conversations.
-		re:     regexp.MustCompile(`(?i)\b(top talker|talkers|top sources|top destinations|bandwidth|biggest (talker|consumer|user)s?|who('?s| is) (talking|using)|heavy hitter|flow (summary|volume|traffic)|netflow|east-?west|top (flow|conversation))`),
-		module: "flow_analytics", tools: []string{"get_top_talkers", "get_flow_summary"},
+	{ // Flow Analytics — top talkers / bandwidth / conversations / services.
+		re:     regexp.MustCompile(`(?i)\b(top talker|talkers|top sources|top destinations|bandwidth|biggest (talker|consumer|user)s?|who('?s| is) (talking|using)|heavy hitter|flow (summary|volume|traffic)|netflow|east-?west|top (flow|conversation)|busiest (service|port)|service (traffic|flow)|app.?to.?db)`),
+		module: "flow_analytics", tools: []string{"get_top_talkers", "get_flow_summary", "get_service_flow_summary"},
 		mode: ModeModuleHealthSummary, intent: "flow_analytics_summary", fresh: FreshnessRecent,
+	},
+	{ // Integrations — connector / ServiceNow / Slack health.
+		re:     regexp.MustCompile(`(?i)\b(integration (health|status)|connector|servicenow (sync|status|health)|slack (delivery|status)|pagerduty (sync|status)|are (my )?integrations)`),
+		module: "integrations", tools: []string{"get_integration_health"},
+		mode: ModeModuleHealthSummary, intent: "integration_health_summary", fresh: FreshnessConfig,
 	},
 	{ // Telemetry — metric anomalies / device health / flapping / CPU·mem.
 		re:     regexp.MustCompile(`(?i)\b(metric anomal|anomal(y|ies)|flapping|flap\b|(high |spiking |elevated )?(cpu|memory|mem|temperature|interface error|errors?)\b|device (health|telemetry)|what('?s| is) (wrong|unhealthy|spiking)|z-?score)`),
@@ -117,7 +126,7 @@ func Classify(question string, uiContext map[string]string) Plan {
 		return Plan{
 			Intent: "problem_explanation", Modules: []string{"correlations_rca"},
 			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
-			Tools: []string{"get_problem", "get_problem_evidence"},
+			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
 		}
 	case reShift.MatchString(q):
 		// Shift pass-down summary (HLD P3, reports module) — answering tools not
@@ -133,6 +142,15 @@ func Classify(question string, uiContext map[string]string) Plan {
 		return Plan{
 			Intent: "time_range_summary", Modules: []string{"reports"},
 			Mode: ModeTimeRangeOutageSummary, Entities: ent, Freshness: FreshnessHistorical,
+		}
+	case reTroubleshoot.MatchString(q):
+		// "how do I troubleshoot a BGP flap" → curated playbook, not live data.
+		// Checked BEFORE navigation so troubleshooting "how do I…" doesn't get a
+		// nav answer.
+		return Plan{
+			Intent: "network_kb", Modules: []string{"network_expert_kb"},
+			Mode: ModeInvestigationPlan, Entities: ent, Freshness: FreshnessConfig,
+			Tools: []string{"search_playbooks"},
 		}
 	case strings.Contains(q, "where") || strings.Contains(q, "how do i") || strings.Contains(q, "navigate") || strings.Contains(q, "find ") && strings.Contains(q, "settings"):
 		return Plan{
@@ -206,6 +224,8 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 		return o.answerModuleHealth(ctx, p, question, plan, allowed, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
+	case ModeInvestigationPlan:
+		return o.answerKB(question, plan, disc), nil
 	default:
 		// Honest disclosure for not-yet-built answer modes (HLD P3–P4).
 		return Answer{
@@ -271,6 +291,12 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 	ownerHints := append(append([]string{pr.Title}, pr.MissingEvidence...), pr.Devices...)
 	owner := InferOwner(pr.Owner, ownerHints...)
 	nextActions := NextActionsRCA(pr.Verdict, pr.Devices, pr.MissingEvidence)
+
+	// Disclose any supporting playbook the model was shown (transparency — it is
+	// general guidance, not evidence about this network).
+	for _, hit := range o.kbFor(pr) {
+		disc = append(disc, "Referenced general playbook: "+hit.Playbook.Title+" (guidance, not evidence).")
+	}
 
 	pe := &ProblemExplanation{
 		ProblemID: pr.ID, Title: pr.Title, Verdict: pr.Verdict,
@@ -651,6 +677,43 @@ func (o *Orchestrator) answerNavigation(question string, plan Plan, disc []strin
 	}
 }
 
+// answerKB answers a troubleshooting question from the Network Expert KB. It is
+// DETERMINISTIC (no LLM): the playbooks are curated content, so returning the
+// best matches directly is honest and works even with no provider. The answer is
+// explicitly framed as general guidance, never live evidence about this network.
+func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answer {
+	if o.KB == nil {
+		return Answer{
+			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+			Text:      "The network playbook library isn't available in this build.",
+			Citations: []Citation{}, Disclaimers: append(disc, "Network Expert KB not loaded."),
+		}
+	}
+	hits := o.KB.Search(question, KBHints{}, 3)
+	if len(hits) == 0 {
+		return Answer{
+			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+			Text:      "I don't have a curated playbook matching that yet. Name the protocol or symptom — e.g. 'BGP flap', 'packet loss', 'ISP latency', 'MTU', 'asymmetric routing'.",
+			Citations: []Citation{}, Disclaimers: append(disc, "No matching playbook."),
+		}
+	}
+	top := hits[0].Playbook
+	mh := &ModuleHealthSummary{Module: "network_expert_kb", DisplayName: "Network Expert Knowledge"}
+	cites := make([]Citation, 0, len(hits))
+	for _, h := range hits {
+		mh.Items = append(mh.Items, h.Playbook.Snippet())
+		cites = append(cites, Citation{ID: "playbook:" + h.Playbook.ID, Kind: "knowledge", Label: h.Playbook.Title})
+	}
+	mh.Headline = "Curated guidance for: " + top.Title + " — general best-practice, not live evidence about your network. Verify against Correlix evidence."
+	return Answer{
+		Mode: ModeInvestigationPlan, Intent: plan.Intent, Modules: plan.Modules,
+		Text: mh.Headline, Module: mh, Citations: cites,
+		RecommendedOwner: top.Owner, NextActions: top.NextActions,
+		ModeBadges:  []string{"Guidance"},
+		Disclaimers: append(disc, "General network-engineering guidance — verify against live Correlix evidence."),
+	}
+}
+
 // answerFuturePhase is the honest disclosure for answer modes that are designed
 // (registry entries + schemas) but whose answering tools land in a later phase
 // (HLD P3+). It NEVER fabricates a summary and NEVER falls back to live data, so a
@@ -701,8 +764,30 @@ func (o *Orchestrator) problemPrompt(question string, pr *Problem, bundle []Evid
 	for _, ev := range bundle {
 		fmt.Fprintf(&b, "- [%s] %s\n", ev.CitationID, ev.Text)
 	}
-	b.WriteString("\nWrite 2–4 sentences: the likely root cause and why, grounded in the evidence above, citing ids. Then one line: the recommended next action.")
+	// Supporting network-engineering knowledge (HLD §8/§9): a few relevant curated
+	// playbook snippets, clearly fenced as GENERAL guidance — never Correlix
+	// evidence. Live evidence above always wins; this only helps the model reason
+	// like a senior NOC engineer about WHAT to check and WHO owns it.
+	if hits := o.kbFor(pr); len(hits) > 0 {
+		b.WriteString("\nSUPPORTING NETWORK-ENGINEERING KNOWLEDGE (general guidance, NOT Correlix evidence — the evidence above wins):\n")
+		for _, hit := range hits {
+			fmt.Fprintf(&b, "- %s\n", hit.Playbook.Snippet())
+		}
+	}
+	b.WriteString("\nWrite 2–4 sentences: the likely root cause and why, grounded in the EVIDENCE above (the supporting knowledge is general guidance only, not facts about this network), citing ids. Then one line: the recommended next action.")
 	return o.redact(b.String())
+}
+
+// kbFor retrieves the playbooks relevant to a problem — keyed on its title +
+// missing evidence, biased by its owner domain. Empty when no KB is wired or
+// nothing scores. Bounded to the top 2 so the prompt stays tight.
+func (o *Orchestrator) kbFor(pr *Problem) []KBHit {
+	if o.KB == nil || pr == nil {
+		return nil
+	}
+	query := pr.Title + " " + strings.Join(pr.MissingEvidence, " ") + " " + strings.Join(pr.Devices, " ")
+	hints := KBHints{FaultDomains: []string{pr.Owner}}
+	return o.KB.Search(query, hints, 2)
 }
 
 // deterministicProblemSummary is the polished evidence-only fallback (no model):

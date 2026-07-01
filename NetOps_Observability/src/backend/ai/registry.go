@@ -214,6 +214,17 @@ var modules = []Module{
 		ResponseModes: []string{"module_health_summary"},
 	},
 	{
+		ID: "network_expert_kb", DisplayName: "Network Expert Knowledge",
+		Description:        "Curated, vendor-neutral CCIE-grade troubleshooting playbooks (BGP/OSPF/IS-IS flaps, ISP/DIA latency, packet-loss triage, MTU, asymmetric routing, SD-WAN, firewall pressure, app-to-DB). General guidance, never live evidence.",
+		Entities:           []string{"playbook", "fault_domain", "next_action_checklist"},
+		QuestionCategories: []string{"how_to_troubleshoot", "next_actions", "protocol_guidance", "fault_domain"},
+		Tools:              []string{"search_playbooks", "get_playbook", "get_next_action_checklist"},
+		Permissions:        nil, // curated public knowledge — no tenant data, no permission gate
+		Freshness:          FreshnessConfig, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
+		CrossModule:   []string{"correlations_rca", "telemetry"},
+		ResponseModes: []string{"investigation_plan", "module_health_summary"},
+	},
+	{
 		ID: "product_navigation", DisplayName: "Product Navigation",
 		Description:        "Helps users find features: maps a capability to its UI route, required permission, and a short explanation.",
 		Entities:           []string{"feature", "ui_route"},

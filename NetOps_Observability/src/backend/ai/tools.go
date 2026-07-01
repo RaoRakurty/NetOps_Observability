@@ -293,11 +293,17 @@ var moduleTools = []struct {
 	// Flow Analytics (CH netops.flows, tenant_iso row policy).
 	{"get_top_talkers", "flow_analytics", "top_talkers", []string{"flows:read"}, FreshnessRecent},
 	{"get_flow_summary", "flow_analytics", "flow_summary", []string{"flows:read"}, FreshnessRecent},
+	{"get_service_flow_summary", "flow_analytics", "service_flow_summary", []string{"flows:read"}, FreshnessRecent},
 	// Telemetry (CH netops.findings, tenant_iso row policy — detected anomalies).
 	{"get_metric_anomalies", "telemetry", "metric_anomalies", []string{"infrastructure:read"}, FreshnessRecent},
 	// App Identification (CH netops.app_identities, tenant_iso row policy).
 	{"get_app_identity_summary", "app_identification", "app_identity_summary", []string{"applications:read"}, FreshnessRecent},
 	{"get_low_confidence_app_matches", "app_identification", "low_confidence_apps", []string{"applications:read"}, FreshnessRecent},
+	// Integrations (connector config store, tenant-scoped).
+	{"get_integration_health", "integrations", "integration_health", []string{"administration:read"}, FreshnessConfig},
+	// ITSM (ticketing store, tenant-scoped) — enriches an RCA with linked-ticket
+	// state. Runs on the problem-explanation path (needs problem_id in args).
+	{"get_ticket_status", "itsm", "ticket_status", []string{"incident:read"}, FreshnessLive},
 }
 
 // Tools builds the tool registry. P1 wires the RCA tools to the DataSource;

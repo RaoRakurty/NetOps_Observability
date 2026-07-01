@@ -24,6 +24,11 @@ func aiEnabled() bool {
 // envFlagLookup answers module-availability flags (ENABLE_*) from the env.
 func envFlagLookup(flag string) bool { return os.Getenv(flag) == "true" }
 
+// aiKB is the Network Expert Knowledge Base, parsed once from the embedded
+// playbooks at startup (curated, offline, no tenant data). Shared read-only
+// across requests.
+var aiKB = ai.LoadKB()
+
 type aiAskRequest struct {
 	Question string            `json:"question"`
 	Context  map[string]string `json:"context,omitempty"` // e.g. {"correlation_id": "<uuid>"}
@@ -61,6 +66,19 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Slash commands (HLD §5) resolve to the SAME intent path as natural language:
+	// "/status" becomes the canonical "what is going on right now" before Classify,
+	// so there is one intent system, not two. "/help" lists the commands.
+	question := req.Question
+	if ai.IsCommand(question) {
+		canonical, cmd, ok := ai.ResolveCommand(question)
+		if !ok || cmd.Intent == "help" {
+			writeJSON(w, http.StatusOK, aiHelpAnswer())
+			return
+		}
+		question = canonical
+	}
+
 	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r)}
 	orch := &ai.Orchestrator{
 		DS:     ds,
@@ -68,8 +86,9 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		LLM:    aiLLM{srv: s},
 		Flags:  envFlagLookup,
 		Policy: ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
+		KB:     aiKB,                                                 // Network Expert KB (supporting knowledge)
 	}
-	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), req.Question, req.Context)
+	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -129,4 +148,72 @@ func (s *server) handleAIModules(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": aiEnabled(), "modules": out})
+}
+
+// handleAICommands: GET /api/ai/commands — the slash-command registry for the
+// "/" menu (read-only, any authenticated user). /commands/suggestions filters by
+// a typed fragment for live suggestions.
+func (s *server) handleAICommands(w http.ResponseWriter, r *http.Request) {
+	if _, ok := userFrom(r.Context()); !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/suggestions") {
+		writeJSON(w, http.StatusOK, map[string]any{"commands": ai.SuggestCommands(r.URL.Query().Get("q"))})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commands": ai.Commands()})
+}
+
+// handleAIFeedback: POST /api/ai/feedback — record a thumbs up/down on an answer.
+// v1 audits it (no PII / no answer text); a persisted feedback loop is a later
+// phase. Rating is "up" | "down".
+func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var req struct {
+		ConversationID string `json:"conversation_id"`
+		Intent         string `json:"intent"`
+		Rating         string `json:"rating"` // up | down
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rating := strings.ToLower(strings.TrimSpace(req.Rating))
+	if rating != "up" && rating != "down" {
+		writeError(w, http.StatusBadRequest, errors.New("rating must be 'up' or 'down'"))
+		return
+	}
+	logInfo("ai", "feedback", map[string]any{
+		"tenant": claims.Tenant, "sub": claims.Sub,
+		"conversation_id": req.ConversationID, "intent": req.Intent, "rating": rating,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// aiHelpAnswer is the deterministic answer for "/help" — lists the commands so
+// the UI can render them without a provider call.
+func aiHelpAnswer() map[string]any {
+	cmds := ai.Commands()
+	lines := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		lines = append(lines, c.Command+" — "+c.Description)
+	}
+	return map[string]any{
+		"mode":     "help",
+		"intent":   "help",
+		"text":     "Ask Correlix in plain English, or use a command:",
+		"commands": cmds,
+		"items":    lines,
+	}
 }

@@ -161,20 +161,143 @@ SELECT toString(correlation_id) AS correlation_id,
 // netops.flows / netops.findings tenant_iso row policy via d.scope (a non-cross
 // caller sees only its own + untagged rows). Unknown query → ErrNotImplemented;
 // no data → empty result (honest, not an error).
-func (d aiDataSource) ModuleQuery(_ context.Context, _ ai.Principal, query string, _ ai.ToolArgs) (ai.ToolResult, error) {
+func (d aiDataSource) ModuleQuery(_ context.Context, p ai.Principal, query string, args ai.ToolArgs) (ai.ToolResult, error) {
 	switch query {
 	case "top_talkers":
 		return d.moduleTopTalkers()
 	case "flow_summary":
 		return d.moduleFlowSummary()
+	case "service_flow_summary":
+		return d.moduleServiceFlows()
 	case "metric_anomalies":
 		return d.moduleMetricAnomalies()
 	case "app_identity_summary":
 		return d.moduleAppIdentity(false)
 	case "low_confidence_apps":
 		return d.moduleAppIdentity(true)
+	case "integration_health":
+		return d.moduleIntegrationHealth(p)
+	case "ticket_status":
+		return d.moduleTicketStatus(p, args["problem_id"])
 	default:
 		return ai.ToolResult{}, ai.ErrNotImplemented
+	}
+}
+
+// moduleServiceFlows — top destination services (by well-known port) over the
+// recent window: the "what services are busiest / app-to-DB" read. Tenant-scoped
+// by the flows row policy via d.scope.
+func (d aiDataSource) moduleServiceFlows() (ai.ToolResult, error) {
+	const sql = `
+SELECT dst_port AS port,
+       sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total,
+       count() AS flows
+  FROM netops.flows
+ WHERE ts >= now() - INTERVAL 24 HOUR AND dst_port > 0
+ GROUP BY port
+ ORDER BY bytes_total DESC
+ LIMIT 8
+ FORMAT JSON`
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	items := make([]ai.EvidenceItem, 0, len(rows))
+	for i, r := range rows {
+		port := int(asFloat(r["port"]))
+		label := servicePortLabel(port)
+		items = append(items, ai.EvidenceItem{
+			CitationID: fmt.Sprintf("flow:svc:%d", i), Kind: "flow",
+			Text: fmt.Sprintf("%s (port %d) — %s over 24h, %s flows",
+				label, port, humanBytes(asFloat(r["bytes_total"])), humanCount(asFloat(r["flows"]))),
+			Href: "#/flows",
+		})
+	}
+	return ai.ToolResult{Items: items}, nil
+}
+
+// moduleIntegrationHealth — connector configuration health (ServiceNow/Jira/
+// Slack/…), tenant-scoped via the integration store (p.Tenant/Cross). Read-only.
+func (d aiDataSource) moduleIntegrationHealth(p ai.Principal) (ai.ToolResult, error) {
+	if d.srv.integrations == nil {
+		return ai.ToolResult{}, nil
+	}
+	cfgs, err := d.srv.integrations.ListConfigs(d.ctx, p.Tenant, p.Cross)
+	if err != nil {
+		return ai.ToolResult{}, err
+	}
+	items := make([]ai.EvidenceItem, 0, len(cfgs))
+	for _, c := range cfgs {
+		state := "configured"
+		if !c.Enabled {
+			state = "disabled"
+		}
+		items = append(items, ai.EvidenceItem{
+			CitationID: "integration:" + c.Provider, Kind: "integration",
+			Text: fmt.Sprintf("%s — %s", c.Provider, state),
+			Href: "#/incident/integrations",
+		})
+	}
+	return ai.ToolResult{Items: items}, nil
+}
+
+// moduleTicketStatus — the ITSM ticket(s) linked to one problem, used to enrich
+// an RCA explanation ("is there a ticket, what state?"). Tenant-scoped via the
+// ticketing store; empty (not error) when nothing is linked. problem_id is the
+// tool arg supplied on the problem-explanation path.
+func (d aiDataSource) moduleTicketStatus(p ai.Principal, problemID string) (ai.ToolResult, error) {
+	if d.srv.ticketing == nil || problemID == "" {
+		return ai.ToolResult{}, nil
+	}
+	audit, err := d.srv.ticketing.ListAudit(d.ctx, p.Tenant, p.Cross, problemID)
+	if err != nil {
+		return ai.ToolResult{}, nil // degrade quietly — ticket status is enrichment, not core
+	}
+	if len(audit) == 0 {
+		return ai.ToolResult{}, nil
+	}
+	last := audit[len(audit)-1]
+	sys := aiFirst(last.ExternalSystem, "ITSM")
+	state := aiFirst(last.NewStatus, last.Action)
+	text := fmt.Sprintf("ITSM: %s ticket linked — latest action %q, state %s", sys, last.Action, state)
+	return ai.ToolResult{Items: []ai.EvidenceItem{{
+		CitationID: "ticket:" + shortID(problemID), Kind: "ticket",
+		Text: text, Href: "#/incident/rca-ticketing",
+	}}}, nil
+}
+
+// servicePortLabel maps a well-known port to a service name (customer-facing,
+// not raw "port 3306"). Unknown ports keep the numeric form via the caller.
+func servicePortLabel(port int) string {
+	switch port {
+	case 443:
+		return "HTTPS"
+	case 80:
+		return "HTTP"
+	case 53:
+		return "DNS"
+	case 3306:
+		return "MySQL"
+	case 5432:
+		return "PostgreSQL"
+	case 1433:
+		return "SQL Server"
+	case 1521:
+		return "Oracle DB"
+	case 6379:
+		return "Redis"
+	case 27017:
+		return "MongoDB"
+	case 22:
+		return "SSH"
+	case 25, 587:
+		return "SMTP"
+	case 389, 636:
+		return "LDAP"
+	case 3389:
+		return "RDP"
+	default:
+		return "service"
 	}
 }
 

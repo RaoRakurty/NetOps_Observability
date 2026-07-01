@@ -896,6 +896,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Correlix AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
+	mux.HandleFunc("/api/ai/commands", s.handleAICommands)             // slash-command registry for the "/" menu
+	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands) // typed-fragment suggestions
+	mux.HandleFunc("/api/ai/feedback", s.handleAIFeedback)             // thumbs up/down (audited)
 	mux.HandleFunc("/api/graphql", s.handleGraphQL)
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)

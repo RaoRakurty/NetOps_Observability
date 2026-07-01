@@ -41,8 +41,13 @@ var routeIsolationLedger = map[string]string{
 	// tenant-scoped aiDataSource (corr_objects/flows/findings row policies; scope
 	// from chTenantScope), proven by ai/orchestrator_test.go cross-tenant tests.
 	// /modules lists the caller's enabled modules (tenant config).
-	"/api/ai/ask":                              "scoped",
-	"/api/ai/modules":                          "scoped",
+	"/api/ai/ask":     "scoped",
+	"/api/ai/modules": "scoped",
+	// Static, identical-for-everyone reference: the slash-command registry + the
+	// caller's own answer feedback (audited). No tenant data crosses these.
+	"/api/ai/commands":                         "selfScoped",
+	"/api/ai/commands/suggestions":             "selfScoped",
+	"/api/ai/feedback":                         "selfScoped",
 	"/api/alerts":                              "scoped",
 	"/api/compliance":                          "scoped",
 	"/api/correlations":                        "scoped",
