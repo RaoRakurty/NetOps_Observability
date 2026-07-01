@@ -1495,6 +1495,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, context }),
     }),
+  // Slash-command registry (the "/" menu) — single source of truth on the server.
+  aiCommands: () => request<{ commands: AiCommand[] }>("/api/ai/commands"),
   // (Re)issue the embedded-console gate cookie for the current session so a raw
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
   ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),
@@ -2530,6 +2532,15 @@ export type AiCurrentState = {
   actionable_count?: number;
   confidence_notes: string[];
   missing_data: string[];
+};
+export type AiCommand = {
+  command: string;
+  aliases?: string[];
+  label: string;
+  description: string;
+  intent: string;
+  risk_level: string;
+  requires_context?: boolean;
 };
 export type AiAnswer = {
   mode: string;

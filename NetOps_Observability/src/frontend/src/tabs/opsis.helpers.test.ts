@@ -56,20 +56,15 @@ describe("topProblemId", () => {
 });
 
 describe("groundedToText", () => {
-  it("includes the narrative and a deterministic counts line", () => {
+  // groundedToText is the chat-BUBBLE fallback = the model narrative only. The
+  // counts / focus / evidence-only badges are rendered by the GroundedAnswer CARD
+  // from the structured fields, never flattened into the text (no duplication).
+  it("returns the narrative text", () => {
     const t = groundedToText(currentState());
     expect(t).toContain("25 active correlation");
-    expect(t).toContain("Confirmed 1");
-    expect(t).toContain("Suspected 7");
-    expect(t).toContain("Most impacted: leaf1, wan-r2");
-    expect(t).toContain("Focus first: 614896e5");
   });
 
-  it("notes the evidence-only fallback when no provider answered", () => {
-    expect(groundedToText(currentState())).toContain("Evidence-only summary");
-  });
-
-  it("gives an honest quiet-fleet line when there's nothing to report", () => {
+  it("gives an honest quiet-fleet line when there's no narrative", () => {
     const ans = currentState({ text: "", current_state: undefined, provider: "anthropic" });
     expect(groundedToText(ans)).toContain("fleet is quiet");
   });

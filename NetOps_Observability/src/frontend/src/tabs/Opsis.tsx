@@ -8,12 +8,13 @@ import {
   CopilotConfig,
   AiAnswer,
   AiCitation,
+  AiCommand,
 } from "../services/api";
 import Icon from "../components/Icon";
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
-// Opsis Ai — the in-app assistant chat. Posts to /api/copilot/chat (provider
+// Correlix AI — the in-app assistant chat. Posts to /api/copilot/chat (provider
 // fallback chain server-side); key-free questions fall through to the grounded
 // /api/ai/ask engine. Rendered inside the right-side drawer. Assistant output is
 // rendered as ESCAPED React text only (OWASP LLM02 — never dangerouslySetInnerHTML).
@@ -57,6 +58,26 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/help", title: "Help", desc: "What Correlix AI can do", module: "Help", kind: "send", text: "What can you do?" },
 ];
 
+// A short module badge per backend intent, for the "/" menu rows.
+const INTENT_BADGE: Record<string, string> = {
+  current_state: "Live", incident_list: "Incidents", problem_explanation: "RCA",
+  flow_analytics_summary: "Flows", telemetry_summary: "Telemetry",
+  app_identification_summary: "Apps", integration_health_summary: "Integrations",
+  cloud_app_summary: "Cloud", network_kb: "Playbook", shift_handoff: "Reports",
+  product_navigation: "Navigation", help: "Help",
+};
+
+// cmdToSlash adapts a backend AiCommand (the single source of truth) to the menu
+// row shape. Every command routes through the grounded engine as the raw "/cmd"
+// — the backend resolves it to the same intent as the natural-language question.
+function cmdToSlash(c: AiCommand): SlashCmd {
+  return {
+    cmd: c.command, title: c.label, desc: c.description,
+    module: INTENT_BADGE[c.intent] ?? "Correlix", kind: "send", text: c.command,
+    soon: c.intent === "shift_handoff" || c.intent === "cloud_app_summary",
+  };
+}
+
 export default function Opsis({ split, onToggleSplit }: { split?: boolean; onToggleSplit?: () => void }) {
   const { setCopilotOpen } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -77,8 +98,14 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   const [savingCfg, setSavingCfg] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   // Slash-command menu (like Claude Code): typing "/" surfaces pre-made questions.
+  // The list is the SERVER command registry (single source of truth); the static
+  // set is only a fallback if the fetch fails.
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
+  const [cmds, setCmds] = useState<SlashCmd[]>(SLASH_COMMANDS);
+  useEffect(() => {
+    api.aiCommands().then((r) => { if (r?.commands?.length) setCmds(r.commands.map(cmdToSlash)); }).catch(() => {});
+  }, []);
 
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
@@ -140,6 +167,28 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
         setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
         setGrounded((g) => ({ ...g, [idx]: ans }));
       }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // sendGrounded sends any text through the evidence-grounded /api/ai/ask
+  // orchestrator (NOT the free-form proxy) — used for slash commands so the
+  // backend resolves "/status" etc. to a structured, cited answer even when a
+  // provider key is configured (a slash command is a shortcut, not a chat prompt).
+  const sendGrounded = async (text: string) => {
+    if (!text.trim() || busy) return;
+    const newHistory = [...history, { role: "user", content: text } as CopilotMessage];
+    const idx = newHistory.length;
+    setHistory(newHistory);
+    setBusy(true);
+    setError(null);
+    try {
+      const ans = await api.aiAsk(text);
+      setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
+      setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -211,17 +260,16 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
 
   // Slash menu: filter the pre-made questions by what's typed after "/".
   const slashQuery = draft.startsWith("/") ? draft.slice(1).toLowerCase().trim() : "";
-  const slashMatches = !slashOpen ? [] : SLASH_COMMANDS.filter((c) =>
+  const slashMatches = !slashOpen ? [] : cmds.filter((c) =>
     !slashQuery || c.cmd.slice(1).includes(slashQuery) || c.title.toLowerCase().includes(slashQuery));
 
-  // runSlash dispatches a guided command to the right grounded action — the same
-  // backend flow free-form questions use (commands are shortcuts, not bypasses).
+  // runSlash dispatches a guided command by sending the raw "/cmd" through the
+  // GROUNDED engine — the backend resolves it to the same intent as the
+  // equivalent natural-language question (commands are shortcuts, not bypasses).
   const runSlash = (c: SlashCmd) => {
     setSlashOpen(false); setDraft("");
     if (c.cmd === "/help") { setShowHelp(true); return; }
-    if (c.kind === "grounded") askGrounded();
-    else if (c.kind === "topIncident") askTopIncident();
-    else if (c.kind === "send" && c.text) send(c.text);
+    sendGrounded(c.cmd);
   };
 
   return (
@@ -265,8 +313,10 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
           <div className="op-help-h">What Correlix AI can do</div>
           <ul className="op-help-list">
             <li><b>Live state</b> — “what’s going on right now”, what to focus on first.</li>
+            <li><b>Incidents</b> — “show me the critical incidents”, the prioritized action list.</li>
             <li><b>RCA</b> — “explain this incident”, root cause, evidence, missing streams.</li>
-            <li><b>Modules</b> — top talkers, metric anomalies, flow summary (more coming).</li>
+            <li><b>Modules</b> — top talkers, metric anomalies, busiest services, integration health.</li>
+            <li><b>Playbooks</b> — “how do I troubleshoot a BGP flap?”, CCIE-grade guidance.</li>
             <li><b>Navigation</b> — “where do I configure ServiceNow?”.</li>
           </ul>
           <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Answers are grounded, tenant-scoped and cited. Full documentation is coming soon.</div>
