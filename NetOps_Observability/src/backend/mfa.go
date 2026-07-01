@@ -245,5 +245,5 @@ func mfaIssuer() string {
 	if v := strings.TrimSpace(envOr("MFA_ISSUER", "")); v != "" {
 		return v
 	}
-	return "Opsis"
+	return "Correlix"
 }

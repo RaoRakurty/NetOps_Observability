@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -235,6 +236,64 @@ func (t activeIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArgs) (
 	return ToolResult{Items: items}, nil
 }
 
+// actionableIncidentsTool answers "show me the critical / actionable incidents"
+// with the PRIORITIZED, FILTERED list — confirmed + suspected first, ranked by
+// PriorityScore, capped — instead of dumping every open correlation. This is the
+// event_management list answer (distinct from the command_center current-state
+// briefing), so an incident question gets specific incidents, not the same 25.
+type actionableIncidentsTool struct{ ds DataSource }
+
+func (t actionableIncidentsTool) Name() string            { return "get_actionable_incidents" }
+func (t actionableIncidentsTool) Module() string          { return "event_management" }
+func (t actionableIncidentsTool) Capability() Capability  { return CapRead }
+func (t actionableIncidentsTool) RequiredPerms() []string { return []string{"correlations:read"} }
+func (t actionableIncidentsTool) Freshness() Freshness    { return FreshnessLive }
+func (t actionableIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArgs) (ToolResult, error) {
+	probs, err := t.ds.ListActiveProblems(ctx, p, 100)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	// Actionable = confirmed or suspected (needs a human). Undetermined are
+	// low-evidence watch items, not action items — surfaced only as a count note.
+	var actionable []Problem
+	undetermined := 0
+	for _, pr := range probs {
+		switch strings.ToLower(pr.Verdict) {
+		case "confirmed", "suspected":
+			actionable = append(actionable, pr)
+		default:
+			undetermined++
+		}
+	}
+	sort.SliceStable(actionable, func(i, j int) bool { return PriorityScore(actionable[i]) > PriorityScore(actionable[j]) })
+
+	const cap = 8
+	tr := ToolResult{}
+	shown := actionable
+	if len(shown) > cap {
+		shown = shown[:cap]
+		tr.Truncated = true
+		tr.Notes = append(tr.Notes, fmt.Sprintf("showing the top %d of %d actionable incidents", cap, len(actionable)))
+	}
+	for _, pr := range shown {
+		tr.Items = append(tr.Items, EvidenceItem{
+			CitationID: "problem:" + pr.ID, Kind: "finding",
+			Text: fmt.Sprintf("%s — %s (%s, %.0f%%)", pr.Display(), pr.Title, StatusLabel(pr.Verdict), pr.Confidence*100),
+			Href: "#/monitoring/correlations?id=" + pr.ID,
+		})
+	}
+	if len(actionable) == 0 {
+		note := "No confirmed or suspected incidents right now."
+		if undetermined > 0 {
+			note += fmt.Sprintf(" %s being investigated (low evidence).", plural(undetermined, "correlation"))
+		}
+		tr.Notes = append(tr.Notes, note)
+	} else if undetermined > 0 {
+		tr.Notes = append(tr.Notes, fmt.Sprintf("plus %s under investigation (low evidence).", plural(undetermined, "correlation")))
+	}
+	return tr, nil
+}
+
 func shortIDFor(id string) string {
 	if i := indexByte(id, '-'); i > 0 {
 		return id[:i]
@@ -316,6 +375,7 @@ func Tools(ds DataSource) *ToolRegistry {
 	reg.add(getProblemTool{ds})
 	reg.add(getProblemEvidenceTool{ds})
 	reg.add(activeIncidentsTool{ds})
+	reg.add(actionableIncidentsTool{ds})
 	if mds, ok := ds.(ModuleDataSource); ok {
 		for _, mt := range moduleTools {
 			reg.add(moduleReadTool{

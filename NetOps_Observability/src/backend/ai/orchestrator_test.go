@@ -285,7 +285,8 @@ func TestPresentTenseStillCurrentState(t *testing.T) {
 
 func knownMode(m AnswerMode) bool {
 	switch m {
-	case ModeProblemExplanation, ModeCurrentStateSummary, ModeProductNavigationHelp, ModeUnavailable:
+	case ModeProblemExplanation, ModeCurrentStateSummary, ModeProductNavigationHelp,
+		ModeModuleHealthSummary, ModeInvestigationPlan, ModeUnavailable:
 		return true
 	}
 	return false

@@ -359,8 +359,8 @@ func (s *ServiceNow) resolveIncident(sysID string) error {
 	payload := map[string]string{
 		"state":       "6", // Resolved
 		"close_code":  "Resolved by caller",
-		"close_notes": "Auto-resolved by NetOps/Opsis: the underlying alert cleared.",
-		"work_notes":  "Alert cleared; incident auto-resolved by NetOps/Opsis.",
+		"close_notes": "Auto-resolved by Correlix: the underlying alert cleared.",
+		"work_notes":  "Alert cleared; incident auto-resolved by Correlix.",
 	}
 	buf, _ := json.Marshal(payload)
 	url := s.instanceURL + "/api/now/table/incident/" + sysID
@@ -453,6 +453,6 @@ func incidentBody(a models.Alert) string {
 	if !a.FiredAt.IsZero() {
 		fmt.Fprintf(&b, "\nFired at: %s\n", a.FiredAt.Format(time.RFC3339))
 	}
-	fmt.Fprint(&b, "\nOpened automatically by NetOps/Opsis.")
+	fmt.Fprint(&b, "\nOpened automatically by Correlix.")
 	return b.String()
 }

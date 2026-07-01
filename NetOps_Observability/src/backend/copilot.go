@@ -24,7 +24,7 @@ var appKnowledge string
 
 // copilot.go — AI Copilot endpoint.
 //
-// The frontend Opsis Ai tab posts a chat history to /api/copilot/chat.
+// The frontend Correlix AI tab posts a chat history to /api/copilot/chat.
 // We forward to the configured LLM provider and stream the response back.
 // Provider credentials are read from env at request time so rotating
 // COPILOT_API_KEY doesn't require a restart.
@@ -183,10 +183,10 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		logWarn("copilot", "provider attempt failed, falling through", map[string]any{"provider": name})
 	}
 	if !attempted {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Opsis Ai isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Correlix AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
 		return
 	}
-	writeError(w, http.StatusBadGateway, fmt.Errorf("Opsis Ai couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
+	writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
 }
 
 // ---- provider chain ---------------------------------------------------------

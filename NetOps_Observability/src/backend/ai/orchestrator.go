@@ -64,6 +64,11 @@ var (
 	// Network Expert KB intent (HLD §8): a "how do I troubleshoot / what should I
 	// check" question — answered from curated playbooks, NOT live tenant data.
 	reTroubleshoot = regexp.MustCompile(`(?i)\b(troubleshoot|playbook|runbook|how (do i|to) (fix|resolve|debug|diagnose|troubleshoot)|next actions|checklist|steps to (fix|resolve|debug)|what (do i|should i) check|how do i diagnose)\b`)
+	// Incident-LIST intent (event_management): "show me the critical incidents",
+	// "what needs attention" → the prioritized, filtered actionable list, NOT the
+	// generic current-state briefing (which dumps every open correlation). Kept
+	// distinct so an incident question gets specific incidents, not the same 25.
+	reIncidents = regexp.MustCompile(`(?i)(\b(critical|confirmed|suspected|actionable|active|major|open|recent|top)\s+(incidents?|correlations?|problems?|issues?)\b|\b(show|list|which|any|what)\b[^?]*\b(incidents?|correlations?)\b|\bincidents?\s+(right now|open|active|to\s+(work|action))\b|\bwhat\s+needs\s+(attention|action|work)\b)`)
 )
 
 // moduleRoute maps a module-specific question (HLD P4) to its module + the
@@ -155,6 +160,14 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "network_kb", Modules: []string{"network_expert_kb"},
 			Mode: ModeInvestigationPlan, Entities: ent, Freshness: FreshnessConfig,
 			Tools: []string{"search_playbooks"},
+		}
+	case reIncidents.MatchString(q):
+		// "critical / actionable incidents" → the prioritized, filtered LIST, not
+		// the generic current-state briefing.
+		return Plan{
+			Intent: "incident_list", Modules: []string{"event_management"},
+			Mode: ModeModuleHealthSummary, Entities: ent, Freshness: FreshnessLive,
+			Tools: []string{"get_actionable_incidents"},
 		}
 	case strings.Contains(q, "where") || strings.Contains(q, "how do i") || strings.Contains(q, "navigate") || strings.Contains(q, "find ") && strings.Contains(q, "settings"):
 		return Plan{
@@ -516,9 +529,10 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		}
 		ran++
 		bundle = append(bundle, res.Items...)
-		if res.Truncated {
-			mh.Notes = append(mh.Notes, res.Notes...)
-		}
+		// Carry a tool's notes ALWAYS (not only on truncation) — a note like
+		// "no confirmed/suspected; N under investigation" is the honest answer when
+		// the item list is empty, and would otherwise be dropped.
+		mh.Notes = append(mh.Notes, res.Notes...)
 	}
 
 	if ran == 0 {
@@ -542,8 +556,15 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 		cites = append(cites, Citation{ID: ev.CitationID, Kind: ev.Kind, Label: ev.Text, Href: ev.Href})
 	}
 	if len(bundle) == 0 {
-		mh.Headline = "No " + strings.ToLower(mh.DisplayName) + " signal in the current window for your scope."
-		disc = append(disc, "Nothing to report in the window.")
+		// Prefer a tool's own note (e.g. "no confirmed/suspected; N under
+		// investigation") over a generic "no signal" — the latter is misleading
+		// when there IS activity that just isn't actionable.
+		if len(mh.Notes) > 0 {
+			mh.Headline = strings.Join(mh.Notes, " ")
+		} else {
+			mh.Headline = "No " + strings.ToLower(mh.DisplayName) + " signal in the current window for your scope."
+			disc = append(disc, "Nothing to report in the window.")
+		}
 		return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
 			Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: disc}, nil
 	}

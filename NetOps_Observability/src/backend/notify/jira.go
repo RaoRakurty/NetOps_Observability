@@ -324,7 +324,7 @@ func (j *Jira) resolveIssue(key string) error {
 		"transition": map[string]string{"id": tid},
 		"update": map[string]any{
 			"comment": []map[string]any{
-				{"add": map[string]string{"body": "Auto-resolved by NetOps/Opsis: the underlying alert cleared."}},
+				{"add": map[string]string{"body": "Auto-resolved by Correlix: the underlying alert cleared."}},
 			},
 		},
 	}
