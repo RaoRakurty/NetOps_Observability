@@ -1,0 +1,5 @@
+{
+  "label": "Events & Incidents",
+  "position": 7,
+  "link": { "type": "generated-index", "description": "Events, incidents, correlation (RCA), and recovery metrics." }
+}

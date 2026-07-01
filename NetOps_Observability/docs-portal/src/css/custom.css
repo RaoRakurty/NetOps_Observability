@@ -1,0 +1,48 @@
+/**
+ * Correlix docs theme. Instrument-grade, dark-first — matches the product's
+ * "trading-floor NOC" aesthetic. Overrides Docusaurus Infima design tokens.
+ */
+
+:root {
+  --ifm-color-primary: #2f7df6;
+  --ifm-color-primary-dark: #1668e6;
+  --ifm-color-primary-darker: #1360d9;
+  --ifm-color-primary-darkest: #0f4fb2;
+  --ifm-color-primary-light: #4d90f8;
+  --ifm-color-primary-lighter: #5c99f9;
+  --ifm-color-primary-lightest: #86b4fb;
+  --ifm-code-font-size: 92%;
+  --ifm-font-family-monospace: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  --docusaurus-highlighted-code-line-bg: rgba(47, 125, 246, 0.12);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #5c99f9;
+  --ifm-color-primary-dark: #3b83f7;
+  --ifm-color-primary-darker: #2b79f6;
+  --ifm-color-primary-darkest: #0f5ae0;
+  --ifm-color-primary-light: #7daffb;
+  --ifm-color-primary-lighter: #8dbafb;
+  --ifm-background-color: #0c1017;
+  --ifm-background-surface-color: #121722;
+  --docusaurus-highlighted-code-line-bg: rgba(92, 153, 249, 0.18);
+}
+
+/* Tighter, denser nav — NOC operators scan a lot of items. */
+.menu { font-size: 14px; }
+.markdown h1 { font-weight: 700; letter-spacing: -0.01em; }
+.markdown h2 { margin-top: 2rem; border-bottom: 1px solid var(--ifm-toc-border-color); padding-bottom: 0.3rem; }
+
+/* Step-numbered how-to lists read as a checklist. */
+.markdown ol { padding-left: 1.2rem; }
+.markdown ol > li { margin-bottom: 0.4rem; }
+
+/* Admonitions a touch calmer. */
+.theme-admonition { border-radius: 8px; }
+
+/* "Console path" inline chips — e.g. Administration → Data Sources. */
+.markdown kbd {
+  font-size: 85%;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
