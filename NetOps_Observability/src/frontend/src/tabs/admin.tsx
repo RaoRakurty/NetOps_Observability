@@ -1173,7 +1173,7 @@ export function RegionsAdmin() {
 // ("" = Global, a tenant id = that tenant). Per-tenant ROLE definitions and the MFA
 // feature are backend follow-ups; surfaced here as a note / "coming soon".
 
-type IATab = "users" | "userroles" | "customroles" | "sso" | "security" | "tenants";
+type IATab = "users" | "access" | "userroles" | "customroles" | "sso" | "security" | "tenants";
 const IA_TABS: { id: IATab; label: string }[] = [
   { id: "users", label: "Users" },
   { id: "userroles", label: "User Roles" },
@@ -1187,7 +1187,11 @@ const IA_TABS_PROVIDER = IA_TABS.filter((t) => t.id === "users" || t.id === "sec
 // An organization additionally owns its (optional) Tenants — isolation units it
 // creates only when it needs to split (prod/dev/region). Tenants live HERE, under
 // their org, not as a top-level peer.
-const IA_TABS_ORG: { id: IATab; label: string }[] = [...IA_TABS, { id: "tenants", label: "Tenants" }];
+// Org drill-in tabs: Users, then a contextual Access tab (assign from here),
+// then roles/sso/security, then the org's Tenants.
+const IA_TABS_ORG: { id: IATab; label: string }[] = [
+  IA_TABS[0], { id: "access", label: "Access" }, ...IA_TABS.slice(1), { id: "tenants", label: "Tenants" },
+];
 
 // SecuritySettings — the scope-wide "User Global Settings": password, lockout and
 // session rules that apply to everyone in this scope (provider = the platform, or
@@ -1318,8 +1322,8 @@ export function BindingsAdmin() {
   return (
     <>
       <div className="admin-head-row">
-        <AdminHead title="Access" sub="Who can do what, where. Grant a person access to an organization, then pick their role. Access can be revoked any time." />
-        <button className="dash-btn accent" onClick={openGrant}>＋ Grant access</button>
+        <AdminHead title="Assign access" sub="Who can do what, where. Give a person a role on an organization; access can be revoked any time. You can also assign from an org's Access tab." />
+        <button className="dash-btn accent" onClick={openGrant}>＋ Assign access</button>
       </div>
       <StatStrip>
         <Stat label="Bindings" value={bindings ? list.length : <Skeleton w={26} h={22} />} />
@@ -1435,6 +1439,7 @@ function IAItems({ kind, id = "", name, tabs = IA_TABS }: {
         ))}
       </div>
       {cur === "users" && <UsersAdmin scopeTenant={id} scopeName={kind === "org" ? name : undefined} scopeNoun={kind === "org" ? "Organization" : "Tenant"} />}
+      {cur === "access" && <OrgAccessPanel orgId={id} orgName={name} />}
       {cur === "userroles" && <RolesAdmin scopeTenant={roleScope} variant="builtin" />}
       {cur === "customroles" && <RolesAdmin scopeTenant={roleScope} variant="custom" />}
       {cur === "sso" && <SsoRolesPanel />}
@@ -1462,6 +1467,86 @@ function OrgTenants({ orgId, orgName }: { orgId: string; orgName: string }) {
     );
   }
   return <TenantsAdmin orgId={orgId} onManageTenant={(id, name) => setSel({ id, name })} />;
+}
+
+// OrgAccessPanel — the contextual "Access" tab on an org drill-in (Phase 4):
+// who has a role in THIS org, plus Assign-access here (scope pre-fixed to the
+// org). Same grantBinding model as the global Access screen, scoped.
+function OrgAccessPanel({ orgId, orgName }: { orgId: string; orgName?: string }) {
+  const scope = `org:${orgId}`;
+  const [bindings, err, reload, setErr] = useReload(() => api.listBindings());
+  const [roles] = useReload(() => api.listRoles());
+  const [users] = useReload(() => api.listUsers());
+  const [assigning, setAssigning] = useState(false);
+  const [principal, setPrincipal] = useState("");
+  const [roleId, setRoleId] = useState("operator");
+  const [busy, setBusy] = useState(false);
+
+  const list = (bindings ?? []).filter((b) => b.scope_id === scope);
+  const roleList = roles?.roles ?? [];
+  const userList = (users ?? []).slice().sort((a, b) => (a.display_name || a.username).localeCompare(b.display_name || b.username));
+
+  const assign = async () => {
+    if (!principal) return;
+    setErr(null); setBusy(true);
+    try { await api.grantBinding({ principal_id: principal, role_id: roleId, scope_id: scope, effect: "allow" }); setAssigning(false); reload(); }
+    catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); } finally { setBusy(false); }
+  };
+  const revoke = async (b: RoleBinding) => {
+    if (!window.confirm(`Revoke ${b.role_id} for ${b.principal_id} in ${orgName || "this organization"}?`)) return;
+    setErr(null);
+    try { await api.revokeBinding(b.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
+  };
+
+  return (
+    <>
+      <div className="admin-head-row">
+        <AdminHead title="Access" sub={`Who has a role in ${orgName || "this organization"}. Assign an existing user a role — scope is this org.`} />
+        <button className="dash-btn accent" onClick={() => { setPrincipal(""); setRoleId("operator"); setErr(null); setAssigning(true); }}>＋ Assign access</button>
+      </div>
+      <ErrLine msg={err} />
+      <div className="card" style={{ paddingTop: 8 }}>
+        {bindings && list.length === 0 ? (
+          <div className="empty">No one is assigned to {orgName || "this organization"} yet. Use <b>Assign access</b> to grant an existing user a role here.</div>
+        ) : (
+          <table className="ds-table" style={{ width: "100%" }}>
+            <thead><tr><th>User</th><th>Role</th><th style={{ width: 1 }}></th></tr></thead>
+            <tbody>
+              {list.map((b) => (
+                <tr key={b.id}>
+                  <td style={{ fontWeight: 600 }}>{b.principal_id}</td>
+                  <td><span className="badge">{b.role_id}</span></td>
+                  <td style={{ textAlign: "right" }}><button className="dash-btn" onClick={() => revoke(b)}>Revoke</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {assigning && (
+        <Modal title="Assign access" subtitle={`Give a person a role in ${orgName || "this organization"}.`} logo={<span className="conn-logo uf-logo"><Icon name="key" size={22} /></span>} onClose={() => setAssigning(false)}>
+          <ErrLine msg={err} />
+          <div className="admin-form">
+            <label className="req-field"><span>User <Req /></span>
+              <select value={principal} onChange={(e) => setPrincipal(e.target.value)}>
+                <option value="">Select a user…</option>
+                {userList.map((u) => <option key={u.username} value={u.username}>{u.display_name || u.username}</option>)}
+              </select></label>
+            <label className="req-field"><span>Role <Req /></span>
+              <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+                {roleList.length === 0 ? <option value="operator">operator</option> : roleList.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}
+              </select></label>
+            <label><span>Scope</span><div className="uf-fixed">{orgName || orgId}</div></label>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+            <button className="dash-btn" onClick={() => setAssigning(false)}>Cancel</button>
+            <button className="dash-btn accent" disabled={!principal || busy} onClick={assign}>{busy ? "Assigning…" : "Assign"}</button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
 }
 
 // SsoRolesPanel — external SSO/IdP group → role mappings live in Authentication

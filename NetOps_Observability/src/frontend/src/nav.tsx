@@ -293,7 +293,7 @@ export const NAV: NavSection[] = [
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
-      { id: "access", label: "Access Grants", render: () => <BindingsAdmin /> },
+      { id: "access", label: "Assign access", render: () => <BindingsAdmin /> },
       { id: "sessions", label: "Sessions", platformOnly: true, render: () => <SessionsAdmin /> },
       { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
       {
