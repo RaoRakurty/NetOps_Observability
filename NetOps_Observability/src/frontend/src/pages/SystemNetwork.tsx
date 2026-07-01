@@ -135,11 +135,27 @@ function ConfigureForm({ kind, cfg, onSaved, onClose }: { kind: Kind; cfg: Syste
       </div>
 
       {status && isDNS && (
-        <div style={{ marginTop: 14, borderTop: "1px solid var(--border, var(--panel-border))", paddingTop: 12, fontSize: 13 }}>
-          Resolving <b>{status.dns.test_host}</b> via {status.dns.servers.length ? status.dns.servers.join(", ") : "system resolver"}:{" "}
-          {status.dns.ok
-            ? <span style={{ color: "var(--ok)" }}>OK — {status.dns.resolved?.slice(0, 4).join(", ")}</span>
-            : <span style={{ color: "var(--crit)" }}>failed{status.dns.error ? ` — ${status.dns.error}` : ""}</span>}
+        <div style={{ marginTop: 14, borderTop: "1px solid var(--border, var(--panel-border))", paddingTop: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ color: "var(--muted)", textAlign: "left" }}>
+                <th style={{ fontWeight: 600, padding: "2px 6px" }}>Query</th>
+                <th style={{ fontWeight: 600, padding: "2px 6px", textAlign: "center" }}>Result</th>
+                <th style={{ fontWeight: 600, padding: "2px 6px" }}>Answer</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ borderTop: "1px solid var(--border, var(--panel-border))" }}>
+                <td style={{ padding: "3px 6px", fontFamily: "var(--font-mono, monospace)" }}>{status.dns.test_host}</td>
+                <td style={{ padding: "3px 6px", textAlign: "center", color: status.dns.ok ? "var(--ok)" : "var(--crit)" }}>{status.dns.ok ? "resolved" : "failed"}</td>
+                <td style={{ padding: "3px 6px", fontFamily: "var(--font-mono, monospace)" }}>
+                  {status.dns.ok
+                    ? `${status.dns.resolved?.[0] ?? "—"}${(status.dns.resolved?.length ?? 0) > 1 ? `  +${(status.dns.resolved!.length - 1)}` : ""}`
+                    : (status.dns.error || "—")}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       )}
       {status && !isDNS && (
