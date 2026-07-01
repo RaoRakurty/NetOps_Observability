@@ -71,7 +71,7 @@ type OpenState = { id: string; top: number } | null;
 // the very bottom), and a utility cluster (Account · Support · Help) sits at the
 // foot — replacing the top-right user menu.
 export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, homeRoute }: Props) {
-  const { navigate, setCopilotOpen, copilotOpen } = useShell();
+  const { navigate, setCopilotOpen, copilotOpen, setHelpOpen } = useShell();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
   const [mfaOpen, setMfaOpen] = useState(false);
@@ -218,7 +218,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
               <Icon name="support" size={16} />
               <span>Support</span>
             </button>
-            <button className="rail-util-icon" type="button" title="Help" aria-label="Help">
+            <button className="rail-util-icon" type="button" title="Documentation" aria-label="Documentation" onClick={() => setHelpOpen(true)}>
               <Icon name="help" size={16} />
               <span>Help</span>
             </button>

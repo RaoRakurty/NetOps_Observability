@@ -4211,3 +4211,78 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-1, 6px); padding: 6px 12px; }
 .ao-btn:hover { border-color: var(--accent); }
 .ao-btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Documentation ("?") — top-bar button + right-docked Help drawer (HelpDrawer.tsx)
+   The drawer embeds the bundled docs portal (served same-origin at /docs/).
+   Right-docked so it never collides with the LEFT-docked Correlix AI panel.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Top-bar "?" button — sits in the right cluster beside the health chip. */
+.help-btn {
+  display: inline-grid; place-items: center; width: 30px; height: 30px;
+  border-radius: 8px; cursor: pointer;
+  color: var(--muted); background: transparent; border: 1px solid transparent;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.help-btn:hover { color: var(--fg); background: var(--hover, var(--surface-2)); border-color: var(--panel-border); }
+.shell-v2 .help-btn { color: var(--rail-fg-muted, var(--muted)); }
+
+/* Scrim over the page area (right of the rail, below the top bar). */
+.help-scrim {
+  position: fixed; left: var(--sidebar-w, 64px); top: var(--topbar-h, 52px); right: 0; bottom: 0;
+  background: rgba(8,11,20,.38); backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 96;
+}
+.help-scrim.open { opacity: 1; pointer-events: auto; }
+
+/* Right-docked slide-over. */
+.help-panel {
+  position: fixed; z-index: 97;
+  right: 0; top: var(--topbar-h, 52px); bottom: 0;
+  width: min(920px, calc(100vw - var(--sidebar-w, 64px) - 8px));
+  display: flex; flex-direction: column;
+  background: var(--panel-solid); border-left: 1px solid var(--panel-border);
+  box-shadow: -18px 0 48px -28px rgba(0,0,0,.65);
+  /* closed → tucked off the right edge, faded out, inert */
+  transform: translateX(24px); opacity: 0; visibility: hidden; pointer-events: none;
+  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s linear .28s;
+}
+.help-panel.open {
+  transform: none; opacity: 1; visibility: visible; pointer-events: auto;
+  transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, visibility 0s;
+}
+
+/* Header — title + open-in-new-tab + close. */
+.help-head {
+  display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
+  padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, var(--panel-solid)), var(--panel-solid));
+}
+.help-title {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 13.5px; letter-spacing: -.01em; color: var(--fg);
+}
+.help-title svg { color: var(--accent); }
+.help-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.help-newtab {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--muted); text-decoration: none;
+  padding: 5px 10px; border-radius: 8px; border: 1px solid transparent;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.help-newtab:hover { color: var(--fg); background: var(--hover, var(--surface-2)); border-color: var(--panel-border); }
+.help-close {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  color: var(--muted); background: transparent; border: 1px solid transparent;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.help-close:hover { color: var(--fg); background: var(--hover, var(--surface-2)); }
+
+/* The embedded docs portal fills the rest of the panel. */
+.help-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--panel-solid); }
+
+@media (max-width: 720px) {
+  .help-panel { width: calc(100vw - var(--sidebar-w, 64px)); }
+  .help-newtab span { display: none; }
+}

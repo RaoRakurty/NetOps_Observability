@@ -9,6 +9,7 @@ import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
 import OpsisDrawer from "./components/OpsisDrawer";
+import HelpDrawer from "./components/HelpDrawer";
 import CommandPalette from "./components/CommandPalette";
 import Inspector from "./components/Inspector";
 import BottomDrawer from "./components/BottomDrawer";
@@ -67,6 +68,7 @@ export default function App() {
   };
   const [query, setQuery] = useState<string>("*");
   const [copilotOpen, setCopilotOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
   // Shell-v2 (#24): the slim icon-rail + hover-flyout nav, navy header band, and
@@ -152,8 +154,8 @@ export default function App() {
   };
 
   const shell: ShellState = useMemo(
-    () => ({ range, setRange, query, setQuery, copilotOpen, setCopilotOpen, navigate }),
-    [range, query, copilotOpen],
+    () => ({ range, setRange, query, setQuery, copilotOpen, setCopilotOpen, helpOpen, setHelpOpen, navigate }),
+    [range, query, copilotOpen, helpOpen],
   );
 
   if (loading) {
@@ -197,6 +199,7 @@ export default function App() {
           <div className="page">{view}</div>
         </main>
         <OpsisDrawer />
+        <HelpDrawer />
         <CommandPalette nav={nav} />
         <Inspector />
         <BottomDrawer />

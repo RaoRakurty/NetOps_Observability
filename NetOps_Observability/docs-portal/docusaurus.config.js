@@ -5,6 +5,11 @@
 
 const { themes } = require('prism-react-renderer');
 
+// baseUrl is env-driven so the SAME build serves two homes:
+//   • embedded in the product at same-origin /docs/  (default — the in-app "?" Help panel)
+//   • standalone at docs.correlix.io with '/'         (build with DOCS_BASE_URL=/)
+const baseUrl = process.env.DOCS_BASE_URL || '/docs/';
+
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Correlix Docs',
@@ -13,7 +18,7 @@ const config = {
 
   // Update these when the docs site domain is finalized.
   url: 'https://docs.correlix.io',
-  baseUrl: '/',
+  baseUrl,
 
   organizationName: 'correlix',
   projectName: 'correlix-docs',
@@ -37,6 +42,7 @@ const config = {
           // "Edit this page" — point at the repo once the docs move to their own repo.
           editUrl: undefined,
           showLastUpdateTime: true,
+          breadcrumbs: true,
         },
         blog: false,
         theme: {
@@ -50,17 +56,23 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       image: 'img/social-card.png',
+      // Dark-first to match the product's trading-floor NOC aesthetic; the toggle
+      // stays so operators on bright monitors can flip to light.
       colorMode: {
         defaultMode: 'dark',
         respectPrefersColorScheme: true,
       },
+      // Compact "on this page" so long how-tos stay scannable.
+      tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
       navbar: {
-        title: 'Correlix Docs',
+        title: 'Correlix',
         logo: { alt: 'Correlix', src: 'img/logo.svg' },
+        hideOnScroll: true,
         items: [
           { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Documentation' },
           { to: '/getting-started/quickstart', label: 'Quickstart', position: 'left' },
           { to: '/onboard-devices/overview', label: 'Onboard Devices', position: 'left' },
+          { to: '/correlix-ai/overview', label: 'Correlix AI', position: 'left' },
         ],
       },
       footer: {
@@ -69,7 +81,7 @@ const config = {
           {
             title: 'Get started',
             items: [
-              { label: 'Introduction', to: '/intro' },
+              { label: 'Introduction', to: '/' },
               { label: 'Quickstart', to: '/getting-started/quickstart' },
               { label: 'Onboard network devices', to: '/onboard-devices/overview' },
             ],
@@ -91,11 +103,11 @@ const config = {
             ],
           },
         ],
-        copyright: `Correlix — network observability. Docs built ${new Date().getFullYear()}.`,
+        copyright: `Correlix — network observability & AI-driven root-cause. Docs built ${new Date().getFullYear()}.`,
       },
       prism: {
-        theme: themes.github,
-        darkTheme: themes.dracula,
+        theme: themes.oneLight,
+        darkTheme: themes.oneDark,
         additionalLanguages: ['bash', 'yaml', 'json', 'promql'],
       },
       docs: {

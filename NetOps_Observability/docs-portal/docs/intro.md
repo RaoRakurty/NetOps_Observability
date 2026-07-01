@@ -4,31 +4,95 @@ sidebar_label: Introduction
 sidebar_position: 1
 description: Correlix is a network observability platform that discovers your devices, watches every plane of telemetry, and tells you the root cause of an incident — with the evidence.
 slug: /
+hide_title: true
 ---
 
-# What is Correlix?
+import Link from '@docusaurus/Link';
 
-Correlix is a **network observability platform** for NOC and network‑engineering teams. It discovers your network devices, collects telemetry from every plane (metrics, flows, logs, traps, and active path measurements), detects when something is wrong, and — the part that sets it apart — **correlates the signals into a single root cause, with the evidence that proves it.**
+<div className="cx-hero">
+  <span className="cx-hero__eyebrow">Correlix Documentation</span>
+  <h1 className="cx-hero__title">Network observability that names the <span className="grad">root cause</span> — with the evidence.</h1>
+  <p className="cx-hero__lead">
+    Point Correlix at your network. It discovers your devices, watches every plane of
+    telemetry, and when something breaks it correlates the signals into a single incident —
+    telling you <em>what broke, where, who owns it, and why</em> instead of a wall of alerts.
+  </p>
+  <div className="cx-hero__actions">
+    <Link className="cx-btn cx-btn--primary" to="/getting-started/quickstart">Quickstart — 15 min ↗</Link>
+    <Link className="cx-btn cx-btn--ghost" to="/onboard-devices/overview">Onboard your devices</Link>
+  </div>
+</div>
 
-You point Correlix at your network. It builds an inventory, starts monitoring, draws the topology, and when an incident happens it tells you *what broke, where, who owns it, and why* — instead of handing you a wall of disconnected alerts.
+## Start here
+
+<div className="cx-cards">
+  <Link className="cx-card" to="/getting-started/overview">
+    <span className="cx-card__icon">🚀</span>
+    <p className="cx-card__title">Getting Started</p>
+    <p className="cx-card__desc">What you need, core concepts, and a 15-minute path to your first monitored device.</p>
+    <span className="cx-card__arrow">Read →</span>
+  </Link>
+  <Link className="cx-card" to="/onboard-devices/overview">
+    <span className="cx-card__icon">🔌</span>
+    <p className="cx-card__title">Onboard Devices</p>
+    <p className="cx-card__desc">SNMP discovery, credentials, streaming telemetry (gNMI/NETCONF), and verification.</p>
+    <span className="cx-card__arrow">Read →</span>
+  </Link>
+  <Link className="cx-card" to="/send-data/overview">
+    <span className="cx-card__icon">📡</span>
+    <p className="cx-card__title">Send Data</p>
+    <p className="cx-card__desc">Point metrics, flows, logs, and SNMP traps at Correlix from any vendor.</p>
+    <span className="cx-card__arrow">Read →</span>
+  </Link>
+</div>
 
 ## What you can do with Correlix
 
-- **Onboard your network** — auto‑discover devices over SNMP, add streaming telemetry (gNMI/NETCONF), and ingest syslog, SNMP traps, and flow records (NetFlow/sFlow/IPFIX).
-- **Monitor everything** — device health, interface performance, routing protocols (BGP/OSPF/IS‑IS), link quality, WAN circuits, and tunnels — on ready‑made dashboards.
-- **See your network** — a live topology canvas, a geographic map, and hop‑by‑hop path traces.
-- **Catch problems early** — z‑score anomaly detection, threshold monitors, and alert rules with notifications to Slack, PagerDuty, email, SMS, and more.
-- **Find root cause fast** — the correlation engine groups related signals into one incident, ranks it, names the fault domain, and recommends an owner and next actions.
-- **Close the loop** — auto‑file a ticket in ServiceNow/Jira, and measure how long each phase of the incident took.
-- **Ask in plain language** — Correlix AI answers "what's going on right now?" and "explain the top incident" grounded in your live, tenant‑scoped data.
-- **Stay secure & compliant** — vulnerability, threat, and compliance posture across the fleet, with full role‑based access and audit.
+<div className="cx-cards">
+  <Link className="cx-card" to="/infrastructure/overview">
+    <span className="cx-card__icon">🗺️</span>
+    <p className="cx-card__title">See your network</p>
+    <p className="cx-card__desc">A live topology canvas, a geographic map, and hop-by-hop path traces.</p>
+    <span className="cx-card__arrow">Explore →</span>
+  </Link>
+  <Link className="cx-card" to="/monitoring/overview">
+    <span className="cx-card__icon">📈</span>
+    <p className="cx-card__title">Monitor everything</p>
+    <p className="cx-card__desc">Device health, interfaces, BGP/OSPF/IS-IS, link quality, WAN circuits, and tunnels.</p>
+    <span className="cx-card__arrow">Explore →</span>
+  </Link>
+  <Link className="cx-card" to="/incidents/overview">
+    <span className="cx-card__icon">🎯</span>
+    <p className="cx-card__title">Find root cause fast</p>
+    <p className="cx-card__desc">The correlation engine groups related signals into one ranked incident with a fault domain.</p>
+    <span className="cx-card__arrow">Explore →</span>
+  </Link>
+  <Link className="cx-card cx-card--ai" to="/correlix-ai/overview">
+    <span className="cx-card__icon">🤖</span>
+    <p className="cx-card__title">Ask in plain language</p>
+    <p className="cx-card__desc">Correlix AI answers "what's going on right now?" grounded in your live, tenant-scoped data.</p>
+    <span className="cx-card__arrow">Explore →</span>
+  </Link>
+  <Link className="cx-card" to="/incident-response/overview">
+    <span className="cx-card__icon">🔔</span>
+    <p className="cx-card__title">Close the loop</p>
+    <p className="cx-card__desc">Notify Slack, PagerDuty, email and SMS; auto-file ServiceNow/Jira tickets and time each phase.</p>
+    <span className="cx-card__arrow">Explore →</span>
+  </Link>
+  <Link className="cx-card cx-card--sec" to="/security/overview">
+    <span className="cx-card__icon">🛡️</span>
+    <p className="cx-card__title">Stay secure & compliant</p>
+    <p className="cx-card__desc">Vulnerability, threat, and compliance posture across the fleet — with RBAC and full audit.</p>
+    <span className="cx-card__arrow">Explore →</span>
+  </Link>
+</div>
 
 ## How this documentation is organized
 
-This portal is **task‑oriented** — it tells you *how to configure and use* each feature, step by step, from an operator's point of view. You don't need to know the internals.
+This portal is **task-oriented** — it tells you *how to configure and use* each feature, step by step, from an operator's point of view. You don't need to know the internals.
 
-1. **[Getting Started](/getting-started/overview)** — what you need, and a 15‑minute quickstart to onboard your first device.
-2. **[Onboard Network Devices](/onboard-devices/overview)** — the full device‑onboarding journey: discovery, credentials, streaming telemetry, and verification.
+1. **[Getting Started](/getting-started/overview)** — what you need, and a 15-minute quickstart to onboard your first device.
+2. **[Onboard Network Devices](/onboard-devices/overview)** — the full device-onboarding journey: discovery, credentials, streaming telemetry, and verification.
 3. **[Send Data](/send-data/overview)** — point metrics, flows, logs, and traps at Correlix.
 4. **Product sections** — Infrastructure, Monitoring, Incidents, Incident Response, Security, Explore, Correlix AI, Dashboards, Automation.
 5. **[Administration](/administration/overview)** — users, roles, SSO, API access, tenants, and audit.

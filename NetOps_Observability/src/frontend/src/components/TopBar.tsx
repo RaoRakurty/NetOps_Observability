@@ -39,7 +39,7 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // objects) backed by /api/search/global, plus a raw log-search handoff —
 // so it behaves like a true global search, not just a log query.
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
-  const { range, setRange, query, setQuery, navigate } = useShell();
+  const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
@@ -197,6 +197,16 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
           ))}
           <option value="__add">＋ Add preset…</option>
         </select>
+
+        <button
+          className="help-btn"
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          title="Documentation"
+          aria-label="Open documentation"
+        >
+          <Icon name="help" size={16} />
+        </button>
 
         <span className={`health${ok ? "" : " bad"}`} title={ok ? `v${health?.version}` : "Disconnected"}>
           <span className="dot" />

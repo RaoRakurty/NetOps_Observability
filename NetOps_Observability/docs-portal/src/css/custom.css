@@ -1,48 +1,459 @@
 /**
- * Correlix docs theme. Instrument-grade, dark-first — matches the product's
- * "trading-floor NOC" aesthetic. Overrides Docusaurus Infima design tokens.
+ * Correlix docs theme — ultra-modern, dark-first, "trading-floor NOC".
+ *
+ * Design language mirrors the product shell: deep navy canvas, elevated glass
+ * surfaces, an indigo→blue accent, crisp Inter-style system type, and generous
+ * but dense spacing. Everything below overrides Docusaurus/Infima design tokens
+ * (--ifm-*) plus a handful of hand-authored components (hero, card grid) used by
+ * the landing page.
  */
 
+/* ─────────────────────────────  Design tokens  ───────────────────────────── */
 :root {
-  --ifm-color-primary: #2f7df6;
-  --ifm-color-primary-dark: #1668e6;
-  --ifm-color-primary-darker: #1360d9;
-  --ifm-color-primary-darkest: #0f4fb2;
-  --ifm-color-primary-light: #4d90f8;
-  --ifm-color-primary-lighter: #5c99f9;
-  --ifm-color-primary-lightest: #86b4fb;
-  --ifm-code-font-size: 92%;
-  --ifm-font-family-monospace: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
-  --docusaurus-highlighted-code-line-bg: rgba(47, 125, 246, 0.12);
+  /* Accent — indigo→blue, the product's signature. */
+  --ifm-color-primary: #3b5bdb;
+  --ifm-color-primary-dark: #2f4fce;
+  --ifm-color-primary-darker: #2b49c0;
+  --ifm-color-primary-darkest: #233c9e;
+  --ifm-color-primary-light: #4d6ce4;
+  --ifm-color-primary-lighter: #6480ea;
+  --ifm-color-primary-lightest: #93a7f1;
+
+  --cx-accent: #4f46e5;
+  --cx-accent-2: #2f7df6;
+  --cx-glow: rgba(79, 70, 229, 0.35);
+
+  --ifm-font-family-base: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  --ifm-font-family-monospace: 'SFMono-Regular', ui-monospace, 'JetBrains Mono',
+    Menlo, Consolas, monospace;
+  --ifm-code-font-size: 90%;
+  --ifm-heading-font-weight: 700;
+  --ifm-h1-font-size: 2.4rem;
+  --ifm-global-radius: 10px;
+  --ifm-navbar-height: 3.75rem;
+
+  --docusaurus-highlighted-code-line-bg: rgba(79, 70, 229, 0.12);
 }
 
+/* Light mode — clean, high-contrast, still crisp. */
+:root {
+  --ifm-background-color: #f6f7fb;
+  --ifm-background-surface-color: #ffffff;
+  --cx-surface: #ffffff;
+  --cx-surface-2: #f2f4fa;
+  --cx-border: rgba(17, 24, 39, 0.09);
+  --cx-border-strong: rgba(17, 24, 39, 0.16);
+  --cx-text-dim: #5a6473;
+  --cx-hero-glow-1: rgba(79, 70, 229, 0.12);
+  --cx-hero-glow-2: rgba(47, 125, 246, 0.1);
+  --ifm-toc-border-color: var(--cx-border);
+}
+
+/* Dark mode — deep navy, the primary experience. */
 [data-theme='dark'] {
-  --ifm-color-primary: #5c99f9;
-  --ifm-color-primary-dark: #3b83f7;
-  --ifm-color-primary-darker: #2b79f6;
-  --ifm-color-primary-darkest: #0f5ae0;
-  --ifm-color-primary-light: #7daffb;
-  --ifm-color-primary-lighter: #8dbafb;
-  --ifm-background-color: #0c1017;
-  --ifm-background-surface-color: #121722;
-  --docusaurus-highlighted-code-line-bg: rgba(92, 153, 249, 0.18);
+  --ifm-color-primary: #7d97f5;
+  --ifm-color-primary-dark: #5c7cf2;
+  --ifm-color-primary-darker: #4a6ef0;
+  --ifm-color-primary-darkest: #2b52ea;
+  --ifm-color-primary-light: #9db2f8;
+  --ifm-color-primary-lighter: #adbef9;
+  --ifm-color-primary-lightest: #cdd8fc;
+
+  --ifm-background-color: #0a0e17;
+  --ifm-background-surface-color: #10151f;
+  --cx-surface: #10151f;
+  --cx-surface-2: #161c28;
+  --cx-border: rgba(148, 163, 184, 0.13);
+  --cx-border-strong: rgba(148, 163, 184, 0.24);
+  --cx-text-dim: #94a3b8;
+  --cx-hero-glow-1: rgba(79, 70, 229, 0.28);
+  --cx-hero-glow-2: rgba(47, 125, 246, 0.2);
+  --ifm-toc-border-color: var(--cx-border);
+  --ifm-heading-color: #eef2f9;
+  --ifm-font-color-base: #cbd5e1;
+  --docusaurus-highlighted-code-line-bg: rgba(125, 151, 245, 0.16);
 }
 
-/* Tighter, denser nav — NOC operators scan a lot of items. */
-.menu { font-size: 14px; }
-.markdown h1 { font-weight: 700; letter-spacing: -0.01em; }
-.markdown h2 { margin-top: 2rem; border-bottom: 1px solid var(--ifm-toc-border-color); padding-bottom: 0.3rem; }
+html { scroll-behavior: smooth; }
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* ──────────────────────────────  Navbar  ─────────────────────────────────── */
+.navbar {
+  background: color-mix(in srgb, var(--ifm-background-surface-color) 82%, transparent);
+  backdrop-filter: saturate(150%) blur(14px);
+  -webkit-backdrop-filter: saturate(150%) blur(14px);
+  border-bottom: 1px solid var(--cx-border);
+  box-shadow: none;
+}
+.navbar__title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-size: 1.12rem;
+  background: linear-gradient(92deg, var(--cx-accent), var(--cx-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.navbar__link {
+  font-weight: 500;
+  font-size: 0.92rem;
+  color: var(--cx-text-dim);
+}
+.navbar__link:hover,
+.navbar__link--active { color: var(--ifm-navbar-link-hover-color); }
+.navbar__link--active {
+  color: var(--ifm-color-primary);
+}
+[data-theme='dark'] .navbar__link--active { color: var(--ifm-color-primary-lightest); }
+
+/* ──────────────────────────────  Sidebar  ────────────────────────────────── */
+.menu {
+  font-size: 0.9rem;
+  padding: 0.75rem 0.6rem !important;
+}
+.menu__list-item-collapsible,
+.menu__link {
+  border-radius: 8px;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.menu__link { font-weight: 500; color: var(--cx-text-dim); }
+.menu__link:hover,
+.menu__list-item-collapsible:hover {
+  background: var(--cx-surface-2);
+  color: var(--ifm-font-color-base);
+}
+.menu__link--active:not(.menu__link--sublist) {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--cx-accent) 22%, transparent),
+    color-mix(in srgb, var(--cx-accent) 6%, transparent));
+  color: var(--ifm-color-primary-lightest);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--cx-accent);
+}
+[data-theme='light'] .menu__link--active:not(.menu__link--sublist) {
+  color: var(--ifm-color-primary-darkest);
+}
+.menu__caret:hover { background: var(--cx-surface-2); }
+
+/* Category headers a touch quieter. */
+.theme-doc-sidebar-item-category > .menu__list-item-collapsible > .menu__link {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--ifm-font-color-base);
+}
+
+/* ──────────────────────────────  Content  ────────────────────────────────── */
+.main-wrapper { background: var(--ifm-background-color); }
+
+.markdown { line-height: 1.72; }
+.markdown h1 {
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.12;
+  background: linear-gradient(180deg, var(--ifm-heading-color), var(--cx-text-dim));
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+[data-theme='dark'] .markdown h1 {
+  background: linear-gradient(180deg, #ffffff, #a9b6cc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.markdown h2 {
+  margin-top: 2.4rem;
+  padding-bottom: 0.4rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+.markdown h3 { margin-top: 1.8rem; font-weight: 650; letter-spacing: -0.01em; }
+
+.markdown a {
+  font-weight: 500;
+  text-decoration-color: color-mix(in srgb, var(--ifm-link-color) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.markdown a:hover { text-decoration-color: currentColor; }
 
 /* Step-numbered how-to lists read as a checklist. */
-.markdown ol { padding-left: 1.2rem; }
-.markdown ol > li { margin-bottom: 0.4rem; }
+.markdown ol { padding-left: 1.25rem; }
+.markdown ol > li { margin-bottom: 0.45rem; }
+.markdown ul > li { margin-bottom: 0.3rem; }
 
-/* Admonitions a touch calmer. */
-.theme-admonition { border-radius: 8px; }
+/* Blockquotes — accent rail. */
+.markdown blockquote {
+  border-left: 3px solid var(--cx-accent);
+  background: var(--cx-surface-2);
+  border-radius: 0 8px 8px 0;
+  color: var(--cx-text-dim);
+}
+
+/* Tables — dense, bordered, sticky-feeling headers. */
+.markdown table {
+  display: table;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--cx-border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 0.9rem;
+}
+.markdown table thead {
+  background: var(--cx-surface-2);
+  border-bottom: 1px solid var(--cx-border-strong);
+}
+.markdown table th { font-weight: 650; text-transform: none; }
+.markdown table tr { background: transparent; border: 0; }
+.markdown table td,
+.markdown table th { border: 0; border-bottom: 1px solid var(--cx-border); }
+.markdown table tbody tr:last-child td { border-bottom: 0; }
+.markdown table tbody tr:hover { background: var(--cx-surface-2); }
+
+/* ────────────────────────────────  Code  ─────────────────────────────────── */
+/* Inline code — a subtle chip. */
+.markdown :not(pre) > code {
+  background: var(--cx-surface-2);
+  border: 1px solid var(--cx-border);
+  border-radius: 6px;
+  padding: 0.12em 0.42em;
+  font-size: 0.86em;
+}
+/* Code blocks — rounded, bordered, quiet shadow. */
+.theme-code-block,
+div[class^='codeBlockContainer'] {
+  border-radius: 12px !important;
+  border: 1px solid var(--cx-border);
+  box-shadow: 0 8px 30px -18px rgba(2, 6, 23, 0.5);
+}
+.prism-code { font-size: 0.86rem; }
 
 /* "Console path" inline chips — e.g. Administration → Data Sources. */
 .markdown kbd {
-  font-size: 85%;
-  padding: 2px 6px;
-  border-radius: 5px;
+  font-size: 82%;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--cx-border-strong);
+  background: var(--cx-surface-2);
+  box-shadow: 0 1.5px 0 var(--cx-border-strong);
+  font-family: var(--ifm-font-family-base);
+  font-weight: 500;
+}
+
+/* ─────────────────────────────  Admonitions  ─────────────────────────────── */
+.theme-admonition {
+  border-radius: 12px;
+  border: 1px solid var(--cx-border);
+  border-left-width: 3px;
+  background: var(--cx-surface);
+  box-shadow: 0 6px 24px -20px rgba(2, 6, 23, 0.55);
+}
+
+/* ──────────────────────────  TOC / breadcrumbs  ──────────────────────────── */
+.table-of-contents { font-size: 0.82rem; }
+.table-of-contents__link--active {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+}
+.table-of-contents__left-border { border-left-color: var(--cx-border); }
+.breadcrumbs__item--active .breadcrumbs__link {
+  background: var(--cx-surface-2);
+  color: var(--ifm-font-color-base);
+}
+.breadcrumbs__link { border-radius: 7px; }
+
+/* Prev/next pagination — turn into cards. */
+.pagination-nav__link {
+  border: 1px solid var(--cx-border);
+  border-radius: 12px;
+  background: var(--cx-surface);
+  transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+.pagination-nav__link:hover {
+  border-color: color-mix(in srgb, var(--cx-accent) 55%, var(--cx-border));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 30px -18px var(--cx-glow);
+}
+
+/* ────────────────────────────  Scrollbars  ───────────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: var(--cx-border-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--cx-border-strong);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--cx-text-dim); background-clip: padding-box; }
+
+/* ══════════════════════════  Landing-page components  ═════════════════════ */
+/* Hand-authored blocks used by intro.md (rendered via MDX). Kept generic so
+   any doc page can drop in a hero or a card grid. */
+
+.cx-hero {
+  position: relative;
+  margin: -1rem 0 2.5rem;
+  padding: 2.75rem 2.25rem 2.5rem;
+  border: 1px solid var(--cx-border);
+  border-radius: 20px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 140% at 12% 0%, var(--cx-hero-glow-1), transparent 55%),
+    radial-gradient(120% 160% at 100% 0%, var(--cx-hero-glow-2), transparent 50%),
+    var(--cx-surface);
+  box-shadow: 0 24px 60px -40px var(--cx-glow);
+}
+.cx-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent, transparent 70%,
+    color-mix(in srgb, var(--cx-surface) 60%, transparent));
+  pointer-events: none;
+}
+.cx-hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+  padding: 0.32rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--cx-accent) 40%, var(--cx-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cx-accent) 10%, transparent);
+}
+.cx-hero__title {
+  margin: 1rem 0 0.6rem;
+  font-size: clamp(1.9rem, 4vw, 2.9rem);
+  font-weight: 820;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+.cx-hero__title .grad {
+  background: linear-gradient(96deg, var(--cx-accent), var(--cx-accent-2) 60%, #22d3ee);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.cx-hero__lead {
+  max-width: 46rem;
+  font-size: 1.08rem;
+  line-height: 1.6;
+  color: var(--cx-text-dim);
+  margin: 0;
+}
+.cx-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1.5rem;
+}
+.cx-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.62rem 1.15rem;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.92rem;
+  text-decoration: none !important;
+  transition: transform 130ms ease, box-shadow 130ms ease, border-color 130ms ease;
+}
+.cx-btn--primary {
+  color: #fff;
+  background: linear-gradient(96deg, var(--cx-accent), var(--cx-accent-2));
+  box-shadow: 0 12px 30px -12px var(--cx-glow);
+}
+.cx-btn--primary:hover { transform: translateY(-1px); box-shadow: 0 16px 36px -12px var(--cx-glow); color: #fff; }
+.cx-btn--ghost {
+  color: var(--ifm-font-color-base);
+  border: 1px solid var(--cx-border-strong);
+  background: var(--cx-surface-2);
+}
+.cx-btn--ghost:hover { transform: translateY(-1px); border-color: var(--cx-accent); color: var(--ifm-font-color-base); }
+
+/* Card grid — feature/section directory. */
+.cx-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0 2rem;
+}
+.cx-card {
+  position: relative;
+  display: block;
+  padding: 1.25rem 1.25rem 1.15rem;
+  border: 1px solid var(--cx-border);
+  border-radius: 16px;
+  background: var(--cx-surface);
+  text-decoration: none !important;
+  color: inherit;
+  overflow: hidden;
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+.cx-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--cx-accent), var(--cx-accent-2));
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.cx-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--cx-accent) 45%, var(--cx-border));
+  box-shadow: 0 22px 48px -30px var(--cx-glow);
+}
+.cx-card:hover::before { opacity: 1; }
+.cx-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 11px;
+  font-size: 1.2rem;
+  margin-bottom: 0.85rem;
+  background: color-mix(in srgb, var(--cx-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cx-accent) 26%, var(--cx-border));
+}
+.cx-card__title {
+  font-weight: 680;
+  font-size: 1.02rem;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.3rem;
+  color: var(--ifm-heading-color);
+}
+.cx-card__desc {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--cx-text-dim);
+}
+.cx-card__arrow {
+  margin-top: 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ifm-color-primary);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.cx-card:hover .cx-card__arrow { opacity: 1; transform: translateX(0); }
+
+/* A tint variant so a small run of cards can pick up module hues. */
+.cx-card--ai .cx-card__icon { background: color-mix(in srgb, #a855f7 16%, transparent); border-color: color-mix(in srgb, #a855f7 30%, var(--cx-border)); }
+.cx-card--sec .cx-card__icon { background: color-mix(in srgb, #ef4444 14%, transparent); border-color: color-mix(in srgb, #ef4444 28%, var(--cx-border)); }
+.cx-card--ok .cx-card__icon { background: color-mix(in srgb, #10b981 14%, transparent); border-color: color-mix(in srgb, #10b981 28%, var(--cx-border)); }
+
+@media (max-width: 600px) {
+  .cx-hero { padding: 2rem 1.4rem; }
+  .cx-cards { grid-template-columns: 1fr; }
 }

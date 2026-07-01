@@ -19,6 +19,20 @@ FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef
 
 COPY src/frontend/dist /usr/share/nginx/html
 
+# In-app documentation portal (the "?" Help panel). Like dist/, the Docusaurus
+# static site is PRE-BUILT on the host and gitignored, so build it once before
+# `docker compose build frontend`:
+#
+#     cd docs-portal
+#     npm install --no-audit --no-fund
+#     npm run build            # emits docs-portal/build (baseUrl /docs/)
+#
+# It's served same-origin at /docs/ (the outer nginx allows same-origin framing
+# so the SPA can embed it). Nested under the SPA root so one static container
+# serves both; the inner nginx `location /docs/` (frontend/default.conf) serves
+# the real files without the SPA history-fallback.
+COPY docs-portal/build /usr/share/nginx/html/docs
+
 # The outer nginx (reverse proxy) handles routing; this inner nginx serves
 # the SPA with HTML5 history fallback (deep links) and a cache policy that
 # keeps redeploys from being masked by a stale cached index.html.

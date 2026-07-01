@@ -24,6 +24,9 @@ export type ShellState = {
   // Copilot slide-over.
   copilotOpen: boolean;
   setCopilotOpen: (b: boolean) => void;
+  // Documentation ("?") slide-over — embeds the /docs portal.
+  helpOpen: boolean;
+  setHelpOpen: (b: boolean) => void;
   // Imperative navigation to a route id, e.g. "search/logs".
   navigate: (route: string) => void;
 };
