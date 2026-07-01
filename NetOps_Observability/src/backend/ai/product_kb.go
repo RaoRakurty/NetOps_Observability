@@ -1,10 +1,14 @@
 package ai
 
 import (
+	"embed"
 	"regexp"
 	"sort"
 	"strings"
 )
+
+//go:embed product_knowledge/*.md
+var productKnowledgeFS embed.FS
 
 // product_kb.go — the Product Knowledge Retriever (HLD §9). It answers questions
 // ABOUT Correlix ("what does 'suspected' mean?", "how do I set up SNMP
@@ -33,19 +37,53 @@ var reMdHeading = regexp.MustCompile(`(?m)^#{1,3}\s+(.+?)\s*$`)
 // productRoutes maps a section title (lowercased substring) to a UI deep link, so
 // a "how do I …" answer can offer the exact page.
 var productRoutes = map[string]string{
+	"correlation":     "#/monitoring/correlations",
+	"rca":             "#/monitoring/correlations",
+	"verdict":         "#/monitoring/correlations",
+	"seam":            "#/monitoring/correlations",
+	"evidence":        "#/monitoring/correlations",
+	"incident":        "#/monitoring/correlations",
+	"troubleshooting": "#/monitoring/correlations",
 	"discovery":       "#/infrastructure/devices",
+	"snmp":            "#/infrastructure/devices",
+	"sso":             "#/admin/security",
 	"authentication":  "#/admin/security",
+	"report":          "#/monitoring/reports",
+	"itsm":            "#/incident/integrations",
+	"notification":    "#/incident/integrations",
+	"tenant":          "#/admin",
 	"configuration":   "#/admin",
 	"ui sections":     "#/dashboards/home",
-	"setup runbooks":  "#/admin",
-	"troubleshooting": "#/monitoring/correlations",
 	"architecture":    "#/infrastructure/topology-canvas",
 }
 
-// LoadProductKB parses a markdown doc into retrievable `##` sections. Robust to an
-// empty doc (returns an empty KB). Keywords are derived from the title + body.
-func LoadProductKB(markdown string) *ProductKB {
+// LoadProductKB builds the product knowledge base: the CURATED, concept-focused
+// concepts doc (embedded ai/product_knowledge/*.md — the primary, well-titled
+// answers) plus any `extra` markdown (e.g. the setup-focused copilot_knowledge.md
+// for runbooks/architecture). Curated sections rank better for concept questions
+// because they're concise and their titles carry the concept. Robust to empty input.
+func LoadProductKB(extra ...string) *ProductKB {
 	kb := &ProductKB{}
+	// Curated concepts first.
+	if entries, err := productKnowledgeFS.ReadDir("product_knowledge"); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			if raw, err := productKnowledgeFS.ReadFile("product_knowledge/" + e.Name()); err == nil {
+				kb.addSections(string(raw))
+			}
+		}
+	}
+	// Then any extra docs (runbooks/architecture prose).
+	for _, md := range extra {
+		kb.addSections(md)
+	}
+	return kb
+}
+
+// addSections parses a markdown doc's `##` blocks into retrievable sections.
+func (k *ProductKB) addSections(markdown string) {
 	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	locs := reMdHeading.FindAllStringSubmatchIndex(markdown, -1)
 	for i, loc := range locs {
@@ -61,15 +99,14 @@ func LoadProductKB(markdown string) *ProductKB {
 		}
 		sec := ProductSection{Title: title, Body: body, Keywords: productKeywords(title, body)}
 		lt := strings.ToLower(title)
-		for k, route := range productRoutes {
-			if strings.Contains(lt, k) {
+		for kw, route := range productRoutes {
+			if strings.Contains(lt, kw) {
 				sec.Route = route
 				break
 			}
 		}
-		kb.sections = append(kb.sections, sec)
+		k.sections = append(k.sections, sec)
 	}
-	return kb
 }
 
 // All returns every parsed section (for tests / a "what can you tell me" listing).
