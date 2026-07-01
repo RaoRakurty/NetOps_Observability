@@ -18,6 +18,9 @@ func TestP3P4Routing(t *testing.T) {
 		{"is ServiceNow sync working", "integration_health_summary", "get_integration_health"},
 		{"how do I troubleshoot a BGP adjacency flap", "network_kb", "search_playbooks"},
 		{"what should I check for ISP latency", "network_kb", "search_playbooks"},
+		// Regression: common words ("packet", "police") must NOT be mistaken for a
+		// P-XXXX problem handle and hijack the query into an RCA lookup.
+		{"how do I troubleshoot ISP latency and packet loss", "network_kb", "search_playbooks"},
 	}
 	for _, c := range cases {
 		plan := Classify(c.q, nil)

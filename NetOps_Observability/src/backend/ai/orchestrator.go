@@ -51,7 +51,11 @@ type Plan struct {
 
 var (
 	reUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-	rePID  = regexp.MustCompile(`(?i)\bP-?[0-9A-Z]{4,}\b`)
+	// NOC problem handle: "P-" + hex (problemDisplayID mints P-XXXXXX). The dash is
+	// REQUIRED — an optional dash + [A-Z] made this match common words like
+	// "packet"/"police", hijacking troubleshooting/module questions into an RCA
+	// lookup for a non-existent id.
+	rePID = regexp.MustCompile(`(?i)\bP-[0-9A-F]{4,}\b`)
 	// Shift-handoff intent (HLD P3, reports module): a NOC pass-down request.
 	reShift = regexp.MustCompile(`(?i)\b(shift\s*(handoff|hand-?off|handover|summary|report|change)|hand-?off|handover|pass-?down|(end|start) of (the )?shift)\b`)
 	// Historical / time-range intent (HLD P3): an explicit PAST window. Keyed on
