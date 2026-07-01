@@ -87,8 +87,7 @@ export default function Settings() {
       {/* Default landing page — the platform-wide post-login page. */}
       <DefaultLandingCard />
 
-      {/* System DNS & NTP — platform-owner only (the platform's own resolvers +
-          time sources). */}
+      {/* DNS + NTP — two boxes (Configure → popup), platform-owner only. */}
       {platformAdmin && <SystemNetworkCard />}
 
       {/* Log export limits — tile + guided setup (C3). */}
