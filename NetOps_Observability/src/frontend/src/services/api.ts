@@ -750,6 +750,27 @@ export type WanInterfaceRow = {
   tier_label?: string; // e.g. "Active path probe"
 };
 
+// Platform DNS + NTP system settings.
+export type SystemNetworkConfig = {
+  dns_servers: string[];
+  search_domains?: string[];
+  ntp_servers: string[];
+  updated_by?: string;
+  updated_at?: string;
+};
+export type NTPResult = {
+  server: string;
+  reachable: boolean;
+  stratum?: number;
+  offset_ms?: number;
+  rtt_ms?: number;
+  error?: string;
+};
+export type SystemNetworkStatus = {
+  dns: { servers: string[]; test_host: string; resolved?: string[]; ok: boolean; error?: string };
+  ntp: { results: NTPResult[]; ok: boolean; offset_ms: number };
+};
+
 export type Tunnel = {
   ts: string;
   id: string;
@@ -1411,6 +1432,13 @@ export const api = {
     return request<ClickHouseResponse<Tunnel>>(`/api/tunnels?${p}`);
   },
   wanInterfaces: () => request<{ interfaces: WanInterfaceRow[] }>(`/api/wan/interfaces`),
+
+  // System network settings (platform admin) — DNS resolvers + NTP servers.
+  systemNetwork: () => request<SystemNetworkConfig>(`/api/system/network`),
+  setSystemNetwork: (cfg: SystemNetworkConfig) =>
+    request<SystemNetworkConfig>(`/api/system/network`, { method: "PUT", body: JSON.stringify(cfg) }),
+  testSystemNetwork: (host?: string) =>
+    request<SystemNetworkStatus>(`/api/system/network/test${host ? `?host=${encodeURIComponent(host)}` : ""}`, { method: "POST" }),
   findings: (limit = 100, severity?: string) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (severity) p.set("severity", severity);

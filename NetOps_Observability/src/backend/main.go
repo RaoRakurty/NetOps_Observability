@@ -64,6 +64,7 @@ type server struct {
 	sites            *sitesStore      // internal SoT sites (default provider)
 	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
 	wanPolicy        *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet        *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
@@ -410,6 +411,13 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("contact point store: %v", err)
 	}
+	systemNet, err := newSystemNetStore(envOr("SYSTEM_NETWORK_FILE", "/data/system_network.json"))
+	if err != nil {
+		log.Fatalf("system network store: %v", err)
+	}
+	// Install the configured DNS resolvers as the process resolver so Correlix
+	// resolves outbound URLs (integrations, webhooks, providers) through them.
+	applyDNS(systemNet.Get().DNSServers)
 
 	srv := &server{
 		startedAt:        time.Now().UTC(),
@@ -438,6 +446,7 @@ func newServer() *server {
 		sites:            sites,
 		deviceSites:      deviceSites,
 		wanPolicy:        wanPolicy,
+		systemNet:        systemNet,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -821,6 +830,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/wan/endpoints", s.handleWanEndpoints)   // derived WAN endpoint registry (read)
 	mux.HandleFunc("/api/wan/circuits", s.handleWanCircuits)     // derived circuit mesh (read)
 	mux.HandleFunc("/api/wan/policy", s.handleWanPolicy)         // topology policy: GET / PUT (intent)
+	mux.HandleFunc("/api/system/network", s.handleSystemNetwork)      // platform DNS + NTP settings (GET/PUT, platform-admin)
+	mux.HandleFunc("/api/system/network/test", s.handleSystemNetworkTest) // resolve + NTP-offset probe
 	// RCA auto-ticketing (#78 P3): incident-policy CRUD + simulator, tenant-scoped
 	// outbox/audit observability. Per-correlation ticket actions ride the
 	// /api/correlations/{id}/{tickets,ticket,ticket/sync} router (correlations.go).

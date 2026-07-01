@@ -192,6 +192,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/sso/config":        "platform",
 	"/api/auth/token-policy":      "platform",
 	"/api/copilot/config":         "platform",
+	"/api/system/network":         "platform",
+	"/api/system/network/test":    "platform",
 	"/api/automation/netbox":      "platform",
 	"/api/automation/netbox/sync": "platform",
 	"/api/notify/smtp":            "platform",
