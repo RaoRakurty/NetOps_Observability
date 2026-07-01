@@ -66,10 +66,14 @@ var (
 	// check" question — answered from curated playbooks, NOT live tenant data.
 	reTroubleshoot = regexp.MustCompile(`(?i)\b(troubleshoot|playbook|runbook|how (do i|to) (fix|resolve|debug|diagnose|troubleshoot)|next actions|checklist|steps to (fix|resolve|debug)|what (do i|should i) check|how do i diagnose)\b`)
 	// Incident-LIST intent (event_management): "show me the critical incidents",
-	// "what needs attention" → the prioritized, filtered actionable list, NOT the
-	// generic current-state briefing (which dumps every open correlation). Kept
-	// distinct so an incident question gets specific incidents, not the same 25.
-	reIncidents = regexp.MustCompile(`(?i)(\b(critical|confirmed|suspected|actionable|active|major|open|recent|top)\s+(incidents?|correlations?|problems?|issues?)\b|\b(show|list|which|any|what)\b[^?]*\b(incidents?|correlations?)\b|\bincidents?\s+(right now|open|active|to\s+(work|action))\b|\bwhat\s+needs\s+(attention|action|work)\b)`)
+	// "any problems", "what's broken" → the prioritized, filtered actionable list,
+	// NOT the generic current-state briefing. Broadened to the natural words an
+	// operator uses (problem/issue/outage/alert/failure, wrong/broken/down).
+	reIncidents = regexp.MustCompile(`(?i)(\b(critical|confirmed|suspected|actionable|active|major|open|recent|top|any)\s+(incidents?|correlations?|problems?|issues?|alerts?|outages?|failures?)\b|\b(show|list|which|are there|is there|got any|do we have|have we got)\b[^?]*\b(incidents?|correlations?|problems?|issues?|outages?|alerts?|failures?)\b|\bwhat('?s| is)\s+(wrong|broken|down|failing|impacted|affected|degraded)\b|\banything\s+(wrong|broken|down|failing|degraded)\b|\bwhat\s+needs\s+(attention|action|work|fixing)\b|\bincidents?\s+(right now|open|active|to\s+(work|action))\b|\bwhat('?s| is)\s+(the\s+)?(top|main|biggest|worst)\s+(issue|problem|incident|concern|outage)\b)`)
+	// Explicit CURRENT-STATE trigger (command_center briefing): "what's going on",
+	// "status", "how is everything", "network health". This is now an EXPLICIT
+	// intent, not the catch-all — an unmatched question no longer dumps the briefing.
+	reStatus = regexp.MustCompile(`(?i)(what('?s| is|s)?\s+(going on|happening)|going on right now|what should (the noc|i|we)\s+(focus|work|look|prioriti|do)|current (status|state|situation|picture|posture)|status (update|report|check)|situation report|sitrep|\boverview\b|how('?s| is| are|s)\s+(the network|things|it going|everything|we doing|we looking|the fleet)|is everything (ok|okay|healthy|fine|good|alright|stable)|are we (ok|healthy|good|stable)|network (health|status)|health (summary|check|status)|overall (health|status|state|picture)|give me (a|the|an)\s+(status|summary|briefing|overview|rundown|update)|summar(ize|y)\b[^?]*\b(network|status|state|situation|health|current|everything)|\bbriefing\b|what.?s the (situation|status|state|picture))`)
 	// Explicit "last/past N <unit>" window for the time-range summary parser.
 	reLookbackNum = regexp.MustCompile(`(?i)(?:last|past|previous)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
 )
@@ -173,6 +177,13 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Mode: ModeModuleHealthSummary, Entities: ent, Freshness: FreshnessLive,
 			Tools: []string{"get_actionable_incidents"},
 		}
+	case reStatus.MatchString(q):
+		// Explicit "what's going on / status / how is everything" → the Command
+		// Center briefing. This is now an EXPLICIT trigger, not the catch-all.
+		return Plan{
+			Intent: "current_state", Modules: []string{"command_center"},
+			Mode: ModeCurrentStateSummary, Entities: ent, Freshness: FreshnessLive,
+		}
 	case strings.Contains(q, "where") || strings.Contains(q, "how do i") || strings.Contains(q, "navigate") || strings.Contains(q, "find ") && strings.Contains(q, "settings"):
 		return Plan{
 			Intent: "product_navigation", Modules: []string{"product_navigation"},
@@ -181,8 +192,7 @@ func Classify(question string, uiContext map[string]string) Plan {
 		}
 	default:
 		// Module-aware routes (HLD P4): a question scoped to one module's data
-		// (flows, telemetry, cloud-app, …). Checked before the Command Center
-		// fallback so "show me top talkers" gets a focused module answer.
+		// (flows, telemetry, cloud-app, …).
 		for _, mr := range moduleRoutes {
 			if mr.re.MatchString(q) {
 				return Plan{
@@ -191,12 +201,11 @@ func Classify(question string, uiContext map[string]string) Plan {
 				}
 			}
 		}
-		// P2 surface (Command Center "what's going on") — registered intent, but the
-		// answering tools land in a later phase; respond with an honest disclosure.
-		return Plan{
-			Intent: "current_state", Modules: []string{"command_center"},
-			Mode: ModeCurrentStateSummary, Entities: ent, Freshness: FreshnessLive,
-		}
+		// TRULY unmatched → a helpful capability clarification, NOT the current-state
+		// briefing. Dumping the "25 correlations" summary for every unrecognized
+		// question read as a bug; instead we say what we CAN do and let the operator
+		// pick (or type /). "capability" is short-circuited in Ask before governance.
+		return Plan{Intent: "capability", Modules: []string{}, Mode: ModeUnavailable, Entities: ent}
 	}
 }
 
@@ -210,6 +219,13 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	// the demand (intent) for audit. We short-circuit BEFORE the permission/
 	// availability gate so the disclosure never reads as an access problem, and so
 	// a past-window question is never silently answered with live current state.
+	// Unrecognized question → a helpful capability clarification (NOT the
+	// current-state briefing). Short-circuit before governance since it reads no
+	// data and needs no module.
+	if plan.Intent == "capability" {
+		return o.answerCapability(plan), nil
+	}
+
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
 	pe := o.policy()
@@ -978,6 +994,23 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 		Text: b.String(), Module: mh, Citations: cites, NextActions: nextActions,
 		ModeBadges: []string{"History · " + label}, Disclaimers: disc,
 	}, nil
+}
+
+// answerCapability is the friendly "I didn't catch that" clarification for an
+// unrecognized question. It NEVER dumps the current-state briefing — instead it
+// says what Correlix AI can do so the operator can pick. Deterministic.
+func (o *Orchestrator) answerCapability(plan Plan) Answer {
+	return Answer{
+		Mode: ModeUnavailable, Intent: "capability", Modules: plan.Modules,
+		Text: "I didn't quite catch that. I can: summarize what's going on right now, list the active incidents, explain a specific incident, show flows/telemetry/app or integration health, look up a troubleshooting playbook, or point you to a feature. Try one of those — or type / for guided commands.",
+		NextActions: []string{
+			"“What's going on right now?” — the current NOC picture",
+			"“Show me the critical incidents” — the actionable list",
+			"“Explain this incident” — RCA with evidence + owner",
+			"“How do I troubleshoot a BGP flap?” — a playbook",
+		},
+		Citations: []Citation{}, Disclaimers: nil,
+	}
 }
 
 // answerFuturePhase is the honest disclosure for answer modes that are designed
