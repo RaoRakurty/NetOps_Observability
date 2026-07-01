@@ -27,6 +27,31 @@ function fmtBps(v: number): string {
 
 const dash = <span className="mini-meta">—</span>;
 
+// Sparkline — a tiny inline SVG throughput graph that redraws each poll (the
+// backend returns a fresh rolling window), so the line advances live. A pulsing
+// dot marks the current value. Auto-scaled; area + line for a dense NOC look.
+function Sparkline({ data, sev }: { data?: number[]; sev?: Sev }) {
+  if (!data || data.length < 2) return <span className="mini-meta">—</span>;
+  const w = 96, h = 26, pad = 3;
+  const n = data.length;
+  const max = Math.max(...data, 1);
+  const x = (i: number) => pad + (i / (n - 1)) * (w - 2 * pad);
+  const y = (v: number) => h - pad - (v / max) * (h - 2 * pad);
+  const line = data.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${pad.toFixed(1)},${(h - pad).toFixed(1)} ${line} ${(w - pad).toFixed(1)},${(h - pad).toFixed(1)}`;
+  const color = sev === "crit" ? "var(--crit, #ef4444)" : sev === "warn" ? "var(--warn, #f59e0b)" : "var(--accent, #3b82f6)";
+  const last = data[n - 1];
+  const bps = last >= 1e9 ? `${(last / 1e9).toFixed(1)} Gbps` : last >= 1e6 ? `${(last / 1e6).toFixed(1)} Mbps` : last >= 1e3 ? `${(last / 1e3).toFixed(0)} Kbps` : `${last.toFixed(0)} bps`;
+  return (
+    <svg className="wan-spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+      <title>{`live throughput · now ${bps} · peak ${(max >= 1e6 ? (max / 1e6).toFixed(1) + " Mbps" : (max / 1e3).toFixed(0) + " Kbps")}`}</title>
+      <polygon points={area} fill={color} opacity={0.13} />
+      <polyline points={line} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      <circle className="wan-spark-dot" cx={x(n - 1)} cy={y(last)} r={2.3} fill={color} />
+    </svg>
+  );
+}
+
 export default function WanCircuits() {
   const [rows, setRows] = useState<WanInterfaceRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -44,7 +69,7 @@ export default function WanCircuits() {
       }
     };
     tick();
-    const id = setInterval(tick, 10000);
+    const id = setInterval(tick, 5000); // 5s → the in-row live sparkline advances smoothly
     return () => { alive = false; clearInterval(id); };
   }, []);
 
@@ -100,6 +125,8 @@ export default function WanCircuits() {
       sortValue: (r) => r.in_bps, render: (r) => (r.has_util ? fmtBps(r.in_bps) : dash) },
     { key: "out", header: "↑ Out", width: 84, align: "right", sortable: true,
       sortValue: (r) => r.out_bps, render: (r) => (r.has_util ? fmtBps(r.out_bps) : dash) },
+    { key: "live", header: "Live", width: 108, sortable: false,
+      render: (r) => <Sparkline data={r.spark} sev={r.has_util ? utilSev(r.util_pct) : undefined} /> },
     { key: "target", header: "Measured to", width: "18%", sortable: true,
       text: (r) => `${r.remote_device ?? ""} ${r.target ?? ""}`, sortValue: (r) => r.target_kind ?? "",
       render: (r) => r.has_target

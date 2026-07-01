@@ -1990,6 +1990,11 @@ tbody tr:hover { background: var(--hover); }
   font-weight: 600; letter-spacing: 0.02em; text-transform: capitalize;
 }
 .badge.good { background: var(--sev-ok-bg); color: var(--good); }
+/* WAN in-row live throughput sparkline + pulsing "current value" dot. */
+.wan-spark { display: block; overflow: visible; }
+.wan-spark polyline { transition: all .45s linear; }
+.wan-spark-dot { animation: wan-spark-pulse 1.5s ease-in-out infinite; }
+@keyframes wan-spark-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 /* WAN measurement-source tier chips (T1 closest to user experience → T5 weakest). */
 .badge.tier-t1 { background: color-mix(in srgb, var(--good, #16a34a) 18%, transparent); color: var(--good, #16a34a); text-transform: none; padding: 2px 6px; }
 .badge.tier-t2 { background: color-mix(in srgb, #14b8a6 18%, transparent); color: #0d9488; text-transform: none; padding: 2px 6px; }

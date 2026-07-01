@@ -71,7 +71,10 @@ type server struct {
 	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS
 	// topology links) for deriving each WAN interface's measurement target. Defaults
 	// to collectors.FetchTopologyLinks; a DI seam so target derivation is testable.
-	wanNeighbors        func(context.Context) ([]collectors.LLDPNeighbor, error)
+	wanNeighbors func(context.Context) ([]collectors.LLDPNeighbor, error)
+	// vmRangeRaw is an optional test seam for the WAN sparkline range query
+	// (query → device+ifName → value series). nil in prod = real VM query_range.
+	vmRangeRaw          func(ctx context.Context, query string, start, end, step int64) (map[string][]float64, error)
 	reports             *reportScheduler
 	reportPipeline      *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents           incidentsRepo   // incident system of record (nil on file backend)

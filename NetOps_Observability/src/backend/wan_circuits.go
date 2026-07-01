@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -491,6 +493,10 @@ type WanInterfaceRow struct {
 	RemoteIf     string       `json:"remote_if,omitempty"`
 	HasTarget    bool         `json:"has_target"`
 
+	// live throughput sparkline (bits/sec, oldest→newest) for the in-row moving
+	// graph. Refetched each poll so the line advances (live). Empty when no series.
+	Spark []float64 `json:"spark,omitempty"`
+
 	// resolved SLA + provenance (5-tier measurement-source ranking)
 	Latency         float64    `json:"latency_ms"`
 	Jitter          float64    `json:"jitter_ms"`
@@ -510,6 +516,85 @@ type WanInterfaceRow struct {
 
 // wanIfKey indexes a device_if_* sample / endpoint by device + interface name.
 func wanIfKey(device, iface string) string { return device + "\x00" + iface }
+
+// wanSparkSeries fetches a short throughput history (bits/sec) per interface for
+// the in-row live sparkline: one VictoriaMetrics range query over the last
+// `windowSec` at `stepSec`, keyed by device+ifName. Throughput = (in+out) octet
+// rate ×8. Best-effort — a query error or a metrics-off environment yields an
+// empty map and the rows simply carry no sparkline. `nowUnix` is passed in so the
+// caller controls the clock (testable, no hidden time.Now here).
+func (s *server) wanSparkSeries(ctx context.Context, nowUnix, windowSec, stepSec int64) map[string][]float64 {
+	if s.vmRangeRaw == nil && s.metricsBase() == "" {
+		return nil
+	}
+	query := `(rate(device_if_in_octets[1m]) + rate(device_if_out_octets[1m])) * 8`
+	series, err := s.vmQueryRangeByIf(ctx, query, nowUnix-windowSec, nowUnix, stepSec)
+	if err != nil {
+		return nil
+	}
+	return series
+}
+
+// metricsBase returns the configured VM base URL (or "" when unset).
+func (s *server) metricsBase() string {
+	return envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
+}
+
+// vmQueryRangeByIf runs a range query and returns per (device,ifName) value series
+// (oldest→newest), keyed by wanIfKey. A DI seam (s.vmRangeRaw) lets tests inject.
+func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end, step int64) (map[string][]float64, error) {
+	if s.vmRangeRaw != nil {
+		return s.vmRangeRaw(ctx, query, start, end, step)
+	}
+	q := url.Values{}
+	q.Set("query", query)
+	q.Set("start", strconv.FormatInt(start, 10))
+	q.Set("end", strconv.FormatInt(end, 10))
+	q.Set("step", strconv.FormatInt(step, 10))
+	endpoint := strings.TrimRight(s.metricsBase(), "/") + "/api/v1/query_range?" + q.Encode()
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := backendHTTPClient(15 * time.Second).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Values [][2]any          `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	series := map[string][]float64{}
+	for _, r := range out.Data.Result {
+		dev, ifn := r.Metric["device"], r.Metric["ifName"]
+		if dev == "" || ifn == "" {
+			continue
+		}
+		vals := make([]float64, 0, len(r.Values))
+		for _, v := range r.Values {
+			f := 0.0
+			if str, ok := v[1].(string); ok {
+				f, _ = strconv.ParseFloat(str, 64)
+			}
+			if f < 0 {
+				f = 0
+			}
+			vals = append(vals, f)
+		}
+		series[wanIfKey(dev, ifn)] = vals
+	}
+	return series, nil
+}
 
 // splitIfKey reverses wanIfKey.
 func splitIfKey(k string) (string, string) {
@@ -573,6 +658,9 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 	foldUtil(`device_if_speed`, func(u *util, v float64) { u.speedMbps = v })
 	foldUtil(`device_if_oper_status`, func(u *util, v float64) { u.oper, u.hasOper = v, true })
 
+	// Live throughput history for the in-row moving sparkline (last 10m @ 30s step).
+	spark := s.wanSparkSeries(ctx, time.Now().Unix(), 600, 30)
+
 	rows := make([]WanInterfaceRow, 0, len(endpoints))
 	for _, e := range endpoints {
 		row := WanInterfaceRow{
@@ -593,6 +681,9 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 			if u.hasOper {
 				row.OperUp, row.HasOper = u.oper == 1, true
 			}
+		}
+		if sp := spark[wanIfKey(e.Device, e.Interface)]; len(sp) > 0 {
+			row.Spark = sp
 		}
 		if c, ok := linkByLocal[wanIfKey(e.Device, e.Interface)]; ok {
 			row.HasTarget = true

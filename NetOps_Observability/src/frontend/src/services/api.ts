@@ -727,6 +727,7 @@ export type WanInterfaceRow = {
   has_util: boolean;
   oper_up: boolean;
   has_oper: boolean;
+  spark?: number[]; // live throughput history (bits/sec, oldest→newest) for the in-row moving graph
   target?: string; // dst host measured to
   target_kind?: WanTargetKind; // how the target was derived
   target_label?: string; // customer-facing target description

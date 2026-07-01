@@ -234,6 +234,22 @@ func TestWanConnectedDisabled(t *testing.T) {
 	}
 }
 
+// TestWanSparkSeries: the live-throughput sparkline series is fetched via the
+// range seam and keyed by device+ifName.
+func TestWanSparkSeries(t *testing.T) {
+	s := newWanTestServer(t, nil, nil)
+	s.vmRangeRaw = func(_ context.Context, _ string, _, _, _ int64) (map[string][]float64, error) {
+		return map[string][]float64{
+			wanIfKey("wan-r2", "Ethernet4"): {1e6, 2e6, 3.6e7},
+		}, nil
+	}
+	got := s.wanSparkSeries(context.Background(), 1000, 600, 30)
+	sp := got[wanIfKey("wan-r2", "Ethernet4")]
+	if len(sp) != 3 || sp[2] != 3.6e7 {
+		t.Fatalf("expected the injected throughput series, got %v", sp)
+	}
+}
+
 // TestWanPolicyStoreIsolation: a tenant's policy is private; a non-cross caller
 // never reads another tenant's policy.
 func TestWanPolicyStoreIsolation(t *testing.T) {
