@@ -457,17 +457,21 @@ type WanInterfaceRow struct {
 	RemoteAddr   string `json:"remote_addr,omitempty"`
 	HasCircuit   bool   `json:"has_circuit"`
 
-	// resolved circuit SLA + provenance (#3)
-	Latency     float64    `json:"latency_ms"`
-	Jitter      float64    `json:"jitter_ms"`
-	Loss        float64    `json:"loss_pct"`
-	QoE         float64    `json:"qoe"`
-	HasLatency  bool       `json:"has_latency"`
-	HasJitter   bool       `json:"has_jitter"`
-	HasLoss     bool       `json:"has_loss"`
-	HasQoE      bool       `json:"has_qoe"`
-	Source      PathSource `json:"source,omitempty"`
-	SourceLabel string     `json:"source_label,omitempty"`
+	// resolved circuit SLA + provenance (#3, 5-tier measurement-source ranking)
+	Latency         float64    `json:"latency_ms"`
+	Jitter          float64    `json:"jitter_ms"`
+	Loss            float64    `json:"loss_pct"`
+	QoE             float64    `json:"qoe"`
+	Availability    float64    `json:"availability_pct"`
+	HasLatency      bool       `json:"has_latency"`
+	HasJitter       bool       `json:"has_jitter"`
+	HasLoss         bool       `json:"has_loss"`
+	HasQoE          bool       `json:"has_qoe"`
+	HasAvailability bool       `json:"has_availability"`
+	Source          PathSource `json:"source,omitempty"`       // headline measurement method
+	SourceLabel     string     `json:"source_label,omitempty"` // customer-facing method name
+	Tier            int        `json:"tier,omitempty"`         // 1..5 (1 = closest to user experience)
+	TierLabel       string     `json:"tier_label,omitempty"`   // e.g. "Active path probe"
 }
 
 // wanIfKey indexes a device_if_* sample / endpoint by device + interface name.
@@ -554,8 +558,11 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 				row.Jitter, row.HasJitter = m.Jitter, m.HasJitter
 				row.Loss, row.HasLoss = m.Loss, m.HasLoss
 				row.QoE, row.HasQoE = m.QoE, m.HasQoE
+				row.Availability, row.HasAvailability = m.Availability, m.HasAvailability
 				row.Source = m.Source()
 				row.SourceLabel = row.Source.Label()
+				row.Tier = int(row.Source.Tier())
+				row.TierLabel = row.Source.TierLabel()
 			}
 		}
 		rows = append(rows, row)

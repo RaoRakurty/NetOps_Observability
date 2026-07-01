@@ -734,12 +734,16 @@ export type WanInterfaceRow = {
   jitter_ms: number;
   loss_pct: number;
   qoe: number;
+  availability_pct: number;
   has_latency: boolean;
   has_jitter: boolean;
   has_loss: boolean;
   has_qoe: boolean;
+  has_availability: boolean;
   source?: string;
   source_label?: string;
+  tier?: number; // 1..5 (1 = closest to user experience)
+  tier_label?: string; // e.g. "Active path probe"
 };
 
 export type Tunnel = {

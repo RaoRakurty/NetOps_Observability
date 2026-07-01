@@ -108,10 +108,17 @@ export default function WanCircuits() {
       ...sla((r) => r.has_loss, (r) => r.loss_pct, (n) => `${n.toFixed(2)} %`, lossSev) },
     { key: "qoe", header: "QoE", width: 64, align: "right", sortable: true,
       ...sla((r) => r.has_qoe, (r) => r.qoe, (n) => n.toFixed(1), qoeSev) },
-    { key: "source", header: "Measured by", width: 110, sortable: true,
-      text: (r) => r.source_label ?? "", sortValue: (r) => r.source_label ?? "",
+    { key: "avail", header: "Avail.", width: 78, align: "right", sortable: true,
+      ...sla((r) => r.has_availability, (r) => r.availability_pct,
+        (n) => `${n.toFixed(2)} %`, (n) => (n < 95 ? "crit" : n < 99 ? "warn" : undefined) as Sev) },
+    { key: "source", header: "Measured by", width: 132, sortable: true,
+      text: (r) => r.source_label ?? "", sortValue: (r) => (r.tier ?? 9) * 100 + (r.source_label?.length ?? 0),
       render: (r) => (r.source_label
-        ? <span className="badge" title={`measurement source: ${r.source_label}`}>{r.source_label}</span> : dash) },
+        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            {r.tier ? <span className={`badge tier-t${r.tier}`} title={`Tier ${r.tier} — ${r.tier_label} (closer to Tier 1 = closer to user experience)`}>T{r.tier}</span> : null}
+            <span className="badge" title={`method: ${r.source_label}${r.tier_label ? " · " + r.tier_label : ""}`}>{r.source_label}</span>
+          </span>
+        : dash) },
     { key: "status", header: "Status", width: 80, sortable: true,
       text: (r) => (r.has_oper ? (r.oper_up ? "up" : "down") : ""), sortValue: (r) => (r.has_oper ? (r.oper_up ? 1 : 0) : -1),
       render: (r) => (r.has_oper ? <span className={`badge ${r.oper_up ? "good" : "bad"}`}>{r.oper_up ? "up" : "down"}</span> : dash) },
@@ -128,9 +135,12 @@ export default function WanCircuits() {
       <h2>WAN Circuit Utilization</h2>
       <p className="mini-meta" style={{ marginTop: -6, marginBottom: 14 }}>
         One row per WAN-router interface = its circuit to the remote interface.
-        Utilization and status are live; latency / jitter / loss / QoE resolve
-        through the active-measurement ladder (STAMP → echo → ICMP → traceroute),
-        and the <b>Measured by</b> column shows which produced each row.
+        Utilization and status are live; latency / jitter / loss / QoE / availability
+        resolve through the <b>measurement-source ranking</b> — closest to the user
+        experience wins: <b>T1</b> application (HTTP/DNS/TLS) → <b>T2</b> active path
+        probe (echo/ICMP/TCP/traceroute) → <b>T3</b> device-native (STAMP) → <b>T4</b>
+        passive → <b>T5</b> flow. The <b>Measured by</b> column shows the winning
+        tier + method per row.
       </p>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
 
