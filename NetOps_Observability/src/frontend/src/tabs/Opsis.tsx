@@ -38,6 +38,7 @@ type SlashCmd = {
   kind: "grounded" | "topIncident" | "send";
   text?: string; // the NL question this expands to (kind:"send")
   soon?: boolean; // answering tools land later — still routes (honest disclosure)
+  ctx?: boolean; // needs an incident — auto-resolve the top one if none is open
 };
 const SLASH_COMMANDS: SlashCmd[] = [
   // Live operations
@@ -75,6 +76,7 @@ function cmdToSlash(c: AiCommand): SlashCmd {
     cmd: c.command, title: c.label, desc: c.description,
     module: INTENT_BADGE[c.intent] ?? "Correlix", kind: "send", text: c.command,
     soon: c.intent === "cloud_app_summary", // cloud module still gated on ingestion
+    ctx: c.requires_context, // /explain, /owner, /missing, /itsm need an incident
   };
 }
 
@@ -178,7 +180,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   // orchestrator (NOT the free-form proxy) — used for slash commands so the
   // backend resolves "/status" etc. to a structured, cited answer even when a
   // provider key is configured (a slash command is a shortcut, not a chat prompt).
-  const sendGrounded = async (text: string) => {
+  const sendGrounded = async (text: string, context?: Record<string, string>) => {
     if (!text.trim() || busy) return;
     const newHistory = [...history, { role: "user", content: text } as CopilotMessage];
     const idx = newHistory.length;
@@ -186,7 +188,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     setBusy(true);
     setError(null);
     try {
-      const ans = await api.aiAsk(text);
+      const ans = await api.aiAsk(text, context);
       setHistory([...newHistory, { role: "assistant", content: groundedToText(ans) }]);
       setGrounded((g) => ({ ...g, [idx]: ans }));
     } catch (e) {
@@ -266,9 +268,19 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   // runSlash dispatches a guided command by sending the raw "/cmd" through the
   // GROUNDED engine — the backend resolves it to the same intent as the
   // equivalent natural-language question (commands are shortcuts, not bypasses).
-  const runSlash = (c: SlashCmd) => {
+  const runSlash = async (c: SlashCmd) => {
     setSlashOpen(false); setDraft("");
     if (c.cmd === "/help") { setShowHelp(true); return; }
+    // Commands that need an incident (/explain, /owner, /missing, /itsm): resolve
+    // the top-priority incident and pass it as context, so the command explains a
+    // real problem instead of dead-ending at "which problem?". If nothing's
+    // active, the backend answers honestly.
+    if (c.ctx && !busy) {
+      try {
+        const id = topProblemId(await api.aiAsk("What is going on right now?"));
+        if (id) { sendGrounded(c.cmd, { correlation_id: id }); return; }
+      } catch { /* fall through to the context-free send */ }
+    }
     sendGrounded(c.cmd);
   };
 
