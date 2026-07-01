@@ -247,19 +247,31 @@ func TestHistoricalNotAnsweredWithLiveState(t *testing.T) {
 	}
 }
 
-// TestShiftHandoffFuturePhase: a shift pass-down request is honestly disclosed,
-// not silently faked from live data.
-func TestShiftHandoffFuturePhase(t *testing.T) {
+// TestShiftHandoff: a shift pass-down request produces a real, deterministic
+// handoff (active picture + priority incidents + checklist) — not a stub, not a
+// provider call. Gated on correlations:read.
+func TestShiftHandoff(t *testing.T) {
 	o := newOrch(newMockDS())
 	ans, err := o.Ask(context.Background(), tenantA(), "give me the shift handoff", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ans.Mode != ModeUnavailable || ans.Intent != "shift_handoff" {
-		t.Fatalf("expected an honest shift_handoff disclosure, got mode=%s intent=%s", ans.Mode, ans.Intent)
+	if ans.Mode != ModeShiftHandoff || ans.Intent != "shift_handoff" {
+		t.Fatalf("expected a real shift_handoff answer, got mode=%s intent=%s", ans.Mode, ans.Intent)
 	}
-	if ans.CurrentState != nil {
-		t.Fatal("shift handoff is not built — must not answer with live state")
+	if strings.TrimSpace(ans.Text) == "" {
+		t.Error("shift handoff must have a narrative")
+	}
+	if len(ans.NextActions) == 0 {
+		t.Error("shift handoff must include a handoff checklist")
+	}
+	if !containsStr(ans.ModeBadges, "Shift handoff") {
+		t.Errorf("expected a Shift handoff badge, got %v", ans.ModeBadges)
+	}
+	// A caller without correlations:read is refused (no incident data leak).
+	noPerm := Principal{Tenant: "t-a", Perms: map[string]bool{"reports:read": true}}
+	if r, _ := o.Ask(context.Background(), noPerm, "shift handoff", nil); r.Mode != ModeUnavailable {
+		t.Errorf("no correlations:read → must be refused, got %s", r.Mode)
 	}
 }
 
@@ -286,7 +298,7 @@ func TestPresentTenseStillCurrentState(t *testing.T) {
 func knownMode(m AnswerMode) bool {
 	switch m {
 	case ModeProblemExplanation, ModeCurrentStateSummary, ModeProductNavigationHelp,
-		ModeModuleHealthSummary, ModeInvestigationPlan, ModeUnavailable:
+		ModeModuleHealthSummary, ModeInvestigationPlan, ModeShiftHandoff, ModeUnavailable:
 		return true
 	}
 	return false

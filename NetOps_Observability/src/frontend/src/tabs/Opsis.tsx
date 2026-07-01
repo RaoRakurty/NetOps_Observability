@@ -74,7 +74,7 @@ function cmdToSlash(c: AiCommand): SlashCmd {
   return {
     cmd: c.command, title: c.label, desc: c.description,
     module: INTENT_BADGE[c.intent] ?? "Correlix", kind: "send", text: c.command,
-    soon: c.intent === "shift_handoff" || c.intent === "cloud_app_summary",
+    soon: c.intent === "cloud_app_summary", // cloud module still gated on ingestion
   };
 }
 

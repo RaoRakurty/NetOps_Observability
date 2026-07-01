@@ -138,12 +138,12 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
 		}
 	case reShift.MatchString(q):
-		// Shift pass-down summary (HLD P3, reports module) — answering tools not
-		// built yet; routed to an honest "planned, not enabled" disclosure rather
-		// than silently answered with live state.
+		// Shift pass-down summary (HLD P3): the active picture + priority incidents
+		// the incoming shift should own. Gated on event_management (the data owner),
+		// answered deterministically from the tenant-scoped active correlations.
 		return Plan{
-			Intent: "shift_handoff", Modules: []string{"reports"},
-			Mode: ModeShiftHandoff, Entities: ent, Freshness: FreshnessHistorical,
+			Intent: "shift_handoff", Modules: []string{"event_management"},
+			Mode: ModeShiftHandoff, Entities: ent, Freshness: FreshnessLive,
 		}
 	case reHistorical.MatchString(q):
 		// Time-range / "what happened last night" summary (HLD P3). Same honest
@@ -207,7 +207,7 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	// availability gate so the disclosure never reads as an access problem, and so
 	// a past-window question is never silently answered with live current state.
 	switch plan.Mode {
-	case ModeTimeRangeOutageSummary, ModeShiftHandoff:
+	case ModeTimeRangeOutageSummary:
 		return o.answerFuturePhase(plan), nil
 	}
 
@@ -239,6 +239,8 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 		return o.answerCurrentState(ctx, p, question, plan, disc)
 	case ModeModuleHealthSummary:
 		return o.answerModuleHealth(ctx, p, question, plan, allowed, disc)
+	case ModeShiftHandoff:
+		return o.answerShiftHandoff(ctx, p, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeInvestigationPlan:
@@ -737,6 +739,87 @@ func (o *Orchestrator) answerKB(question string, plan Plan, disc []string) Answe
 		ModeBadges:  []string{"Guidance"},
 		Disclaimers: append(disc, "General network-engineering guidance — verify against live Correlix evidence."),
 	}
+}
+
+// answerShiftHandoff builds a NOC pass-down (HLD P3): the active picture, the
+// priority incidents the incoming shift should own, the watch items, and a
+// handoff checklist — all from the tenant-scoped active correlations, DETERMINISTIC
+// (no LLM needed, works key-free). Gated on correlations:read (the data it reads).
+func (o *Orchestrator) answerShiftHandoff(ctx context.Context, p Principal, plan Plan, disc []string) (Answer, error) {
+	if !p.Can("correlations:read") {
+		return Answer{
+			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+			Text:      "You don't have permission to read incidents for a shift handoff.",
+			Citations: []Citation{}, Disclaimers: append(disc, "correlations:read required."),
+		}, nil
+	}
+	probs, err := o.DS.ListActiveProblems(ctx, p, 100)
+	if err != nil {
+		return Answer{}, err
+	}
+
+	conf, susp, undet := 0, 0, 0
+	var actionable []Problem
+	for _, pr := range probs {
+		switch strings.ToLower(pr.Verdict) {
+		case "confirmed":
+			conf++
+			actionable = append(actionable, pr)
+		case "suspected":
+			susp++
+			actionable = append(actionable, pr)
+		default:
+			undet++
+		}
+	}
+	sort.SliceStable(actionable, func(i, j int) bool { return PriorityScore(actionable[i]) > PriorityScore(actionable[j]) })
+
+	mh := &ModuleHealthSummary{Module: "event_management", DisplayName: "Shift Handoff"}
+	cites := []Citation{}
+	const cap = 8
+	shown := actionable
+	if len(shown) > cap {
+		shown = shown[:cap]
+		mh.Notes = append(mh.Notes, fmt.Sprintf("showing the top %d of %d actionable incidents", cap, len(actionable)))
+	}
+	for _, pr := range shown {
+		line := fmt.Sprintf("%s — %s (%s, %.0f%%)", pr.Display(), pr.Title, StatusLabel(pr.Verdict), pr.Confidence*100)
+		mh.Items = append(mh.Items, line)
+		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: line, Href: "#/monitoring/correlations?id=" + pr.ID})
+	}
+
+	// Deterministic narrative — reads like an operator's pass-down note.
+	var b strings.Builder
+	if len(actionable) == 0 {
+		b.WriteString("Quiet shift: no confirmed or suspected incidents to hand off.")
+		if undet > 0 {
+			b.WriteString(fmt.Sprintf(" %s under investigation (low evidence) — keep in watch mode.", plural(undet, "correlation")))
+		}
+	} else {
+		b.WriteString(fmt.Sprintf("Shift pass-down: %s to action (%d confirmed, %d suspected)", plural(len(actionable), "incident"), conf, susp))
+		if undet > 0 {
+			b.WriteString(fmt.Sprintf(", plus %s under investigation", plural(undet, "correlation")))
+		}
+		top := actionable[0]
+		b.WriteString(". Priority for the incoming shift: " + top.Display() + " — " + top.Title + ".")
+	}
+
+	var nextActions []string
+	if len(actionable) > 0 {
+		nextActions = append(nextActions,
+			"Brief the incoming shift on the priority incidents above.",
+			"Confirm ownership and ticket status for the confirmed incidents.")
+	}
+	if undet > 0 {
+		nextActions = append(nextActions, fmt.Sprintf("Keep the %s under investigation in watch mode unless they gain evidence.", plural(undet, "correlation")))
+	}
+	nextActions = append(nextActions, "Record any manual actions taken this shift for continuity.")
+
+	return Answer{
+		Mode: ModeShiftHandoff, Intent: plan.Intent, Modules: plan.Modules,
+		Text: b.String(), Module: mh, Citations: cites, NextActions: nextActions,
+		ModeBadges: []string{"Shift handoff"}, Disclaimers: disc,
+	}, nil
 }
 
 // answerFuturePhase is the honest disclosure for answer modes that are designed
