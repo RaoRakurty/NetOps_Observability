@@ -13,6 +13,8 @@ func TestSlashAndNaturalLanguageConverge(t *testing.T) {
 		{"/telemetry", "any metric anomalies?"},
 		{"/integrations", "are my integrations healthy"},
 		{"/playbook bgp flap", "how do I troubleshoot a bgp flap"},
+		{"/history", "what happened overnight"},
+		{"/recap last 4 hours", "summarize the last 4 hours"},
 	}
 	for _, c := range cases {
 		q, _, ok := ResolveCommand(c.cmd)

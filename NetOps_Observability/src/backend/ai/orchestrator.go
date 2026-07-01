@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -69,6 +70,8 @@ var (
 	// generic current-state briefing (which dumps every open correlation). Kept
 	// distinct so an incident question gets specific incidents, not the same 25.
 	reIncidents = regexp.MustCompile(`(?i)(\b(critical|confirmed|suspected|actionable|active|major|open|recent|top)\s+(incidents?|correlations?|problems?|issues?)\b|\b(show|list|which|any|what)\b[^?]*\b(incidents?|correlations?)\b|\bincidents?\s+(right now|open|active|to\s+(work|action))\b|\bwhat\s+needs\s+(attention|action|work)\b)`)
+	// Explicit "last/past N <unit>" window for the time-range summary parser.
+	reLookbackNum = regexp.MustCompile(`(?i)(?:last|past|previous)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
 )
 
 // moduleRoute maps a module-specific question (HLD P4) to its module + the
@@ -146,10 +149,11 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Mode: ModeShiftHandoff, Entities: ent, Freshness: FreshnessLive,
 		}
 	case reHistorical.MatchString(q):
-		// Time-range / "what happened last night" summary (HLD P3). Same honest
-		// disclosure — answering a PAST-window question with LIVE data would mislead.
+		// Time-range / "what happened last night" summary (HLD P3): summarized from
+		// a PAST-window correlation query (never live current-state). Gated on
+		// event_management (the data owner).
 		return Plan{
-			Intent: "time_range_summary", Modules: []string{"reports"},
+			Intent: "time_range_summary", Modules: []string{"event_management"},
 			Mode: ModeTimeRangeOutageSummary, Entities: ent, Freshness: FreshnessHistorical,
 		}
 	case reTroubleshoot.MatchString(q):
@@ -206,11 +210,6 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 	// the demand (intent) for audit. We short-circuit BEFORE the permission/
 	// availability gate so the disclosure never reads as an access problem, and so
 	// a past-window question is never silently answered with live current state.
-	switch plan.Mode {
-	case ModeTimeRangeOutageSummary:
-		return o.answerFuturePhase(plan), nil
-	}
-
 	// Governance: every module route passes the Policy Engine (availability +
 	// deny-list + RBAC/PBAC). Disallowed modules are dropped with an honest reason.
 	pe := o.policy()
@@ -241,6 +240,8 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 		return o.answerModuleHealth(ctx, p, question, plan, allowed, disc)
 	case ModeShiftHandoff:
 		return o.answerShiftHandoff(ctx, p, plan, disc)
+	case ModeTimeRangeOutageSummary:
+		return o.answerTimeRange(ctx, p, question, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
 	case ModeInvestigationPlan:
@@ -819,6 +820,151 @@ func (o *Orchestrator) answerShiftHandoff(ctx context.Context, p Principal, plan
 		Mode: ModeShiftHandoff, Intent: plan.Intent, Modules: plan.Modules,
 		Text: b.String(), Module: mh, Citations: cites, NextActions: nextActions,
 		ModeBadges: []string{"Shift handoff"}, Disclaimers: disc,
+	}, nil
+}
+
+// parseLookback turns a past-window phrase into a lookback (seconds) + an
+// operator-facing label. Explicit "last N <unit>" wins; else keyword windows;
+// else a sensible default. Clamped to [5m, 30d] so a summary is always bounded.
+func parseLookback(q string) (int, string) {
+	ql := strings.ToLower(q)
+	if m := reLookbackNum.FindStringSubmatch(ql); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		if n < 1 {
+			n = 1
+		}
+		var secs int
+		var word string
+		switch m[2][0] {
+		case 'w':
+			secs, word = n*7*24*3600, "week"
+		case 'd':
+			secs, word = n*24*3600, "day"
+		case 'h':
+			secs, word = n*3600, "hour"
+		default: // minutes
+			secs, word = n*60, "minute"
+		}
+		return clampLookback(secs), "the last " + plural(n, word)
+	}
+	switch {
+	case strings.Contains(ql, "overnight") || strings.Contains(ql, "last night"):
+		return 12 * 3600, "overnight"
+	case strings.Contains(ql, "this morning"):
+		return 6 * 3600, "this morning"
+	case strings.Contains(ql, "this afternoon") || strings.Contains(ql, "this evening"):
+		return 8 * 3600, "this afternoon/evening"
+	case strings.Contains(ql, "yesterday"):
+		return 24 * 3600, "the last day"
+	case strings.Contains(ql, "weekend"):
+		return 72 * 3600, "the weekend"
+	case strings.Contains(ql, "last week"):
+		return 7 * 24 * 3600, "the last week"
+	case strings.Contains(ql, "earlier today") || strings.Contains(ql, "today"):
+		return 12 * 3600, "earlier today"
+	}
+	return 12 * 3600, "the recent window"
+}
+
+func clampLookback(s int) int {
+	const minS, maxS = 300, 30 * 24 * 3600
+	if s < minS {
+		return minS
+	}
+	if s > maxS {
+		return maxS
+	}
+	return s
+}
+
+// answerTimeRange summarizes what happened in a PAST window (HLD P3, "what
+// happened overnight"). It reads from a WINDOWED correlation query (WindowDataSource)
+// — never live current-state — so a past question is answered honestly. Groups by
+// verdict, distinguishes still-open from resolved, and lists the notable incidents.
+// Deterministic (no LLM). Degrades to an honest disclosure if the DS can't do
+// windowed reads. Gated on correlations:read.
+func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, question string, plan Plan, disc []string) (Answer, error) {
+	if !p.Can("correlations:read") {
+		return Answer{
+			Mode: ModeUnavailable, Intent: plan.Intent, Modules: plan.Modules,
+			Text:      "You don't have permission to read incident history.",
+			Citations: []Citation{}, Disclaimers: append(disc, "correlations:read required."),
+		}, nil
+	}
+	wds, ok := o.DS.(WindowDataSource)
+	if !ok {
+		// Can't do windowed reads → honest disclosure, NEVER a live-state answer.
+		return o.answerFuturePhase(plan), nil
+	}
+	secs, label := parseLookback(question)
+	probs, err := wds.ListProblemsInWindow(ctx, p, secs)
+	if err != nil {
+		return Answer{}, err
+	}
+
+	conf, susp, undet, open := 0, 0, 0, 0
+	var notable []Problem
+	for _, pr := range probs {
+		switch strings.ToLower(pr.Verdict) {
+		case "confirmed":
+			conf++
+			notable = append(notable, pr)
+		case "suspected":
+			susp++
+			notable = append(notable, pr)
+		default:
+			undet++
+		}
+		if strings.EqualFold(pr.State, "open") {
+			open++
+		}
+	}
+	sort.SliceStable(notable, func(i, j int) bool { return PriorityScore(notable[i]) > PriorityScore(notable[j]) })
+
+	mh := &ModuleHealthSummary{Module: "event_management", DisplayName: "Outage Summary"}
+	cites := []Citation{}
+	const cap = 8
+	shown := notable
+	if len(shown) > cap {
+		shown = shown[:cap]
+		mh.Notes = append(mh.Notes, fmt.Sprintf("showing the top %d of %d notable incidents", cap, len(notable)))
+	}
+	for _, pr := range shown {
+		line := fmt.Sprintf("%s — %s (%s, %.0f%%)", pr.Display(), pr.Title, StatusLabel(pr.Verdict), pr.Confidence*100)
+		mh.Items = append(mh.Items, line)
+		cites = append(cites, Citation{ID: "problem:" + pr.ID, Kind: "finding", Label: line, Href: "#/monitoring/correlations?id=" + pr.ID})
+	}
+
+	var b strings.Builder
+	if len(probs) == 0 {
+		b.WriteString("Quiet window: no correlations were recorded in " + label + ".")
+	} else {
+		fmt.Fprintf(&b, "In %s: %s (%d confirmed, %d suspected, %d low-evidence)",
+			label, plural(len(probs), "correlation group"), conf, susp, undet)
+		if open > 0 {
+			fmt.Fprintf(&b, "; %d still open", open)
+		} else {
+			b.WriteString("; all resolved")
+		}
+		b.WriteString(".")
+		if len(notable) > 0 {
+			b.WriteString(" Most significant: " + notable[0].Display() + " — " + notable[0].Title + ".")
+		}
+	}
+
+	var nextActions []string
+	if open > 0 {
+		nextActions = append(nextActions, "Review the still-open incidents above and confirm ownership.")
+	}
+	if conf > 0 || susp > 0 {
+		nextActions = append(nextActions, "Decide whether the confirmed/suspected incidents need a postmortem or ticket.")
+	}
+	nextActions = append(nextActions, "Open any incident above for its full RCA and evidence.")
+
+	return Answer{
+		Mode: ModeTimeRangeOutageSummary, Intent: plan.Intent, Modules: plan.Modules,
+		Text: b.String(), Module: mh, Citations: cites, NextActions: nextActions,
+		ModeBadges: []string{"History · " + label}, Disclaimers: disc,
 	}, nil
 }
 

@@ -50,6 +50,17 @@ func (m *mockDS) ListActiveProblems(_ context.Context, p Principal, _ int) ([]Pr
 	return out, nil
 }
 
+// ListProblemsInWindow makes mockDS a WindowDataSource. It returns data DISTINCT
+// from the live list ("Overnight …") so tests can prove the time-range answer
+// reads the WINDOW, not current state — and stays tenant-isolated.
+func (m *mockDS) ListProblemsInWindow(_ context.Context, p Principal, _ int) ([]Problem, error) {
+	win := map[string][]Problem{
+		"t-a": {{ID: "wa", Title: "Overnight DIA latency", Verdict: "suspected", Confidence: 0.7, State: "closed", SignalCount: 3, NodeCount: 2}},
+		"t-b": {{ID: "wb", Title: "Overnight leaf reboot", Verdict: "confirmed", Confidence: 0.9, State: "open", SignalCount: 4, NodeCount: 1}},
+	}
+	return win[p.Tenant], nil
+}
+
 // ModuleQuery makes mockDS a ModuleDataSource (P4) so the module read tools
 // register. It returns per-tenant data keyed on the principal so the isolation
 // tests can prove a module summary never crosses tenants: t-a sees edge-1,
@@ -216,14 +227,13 @@ func TestCurrentStateIsolation(t *testing.T) {
 	}
 }
 
-// TestHistoricalNotAnsweredWithLiveState is the honesty guard: a PAST-window
-// question ("the outage last night") must NOT be silently answered with live
-// current-state data. It routes to an honest "planned, not enabled" disclosure
-// and leaks none of the active correlation's facts.
-func TestHistoricalNotAnsweredWithLiveState(t *testing.T) {
+// TestTimeRangeSummary: a PAST-window question is summarized from the WINDOWED
+// correlation query — never from live current-state. The honesty guard: the
+// answer reflects the window data ("Overnight …") and NOT the live active
+// correlation ("BGP peer down on edge-1").
+func TestTimeRangeSummary(t *testing.T) {
 	o := newOrch(newMockDS())
 	for _, q := range []string{
-		"explain the outage last night",
 		"what happened overnight?",
 		"summarize the last 4 hours",
 		"give me yesterday's incidents",
@@ -232,18 +242,51 @@ func TestHistoricalNotAnsweredWithLiveState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: %v", q, err)
 		}
-		if ans.Mode != ModeUnavailable {
-			t.Fatalf("%q: a time-range question must get an honest disclosure, got mode=%s", q, ans.Mode)
-		}
-		if ans.Intent != "time_range_summary" {
-			t.Fatalf("%q: intent should record the demand, got %q", q, ans.Intent)
+		if ans.Mode != ModeTimeRangeOutageSummary || ans.Intent != "time_range_summary" {
+			t.Fatalf("%q: want a time-range summary, got mode=%s intent=%s", q, ans.Mode, ans.Intent)
 		}
 		if ans.CurrentState != nil {
 			t.Fatalf("%q: must NOT answer a past question with live current-state data", q)
 		}
+		// Reads the WINDOW, not live state.
 		if strings.Contains(ans.Text, "BGP peer down") || strings.Contains(ans.Text, "edge-1") {
-			t.Fatalf("%q: leaked live correlation data into a historical answer: %q", q, ans.Text)
+			t.Fatalf("%q: leaked LIVE correlation data into a historical answer: %q", q, ans.Text)
 		}
+		if ans.Module == nil || len(ans.Module.Items) == 0 {
+			t.Fatalf("%q: expected windowed incident items, got %+v", q, ans.Module)
+		}
+	}
+
+	// Tenant isolation: t-a sees only its window rows, t-b only its own.
+	a, _ := o.Ask(context.Background(), tenantA(), "what happened overnight", nil)
+	if !strings.Contains(a.Text, "Overnight DIA latency") {
+		t.Errorf("t-a window summary should reflect its own data, got %q", a.Text)
+	}
+	if strings.Contains(a.Text, "leaf reboot") {
+		t.Errorf("t-a must not see t-b's window incident: %q", a.Text)
+	}
+}
+
+func TestParseLookback(t *testing.T) {
+	cases := []struct {
+		q        string
+		wantSecs int
+	}{
+		{"what happened in the last 4 hours", 4 * 3600},
+		{"summarize the past 2 days", 2 * 24 * 3600},
+		{"last 30 minutes", 30 * 60},
+		{"overnight incidents", 12 * 3600},
+		{"what happened this morning", 6 * 3600},
+		{"over the weekend", 72 * 3600},
+	}
+	for _, c := range cases {
+		if got, _ := parseLookback(c.q); got != c.wantSecs {
+			t.Errorf("parseLookback(%q) = %d, want %d", c.q, got, c.wantSecs)
+		}
+	}
+	// Clamp: an absurd window is bounded to 30d.
+	if got, _ := parseLookback("last 999 weeks"); got != 30*24*3600 {
+		t.Errorf("parseLookback should clamp to 30d, got %d", got)
 	}
 }
 
@@ -298,7 +341,8 @@ func TestPresentTenseStillCurrentState(t *testing.T) {
 func knownMode(m AnswerMode) bool {
 	switch m {
 	case ModeProblemExplanation, ModeCurrentStateSummary, ModeProductNavigationHelp,
-		ModeModuleHealthSummary, ModeInvestigationPlan, ModeShiftHandoff, ModeUnavailable:
+		ModeModuleHealthSummary, ModeInvestigationPlan, ModeShiftHandoff,
+		ModeTimeRangeOutageSummary, ModeUnavailable:
 		return true
 	}
 	return false

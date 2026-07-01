@@ -154,6 +154,46 @@ SELECT toString(correlation_id) AS correlation_id,
 	return out, nil
 }
 
+// ListProblemsInWindow implements the WindowDataSource seam: correlation problems
+// whose onset falls in the past window, tenant-scoped via the corr_objects row
+// policy. NOT filtered to open, so a time-range summary can distinguish still-open
+// from resolved. One row per correlation (latest version).
+func (d aiDataSource) ListProblemsInWindow(_ context.Context, _ ai.Principal, sinceSeconds int) ([]ai.Problem, error) {
+	if sinceSeconds <= 0 {
+		sinceSeconds = 12 * 3600
+	}
+	sql := fmt.Sprintf(`
+SELECT toString(correlation_id) AS correlation_id,
+       top_hypothesis, top_confidence, verdict_tier, state,
+       affected, signal_count, node_count
+  FROM netops.corr_objects
+ WHERE window_start >= now() - INTERVAL %d SECOND
+ ORDER BY window_start DESC
+ LIMIT 1 BY correlation_id
+ LIMIT 1000
+ FORMAT JSON`, sinceSeconds)
+	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ai.Problem, 0, len(rows))
+	for _, r := range rows {
+		id := asStr(r["correlation_id"])
+		out = append(out, ai.Problem{
+			ID:          id,
+			DisplayID:   problemDisplayID(id),
+			Title:       aiProblemTitle(asStr(r["top_hypothesis"]), id),
+			Verdict:     asStr(r["verdict_tier"]),
+			Confidence:  asFloat(r["top_confidence"]),
+			State:       asStr(r["state"]),
+			SignalCount: int(asFloat(r["signal_count"])),
+			NodeCount:   int(asFloat(r["node_count"])),
+			Devices:     affectedDevices(r["affected"]),
+		})
+	}
+	return out, nil
+}
+
 // ModuleQuery is the server-side ModuleDataSource seam (HLD P4). It maps a FIXED,
 // allowlisted query name (chosen by the AI tool, never by the model) to exactly
 // ONE tenant-scoped ClickHouse read, so a module-aware answer ("top talkers",

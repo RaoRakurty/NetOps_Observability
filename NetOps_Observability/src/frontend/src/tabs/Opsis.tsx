@@ -65,7 +65,7 @@ const INTENT_BADGE: Record<string, string> = {
   flow_analytics_summary: "Flows", telemetry_summary: "Telemetry",
   app_identification_summary: "Apps", integration_health_summary: "Integrations",
   cloud_app_summary: "Cloud", network_kb: "Playbook", shift_handoff: "Reports",
-  product_navigation: "Navigation", help: "Help",
+  time_range_summary: "History", product_navigation: "Navigation", help: "Help",
 };
 
 // cmdToSlash adapts a backend AiCommand (the single source of truth) to the menu

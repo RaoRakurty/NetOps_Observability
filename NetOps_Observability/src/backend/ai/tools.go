@@ -62,6 +62,7 @@ type Problem struct {
 	SignalCount     int
 	NodeCount       int
 	CreatedAt       string
+	State           string   // open | closed | merged (window summaries: still-open vs resolved)
 	Timeline        []string // optional human-readable timeline lines
 }
 
@@ -151,6 +152,18 @@ type DataSource interface {
 	// ListActiveProblems returns the tenant-scoped recent/active correlation
 	// problems (newest first), bounded by limit — for Command Center summaries (P2).
 	ListActiveProblems(ctx context.Context, p Principal, limit int) ([]Problem, error)
+}
+
+// WindowDataSource is the OPTIONAL seam for PAST-window reads (the time-range
+// outage summary — "what happened overnight"). Kept separate from DataSource so
+// existing implementers don't churn; the real server implements it. A DataSource
+// that doesn't implement it makes the time-range answer degrade to an honest
+// "not available in this build" disclosure (never a live-state answer).
+type WindowDataSource interface {
+	// ListProblemsInWindow returns the tenant-scoped correlation problems whose
+	// onset falls in [now-sinceSeconds, now], newest first — NOT filtered to open,
+	// so a summary can distinguish still-open from resolved.
+	ListProblemsInWindow(ctx context.Context, p Principal, sinceSeconds int) ([]Problem, error)
 }
 
 // ---- RCA read tools (HLD P1, module correlations_rca) -----------------------
