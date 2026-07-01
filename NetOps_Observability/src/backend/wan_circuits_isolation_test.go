@@ -168,6 +168,48 @@ func TestWanConnectedInterfaceIncluded(t *testing.T) {
 	}
 }
 
+// TestWanMgmtInterfacesExcluded: management ports are never WAN transport, even
+// when a shared mgmt segment makes them LLDP neighbours of a WAN device. This is
+// the lab bug — the WAN router's mgmt0 must not pull the whole fabric in.
+func TestWanMgmtInterfacesExcluded(t *testing.T) {
+	if !isMgmtInterface("mgmt0") || !isMgmtInterface("Management0") || !isMgmtInterface("ma1") {
+		t.Fatal("mgmt interface matcher must catch mgmt0/Management0/ma1")
+	}
+	if isMgmtInterface("Ethernet1") || isMgmtInterface("Eth3") {
+		t.Fatal("data interfaces must NOT be treated as management")
+	}
+	ifaddr := map[string]map[string]string{
+		"wan-r2": {"172.40.40.10": "Management0", "10.0.0.1": "Eth1"},
+		"leaf1":  {"172.40.40.11": "Management0"}, // only a mgmt port, shared segment
+	}
+	neighbors := []collectors.LLDPNeighbor{
+		// shared mgmt segment: every device neighbours the WAN router's mgmt0
+		{LocalDevice: "leaf1", LocalPort: "Management0", RemSysName: "wan-r2", RemPort: "Management0", Proto: "lldp"},
+	}
+	s := newWanTestServer(t, ifaddr, neighbors)
+	s.discovery.Upsert(models.Device{ID: "wan-r2", Name: "wan-r2", TenantID: "acme"})
+	s.discovery.Upsert(models.Device{ID: "leaf1", Name: "leaf1", TenantID: "acme"})
+	eps, _ := s.wanProject(context.Background(), "acme", false)
+	for _, e := range eps {
+		if isMgmtInterface(e.Interface) {
+			t.Fatalf("management interface leaked into WAN scope: %s/%s", e.Device, e.Interface)
+		}
+		if e.Device == "leaf1" {
+			t.Fatalf("leaf1 has only a mgmt port and must not be pulled in via the shared mgmt segment: %+v", e)
+		}
+	}
+	// wan-r2's DATA interface is still measured (as an anchor — no data-plane peer).
+	var sawData bool
+	for _, e := range eps {
+		if e.Device == "wan-r2" && e.Interface == "Eth1" {
+			sawData = true
+		}
+	}
+	if !sawData {
+		t.Fatal("wan-r2's data interface Eth1 should still be in scope")
+	}
+}
+
 // TestWanConnectedDisabled: include_connected=false drops the Spine interface.
 func TestWanConnectedDisabled(t *testing.T) {
 	ifaddr := map[string]map[string]string{

@@ -49,6 +49,14 @@ import (
 // defaultWanPattern selects WAN devices by name.
 const defaultWanPattern = "wan|edge|gw|dmz"
 
+// mgmtIfPattern matches out-of-band MANAGEMENT interfaces, which are never WAN
+// transport. Excluding them is essential: on a shared management segment every
+// device is an LLDP/CDP neighbour of every other, so without this filter the WAN
+// router's mgmt port pulls the whole fabric in and derives arbitrary "peers".
+var mgmtIfPattern = regexp.MustCompile(`(?i)(^|[^a-z])(mgmt|management|oob)|^(ma|me|fxp|em)\d`)
+
+func isMgmtInterface(ifn string) bool { return mgmtIfPattern.MatchString(ifn) }
+
 // defaultAnchors are the reachability anchors used when an interface has no
 // directly-connected peer and no configured next-hop (prod internet-facing case).
 var defaultAnchors = []string{"1.1.1.1", "8.8.8.8"}
@@ -249,6 +257,9 @@ func (s *server) wanProject(ctx context.Context, tenant string, cross bool) ([]W
 	type ifRef struct{ dev, ifn, ip string }
 	inScope := map[string]ifRef{} // key = wanIfKey(devID, ifName)
 	addIf := func(devID, ifn, ip string) {
+		if isMgmtInterface(ifn) {
+			return // management ports are never WAN transport
+		}
 		k := wanIfKey(devID, ifn)
 		if _, ok := inScope[k]; !ok {
 			inScope[k] = ifRef{devID, ifn, ip}
