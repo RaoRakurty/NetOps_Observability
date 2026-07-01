@@ -56,7 +56,6 @@ import VulnerabilityManagement from "./pages/VulnerabilityManagement";
 import ComplianceMonitoring from "./pages/ComplianceMonitoring";
 import NewMonitor from "./pages/NewMonitor";
 import CommandCenter from "./pages/CommandCenter";
-import SystemNetwork from "./pages/SystemNetwork";
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -284,9 +283,6 @@ export const NAV: NavSection[] = [
     footer: true,
     children: [
       { id: "settings", label: "Settings", render: () => <Settings /> },
-      // System — the platform's own DNS resolvers + NTP time sources (so Correlix
-      // resolves outbound URLs and keeps its clock in sync). Platform-owner only.
-      { id: "system", label: "System (DNS & NTP)", platformOnly: true, render: () => <SystemNetwork /> },
       // Data Collection — moved out of Infrastructure (kept it uncrowded): the
       // sources + the poller plumbing that feed telemetry.
       { id: "datasources", label: "Data Sources", group: "Data Collection", render: () => <DataSources /> },

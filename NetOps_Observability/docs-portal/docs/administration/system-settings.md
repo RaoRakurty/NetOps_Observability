@@ -7,13 +7,13 @@ description: Configure the DNS resolvers Correlix uses for outbound URLs and the
 
 # System settings (DNS & NTP)
 
-These are Correlix's own **system** network settings — the DNS resolvers the platform uses to resolve outbound URLs, and the NTP servers it tracks its clock against. Configure them at <kbd>Administration → System (DNS & NTP)</kbd>. Platform‑owner scope.
+These are Correlix's own **system** network settings — the DNS resolvers the platform uses to resolve outbound URLs, and the NTP servers it tracks its clock against. Configure them in the **System · DNS & NTP** box on <kbd>Administration → Settings</kbd>. Platform‑owner only.
 
 ## DNS servers
 
 The DNS servers Correlix uses to **resolve outbound URLs** — integrations (ServiceNow, Jira), webhooks, notification providers, and any host Correlix connects to by name.
 
-1. Go to <kbd>Administration → System (DNS & NTP)</kbd>.
+1. Go to <kbd>Administration → Settings</kbd>.
 2. Enter one or more **DNS server IPs** (one per line).
 3. (Optional) add **search domains**.
 4. **Save** — Correlix immediately starts resolving names through these servers.

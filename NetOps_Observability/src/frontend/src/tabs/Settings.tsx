@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { ExportPolicyForm, LANDING_OPTIONS } from "./admin";
 import { api } from "../services/api";
 import Icon from "../components/Icon";
+import { useAuth } from "../hooks/useAuth";
+import SystemNetworkCard from "../pages/SystemNetwork";
 
 // Default landing page — the platform-wide page users land on after sign-in.
 // Stored on the global tenant (the platform default); individual tenants can
@@ -68,6 +70,8 @@ function DefaultLandingCard() {
 //   - log-export limits are now a tile that opens a guided setup modal.
 export default function Settings() {
   const [showExport, setShowExport] = useState(false);
+  const { user } = useAuth();
+  const platformAdmin = !!user?.platform_admin;
 
   return (
     <>
@@ -82,6 +86,10 @@ export default function Settings() {
 
       {/* Default landing page — the platform-wide post-login page. */}
       <DefaultLandingCard />
+
+      {/* System DNS & NTP — platform-owner only (the platform's own resolvers +
+          time sources). */}
+      {platformAdmin && <SystemNetworkCard />}
 
       {/* Log export limits — tile + guided setup (C3). */}
       <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>
