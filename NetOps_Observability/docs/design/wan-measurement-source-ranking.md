@@ -57,5 +57,30 @@ destination wins that field (per field, first-with-data-wins).
 
 `ResolvedPathMetric` carries per-field sources + availability; `WanInterfaceRow`
 exposes `source`/`source_label`/`tier`/`tier_label`/`availability_pct`. The WAN
-Circuit table renders an **Availability** column and a tier chip (T1..T5) + method
-in **Measured by**.
+Interface Metrics table renders an **Availability** column and a tier chip (T1..T5)
++ method in **Measured by**.
+
+## Per-interface measurement targets (no hub/spoke — 2026-07-01)
+
+The earlier SD-WAN hub-and-spoke circuit-mesh model was **removed entirely**
+(no `WanRole`, no topology-policy hubs, no `wanMesh`). Every WAN interface is
+measured on its own, to a **target derived per interface** (`wan_circuits.go`,
+`wanDeriveTarget`), ranked first-wins:
+
+1. **Operator next-hop override** — `WanMeasurementPolicy.NextHops[device]` or
+   `[device/ifName]`. The prod ISP next-hop when you know it.
+2. **Directly-connected peer** — the LLDP/CDP neighbor's interface IP
+   (`FetchTopologyLinks` joined to the interface-IP table). This is the lab case
+   (WAN router ⇄ Spine) and any internal point-to-point link.
+3. **Reachability anchor** — a public-DNS anchor (`Anchors`, default `1.1.1.1`,
+   `8.8.8.8`). The prod internet-facing case where the ISP speaks no LLDP: you
+   measure internet reachability to a well-known anchor.
+
+**Interface scope** = every interface on a WAN-pattern device (`wan|edge|gw|dmz`)
+**plus** every interface directly connected to a WAN device (gated by
+`include_connected`, default true). That is what makes the lab correct: the WAN
+router's interfaces **and** the Spine's interface toward it are both measured.
+
+The SLA (latency/jitter/loss/QoE/**availability**) is then resolved for the
+derived target host through the 5-tier ranking above — identical provenance
+everywhere. The echo collector probes the published per-interface targets.
