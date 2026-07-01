@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,214 +18,207 @@ import (
 	"netops/backend/models"
 )
 
-// WAN circuits (#1 of the WAN path-metrics program).
+// WAN interface metrics (WAN path-metrics program).
 //
-// Model only — no measurement here. This file defines the controller-style
-// registry the SD-WAN world calls TLOCs + topology policy: every WAN-device
-// interface is an ENDPOINT; the topology policy meshes them into CIRCUITS
-// (local⇄remote interface pairs) that the echo-probe collector (#2) and the
-// source-agnostic resolver (#3) will later measure and the per-interface table
-// (#4) will render.
+// NO hub/spoke. Every WAN interface gets path metrics on its own, measured to a
+// TARGET that is DERIVED per interface — not paired by an operator "hub" intent.
+// The old SD-WAN hub-and-spoke circuit mesh has been removed entirely.
 //
-// Design notes (agreed with the owner):
-//   - The unit is the CIRCUIT = local WAN interface ⇄ remote WAN interface, NOT
-//     "interface → some host". Far-ends are NOT discovered by LLDP (a WAN port
-//     only ever sees the provider PE one L2 hop away); like an SD-WAN controller
-//     we build the endpoint registry CENTRALLY from the SNMP interface-IP table
-//     and mesh it by policy.
-//   - Topology is hub-and-spoke by default (enterprises rarely full-mesh); the
-//     hub is operator INTENT, defaulted from the site's role, never sniffed.
-//   - Endpoints + circuits are DERIVED (projected on demand from the registry ×
-//     site roles × policy), exactly like the topology /view projector. Only the
-//     policy (operator intent) is persisted (tenantKV). Circuit persistence with
-//     an RLS table is reserved (migration 0017) for when we want history.
+// Which interfaces are measured:
+//   - every interface on a WAN-pattern device (default name pattern below), AND
+//   - every interface on ANY device that is directly connected (LLDP/CDP neighbor)
+//     to a WAN-pattern device. This is what makes the lab work: the WAN router's
+//     interfaces AND the Spine's interface toward the WAN router are both measured.
+//
+// How the measurement target is derived per interface (ranked, first wins):
+//  1. operator NEXT-HOP override (policy.NextHops[device] or [device/ifName]) —
+//     the prod ISP next-hop when you know it.
+//  2. DIRECTLY-CONNECTED PEER (LLDP/CDP): the neighbor interface's IP. This is the
+//     lab case (WAN router ⇄ Spine) and any internal point-to-point link.
+//  3. REACHABILITY ANCHOR (public DNS 1.1.1.1 / 8.8.8.8 by default): the prod
+//     internet-facing case where the far end is an ISP that speaks no LLDP — you
+//     measure internet reachability to a well-known anchor instead.
+//
+// The per-field SLA (latency/jitter/loss/QoE/availability) is then resolved for
+// that target host through the ONE source-agnostic resolver (path_metric_resolver.go,
+// the 5-tier measurement-source ranking) — so provenance is identical everywhere.
+//
+// Endpoints/targets are DERIVED (projected on demand from the interface-IP table ×
+// neighbors × policy). Only the policy (operator intent) is persisted (tenantKV).
 
-// WanRole is a device/site's place in the WAN topology — declared intent.
-type WanRole string
+// defaultWanPattern selects WAN devices by name.
+const defaultWanPattern = "wan|edge|gw|dmz"
+
+// defaultAnchors are the reachability anchors used when an interface has no
+// directly-connected peer and no configured next-hop (prod internet-facing case).
+var defaultAnchors = []string{"1.1.1.1", "8.8.8.8"}
+
+// WanTargetKind is how an interface's measurement target was derived (provenance).
+type WanTargetKind string
 
 const (
-	WanRoleHub   WanRole = "hub"
-	WanRoleSpoke WanRole = "spoke"
+	WanTargetDirectPeer WanTargetKind = "direct_peer" // LLDP/CDP-connected neighbor (lab, internal P2P)
+	WanTargetNextHop    WanTargetKind = "next_hop"     // operator-configured ISP next-hop
+	WanTargetAnchor     WanTargetKind = "anchor"       // public-DNS / reachability anchor (prod default)
+	WanTargetNone       WanTargetKind = ""             // no target could be derived
 )
 
-// RoleSource records HOW a role was decided, so the UI can show the "why" and
-// never present an inferred role as fact (anti-black-box).
-type RoleSource string
+// Label is the customer-facing kind name (no raw tokens — customer-language rule).
+func (k WanTargetKind) Label() string {
+	switch k {
+	case WanTargetDirectPeer:
+		return "Directly-connected peer"
+	case WanTargetNextHop:
+		return "ISP next-hop"
+	case WanTargetAnchor:
+		return "Reachability anchor"
+	default:
+		return "—"
+	}
+}
 
-const (
-	RoleDeclared  RoleSource = "declared"  // operator override / explicit hub list
-	RoleFromSite  RoleSource = "site"      // inherited from the site SoT role
-	RoleSuggested RoleSource = "suggested" // inferred (name hint; structural in a later pass)
-	RoleDefault   RoleSource = "default"   // default-closed → spoke
-)
-
-// WanEndpoint is one WAN transport interface — the SD-WAN TLOC analog.
+// WanEndpoint is one WAN (or WAN-connected) transport interface, with its derived
+// measurement target.
 type WanEndpoint struct {
 	TenantID   string `json:"tenant_id,omitempty"`
 	Device     string `json:"device"`
 	Interface  string `json:"interface"`       // ifName (Ethernet1)
-	Address    string `json:"address"`         // physical interface IP (provider /30, maybe NAT'd)
-	Measurable string `json:"measurable_addr"` // address we actually probe (loopback/public); default = Address
+	Address    string `json:"address"`         // interface IP
+	Measurable string `json:"measurable_addr"` // address the OTHER end targets; default = Address
 	Site       string `json:"site,omitempty"`
+	// ConnectedToWAN marks an interface that was included because it is directly
+	// connected to a WAN device (e.g. the lab Spine's link to the WAN router),
+	// rather than living on a WAN device itself.
+	ConnectedToWAN bool `json:"connected_to_wan,omitempty"`
 
-	Role         WanRole    `json:"role"`
-	RoleSource   RoleSource `json:"role_source"`
-	RoleEvidence string     `json:"role_evidence,omitempty"`
+	// Derived measurement target (no hub/spoke).
+	Target      string        `json:"target,omitempty"`       // dst host we measure to
+	TargetKind  WanTargetKind `json:"target_kind,omitempty"`  // how the target was derived
+	TargetLabel string        `json:"target_label,omitempty"` // customer-facing target description
 }
 
-// WanCircuit is one measured direction local→remote. When the policy is
-// bidirectional the reverse is its own row (loss/latency are often asymmetric).
+// WanCircuit is one interface → its measurement target (a 1:1 link, NOT a mesh).
+// The name is retained for the /api/wan/circuits surface + the echo publisher;
+// Remote is the target rendered as an endpoint (its device/if for a direct peer,
+// or the anchor address for an anchor target).
 type WanCircuit struct {
-	TenantID string      `json:"tenant_id,omitempty"`
-	ID       string      `json:"id"` // deterministic over the endpoint pair
-	Local    WanEndpoint `json:"local"`
-	Remote   WanEndpoint `json:"remote"`
-	Topology string      `json:"topology"` // hub-spoke | full-mesh | manual
-	Source   string      `json:"source"`   // registry | manual
-	Enabled  bool        `json:"enabled"`
+	TenantID string        `json:"tenant_id,omitempty"`
+	ID       string        `json:"id"` // deterministic over (local interface, target)
+	Local    WanEndpoint   `json:"local"`
+	Remote   WanEndpoint   `json:"remote"`
+	Kind     WanTargetKind `json:"kind"`
+	Source   string        `json:"source"` // registry
+	Enabled  bool          `json:"enabled"`
 }
 
-// WanTopologyPolicy is the controller-style mesh policy — one row per tenant.
-// All operator intent for the WAN view lives here.
-type WanTopologyPolicy struct {
-	TenantID      string             `json:"tenant_id,omitempty"`
-	Mode          string             `json:"mode"`                     // hub-spoke (default) | full-mesh
-	Bidirectional bool               `json:"bidirectional"`            // default true
-	Hubs          []string           `json:"hubs,omitempty"`           // device id/name OR site slug designated hub
-	WanPattern    string             `json:"wan_pattern,omitempty"`    // which devices are WAN devices (default below)
-	RoleOverrides map[string]WanRole `json:"role_overrides,omitempty"` // per-device id/name override
-	UpdatedBy     string             `json:"updated_by,omitempty"`
-	UpdatedAt     time.Time          `json:"updated_at"`
+// WanMeasurementPolicy is the per-tenant measurement policy — one row per tenant.
+// It replaces the old hub/spoke topology policy: no roles, no mesh mode. All
+// operator intent for the WAN interface view lives here.
+type WanMeasurementPolicy struct {
+	TenantID   string            `json:"tenant_id,omitempty"`
+	WanPattern string            `json:"wan_pattern,omitempty"`       // which devices are WAN devices
+	Anchors    []string          `json:"anchors,omitempty"`           // reachability anchors (default 1.1.1.1/8.8.8.8)
+	NextHops   map[string]string `json:"next_hops,omitempty"`         // device or device/ifName → explicit target (ISP next-hop)
+	IncludeConnected *bool        `json:"include_connected,omitempty"` // include ifaces connected to a WAN device (default true)
+	UpdatedBy  string            `json:"updated_by,omitempty"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
-const defaultWanPattern = "wan|edge|gw|dmz"
-
-// hubNameHint / spokeNameHint feed the weakest (suggested) role signal.
-var (
-	hubNameHint   = regexp.MustCompile(`(?i)(^|[-_])(hub|dc|hq|core|agg|gw|gateway)([-_]|\d|$)`)
-	spokeNameHint = regexp.MustCompile(`(?i)(^|[-_])(spoke|branch|site|store|remote|cpe)([-_]|\d|$)`)
-)
-
-// withDefaults returns the policy with empty fields filled — the safe baseline
-// a tenant gets before it has ever saved one.
-func (p WanTopologyPolicy) withDefaults() WanTopologyPolicy {
-	if p.Mode == "" {
-		p.Mode = "hub-spoke"
-	}
+// withDefaults fills empty fields with the safe baseline a tenant gets before it
+// has ever saved a policy.
+func (p WanMeasurementPolicy) withDefaults() WanMeasurementPolicy {
 	if p.WanPattern == "" {
 		p.WanPattern = defaultWanPattern
 	}
-	// Bidirectional defaults to true; a stored policy carries the explicit value.
+	if len(p.Anchors) == 0 {
+		p.Anchors = append([]string(nil), defaultAnchors...)
+	}
+	if p.IncludeConnected == nil {
+		t := true
+		p.IncludeConnected = &t
+	}
 	return p
 }
 
-func (p WanTopologyPolicy) validate() error {
-	if p.Mode != "" && p.Mode != "hub-spoke" && p.Mode != "full-mesh" {
-		return errors.New(`mode must be "hub-spoke" or "full-mesh"`)
-	}
+func (p WanMeasurementPolicy) validate() error {
 	if p.WanPattern != "" {
 		if _, err := regexp.Compile("(?i)" + p.WanPattern); err != nil {
 			return fmt.Errorf("wan_pattern is not a valid regex: %w", err)
 		}
 	}
-	for dev, r := range p.RoleOverrides {
-		if r != WanRoleHub && r != WanRoleSpoke {
-			return fmt.Errorf("role_overrides[%q] must be hub or spoke", dev)
-		}
-	}
 	return nil
+}
+
+func (p WanMeasurementPolicy) includeConnected() bool {
+	return p.IncludeConnected == nil || *p.IncludeConnected
 }
 
 // ---- policy store (operator intent) — tenantKV, one row per tenant ----
 
 type wanPolicyStore struct {
-	kv *tenantKV[WanTopologyPolicy]
+	kv *tenantKV[WanMeasurementPolicy]
 }
 
 func newWanPolicyStore(path string) (*wanPolicyStore, error) {
 	if path == "" {
 		path = "/data/wan_policy.json"
 	}
-	kv, err := newTenantKV[WanTopologyPolicy](path,
-		func(p WanTopologyPolicy) string { return p.TenantID },
-		func(p WanTopologyPolicy) string { return "policy" }) // single row per tenant
+	kv, err := newTenantKV[WanMeasurementPolicy](path,
+		func(p WanMeasurementPolicy) string { return p.TenantID },
+		func(p WanMeasurementPolicy) string { return "policy" }) // single row per tenant
 	if err != nil {
 		return nil, err
 	}
 	return &wanPolicyStore{kv: kv}, nil
 }
 
-// Get returns the tenant's policy (with defaults applied) — never fails closed
-// to "no view": an unconfigured tenant gets the hub-spoke baseline.
-func (s *wanPolicyStore) Get(tenant string, cross bool) WanTopologyPolicy {
+// Get returns the tenant's policy (with defaults applied) — never fails closed to
+// "no view": an unconfigured tenant gets the measurement baseline.
+func (s *wanPolicyStore) Get(tenant string, cross bool) WanMeasurementPolicy {
 	if p, ok := s.kv.Get(tenant, cross, "policy"); ok {
 		return p.withDefaults()
 	}
-	return WanTopologyPolicy{TenantID: tenant, Bidirectional: true}.withDefaults()
+	return WanMeasurementPolicy{TenantID: tenant}.withDefaults()
 }
 
-func (s *wanPolicyStore) Put(p WanTopologyPolicy) error { return s.kv.Upsert(p) }
+func (s *wanPolicyStore) Put(p WanMeasurementPolicy) error { return s.kv.Upsert(p) }
 
-// ---- projector: registry × site roles × policy → endpoints + circuits ----
+// ---- projector: interface-IP table × neighbors × policy → endpoints + targets ----
 
-// wanResolveRole decides a device's role with full provenance. Precedence:
-// operator override → explicit hub list (device) → site role → hub list (site)
-// → name hint (suggested) → default spoke.
-func (s *server) wanResolveRole(tenant string, cross bool, d models.Device, pol WanTopologyPolicy) (WanRole, RoleSource, string) {
-	if r, ok := pol.RoleOverrides[d.ID]; ok {
-		return r, RoleDeclared, "operator override"
-	}
-	if r, ok := pol.RoleOverrides[d.Name]; ok {
-		return r, RoleDeclared, "operator override"
-	}
-	hubSet := map[string]bool{}
-	for _, h := range pol.Hubs {
-		hubSet[strings.ToLower(h)] = true
-	}
-	if hubSet[strings.ToLower(d.ID)] || hubSet[strings.ToLower(d.Name)] {
-		return WanRoleHub, RoleDeclared, "designated hub"
-	}
-	// Site role (the SD-WAN site-ID analog): device inherits its site's role.
-	site := ""
-	if b, ok := s.deviceSites.Get(tenant, cross, d.ID); ok {
-		site = b.Site
-	}
-	if site != "" {
-		if st, ok := s.sites.Get(tenant, cross, site); ok && st.Role != "" {
-			return WanRole(st.Role), RoleFromSite, "site " + site
-		}
-		if hubSet[strings.ToLower(site)] {
-			return WanRoleHub, RoleDeclared, "designated hub site " + site
-		}
-	}
-	// Weakest signal: name hint. Structural inference (degree/routing) is a later pass.
-	if hubNameHint.MatchString(d.Name) {
-		return WanRoleHub, RoleSuggested, "name suggests hub"
-	}
-	if spokeNameHint.MatchString(d.Name) {
-		return WanRoleSpoke, RoleSuggested, "name suggests spoke"
-	}
-	return WanRoleSpoke, RoleDefault, "default (no hub designated)"
+// wanNeighborIndex indexes directly-connected neighbours by the LOCAL interface
+// (deviceID, ifName) → the peer (device id, ifName, measurable IP). Built from the
+// merged LLDP/CDP/BGP-LS topology links, joined to the interface-IP table so we
+// know the peer's probe-able address.
+type wanPeer struct {
+	device string // peer device name
+	iface  string // peer ifName
+	addr   string // peer interface IP (probe target)
 }
 
-// wanProject builds the endpoint registry and the circuit mesh for a principal.
-// Endpoints come from the SNMP interface-IP table (FetchIfAddrMap) joined to the
-// tenant via device ownership — the same join the entity-resolver export uses,
-// so a tenant only ever sees its own devices' interfaces.
+// wanProject builds the WAN endpoint set (every WAN interface + every interface
+// directly connected to a WAN device) with each interface's derived measurement
+// target, plus the 1:1 interface→target links. Tenant-scoped: a principal only
+// ever sees its own devices' interfaces (the isolation guarantee).
 func (s *server) wanProject(ctx context.Context, tenant string, cross bool) ([]WanEndpoint, []WanCircuit) {
 	pol := s.wanPolicy.Get(tenant, cross)
 	pat := regexp.MustCompile("(?i)" + pol.WanPattern)
 
-	// device id → device, restricted to WAN devices visible to this principal.
-	wanDev := map[string]models.Device{}
+	// All devices visible to this principal, id→device and name→id.
+	visible := map[string]models.Device{}
+	nameToID := map[string]string{}
+	wanDev := map[string]bool{} // device id → is a WAN-pattern device
 	for _, d := range s.discovery.Devices() {
-		if d.ID == "" || !pat.MatchString(d.Name) {
+		if d.ID == "" {
 			continue
 		}
 		if !cross && deviceTenant(d) != tenant {
 			continue
 		}
-		wanDev[d.ID] = d
+		visible[d.ID] = d
+		nameToID[strings.ToLower(d.Name)] = d.ID
+		if pat.MatchString(d.Name) {
+			wanDev[d.ID] = true
+		}
 	}
 	if len(wanDev) == 0 {
 		return nil, nil
@@ -238,35 +230,66 @@ func (s *server) wanProject(ctx context.Context, tenant string, cross bool) ([]W
 	}
 	ifaddr, _ := fetchIfAddr(ctx) // device → ip → ifName (empty if collector off)
 
-	// Build endpoints per device, plus a per-device representative endpoint (the
-	// measurable address the OTHER end of a circuit targets).
-	byDevice := map[string][]WanEndpoint{}
-	for id, d := range wanDev {
-		role, rsrc, evid := s.wanResolveRole(tenant, cross, d, pol)
-		site := ""
-		if b, ok := s.deviceSites.Get(tenant, cross, d.ID); ok {
-			site = b.Site
+	// ifName → ip, per device (inverse of ifaddr) — for peer-IP resolution.
+	ipByDevIf := map[string]map[string]string{}
+	for dev, m := range ifaddr {
+		inv := map[string]string{}
+		for ip, ifn := range m {
+			inv[ifn] = ip
 		}
-		var eps []WanEndpoint
-		for ip, ifname := range ifaddr[id] {
-			eps = append(eps, WanEndpoint{
-				TenantID: deviceTenant(d), Device: d.Name, Interface: ifname,
-				Address: ip, Measurable: ip, Site: site,
-				Role: role, RoleSource: rsrc, RoleEvidence: evid,
-			})
-		}
-		sort.Slice(eps, func(a, b int) bool {
-			if eps[a].Interface != eps[b].Interface {
-				return eps[a].Interface < eps[b].Interface
-			}
-			return eps[a].Address < eps[b].Address
-		})
-		byDevice[id] = eps
+		ipByDevIf[dev] = inv
 	}
 
+	// Directly-connected neighbours, joined to the peer's interface IP.
+	neighbors := s.wanNeighborIndex(ctx, visible, nameToID, ipByDevIf)
+
+	// Which (device, ifName) interfaces are IN SCOPE:
+	//   - every interface on a WAN device, PLUS
+	//   - (if enabled) every interface directly connected to a WAN device.
+	type ifRef struct{ dev, ifn, ip string }
+	inScope := map[string]ifRef{} // key = wanIfKey(devID, ifName)
+	addIf := func(devID, ifn, ip string) {
+		k := wanIfKey(devID, ifn)
+		if _, ok := inScope[k]; !ok {
+			inScope[k] = ifRef{devID, ifn, ip}
+		}
+	}
+	for devID := range wanDev {
+		for ip, ifn := range ifaddr[devID] {
+			addIf(devID, ifn, ip)
+		}
+	}
+	if pol.includeConnected() {
+		for k, peer := range neighbors {
+			devID, ifn := splitIfKey(k)
+			if devID == "" {
+				continue
+			}
+			// Only pull in a NON-WAN device's interface when its peer is a WAN device.
+			if wanDev[devID] {
+				continue // already covered above
+			}
+			if id := nameToID[strings.ToLower(peer.device)]; id != "" && wanDev[id] {
+				addIf(devID, ifn, ipByDevIf[devID][ifn])
+			}
+		}
+	}
+
+	// Build endpoints with a derived target each.
 	var endpoints []WanEndpoint
-	for _, eps := range byDevice {
-		endpoints = append(endpoints, eps...)
+	for _, ref := range inScope {
+		d := visible[ref.dev]
+		site := ""
+		if b, ok := s.deviceSites.Get(tenant, cross, ref.dev); ok {
+			site = b.Site
+		}
+		ep := WanEndpoint{
+			TenantID: deviceTenant(d), Device: d.Name, Interface: ref.ifn,
+			Address: ref.ip, Measurable: ref.ip, Site: site,
+			ConnectedToWAN: !wanDev[ref.dev],
+		}
+		ep.Target, ep.TargetKind, ep.TargetLabel = wanDeriveTarget(ref.dev, ref.ifn, neighbors, pol)
+		endpoints = append(endpoints, ep)
 	}
 	sort.Slice(endpoints, func(a, b int) bool {
 		if endpoints[a].Device != endpoints[b].Device {
@@ -275,113 +298,114 @@ func (s *server) wanProject(ctx context.Context, tenant string, cross bool) ([]W
 		return endpoints[a].Interface < endpoints[b].Interface
 	})
 
-	circuits := s.wanMesh(byDevice, wanDev, pol)
+	// 1:1 interface → target links.
+	var circuits []WanCircuit
+	for _, ep := range endpoints {
+		if ep.Target == "" {
+			continue
+		}
+		remote := WanEndpoint{
+			TenantID: ep.TenantID, Measurable: ep.Target, Address: ep.Target,
+		}
+		switch ep.TargetKind {
+		case WanTargetDirectPeer:
+			// Fill the peer device/if for display.
+			if peer, ok := neighbors[wanIfKey(deviceIDForName(ep.Device, nameToID), ep.Interface)]; ok {
+				remote.Device, remote.Interface = peer.device, peer.iface
+			}
+		case WanTargetAnchor:
+			remote.Device = "Internet"
+		case WanTargetNextHop:
+			remote.Device = "Next-hop"
+		}
+		circuits = append(circuits, WanCircuit{
+			TenantID: ep.TenantID, ID: wanCircuitID(ep, remote), Local: ep, Remote: remote,
+			Kind: ep.TargetKind, Source: "registry", Enabled: true,
+		})
+	}
 	return endpoints, circuits
 }
 
-// repEndpoint returns a device's representative (measurable) endpoint — the
-// address the far end of a circuit targets. Default = its first interface.
-func repEndpoint(eps []WanEndpoint) (WanEndpoint, bool) {
-	if len(eps) == 0 {
-		return WanEndpoint{}, false
+// wanNeighborIndex builds (localDevID, localIfName) → peer, from the merged
+// topology links, restricted to devices visible to the principal and joined to
+// the peer's interface IP. LLDP/CDP carry LocalDevice (id) + RemSysName (name);
+// we resolve the peer name to a visible device id and look up its interface IP.
+func (s *server) wanNeighborIndex(ctx context.Context, visible map[string]models.Device, nameToID map[string]string, ipByDevIf map[string]map[string]string) map[string]wanPeer {
+	fetch := s.wanNeighbors
+	if fetch == nil {
+		fetch = collectors.FetchTopologyLinks
 	}
-	return eps[0], true
-}
-
-func wanCircuitID(local, remote WanEndpoint) string {
-	h := sha1.Sum([]byte(local.Device + "|" + local.Interface + "|" + remote.Device + "|" + remote.Interface))
-	return "ckt-" + hex.EncodeToString(h[:6])
-}
-
-// wanMesh generates circuits from the per-device endpoints by topology policy.
-// hub-spoke (default): every spoke interface ⇄ each hub (and, when bidirectional,
-// every hub interface ⇄ each spoke). full-mesh: every device's interfaces ⇄ every
-// other device. The far end of each circuit is the remote device's measurable
-// (representative) endpoint — exactly how an SD-WAN edge probes a remote TLOC.
-func (s *server) wanMesh(byDevice map[string][]WanEndpoint, wanDev map[string]models.Device, pol WanTopologyPolicy) []WanCircuit {
-	roleOf := func(id string) WanRole {
-		if eps := byDevice[id]; len(eps) > 0 {
-			return eps[0].Role
+	links, _ := fetch(ctx)
+	out := map[string]wanPeer{}
+	for _, l := range links {
+		if l.Proto == "bgp_ls" { // BGP-LS is a control-plane view, not a directly-probeable L2 peer
+			continue
 		}
-		return WanRoleSpoke
-	}
-	bidir := pol.Bidirectional
-
-	seen := map[string]bool{}
-	var out []WanCircuit
-	add := func(local, remote WanEndpoint) {
-		id := wanCircuitID(local, remote)
-		if seen[id] {
-			return
+		if l.LocalDevice == "" || l.LocalPort == "" {
+			continue
 		}
-		seen[id] = true
-		out = append(out, WanCircuit{
-			TenantID: local.TenantID, ID: id, Local: local, Remote: remote,
-			Topology: pol.Mode, Source: "registry", Enabled: true,
-		})
-	}
-
-	if pol.Mode == "full-mesh" {
-		for aID, aEps := range byDevice {
-			for bID, bEps := range byDevice {
-				if aID == bID {
-					continue
-				}
-				rep, ok := repEndpoint(bEps)
-				if !ok {
-					continue
-				}
-				for _, e := range aEps {
-					add(e, rep)
-				}
-			}
+		if _, ok := visible[l.LocalDevice]; !ok {
+			continue // not this principal's device
 		}
-		return out
-	}
-
-	// hub-spoke (default)
-	var hubIDs, spokeIDs []string
-	for id := range byDevice {
-		if roleOf(id) == WanRoleHub {
-			hubIDs = append(hubIDs, id)
-		} else {
-			spokeIDs = append(spokeIDs, id)
+		peerID := nameToID[strings.ToLower(l.RemSysName)]
+		if peerID == "" {
+			continue // unknown / cross-tenant peer — skip (never leak another tenant)
 		}
-	}
-	for _, sID := range spokeIDs {
-		for _, hID := range hubIDs {
-			rep, ok := repEndpoint(byDevice[hID])
-			if !ok {
-				continue
-			}
-			for _, e := range byDevice[sID] {
-				add(e, rep)
-			}
-		}
-	}
-	if bidir {
-		for _, hID := range hubIDs {
-			for _, sID := range spokeIDs {
-				rep, ok := repEndpoint(byDevice[sID])
-				if !ok {
-					continue
-				}
-				for _, e := range byDevice[hID] {
-					add(e, rep)
-				}
-			}
+		peerAddr := ipByDevIf[peerID][l.RemPort]
+		peerName := visible[peerID].Name
+		k := wanIfKey(l.LocalDevice, l.LocalPort)
+		if _, seen := out[k]; !seen {
+			out[k] = wanPeer{device: peerName, iface: l.RemPort, addr: peerAddr}
 		}
 	}
 	return out
 }
 
-// ---- circuit-target publisher (→ Redis, for the wan-echo collector #2) ----
+// wanDeriveTarget picks an interface's measurement target by the ranked strategy:
+// operator next-hop override → directly-connected peer → reachability anchor.
+func wanDeriveTarget(devID, ifn string, neighbors map[string]wanPeer, pol WanMeasurementPolicy) (string, WanTargetKind, string) {
+	// 1. operator next-hop override, keyed by "device/ifName" then "device".
+	if pol.NextHops != nil {
+		if t := pol.NextHops[devID+"/"+ifn]; t != "" {
+			return t, WanTargetNextHop, "Configured next-hop " + t
+		}
+		if t := pol.NextHops[devID]; t != "" {
+			return t, WanTargetNextHop, "Configured next-hop " + t
+		}
+	}
+	// 2. directly-connected peer (LLDP/CDP) with a resolvable IP.
+	if peer, ok := neighbors[wanIfKey(devID, ifn)]; ok && peer.addr != "" {
+		return peer.addr, WanTargetDirectPeer, "Directly-connected peer " + peer.device + " " + peer.iface
+	}
+	// 3. reachability anchor (prod internet-facing default).
+	anchors := pol.Anchors
+	if len(anchors) == 0 {
+		anchors = defaultAnchors
+	}
+	if len(anchors) > 0 && anchors[0] != "" {
+		return anchors[0], WanTargetAnchor, "Reachability anchor " + anchors[0]
+	}
+	return "", WanTargetNone, ""
+}
 
-// startWANCircuitPublish periodically projects every tenant's circuit mesh and
-// publishes it to Redis as the wan-echo collector's target list. The prober is
-// platform infrastructure, so it probes across tenants (cross-tenant projection);
-// each EchoTarget carries its Tenant label so the resulting metric stays scoped.
-// Gated by FEATURE_WAN_ECHO; a no-op without it (or without Redis configured).
+// deviceIDForName resolves a device NAME back to its id (endpoints store the name).
+func deviceIDForName(name string, nameToID map[string]string) string {
+	return nameToID[strings.ToLower(name)]
+}
+
+func wanCircuitID(local, remote WanEndpoint) string {
+	h := sha1.Sum([]byte(local.Device + "|" + local.Interface + "|" + remote.Measurable))
+	return "wan-" + hex.EncodeToString(h[:6])
+}
+
+// ---- interface-target publisher (→ Redis, for the wan-echo collector) ----
+
+// startWANCircuitPublish periodically projects every tenant's interface→target
+// links and publishes them to Redis as the wan-echo collector's target list, so
+// the prober measures the DERIVED targets. Gated by FEATURE_WAN_ECHO; a no-op
+// without it (or without Redis). The prober is platform infrastructure, so it
+// probes across tenants; each target carries its tenant label so the metric stays
+// scoped.
 func (s *server) startWANCircuitPublish(ctx context.Context) {
 	if os.Getenv("FEATURE_WAN_ECHO") != "true" || collectors.RedisAddr() == "" {
 		return
@@ -405,13 +429,11 @@ func (s *server) startWANCircuitPublish(ctx context.Context) {
 				RemoteAddr:   c.Remote.Measurable,
 			})
 		}
-		// TTL > 2× publish interval so a brief API hiccup doesn't starve the
-		// collector, but a stopped API self-clears the targets.
 		if err := collectors.PublishWANCircuits(ctx, targets, int(3*interval/time.Second)); err != nil {
-			log.Printf("wan-echo: publish circuits: %v", err)
+			log.Printf("wan-echo: publish targets: %v", err)
 			return
 		}
-		log.Printf("wan-echo: published %d circuit target(s)", len(targets))
+		log.Printf("wan-echo: published %d interface target(s)", len(targets))
 	}
 	go func() {
 		t := time.NewTicker(interval)
@@ -428,20 +450,19 @@ func (s *server) startWANCircuitPublish(ctx context.Context) {
 	}()
 }
 
-// ---- per-WAN-interface rows (#4): registry × circuit × resolved SLA × util ----
+// ---- per-WAN-interface rows: interface × target × resolved SLA × util ----
 
-// WanInterfaceRow is one WAN-device interface = its circuit, fully enriched for
-// the table: live utilization/status (device_if_*), the circuit far-end, and the
-// SLA resolved through the source ladder (#3) with provenance. Every WAN
-// interface appears; SLA/circuit fields stay zero/empty (honest "—") where no
-// circuit or measurement exists yet.
+// WanInterfaceRow is one WAN (or WAN-connected) interface enriched for the table:
+// live utilization/status (device_if_*), the derived measurement target + how it
+// was derived, and the SLA resolved through the 5-tier source ranking with
+// provenance. Every in-scope interface appears; SLA/target fields stay zero/empty
+// ("—") where no target or no measurement exists yet.
 type WanInterfaceRow struct {
-	Device     string     `json:"device"`
-	Interface  string     `json:"interface"`
-	Address    string     `json:"address"`
-	Site       string     `json:"site,omitempty"`
-	Role       WanRole    `json:"role"`
-	RoleSource RoleSource `json:"role_source"`
+	Device         string `json:"device"`
+	Interface      string `json:"interface"`
+	Address        string `json:"address"`
+	Site           string `json:"site,omitempty"`
+	ConnectedToWAN bool   `json:"connected_to_wan,omitempty"` // Spine-style: connected to a WAN device, not on one
 
 	// live interface load/state (VictoriaMetrics device_if_*)
 	InBps   float64 `json:"in_bps"`
@@ -451,13 +472,15 @@ type WanInterfaceRow struct {
 	OperUp  bool    `json:"oper_up"`
 	HasOper bool    `json:"has_oper"`
 
-	// circuit far-end (the remote WAN interface this circuit measures to)
-	RemoteDevice string `json:"remote_device,omitempty"`
-	RemoteIf     string `json:"remote_if,omitempty"`
-	RemoteAddr   string `json:"remote_addr,omitempty"`
-	HasCircuit   bool   `json:"has_circuit"`
+	// derived measurement target (no hub/spoke)
+	Target      string        `json:"target,omitempty"`       // dst host measured to
+	TargetKind  WanTargetKind `json:"target_kind,omitempty"`  // direct_peer | next_hop | anchor
+	TargetLabel string        `json:"target_label,omitempty"` // customer-facing target description
+	RemoteDevice string       `json:"remote_device,omitempty"`
+	RemoteIf     string       `json:"remote_if,omitempty"`
+	HasTarget    bool         `json:"has_target"`
 
-	// resolved circuit SLA + provenance (#3, 5-tier measurement-source ranking)
+	// resolved SLA + provenance (5-tier measurement-source ranking)
 	Latency         float64    `json:"latency_ms"`
 	Jitter          float64    `json:"jitter_ms"`
 	Loss            float64    `json:"loss_pct"`
@@ -477,20 +500,29 @@ type WanInterfaceRow struct {
 // wanIfKey indexes a device_if_* sample / endpoint by device + interface name.
 func wanIfKey(device, iface string) string { return device + "\x00" + iface }
 
-// wanInterfaceRows builds the per-interface table: every WAN interface for the
-// principal, joined with its circuit far-end, the resolved SLA, and live util.
+// splitIfKey reverses wanIfKey.
+func splitIfKey(k string) (string, string) {
+	if i := strings.IndexByte(k, 0); i >= 0 {
+		return k[:i], k[i+1:]
+	}
+	return "", ""
+}
+
+// wanInterfaceRows builds the per-interface table: every in-scope WAN interface
+// for the principal, joined with its derived target, the resolved SLA, and live
+// util. Target metrics are keyed by target HOST (the resolver's identity).
 func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool) []WanInterfaceRow {
 	endpoints, circuits := s.wanProject(ctx, tenant, cross)
 	if len(endpoints) == 0 {
 		return nil
 	}
 
-	// local (device,if) → circuit far-end, so each interface finds its circuit.
-	circByLocal := map[string]WanCircuit{}
+	// local (device,if) → target link, so each interface finds its target.
+	linkByLocal := map[string]WanCircuit{}
 	for _, c := range circuits {
 		k := wanIfKey(c.Local.Device, c.Local.Interface)
-		if _, seen := circByLocal[k]; !seen {
-			circByLocal[k] = c
+		if _, seen := linkByLocal[k]; !seen {
+			linkByLocal[k] = c
 		}
 	}
 
@@ -534,7 +566,8 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 	for _, e := range endpoints {
 		row := WanInterfaceRow{
 			Device: e.Device, Interface: e.Interface, Address: e.Address,
-			Site: e.Site, Role: e.Role, RoleSource: e.RoleSource,
+			Site: e.Site, ConnectedToWAN: e.ConnectedToWAN,
+			Target: e.Target, TargetKind: e.TargetKind, TargetLabel: e.TargetLabel,
 		}
 		if u, ok := uMap[wanIfKey(e.Device, e.Interface)]; ok {
 			row.InBps, row.OutBps = u.in, u.out
@@ -550,10 +583,10 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 				row.OperUp, row.HasOper = u.oper == 1, true
 			}
 		}
-		if c, ok := circByLocal[wanIfKey(e.Device, e.Interface)]; ok {
-			row.HasCircuit = true
-			row.RemoteDevice, row.RemoteIf, row.RemoteAddr = c.Remote.Device, c.Remote.Interface, c.Remote.Measurable
-			if m, ok := resolved[hostOnly(c.Remote.Measurable)]; ok {
+		if c, ok := linkByLocal[wanIfKey(e.Device, e.Interface)]; ok {
+			row.HasTarget = true
+			row.RemoteDevice, row.RemoteIf = c.Remote.Device, c.Remote.Interface
+			if m, ok := resolved[hostOnly(e.Target)]; ok {
 				row.Latency, row.HasLatency = m.Latency, m.HasLatency
 				row.Jitter, row.HasJitter = m.Jitter, m.HasJitter
 				row.Loss, row.HasLoss = m.Loss, m.HasLoss
@@ -603,7 +636,7 @@ func (s *server) handleWanEndpoints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"endpoints": eps})
 }
 
-// handleWanCircuits: GET /api/wan/circuits — the derived circuit mesh.
+// handleWanCircuits: GET /api/wan/circuits — the derived interface→target links.
 func (s *server) handleWanCircuits(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
 	if !ok {
@@ -614,7 +647,7 @@ func (s *server) handleWanCircuits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"circuits": circuits})
 }
 
-// handleWanPolicy: GET|PUT /api/wan/policy — the per-tenant topology policy.
+// handleWanPolicy: GET|PUT /api/wan/policy — the per-tenant measurement policy.
 func (s *server) handleWanPolicy(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -629,7 +662,7 @@ func (s *server) handleWanPolicy(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		var req WanTopologyPolicy
+		var req WanMeasurementPolicy
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad body: " + err.Error()})
 			return

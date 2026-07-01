@@ -5,13 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"netops/backend/collectors"
 	"netops/backend/models"
 )
 
-// newWanTestServer builds a minimal server with just the stores the WAN circuit
-// projector touches, plus the wanIfAddr DI seam so the interface registry can be
-// injected without Redis.
-func newWanTestServer(t *testing.T, ifaddr map[string]map[string]string) *server {
+// newWanTestServer builds a minimal server with just the stores the WAN projector
+// touches, plus the wanIfAddr + wanNeighbors DI seams so the interface registry
+// and directly-connected neighbours can be injected without Redis.
+func newWanTestServer(t *testing.T, ifaddr map[string]map[string]string, neighbors []collectors.LLDPNeighbor) *server {
 	t.Helper()
 	dir := t.TempDir()
 	wp, err := newWanPolicyStore(filepath.Join(dir, "wan_policy.json"))
@@ -34,20 +35,23 @@ func newWanTestServer(t *testing.T, ifaddr map[string]map[string]string) *server
 		wanIfAddr: func(context.Context) (map[string]map[string]string, error) {
 			return ifaddr, nil
 		},
+		wanNeighbors: func(context.Context) ([]collectors.LLDPNeighbor, error) {
+			return neighbors, nil
+		},
 	}
 }
 
-// TestWanProjectTenantIsolation is the §3a guarantee: the derived endpoint/circuit
+// TestWanProjectTenantIsolation is the §3a guarantee: the derived endpoint/target
 // projection must never surface another tenant's device interfaces.
 func TestWanProjectTenantIsolation(t *testing.T) {
 	ifaddr := map[string]map[string]string{
-		"wan-hub":   {"10.0.0.1": "Ethernet1"},
-		"wan-spoke": {"10.0.1.1": "Ethernet1"},
+		"wan-a":     {"10.0.0.1": "Ethernet1"},
+		"wan-a2":    {"10.0.1.1": "Ethernet1"},
 		"wan-other": {"10.9.0.1": "Ethernet1"}, // belongs to globex
 	}
-	s := newWanTestServer(t, ifaddr)
-	s.discovery.Upsert(models.Device{ID: "wan-hub", Name: "wan-hub", Address: "10.0.0.254", TenantID: "acme"})
-	s.discovery.Upsert(models.Device{ID: "wan-spoke", Name: "wan-spoke", Address: "10.0.1.254", TenantID: "acme"})
+	s := newWanTestServer(t, ifaddr, nil)
+	s.discovery.Upsert(models.Device{ID: "wan-a", Name: "wan-a", Address: "10.0.0.254", TenantID: "acme"})
+	s.discovery.Upsert(models.Device{ID: "wan-a2", Name: "wan-a2", Address: "10.0.1.254", TenantID: "acme"})
 	s.discovery.Upsert(models.Device{ID: "wan-other", Name: "wan-other", Address: "10.9.0.254", TenantID: "globex"})
 
 	ctx := context.Background()
@@ -80,93 +84,110 @@ func TestWanProjectTenantIsolation(t *testing.T) {
 	for _, e := range allEps {
 		devs[e.Device] = true
 	}
-	for _, want := range []string{"wan-hub", "wan-spoke", "wan-other"} {
+	for _, want := range []string{"wan-a", "wan-a2", "wan-other"} {
 		if !devs[want] {
 			t.Errorf("cross-tenant principal should see %q", want)
 		}
 	}
 
-	// Circuits never cross the tenant boundary either.
-	_, ckts := s.wanProject(ctx, "acme", false)
-	for _, c := range ckts {
-		if c.Local.Device == "wan-other" || c.Remote.Device == "wan-other" {
-			t.Fatalf("TENANT LEAK in circuit %s: touches globex device", c.ID)
+	// Interface→target links never cross the tenant boundary either.
+	_, links := s.wanProject(ctx, "acme", false)
+	for _, c := range links {
+		if c.Local.Device == "wan-other" {
+			t.Fatalf("TENANT LEAK in link %s: touches globex device", c.ID)
 		}
 	}
 }
 
-// TestWanResolveRolePrecedence locks the documented precedence:
-// override → hub list → site role → name hint → default spoke.
-func TestWanResolveRolePrecedence(t *testing.T) {
-	s := newWanTestServer(t, nil)
-	// Site "acme-dc" is a hub; bind wan-edge1 to it.
-	if _, err := s.sites.Upsert(Site{TenantID: "acme", Slug: "acme-dc", Name: "DC", Role: "hub"}); err != nil {
-		t.Fatalf("site upsert: %v", err)
-	}
-	if err := s.deviceSites.Set(DeviceSiteBinding{TenantID: "acme", DeviceID: "wan-edge1", Site: "acme-dc"}); err != nil {
-		t.Fatalf("binding: %v", err)
+// TestWanDeriveTarget locks the target-derivation precedence:
+// operator next-hop → directly-connected peer → reachability anchor.
+func TestWanDeriveTarget(t *testing.T) {
+	neighbors := map[string]wanPeer{
+		wanIfKey("wan-r2", "Eth1"): {device: "spine1", iface: "Eth3", addr: "10.0.0.2"},
 	}
 
-	dev := func(id, name string) models.Device {
-		return models.Device{ID: id, Name: name, TenantID: "acme"}
+	// 1. Operator next-hop override wins over everything.
+	pol := WanMeasurementPolicy{NextHops: map[string]string{"wan-r2/Eth1": "203.0.113.1"}}.withDefaults()
+	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth1", neighbors, pol); tgt != "203.0.113.1" || kind != WanTargetNextHop {
+		t.Errorf("next-hop override: got %q/%v, want 203.0.113.1/next_hop", tgt, kind)
 	}
 
-	// 1. Explicit override wins over everything (even the hub site).
-	pol := WanTopologyPolicy{RoleOverrides: map[string]WanRole{"wan-edge1": WanRoleSpoke}}.withDefaults()
-	if r, src, _ := s.wanResolveRole("acme", false, dev("wan-edge1", "wan-edge1"), pol); r != WanRoleSpoke || src != RoleDeclared {
-		t.Errorf("override: got %v/%v, want spoke/declared", r, src)
+	// 2. Directly-connected peer when no override.
+	pol = WanMeasurementPolicy{}.withDefaults()
+	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth1", neighbors, pol); tgt != "10.0.0.2" || kind != WanTargetDirectPeer {
+		t.Errorf("direct peer: got %q/%v, want 10.0.0.2/direct_peer", tgt, kind)
 	}
 
-	// 2. Site role applies when no override.
-	pol = WanTopologyPolicy{}.withDefaults()
-	if r, src, _ := s.wanResolveRole("acme", false, dev("wan-edge1", "wan-edge1"), pol); r != WanRoleHub || src != RoleFromSite {
-		t.Errorf("site role: got %v/%v, want hub/site", r, src)
+	// 3. Reachability anchor when no peer and no override (prod internet-facing).
+	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth9", neighbors, pol); tgt != "1.1.1.1" || kind != WanTargetAnchor {
+		t.Errorf("anchor default: got %q/%v, want 1.1.1.1/anchor", tgt, kind)
 	}
 
-	// 3. Name hint when no override / site role.
-	if r, src, _ := s.wanResolveRole("acme", false, dev("br-1", "branch-1"), pol); r != WanRoleSpoke || src != RoleSuggested {
-		t.Errorf("name hint: got %v/%v, want spoke/suggested", r, src)
-	}
-
-	// 4. Default-closed → spoke when nothing is known.
-	if r, src, _ := s.wanResolveRole("acme", false, dev("x9", "x9"), pol); r != WanRoleSpoke || src != RoleDefault {
-		t.Errorf("default: got %v/%v, want spoke/default", r, src)
+	// Custom anchor is honoured.
+	pol2 := WanMeasurementPolicy{Anchors: []string{"9.9.9.9"}}.withDefaults()
+	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth9", neighbors, pol2); tgt != "9.9.9.9" || kind != WanTargetAnchor {
+		t.Errorf("custom anchor: got %q/%v, want 9.9.9.9/anchor", tgt, kind)
 	}
 }
 
-// TestWanMeshHubSpoke verifies hub-spoke generates spoke⇄hub circuits (both
-// directions when bidirectional) and never spoke↔spoke.
-func TestWanMeshHubSpoke(t *testing.T) {
-	hubEp := WanEndpoint{Device: "hub1", Interface: "Eth1", Address: "10.0.0.1", Measurable: "10.0.0.1", Role: WanRoleHub}
-	sp1 := WanEndpoint{Device: "spoke1", Interface: "Eth1", Address: "10.1.0.1", Measurable: "10.1.0.1", Role: WanRoleSpoke}
-	sp2 := WanEndpoint{Device: "spoke2", Interface: "Eth1", Address: "10.2.0.1", Measurable: "10.2.0.1", Role: WanRoleSpoke}
-	byDevice := map[string][]WanEndpoint{
-		"hub1":   {hubEp},
-		"spoke1": {sp1},
-		"spoke2": {sp2},
+// TestWanConnectedInterfaceIncluded is the LAB guarantee: the WAN router's
+// interface AND the Spine's interface toward it are BOTH in scope and measure to
+// each other (directly-connected peer) — no hub/spoke needed.
+func TestWanConnectedInterfaceIncluded(t *testing.T) {
+	ifaddr := map[string]map[string]string{
+		"wan-r2": {"10.0.0.1": "Eth1"},
+		"spine1": {"10.0.0.2": "Eth3", "10.1.0.1": "Eth1"}, // Eth1 is NOT connected to WAN
 	}
-	s := newWanTestServer(t, nil)
-	pol := WanTopologyPolicy{Mode: "hub-spoke", Bidirectional: true}
-	ckts := s.wanMesh(byDevice, nil, pol)
+	neighbors := []collectors.LLDPNeighbor{
+		{LocalDevice: "wan-r2", LocalPort: "Eth1", RemSysName: "spine1", RemPort: "Eth3", Proto: "lldp"},
+		{LocalDevice: "spine1", LocalPort: "Eth3", RemSysName: "wan-r2", RemPort: "Eth1", Proto: "lldp"},
+	}
+	s := newWanTestServer(t, ifaddr, neighbors)
+	s.discovery.Upsert(models.Device{ID: "wan-r2", Name: "wan-r2", TenantID: "acme"})
+	s.discovery.Upsert(models.Device{ID: "spine1", Name: "spine1", TenantID: "acme"})
 
-	if len(ckts) == 0 {
-		t.Fatal("hub-spoke should generate circuits")
-	}
-	for _, c := range ckts {
-		// No spoke→spoke.
-		if c.Local.Role == WanRoleSpoke && c.Remote.Role == WanRoleSpoke {
-			t.Errorf("spoke↔spoke circuit must not exist: %s→%s", c.Local.Device, c.Remote.Device)
-		}
-		if c.Topology != "hub-spoke" {
-			t.Errorf("topology tag = %q, want hub-spoke", c.Topology)
-		}
+	eps, _ := s.wanProject(context.Background(), "acme", false)
+	byKey := map[string]WanEndpoint{}
+	for _, e := range eps {
+		byKey[e.Device+"/"+e.Interface] = e
 	}
 
-	// Unidirectional: only spoke→hub.
-	uni := s.wanMesh(byDevice, nil, WanTopologyPolicy{Mode: "hub-spoke", Bidirectional: false})
-	for _, c := range uni {
-		if c.Local.Role != WanRoleSpoke || c.Remote.Role != WanRoleHub {
-			t.Errorf("unidirectional should be spoke→hub only, got %v→%v", c.Local.Role, c.Remote.Role)
+	// WAN router interface → measures to the spine peer.
+	wr := byKey["wan-r2/Eth1"]
+	if wr.Target != "10.0.0.2" || wr.TargetKind != WanTargetDirectPeer {
+		t.Errorf("wan-r2/Eth1 should target the spine peer, got %q/%v", wr.Target, wr.TargetKind)
+	}
+	// Spine's interface toward the WAN router is pulled in and measures back.
+	sp := byKey["spine1/Eth3"]
+	if sp.Target != "10.0.0.1" || sp.TargetKind != WanTargetDirectPeer || !sp.ConnectedToWAN {
+		t.Errorf("spine1/Eth3 should be included (connected_to_wan) and target the WAN router, got %+v", sp)
+	}
+	// The spine's OTHER interface (not connected to a WAN device) is NOT in scope.
+	if _, ok := byKey["spine1/Eth1"]; ok {
+		t.Error("spine1/Eth1 is not connected to a WAN device and must not be measured")
+	}
+}
+
+// TestWanConnectedDisabled: include_connected=false drops the Spine interface.
+func TestWanConnectedDisabled(t *testing.T) {
+	ifaddr := map[string]map[string]string{
+		"wan-r2": {"10.0.0.1": "Eth1"},
+		"spine1": {"10.0.0.2": "Eth3"},
+	}
+	neighbors := []collectors.LLDPNeighbor{
+		{LocalDevice: "spine1", LocalPort: "Eth3", RemSysName: "wan-r2", RemPort: "Eth1", Proto: "lldp"},
+	}
+	s := newWanTestServer(t, ifaddr, neighbors)
+	s.discovery.Upsert(models.Device{ID: "wan-r2", Name: "wan-r2", TenantID: "acme"})
+	s.discovery.Upsert(models.Device{ID: "spine1", Name: "spine1", TenantID: "acme"})
+	no := false
+	if err := s.wanPolicy.Put(WanMeasurementPolicy{TenantID: "acme", IncludeConnected: &no}); err != nil {
+		t.Fatalf("policy put: %v", err)
+	}
+	eps, _ := s.wanProject(context.Background(), "acme", false)
+	for _, e := range eps {
+		if e.Device == "spine1" {
+			t.Fatalf("include_connected=false must drop the spine interface, got %+v", e)
 		}
 	}
 }
@@ -174,21 +195,22 @@ func TestWanMeshHubSpoke(t *testing.T) {
 // TestWanPolicyStoreIsolation: a tenant's policy is private; a non-cross caller
 // never reads another tenant's policy.
 func TestWanPolicyStoreIsolation(t *testing.T) {
-	s := newWanTestServer(t, nil)
-	if err := s.wanPolicy.Put(WanTopologyPolicy{TenantID: "acme", Mode: "full-mesh", Bidirectional: true}); err != nil {
+	s := newWanTestServer(t, nil, nil)
+	if err := s.wanPolicy.Put(WanMeasurementPolicy{TenantID: "acme", WanPattern: "acme-wan"}); err != nil {
 		t.Fatalf("acme put: %v", err)
 	}
-	if err := s.wanPolicy.Put(WanTopologyPolicy{TenantID: "globex", Mode: "hub-spoke", Bidirectional: false}); err != nil {
+	if err := s.wanPolicy.Put(WanMeasurementPolicy{TenantID: "globex", Anchors: []string{"9.9.9.9"}}); err != nil {
 		t.Fatalf("globex put: %v", err)
 	}
-	if got := s.wanPolicy.Get("acme", false); got.Mode != "full-mesh" {
-		t.Errorf("acme policy = %q, want full-mesh", got.Mode)
+	if got := s.wanPolicy.Get("acme", false); got.WanPattern != "acme-wan" {
+		t.Errorf("acme policy = %q, want acme-wan", got.WanPattern)
 	}
-	if got := s.wanPolicy.Get("globex", false); got.Mode != "hub-spoke" {
-		t.Errorf("globex policy = %q, want hub-spoke", got.Mode)
+	if got := s.wanPolicy.Get("globex", false); len(got.Anchors) == 0 || got.Anchors[0] != "9.9.9.9" {
+		t.Errorf("globex anchors = %v, want [9.9.9.9]", got.Anchors)
 	}
 	// A tenant with no policy gets the safe default, NOT another tenant's.
-	if got := s.wanPolicy.Get("initech", false); got.Mode != "hub-spoke" || got.TenantID != "initech" {
-		t.Errorf("unconfigured tenant should get default hub-spoke baseline, got %q/%q", got.Mode, got.TenantID)
+	got := s.wanPolicy.Get("initech", false)
+	if got.TenantID != "initech" || got.WanPattern != defaultWanPattern || len(got.Anchors) == 0 {
+		t.Errorf("unconfigured tenant should get the default baseline, got %+v", got)
 	}
 }

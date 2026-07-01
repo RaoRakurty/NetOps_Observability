@@ -710,26 +710,29 @@ export type Finding = {
 // Overlay tunnel (IPsec / SD-WAN / GRE) — one current row per tunnel, served
 // from netops.tunnels. Numeric fields may arrive as JSON strings from
 // ClickHouse (UInt64), so coerce with Number() at the call site.
-// Per-WAN-interface row (GET /api/wan/interfaces, #4) — one WAN interface = its
-// circuit, with live util/status, the circuit far-end, and the SLA resolved
-// through the source ladder (#3). Has* flags distinguish a real 0 from "no data".
+// Per-WAN-interface row (GET /api/wan/interfaces) — one WAN (or WAN-connected)
+// interface, with live util/status, its DERIVED measurement target (no hub/spoke)
+// and the SLA resolved through the 5-tier source ranking. Has* flags distinguish a
+// real 0 from "no data".
+export type WanTargetKind = "direct_peer" | "next_hop" | "anchor" | "";
 export type WanInterfaceRow = {
   device: string;
   interface: string;
   address: string;
   site?: string;
-  role: "hub" | "spoke" | string;
-  role_source: string;
+  connected_to_wan?: boolean; // Spine-style: connected to a WAN device, not on one
   in_bps: number;
   out_bps: number;
   util_pct: number;
   has_util: boolean;
   oper_up: boolean;
   has_oper: boolean;
+  target?: string; // dst host measured to
+  target_kind?: WanTargetKind; // how the target was derived
+  target_label?: string; // customer-facing target description
   remote_device?: string;
   remote_if?: string;
-  remote_addr?: string;
-  has_circuit: boolean;
+  has_target: boolean;
   latency_ms: number;
   jitter_ms: number;
   loss_pct: number;

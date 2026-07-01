@@ -3,15 +3,15 @@ import { api, WanInterfaceRow } from "../services/api";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { latSev, lossSev } from "../tabs/Tunnels";
 
-// WAN Circuit Utilization — one row per WAN-router interface = its circuit.
+// WAN Interface Metrics — one row per WAN (or WAN-connected) interface.
 //
-// The whole row is resolved server-side (GET /api/wan/interfaces): live
-// utilization/oper status (device_if_*), the circuit far-end (remote WAN
-// interface), and the SLA — latency/jitter/loss/QoE — resolved through the
-// measurement-source ladder (STAMP → wan-echo → ICMP → traceroute) with a
-// per-row SOURCE badge showing HOW it was measured. SLA cells show an honest
-// "—" where no circuit exists yet (single hub/spoke not designated) or no probe
-// has measured it — never a fabricated number.
+// No hub/spoke. The whole row is resolved server-side (GET /api/wan/interfaces):
+// live utilization/oper status (device_if_*), the interface's DERIVED measurement
+// TARGET (directly-connected peer via LLDP in the lab; ISP next-hop or a public-DNS
+// reachability anchor in prod), and the SLA — latency/jitter/loss/QoE/availability —
+// resolved through the 5-tier measurement-source ranking with a per-row tier +
+// method badge. SLA cells show an honest "—" where no target or no probe has
+// measured it — never a fabricated number.
 
 const jitSev = (ms: number): Sev => (ms < 30 ? "ok" : ms < 60 ? "warn" : "crit");
 const qoeSev = (q: number): Sev => (q >= 8 ? "ok" : q >= 5 ? "warn" : "crit");
@@ -52,13 +52,19 @@ export default function WanCircuits() {
     const needle = q.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter((r) =>
-      `${r.device} ${r.interface} ${r.remote_device ?? ""} ${r.source_label ?? ""}`.toLowerCase().includes(needle));
+      `${r.device} ${r.interface} ${r.remote_device ?? ""} ${r.target ?? ""} ${r.target_label ?? ""} ${r.source_label ?? ""}`.toLowerCase().includes(needle));
   }, [rows, q]);
 
   const rowKey = (r: WanInterfaceRow) => `${r.device}#${r.interface}`;
 
-  const roleChip = (r: WanInterfaceRow) =>
-    <span className={`badge ${r.role === "hub" ? "accent" : ""}`} title={`role: ${r.role} (${r.role_source})`}>{r.role}</span>;
+  // How the measurement target was derived (provenance chip).
+  const targetKindLabel: Record<string, string> = {
+    direct_peer: "Peer", next_hop: "Next-hop", anchor: "Anchor",
+  };
+  const connectedChip = (r: WanInterfaceRow) =>
+    r.connected_to_wan
+      ? <span className="badge" title="This interface is directly connected to a WAN device (measured too).">linked</span>
+      : null;
 
   const utilCell = (r: WanInterfaceRow) => {
     if (!r.has_util) return dash;
@@ -87,18 +93,23 @@ export default function WanCircuits() {
     { key: "iface", header: "Interface", width: "13%", sortable: true,
       text: (r) => r.interface, sortValue: (r) => r.interface,
       render: (r) => <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-        <span style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.interface}</span>{roleChip(r)}</span> },
+        <span style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.interface}</span>{connectedChip(r)}</span> },
     { key: "util", header: "Utilization", width: 122, align: "right", sortable: true,
       sortValue: (r) => (r.has_util ? r.util_pct : -1), sev: (r) => (r.has_util ? utilSev(r.util_pct) : undefined), render: utilCell },
     { key: "in", header: "↓ In", width: 84, align: "right", sortable: true,
       sortValue: (r) => r.in_bps, render: (r) => (r.has_util ? fmtBps(r.in_bps) : dash) },
     { key: "out", header: "↑ Out", width: 84, align: "right", sortable: true,
       sortValue: (r) => r.out_bps, render: (r) => (r.has_util ? fmtBps(r.out_bps) : dash) },
-    { key: "remote", header: "Circuit → far-end", width: "16%", sortable: true,
-      text: (r) => `${r.remote_device ?? ""} ${r.remote_if ?? ""}`, sortValue: (r) => r.remote_device ?? "",
-      render: (r) => r.has_circuit
-        ? <span title={`${r.remote_device} · ${r.remote_if} · ${r.remote_addr}`}>{r.remote_device}
-            <span className="mini-meta" style={{ marginLeft: 6, fontFamily: "var(--font-mono, monospace)" }}>{r.remote_if}</span></span>
+    { key: "target", header: "Measured to", width: "18%", sortable: true,
+      text: (r) => `${r.remote_device ?? ""} ${r.target ?? ""}`, sortValue: (r) => r.target_kind ?? "",
+      render: (r) => r.has_target
+        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            title={r.target_label ?? `${r.remote_device ?? ""} ${r.target ?? ""}`}>
+            {r.target_kind ? <span className="badge" style={{ textTransform: "none" }}>{targetKindLabel[r.target_kind] ?? r.target_kind}</span> : null}
+            <span>{r.remote_device || "—"}</span>
+            {r.remote_if ? <span className="mini-meta" style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.remote_if}</span> : null}
+            <span className="mini-meta" style={{ fontFamily: "var(--font-mono, monospace)" }}>{r.target}</span>
+          </span>
         : dash },
     { key: "latency", header: "Latency", width: 90, align: "right", sortable: true,
       ...sla((r) => r.has_latency, (r) => r.latency_ms, (n) => `${n.toFixed(1)} ms`, latSev) },
@@ -132,15 +143,18 @@ export default function WanCircuits() {
 
   return (
     <div className="card">
-      <h2>WAN Circuit Utilization</h2>
+      <h2>WAN Interface Metrics</h2>
       <p className="mini-meta" style={{ marginTop: -6, marginBottom: 14 }}>
-        One row per WAN-router interface = its circuit to the remote interface.
-        Utilization and status are live; latency / jitter / loss / QoE / availability
-        resolve through the <b>measurement-source ranking</b> — closest to the user
-        experience wins: <b>T1</b> application (HTTP/DNS/TLS) → <b>T2</b> active path
-        probe (echo/ICMP/TCP/traceroute) → <b>T3</b> device-native (STAMP) → <b>T4</b>
-        passive → <b>T5</b> flow. The <b>Measured by</b> column shows the winning
-        tier + method per row.
+        One row per WAN interface — plus any interface directly connected to a WAN
+        device (marked <span className="badge" style={{ verticalAlign: "middle" }}>linked</span>),
+        so a lab WAN router <i>and</i> the Spine link to it are both measured. Each
+        interface measures to a <b>derived target</b> (<b>Measured to</b>): a
+        directly-connected peer (LLDP), an ISP next-hop, or a public-DNS reachability
+        anchor. Utilization and status are live; latency / jitter / loss / QoE /
+        availability resolve through the <b>5-tier measurement-source ranking</b> —
+        closest to the user experience wins: <b>T1</b> application → <b>T2</b> active
+        path probe → <b>T3</b> device-native (STAMP) → <b>T4</b> passive → <b>T5</b>
+        flow. The <b>Measured by</b> column shows the winning tier + method per row.
       </p>
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
 
@@ -170,17 +184,18 @@ export default function WanCircuits() {
       <div className="dt-toolbar">
         <label className="dt-search">
           <span className="omni-icon">⌕</span>
-          <input placeholder="Search routers, interfaces, far-ends…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input placeholder="Search devices, interfaces, targets…" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <span className="dt-count">{filtered.length} of {rows.length} interfaces</span>
       </div>
 
       {loaded && rows.length === 0 ? (
         <div className="empty">
-          No WAN interfaces yet. WAN routers are the devices matched by the WAN
-          topology policy (default name pattern <code>wan|edge|gw|dmz</code>);
-          rows appear once they export <code>device_if_*</code> metrics. Designate
-          a <b>hub</b> site to generate circuits and populate the SLA columns.
+          No WAN interfaces yet. WAN devices are matched by the measurement policy
+          (default name pattern <code>wan|edge|gw|dmz</code>); their interfaces —
+          plus any interface directly connected to them — appear once they export
+          <code>device_if_*</code> metrics. SLA columns populate once a probe
+          measures each interface's derived target.
         </div>
       ) : (
         <DataTable<WanInterfaceRow>

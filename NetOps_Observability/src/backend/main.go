@@ -63,11 +63,15 @@ type server struct {
 	deviceLocations  *deviceLocationStore
 	sites            *sitesStore      // internal SoT sites (default provider)
 	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy        *wanPolicyStore  // WAN circuits topology policy (operator intent) #wan-path-metrics
+	wanPolicy        *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
-	wanIfAddr           func(context.Context) (map[string]map[string]string, error)
+	wanIfAddr func(context.Context) (map[string]map[string]string, error)
+	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS
+	// topology links) for deriving each WAN interface's measurement target. Defaults
+	// to collectors.FetchTopologyLinks; a DI seam so target derivation is testable.
+	wanNeighbors        func(context.Context) ([]collectors.LLDPNeighbor, error)
 	reports             *reportScheduler
 	reportPipeline      *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents           incidentsRepo   // incident system of record (nil on file backend)
