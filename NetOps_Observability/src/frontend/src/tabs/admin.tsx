@@ -1675,117 +1675,121 @@ function IAMHierarchyMap() {
   );
 }
 
-// AddEntityWizard — the guided "+ Add" flow (Phase 3). Step 1 picks WHAT to create
-// (tenant / org / user / assign-access); step 2 is that entity's form with smart
-// defaults (tenant org → Provider, region → inherited). Enforces create-then-assign
-// and only ever offers parents that already exist.
-type AddKind = "tenant" | "org" | "user" | "grant";
-function AddEntityWizard({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
-  const [kind, setKind] = useState<AddKind | null>(null);
-  const [orgs, setOrgs] = useState<Org[]>([]);
+// GuidedSetupWizard — the end-to-end "＋ Add" flow: walk from the start
+// (optionally an organization) → the tenant → a first user with a role, creating
+// the whole chain in order on Finish (nothing is created until then). Optional
+// steps (org, user) are skippable; a tenant is always created.
+function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
   const [regions, setRegions] = useState<Region[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
   useEffect(() => {
-    Promise.all([
-      api.listOrgs().catch(() => [] as Org[]),
-      api.listRegions().catch(() => [] as Region[]),
-      api.listRoles().catch(() => ({ modules: [], roles: [] as Role[] })),
-      api.listUsers().catch(() => [] as AdminUser[]),
-      api.listTenants().catch(() => [] as Tenant[]),
-    ]).then(([o, r, rl, u, t]) => { setOrgs(o); setRegions(r); setRoles(rl.roles || []); setUsers(u); setTenants(t); });
+    Promise.all([api.listRegions().catch(() => [] as Region[]), api.listRoles().catch(() => ({ modules: [], roles: [] as Role[] }))])
+      .then(([r, rl]) => { setRegions(r); setRoles(rl.roles || []); });
   }, []);
+  const rlabel = (id?: string) => (id ? (regions.find((r) => r.id === id)?.label || id) : "");
 
-  const [tName, setTName] = useState(""); const [tOrg, setTOrg] = useState("global"); const [tRegion, setTRegion] = useState("");
+  const [makeOrg, setMakeOrg] = useState(false);
   const [oName, setOName] = useState(""); const [oRegion, setORegion] = useState("us-east"); const [oSso, setOSso] = useState("");
-  const [uName, setUName] = useState(""); const [uEmail, setUEmail] = useState(""); const [uPass, setUPass] = useState("");
-  const [gUser, setGUser] = useState(""); const [gRole, setGRole] = useState("operator"); const [gScope, setGScope] = useState("");
+  const [tName, setTName] = useState(""); const [tRegion, setTRegion] = useState("");
+  const [makeUser, setMakeUser] = useState(true);
+  const [uName, setUName] = useState(""); const [uEmail, setUEmail] = useState(""); const [uPass, setUPass] = useState(""); const [uRole, setURole] = useState("operator");
+
+  const orgLabel = makeOrg ? (oName.trim() || "new organization") : "Provider (default)";
+  const opt = <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span>;
 
   const finish = async () => {
-    if (kind === "tenant") await api.createTenant(tName.trim(), "", false, tOrg, tRegion);
-    else if (kind === "org") await api.createOrg(oName.trim(), { homeRegion: oRegion, ssoConnection: oSso.trim() || undefined });
-    else if (kind === "user") await api.createUser({ username: uName.trim(), email: uEmail.trim() || undefined, password: uPass || undefined });
-    else if (kind === "grant") await api.grantBinding({ principal_id: gUser, role_id: gRole, scope_id: gScope, effect: "allow" });
+    let orgId = "global";
+    if (makeOrg) { const o = await api.createOrg(oName.trim(), { homeRegion: oRegion, ssoConnection: oSso.trim() || undefined }); orgId = o.id; }
+    const t = await api.createTenant(tName.trim(), "", false, orgId, tRegion);
+    if (makeUser) {
+      await api.createUser({ username: uName.trim(), email: uEmail.trim() || undefined, display_name: uName.trim(), password: uPass || undefined, role: uRole, tenant_id: t.id, status: "active" });
+    }
     onDone();
   };
 
-  const tiles: { k: AddKind; t: string; d: string; chip?: "req" | "opt" }[] = [
-    { k: "tenant", t: "Tenant", d: "A workspace to monitor a network — the unit that holds devices & data.", chip: "req" },
-    { k: "org", t: "Organization", d: "Group several tenants (a customer / BU) with its own region + SSO.", chip: "opt" },
-    { k: "user", t: "User", d: "Add a person who can sign in." },
-    { k: "grant", t: "Assign access", d: "Give an existing user a role in an org or tenant." },
-  ];
-  const scopeOpts = [
-    ...orgs.filter((o) => o.id !== "global").map((o) => ({ id: `org:${o.id}`, label: `Org · ${o.name}` })),
-    ...tenants.map((t) => ({ id: `tenant:${t.id}`, label: `Tenant · ${t.name}` })),
-  ];
-  const formTitle = { tenant: "New tenant", org: "New organization", user: "New user", grant: "Assign access" }[kind ?? "tenant"];
+  const sRow = (n: string, label: string, val: string, muted?: boolean) => (
+    <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+      <span style={{ width: 18, height: 18, borderRadius: 9, background: "var(--surface-2)", color: "var(--muted)", fontSize: 11, display: "inline-grid", placeItems: "center", flexShrink: 0 }}>{n}</span>
+      <span style={{ color: "var(--muted)", minWidth: 96 }}>{label}</span>
+      <span style={{ color: muted ? "var(--muted)" : "var(--fg)", fontWeight: muted ? 400 : 600 }}>{val}</span>
+    </div>
+  );
 
   const steps: WizardStep[] = [
     {
-      id: "kind", title: "What do you want to create?", hint: "Create flows down; you'll grant access at the end.",
-      isValid: () => kind !== null,
+      id: "org", title: "Organization", hint: "Optional — group tenants under a customer/BU. Skip to use the default Provider realm.",
+      isValid: () => !makeOrg || !!oName.trim(),
       render: () => (
-        <div style={{ display: "grid", gap: 10 }}>
-          {tiles.map((x) => (
-            <button key={x.k} type="button" onClick={() => setKind(x.k)} className="card"
-              style={{ textAlign: "left", cursor: "pointer", display: "flex", gap: 10, alignItems: "center", borderColor: kind === x.k ? "var(--accent)" : undefined }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, display: "inline-flex", gap: 6, alignItems: "center" }}>{x.t}{x.chip && <ReqChip kind={x.chip} />}</div>
-                <div className="mini-meta">{x.d}</div>
-              </div>
-              {kind === x.k && <span style={{ color: "var(--accent)", fontWeight: 700 }}>✓</span>}
-            </button>
-          ))}
+        <div style={{ display: "grid", gap: 12 }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={makeOrg} onChange={(e) => setMakeOrg(e.target.checked)} />
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>Create a new organization <ReqChip kind="opt" /></span>
+          </label>
+          {makeOrg ? (
+            <div className="admin-form">
+              <label className="req-field"><span>Organization name <Req /></span><input autoFocus placeholder="e.g. Acme Corp" value={oName} onChange={(e) => setOName(e.target.value)} /></label>
+              <label><span>Home region</span><select value={oRegion} onChange={(e) => setORegion(e.target.value)}>{regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
+              <label style={{ flex: 2 }}><span>SSO connection {opt}</span><input placeholder="e.g. okta (bind later in Authentication)" value={oSso} onChange={(e) => setOSso(e.target.value)} /></label>
+            </div>
+          ) : <div className="mini-meta">Your tenant will be created in the default <b>Provider</b> realm — you can add organizations later.</div>}
         </div>
       ),
     },
-    ...(kind ? [{
-      id: "form", title: formTitle,
-      isValid: () => kind === "tenant" ? !!tName.trim() : kind === "org" ? !!oName.trim() : kind === "user" ? !!uName.trim() : !!(gUser && gRole && gScope),
+    {
+      id: "tenant", title: "Tenant", hint: "The workspace that holds devices & data — this is the required unit.",
+      isValid: () => !!tName.trim(),
       render: () => (
         <div className="admin-form">
-          {kind === "tenant" && <>
-            <label className="req-field"><span>Tenant name <Req /></span><input autoFocus placeholder="e.g. acme-prod" value={tName} onChange={(e) => setTName(e.target.value)} /></label>
-            <label title="Optional — leave as Provider unless grouping tenants into a customer/BU org."><span>Organization <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span>
-              <select value={tOrg} onChange={(e) => { setTOrg(e.target.value); setTRegion(""); }}>
-                {!orgs.some((o) => o.id === "global") && <option value="global">Provider (default)</option>}
-                {orgs.map((o) => <option key={o.id} value={o.id}>{o.id === "global" ? `${o.name} (default)` : o.name}</option>)}
-              </select></label>
-            <label><span>Region <span style={{ fontWeight: 400, color: "var(--muted)" }}>(inherited)</span></span>
-              <select value={tRegion} onChange={(e) => setTRegion(e.target.value)}>
-                <option value="">From organization</option>
-                {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-              </select></label>
-          </>}
-          {kind === "org" && <>
-            <label className="req-field"><span>Organization name <Req /></span><input autoFocus placeholder="e.g. Acme Corp" value={oName} onChange={(e) => setOName(e.target.value)} /></label>
-            <label><span>Home region</span><select value={oRegion} onChange={(e) => setORegion(e.target.value)}>{regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
-            <label style={{ flex: 2 }}><span>SSO connection <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span><input placeholder="e.g. okta (bind later in Authentication)" value={oSso} onChange={(e) => setOSso(e.target.value)} /></label>
-          </>}
-          {kind === "user" && <>
-            <label className="req-field"><span>Username <Req /></span><input autoFocus placeholder="e.g. jdoe" value={uName} onChange={(e) => setUName(e.target.value)} /></label>
-            <label><span>Email <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span><input placeholder="jdoe@example.com" value={uEmail} onChange={(e) => setUEmail(e.target.value)} /></label>
-            <label><span>Initial password <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span></span><input type="password" placeholder="blank = set later / via SSO" value={uPass} onChange={(e) => setUPass(e.target.value)} /></label>
-          </>}
-          {kind === "grant" && <>
-            <label className="req-field"><span>User <Req /></span><select value={gUser} onChange={(e) => setGUser(e.target.value)}><option value="">Select a user…</option>{users.map((u) => <option key={u.username} value={u.username}>{u.display_name || u.username}</option>)}</select></label>
-            <label className="req-field"><span>Role <Req /></span><select value={gRole} onChange={(e) => setGRole(e.target.value)}>{roles.length === 0 ? <option value="operator">operator</option> : roles.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
-            <label className="req-field"><span>Scope <Req /></span><select value={gScope} onChange={(e) => setGScope(e.target.value)}><option value="">Select an org or tenant…</option>{scopeOpts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
-          </>}
+          <label className="req-field"><span>Tenant name <Req /></span><input autoFocus placeholder="e.g. acme-prod" value={tName} onChange={(e) => setTName(e.target.value)} /></label>
+          <label><span>Organization</span><div className="uf-fixed">{orgLabel}</div></label>
+          <label><span>Region <span style={{ fontWeight: 400, color: "var(--muted)" }}>(inherited)</span></span>
+            <select value={tRegion} onChange={(e) => setTRegion(e.target.value)}>
+              <option value="">{makeOrg ? `From ${oName.trim() || "organization"} (${rlabel(oRegion)})` : "From Provider"}</option>
+              {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select></label>
         </div>
       ),
-    } as WizardStep] : []),
+    },
+    {
+      id: "user", title: "First user", hint: "Create a user for this workspace (recommended).",
+      isValid: () => !makeUser || !!uName.trim(),
+      render: () => (
+        <div style={{ display: "grid", gap: 12 }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={makeUser} onChange={(e) => setMakeUser(e.target.checked)} />
+            <span>Create a user for this tenant</span>
+          </label>
+          {makeUser && (
+            <div className="admin-form">
+              <label className="req-field"><span>Username <Req /></span><input autoFocus placeholder="e.g. jdoe" value={uName} onChange={(e) => setUName(e.target.value)} /></label>
+              <label><span>Email {opt}</span><input placeholder="jdoe@example.com" value={uEmail} onChange={(e) => setUEmail(e.target.value)} /></label>
+              <label><span>Password {opt}</span><input type="password" placeholder="blank = set later / via SSO" value={uPass} onChange={(e) => setUPass(e.target.value)} /></label>
+              <label><span>Role</span><select value={uRole} onChange={(e) => setURole(e.target.value)}>{roles.length === 0 ? <option value="operator">operator</option> : roles.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: "review", title: "Review & create", hint: "Here's what will be created, in order.",
+      isValid: () => !!tName.trim() && (!makeUser || !!uName.trim()),
+      render: () => (
+        <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+          {sRow("1", "Organization", makeOrg ? `${oName.trim()} · ${rlabel(oRegion)}` : "Provider (default) — skipped", !makeOrg)}
+          {sRow("2", "Tenant", `${tName.trim() || "—"} · ${tRegion ? rlabel(tRegion) : `${orgLabel} region`}`)}
+          {makeUser ? sRow("3", "User", `${uName.trim() || "—"} · role ${uRole}`) : sRow("3", "User", "skipped", true)}
+          <div className="mini-meta" style={{ marginTop: 6 }}>Click Create to set these up in order. You can add more users under the tenant's Users tab.</div>
+        </div>
+      ),
+    },
   ];
 
   return (
-    <Modal title="Add" subtitle="Create tenants, orgs, users and access — in the right order." onClose={onClose}>
-      <Wizard steps={steps} onFinish={finish} onCancel={onClose} finishLabel={kind === "grant" ? "Assign" : "Create"} />
+    <Modal title="Guided setup" subtitle="Set up a workspace end to end — organization (optional), tenant, and a first user." onClose={onClose}>
+      <Wizard steps={steps} onFinish={finish} onCancel={onClose} finishLabel="Create" />
     </Modal>
   );
 }
-
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
@@ -1811,7 +1815,7 @@ export function IdentityAccess() {
         <button className="dash-btn accent" onClick={() => setShowAdd(true)}>＋ Add</button>
       </div>
       <IAMHierarchyMap key={refresh} />
-      {showAdd && <AddEntityWizard onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); setRefresh((r) => r + 1); }} />}
+      {showAdd && <GuidedSetupWizard onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); setRefresh((r) => r + 1); }} />}
       <div style={{ marginBottom: 12 }}>
         <Segmented
           ariaLabel="Identity scope"
