@@ -1,65 +1,147 @@
 ---
-title: Notifications (Slack, PagerDuty, Email, SMS, SNS)
+title: Notifications (Slack, PagerDuty, Email, SMS & Push)
 sidebar_label: Notifications
 sidebar_position: 2
-description: Route alerts and incidents to your team's channels — Slack, PagerDuty, email, SMS (Twilio), and AWS SNS.
+description: Route alerts to your team's channels — Slack, PagerDuty, email, SMS (Twilio), and phone push — with per-channel severity thresholds and test sends.
 ---
 
 # Notifications
 
-Notification channels deliver alerts and incidents to where your team already works. Configure them at <kbd>Incident Response → Notifications</kbd>.
+Notification channels deliver alerts to where your team already works. Configure them at <kbd>Incident Response → Notifications</kbd> — a gallery of four channel tiles, each opening its own guided setup:
 
-Correlix separates **Notifications** (real‑time channels — Slack, PagerDuty, email, SMS, SNS) from **[Integrations](/incident-response/integrations)** (ITSM systems of record — ServiceNow, Jira). Use both together: page the on‑call *and* file the ticket.
+| Channel | Delivers via | Typical use |
+| --- | --- | --- |
+| **Email** | Your SMTP relay | NOC distribution lists |
+| **SMS &amp; Push** | Twilio (SMS) and ntfy (free push) | Paging phones on critical alerts |
+| **Slack** | Slack Incoming Webhook | Team channel visibility |
+| **PagerDuty** | PagerDuty Events API v2 | On-call escalation |
 
-## Add a channel
+Each tile shows its state at a glance — **Not set up**, **On**, or **Off** — and the stat strip at the top counts **Channels**, **Enabled**, and **Contact points**.
 
-1. Go to <kbd>Incident Response → Notifications</kbd>.
-2. Choose the channel type and enter its credentials (below).
-3. Choose **what routes to it** — which severities, monitors, or incident types.
-4. Save, then send a **test** to confirm delivery.
-
-## Channel setup
-
-### Slack
-
-1. In Slack, create an **Incoming Webhook** for the target channel (Slack → *Apps → Incoming Webhooks*), and copy the webhook URL.
-2. In Correlix, add a **Slack** channel and paste the **webhook URL**.
-3. Route the alerts you want and send a test — a message should appear in the Slack channel.
-
-### PagerDuty
-
-1. In PagerDuty, create a service with an **Events API v2** integration and copy the **Integration/Routing Key**.
-2. In Correlix, add a **PagerDuty** channel and paste the **routing key**.
-3. Correlix triggers a PagerDuty incident when a routed alert fires (and can resolve it when the condition clears). Send a test to verify it pages.
-
-### Email (SMTP)
-
-1. Add an **Email** channel.
-2. Provide your **SMTP** server, port, and (if required) username/password and TLS setting.
-3. Set the **from** address and **recipient** list.
-4. Send a test email.
-
-### SMS (Twilio)
-
-1. In Twilio, note your **Account SID**, **Auth Token**, and a **sending phone number**.
-2. In Correlix, add a **Twilio SMS** channel and enter those, plus the **recipient number(s)**.
-3. Send a test SMS.
-
-### AWS SNS
-
-1. Create (or choose) an **SNS topic** and note its ARN, plus an IAM identity allowed to `sns:Publish`.
-2. In Correlix, add an **SNS** channel with the **topic ARN**, **region**, and credentials.
-3. Send a test — subscribers to the topic receive it.
-
-:::info Secrets are stored encrypted
-Webhook URLs, routing keys, SMTP passwords, and API tokens are encrypted at rest and never displayed again. Re‑saving with a blank secret keeps the stored value.
+:::note Platform administrator required
+Notification channels are platform-wide delivery plumbing; configuring them requires a platform administrator. All secrets (passwords, tokens, webhook URLs, routing keys) are **write-only**: they are never displayed after saving, and re-saving with a blank secret field keeps the stored value.
 :::
 
-## Route alerts to channels
+## How delivery works
 
-Notifications are tied to your **[monitors](/monitoring/overview)** and incidents. When you create or edit a monitor, choose the channel(s) it notifies. Incidents can additionally file a ticket via **[Integrations](/incident-response/integrations)** and **[RCA Auto‑Ticketing](/incident-response/rca-ticketing)**.
+- An alert is dispatched **once, when it first starts firing** — not on every evaluation. See [Manage alerts](/monitoring/manage-alerts).
+- Every *enabled* channel receives every alert, filtered by that channel's own **Send on severity ≥** selector. Severity levels, lowest to highest: `info`, `notice`, `warning`, `error`, `critical`.
+- Notification channels are separate from [Integrations](/incident-response/integrations) (ServiceNow/Jira ticketing). Use both: page the on-call *and* file the ticket.
+
+## Email (SMTP)
+
+1. Go to <kbd>Incident Response → Notifications</kbd> and click the **Email** tile.
+2. Check **Enable email delivery**.
+3. Fill in the fields:
+
+| Field | Required | What it is | Example |
+| --- | --- | --- | --- |
+| **Host** | Yes | Hostname of your SMTP relay | `smtp.example.com` |
+| **Port** | Yes | SMTP port — 587 for STARTTLS, 465 for TLS-on-connect, 25 for plain relay | `587` |
+| **From** | Yes | The From address alert emails are sent as | `noc@example.com` |
+| **Recipients (comma-separated)** | Yes | One or more addresses that receive alert emails | `oncall@example.com, noc@example.com` |
+| **Username** | No | SMTP auth username; leave blank for an unauthenticated relay | `alerts` |
+| **Password** | No | SMTP auth password (write-only — blank keeps the stored value) | — |
+| **Security** | Yes | Transport encryption: **STARTTLS (587, secure)**, **TLS on connect (465, secure)**, or **None (plain relay, insecure)** | STARTTLS |
+| **Send on severity ≥** | Yes | Only alerts at or above this severity are delivered to this channel | `error` |
+
+4. Click **Save**, then **Send test**.
+
+**Verify it worked:** the page shows "Test sent — check your inbox/phone" and a test email arrives at every recipient. The Email tile now reads **On** with `Relay <your-host>` beneath it.
+
+**Troubleshooting**
+
+- **Test failed** with a connection error — the port and **Security** setting must match your relay (587 ↔ STARTTLS, 465 ↔ TLS on connect); a mismatch is the most common failure.
+- **Test sent but nothing arrives** — check the relay's logs and spam filtering; many relays reject a **From** address outside their own domain.
+- **Auth errors** — re-enter the password (write-only, so you can't visually confirm the stored one).
+
+## SMS & Push
+
+The **SMS &amp; Push** tile holds two phone-delivery methods in one place: metered SMS via **Twilio** and free push via **ntfy**. Use ntfy to rehearse critical-alert paging without SMS cost, then add Twilio for production.
+
+### SMS via Twilio
+
+1. In the Twilio Console, note your **Account SID** (starts with `AC…`), **Auth token**, and a Twilio **sending phone number**.
+2. In Correlix, open the **SMS &amp; Push** tile and check **Enable SMS delivery** under *SMS · Twilio*.
+3. Fill in the fields:
+
+| Field | Required | What it is | Example |
+| --- | --- | --- | --- |
+| **Account SID** | Yes | Your Twilio Account SID, from the Twilio Console dashboard | `ACxxxxxxxx…` |
+| **Auth token** | Yes (first save) | Twilio auth token paired with the SID (write-only) | — |
+| **From number** | Yes | A Twilio phone number in E.164 format that messages are sent from | `+15555550123` |
+| **To numbers (comma-separated)** | Yes | Recipient phone numbers in E.164 format | `+15555550100, +15555550101` |
+| **Send on severity ≥** | Yes | Delivery threshold for this channel | `critical` |
+
+4. Click **Save SMS**, then **Send test**.
+
+### Push via ntfy
+
+1. Install the ntfy app on the phones that should receive pushes and subscribe them to a topic name of your choosing (make it unguessable — on a public server, anyone who knows the topic can subscribe).
+2. In the **SMS &amp; Push** tile, check **Enable push delivery** under *Push · ntfy* and fill in:
+
+| Field | Required | What it is | Example |
+| --- | --- | --- | --- |
+| **Server** | No | ntfy server base URL — the public server or your self-hosted instance | `https://ntfy.sh` |
+| **Topic** | Yes | The topic Correlix publishes to; subscribe to it in the ntfy app | `netops-a1b2c3` |
+| **Token (optional)** | No | Access token for protected topics (write-only) | — |
+| **Send on severity ≥** | Yes | Delivery threshold for this channel | `critical` |
+
+3. Click **Save push**, then **Send test**.
+
+**Verify it worked:** the test SMS arrives on every **To** number, and the push appears on every subscribed device. The tile shows **On** with `SMS · Push` beneath it.
+
+**Troubleshooting**
+
+- **Twilio test failed** — numbers must be in E.164 format (`+` and country code); trial Twilio accounts can only text verified numbers.
+- **No push received** — the topic in Correlix and in the ntfy app must match exactly, and a protected topic needs the token saved.
+- **SMS bills climbing** — raise **Send on severity ≥** to `critical`; Twilio is metered per message per recipient.
+
+## Slack
+
+1. In Slack, create an **Incoming Webhook** for the target channel and copy the webhook URL (it looks like `https://hooks.slack.com/services/…`).
+2. In Correlix, open the **Slack** tile and check **Enable Slack delivery**.
+3. Fill in the fields:
+
+| Field | Required | What it is | Example |
+| --- | --- | --- | --- |
+| **Webhook URL** | Yes (first save) | Slack Incoming Webhook URL — it embeds a secret, so it's write-only | `https://hooks.slack.com/services/…` |
+| **Send on severity ≥** | Yes | Delivery threshold for this channel | `warning` |
+
+4. Click **Save**, then **Send test**.
+
+**Verify it worked:** a test message appears in the Slack channel the webhook targets; the tile reads **On** with "Webhook configured."
+
+**Troubleshooting:** a failed test usually means the webhook was revoked or the app removed from the channel — create a fresh Incoming Webhook and re-save (paste the full URL; the field shows dots afterward because it is write-only).
+
+## PagerDuty
+
+1. In PagerDuty, on the service that should receive alerts, add an **Events API v2** integration and copy its 32-character **integration (routing) key**.
+2. In Correlix, open the **PagerDuty** tile and check **Enable PagerDuty delivery**.
+3. Fill in the fields:
+
+| Field | Required | What it is | Example |
+| --- | --- | --- | --- |
+| **Routing key** | Yes (first save) | Events API v2 integration key from your PagerDuty service (write-only) | 32-char key |
+| **Send on severity ≥** | Yes | Delivery threshold — for a paging channel, usually `critical` | `critical` |
+
+4. Click **Save**, then **Send test**.
+
+Each Correlix alert triggers a PagerDuty event carrying the alert summary, severity, source device, and rule, with a per-alert dedup key so a repeated dispatch of the same alert does not stack duplicate PagerDuty incidents.
+
+**Verify it worked:** a test incident appears (and pages) on the PagerDuty service.
+
+**Troubleshooting:** "invalid routing key" means the key isn't the Events API v2 integration key — service API keys and REST API keys will not work.
+
+### Two-way sync (Slack and PagerDuty)
+
+Inside the Slack and PagerDuty setup panels, a collapsible **Bidirectional sync** section lets the provider push state changes (ack, resolve, reassign) back onto Correlix incidents: set **Sync mode** to `bidirectional`, check **Accept inbound state changes**, enter a **Webhook signing secret** (required; inbound calls are HMAC-verified against it), then copy the displayed **Inbound webhook URL** and register it with the provider — for Slack as the app's Interactivity request URL, for PagerDuty as a v3 webhook subscription — and click **Save sync**. The mechanics are identical to the ITSM sync step described under [Integrations](/incident-response/integrations#two-way-sync-and-webhook-secrets).
+
+## Contact points
+
+Below the channel gallery, the **Contact points** card manages reusable delivery audiences — email groups, Slack targets, or webhooks — that **Reports** deliver to (they are not the alert path above). Contact points are scoped to the current tenant. To add one: enter a **Name** (e.g. `NOC on-call`), pick a **Type** (`email`, `slack`, or `webhook`), then either the comma-separated **Email recipients** (email type) or the **Target** URL/channel (other types), and click **Add**.
 
 ## Next
 
-- **[Integrations (ServiceNow, Jira)](/incident-response/integrations)**
-- **[RCA Auto‑Ticketing](/incident-response/rca-ticketing)**
+- **[Integrations (ServiceNow, Jira)](/incident-response/integrations)** — file tickets, not just messages
+- **[RCA Auto-Ticketing](/incident-response/rca-ticketing)** — one ticket per root cause, automatically

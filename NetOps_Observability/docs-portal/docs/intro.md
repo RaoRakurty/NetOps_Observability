@@ -44,6 +44,12 @@ import Link from '@docusaurus/Link';
     <p className="cx-card__desc">Point metrics, flows, logs, and SNMP traps at Correlix from any vendor.</p>
     <span className="cx-card__arrow">Read →</span>
   </Link>
+  <Link className="cx-card" to="/noc-guide/overview">
+    <span className="cx-card__icon">🧭</span>
+    <p className="cx-card__title">NOC Operator Guide</p>
+    <p className="cx-card__desc">How each tab builds the story of an outage — from raw signals to correlation, root cause, and the ticket.</p>
+    <span className="cx-card__arrow">Read →</span>
+  </Link>
 </div>
 
 ## What you can do with Correlix

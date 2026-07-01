@@ -2,63 +2,118 @@
 title: SNMP profiles & credentials
 sidebar_label: SNMP profiles & credentials
 sidebar_position: 2
-description: Manage the SNMP v2c community strings and SNMPv3 USM users Correlix uses to read your devices, and the vendor OID/metric library.
+description: Manage the SNMP v1/v2c community strings and SNMPv3 USM users Correlix uses to read your devices, and the vendor OID/metric library.
 ---
 
 # SNMP profiles & credentials
 
-Correlix reads devices over SNMP. This page covers the two things the **SNMP Profile Manager** manages:
+Correlix reads devices over SNMP. The **SNMP Profile Manager** is where you manage both halves of that:
 
-- **Credentials** — the v2c community strings and SNMPv3 users used to authenticate.
-- **Profiles** — the vendor OID & metric library that tells Correlix *what* to read from each vendor.
+- **Credentials** — the v1/v2c community strings and SNMPv3 users used to authenticate to devices.
+- **Profiles** — the vendor OID and metric library that tells Correlix *what* to read from each vendor.
 
-Open it at <kbd>Administration → Data Collection → SNMP Profile Manager</kbd>.
+Open it at <kbd>Administration → Data Collection → SNMP Profile Manager</kbd>. A segmented control at the top switches between the **Credentials** pane (*"Per-device community / SNMPv3 USM secrets"*) and the **Profiles** pane (*"Vendor OID & metric library"*).
 
-## Add an SNMP credential
+## Create an SNMP credential
 
-1. Open the **Credentials** tab (*"Per‑device community / SNMPv3 USM secrets"*).
-2. Choose the SNMP version and fill in the fields:
+1. Open <kbd>Administration → Data Collection → SNMP Profile Manager</kbd> and select the **Credentials** pane.
+2. Click **+ New profile**.
+3. Fill in the common fields:
 
-   **SNMP v2c**
-   - **Community string** — your read‑only community.
+   | Field | Required | Notes |
+   | --- | --- | --- |
+   | **Name** | yes | A handle you'll reference from devices, e.g. `Core Switches`. |
+   | **Version** | yes | `v1`, `v2c`, or `v3`. Prefer v3 where the device supports it. |
+   | **Port** | yes | Defaults to `161`. Change only if the device answers SNMP on a non-standard port. |
+   | **Timeout (ms)** | yes | Defaults to `2000`. Raise for slow WAN-attached devices. |
+   | **Retries** | yes | Defaults to `1`. |
 
-   **SNMP v3 (recommended)**
-   - **Username** (security name)
-   - **Auth protocol** — SHA or MD5 — and the **auth passphrase**
-   - **Privacy protocol** — AES or DES — and the **privacy passphrase**
-   - **Security level** — noAuthNoPriv / authNoPriv / authPriv (authPriv is recommended)
+4. Fill in the version-specific fields.
 
-3. Save.
+   **For v1 / v2c:**
 
-:::info Secrets are write‑only
-Credentials are encrypted at rest and **never displayed again** after saving. A stored secret shows as `••••••`. Saving with the field left blank keeps the existing secret.
+   | Field | Notes |
+   | --- | --- |
+   | **Community string** | Your read-only community. Entered as a secret; never displayed again. |
+
+   **For v3 (USM):**
+
+   | Field | Options | Notes |
+   | --- | --- | --- |
+   | **Security name** | — | The USM username configured on the device. |
+   | **Security level** | `noAuthNoPriv` · `authNoPriv` · `authPriv` | `authPriv` (the default) is recommended. The auth and privacy fields below appear only when the level requires them. |
+   | **Auth protocol** | `MD5` · `SHA` · `SHA224` · `SHA256` · `SHA384` · `SHA512` | Shown for `authNoPriv` and `authPriv`. |
+   | **Auth key** | — | The authentication passphrase (secret). |
+   | **Privacy protocol** | `DES` · `3DES` · `AES128` · `AES192` · `AES256` | Shown for `authPriv` only. |
+   | **Privacy key** | — | The privacy (encryption) passphrase (secret). |
+   | **Context** | — | Optional SNMPv3 context name; leave blank unless your device requires one. |
+
+5. Click **Save profile**. The credential appears in the profiles table with its version, port, auth and privacy summary, and a **Secrets** column confirming which secrets are stored (`community ✓`, `auth ✓`, `priv ✓`).
+
+:::info Secrets are write-only
+Credentials are stored encrypted and **never displayed again** after saving. When you edit a profile, secret fields show `•••••• (unchanged)` — leaving them blank keeps the existing secret; typing a new value replaces it.
 :::
 
-### Scope: default vs per‑device
+### Edit or delete a credential
 
-- A **default credential** is tried against devices that don't have a specific one — handy when most of your fleet shares a community/user.
-- A **per‑device credential** overrides the default for that device — use it for exceptions (a different community, a v3‑only box).
+1. In the **Credentials** pane, find the profile row and click **Edit** or **Delete**.
+2. When editing, only fill secret fields if you're rotating them — blank means "keep what's stored".
+3. Deleting a profile does not delete devices; devices that referenced it fall back to the instance-wide default community (see below).
 
-Correlix picks the most specific credential that authenticates.
+### Assign a credential to a device
+
+Each device record carries a **credential reference** — the name (or id) of the SNMP profile the poller should use for it. Matching is by profile id first, then by name (case-insensitive).
+
+- Devices **with a reference** are polled with that profile — v3 profiles thread the full USM parameters; v1/v2c profiles thread the community.
+- Devices **without a reference** fall back to the instance-wide default community configured at deployment.
+
+Today the reference is set on the device record itself — through the device API, an inventory import, or the seeded device file — rather than a picker in the add-device dialog. Group your fleet into a few shared profiles (e.g. `campus-v2c`, `dc-v3`) and reference those.
 
 ## Vendor profiles (OID & metric library)
 
-The **Profiles** tab (*"Vendor OID & metric library"*) is the catalog of what Correlix reads per vendor — interface counters, CPU/memory, environment sensors, protocol state, and so on.
+The **Profiles** pane is the catalog of what Correlix reads per platform: interface counters, CPU/memory, temperature, protocol state, and so on. It ships with built-in profiles — **Universal** profiles that apply standard MIBs to every device, plus vendor packs (Cisco IOS/IOS-XE, Juniper JUNOS, Arista EOS, Fortinet FortiGate, Palo Alto PAN-OS, and more — see [Supported devices](/onboard-devices/supported-devices)). Vendor profiles are matched to devices automatically by the device's SNMP identity fingerprint.
 
-- Out‑of‑the‑box profiles cover the common enterprise and data‑center vendors, so most devices work with **no profile configuration** — just a credential.
-- You generally only touch this tab to **extend coverage** (add an OID/metric for a platform that exposes something extra).
+For a standard onboarding **you don't need to touch this pane** — add a credential, add the device, and the built-ins handle the rest. Come here to extend coverage:
 
-:::tip You usually don't need to edit profiles
-For a standard onboarding, add a credential and add the device — the built‑in profiles handle the rest. Come back to Profiles only when a specific metric you want isn't being collected.
-:::
+### Add a metric to a profile
 
-## Verify a credential works
+1. In the **Profiles** pane, use the search box on the left to find the profile, grouped by category (Universal, Routers/Switches, Firewalls, Servers/Hosts, …). Select it.
+2. In the metric table on the right, enter the new metric's **name**, **OID**, **type**, and **unit**, then add it.
 
-After attaching a credential and adding a device:
+### Bulk-load metrics
 
-1. Go to <kbd>Administration → Data Collection → Data Sources</kbd>.
-2. The device's **SNMP metrics** cell should turn green within a poll cycle (~1 minute).
-3. If it stays "No data", the credential or reachability is the usual cause — see [Troubleshooting](/reference/troubleshooting).
+1. Select the target profile.
+2. Open the upload panel and paste (or choose a file containing) a JSON array of metrics:
+
+```json
+[
+  { "name": "psu_status", "oid": "1.3.6.1.4.1.9.9.13.1.5.1.3", "type": "gauge", "unit": "" }
+]
+```
+
+3. Confirm the upload; the metrics are appended to the profile.
+
+### Create a custom vendor profile
+
+1. In the profile list, type the vendor name into **New vendor profile…** and click **+**.
+2. The profile is created under the **Custom** category with an empty metric table — add metrics as above.
+
+## Verify
+
+1. Attach the credential and add a device ([manually](/onboard-devices/add-devices-manually) or via [discovery](/onboard-devices/snmp-discovery)).
+2. Go to <kbd>Administration → Data Collection → Data Sources</kbd>.
+3. The device's **SNMP metrics** cell should turn green within a poll cycle (about a minute).
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| SNMP metrics stays "no data" | Wrong community/passphrase, or device is v3-only | Re-save the credential secrets; confirm the version matches the device |
+| Works from your laptop, not from Correlix | ACL restricts SNMP by source address | Permit the Correlix address in the device's SNMP ACL |
+| Timeouts on remote devices | Default 2000 ms timeout too tight over WAN | Raise **Timeout (ms)** and **Retries** on the profile |
+| A vendor metric you expect is missing | Not in the built-in profile for that platform | Extend the vendor profile with the OID (above) |
+
+See [Troubleshooting](/reference/troubleshooting) for the full flow.
 
 ## Next
 
