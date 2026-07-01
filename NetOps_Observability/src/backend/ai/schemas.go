@@ -18,6 +18,7 @@ const (
 	ModeShiftHandoff             AnswerMode = "shift_handoff"
 	ModeExecutiveSummary         AnswerMode = "executive_summary"
 	ModeProductNavigationHelp    AnswerMode = "product_navigation_help"
+	ModeProductAnswer            AnswerMode = "product_answer" // answers a question ABOUT Correlix from product knowledge
 	ModeInvestigationPlan        AnswerMode = "investigation_plan"
 	ModeUnavailable              AnswerMode = "unavailable" // module disabled / future
 )

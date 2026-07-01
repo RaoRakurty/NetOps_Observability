@@ -31,6 +31,11 @@ func envFlagLookup(flag string) bool { return os.Getenv(flag) == "true" }
 // across requests.
 var aiKB = ai.LoadKB()
 
+// aiProductKB is the Correlix PRODUCT knowledge (concepts + how-tos), parsed once
+// from the same embedded doc that grounds the free-form copilot — so the grounded,
+// key-free assistant answers "what is a seam / how do I set up SNMP" accurately.
+var aiProductKB = ai.LoadProductKB(appKnowledge)
+
 type aiAskRequest struct {
 	Question string            `json:"question"`
 	Context  map[string]string `json:"context,omitempty"` // e.g. {"correlation_id": "<uuid>"}
@@ -83,12 +88,13 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 
 	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r)}
 	orch := &ai.Orchestrator{
-		DS:     ds,
-		Tools:  ai.Tools(ds),
-		LLM:    aiLLM{srv: s},
-		Flags:  envFlagLookup,
-		Policy: ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		KB:     aiKB,                                                 // Network Expert KB (supporting knowledge)
+		DS:        ds,
+		Tools:     ai.Tools(ds),
+		LLM:       aiLLM{srv: s},
+		Flags:     envFlagLookup,
+		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
+		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
+		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
 	}
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {

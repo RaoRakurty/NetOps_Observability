@@ -14,13 +14,14 @@ import (
 // an LLMClient (the provider proxy), the feature-flag lookup, and an optional
 // redactor. It holds NO credentials and makes NO store query itself.
 type Orchestrator struct {
-	DS       DataSource
-	Tools    *ToolRegistry
-	LLM      LLMClient
-	Flags    FlagLookup
-	Policy   *PolicyEngine       // the gate for what the AI may run; nil = safe default
-	Redactor func(string) string // strips secrets/PII before egress (LLM02); nil = identity
-	KB       *KB                 // Network Expert KB (curated playbooks); nil = no supporting knowledge
+	DS        DataSource
+	Tools     *ToolRegistry
+	LLM       LLMClient
+	Flags     FlagLookup
+	Policy    *PolicyEngine       // the gate for what the AI may run; nil = safe default
+	Redactor  func(string) string // strips secrets/PII before egress (LLM02); nil = identity
+	KB        *KB                 // Network Expert KB (curated playbooks); nil = no supporting knowledge
+	ProductKB *ProductKB          // Correlix product knowledge (concepts + how-tos); nil = no product answers
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -74,6 +75,11 @@ var (
 	// "status", "how is everything", "network health". This is now an EXPLICIT
 	// intent, not the catch-all — an unmatched question no longer dumps the briefing.
 	reStatus = regexp.MustCompile(`(?i)(what('?s| is|s)?\s+(going on|happening)|going on right now|what should (the noc|i|we)\s+(focus|work|look|prioriti|do)|current (status|state|situation|picture|posture)|status (update|report|check)|situation report|sitrep|\boverview\b|how('?s| is| are|s)\s+(the network|things|it going|everything|we doing|we looking|the fleet)|is everything (ok|okay|healthy|fine|good|alright|stable)|are we (ok|healthy|good|stable)|network (health|status)|health (summary|check|status)|overall (health|status|state|picture)|give me (a|the|an)\s+(status|summary|briefing|overview|rundown|update)|summar(ize|y)\b[^?]*\b(network|status|state|situation|health|current|everything)|\bbriefing\b|what.?s the (situation|status|state|picture))`)
+	// Product-knowledge intent (§9): a question ABOUT Correlix — a concept ("what
+	// is a seam", "what does suspected mean", "how does correlation work") or a
+	// how-to ("how do I set up SNMP discovery / enable SSO / create a report").
+	// Answered from the curated product knowledge, not live data.
+	reProduct = regexp.MustCompile(`(?i)(\bwhat (is|are|does)\b|\bwhat.?s (a|an|the)\b|\bwhat does\b.*\bmean\b|\bhow does\b|\bhow do(es)? (correlix|the (engine|platform|product|system))\b|\bhow do i (set ?up|configure|enable|create|add|onboard|connect|turn on|register|provision|import|schedule|invite)\b|\bhow to (set ?up|configure|enable|create|add|onboard|connect|import)\b|\bexplain (the|how|correlix)\b|\btell me about\b|\bwhat (can|do) you (do|know)\b|\bwhat is correlix\b)`)
 	// Explicit "last/past N <unit>" window for the time-range summary parser.
 	reLookbackNum = regexp.MustCompile(`(?i)(?:last|past|previous)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
 )
@@ -184,6 +190,13 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "current_state", Modules: []string{"command_center"},
 			Mode: ModeCurrentStateSummary, Entities: ent, Freshness: FreshnessLive,
 		}
+	case reProduct.MatchString(q):
+		// "what is a seam / how do I set up SNMP discovery" → answered from the
+		// curated product knowledge (no tenant data). No perms needed.
+		return Plan{
+			Intent: "product_question", Modules: []string{"product_navigation"},
+			Mode: ModeProductAnswer, Entities: ent, Freshness: FreshnessConfig,
+		}
 	case strings.Contains(q, "where") || strings.Contains(q, "how do i") || strings.Contains(q, "navigate") || strings.Contains(q, "find ") && strings.Contains(q, "settings"):
 		return Plan{
 			Intent: "product_navigation", Modules: []string{"product_navigation"},
@@ -260,6 +273,8 @@ func (o *Orchestrator) Ask(ctx context.Context, p Principal, question string, ui
 		return o.answerTimeRange(ctx, p, question, plan, disc)
 	case ModeProductNavigationHelp:
 		return o.answerNavigation(question, plan, disc), nil
+	case ModeProductAnswer:
+		return o.answerProduct(question, plan, disc), nil
 	case ModeInvestigationPlan:
 		return o.answerKB(question, plan, disc), nil
 	default:
@@ -994,6 +1009,49 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 		Text: b.String(), Module: mh, Citations: cites, NextActions: nextActions,
 		ModeBadges: []string{"History · " + label}, Disclaimers: disc,
 	}, nil
+}
+
+// answerProduct answers a question ABOUT Correlix from the curated product
+// knowledge (§9). Deterministic: it returns the most relevant section(s) so the
+// key-free assistant is accurate on product/how-to questions. Falls back to the
+// capability clarification when nothing matches (honest — no product KB / no hit).
+func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) Answer {
+	if o.ProductKB == nil {
+		return o.answerCapability(plan)
+	}
+	hits := o.ProductKB.Search(question, 3)
+	if len(hits) == 0 {
+		// Maybe they meant "where is X" — offer navigation as a fallback path.
+		if nav := FindFeature(question); len(nav) > 0 {
+			return o.answerNavigation(question, plan, disc)
+		}
+		return o.answerCapability(plan)
+	}
+	top := hits[0].Section
+	mh := &ModuleHealthSummary{Module: "product_navigation", DisplayName: "Correlix"}
+	// The answer body is the top section (the curated content). Related sections
+	// become "learn more" pointers.
+	body := top.Body
+	if len(body) > 900 { // keep the card readable; the deep link has the rest
+		body = strings.TrimSpace(body[:900]) + " …"
+	}
+	cites := []Citation{}
+	if top.Route != "" {
+		cites = append(cites, Citation{ID: "doc:" + top.Title, Kind: "navigation", Label: top.Title, Href: top.Route})
+	}
+	var related []string
+	for _, h := range hits[1:] {
+		related = append(related, "See also: "+h.Section.Title)
+		if h.Section.Route != "" {
+			cites = append(cites, Citation{ID: "doc:" + h.Section.Title, Kind: "navigation", Label: h.Section.Title, Href: h.Section.Route})
+		}
+	}
+	mh.Headline = top.Title
+	return Answer{
+		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
+		Text: body, Module: mh, Citations: cites, NextActions: related,
+		ModeBadges: []string{"Product help"}, Disclaimers: disc,
+	}
 }
 
 // answerCapability is the friendly "I didn't catch that" clarification for an

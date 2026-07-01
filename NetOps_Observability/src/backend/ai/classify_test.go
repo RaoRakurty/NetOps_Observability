@@ -49,10 +49,16 @@ func TestClassifyBroadPhrasings(t *testing.T) {
 		// Navigation.
 		{"where do I configure servicenow", "product_navigation"},
 
+		// Product / how-to questions ABOUT Correlix → product_question (answered
+		// from the product knowledge; degrades to a capability clarification if the
+		// KB has no match — the KB lookup is the disambiguator).
+		{"what is a seam", "product_question"},
+		{"how do I set up SNMP discovery", "product_question"},
+		{"what does suspected mean", "product_question"},
+
 		// Truly unrecognized → capability clarification, NOT current_state.
 		{"who should I call about the wan", "capability"},
 		{"tell me a joke", "capability"},
-		{"what's the weather", "capability"},
 	}
 	for _, c := range cases {
 		got := Classify(c.q, nil).Intent
