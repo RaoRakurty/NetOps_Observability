@@ -43,7 +43,7 @@ export default function SystemNetworkCards() {
 
   return (
     <>
-      {tile("dns", "external", "DNS", "The resolvers Correlix uses to resolve outbound URLs.", cfg.dns_servers?.length ?? 0)}
+      {tile("dns", "external", "DNS", "Preferred DNS resolvers for outbound URLs — validate with Test connectivity.", cfg.dns_servers?.length ?? 0)}
       {tile("ntp", "refresh", "NTP", "The time sources Correlix tracks its clock against.", cfg.ntp_servers?.length ?? 0)}
 
       {editing && (
@@ -81,7 +81,7 @@ function ConfigureForm({ kind, cfg, onSaved, onClose }: { kind: Kind; cfg: Syste
         : { ...cfg, ntp_servers: toList(ntp) };
       const saved = await api.setSystemNetwork(next);
       onSaved(saved);
-      setMsg({ kind: "ok", text: isDNS ? "Saved · outbound URLs now resolve via these servers" : "Saved" });
+      setMsg({ kind: "ok", text: "Saved" });
     } catch (e) { setMsg({ kind: "err", text: (e as Error).message }); } finally { setBusy(false); }
   };
 
@@ -103,7 +103,7 @@ function ConfigureForm({ kind, cfg, onSaved, onClose }: { kind: Kind; cfg: Syste
       </div>
       <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 0, marginBottom: 14 }}>
         {isDNS
-          ? "The DNS resolvers Correlix uses to resolve outbound URLs — integrations, webhooks, and providers."
+          ? "Preferred DNS resolvers for resolving outbound URLs (integrations, webhooks, providers). Use Test connectivity to confirm they resolve names."
           : "The NTP time sources Correlix tracks its clock against. Test reports the measured clock offset per server."}
         {msg && <span style={{ color: msg.kind === "ok" ? "var(--ok)" : "var(--crit)" }}> · {msg.text}</span>}
       </p>

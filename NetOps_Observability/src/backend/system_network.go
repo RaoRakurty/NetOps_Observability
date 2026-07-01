@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -135,44 +134,12 @@ func isHostname(h string) bool {
 	return true
 }
 
-// ---- DNS: install the configured resolvers as the process resolver ----
-
-// applyDNS installs a resolver that dials the configured DNS servers on :53 for
-// every Go name lookup (PreferGo). Empty list restores the system default. The
-// dialer round‑robins across the configured servers for resilience.
-func applyDNS(servers []string) {
-	if len(servers) == 0 {
-		net.DefaultResolver = &net.Resolver{}
-		return
-	}
-	targets := make([]string, len(servers))
-	for i, s := range servers {
-		targets[i] = net.JoinHostPort(strings.TrimSpace(s), "53")
-	}
-	var rr uint32
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 5 * time.Second}
-			// try each configured server, starting at a rotating offset
-			start := int(atomic.AddUint32(&rr, 1)) % len(targets)
-			var lastErr error
-			for i := 0; i < len(targets); i++ {
-				addr := targets[(start+i)%len(targets)]
-				proto := "udp"
-				if network == "tcp" {
-					proto = "tcp"
-				}
-				if c, err := d.DialContext(ctx, proto, addr); err == nil {
-					return c, nil
-				} else {
-					lastErr = err
-				}
-			}
-			return nil, lastErr
-		},
-	}
-}
+// NOTE on DNS scope: the configured resolvers are used to VALIDATE outbound
+// resolution (the Test endpoint, via resolverFor) — they are deliberately NOT
+// installed as the global process resolver. Overriding net.DefaultResolver would
+// hijack INTERNAL container name resolution too (clickhouse/postgres/redis/…),
+// which broke the platform. Applying the configured DNS only to specific outbound
+// external clients (integrations/webhooks) is a safe, scoped follow-up.
 
 // ---- NTP (SNTP) client — stdlib only, no new dependency ----
 
@@ -290,7 +257,6 @@ func (s *server) handleSystemNetwork(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
-		applyDNS(clean.DNSServers) // take effect immediately for outbound URL resolution
 		writeJSON(w, http.StatusOK, clean)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})

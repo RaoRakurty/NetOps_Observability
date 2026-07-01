@@ -415,9 +415,6 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("system network store: %v", err)
 	}
-	// Install the configured DNS resolvers as the process resolver so Correlix
-	// resolves outbound URLs (integrations, webhooks, providers) through them.
-	applyDNS(systemNet.Get().DNSServers)
 
 	srv := &server{
 		startedAt:        time.Now().UTC(),
