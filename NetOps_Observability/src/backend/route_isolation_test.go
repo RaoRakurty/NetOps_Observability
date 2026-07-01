@@ -47,7 +47,7 @@ var routeIsolationLedger = map[string]string{
 	// caller's own answer feedback (audited). No tenant data crosses these.
 	"/api/ai/commands":                         "selfScoped",
 	"/api/ai/commands/suggestions":             "selfScoped",
-	"/api/ai/feedback":                         "selfScoped",
+	"/api/ai/feedback":                         "scoped", // POST own rating (tenant-stamped); GET tenant-scoped aggregate (store RLS)
 	"/api/alerts":                              "scoped",
 	"/api/compliance":                          "scoped",
 	"/api/correlations":                        "scoped",

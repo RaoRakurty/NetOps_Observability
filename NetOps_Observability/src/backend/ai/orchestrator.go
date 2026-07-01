@@ -344,6 +344,11 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...) // provider-unavailable → metadata badge
 	}
+	// Unsupported-claim guard (§11/§16): strip any citation the MODEL invented.
+	// The deterministic fallback is already grounded, so only verify model output.
+	if !evidenceOnly {
+		text, badges, disc = verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
+	}
 	pe.Summary = Scrub(strings.TrimSpace(text))
 
 	// Status/evidence-strength badges (spec §19) — small, not the main answer.
@@ -450,6 +455,10 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 		provider = "none"
 		evidenceOnly = true
 		badges = append(badges, FallbackBadges(false)...)
+	} else {
+		// Unsupported-claim guard (§11/§16) — verify the model didn't cite an id
+		// that isn't among this answer's citations.
+		text, badges, disc = verifyNarrative(text, citationRefIDs(cites), badges, disc)
 	}
 	cs.Summary = Scrub(strings.TrimSpace(text))
 
@@ -576,15 +585,18 @@ func (o *Orchestrator) answerModuleHealth(ctx context.Context, p Principal, ques
 	system := o.systemPrompt()
 	user := o.moduleHealthPrompt(question, mh, bundle)
 	text, provider, lerr := o.LLM.Complete(ctx, system, []LLMMessage{{Role: "user", Content: user}})
+	var badges []string
 	if lerr != nil {
 		mh.Headline = o.deterministicModuleSummary(mh, bundle)
 		provider = "none"
 		disc = append(disc, "AI provider unavailable — showing an evidence-only summary.")
 	} else {
-		mh.Headline = strings.TrimSpace(text)
+		// Unsupported-claim guard (§11/§16) on the model headline.
+		mh.Headline, badges, disc = verifyNarrative(strings.TrimSpace(text), bundleCitationIDs(bundle), badges, disc)
 	}
 	return Answer{Mode: ModeModuleHealthSummary, Intent: plan.Intent, Modules: allowed,
-		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: disc, Provider: provider}, nil
+		Text: mh.Headline, Module: mh, Citations: cites, Disclaimers: disc, Provider: provider,
+		ModeBadges: badges}, nil
 }
 
 func (o *Orchestrator) moduleHealthPrompt(question string, mh *ModuleHealthSummary, bundle []EvidenceItem) string {

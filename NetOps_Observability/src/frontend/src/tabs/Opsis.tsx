@@ -550,6 +550,12 @@ function badgeTone(b: string): string {
 }
 
 function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () => void; onClose: () => void }) {
+  const [rated, setRated] = useState<"up" | "down" | null>(null);
+  const rate = (r: "up" | "down") => {
+    if (rated) return;
+    setRated(r);
+    api.aiFeedback(r, ans.intent).catch(() => {}); // best-effort; never blocks the UI
+  };
   const cs = ans.current_state;
   const pr = ans.problem;
   const mod = ans.module;
@@ -646,6 +652,21 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       {/* Disclaimers stay small; provider state is a badge above, not a sentence. */}
       {ans.disclaimers && ans.disclaimers.length > 0 && (
         <div className="op-disc">{ans.disclaimers.join(" ")}</div>
+      )}
+
+      {/* Answer feedback (privacy-safe: rating + intent only). */}
+      {ans.mode !== "unavailable" && (
+        <div className="op-fb">
+          {rated ? (
+            <span className="op-fb-thanks">Thanks — feedback recorded.</span>
+          ) : (
+            <>
+              <span className="op-fb-q">Was this helpful?</span>
+              <button type="button" className="op-fb-btn" title="Helpful" aria-label="Helpful" onClick={() => rate("up")}>👍</button>
+              <button type="button" className="op-fb-btn" title="Not helpful" aria-label="Not helpful" onClick={() => rate("down")}>👎</button>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

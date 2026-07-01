@@ -1497,6 +1497,12 @@ export const api = {
     }),
   // Slash-command registry (the "/" menu) — single source of truth on the server.
   aiCommands: () => request<{ commands: AiCommand[] }>("/api/ai/commands"),
+  // Answer feedback (thumbs up/down) — privacy-safe (rating + intent only). 204.
+  aiFeedback: (rating: "up" | "down", intent?: string, conversationId?: string) =>
+    request<void>("/api/ai/feedback", {
+      method: "POST",
+      body: JSON.stringify({ rating, intent, conversation_id: conversationId }),
+    }),
   // (Re)issue the embedded-console gate cookie for the current session so a raw
   // iframe (/netbox, /search) carries a fresh, correctly-pathed cookie. 204.
   ensureConsoleGate: () => request<void>("/api/auth/console-gate", { method: "POST" }),

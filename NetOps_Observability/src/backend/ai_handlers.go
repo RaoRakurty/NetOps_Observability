@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"netops/backend/ai"
 )
@@ -97,7 +99,8 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	// question text or any retrieved data (no PII/secret in the audit line).
 	logInfo("ai", "ask", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,
-		"intent": ans.Intent, "mode": ans.Mode, "modules": ans.Modules, "provider": ans.Provider,
+		"intent": ans.Intent, "mode": ans.Mode, "modules": ans.Modules,
+		"provider": ans.Provider, "tier": ai.RouteFor(ans.Mode).Tier, // §10 model-router tier
 	})
 	writeJSON(w, http.StatusOK, ans)
 }
@@ -169,8 +172,12 @@ func (s *server) handleAICommands(w http.ResponseWriter, r *http.Request) {
 // v1 audits it (no PII / no answer text); a persisted feedback loop is a later
 // phase. Rating is "up" | "down".
 func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet { // GET = the tenant-scoped feedback aggregate
+		s.handleAIFeedbackStats(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
+		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -194,11 +201,44 @@ func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("rating must be 'up' or 'down'"))
 		return
 	}
+	// Persist the rating (privacy-safe: no question/answer text) so answer quality
+	// can be measured over time — the feedback loop. Owner stamped from the token.
+	tenant, _ := principalTenant(claims)
+	if s.aiFeedback != nil {
+		row := aiFeedbackRow{
+			TenantID: tenant, ID: randID(), ConversationID: req.ConversationID,
+			Sub: claims.Sub, Intent: req.Intent, Rating: rating, At: time.Now().UTC(),
+		}
+		if err := s.aiFeedback.Put(r.Context(), row); err != nil {
+			log.Printf("ai feedback persist: %v", err) // best-effort; still audit below
+		}
+	}
 	logInfo("ai", "feedback", map[string]any{
 		"tenant": claims.Tenant, "sub": claims.Sub,
 		"conversation_id": req.ConversationID, "intent": req.Intent, "rating": rating,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAIFeedbackStats: GET /api/ai/feedback — the tenant-scoped feedback
+// aggregate (up/down totals + per-intent breakdown) for the quality loop.
+func (s *server) handleAIFeedbackStats(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "administration", LevelRead)
+	if !ok {
+		return
+	}
+	if s.aiFeedback == nil {
+		writeJSON(w, http.StatusOK, aiFeedbackStats{ByIntent: map[string]*upDownCounts{}})
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	since := int(durationQuery(r, "since", 30*24*time.Hour).Seconds())
+	st, err := s.aiFeedback.Stats(r.Context(), tenant, cross, since)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // aiHelpAnswer is the deterministic answer for "/help" — lists the commands so

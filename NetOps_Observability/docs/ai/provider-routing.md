@@ -15,9 +15,40 @@ redaction, audit). Tests use `MockLLM` (deterministic, offline).
   Response-Quality layer (not a raw "provider unavailable"). The KB direct-answer
   path (`/playbook`) and product-navigation are deterministic by design.
 
-> Routing different intents to different model tiers (fast vs. strong vs. verifier)
-> is contracted for a later phase — the seam is the single `LLMClient`, so it's a
-> drop-in. Today one provider chain serves all intents with the safe fallback.
+## Model Router (§10)
+
+`RouteFor(mode)` (`ai/router.go`) is the intent→tier policy: it classifies each
+answer mode by the model tier it needs and whether the verifier applies.
+
+| Mode | Tier | LLM | Verify |
+|------|------|-----|--------|
+| problem_explanation | strong | yes | yes |
+| current_state / module_health | fast | yes | yes |
+| investigation_plan (KB) / navigation / shift_handoff / time_range / incident_list | deterministic | no | no |
+
+Most answer modes are **deterministic** — built from tools/KB/registry, no
+provider call at all — which is why the copilot works key-free. The chosen tier
+is recorded in the audit line. Per-tier providers (a fast model vs. a strong one)
+plug into the single `LLMClient` seam without touching the orchestrator; today
+they resolve through one provider chain + the evidence-only fallback.
+
+## Verifier / unsupported-claim detector (§11, §16)
+
+`VerifyGrounding` (`ai/verify.go`) is a **deterministic** post-check on every
+model narrative: it strips bracketed citations the model invented (a "kind:detail"
+id not in the evidence bundle) — fabricated grounding is the worst hallucination.
+Genuine citations and non-citation brackets are untouched. When it removes
+anything the answer is badged **Verified** and a disclaimer notes the removal.
+Being deterministic it's always-on and free (no verifier-model call).
+
+## Feedback loop (§14)
+
+Thumbs up/down on an answer POST to `/api/ai/feedback` and persist to
+`ai_feedback` (tenant-isolated, **privacy-safe** — rating + intent/mode/
+conversation id only, never the question or answer text). `GET /api/ai/feedback`
+returns the tenant-scoped aggregate (up/down + per-intent) for the quality loop.
+Full conversation-transcript persistence is a deliberate **non-goal** (it would
+conflict with the no-PII audit stance).
 
 ## Response Quality Layer (`src/backend/ai/quality.go`)
 
