@@ -88,8 +88,8 @@ suspected/likely until a human or fiber-path validation corroborates).
 | **P2** | Storage: migration 0019 (7 RLS models) + `portintel` domain pkg (enums, validated payloads, module-detection resolver, topics) | ✅ shipped `8774005` |
 | **P3a** | Universal DOM collector: ENTITY-SENSOR-MIB → `port_optics_*` VM series (scale/precision math, TX/RX disambiguation, cardinality-safe), `FEATURE_PORT_DOM` | ✅ shipped `f842b95` (needs real optics hw to render — lab is virtual) |
 | **P3b(1)** | Physical-layer port-event producer: transceiver/optics/DOM/FEC syslog → sig.spdc evidence kinds (`producers.port_event_signal`), wired into the syslog path | ✅ shipped `e409338` |
-| P3b(2) | gNMI/OpenConfig transceiver streaming + per-vendor DOM MIB adapters (Juniper/Nokia/Cisco/Arista + coherent PM) + threshold-alarm traps + audited CLI fallback | queued |
-| P4 | Threshold policy engine + deterministic port-health scorer (weights above) + port_health_current | queued |
+| **P3b(2)** | Vendor DOM adapters (Juniper jnxDom, Nokia DDM) + OpenConfig transceiver normalizer, shared emit; unit-conversion math tested (walk needs real hw) | ✅ shipped `94cc145` (Cisco/Arista use ENTITY-SENSOR; coherent PM leaves mapped) |
+| **P4** | Threshold policy (`DefaultPolicy`) + deterministic port-health scorer (owner weights, dominant-issue, replay-stable) | ✅ shipped `d12ef21` |
 | P5 | API endpoints + response models | queued |
 | P6 | UI surfaces (heatmap, explorer, detail tabs, fiber workbench, playbook drawer) | queued |
 | P7 | RCA path-resolution integration (incident endpoints → port/lane/fiber-path) | queued |
