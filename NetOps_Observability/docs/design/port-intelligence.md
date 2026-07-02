@@ -91,7 +91,7 @@ suspected/likely until a human or fiber-path validation corroborates).
 | **P3b(2)** | Vendor DOM adapters (Juniper jnxDom, Nokia DDM) + OpenConfig transceiver normalizer, shared emit; unit-conversion math tested (walk needs real hw) | ✅ shipped `94cc145` (Cisco/Arista use ENTITY-SENSOR; coherent PM leaves mapped) |
 | **P4** | Threshold policy (`DefaultPolicy`) + deterministic port-health scorer (owner weights, dominant-issue, replay-stable) | ✅ shipped `d12ef21` |
 | **P5** | Tenant-scoped API: interfaces (filtered+paginated), detail, port-summary, module-types, filter-options, port-signatures; portStore in-mem+pg | ✅ shipped `f0c2017` |
-| P6 | UI surfaces (heatmap, explorer, detail tabs, fiber workbench, playbook drawer) | queued |
+| **P6** | Workbench UI: 6 column presets + filters + health summary + detail drawer, mounted Infra→Inventory→'Interfaces & Optics' | ✅ shipped `be3a3ac` (fiber-path workbench + lane-map viz = P6b when real optics data exists) |
 | P7 | RCA path-resolution integration (incident endpoints → port/lane/fiber-path) | queued |
 
 Known vendor gaps to research in P3: Nokia DDM exposure granularity; coherent
