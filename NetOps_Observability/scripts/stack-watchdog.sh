@@ -36,8 +36,8 @@ NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
 # profile, not started by default; Go collector owns SNMP). Re-adding it here
 # would false-alarm every minute. gnmic is the gNMI collector if profiled in.
 EXPECTED_SERVICES="api clickhouse correlation frontend goflow2 grafana nginx \
-opensearch opensearch-dashboards postgres prometheus redis redpanda syslog-ng \
-vector-aggregator vector-router victoria"
+opensearch opensearch-dashboards postgres prober prometheus redis redpanda \
+syslog-ng vector-aggregator vector-router victoria"
 
 push() {  # title, tags, priority, body
   [ -n "${NTFY_TOPIC:-}" ] || return 0
