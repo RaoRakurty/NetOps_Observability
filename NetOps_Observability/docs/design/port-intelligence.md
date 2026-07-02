@@ -85,7 +85,7 @@ suspected/likely until a human or fiber-path validation corroborates).
 | Phase | Scope | Status |
 |---|---|---|
 | **P1** | 23 sig.spdc.* catalog entries + new Template fields (score_impact, next_checks, allow_root_cause_confirmed w/ tier cap in scorer) + 20 fx_* fixtures + drill integration | ✅ shipped this session |
-| P2 | Storage migrations (7 relational models, RLS) + schema validation + topics | queued |
+| **P2** | Storage: migration 0019 (7 RLS models) + `portintel` domain pkg (enums, validated payloads, module-detection resolver, topics) | ✅ shipped `8774005` |
 | P3 | Collectors: SNMP universal (IF/ENTITY/ENTITY-SENSOR MIB) + gNMI/OpenConfig streaming + vendor DOM adapters + trap/syslog events + audited CLI fallback | queued |
 | P4 | Threshold policy engine + deterministic port-health scorer (weights above) + port_health_current | queued |
 | P5 | API endpoints + response models | queued |
