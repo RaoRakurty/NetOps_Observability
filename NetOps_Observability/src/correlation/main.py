@@ -54,6 +54,7 @@ from producers import (
     episode_signal,
     flow_sample,
     parse_event_ts,
+    port_event_signal,
     probe_signals,
     syslog_control_signal,
     trap_control_signal,
@@ -1237,6 +1238,19 @@ async def handle_syslog(ev: dict) -> None:
             buffer_signal(cp_sig)
             log.info("control-plane signal %s: %s %s",
                      cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
+        # Port Intelligence physical-layer event (#94 P3b): transceiver/optics/
+        # DOM/FEC syslog → sig.ent.spdc evidence kinds. Independent of the
+        # control-plane classifier (a line can be one or the other, rarely both).
+        try:
+            pe_sig = port_event_signal(ev, cp_tenant, datetime.now(timezone.utc))
+        except DeadLetter as exc:
+            DEADLETTER_COUNT += 1
+            log.warning("dead-letter (port-event): %s", exc)
+            pe_sig = None
+        if pe_sig is not None:
+            await ch.insert("netops.corr_signals", [pe_sig.to_ch_row()])
+            buffer_signal(pe_sig)
+            log.info("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
 
     host = str(ev.get("hostname") or "unknown")
     sev  = str(ev.get("severity") or "info").lower()

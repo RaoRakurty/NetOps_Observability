@@ -851,3 +851,88 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         )
 
     return None  # unclassified — searchable in OpenSearch, no RCA signal
+
+
+# ---------------------------------------------------------------------------
+# Port Intelligence physical-layer event producer (#94 P3b). Classifies
+# transceiver / optics / DOM / FEC syslog into the sig.ent.spdc.* evidence
+# kinds so the physical-layer signatures fire from real device logs. Vendor
+# patterns are recognized off the VRL-parsed envelope (facility/mnemonic/
+# message), not a per-vendor hardcode; an unrecognized line returns None
+# (searchable, never a spurious RCA signal). Pure + table-driven + tested.
+
+# (regex, kind, entity=interface?, severity) — ordered; first match wins. The
+# kinds line up with the sig.ent.spdc catalog's required/supporting evidence.
+_PORT_EVENT_RULES: list[tuple[re.Pattern, str, bool, Severity]] = [
+    # Unsupported / unqualified transceiver (Cisco %PLATFORM UNSUPPORTED_TRANSCEIVER,
+    # Arista "unsupported transceiver", FortiGate "unqualified SFP").
+    (re.compile(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver.*not\s+supported", re.I),
+     "transceiver_unsupported", True, Severity.HIGH),
+    # DOM/DDM optical threshold alarms (SFF-8472 / %OPTICS / vendor DOM).
+    (re.compile(r"(rx|receive).*(power).*(low|below).*(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power", re.I),
+     "dom_rx_power_low", True, Severity.HIGH),
+    (re.compile(r"(temperature|temp).*(high|above).*(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature", re.I),
+     "dom_temperature_high", True, Severity.HIGH),
+    (re.compile(r"(tx\s+)?bias.*(high|current).*(alarm|threshold)|BIAS_HIGH", re.I),
+     "dom_lane_bias_anomaly", True, Severity.WARN),
+    # FEC / PCS.
+    (re.compile(r"uncorrectable.*(fec|codeword|block)|FEC.*UNCORRECTABLE|post[-_ ]?fec.*(error|ber)", re.I),
+     "prefec_ber_rising", True, Severity.HIGH),
+    (re.compile(r"pre[-_ ]?fec\s+ber|fec.*corrected.*(rate|high)|CORRECTED_FEC", re.I),
+     "fec_corrected_rate_high", True, Severity.WARN),
+    (re.compile(r"local\s+fault|LOCAL_FAULT", re.I), "pcs_local_fault", True, Severity.HIGH),
+    (re.compile(r"remote\s+fault|REMOTE_FAULT", re.I), "pcs_remote_fault", True, Severity.HIGH),
+    (re.compile(r"deskew|align.*(marker|lane).*(fail|lost)|PCS.*DESKEW", re.I),
+     "pcs_deskew_fault", True, Severity.HIGH),
+    (re.compile(r"hi[-_ ]?ber|high\s+bit\s+error", re.I), "hi_ber_indication", True, Severity.HIGH),
+    # Optic present but no light / signal (link-down-with-optic-in fingerprint).
+    (re.compile(r"no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS", re.I),
+     "link_down_no_light", True, Severity.HIGH),
+    # Transceiver insert/remove flap on insert (interop/incompat fingerprint).
+    (re.compile(r"transceiver.*(insert|remov).*(insert|remov)|SFP.*flap|optic.*flap", re.I),
+     "link_flap_on_insert", True, Severity.WARN),
+]
+
+
+def _port_of(ev: dict) -> str:
+    """Best-effort port/interface name from the parsed envelope."""
+    for k in ("interface", "if_name", "ifname", "port"):
+        v = ev.get(k)
+        if v:
+            return str(v)
+    m = re.search(r"\b((?:Ethernet|Eth|Et|Gi|Te|Fo|Hu|xe-|ge-|et-)[\w./:-]+)", str(ev.get("message") or ""))
+    return m.group(1) if m else ""
+
+
+def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> "Signal | None":
+    """Transceiver/optics/DOM/FEC syslog → one device_telemetry Signal in the
+    sig.ent.spdc evidence vocabulary; None for anything unrecognized. Feeds the
+    physical-layer signatures (#94). Also the source of port_event_log rows."""
+    host = str(ev.get("hostname") or ev.get("device") or "")
+    if not host or host == "unknown":
+        return None
+    msg = str(ev.get("message") or "")
+    ctoken = msg + " " + str(ev.get("facility") or "") + " " + str(ev.get("event_type") or "") + " " + str(ev.get("appname") or "")
+    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts_ms = int(ts.timestamp() * 1000)
+    observer = Observer(
+        observer_id=host, observer_type=ObserverType.DEVICE,
+        collection_path="direct", clock_quality="unknown",
+    )
+    for pat, kind, iface_scoped, sev in _PORT_EVENT_RULES:
+        if not pat.search(ctoken):
+            continue
+        port = _port_of(ev)
+        if iface_scoped and port:
+            etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{port}", (host, port)
+        else:
+            etype_, eid_, toks_ = EntityType.DEVICE, host, (host,)
+        return Signal(
+            tenant_id=tenant, ts=ts, source=Source.SYSLOG, kind=kind,
+            observer=observer, modality_class=ModalityClass.DEVICE_TELEMETRY,
+            entity_type=etype_, entity_id=eid_, severity=sev,
+            native_id=f"{host}|portevt|{kind}|{port or '-'}|{ts_ms}",
+            entity_tokens=toks_, metric_name="port_event",
+            attrs={"interface": port, "port_event": kind, "message": msg[:240]},
+        )
+    return None
