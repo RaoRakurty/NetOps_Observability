@@ -92,7 +92,7 @@ suspected/likely until a human or fiber-path validation corroborates).
 | **P4** | Threshold policy (`DefaultPolicy`) + deterministic port-health scorer (owner weights, dominant-issue, replay-stable) | ✅ shipped `d12ef21` |
 | **P5** | Tenant-scoped API: interfaces (filtered+paginated), detail, port-summary, module-types, filter-options, port-signatures; portStore in-mem+pg | ✅ shipped `f0c2017` |
 | **P6** | Workbench UI: 6 column presets + filters + health summary + detail drawer, mounted Infra→Inventory→'Interfaces & Optics' | ✅ shipped `be3a3ac` (fiber-path workbench + lane-map viz = P6b when real optics data exists) |
-| P7 | RCA path-resolution integration (incident endpoints → port/lane/fiber-path) | queued |
+| **P7** | RCA path-resolution: ResolvePath (port+fiber-path+neighbor) + `/interfaces/{id}/path`, tenant-scoped no-leak | ✅ shipped `98b4978` |
 
 Known vendor gaps to research in P3: Nokia DDM exposure granularity; coherent
 PM availability per platform (Cisco/Arista enhanced DOM vs OpenConfig
