@@ -10,16 +10,36 @@ import (
 )
 
 // ai_datasource.go — the server-side implementation of ai.DataSource. It is the
-// ONLY place the AI path touches a store, and every query is tenant-scoped via
-// the ClickHouse row policy (chTenantScope), so a non-cross caller can never
-// retrieve another tenant's problem (the corr_objects row policy returns 0 rows
-// → ErrNotFound, never revealing existence). No DB driver, no SQL, lives in the
-// ai package — only here, in the trusted server.
+// ONLY place the AI path touches a store. Isolation is TWO layers, both required
+// (the CH row policies deliberately share untagged rows to every scope — the
+// hybrid model — so the policy alone is NOT sufficient for a scoped caller):
+//
+//   1. every query rides the caller's tenant_scope (row policy: tagged rows);
+//   2. app-layer narrowing for untagged rows — telemetry reads narrow to the
+//     principal's own devices (addrTenantClauseFor/deviceTenantCondFor, the same
+//     guards the REST surfaces use), and correlation reads are STRICT
+//     (corrRowVisible: untagged correlation intel is platform-only — device
+//     names are not globally unique, so device-matching would cross-match).
+//
+// A non-cross caller can never retrieve another tenant's (or the platform's)
+// problem: unknown AND foreign ids both yield ErrNotFound, never revealing
+// existence. No DB driver, no SQL outside this file's seam.
 type aiDataSource struct {
 	srv    *server
 	ctx    context.Context
 	scope  string    // chTenantScope(r) — encodes tenant / __all__ for cross-tenant
 	claims jwtClaims // caller claims for OS/VM scoping helpers (visibleDevice*)
+}
+
+// corrRowVisible enforces strict tenancy on correlation intel app-side, as
+// defense-in-depth alongside the strict corr row policies: a scoped principal
+// sees ONLY rows stamped with its own tenant — never untagged (platform) rows.
+func (d aiDataSource) corrRowVisible(row map[string]any) bool {
+	tenant, cross := principalTenant(d.claims)
+	if cross {
+		return true
+	}
+	return asStr(row["tenant_id"]) == tenant
 }
 
 // GetProblem fetches one correlation object (tenant-scoped) and maps it to the
@@ -29,7 +49,7 @@ func (d aiDataSource) GetProblem(_ context.Context, _ ai.Principal, id string) (
 		return nil, ai.ErrNotFound
 	}
 	sql := `
-SELECT toString(correlation_id) AS correlation_id,
+SELECT toString(correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier,
        evidence_missing, affected, hypotheses,
        signal_count, node_count,
@@ -43,8 +63,8 @@ SELECT toString(correlation_id) AS correlation_id,
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return nil, ai.ErrNotFound // not found OR another tenant's (row policy) — don't reveal
+	if len(rows) == 0 || !d.corrRowVisible(rows[0]) {
+		return nil, ai.ErrNotFound // not found OR another tenant's / untagged — don't reveal
 	}
 	r := rows[0]
 	pr := &ai.Problem{
@@ -70,7 +90,7 @@ func (d aiDataSource) GetProblemEvidence(_ context.Context, p ai.Principal, id s
 		return nil, ai.ErrNotFound
 	}
 	sql := `
-SELECT hypotheses, affected
+SELECT hypotheses, affected, tenant_id
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'
  ORDER BY version DESC
@@ -80,7 +100,7 @@ SELECT hypotheses, affected
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	if len(rows) == 0 || !d.corrRowVisible(rows[0]) {
 		return nil, ai.ErrNotFound
 	}
 	href := "#/monitoring/correlations?id=" + id
@@ -125,7 +145,7 @@ func (d aiDataSource) ListActiveProblems(_ context.Context, _ ai.Principal, limi
 		limit = 25
 	}
 	sql := fmt.Sprintf(`
-SELECT toString(correlation_id) AS correlation_id,
+SELECT toString(correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier,
        affected, signal_count, node_count
   FROM netops.corr_objects
@@ -140,6 +160,9 @@ SELECT toString(correlation_id) AS correlation_id,
 	}
 	out := make([]ai.Problem, 0, len(rows))
 	for _, r := range rows {
+		if !d.corrRowVisible(r) {
+			continue // strict: untagged correlation intel is platform-only
+		}
 		id := asStr(r["correlation_id"])
 		out = append(out, ai.Problem{
 			ID:          id,
@@ -164,7 +187,7 @@ func (d aiDataSource) ListProblemsInWindow(_ context.Context, _ ai.Principal, si
 		sinceSeconds = 12 * 3600
 	}
 	sql := fmt.Sprintf(`
-SELECT toString(correlation_id) AS correlation_id,
+SELECT toString(correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier, state,
        affected, signal_count, node_count
   FROM netops.corr_objects
@@ -179,6 +202,9 @@ SELECT toString(correlation_id) AS correlation_id,
 	}
 	out := make([]ai.Problem, 0, len(rows))
 	for _, r := range rows {
+		if !d.corrRowVisible(r) {
+			continue // strict: untagged correlation intel is platform-only
+		}
 		id := asStr(r["correlation_id"])
 		out = append(out, ai.Problem{
 			ID:          id,
@@ -233,12 +259,16 @@ func (d aiDataSource) ModuleQuery(_ context.Context, p ai.Principal, query strin
 // recent window: the "what services are busiest / app-to-DB" read. Tenant-scoped
 // by the flows row policy via d.scope.
 func (d aiDataSource) moduleServiceFlows() (ai.ToolResult, error) {
-	const sql = `
+	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_addr", "dst_addr")
+	if empty {
+		return ai.ToolResult{}, nil // no visible devices — honest empty, never platform data
+	}
+	sql := `
 SELECT dst_port AS port,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total,
        count() AS flows
   FROM netops.flows
- WHERE ts >= now() - INTERVAL 24 HOUR AND dst_port > 0
+ WHERE ts >= now() - INTERVAL 24 HOUR AND dst_port > 0` + clause + `
  GROUP BY port
  ORDER BY bytes_total DESC
  LIMIT 8
@@ -350,6 +380,10 @@ func servicePortLabel(port int) string {
 // the tenant-scoped netops.app_identities table. lowConfidence=true narrows to
 // weak matches (the "which apps have low identification confidence?" question).
 func (d aiDataSource) moduleAppIdentity(lowConfidence bool) (ai.ToolResult, error) {
+	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_ip", "dst_ip")
+	if empty {
+		return ai.ToolResult{}, nil
+	}
 	having := ""
 	if lowConfidence {
 		having = "HAVING conf < 0.5"
@@ -357,7 +391,7 @@ func (d aiDataSource) moduleAppIdentity(lowConfidence bool) (ai.ToolResult, erro
 	sql := `
 SELECT app, count() AS flows, round(avg(confidence), 2) AS conf, any(provider) AS provider
   FROM netops.app_identities
- WHERE fused_at >= now() - INTERVAL 24 HOUR AND app != ''
+ WHERE fused_at >= now() - INTERVAL 24 HOUR AND app != ''` + clause + `
  GROUP BY app
  ` + having + `
  ORDER BY flows DESC
@@ -385,12 +419,16 @@ SELECT app, count() AS flows, round(avg(confidence), 2) AS conf, any(provider) A
 // moduleTopTalkers — the heaviest conversations (bidirectional pairs) over the
 // recent window, sampling-rate corrected, tenant-scoped.
 func (d aiDataSource) moduleTopTalkers() (ai.ToolResult, error) {
-	const sql = `
+	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_addr", "dst_addr")
+	if empty {
+		return ai.ToolResult{}, nil
+	}
+	sql := `
 SELECT least(src_addr, dst_addr)  AS a,
        greatest(src_addr, dst_addr) AS b,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate)) AS bytes_total
   FROM netops.flows
- WHERE ts >= now() - INTERVAL 24 HOUR
+ WHERE ts >= now() - INTERVAL 24 HOUR` + clause + `
  GROUP BY a, b
  ORDER BY bytes_total DESC
  LIMIT 8
@@ -413,13 +451,17 @@ SELECT least(src_addr, dst_addr)  AS a,
 
 // moduleFlowSummary — one-line traffic totals over the recent window.
 func (d aiDataSource) moduleFlowSummary() (ai.ToolResult, error) {
-	const sql = `
+	clause, empty := d.srv.addrTenantClauseFor(d.claims, "src_addr", "dst_addr")
+	if empty {
+		return ai.ToolResult{}, nil
+	}
+	sql := `
 SELECT sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total,
        count() AS flows,
        uniqExact(src_addr) AS sources
   FROM netops.flows
- WHERE ts >= now() - INTERVAL 24 HOUR
+ WHERE ts >= now() - INTERVAL 24 HOUR` + clause + `
  FORMAT JSON`
 	rows, err := d.srv.chRowsScope(d.ctx, d.scope, sql)
 	if err != nil {
@@ -440,12 +482,19 @@ SELECT sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
 // moduleMetricAnomalies — recent detected metric anomalies (z-score findings),
 // worst-first, tenant-scoped via the findings row policy.
 func (d aiDataSource) moduleMetricAnomalies() (ai.ToolResult, error) {
+	cond, empty := d.srv.deviceTenantCondFor(d.claims, "device")
+	if empty {
+		return ai.ToolResult{}, nil
+	}
+	if cond != "" {
+		cond = " AND " + cond
+	}
 	// NB: don't alias toString(ts) AS ts — a String alias named `ts` collides with
 	// the DateTime `ts` in ORDER BY (NO_COMMON_TYPE). ts isn't shown, so omit it.
-	const sql = `
+	sql := `
 SELECT id, severity, score, device, component, summary
   FROM netops.findings
- WHERE kind = 'anomaly' AND ts >= now() - INTERVAL 6 HOUR
+ WHERE kind = 'anomaly' AND ts >= now() - INTERVAL 6 HOUR` + cond + `
  ORDER BY score DESC, ts DESC
  LIMIT 10
  FORMAT JSON`

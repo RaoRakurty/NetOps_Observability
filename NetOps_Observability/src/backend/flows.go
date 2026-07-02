@@ -473,6 +473,16 @@ func flowTypeClause(r *http.Request) string {
 // no visible device addresses (caller should short-circuit to an empty result).
 func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
 	claims, _ := userFrom(r.Context())
+	return s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+}
+
+// addrTenantClauseFor is the claims-based core of flowTenantClause, shared with
+// the AI DataSource (which has claims, not a request). The CH row policies share
+// untagged telemetry rows to every tenant scope by design (hybrid model), so THIS
+// app-layer narrowing is the isolation for untagged rows — a scoped principal
+// reads only rows touching its own device addresses, and a principal with no
+// devices reads nothing (default-closed).
+func (s *server) addrTenantClauseFor(claims jwtClaims, srcCol, dstCol string) (clause string, empty bool) {
 	addrs, cross := s.visibleDeviceAddrs(claims)
 	// Compliance (operator-visibility): deny if the operator scoped into a
 	// restricted tenant; in the Global view exclude restricted tenants' devices.
@@ -481,7 +491,7 @@ func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
 	} else if cross {
 		if len(rt.addrs) > 0 {
 			in := sqlInList(rt.addrs)
-			return " AND src_addr NOT IN (" + in + ") AND dst_addr NOT IN (" + in + ")", false
+			return " AND " + srcCol + " NOT IN (" + in + ") AND " + dstCol + " NOT IN (" + in + ")", false
 		}
 		return "", false
 	}
@@ -489,7 +499,26 @@ func (s *server) flowTenantClause(r *http.Request) (clause string, empty bool) {
 		return "", true
 	}
 	in := sqlInList(addrs)
-	return " AND (src_addr IN (" + in + ") OR dst_addr IN (" + in + "))", false
+	return " AND (" + srcCol + " IN (" + in + ") OR " + dstCol + " IN (" + in + "))", false
+}
+
+// deviceTenantCondFor is the device-keyed sibling of addrTenantClauseFor for
+// tables keyed by a device name column (findings). Same hybrid-model contract:
+// scoped principal → only its own devices' rows; no devices → nothing.
+func (s *server) deviceTenantCondFor(claims jwtClaims, col string) (cond string, empty bool) {
+	keys, cross := s.visibleDeviceKeys(claims)
+	if rt := s.restrictedTelemetry(claims); rt.deny {
+		return "", true
+	} else if cross {
+		if len(rt.keys) > 0 {
+			return col + " NOT IN (" + sqlInList(rt.keys) + ")", false
+		}
+		return "", false
+	}
+	if len(keys) == 0 {
+		return "", true
+	}
+	return col + " IN (" + sqlInList(keys) + ")", false
 }
 
 // sqlInList renders values as a quoted, comma-separated SQL list with single

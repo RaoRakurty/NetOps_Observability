@@ -71,7 +71,7 @@ func TestProviderModelDefaults(t *testing.T) {
 	if m := providerModel("openai"); m != "gpt-4o-mini" {
 		t.Errorf("openai default model = %q", m)
 	}
-	if m := providerModel("gemini"); m != "gemini-1.5-flash" {
+	if m := providerModel("gemini"); m != "gemini-flash-latest" {
 		t.Errorf("gemini default model = %q", m)
 	}
 	t.Setenv("GEMINI_MODEL", "gemini-2.0-pro")

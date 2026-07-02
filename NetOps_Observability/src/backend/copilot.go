@@ -459,9 +459,10 @@ func providerModel(name string) string {
 	case "openai":
 		return "gpt-4o-mini"
 	case "gemini":
-		return "gemini-1.5-flash"
+		// Evergreen alias — Google retires dated 1.x/2.x ids (gemini-1.5-flash now 404s).
+		return "gemini-flash-latest"
 	case "anthropic":
-		return "claude-sonnet-4-5"
+		return "claude-sonnet-4-6"
 	}
 	return ""
 }

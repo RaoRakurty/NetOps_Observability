@@ -432,8 +432,11 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_findings ON netops.findings
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_tunnels ON netops.tunnels
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
+-- STRICT (2026-07-02): no untagged-shared clause — correlation intel carries
+-- device names/hypotheses and has NO app-layer device narrowing on its read
+-- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals ON netops.corr_signals
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_app_observations ON netops.app_observations
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
@@ -441,15 +444,27 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_app_observations ON netops.app_observ
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_app_identities ON netops.app_identities
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
     TO ALL;
+-- STRICT (2026-07-02): no untagged-shared clause — correlation intel carries
+-- device names/hypotheses and has NO app-layer device narrowing on its read
+-- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_signals_archive ON netops.corr_signals_archive
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
+-- STRICT (2026-07-02): no untagged-shared clause — correlation intel carries
+-- device names/hypotheses and has NO app-layer device narrowing on its read
+-- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_objects ON netops.corr_objects
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
+-- STRICT (2026-07-02): no untagged-shared clause — correlation intel carries
+-- device names/hypotheses and has NO app-layer device narrowing on its read
+-- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_edges ON netops.corr_edges
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
+-- STRICT (2026-07-02): no untagged-shared clause — correlation intel carries
+-- device names/hypotheses and has NO app-layer device narrowing on its read
+-- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_evidence ON netops.corr_evidence
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
