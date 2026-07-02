@@ -147,43 +147,60 @@
 
   <!-- ───────────────────────── 3 · use case 1 ───────────────────────── -->
   <h2><span class="no">03</span> Use case 1 — "Is it us, or the carrier?" <span class="tag illu">Illustrative</span></h2>
-  <p class="lede">A WAN circuit degrades at night. Two independent streams answer the question — with proof.</p>
-  <p>An enterprise runs its primary internet circuit through a national carrier. On a quiet Tuesday night the circuit begins to degrade — not down, just <i>wrong</i>. Nightly replication crawls; remote-workforce VPN sessions stutter.</p>
+  <p class="lede">A user-to-database path crosses five domains, four seams, and two firewalls. Any of them could be the fault. Two independent streams pin the segment — with proof.</p>
+  <p>An enterprise runs branch users to data-center applications across a five-domain path: <b>branch LAN → SD-WAN edge</b> (with the branch firewall) <b>→ carrier underlay → data-center WAN edge</b> (with the DC firewall) <b>→ application &amp; database tier</b>. Every handoff is a place the fault could hide — and a different team that could own it. On a quiet Tuesday night the path begins to degrade — not down, just <i>wrong</i>. The ERP front end stutters; nightly database replication crawls.</p>
   <table>
     <tr><th style="width:11%">Time</th><th>Event</th></tr>
-    <tr><td class="t">22:04</td><td>Round-trip time on the circuit climbs — 24&nbsp;ms → 180&nbsp;ms over ten minutes, with intermittent packet loss.</td></tr>
-    <tr><td class="t">22:09</td><td>The BGP session to the provider edge flaps. Then again. And again.</td></tr>
-    <tr><td class="t">22:15</td><td>Alert queues fill: interface warnings, reachability checks, application slowness — <b>47 alerts across 9 devices</b>.</td></tr>
-    <tr><td class="t">22:19</td><td><b>Correlix confirms.</b> Control-plane events (BGP session state) and the active path probe (RTT/loss on the same circuit) degrade in the same activity window. Fault domain: <b>internet egress, provider side of the seam</b>.</td></tr>
+    <tr><td class="t">22:04</td><td>Branch-to-DC replication slows; the path probe on that segment shows round-trip time climbing — 24&nbsp;ms → 180&nbsp;ms over ten minutes, with intermittent packet loss.</td></tr>
+    <tr><td class="t">22:07</td><td>Retransmitting sessions pile up in the <b>branch firewall's</b> state table; its session-count and CPU alarms fire. In most NOCs, this is where the blame lands first.</td></tr>
+    <tr><td class="t">22:09</td><td>The BGP session from the SD-WAN edge to the carrier flaps. Then again. Overlay tunnels re-key and fail over between underlays — the SD-WAN console still shows them "up".</td></tr>
+    <tr><td class="t">22:15</td><td>Alert queues fill across every domain on the path — wireless clients, both firewalls, tunnel health, DC-edge interfaces, database slow-query alarms: <b>68 alerts across 14 devices and 5 domains</b>.</td></tr>
+    <tr><td class="t">22:19</td><td><b>Correlix confirms.</b> Control-plane events (BGP to the carrier) and the independent path probe (RTT/loss on the same segment) degrade in the same activity window — while both firewalls' own telemetry shows the affected flows <b>passing, zero drops</b>, and the LAN- and DC-segment probes stay clean. Fault domain: <b>carrier middle mile, provider side of the seam</b>.</td></tr>
   </table>
-  <p><b>Without Correlix:</b> the NPM shows every interface up and green; the synthetic tool sees latency but can't say why; the routing logs sit in a third console. By 23:30 there's a war room — five engineers, three tools, one whiteboard — and the carrier answers with the sentence every engineer knows by heart: <i>"We see no problem on our side."</i></p>
+  <p><b>Without Correlix:</b> five domains means five consoles and six owners. The app team blames the network; the NPM shows every interface up and green; the firewall team — guilty by default the moment its session alarms fired — spends the night exporting allow-logs to prove innocence; the SD-WAN dashboard says the tunnels are up because they failed over; and the carrier answers with the sentence every engineer knows by heart: <i>"We see no problem on our side."</i> By 23:30 there's a war room proving negatives, segment by segment.</p>
 
   <figure class="keep">
-    <svg viewBox="0 0 720 96" width="100%" role="img" aria-label="Responsibility seam diagram: fault pinned on the provider side">
-      <line x1="452" y1="6" x2="452" y2="90" stroke="#b42318" stroke-width="2" stroke-dasharray="5 4"/>
-      <text x="452" y="14" text-anchor="middle" font-size="8" fill="#b42318" font-weight="600">RESPONSIBILITY SEAM</text>
-      <rect x="10" y="30" width="120" height="34" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
-      <text x="70" y="50" text-anchor="middle" font-size="10">core-sw-01</text>
-      <rect x="180" y="30" width="120" height="34" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
-      <text x="240" y="50" text-anchor="middle" font-size="10">edge-rtr-01</text>
-      <rect x="500" y="30" width="120" height="34" rx="4" fill="#fdf1ef" stroke="#b42318"/>
-      <text x="560" y="50" text-anchor="middle" font-size="10" fill="#b42318">carrier edge</text>
-      <text x="648" y="52" font-size="10" fill="#565d6d">INTERNET</text>
-      <line x1="130" y1="47" x2="180" y2="47" stroke="#565d6d"/>
-      <line x1="300" y1="47" x2="500" y2="47" stroke="#b42318" stroke-width="2"/>
-      <line x1="620" y1="47" x2="644" y2="47" stroke="#565d6d"/>
-      <text x="20" y="86" font-size="8" fill="#565d6d">YOUR NETWORK</text>
-      <text x="500" y="86" font-size="8" fill="#b42318" font-weight="600">FAULT DOMAIN — INTERNET EGRESS · PROVIDER SIDE</text>
+    <svg viewBox="0 0 720 112" width="100%" role="img" aria-label="Five-domain path with four responsibility seams: branch LAN, SD-WAN edge with firewall, carrier underlay, DC WAN edge with firewall, application and database tier; fault pinned to the carrier middle mile, both firewalls cleared">
+      <line x1="139" y1="18" x2="139" y2="96" stroke="#565d6d" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <line x1="283" y1="18" x2="283" y2="96" stroke="#b42318" stroke-width="2" stroke-dasharray="5 4"/>
+      <line x1="427" y1="18" x2="427" y2="96" stroke="#b42318" stroke-width="2" stroke-dasharray="5 4"/>
+      <line x1="571" y1="18" x2="571" y2="96" stroke="#565d6d" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <text x="139" y="12" text-anchor="middle" font-size="7" fill="#565d6d">SEAM 1</text>
+      <text x="283" y="12" text-anchor="middle" font-size="7" fill="#b42318" font-weight="600">SEAM 2</text>
+      <text x="427" y="12" text-anchor="middle" font-size="7" fill="#b42318" font-weight="600">SEAM 3</text>
+      <text x="571" y="12" text-anchor="middle" font-size="7" fill="#565d6d">SEAM 4</text>
+      <line x1="126" y1="52" x2="152" y2="52" stroke="#565d6d"/>
+      <line x1="270" y1="52" x2="296" y2="52" stroke="#b42318" stroke-width="2"/>
+      <line x1="414" y1="52" x2="440" y2="52" stroke="#b42318" stroke-width="2"/>
+      <line x1="558" y1="52" x2="584" y2="52" stroke="#565d6d"/>
+      <rect x="8" y="32" width="118" height="40" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="67" y="49" text-anchor="middle" font-size="9.5">branch LAN</text>
+      <text x="67" y="63" text-anchor="middle" font-size="7.5" fill="#565d6d">users · wireless</text>
+      <rect x="152" y="32" width="118" height="40" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="211" y="49" text-anchor="middle" font-size="9.5">SD-WAN edge</text>
+      <text x="211" y="63" text-anchor="middle" font-size="7.5" fill="#0f7b4d" font-weight="600">branch FW ✓ cleared</text>
+      <rect x="296" y="32" width="118" height="40" rx="4" fill="#fdf1ef" stroke="#b42318"/>
+      <text x="355" y="49" text-anchor="middle" font-size="9.5" fill="#b42318" font-weight="600">carrier underlay</text>
+      <text x="355" y="63" text-anchor="middle" font-size="7.5" fill="#b42318">middle mile</text>
+      <rect x="440" y="32" width="118" height="40" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="499" y="49" text-anchor="middle" font-size="9.5">DC WAN edge</text>
+      <text x="499" y="63" text-anchor="middle" font-size="7.5" fill="#0f7b4d" font-weight="600">DC FW ✓ cleared</text>
+      <rect x="584" y="32" width="118" height="40" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="643" y="49" text-anchor="middle" font-size="9.5">app tier</text>
+      <text x="643" y="63" text-anchor="middle" font-size="7.5" fill="#565d6d">database · ERP</text>
+      <text x="8" y="108" font-size="8" fill="#565d6d">YOUR NETWORK</text>
+      <text x="355" y="108" text-anchor="middle" font-size="8" fill="#b42318" font-weight="600">FAULT DOMAIN — CARRIER MIDDLE MILE · PROVIDER SIDE</text>
+      <text x="702" y="108" text-anchor="end" font-size="8" fill="#565d6d">YOUR NETWORK</text>
     </svg>
-    <figcaption>The seam is a first-class object: Correlix models where your responsibility ends and the provider's begins, so a fault domain can name a <i>side</i>, not just a device. <b>Corroboration:</b> BGP session flapping (control plane) + RTT 24→180&nbsp;ms with 4–9% loss (independent path probe) — same circuit, same window.</figcaption>
+    <figcaption>Five domains, four seams — every handoff is a first-class object, so the fault domain names a <i>segment and a side</i>, not just a device. <b>Corroboration:</b> BGP flapping to the carrier (control plane) + RTT 24→180&nbsp;ms with 4–9% loss (independent path probe) — same segment, same window. <b>Exoneration works the same way:</b> both firewalls are cleared by their own telemetry — the affected flows passing, zero drops — and the LAN- and DC-segment probes stay clean.</figcaption>
   </figure>
 
   <div class="duo">
     <div class="cell before"><h4>The traditional night</h4>
-      <p>47 alerts · 9 devices · 3 consoles</p><p>A war room assembling at 23:30, still proving a negative.</p></div>
+      <p>68 alerts · 14 devices · 5 domains · 6 owners</p><p>A war room assembling at 23:30 — the firewall guilty until proven innocent, every team proving a negative.</p></div>
     <div class="cell after"><h4>With Correlix</h4>
-      <p>1 confirmed incident · fault domain named · recommended owner: <b>carrier</b></p>
-      <p>One ticket filed — evidence bundle attached. The ISP escalation opens with proof, not opinion.</p></div>
+      <p>1 confirmed incident · fault domain: <b>carrier middle mile</b> · recommended owner: <b>carrier</b></p>
+      <p>Both firewalls exonerated by their own telemetry. One ticket filed — evidence bundle attached. The carrier escalation opens with proof, not opinion.</p></div>
   </div>
 
   <!-- ───────────────────────── 4 · use case 2 ───────────────────────── -->
@@ -249,7 +266,7 @@
     <tr><td class="k">Outputs</td><td>ServiceNow / Jira auto-ticketing with evidence bundle; Slack, PagerDuty, email, SMS notifications; REST API</td></tr>
   </table>
   <p><b>Operational guardrails.</b> Per-tenant isolation enforced at every storage layer; role-based access with SSO (OIDC/LDAP/TACACS+); credentials encrypted at rest in a built-in vault; every verdict carries its clickable evidence log. The optional AI assistant answers from your live data with citations — it is off by default, bounded, and never required for the RCA itself.</p>
-  <p class="keep"><b>Proof maturity, stated honestly.</b> Correlix has no public customer case studies yet — that is what the pilot below exists to produce, and we would rather show you than tell you. What is real today, and shown live in any demo: the correlation engine, fault-family signatures, seam corroboration (control-plane + independent path probe), alert-storm grouping, and the auto-ticketing loop all run against a physical multi-vendor lab (Cisco, Arista, Nokia, Juniper, Fortinet) with real fault injection — BGP instability, adjacency loss, link flaps, firewall drops — and ticket creation validated end-to-end against a ServiceNow-format instance. <span class="tag demo">Demonstrated</span></p>
+  <p class="keep"><b>Proof maturity, stated honestly.</b> Correlix has no public customer case studies yet — that is what the pilot below exists to produce, and we would rather show you than tell you. What is real today, and shown live in any demo: the correlation engine, fault-family signatures, seam corroboration (control-plane + independent path probe), alert-storm grouping, and the auto-ticketing loop all run against a physical multi-vendor lab with real fault injection — BGP instability, adjacency loss, link flaps, firewall drops — and ticket creation validated end-to-end against a ServiceNow-format instance. <span class="tag demo">Demonstrated</span></p>
 
   <!-- ───────────────────────── 6 · why it works ───────────────────────── -->
   <h2><span class="no">06</span> Why this works — and why you'd care</h2>
