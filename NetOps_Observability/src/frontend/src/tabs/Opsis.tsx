@@ -364,7 +364,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
             <span className="op-hd-sub">
               <span className={`op-dot ${ready ? "ok" : "warn"}`} />
               {cfg
-                ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
+                ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider === "gemini" ? "Gemini" : cfg.provider === "openai" ? "GPT" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
                 : tcfg
                   ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
                   : "Network assistant"}
@@ -415,7 +415,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
           </p>
           <label className="op-field">
             <span>
-              {cfg.provider === "openai" ? "OpenAI" : "Anthropic"} API key{" "}
+              {cfg.provider === "openai" ? "OpenAI" : cfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
               {cfg.key_present
                 ? <span className="badge good" style={{ fontSize: 10 }}>{cfg.key_source === "env" ? "via environment" : "configured"}</span>
                 : <span className="badge warn" style={{ fontSize: 10 }}>not set</span>}
@@ -435,12 +435,12 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
           <div className="op-field">
             <span>Provider</span>
             <div className="op-tiles">
-              {(cfg.providers ?? ["anthropic", "openai"]).map((pv) => (
+              {(cfg.providers ?? ["anthropic", "openai", "gemini"]).map((pv) => (
                 <button type="button" key={pv}
                   className={`op-tile${cfg.provider === pv ? " on" : ""}`}
                   onClick={() => { const s = cfg.model_suggestions?.[pv] ?? []; setCfg({ ...cfg, provider: pv, model: s[0] ?? cfg.model }); }}>
-                  <span className="op-tile-name">{pv === "anthropic" ? "Anthropic" : pv === "openai" ? "OpenAI" : pv}</span>
-                  <span className="op-tile-sub">{pv === "anthropic" ? "Claude" : pv === "openai" ? "GPT" : ""}</span>
+                  <span className="op-tile-name">{pv === "anthropic" ? "Anthropic" : pv === "openai" ? "OpenAI" : pv === "gemini" ? "Google" : pv}</span>
+                  <span className="op-tile-sub">{pv === "anthropic" ? "Claude" : pv === "openai" ? "GPT" : pv === "gemini" ? "Gemini" : ""}</span>
                 </button>
               ))}
             </div>

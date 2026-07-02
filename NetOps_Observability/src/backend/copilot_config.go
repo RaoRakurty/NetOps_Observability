@@ -27,7 +27,7 @@ import (
 // copilotConfig is the operator-tunable assistant settings. Key is a reversible
 // secret (in-memory plaintext, sealed at rest); the rest are non-secret.
 type copilotConfig struct {
-	Provider string `json:"provider"`      // "anthropic" | "openai"
+	Provider string `json:"provider"`      // "anthropic" | "openai" | "gemini"
 	Model    string `json:"model"`         // e.g. claude-sonnet-4-6, claude-opus-4-8, gpt-4o
 	System   string `json:"system"`        // optional system-prompt override ("" => default)
 	Key      string `json:"key,omitempty"` // provider API key — sealed at rest, never sent to clients
@@ -80,8 +80,8 @@ func (s *copilotConfigStore) get() copilotConfig {
 
 func (s *copilotConfigStore) set(c copilotConfig) copilotConfig {
 	c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
-	if c.Provider != "openai" {
-		c.Provider = "anthropic" // default + only other supported value
+	if c.Provider != "openai" && c.Provider != "gemini" {
+		c.Provider = "anthropic" // default; supported: anthropic | openai | gemini
 	}
 	c.Model = strings.TrimSpace(c.Model)
 	c.System = strings.TrimSpace(c.System)
@@ -130,11 +130,12 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 			"feature_enabled": os.Getenv("FEATURE_COPILOT") == "true",
 			"key_present":     s.copilotKeyPresent(),
 			"key_source":      s.copilotKeySource(),
-			"providers":       []string{"anthropic", "openai"},
+			"providers":       []string{"anthropic", "openai", "gemini"},
 			// Suggested models per provider for the UI dropdown (free-text also allowed).
 			"model_suggestions": map[string][]string{
 				"anthropic": {"claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"},
 				"openai":    {"gpt-4o", "gpt-4o-mini", "gpt-4.1"},
+				"gemini":    {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-latest"},
 			},
 		})
 	case http.MethodPut:

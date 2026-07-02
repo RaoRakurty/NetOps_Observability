@@ -40,8 +40,9 @@ func TestCopilotConfigEnvFallbackDefaults(t *testing.T) {
 	}
 }
 
-// set() normalizes the provider: only "openai" survives, everything else
-// (including junk and casing variants) collapses to the default "anthropic".
+// set() normalizes the provider: only the supported set (openai/gemini/
+// anthropic) survives; junk and casing variants collapse to the default
+// "anthropic".
 func TestCopilotConfigProviderNormalization(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -53,7 +54,9 @@ func TestCopilotConfigProviderNormalization(t *testing.T) {
 		{"anthropic", "anthropic"},
 		{"Anthropic", "anthropic"},
 		{"", "anthropic"},
-		{"gemini", "anthropic"},
+		{"gemini", "gemini"},
+		{"Gemini", "gemini"},
+		{"grok", "anthropic"},
 		{"  ", "anthropic"},
 	}
 	for _, c := range cases {
