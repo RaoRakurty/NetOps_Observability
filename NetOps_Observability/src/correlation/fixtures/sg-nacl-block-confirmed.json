@@ -1,0 +1,40 @@
+{
+  "name": "Flow-log rejects + probe failures on the exact path: confirmed policy block",
+  "signals": [
+    {
+      "kind": "cloud_flow_reject",
+      "entity_type": "service",
+      "entity_id": "vpc-a/api-x",
+      "observer_id": "flow-logs-vpc-a",
+      "observer_type": "flow_exporter",
+      "modality": "passive_flow",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "api-x",
+      "observer_id": "probe-agent-1",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "cloud_audit",
+      "entity_type": "service",
+      "entity_id": "sg-123",
+      "observer_id": "cloud-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.sg-nacl-block",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

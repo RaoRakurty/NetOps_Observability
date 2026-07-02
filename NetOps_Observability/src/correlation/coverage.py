@@ -41,6 +41,24 @@ KNOWN_PENDING: frozenset[str] = frozenset({
     "if_crc", "if_discards", "if_errors", "if_util_high", "lb_5xx",
     "optical_power_low", "path_change", "probe_latency_departure", "qos_drops",
     "synthetic_http_fail", "tunnel_degraded", "tunnel_down", "tunnel_flap",
+    # v1 NOC catalog (owner failure-signature spec 2026-07-02, midnight-noc-
+    # questions.md) — the catalog deliberately leads Layer-2 ingestion; these
+    # attach as their collectors land (#73 build order; change-timeline kinds
+    # like config_change/deploy_event are build-order-① of the capability map).
+    "app_conn_fail", "app_error_rate_high", "app_latency_high", "arp_fail",
+    "cert_expired", "cert_expiry_warning", "client_onboarding_fail",
+    "cloud_flow_reject", "config_change", "deploy_event", "dhcp_fail",
+    "dhcp_relay_fail", "dhcp_scope_util_high", "dns_answer_mismatch",
+    "dns_failover_event", "ecmp_member_loss", "evpn_route_missing",
+    "flow_asymmetry", "flow_drop_at_nat", "fqdn_probe_fail",
+    "fw_ha_state_change", "fw_policy_mismatch", "fw_session_drop", "fw_sync_fail",
+    "k8s_endpoints_empty", "k8s_event", "k8s_pod_not_ready",
+    "lb_target_unhealthy", "mac_table_missing", "nat_alloc_fail",
+    "nat_table_high", "nat_translation_change", "policy_diff_block",
+    "route_advertisement_change", "route_count_drop", "route_missing_nexthop",
+    "route_prefix_missing", "route_table_blackhole", "tls_handshake_fail",
+    "vlan_reachability_fail", "vni_reachability_fail",
+    "waf_block_spike", "waf_rule_match",
 })
 
 

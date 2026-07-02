@@ -1,0 +1,30 @@
+{
+  "name": "NAT allocation failures + intermittent connection failures: confirmed exhaustion",
+  "signals": [
+    {
+      "kind": "nat_alloc_fail",
+      "entity_type": "device",
+      "entity_id": "fw-edge",
+      "observer_id": "snmp-fw-edge",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "saas-x",
+      "observer_id": "probe-agent-2",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.security.nat-snat-exhaustion",
+    "tier": "confirmed",
+    "owner": "netops"
+  }
+}

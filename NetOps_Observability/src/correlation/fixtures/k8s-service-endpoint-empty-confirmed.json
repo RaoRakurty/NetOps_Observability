@@ -1,0 +1,40 @@
+{
+  "name": "Service has no ready endpoints, front door 5xx: confirmed readiness failure",
+  "signals": [
+    {
+      "kind": "k8s_endpoints_empty",
+      "entity_type": "service",
+      "entity_id": "shop-svc",
+      "observer_id": "k8s-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 2.0
+    },
+    {
+      "kind": "synthetic_http_fail",
+      "entity_type": "service",
+      "entity_id": "shop-vip",
+      "observer_id": "probe-agent-1",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "deploy_event",
+      "entity_type": "service",
+      "entity_id": "shop-app",
+      "observer_id": "cicd-platform",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.k8s-service-endpoint-empty",
+    "tier": "confirmed",
+    "owner": "app_team"
+  }
+}

@@ -80,6 +80,28 @@ class HypothesisScore:
     notes: tuple[str, ...]
     owner: str
     first_steps: tuple[str, ...]
+    supporting_hit: bool = False          # >=1 optional (supporting) clause matched
+    # v1 NOC-catalog narration fields, carried verbatim from the template so the
+    # AI/UI never re-derive wording (the engine reasons, the AI narrates).
+    seams: tuple[str, ...] = ()
+    deployment_scope: str = "hybrid"
+    operator_phrase: str = ""
+    manager_phrase: str = ""
+    blast_radius: str = ""
+    false_positives: tuple[str, ...] = ()
+
+    def confidence_label(self) -> str:
+        """The lexical confidence label of the owner's taxonomy (voice contract):
+        confirmed — the independence gate passed (>=2 modalities/observers,
+        an independent pair, required modalities witnessed); likely — every
+        required clause matched plus at least one independent supporting clause
+        and no contradiction (actionable, gate not yet fully met); suspected —
+        anything less. Never derived from the bare confidence number."""
+        if self.verdict_gate.tier.value == "confirmed":
+            return "confirmed"
+        if not self.missing and self.supporting_hit and not self.contradicted:
+            return "likely"
+        return "suspected"
 
     def to_dict(self) -> dict:
         return {
@@ -87,12 +109,19 @@ class HypothesisScore:
             "title": self.title,
             "coverage": round(self.coverage, 4),
             "confidence": round(self.confidence_rank, 4),
+            "confidence_label": self.confidence_label(),
             "contradicted": self.contradicted,
             "satisfied": list(self.satisfied),
             "missing": list(self.missing),
             "contradictions": list(self.contradictions),
             "forced_competitors": list(self.forced_competitors),
             "notes": list(self.notes),
+            "seams": list(self.seams),
+            "deployment_scope": self.deployment_scope,
+            "operator_phrase": self.operator_phrase,
+            "manager_phrase": self.manager_phrase,
+            "blast_radius": self.blast_radius,
+            "false_positives": list(self.false_positives),
             "verdict": {
                 "owner": self.owner,
                 "first_steps": list(self.first_steps),
@@ -126,11 +155,13 @@ def score_template(
             missing.append(clause.kind)
 
     bonus = 0.0
+    supporting_hit = False
     for clause in optional:
         hits = _satisfying(clause, evidence)
         if hits:
             satisfied.append(clause.kind)
             matched_signals.extend(hits)
+            supporting_hit = True
             bonus = min(OPTIONAL_BONUS_CAP, bonus + OPTIONAL_BONUS_PER_CLAUSE)
 
     coverage = (len(required) - len(missing)) / len(required) if required else 0.0
@@ -166,6 +197,13 @@ def score_template(
         notes=tuple(notes),
         owner=template.verdict.owner,
         first_steps=template.verdict.first_steps,
+        supporting_hit=supporting_hit,
+        seams=tuple(template.seams),
+        deployment_scope=template.deployment_scope,
+        operator_phrase=template.operator_phrase,
+        manager_phrase=template.manager_phrase,
+        blast_radius=template.blast_radius,
+        false_positives=tuple(template.false_positives),
     )
 
 
@@ -196,7 +234,11 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     tie-break (template id) so equal scores never flap between runs."""
     ev = tuple(evidence)
     scores = [score_template(t, ev) for t in catalog.enabled_templates()]
-    scores.sort(key=lambda s: (-s.confidence_rank, s.template_id))
+    # Equal confidence → prefer the MORE SPECIFIC explanation (more matched
+    # clauses = more of the evidence explained); template id only as the final
+    # deterministic tie-break. Keeps a broad single-clause look-alike from
+    # shadowing a multi-witness signature it ties with.
+    scores.sort(key=lambda s: (-s.confidence_rank, -len(s.satisfied), s.template_id))
 
     # Forced competitors must appear in the visible set even if low-ranked
     # (competing hypotheses by construction — §4.5).
@@ -206,6 +248,15 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     for s in scores[TOP_K:]:
         if s.template_id in forced_ids and s.template_id not in visible_ids:
             visible.append(s)
+            visible_ids.add(s.template_id)
+    # And the converse: a CONTRADICTED look-alike whose discriminator handed the
+    # win to a visible template stays visible too — it is the "ruled out
+    # because…" row (anti-black-box), and must not silently fall off just
+    # because the catalog grew enough 0.5-scorers to fill TOP_K.
+    for s in scores[TOP_K:]:
+        if s.contradicted and s.template_id not in visible_ids and visible_ids & set(s.forced_competitors):
+            visible.append(s)
+            visible_ids.add(s.template_id)
             visible_ids.add(s.template_id)
 
     if not scores or scores[0].confidence_rank < CONFIDENCE_FLOOR:
