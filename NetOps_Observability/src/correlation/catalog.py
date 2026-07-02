@@ -1962,6 +1962,308 @@ W2_BACKLOG_TEMPLATES: list[dict] = [
 ]
 BUILTIN_TEMPLATES.extend(W2_BACKLOG_TEMPLATES)
 
+# ---------------------------------------------------------------------------
+# Wave 3 (owner spec batch 3 — failure-signature-catalog-wave3.md): 7 new
+# fault-boundary families ENABLED, 3 backlog promotions (owner P0), 7 new
+# backlog. Uniqueness contract: every entry differs from its nearest reserved
+# neighbor in fault boundary + required evidence; the neighbor is recorded
+# machine-readably in the discriminator's else_prefer.
+WAVE3_TEMPLATES: list[dict] = [
+    {
+        "id": "sig.ent.access.stp-loop-broadcast-storm",
+        "title": "STP loop / broadcast storm",
+        "domain": "ent.access",
+        "seams": ["LAN", "DC_FABRIC"],
+        "deployment_scope": "onprem_only",
+        "requires": [
+            {"kind": "stp_topology_change", "entity_type": "device"},
+            {"kind": "broadcast_storm|mac_move_spike"},
+            {"kind": "device_resource_anomaly|if_util_high", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A contained TC event without storm load is the existing TC family.
+            {"absent": {"kind": "link_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.access.stp-topology-change"},
+        ],
+        "direction_expect": "l2-loop -> bridge-domain -> site/vlan-meltdown",
+        "verdict": {
+            "owner": "netops", "layer": "L2 (STP/loop)",
+            "first_steps": [
+                "Check STP change logs, root changes and storm-control counters",
+                "Measure MAC move rate and broadcast pps against baseline",
+                "Hunt the loop source: recent cabling, unmanaged switch, NIC bridging",
+            ],
+        },
+        "operator_phrase": "Sudden L2 instability is consistent with an STP loop or broadcast storm — TC churn plus abnormal broadcast/MAC-move load in one bridge domain.",
+        "manager_phrase": "A local network switching event is overwhelming normal traffic handling.",
+        "blast_radius": "the affected VLAN/site bridge domain",
+        "false_positives": ["maintenance reconvergence", "mass vMotion"],
+    },
+    {
+        "id": "sig.ent.security.fw-aa-session-owner-mismatch",
+        "title": "Firewall active/active session-owner mismatch",
+        "domain": "ent.security",
+        "seams": ["LAN", "WAN_SDWAN", "DC_FABRIC", "CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "fw_session_owner_mismatch|fw_ha_sync_fail", "entity_type": "device"},
+            {"kind": "flow_asymmetry|fw_session_drop"},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # A role CHANGE (failover) is the drift family; here both stay active.
+            {"absent": {"kind": "fw_ha_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.security.fw-ha-failover-drift"},
+        ],
+        "direction_expect": "cluster-members -> session-ownership -> asymmetric-flows",
+        "verdict": {
+            "owner": "netops", "layer": "L4 (firewall cluster state)",
+            "first_steps": [
+                "Verify session-owner selection and sync health across the active/active members",
+                "Check whether forward and return flows land on different members without synchronized state",
+                "Review upstream/downstream steering (ECMP/LAG hashing) into the cluster",
+            ],
+        },
+        "operator_phrase": "This looks like active/active session ownership or synchronization mismatch — one direction succeeds while flows pinned to the other member drop.",
+        "manager_phrase": "Traffic is crossing a clustered firewall path in a way the cluster is not tracking correctly.",
+        "blast_radius": "flows hashed across the misaligned cluster members",
+        "false_positives": ["upstream route asymmetry without a firewall issue", "host stateful filter"],
+    },
+    {
+        "id": "sig.ent.security.proxy-pac-wpad-failure",
+        "title": "Proxy PAC/WPAD distribution failure",
+        "domain": "ent.security",
+        "seams": ["WAN_SDWAN", "CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "pac_fetch_fail|wpad_lookup_fail", "entity_type": "service"},
+            {"kind": "synthetic_http_fail|app_error_rate_high"},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # The proxy itself being down is the egress-outage family.
+            {"absent": {"kind": "proxy_fail|swg_health_degraded"}, "within_s": 300,
+             "else_prefer": "sig.ent.security.proxy-swg-egress-failure"},
+        ],
+        "direction_expect": "pac/wpad-delivery -> client-proxy-config -> saas-paths",
+        "verdict": {
+            "owner": "netops", "layer": "L7 (proxy discovery)",
+            "first_steps": [
+                "Validate WPAD resolution and PAC retrieval from an affected client",
+                "Check the effective client proxy settings against the intended PAC",
+                "Confirm the proxy itself is healthy (direct proxy test) — delivery is the fault",
+            ],
+        },
+        "operator_phrase": "The proxy infrastructure may be healthy, but PAC or WPAD delivery is not — clients are using wrong or no proxy inconsistently.",
+        "manager_phrase": "Users are not getting the right proxy instructions, so traffic is taking inconsistent paths.",
+        "blast_radius": "clients depending on the failed PAC/WPAD path",
+        "false_positives": ["browser cache", "client VPN split tunnel"],
+    },
+    {
+        "id": "sig.ent.cloud.private-dns-ruleset-gap",
+        "title": "Private DNS forwarding ruleset gap",
+        "domain": "ent.cloud",
+        "seams": ["CLOUD_APP", "CARRIER_INTERCONNECT"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "dns_forward_ruleset_gap", "entity_type": "service"},
+            {"kind": "fqdn_probe_fail|synthetic_http_fail"},
+            {"kind": "cloud_change", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # Recursion/bouncing between resolvers is the forwarding-LOOP family.
+            {"absent": {"kind": "dns_forwarding_loop"}, "within_s": 300,
+             "else_prefer": "sig.ent.cloud.private-dns-forwarding-loop"},
+        ],
+        "direction_expect": "forwarding-ruleset -> private-zone-resolution -> app-dependencies",
+        "verdict": {
+            "owner": "netops", "layer": "L7 (cloud DNS forwarding)",
+            "first_steps": [
+                "Verify the resolver ruleset links and suffix rules for the affected VNet/VPC",
+                "Confirm public names resolve while ONLY private-zone names fail",
+                "Check reachability from the intended network to the forwarding targets",
+            ],
+        },
+        "operator_phrase": "Private-name failure fits a forwarding-ruleset or link gap more than a resolver outage — public resolution works, the ruleset link is missing.",
+        "manager_phrase": "Cloud systems are not forwarding certain private DNS requests to the right place.",
+        "blast_radius": "private-zone lookups from the unlinked networks",
+        "false_positives": ["missing private zone record", "security rule blocking DNS"],
+    },
+    {
+        "id": "sig.ent.cloud.lb-probe-semantics-mismatch",
+        "title": "LB health-check protocol / host-header mismatch",
+        "domain": "ent.cloud",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "lb_probe_semantics_mismatch", "entity_type": "service"},
+            {"kind": "lb_target_unhealthy"},
+            {"kind": "config_change", "optional": True},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # Probes DENIED before evaluation is the source-blocked family.
+            {"absent": {"kind": "cloud_flow_reject|fw_probe_denied"}, "within_s": 300,
+             "else_prefer": "sig.ent.cloud.lb-probe-source-blocked"},
+            # Backends genuinely failing is the target-health family.
+            {"absent": {"kind": "app_error_rate_high|synthetic_http_fail"}, "within_s": 300,
+             "else_prefer": "sig.ent.app.lb-target-health-failure"},
+        ],
+        "direction_expect": "probe-definition -> health-evaluation -> pool-state",
+        "verdict": {
+            "owner": "app_team", "layer": "L7 (probe semantics)",
+            "first_steps": [
+                "Compare the probe's Host header, protocol, path and port with backend vhost expectations",
+                "Confirm the backend answers a DIRECT request shaped like real traffic",
+                "Check named-port/target-port mappings after recent changes",
+            ],
+        },
+        "operator_phrase": "The backend is healthy directly, but the load balancer's probe semantics (host header, protocol, path or port) do not match backend expectations.",
+        "manager_phrase": "The backends work, but the platform health checks are asking the wrong question.",
+        "blast_radius": "the pool behind the mis-probed VIP",
+        "false_positives": ["real backend latency", "DNS failure to the backend name"],
+    },
+    {
+        "id": "sig.ent.cloud.lb-snat-hotspot-imbalance",
+        "title": "LB SNAT hot-spot imbalance",
+        "domain": "ent.cloud",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "cloud_only",
+        "requires": [
+            {"kind": "snat_member_hotspot", "entity_type": "service"},
+            {"kind": "app_conn_fail|flow_timeout"},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # Uniform exhaustion is the NAT-capacity family.
+            {"absent": {"kind": "nat_alloc_fail|cloud_nat_alloc_fail"}, "within_s": 300,
+             "else_prefer": "sig.ent.security.nat-snat-exhaustion"},
+        ],
+        "direction_expect": "member-snat-allocation -> outbound-flows -> dependencies",
+        "verdict": {
+            "owner": "app_team", "layer": "L4 (SNAT distribution)",
+            "first_steps": [
+                "Check per-instance/member SNAT port metrics — the fault is a skew, not a global ceiling",
+                "Measure connection distribution across the pool for hot-spotting",
+                "Consider outbound rules/NAT gateway or rebalancing before scaling everything",
+            ],
+        },
+        "operator_phrase": "Outbound failures are concentrated on specific backend members, which fits SNAT hot-spot imbalance rather than pool-wide exhaustion.",
+        "manager_phrase": "Only part of the backend pool is running out of outbound connection capacity.",
+        "blast_radius": "outbound flows from the hot-spotted members",
+        "false_positives": ["destination throttling", "app connection pool bug"],
+    },
+    {
+        "id": "sig.ent.security.waf-body-limit-block",
+        "title": "WAF body-inspection-limit block",
+        "domain": "ent.security",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "waf_body_limit_hit|waf_oversize_block", "entity_type": "service"},
+            {"kind": "synthetic_http_fail|app_error_rate_high"},
+        ],
+        "required_modalities": ["control_plane"],
+        "discriminators": [
+            # Rule-match blocks without a size boundary are the false-positive family.
+            {"absent": {"kind": "waf_block_spike"}, "within_s": 300,
+             "else_prefer": "sig.ent.security.waf-rule-false-positive"},
+        ],
+        "direction_expect": "inspection-limit -> large-requests -> uploads/apis",
+        "verdict": {
+            "owner": "app_team", "layer": "L7 (WAF inspection limits)",
+            "first_steps": [
+                "Check the WAF body-size limit and oversize-handling action",
+                "Confirm ONLY requests above the threshold fail (small POSTs pass)",
+                "Review the request-size distribution against the failing endpoints",
+            ],
+        },
+        "operator_phrase": "The WAF behavior is size-boundary or oversize-handling related, not a generic false positive — failures cluster at a body-size threshold.",
+        "manager_phrase": "Larger requests are failing because the security inspection boundary is being hit.",
+        "blast_radius": "uploads/API calls above the inspection threshold",
+        "false_positives": ["app upload limit", "client timeout"],
+    },
+]
+BUILTIN_TEMPLATES.extend(WAVE3_TEMPLATES)
+
+# Wave-3 backlog (7 new disabled families).
+W3_BACKLOG_TEMPLATES: list[dict] = [
+    {
+        "id": f"sig.{sid}", "title": title, "domain": domain, "enabled": False,
+        "seams": list(seams), "deployment_scope": scope, "demo_priority": "p2",
+        "requires": [{"kind": req} for req in reqs],
+        "required_modalities": list(mods),
+        "direction_expect": "", "verdict": {"owner": owner, "layer": layer, "first_steps": list(steps)},
+        "operator_phrase": op, "manager_phrase": mgr,
+    }
+    for (sid, title, domain, seams, scope, reqs, mods, owner, layer, steps, op, mgr) in [
+        ("ent.wan-edge.qos-marking-mismatch", "QoS marking/classification mismatch", "ent.wan-edge",
+         ("WAN_SDWAN", "CARRIER_INTERCONNECT"), "hybrid",
+         ("dscp_marking_mismatch", "probe_rtt_anomaly|app_latency_high"), ("control_plane",), "netops", "L2/L3 (QoS marking)",
+         ("Compare DSCP markings and queue assignment before/after the WAN edge", "Check for provider or policy remarking"),
+         "The impact pattern fits QoS marking or classification mismatch more than raw bandwidth exhaustion.",
+         "Priority traffic is being handled incorrectly even though the circuit is still available."),
+        ("ent.wan-edge.route-preference-leak", "Route preference leak / wrong egress", "ent.wan-edge",
+         ("WAN_SDWAN", "CARRIER_INTERCONNECT", "CLOUD_APP"), "hybrid",
+         ("route_selection_changed", "flow_egress_unexpected|path_change"), ("control_plane",), "netops", "L3 (route preference)",
+         ("Compare effective/learned routes and path selection before vs after impact", "Check metric/preference changes"),
+         "Routing preference has shifted traffic onto an unintended egress path while connectivity still exists.",
+         "Traffic is taking the wrong path even though connectivity still exists."),
+        ("ent.cloud.kube-proxy-rules-desync", "kube-proxy service rules desync", "ent.cloud",
+         ("DC_FABRIC", "CLOUD_APP"), "hybrid",
+         ("kube_proxy_desync", "k8s_event"), ("control_plane",), "app_team", "L4 (service proxy)",
+         ("Inspect kube-proxy logs and node service rules on affected nodes", "Confirm endpoints exist and pods answer directly"),
+         "Service backends exist, but the node service-proxy path appears out of sync — VIP fails while pod IPs answer.",
+         "The application instances are healthy, but the cluster routing layer is not forwarding to them correctly."),
+        ("ent.cloud.csi-volume-attach-conflict", "CSI volume attach/mount conflict", "ent.cloud",
+         ("DC_FABRIC", "CLOUD_APP"), "hybrid",
+         ("volume_attach_fail", "k8s_pod_pending|k8s_event"), ("control_plane",), "app_team", "storage (attach path)",
+         ("Check VolumeAttachment objects, access mode and current holder", "Review CSI controller errors"),
+         "The failure is at volume attach or mount time, not in the service network path.",
+         "The workload cannot start because its storage attachment is failing."),
+        ("ent.security.fw-zone-binding-drift", "Firewall zone/interface binding policy drift", "ent.security",
+         ("LAN", "WAN_SDWAN", "DC_FABRIC", "CLOUD_APP"), "hybrid",
+         ("fw_zone_binding_mismatch|fw_policy_mismatch", "config_change"), ("control_plane",), "netops", "L4 (policy context)",
+         ("Compare policy and zone bindings before/after the interface or path change", "Check policy hit-count shifts"),
+         "Policy or zone binding on the firewall does not match the current traffic path after a change.",
+         "The traffic is hitting the wrong security policy context after a path or interface change."),
+        ("ent.security.tls-inspection-trust-break", "TLS inspection trust break", "ent.security",
+         ("WAN_SDWAN", "CLOUD_APP"), "hybrid",
+         ("tls_inspection_trust_fail", "synthetic_http_fail|app_error_rate_high"), ("control_plane",), "netops", "L6 (middlebox trust)",
+         ("Compare bypass vs inspected behavior for the same destinations", "Verify client trust of the inspection CA"),
+         "HTTPS failure aligns with TLS inspection trust rather than the server certificate itself — bypass succeeds, inspected fails.",
+         "Secure web traffic is failing because the inspection layer is not trusted correctly."),
+        ("ent.cloud.private-dns-zone-shadow", "Overlapping private DNS zone shadowing", "ent.cloud",
+         ("CLOUD_APP",), "cloud_only",
+         ("dns_zone_shadowing", "dns_answer_mismatch"), ("control_plane",), "netops", "L7 (zone precedence)",
+         ("Map overlapping zones and confirm which suffix wins per query path", "Compare answers across resolver paths"),
+         "Overlapping private zones appear to be shadowing the intended DNS answer — different paths return different records.",
+         "A cloud DNS precedence issue is sending requests to the wrong internal name target."),
+    ]
+]
+BUILTIN_TEMPLATES.extend(W3_BACKLOG_TEMPLATES)
+
+# Wave-3 backlog promotions (owner P0): these wave-2 backlog families are
+# enabled now; the ExpressRoute entry gains the owner's hard-required VLAN/
+# MACsec parity evidence (vendor-subtype rule: a provider variant must add a
+# unique required signal). The jumbo-MTU family gets a probe alternative so
+# its evidence contract is disjoint from the campus PMTUD family.
+_WAVE3_PROMOTED = {
+    "sig.ent.access.pmtud-blackhole",
+    "sig.ent.middle-mile.interconnect-jumbo-mtu-mismatch",
+    "sig.ent.middle-mile.expressroute-arp-unresolved",
+}
+for _t in W2_BACKLOG_TEMPLATES:
+    if _t["id"] in _WAVE3_PROMOTED:
+        _t["enabled"] = True
+        _t["demo_priority"] = "p0"
+        if _t["id"] == "sig.ent.middle-mile.expressroute-arp-unresolved":
+            _t["requires"].append({"kind": "macsec_or_vlan_mismatch", "optional": True})
+        if _t["id"] == "sig.ent.middle-mile.interconnect-jumbo-mtu-mismatch":
+            _t["requires"] = [{"kind": "size_dependent_loss"}, {"kind": "tcp_retransmit_high|probe_loss"}]
+
 
 def builtin_catalog() -> Catalog:
     """The validated built-in set. Import-time safe: validation errors here

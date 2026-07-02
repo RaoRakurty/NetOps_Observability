@@ -1,0 +1,40 @@
+{
+  "name": "ER circuit enabled, ARP never resolves, BGP unstable: L2 parity fault",
+  "signals": [
+    {
+      "kind": "interconnect_peer_unreachable",
+      "entity_type": "device",
+      "entity_id": "er-edge:vlan200",
+      "observer_id": "syslog-er-edge",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "bgp_state_anomaly",
+      "entity_type": "device",
+      "entity_id": "er-edge:169.254.1.1",
+      "observer_id": "route-collector",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "macsec_or_vlan_mismatch",
+      "entity_type": "device",
+      "entity_id": "er-edge",
+      "observer_id": "change-tracker",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.expressroute-arp-unresolved",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

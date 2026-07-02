@@ -26,7 +26,7 @@ def _v1_templates():
 
 def test_v1_taxonomy_is_closed():
     cat = builtin_catalog()
-    assert len(_v1_templates()) == 71  # wave-1 (32) + wave-2 (12 v0 + 27 backlog)
+    assert len(_v1_templates()) == 85  # waves 1-3 (enabled + backlog)
     for t in cat.templates:
         assert set(t.seams) <= ALLOWED_SEAMS, t.id
         assert t.deployment_scope in ALLOWED_SCOPES, t.id

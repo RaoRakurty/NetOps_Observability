@@ -66,6 +66,14 @@ KNOWN_PENDING: frozenset[str] = frozenset({
     "ipsec_negotiation_fail", "ipsec_sa_rekey_fail", "k8s_ip_alloc_fail",
     "k8s_pod_pending", "mesh_cert_rotation_fail", "mtls_handshake_fail",
     "private_dns_missing", "sdwan_control_down", "subnet_capacity_exhausted",
+    # Wave 3 (failure-signature-catalog-wave3.md) + backlog promotions.
+    "broadcast_storm", "cloud_nat_alloc_fail", "dns_forward_ruleset_gap",
+    "dns_forwarding_loop", "flow_timeout", "fw_ha_sync_fail",
+    "fw_session_owner_mismatch", "lb_probe_semantics_mismatch",
+    "mac_move_spike", "macsec_or_vlan_mismatch", "pac_fetch_fail",
+    "proxy_fail", "size_dependent_loss", "snat_member_hotspot",
+    "swg_health_degraded", "tcp_retransmit_high", "waf_body_limit_hit",
+    "waf_oversize_block", "wpad_lookup_fail",
 })
 
 
