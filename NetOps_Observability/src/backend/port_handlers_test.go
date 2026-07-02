@@ -125,6 +125,41 @@ func TestPortSummaryScoped(t *testing.T) {
 	}
 }
 
+func TestPortPathResolution(t *testing.T) {
+	s := portTestServer(t)
+	ms := s.portStore.(*memPortStore)
+	// A fiber path with leaf1:Et1 as the A endpoint → far side leafZ:Et5, + a neighbor.
+	_ = ms.UpsertFiberPath(context.Background(), "t-a", fiberPathRec{
+		PathID: "fp-1", ADevice: "leaf1", APort: "leaf1:Et1", ZDevice: "leafZ", ZPort: "leafZ:Et5",
+		Circuit: "CID-9001", Provider: "Lumen", Polarity: "B", PanelID: "PP-3", Cassette: "C-12",
+	})
+	_ = ms.UpsertNeighbor(context.Background(), "t-a", "leaf1", "leaf1:Et1", "leafZ.dc", "Ethernet5")
+
+	// Own endpoint → resolved with the far side + circuit + neighbor.
+	w := httptest.NewRecorder()
+	s.handlePortInterfaceDetail(w, portReq(viewerA, "GET", "/api/infrastructure/interfaces/leaf1:Et1/path"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("path: %d %s", w.Code, w.Body.String())
+	}
+	var pc PathContext
+	_ = json.Unmarshal(w.Body.Bytes(), &pc)
+	if !pc.Resolved || pc.Circuit != "CID-9001" || pc.FarDevice != "leafZ" || pc.Neighbor != "leafZ.dc" {
+		t.Fatalf("path resolution wrong: %+v", pc)
+	}
+	if pc.Port == nil || pc.Port.PortID != "leaf1:Et1" {
+		t.Fatalf("path must include the port row: %+v", pc.Port)
+	}
+
+	// Tenant B resolving tenant A's endpoint → nothing (no cabling leak).
+	w2 := httptest.NewRecorder()
+	s.handlePortInterfaceDetail(w2, portReq(viewerB, "GET", "/api/infrastructure/interfaces/leaf1:Et1/path"))
+	var pc2 PathContext
+	_ = json.Unmarshal(w2.Body.Bytes(), &pc2)
+	if pc2.Resolved || pc2.Port != nil {
+		t.Fatalf("cross-tenant path must resolve to nothing: %+v", pc2)
+	}
+}
+
 func TestModuleTypesAndSignatures(t *testing.T) {
 	s := portTestServer(t)
 	w := httptest.NewRecorder()

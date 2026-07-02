@@ -53,6 +53,11 @@ func (s *server) handlePortInterfaces(w http.ResponseWriter, r *http.Request) {
 // — the detail-drawer payload. A foreign or unknown id returns 404 (never
 // reveal another tenant's port).
 func (s *server) handlePortInterfaceDetail(w http.ResponseWriter, r *http.Request) {
+	// The RCA path-resolution shares this prefix route (P7).
+	if strings.HasSuffix(r.URL.Path, "/path") {
+		s.handlePortPath(w, r)
+		return
+	}
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
 	if !ok {
 		return
@@ -74,6 +79,32 @@ func (s *server) handlePortInterfaceDetail(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
+}
+
+// handlePortPath: GET /api/infrastructure/interfaces/{device:port}/path — the
+// RCA path-resolution (#94 P7): maps an incident endpoint to its physical port,
+// fiber path (circuit/panel/cassette/polarity, far endpoint) and neighbor. The
+// RCA Inspector uses this to point an incident at the exact optic/strand/
+// cross-connect. Tenant-scoped; a foreign endpoint resolves to nothing (never
+// reveals another tenant's cabling).
+func (s *server) handlePortPath(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/infrastructure/interfaces/"), "/path")
+	dev, port, found := strings.Cut(id, ":")
+	if !found || dev == "" || port == "" {
+		writeError(w, http.StatusBadRequest, errors.New("interface id must be device:port"))
+		return
+	}
+	pc, err := s.portStore.ResolvePath(r.Context(), tenant, cross, dev, dev+":"+port)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pc)
 }
 
 // handlePortSummary: GET /api/infrastructure/port-summary — fleet health rollup

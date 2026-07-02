@@ -64,18 +64,53 @@ type PortFilter struct {
 	Offset int
 }
 
+// PathContext is the physical-layer resolution of one incident endpoint (#94
+// P7): the port itself + its fiber path (panel/cassette/circuit A↔Z) + the
+// discovered neighbor. RCA uses it to point an incident at the exact optic /
+// strand / cross-connect instead of just "device X".
+type PathContext struct {
+	Port     *PortRow          `json:"port,omitempty"`
+	Resolved bool              `json:"resolved"`
+	Circuit  string            `json:"circuit_id,omitempty"`
+	Provider string            `json:"provider,omitempty"`
+	PanelID  string            `json:"panel_id,omitempty"`
+	Cassette string            `json:"cassette_id,omitempty"`
+	Polarity string            `json:"polarity_method,omitempty"`
+	FarDevice string           `json:"far_device_id,omitempty"`
+	FarPort  string            `json:"far_port_id,omitempty"`
+	Neighbor string            `json:"lldp_remote_system_name,omitempty"`
+}
+
 type portStore interface {
 	ListPorts(ctx context.Context, tenant string, cross bool, f PortFilter) ([]PortRow, int, error)
 	GetPort(ctx context.Context, tenant string, cross bool, deviceID, portID string) (*PortRow, bool, error)
+	ResolvePath(ctx context.Context, tenant string, cross bool, deviceID, portID string) (*PathContext, error)
 	UpsertPort(ctx context.Context, r PortRow) error
 	UpsertHealth(ctx context.Context, tenant, deviceID, portID string, score int, state, dominant, sig string) error
+	UpsertFiberPath(ctx context.Context, tenant string, fp fiberPathRec) error
+	UpsertNeighbor(ctx context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error
+}
+
+// fiberPathRec is the writer shape for fiber_path_inventory (subset used by the
+// resolver; the full lossless record rides JSONB via the collector router).
+type fiberPathRec struct {
+	PathID    string
+	ADevice   string
+	APort     string
+	ZDevice   string
+	ZPort     string
+	Circuit   string
+	Provider  string
+	Polarity  string
+	PanelID   string
+	Cassette  string
 }
 
 func newPortStore() portStore {
 	if ps, ok := backend.(*pgStore); ok {
 		return &pgPortStore{db: ps.db}
 	}
-	return &memPortStore{ports: map[string]PortRow{}}
+	return &memPortStore{ports: map[string]PortRow{}, paths: map[string]fiberPathRec{}, neighbors: map[string][2]string{}}
 }
 
 // applyFilter is the shared predicate (both backends filter with it after the
@@ -111,8 +146,10 @@ func matchPort(r PortRow, f PortFilter) bool {
 // ── in-memory backend ──────────────────────────────────────────────────────
 
 type memPortStore struct {
-	mu    sync.RWMutex
-	ports map[string]PortRow // key: tenant|device|port
+	mu        sync.RWMutex
+	ports     map[string]PortRow      // key: tenant|device|port
+	paths     map[string]fiberPathRec // key: tenant|pathid
+	neighbors map[string][2]string    // key: tenant|device|port → [remoteSys, remotePort]
 }
 
 func portKey(tenant, device, port string) string { return tenant + "|" + device + "|" + port }
@@ -193,6 +230,72 @@ func (m *memPortStore) UpsertHealth(_ context.Context, tenant, deviceID, portID 
 	r.HealthScore, r.HealthState, r.DominantIssue, r.MatchedSig = score, state, dominant, sig
 	m.ports[k] = r
 	return nil
+}
+
+func (m *memPortStore) UpsertFiberPath(_ context.Context, tenant string, fp fiberPathRec) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.paths == nil {
+		m.paths = map[string]fiberPathRec{}
+	}
+	m.paths[tenant+"|"+fp.PathID] = fp
+	return nil
+}
+
+func (m *memPortStore) UpsertNeighbor(_ context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.neighbors == nil {
+		m.neighbors = map[string][2]string{}
+	}
+	m.neighbors[portKey(tenant, deviceID, portID)] = [2]string{remoteSys, remotePort}
+	return nil
+}
+
+func (m *memPortStore) ResolvePath(_ context.Context, tenant string, cross bool, deviceID, portID string) (*PathContext, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	pc := &PathContext{}
+	// Port (tenant-scoped).
+	for _, r := range m.ports {
+		if r.DeviceID == deviceID && r.PortID == portID && (cross || r.TenantID == tenant) {
+			cp := r
+			pc.Port = &cp
+			break
+		}
+	}
+	// Fiber path whose A or Z endpoint matches this port (tenant-scoped).
+	for k, fp := range m.paths {
+		if !cross && !strings.HasPrefix(k, tenant+"|") {
+			continue
+		}
+		aMatch := fp.ADevice == deviceID && fp.APort == portID
+		zMatch := fp.ZDevice == deviceID && fp.ZPort == portID
+		if aMatch || zMatch {
+			pc.Resolved = true
+			pc.Circuit, pc.Provider, pc.PanelID, pc.Cassette, pc.Polarity = fp.Circuit, fp.Provider, fp.PanelID, fp.Cassette, fp.Polarity
+			if aMatch {
+				pc.FarDevice, pc.FarPort = fp.ZDevice, fp.ZPort
+			} else {
+				pc.FarDevice, pc.FarPort = fp.ADevice, fp.APort
+			}
+			break
+		}
+	}
+	// Neighbor (tenant-scoped).
+	if n, ok := m.neighbors[portKey(tenant, deviceID, portID)]; ok {
+		pc.Neighbor = n[0]
+		pc.Resolved = true
+	} else if cross {
+		for k, n := range m.neighbors {
+			if strings.HasSuffix(k, "|"+deviceID+"|"+portID) {
+				pc.Neighbor = n[0]
+				pc.Resolved = true
+				break
+			}
+		}
+	}
+	return pc, nil
 }
 
 // ── Postgres backend ─────────────────────────────────────────────────────────
@@ -288,6 +391,80 @@ func (s *pgPortStore) UpsertPort(ctx context.Context, r PortRow) error {
 			  last_seen=now(), data=EXCLUDED.data`,
 			r.TenantID, r.DeviceID, r.PortID, r.IfName, r.IfAlias, r.AdminStatus,
 			r.OperStatus, r.SpeedBps, r.Role, r.Seam, r.LagID, r.BreakoutGrp, data)
+		return err
+	})
+}
+
+func (s *pgPortStore) ResolvePath(ctx context.Context, tenant string, cross bool, deviceID, portID string) (*PathContext, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	pc := &PathContext{}
+	if row, ok, err := s.GetPort(ctx, tenant, cross, deviceID, portID); err == nil && ok {
+		pc.Port = row
+	}
+	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		// Fiber path where this port is the A or Z endpoint (RLS-scoped).
+		var aDev, aPort, zDev, zPort string
+		e := tx.QueryRow(ctx, `
+			SELECT circuit_id, provider, panel_id, cassette_id, polarity_method,
+			       a_device_id, a_port_id, z_device_id, z_port_id
+			  FROM fiber_path_inventory
+			 WHERE (a_device_id=$1 AND a_port_id=$2) OR (z_device_id=$1 AND z_port_id=$2)
+			 LIMIT 1`, deviceID, portID).Scan(&pc.Circuit, &pc.Provider, &pc.PanelID, &pc.Cassette,
+			&pc.Polarity, &aDev, &aPort, &zDev, &zPort)
+		if e == nil {
+			pc.Resolved = true
+			if aDev == deviceID && aPort == portID {
+				pc.FarDevice, pc.FarPort = zDev, zPort
+			} else {
+				pc.FarDevice, pc.FarPort = aDev, aPort
+			}
+		}
+		// Neighbor.
+		var nsys string
+		if e := tx.QueryRow(ctx, `SELECT remote_system_name FROM port_neighbor_current WHERE device_id=$1 AND port_id=$2 LIMIT 1`,
+			deviceID, portID).Scan(&nsys); e == nil && nsys != "" {
+			pc.Neighbor = nsys
+			pc.Resolved = true
+		}
+		return nil
+	})
+	return pc, err
+}
+
+func (s *pgPortStore) UpsertFiberPath(ctx context.Context, tenant string, fp fiberPathRec) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO fiber_path_inventory
+			  (tenant_id, path_id, a_device_id, a_port_id, z_device_id, z_port_id,
+			   circuit_id, provider, polarity_method, panel_id, cassette_id, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+			ON CONFLICT (tenant_id, path_id) DO UPDATE SET
+			  a_device_id=EXCLUDED.a_device_id, a_port_id=EXCLUDED.a_port_id,
+			  z_device_id=EXCLUDED.z_device_id, z_port_id=EXCLUDED.z_port_id,
+			  circuit_id=EXCLUDED.circuit_id, provider=EXCLUDED.provider,
+			  polarity_method=EXCLUDED.polarity_method, panel_id=EXCLUDED.panel_id,
+			  cassette_id=EXCLUDED.cassette_id, updated_at=now()`,
+			tenant, fp.PathID, fp.ADevice, fp.APort, fp.ZDevice, fp.ZPort,
+			fp.Circuit, fp.Provider, fp.Polarity, fp.PanelID, fp.Cassette)
+		return err
+	})
+}
+
+func (s *pgPortStore) UpsertNeighbor(ctx context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO port_neighbor_current
+			  (tenant_id, device_id, port_id, remote_system_name, remote_port_id, last_seen)
+			VALUES ($1,$2,$3,$4,$5, now())
+			ON CONFLICT (tenant_id, device_id, port_id) DO UPDATE SET
+			  remote_system_name=EXCLUDED.remote_system_name,
+			  remote_port_id=EXCLUDED.remote_port_id, last_seen=now()`,
+			tenant, deviceID, portID, remoteSys, remotePort)
 		return err
 	})
 }
