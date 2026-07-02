@@ -933,6 +933,10 @@ export type NormalizedChatResponse = {
   investigated?: number;
   citations?: ChatCitation[];
   truncated?: boolean;
+  // Provider-down fallback: the grounded engine answered (evidence-only) and
+  // the UI shows a slim disclosure banner.
+  fallback?: "provider_unavailable";
+  grounded?: AiAnswer;
 };
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
@@ -970,6 +974,8 @@ export type AITenantRow = {
   investigations_enabled: boolean;
   key_present: boolean;
   no_platform_key: boolean;
+  max_calls: number; // 0 = platform default
+  daily_tokens: number; // 0 = platform default
 };
 
 export const TOKEN_KEY = "netops_token";
@@ -1620,8 +1626,8 @@ export const api = {
   setAITenantConfig: (cfg: { provider: string; model: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
     request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
   // Per-tenant AI access (platform owner): who gets the assistant/investigations.
-  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean }>("/api/ai/tenants"),
-  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean }) =>
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean; defaults?: { max_calls: number; daily_tokens: number } }>("/api/ai/tenants"),
+  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean; max_calls?: number; daily_tokens?: number }) =>
     request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).

@@ -393,11 +393,12 @@ REFRESH_TOKEN_TTL=168h
 APIKEY_RATE_LIMIT_PER_MIN=600
 
 # AI Copilot (chat pane in the dashboard). Leave FEATURE_COPILOT=false
-# to disable. Provider can be 'anthropic' or 'openai'.
+# to disable. Provider: 'gemini' (default — free tier), 'anthropic' or 'openai';
+# the key is usually pasted in the assistant settings UI instead of here.
 FEATURE_COPILOT=false
-COPILOT_PROVIDER=anthropic
+COPILOT_PROVIDER=gemini
 COPILOT_API_KEY=
-COPILOT_MODEL=claude-sonnet-4-5
+COPILOT_MODEL=
 
 # Correlation/AI Python service log level: info|debug|warning
 CORRELATION_LOG_LEVEL=info

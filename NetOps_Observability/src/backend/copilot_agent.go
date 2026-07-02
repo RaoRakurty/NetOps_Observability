@@ -47,7 +47,10 @@ INVESTIGATION DOCTRINE — how to answer with the tools:
 - Resolve relative time yourself against the current time above: "last night" or "today" → window 12h or 24h; "this week" or "past month" → 7d (the widest available — say what you covered).
 - "Any issues / what's wrong / what happened" → start with the incident tools: get_incident_history for past windows, get_active_major_incidents for right now. They are the platform's already-correlated view across logs, metrics, flows and paths — never offer the operator a menu of raw sources instead.
 - For a named device, corroborate with get_device_health and search_logs, and MERGE everything into ONE answer with citations.
-- Ask a clarifying question ONLY when a required argument is truly unknowable (for example, two devices share the same name).`
+- Outage triage narrows in this order — real impact → blast radius → what changed → transport (links/tunnels) → routing → policy/firewall → front door (DNS/LB) → brownout vs hard-down → provider vs us → safest mitigation. Answer with where the evidence points and what would close the next question; a question closes only when its evidence threshold is met (e.g. two independent streams agree).
+- Ask a clarifying question ONLY when a required argument is truly unknowable (for example, two devices share the same name).
+
+WORDING (NOC operator voice): answer as "[Confidence label] [fault domain] affecting [scope]. Evidence: [signal A], [signal B], [time window]. Next: [specific check or mitigation]." Lead with impact and scope, never a deep mechanism. Separate symptom from hypothesis. Confidence labels — confirmed: multiple independent evidence classes agree, use sparingly live; likely: strong directional evidence, safe to act on; suspected: incomplete or contradicted — say what would confirm it; unknown: state symptom and impact only, never imply a root cause. Never show a bare percentage alone — pair it with the label ("Likely, 85% model confidence"). Name contradictions and gaps instead of hiding them; blameless language. Live verbs: investigating, identified, likely, suspected, monitoring, mitigated, resolved. Never: certainly, definitely, root cause found, proven.`
 }
 
 // featureAIToolsEnabled gates the loop (off by default — soak per plan §5 P2).
@@ -86,8 +89,9 @@ func newAIDailyBudget() *aiDailyBudget { return &aiDailyBudget{used: map[string]
 func aiToolsDailyTokens() int { return envInt("AI_TOOLS_DAILY_TOKENS", 250_000) }
 
 // allow reports whether the tenant still has budget; charge adds usage.
-func (b *aiDailyBudget) allow(tenant string) bool {
-	limit := aiToolsDailyTokens()
+// allow reports whether the tenant is under its daily token limit (resolved by
+// the caller — per-tenant override or platform default; <=0 disables metering).
+func (b *aiDailyBudget) allow(tenant string, limit int) bool {
 	if limit <= 0 {
 		return true
 	}
@@ -160,12 +164,8 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 	ctx, cancel := context.WithTimeout(ctx, aiToolsLoopTimeout)
 	defer cancel()
 
-	maxCalls := envInt("AI_TOOLS_MAX_CALLS", 4)
-	if maxCalls < 1 {
-		maxCalls = 1
-	} else if maxCalls > 8 {
-		maxCalls = 8
-	}
+	loopTenant, _ := principalTenant(claims)
+	maxCalls := s.maxCallsFor(loopTenant) // per-tenant guardrail, platform default fallback
 
 	turns := make([]agentTurn, 0, len(msgs)+2*maxCalls)
 	for _, m := range msgs {

@@ -209,11 +209,25 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		// providerDo, never echoed to the client. Fall through to the next.
 		logWarn("copilot", "provider attempt failed, falling through", map[string]any{"provider": name})
 	}
-	if !attempted {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Correlix AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
+	// Provider-down fallback (owner decision 2026-07-02): the grounded engine
+	// answers when no LLM can — evidence-only, tenant-scoped, key-free — with a
+	// disclosure the UI renders as a slim banner. The assistant degrades, never
+	// dead-ends. (No key configured at all still explains how to add one.)
+	if attempted {
+		if q := latestUserMessage(msgs); q != "" {
+			if ans, err := s.newOrchestrator(r, claims).Ask(r.Context(), s.aiPrincipal(claims), q, nil); err == nil {
+				logInfo("copilot", "provider unavailable — engine fallback answered", map[string]any{"tenant": claims.Tenant})
+				writeJSON(w, http.StatusOK, map[string]any{
+					"provider": "engine", "text": ans.Text, "grounded": ans, "doc_refs": docRefs,
+					"fallback": "provider_unavailable",
+				})
+				return
+			}
+		}
+		writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
 		return
 	}
-	writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
+	writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Correlix AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
 }
 
 // firstConfiguredProvider resolves the first provider candidate for this
@@ -236,7 +250,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		return false // no provider — plain path renders the "add a key" message
 	}
 	tenant, _ := principalTenant(claims)
-	if !s.aiToolBudget.allow(tenant) {
+	if !s.aiToolBudget.allow(tenant, s.dailyTokensFor(tenant)) {
 		logWarn("ai", "agent loop skipped — daily token budget exhausted", map[string]any{"tenant": claims.Tenant})
 		return false // fail closed to chat-without-tools (plan §4.5), disclosed via provider note
 	}

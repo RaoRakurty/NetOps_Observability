@@ -38,6 +38,8 @@ type aiTenantConfig struct {
 	TenantID      string `json:"tenant_id"`
 	AssistantOff  bool   `json:"assistant_off,omitempty"`   // entitlement: true → assistant disabled for this tenant
 	AgentTools    bool   `json:"agent_tools,omitempty"`     // entitlement: true → bounded agent loop enabled
+	MaxCalls      int    `json:"max_calls,omitempty"`       // guardrail override: lookups per question (0 → platform default, clamp 1-8)
+	DailyTokens   int    `json:"daily_tokens,omitempty"`    // guardrail override: tokens/day (0 → platform default)
 	Provider      string `json:"provider,omitempty"`        // BYO: "anthropic" | "openai" | "gemini" ("" → unset)
 	Model         string `json:"model,omitempty"`           // BYO model override ("" → provider default)
 	Key           string `json:"key,omitempty"`             // BYO provider key — sealed under the tenant DEK, never sent to clients
@@ -172,18 +174,54 @@ func (s *aiTenantConfigStore) setTenantSettings(tenant, provider, model, key str
 	return c
 }
 
-// setEntitlement updates the PLATFORM-OWNER fields: assistant availability and
-// the agent-loop grant.
-func (s *aiTenantConfigStore) setEntitlement(tenant string, assistantOff, agentTools bool) aiTenantConfig {
+// setEntitlement updates the PLATFORM-OWNER fields: assistant availability, the
+// agent-loop grant, and the per-tenant spend guardrails (0 = platform default).
+func (s *aiTenantConfigStore) setEntitlement(tenant string, assistantOff, agentTools bool, maxCalls, dailyTokens int) aiTenantConfig {
+	if maxCalls < 0 {
+		maxCalls = 0
+	} else if maxCalls > 8 {
+		maxCalls = 8 // same hard ceiling the loop clamps to
+	}
+	if dailyTokens < 0 {
+		dailyTokens = 0
+	} else if dailyTokens > 5_000_000 {
+		dailyTokens = 5_000_000 // sanity ceiling — a tenant is not the whole platform
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.cfgs[tenant]
 	c.TenantID = tenant
 	c.AssistantOff = assistantOff
 	c.AgentTools = agentTools
+	c.MaxCalls = maxCalls
+	c.DailyTokens = dailyTokens
 	s.cfgs[tenant] = c
 	s.saveLocked()
 	return c
+}
+
+// maxCallsFor resolves the per-question lookup cap for a tenant: its override
+// when set, else the platform default (AI_TOOLS_MAX_CALLS), clamped 1-8.
+func (s *server) maxCallsFor(tenant string) int {
+	n := s.aiTenantCfg.get(tenant).MaxCalls
+	if n <= 0 {
+		n = envInt("AI_TOOLS_MAX_CALLS", 4)
+	}
+	if n < 1 {
+		n = 1
+	} else if n > 8 {
+		n = 8
+	}
+	return n
+}
+
+// dailyTokensFor resolves the tokens/day budget for a tenant: its override when
+// set, else the platform default (AI_TOOLS_DAILY_TOKENS; <=0 disables metering).
+func (s *server) dailyTokensFor(tenant string) int {
+	if n := s.aiTenantCfg.get(tenant).DailyTokens; n > 0 {
+		return n
+	}
+	return aiToolsDailyTokens()
 }
 
 // ---- gates (used by copilot.go / ai_handlers.go / copilot_agent.go) ----------
@@ -336,6 +374,8 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			Investigations bool   `json:"investigations_enabled"`
 			KeyPresent     bool   `json:"key_present"` // tenant brought their own key
 			NoPlatformKey  bool   `json:"no_platform_key"`
+			MaxCalls       int    `json:"max_calls"`    // 0 = platform default
+			DailyTokens    int    `json:"daily_tokens"` // 0 = platform default
 		}
 		var rows []row
 		for _, t := range s.tenants.List() {
@@ -349,11 +389,17 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 				Investigations: c.AgentTools,
 				KeyPresent:     c.Key != "",
 				NoPlatformKey:  c.NoPlatformKey,
+				MaxCalls:       c.MaxCalls,
+				DailyTokens:    c.DailyTokens,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tenants":       rows,
 			"tools_feature": featureAIToolsEnabled(), // investigations need FEATURE_AI_TOOLS too
+			"defaults": map[string]int{ // platform defaults, for UI placeholders
+				"max_calls":    envInt("AI_TOOLS_MAX_CALLS", 4),
+				"daily_tokens": aiToolsDailyTokens(),
+			},
 		})
 	case http.MethodPut:
 		id := strings.TrimPrefix(r.URL.Path, "/api/ai/tenants/")
@@ -370,16 +416,20 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Assistant      bool `json:"assistant_enabled"`
 			Investigations bool `json:"investigations_enabled"`
+			MaxCalls       int  `json:"max_calls"`    // 0 = platform default
+			DailyTokens    int  `json:"daily_tokens"` // 0 = platform default
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		c := s.aiTenantCfg.setEntitlement(t.ID, !req.Assistant, req.Investigations)
+		c := s.aiTenantCfg.setEntitlement(t.ID, !req.Assistant, req.Investigations, req.MaxCalls, req.DailyTokens)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tenant_id":              t.ID,
 			"assistant_enabled":      !c.AssistantOff,
 			"investigations_enabled": c.AgentTools,
+			"max_calls":              c.MaxCalls,
+			"daily_tokens":           c.DailyTokens,
 		})
 	default:
 		w.Header().Set("Allow", "GET, PUT")

@@ -818,11 +818,12 @@ services:
       APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
       # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)
       MAX_USERS: ${MAX_USERS:-0}
-      # AI assistant (ChatGPT). FEATURE_COPILOT gates it; provider defaults to
-      # OpenAI (set COPILOT_PROVIDER=anthropic to use Claude instead). The model
+      # AI assistant. FEATURE_COPILOT gates it; the product default provider is
+      # Gemini (free tier — owner decision 2026-07-02); switch to anthropic or
+      # openai in the assistant settings UI or via COPILOT_PROVIDER. The model
       # default tracks the provider in the backend unless COPILOT_MODEL is set.
       FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
-      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-openai}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-gemini}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-}
       # AI agent loop ("Investigations"): the model may run governed read-only

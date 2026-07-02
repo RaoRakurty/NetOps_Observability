@@ -99,18 +99,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		question = canonical
 	}
 
-	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
-	orch := &ai.Orchestrator{
-		DS:        ds,
-		Tools:     ai.Tools(ds),
-		LLM:       aiLLM{srv: s, claims: claims},
-		Flags:     envFlagLookup,
-		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
-		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
-		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
-		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
-	}
-	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
+	ans, err := s.newOrchestrator(r, claims).Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -123,6 +112,23 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		"provider": ans.Provider, "tier": ai.RouteFor(ans.Mode).Tier, // §10 model-router tier
 	})
 	writeJSON(w, http.StatusOK, ans)
+}
+
+// newOrchestrator builds the grounded engine for one request — shared by
+// /api/ai/ask and the copilot provider-down fallback (the engine answers when
+// no LLM can). All reads ride the caller's tenant-scoped aiDataSource.
+func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestrator {
+	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
+	return &ai.Orchestrator{
+		DS:        ds,
+		Tools:     ai.Tools(ds),
+		LLM:       aiLLM{srv: s, claims: claims},
+		Flags:     envFlagLookup,
+		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
+		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
+		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
+		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
+	}
 }
 
 // aiPrincipal maps the coarse RBAC grid (overview/explore/alerts/infrastructure/

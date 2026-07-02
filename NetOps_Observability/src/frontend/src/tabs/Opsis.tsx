@@ -104,6 +104,9 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Slim disclosure when the AI provider is unreachable and the grounded engine
+  // answered instead (owner decision: degrade elegantly, never dead-end).
+  const [fallbackNote, setFallbackNote] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -197,14 +200,16 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     }
   };
 
-  // Flip one workspace's AI access (platform owner) — optimistic row update.
-  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled">>) => {
+  // Flip one workspace's AI access / guardrails (platform owner) — optimistic row update.
+  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled" | "max_calls" | "daily_tokens">>) => {
     const next = { ...row, ...patch };
     setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? next : r)));
     try {
       await api.setAITenantAccess(row.tenant_id, {
         assistant_enabled: next.assistant_enabled,
         investigations_enabled: next.investigations_enabled,
+        max_calls: next.max_calls || 0,
+        daily_tokens: next.daily_tokens || 0,
       });
     } catch (e) {
       setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? row : r)));
@@ -230,6 +235,14 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
         if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
         if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
         if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
+        // Provider-down fallback: the engine answered — render the rich grounded
+        // card and disclose it with the slim banner (never a dead-end error).
+        if (nr.fallback && nr.grounded) {
+          setGrounded((g) => ({ ...g, [idx]: nr.grounded! }));
+          setFallbackNote(true);
+        } else if (nr.provider && nr.provider !== "engine") {
+          setFallbackNote(false); // provider is back — banner clears itself
+        }
       } else {
         // No provider key: answer from the grounded engine instead of erroring, so
         // any typed question still gets a tenant-scoped, evidence-cited answer.
@@ -486,8 +499,22 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
                     <input type="checkbox" checked={row.investigations_enabled} disabled={!row.assistant_enabled}
                       onChange={(e) => setAccess(row, { investigations_enabled: e.target.checked })} /> Investigations
                   </label>
+                  {/* Per-workspace spend guardrails — blank = platform default. */}
+                  <input type="number" min={0} max={8} value={row.max_calls || ""}
+                    title="Lookups per question (blank = platform default)"
+                    placeholder="4" disabled={!row.investigations_enabled}
+                    style={{ width: 44, fontSize: 11 }}
+                    onChange={(e) => setAccess(row, { max_calls: Math.max(0, Math.min(8, Number(e.target.value) || 0)) })} />
+                  <input type="number" min={0} step={50000} value={row.daily_tokens || ""}
+                    title="AI tokens per day (blank = platform default)"
+                    placeholder="250000" disabled={!row.assistant_enabled}
+                    style={{ width: 84, fontSize: 11 }}
+                    onChange={(e) => setAccess(row, { daily_tokens: Math.max(0, Number(e.target.value) || 0) })} />
                 </div>
               ))}
+              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                Guardrails per workspace: lookups per question · AI tokens per day. Blank = platform defaults.
+              </div>
             </div>
           )}
         </div>
@@ -557,6 +584,20 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
             )}
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+        </div>
+      )}
+
+      {/* Provider-down disclosure — slim, dismissible, honest. */}
+      {fallbackNote && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, padding: "5px 12px",
+          fontSize: 11, color: "var(--muted)", background: "var(--panel-2, rgba(255,180,60,0.06))",
+          borderBottom: "1px solid var(--line)",
+        }}>
+          <span className="op-dot warn" />
+          <span style={{ flex: 1 }}>AI narration is temporarily unavailable — answers come straight from the correlation engine, fully cited.</span>
+          <button className="op-hd-btn" style={{ width: 18, height: 18, fontSize: 11 }} title="Dismiss"
+            onClick={() => setFallbackNote(false)}>×</button>
         </div>
       )}
 

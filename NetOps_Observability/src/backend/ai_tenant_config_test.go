@@ -102,7 +102,7 @@ func TestAITenantConfigStoreKeyLifecycle(t *testing.T) {
 	}
 	// Entitlement writes never disturb tenant settings and vice versa.
 	st.setTenantSettings("t-a", "openai", "", "sk-oai", true, false)
-	st.setEntitlement("t-a", true, true)
+	st.setEntitlement("t-a", true, true, 0, 0)
 	c := st.get("t-a")
 	if c.Key != "sk-oai" || !c.NoPlatformKey || !c.AssistantOff || !c.AgentTools {
 		t.Fatalf("entitlement and tenant settings must compose: %+v", c)
@@ -302,7 +302,7 @@ func TestAssistantEntitlementGate(t *testing.T) {
 	if code := ask(aiTenantUserA); code != http.StatusOK {
 		t.Fatalf("entitled-by-default tenant must reach the assistant: %d", code)
 	}
-	s.aiTenantCfg.setEntitlement("t-a", true, false) // assistant OFF for t-a
+	s.aiTenantCfg.setEntitlement("t-a", true, false, 0, 0) // assistant OFF for t-a
 	if code := ask(aiTenantUserA); code != http.StatusForbidden {
 		t.Fatalf("disabled tenant must be refused: %d", code)
 	}
