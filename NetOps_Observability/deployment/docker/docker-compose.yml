@@ -674,6 +674,10 @@ services:
       ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # Port Intelligence #94 P3: DOM/DDM optics via ENTITY-SENSOR-MIB (rx/tx
+      # power, temp, voltage, bias per port → port_optics_* VM series). Opt-in;
+      # best-effort (devices without ENTITY-SENSOR yield nothing).
+      FEATURE_PORT_DOM: ${FEATURE_PORT_DOM:-false}
       # LLDP neighbour discovery (real L1 topology links via SNMP LLDP-MIB) →
       # netops:topology:lldp → /api/topology/links → Device Topology real edges.
       ENABLE_LLDP_DISCOVERY: ${ENABLE_LLDP_DISCOVERY:-false}

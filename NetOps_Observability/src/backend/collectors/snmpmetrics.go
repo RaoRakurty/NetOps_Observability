@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,6 +164,12 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 		// without ENTITY-MIB yield nothing.
 		lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
+		// DOM/DDM optics (ENTITY-SENSOR-MIB) — Port Intelligence #94 P3, opt-in.
+		// Normalized rx/tx power, temp, voltage, bias per port; VM-only fast
+		// numerics (identity stays relational). Best-effort — no sensors, no lines.
+		if os.Getenv("FEATURE_PORT_DOM") == "true" {
+			lines = append(lines, collectDOMSensors(dctx, addr, creds, tg.ID, vendor, now)...)
+		}
 		// Topology enrichment: interface IP → ifName (reuses the ifName map already
 		// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
 		// links (interface IPs) resolve to real port names + join to metrics.
