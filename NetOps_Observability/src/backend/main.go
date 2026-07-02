@@ -107,6 +107,7 @@ type server struct {
 	aiToolBudget        *aiDailyBudget           // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg          *copilotConfigStore
 	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
+	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
 	netboxSync          *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
@@ -507,6 +508,7 @@ func newServer() *server {
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
+	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg
 	srv.discoveryCfg = discoveryCfg
 	// Write-through: reconcile discovered devices INTO NetBox (the source of truth),
@@ -823,6 +825,13 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/snmp/profiles", s.handleSNMPProfiles)
 	mux.HandleFunc("/api/snmp/profiles/", s.handleSNMPProfileByID)
 	mux.HandleFunc("/api/devices", s.handleDevices)
+	// Port Intelligence (#94 P5) — enhances the Infrastructure surface (no new nav).
+	mux.HandleFunc("/api/infrastructure/interfaces", s.handlePortInterfaces)
+	mux.HandleFunc("/api/infrastructure/interfaces/", s.handlePortInterfaceDetail)
+	mux.HandleFunc("/api/infrastructure/port-summary", s.handlePortSummary)
+	mux.HandleFunc("/api/infrastructure/module-types", s.handleModuleTypes)
+	mux.HandleFunc("/api/infrastructure/port-filter-options", s.handlePortFilterOptions)
+	mux.HandleFunc("/api/infrastructure/port-signatures", s.handlePortSignatureCatalog)
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)
 	mux.HandleFunc("/api/alerts", s.handleAlerts)

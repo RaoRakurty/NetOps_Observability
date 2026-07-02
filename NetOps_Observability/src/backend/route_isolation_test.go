@@ -72,6 +72,16 @@ var routeIsolationLedger = map[string]string{
 	"/api/credentials":              "scoped",
 	"/api/devices":                  "scoped",
 	"/api/devices/":                 "scoped",
+	// Port Intelligence (#94): every port/interface/optics read is tenant DATA,
+	// scoped by requirePerm(infrastructure:read) + the portStore RLS/tenant
+	// filter (cross-tenant get → 404); proven by port_handlers_test.go.
+	"/api/infrastructure/interfaces":           "scoped",
+	"/api/infrastructure/interfaces/":          "scoped",
+	"/api/infrastructure/port-summary":         "scoped",
+	"/api/infrastructure/port-filter-options":  "scoped",
+	// Static reference (identical for everyone; no tenant data).
+	"/api/infrastructure/module-types":   "selfScoped",
+	"/api/infrastructure/port-signatures": "selfScoped",
 	"/api/events":                   "scoped",
 	"/api/events/feed":              "scoped",
 	"/api/findings":                 "scoped",
