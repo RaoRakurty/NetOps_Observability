@@ -1,6 +1,32 @@
 // Minimal typed API client. Paths are relative — nginx (or Vite dev
 // proxy) routes /api and /admin to the Go backend.
 
+// Port Intelligence workbench row (#94) — flattened port+transceiver+health.
+export type PortRow = {
+  device: string;
+  port_id: string;
+  port_name: string;
+  if_alias?: string;
+  admin_status: string;
+  oper_status: string;
+  speed_bps: number;
+  role?: string;
+  seam?: string;
+  lag_id?: string;
+  breakout_group_id?: string;
+  form_factor?: string;
+  media_type?: string;
+  vendor_name?: string;
+  part_number?: string;
+  serial_number?: string;
+  supported_status?: string;
+  health: number;
+  health_state: string;
+  dominant_issue?: string;
+  matched_signature?: string;
+  last_change?: string;
+};
+
 export type Device = {
   id: string;
   name: string;
@@ -1354,6 +1380,14 @@ export const api = {
   deleteSnmpProfile: (id: string) =>
     request<void>(`/api/snmp/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
   devices: () => request<Device[]>("/api/devices"),
+
+  // Port Intelligence (#94) — the interfaces/ports/optics workbench.
+  portInterfaces: (qs = "") => request<{ interfaces: PortRow[]; total: number; limit: number; offset: number }>(`/api/infrastructure/interfaces${qs ? "?" + qs : ""}`),
+  portInterfaceDetail: (id: string) => request<PortRow>(`/api/infrastructure/interfaces/${encodeURIComponent(id)}`),
+  portSummary: () => request<{ total_ports: number; by_state: Record<string, number>; rca_attached: number }>("/api/infrastructure/port-summary"),
+  portModuleTypes: () => request<{ module_families: string[]; media_types: string[]; supported_status: string[]; detection_methods: string[] }>("/api/infrastructure/module-types"),
+  portFilterOptions: () => request<Record<string, string[]>>("/api/infrastructure/port-filter-options"),
+  portSignatures: () => request<{ signatures: { id: string; name: string; seams: string }[] }>("/api/infrastructure/port-signatures"),
   upsertDevice: (d: Partial<Device>) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(d) }),
   deleteDevice: (id: string) =>
