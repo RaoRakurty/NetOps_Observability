@@ -514,6 +514,12 @@ func (o *Orchestrator) explainProblem(ctx context.Context, p Principal, question
 	if !evidenceOnly {
 		text, badges, disc = verifyNarrative(text, bundleCitationIDs(bundle), badges, disc)
 	}
+	// Engine voice contract (v1 NOC catalog): when the matched signature carries
+	// owner-approved fault-family wording, LEAD with it — the AI narrates the
+	// engine's phrase, on both the model and evidence-only paths.
+	if pr.OperatorPhrase != "" && !strings.Contains(text, pr.OperatorPhrase) {
+		text = pr.OperatorPhrase + " " + strings.TrimSpace(text)
+	}
 	// Preface with the "why this is the top incident" reasons (spec §4) so they
 	// show regardless of provider.
 	if len(whyFirst) > 0 {

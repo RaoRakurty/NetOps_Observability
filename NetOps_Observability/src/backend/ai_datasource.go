@@ -79,7 +79,34 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 		Devices:         aiEntityLabels(affectedDevices(r["affected"])),
 		MissingEvidence: aiHumanizeMissing(jsonStrings(r["evidence_missing"])),
 	}
+	// v1 NOC catalog voice contract: the matched signature's own operator
+	// wording + lexical confidence label ride the hypotheses blob — the AI
+	// narrates the engine's phrase instead of re-deriving a cause statement.
+	pr.OperatorPhrase, pr.ConfidenceLabel = topHypothesisVoice(r["hypotheses"])
 	return pr, nil
+}
+
+// topHypothesisVoice pulls the matched signature's operator_phrase and
+// confidence_label from the corr object's hypotheses blob (ranking.hypotheses[0]
+// — the top hypothesis). Empty for pre-v1 signatures; the wording engine's
+// derived phrasing remains the fallback.
+func topHypothesisVoice(raw any) (operatorPhrase, confidenceLabel string) {
+	var blob struct {
+		Ranking struct {
+			Hypotheses []struct {
+				OperatorPhrase  string `json:"operator_phrase"`
+				ConfidenceLabel string `json:"confidence_label"`
+			} `json:"hypotheses"`
+		} `json:"ranking"`
+	}
+	if err := json.Unmarshal([]byte(asStr(raw)), &blob); err != nil {
+		return "", ""
+	}
+	if len(blob.Ranking.Hypotheses) == 0 {
+		return "", ""
+	}
+	top := blob.Ranking.Hypotheses[0]
+	return strings.TrimSpace(top.OperatorPhrase), strings.TrimSpace(top.ConfidenceLabel)
 }
 
 // GetProblemEvidence derives bounded, cited evidence items for the problem from

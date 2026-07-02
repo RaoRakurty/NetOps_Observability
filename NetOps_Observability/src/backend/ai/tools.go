@@ -64,6 +64,11 @@ type Problem struct {
 	CreatedAt       string
 	State           string   // open | closed | merged (window summaries: still-open vs resolved)
 	Timeline        []string // optional human-readable timeline lines
+	// Engine voice contract (v1 NOC catalog): when the matched signature carries
+	// the owner-approved fault-family wording, the AI narrates THAT — it never
+	// re-derives the cause statement (engine reasons, AI narrates).
+	OperatorPhrase  string // signature operator_phrase ("" for pre-v1 signatures)
+	ConfidenceLabel string // signature confidence_label: suspected|likely|confirmed
 }
 
 // Display returns the operator-facing problem handle for NARRATIVE text — the
