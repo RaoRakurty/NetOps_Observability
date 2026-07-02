@@ -107,6 +107,10 @@ func (s *server) copilotSystemPrompt() string {
 			persona = sys
 		}
 	}
+	// The brevity contract rides EVERY persona (default or override): operators
+	// live in a console, and style instructions ("too verbose", "briefly") are
+	// commands, not commentary — live incident 2026-07-02.
+	persona += "\n\nBREVITY: be concise by default — at most ~6 short sentences unless the operator asks for detail. ALWAYS obey style instructions immediately: \"too verbose\"/\"briefly\"/\"shorter\" means compress your PREVIOUS answer to 2-3 sentences keeping the counts, the top item and the next action. Never respond to a style instruction with a menu of capabilities."
 	// Always ground the assistant in the embedded application knowledge, whether
 	// the persona is the default or an admin override.
 	if k := strings.TrimSpace(appKnowledge); k != "" {

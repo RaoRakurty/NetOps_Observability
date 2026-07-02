@@ -89,8 +89,14 @@ func (s *copilotConfigStore) set(c copilotConfig) copilotConfig {
 	s.mu.Lock()
 	// A blank key on save preserves the stored one — the GET form is redacted and
 	// never round-trips the secret, so "save settings" mustn't wipe the key.
+	// EXCEPT when the PROVIDER changes: an API key is provider-specific, and
+	// silently re-using the old provider's key against the new provider produces
+	// baffling 401s (live incident 2026-07-02: the Gemini key rode along to
+	// OpenAI). Provider switch without a new key ⇒ key cleared, UI shows "not set".
 	if c.Key == "" {
-		c.Key = s.cfg.Key
+		if s.cfg.Provider == "" || c.Provider == s.cfg.Provider {
+			c.Key = s.cfg.Key
+		}
 	}
 	s.cfg = c                                                      // in-memory stays plaintext
 	if sealed, err := mapCopilot(c, sealFn(s.vault)); err == nil { // encrypt at rest

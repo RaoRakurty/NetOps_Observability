@@ -91,6 +91,12 @@ var (
 	// incident noun; OR the bare "top incident(s)" phrase. Kept NARROW so it doesn't
 	// swallow the plain incident LIST ("show me the critical incidents").
 	reTopIncident = regexp.MustCompile(`(?i)((explain|describe|detail|walk me through|tell me about)\s+(the\s+)?(top|highest[-\s]?priority|number[-\s]?one|#?1|worst|biggest|main|most (critical|urgent|important|severe|pressing))\s+(incident|problem|correlation|issue|priority)\b|(what('?s| is)|which is)\s+(the\s+)?(top|highest[-\s]?priority|number[-\s]?one|#?1)\s+(incident|problem|correlation|priority)\b|\btop incidents?\b)`)
+	// Style feedback on the PREVIOUS answer ("that's too verbose, summarize
+	// briefly"). The deterministic engine has no conversation memory yet (P4),
+	// but the honest, useful response is a COMPACT re-briefing of the current
+	// state — never "I didn't quite catch that". Deliberately narrow so a
+	// topic-carrying "summarize what happened last night" is NOT hijacked.
+	reStyleFeedback = regexp.MustCompile(`(?i)(too (verbose|long|wordy|detailed)|\btl;?dr\b|\bbe brief\b|keep it (short|brief)|\bshorter\b|summari[sz]e\s*(that|this|it|briefly)?\s*(briefly|please)?\s*$|(in|give me)\s+(a\s+)?(one|1|two|2|few)\s+(line|liner|sentence)s?)`)
 	// NOC-FOCUS recommendation (spec §5): "which incident should the NOC focus on
 	// first and why" — an EXPLANATION of what to work first, not just a list.
 	// Checked before reIncidents/reStatus so "which incident … focus … first"
@@ -168,6 +174,14 @@ func Classify(question string, uiContext map[string]string) Plan {
 			Intent: "problem_explanation", Modules: []string{"correlations_rca"},
 			Mode: ModeProblemExplanation, Entities: ent, Freshness: FreshnessLive,
 			Tools: []string{"get_problem", "get_problem_evidence", "get_ticket_status"},
+		}
+	case reStyleFeedback.MatchString(q) && len(q) < 80:
+		// Pure style feedback → compact current-state re-briefing (brief mode).
+		ent["style"] = "brief"
+		return Plan{
+			Intent: "current_state", Modules: []string{"command_center"},
+			Mode: ModeCurrentStateSummary, Entities: ent, Freshness: FreshnessLive,
+			Tools: []string{"get_current_health_summary", "get_active_major_incidents"},
 		}
 	case reTopIncident.MatchString(q):
 		// "explain the top incident" / "/top" → resolve rank #1 from the priority
@@ -587,6 +601,19 @@ func (o *Orchestrator) answerCurrentState(ctx context.Context, p Principal, ques
 	cs.FocusConfidence = focusConf
 	cs.RecommendedFocus = []string{fmt.Sprintf("%s — %s", focus.Display(), focus.Title)}
 	cs.FocusReason = currentStateFocusReason(focus, cs)
+
+	// Brief mode (style feedback: "too verbose, summarize briefly") — three
+	// sentences, no card payload, same facts. The operator asked for less, so
+	// the answer is a compressed re-briefing, never a menu or an apology.
+	if plan.Entities["style"] == "brief" {
+		brief := fmt.Sprintf("%d active: %d confirmed, %d suspected, %d low-evidence. Top priority: %s — %s (%s, %s). Start there; ask \"explain the top incident\" for the evidence.",
+			counts.ActiveCorrelationGroups, cs.Confirmed, cs.Suspected, cs.Undetermined,
+			focus.Display(), focus.Title, focusStatus, focusConf)
+		return Answer{Mode: ModeCurrentStateSummary, Intent: plan.Intent, Modules: plan.Modules,
+			Title: "Quick summary", Text: brief,
+			Citations:   []Citation{{ID: "problem:" + focus.ID, Kind: "finding", Label: focus.Display(), Href: "#/monitoring/correlations?id=" + focus.ID}},
+			Disclaimers: disc}, nil
+	}
 
 	// List ONLY the actionable incidents (confirmed+suspected), ranked, capped —
 	// not a dump of every low-evidence undetermined item. Undetermined → watch note.
