@@ -249,6 +249,9 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 	if len(specs) == 0 {
 		return false // caller can run nothing — plain chat is strictly better
 	}
+	// Server-owned investigation playbook + current-time anchor (models cannot
+	// resolve "last night" without knowing now).
+	system += "\n\n" + agentDoctrine(time.Now().UTC())
 	call := func(ctx context.Context, sys string, turns []agentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
 		return callProviderTools(ctx, name, key, model, sys, turns, sp)
 	}

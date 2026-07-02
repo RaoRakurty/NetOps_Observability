@@ -249,6 +249,50 @@ func (t activeIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArgs) (
 	return ToolResult{Items: items}, nil
 }
 
+// incidentHistoryTool answers "what happened last night / over the weekend":
+// the correlation problems whose ONSET fell inside a past window — open and
+// resolved alike, state included. This is the engine's already-merged view over
+// logs, metrics, flows and paths, so a "summarize the past N hours" question is
+// one lookup, not a source-by-source quiz. Window is a fixed allowlisted token
+// (never a model-controlled duration — no unbounded scans).
+type incidentHistoryTool struct{ ds WindowDataSource }
+
+var incidentHistoryWindows = map[string]int{
+	"1h": 3600, "6h": 6 * 3600, "12h": 12 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600,
+}
+
+func (t incidentHistoryTool) Name() string            { return "get_incident_history" }
+func (t incidentHistoryTool) Module() string          { return "event_management" }
+func (t incidentHistoryTool) Capability() Capability  { return CapRead }
+func (t incidentHistoryTool) RequiredPerms() []string { return []string{"correlations:read"} }
+func (t incidentHistoryTool) Freshness() Freshness    { return FreshnessLive }
+func (t incidentHistoryTool) Run(ctx context.Context, p Principal, args ToolArgs) (ToolResult, error) {
+	secs, ok := incidentHistoryWindows[strings.ToLower(strings.TrimSpace(args["window"]))]
+	if !ok {
+		secs = incidentHistoryWindows["24h"]
+	}
+	probs, err := t.ds.ListProblemsInWindow(ctx, p, secs)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	if len(probs) > 25 {
+		probs = probs[:25]
+	}
+	items := make([]EvidenceItem, 0, len(probs))
+	for _, pr := range probs {
+		state := pr.State
+		if state == "" {
+			state = "open"
+		}
+		items = append(items, EvidenceItem{
+			CitationID: "problem:" + pr.ID, Kind: "finding",
+			Text: fmt.Sprintf("%s — %s (%s, %.0f%%, %s)", pr.Display(), pr.Title, pr.Verdict, pr.Confidence*100, state),
+			Href: "#/monitoring/correlations?id=" + pr.ID,
+		})
+	}
+	return ToolResult{Items: items}, nil
+}
+
 // actionableIncidentsTool answers "show me the critical / actionable incidents"
 // with the PRIORITIZED, FILTERED list — confirmed + suspected first, ranked by
 // PriorityScore, capped — instead of dumping every open correlation. This is the
@@ -394,6 +438,9 @@ func Tools(ds DataSource) *ToolRegistry {
 	reg.add(getProblemEvidenceTool{ds})
 	reg.add(activeIncidentsTool{ds})
 	reg.add(actionableIncidentsTool{ds})
+	if wds, ok := ds.(WindowDataSource); ok {
+		reg.add(incidentHistoryTool{wds})
+	}
 	if mds, ok := ds.(ModuleDataSource); ok {
 		for _, mt := range moduleTools {
 			reg.add(moduleReadTool{

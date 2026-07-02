@@ -32,6 +32,24 @@ const (
 
 var errAIToolsBudget = errors.New("daily AI investigation budget exhausted")
 
+// agentDoctrine is the investigation playbook appended to the server-owned
+// system prompt on tool-enabled turns. It exists because models — especially
+// small ones — default to interrogating the operator ("which source? exact
+// timestamps?") instead of investigating. A NOC assistant acts first: the
+// current-time anchor lets it resolve relative phrases itself, and the
+// incidents-first rule points it at the platform's already-merged view instead
+// of offering a logs/metrics/flows menu.
+func agentDoctrine(now time.Time) string {
+	return "CURRENT TIME (UTC): " + now.Format("Monday, 2006-01-02 15:04") + `
+
+INVESTIGATION DOCTRINE — how to answer with the tools:
+- Act first, ask later. NEVER ask which data source to check, and NEVER ask for exact timestamps. Run the lookups, answer, then state what you covered and offer to narrow.
+- Resolve relative time yourself against the current time above: "last night" or "today" → window 12h or 24h; "this week" or "past month" → 7d (the widest available — say what you covered).
+- "Any issues / what's wrong / what happened" → start with the incident tools: get_incident_history for past windows, get_active_major_incidents for right now. They are the platform's already-correlated view across logs, metrics, flows and paths — never offer the operator a menu of raw sources instead.
+- For a named device, corroborate with get_device_health and search_logs, and MERGE everything into ONE answer with citations.
+- Ask a clarifying question ONLY when a required argument is truly unknowable (for example, two devices share the same name).`
+}
+
 // featureAIToolsEnabled gates the loop (off by default — soak per plan §5 P2).
 func featureAIToolsEnabled() bool { return os.Getenv("FEATURE_AI_TOOLS") == "true" }
 

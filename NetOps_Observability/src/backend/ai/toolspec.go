@@ -91,6 +91,13 @@ var toolMetas = map[string]toolMeta{
 		description: "List the prioritized ACTIONABLE incidents (confirmed + suspected only, ranked, top 8); low-evidence items are summarized as a count.",
 		label:       "Actionable incidents",
 	},
+	"get_incident_history": {
+		description: "Incidents whose onset fell in a past window — open AND resolved, with state. THE tool for \"what happened last night / today / this week\": it is the engine's merged view across logs, metrics, flows and paths.",
+		label:       "Incident history",
+		args: []toolArgSpec{
+			{name: "window", desc: "Lookback window: 1h, 6h, 12h, 24h or 7d (default 24h). Resolve relative phrases yourself (\"last night\" → 12h or 24h) — never ask for exact timestamps.", required: false},
+		},
+	},
 	"get_top_talkers": {
 		description: "Top traffic conversations (heaviest source↔destination pairs) over the last 24 hours.",
 		label:       "Top talkers",
@@ -137,7 +144,7 @@ var toolMetas = map[string]toolMeta{
 		args: []toolArgSpec{
 			{name: "query", desc: "Search text or Lucene query (e.g. \"BGP\" or \"severity:err\"). Empty matches everything in the window.", required: false},
 			{name: "device", desc: "Restrict to one device by name.", required: false},
-			{name: "window", desc: "Lookback window: 15m, 1h, 6h or 24h (default 1h).", required: false},
+			{name: "window", desc: "Lookback window: 15m, 1h, 6h, 24h or 7d (default 1h). For longer ranges use 7d and say what you covered.", required: false},
 		},
 	},
 	"get_device_health": {

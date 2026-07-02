@@ -27,6 +27,7 @@ var aiLogWindows = map[string]time.Duration{
 	"1h":  time.Hour,
 	"6h":  6 * time.Hour,
 	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour, // widest allowed — results stay capped at 50 lines
 }
 
 const (
