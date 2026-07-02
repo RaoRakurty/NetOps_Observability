@@ -90,7 +90,7 @@ suspected/likely until a human or fiber-path validation corroborates).
 | **P3b(1)** | Physical-layer port-event producer: transceiver/optics/DOM/FEC syslog → sig.spdc evidence kinds (`producers.port_event_signal`), wired into the syslog path | ✅ shipped `e409338` |
 | **P3b(2)** | Vendor DOM adapters (Juniper jnxDom, Nokia DDM) + OpenConfig transceiver normalizer, shared emit; unit-conversion math tested (walk needs real hw) | ✅ shipped `94cc145` (Cisco/Arista use ENTITY-SENSOR; coherent PM leaves mapped) |
 | **P4** | Threshold policy (`DefaultPolicy`) + deterministic port-health scorer (owner weights, dominant-issue, replay-stable) | ✅ shipped `d12ef21` |
-| P5 | API endpoints + response models | queued |
+| **P5** | Tenant-scoped API: interfaces (filtered+paginated), detail, port-summary, module-types, filter-options, port-signatures; portStore in-mem+pg | ✅ shipped `f0c2017` |
 | P6 | UI surfaces (heatmap, explorer, detail tabs, fiber workbench, playbook drawer) | queued |
 | P7 | RCA path-resolution integration (incident endpoints → port/lane/fiber-path) | queued |
 
