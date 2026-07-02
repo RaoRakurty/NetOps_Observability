@@ -104,6 +104,7 @@ type server struct {
 	exportPolicy        *exportPolicyStore       // runtime-tunable log-export limits
 	exportLimiter       *tenantRateLimiter       // per-tenant export rate limit
 	copilotLimiter      *tenantRateLimiter       // per-principal copilot rate limit (SR-021)
+	aiToolBudget        *aiDailyBudget           // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg          *copilotConfigStore
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
@@ -500,6 +501,7 @@ func newServer() *server {
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
 	srv.exportLimiter = newTenantRateLimiter()
 	srv.copilotLimiter = newTenantRateLimiter()
+	srv.aiToolBudget = newAIDailyBudget()
 	engine.OnFire = srv.ingestAlertIncident
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)

@@ -917,10 +917,23 @@ export type OpenAIChatResponse = {
 // One retrieved documentation section returned with a chat answer — rendered
 // as a "From the docs" link that opens the Help drawer at that page+section.
 export type CopilotDocRef = { id: string; label: string; href: string };
+// One governed lookup the agent loop ran for this answer (customer-facing label).
+export type ChatLookup = { tool: string; label: string; items: number; error?: boolean };
+// One evidence citation from an agent-loop lookup — href deep-links into the app.
+export type ChatCitation = { id: string; kind: string; label: string; href: string };
 // The backend now normalizes every provider (ChatGPT/Gemini/Copilot) to a single
-// shape: { provider, text, doc_refs }. The old provider-native shapes are kept
-// for backward-compatible parsing.
-export type NormalizedChatResponse = { provider: string; text: string; doc_refs?: CopilotDocRef[] };
+// shape: { provider, text, doc_refs } — plus, when the agent loop investigated,
+// lookups/citations/truncated. The old provider-native shapes are kept for
+// backward-compatible parsing.
+export type NormalizedChatResponse = {
+  provider: string;
+  text: string;
+  doc_refs?: CopilotDocRef[];
+  lookups?: ChatLookup[];
+  investigated?: number;
+  citations?: ChatCitation[];
+  truncated?: boolean;
+};
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
 // Runtime assistant config (admin). The API key stays server-side and is never

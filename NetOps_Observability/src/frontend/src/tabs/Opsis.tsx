@@ -4,6 +4,8 @@ import {
   CopilotMessage,
   CopilotChatResponse,
   CopilotDocRef,
+  ChatLookup,
+  ChatCitation,
   NormalizedChatResponse,
   AnthropicChatResponse,
   OpenAIChatResponse,
@@ -93,6 +95,10 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   // Documentation sections retrieved for a free-form turn — rendered as
   // "From the docs" links under that answer (they open the Help drawer).
   const [docRefs, setDocRefs] = useState<Record<number, CopilotDocRef[]>>({});
+  // Agent-loop investigation trail for a free-form turn: which governed lookups
+  // ran ("Investigated 3 sources") + the evidence citations they produced.
+  const [lookups, setLookups] = useState<Record<number, ChatLookup[]>>({});
+  const [chatCites, setChatCites] = useState<Record<number, ChatCitation[]>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +122,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
 
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
-    setHistory([]); setGrounded({}); setDocRefs({}); setDraft(""); setError(null);
+    setHistory([]); setGrounded({}); setDocRefs({}); setLookups({}); setChatCites({}); setDraft(""); setError(null);
     setShowSettings(false); setShowHelp(false); setSlashOpen(false);
     taRef.current?.focus();
   };
@@ -167,8 +173,10 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
         // Free-form LLM chat — a provider key is configured.
         const r = await api.copilotChat(newHistory);
         setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
-        const refs = (r as NormalizedChatResponse).doc_refs;
-        if (refs?.length) setDocRefs((d) => ({ ...d, [idx]: refs }));
+        const nr = r as NormalizedChatResponse;
+        if (nr.doc_refs?.length) setDocRefs((d) => ({ ...d, [idx]: nr.doc_refs! }));
+        if (nr.lookups?.length) setLookups((d) => ({ ...d, [idx]: nr.lookups! }));
+        if (nr.citations?.length) setChatCites((d) => ({ ...d, [idx]: nr.citations! }));
       } else {
         // No provider key: answer from the grounded engine instead of erroring, so
         // any typed question still gets a tenant-scoped, evidence-cited answer.
@@ -439,6 +447,25 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
               {m.role === "assistant" && grounded[i]
                 ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
                 : renderContent(m.content)}
+              {/* Agent-loop trail: which governed lookups the assistant ran for
+                  this answer, plus the evidence they produced (deep links). */}
+              {m.role === "assistant" && lookups[i] && lookups[i].length > 0 && (
+                <div className="op-inv">
+                  <Icon name="search" size={11} /> Investigated {lookups[i].length}{" "}
+                  {lookups[i].length === 1 ? "source" : "sources"} — {lookups[i].map((l) => l.label).join(" · ")}
+                </div>
+              )}
+              {m.role === "assistant" && chatCites[i] && chatCites[i].length > 0 && (
+                <div className="op-cites">
+                  <span className="op-cites-h">Evidence</span>
+                  {chatCites[i].map((c) => (
+                    <a key={c.id} className="op-cite" href={c.href} title={c.label}
+                      onClick={() => setCopilotOpen(false)}>
+                      {c.label.length > 42 ? c.label.slice(0, 42) + "…" : c.label}
+                    </a>
+                  ))}
+                </div>
+              )}
               {/* Documentation the answer was grounded in — opens the Help drawer
                   at the exact page + section. */}
               {m.role === "assistant" && docRefs[i] && docRefs[i].length > 0 && (

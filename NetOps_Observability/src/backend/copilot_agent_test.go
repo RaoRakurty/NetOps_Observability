@@ -1,0 +1,199 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"netops/backend/ai"
+)
+
+// copilot_agent_test.go — the P2 agent-loop guarantees, proven with a mock
+// model (no HTTP): the loop HALTS at its call cap against a runaway model, a
+// cross-tenant probe yields "not found" and zero foreign rows (§3a.5), policy
+// denials refuse execution, invented citations are stripped, and the daily
+// budget meters.
+
+// agentTestDS is a two-tenant ai.DataSource: tenant "t-a" owns problem A,
+// "t-b" owns problem B — mirroring the chTenantScope/RLS guarantee.
+type agentTestDS struct{}
+
+const (
+	problemA = "aaaaaaaa-1111-1111-1111-111111111111"
+	problemB = "bbbbbbbb-2222-2222-2222-222222222222"
+)
+
+func (agentTestDS) GetProblem(_ context.Context, p ai.Principal, id string) (*ai.Problem, error) {
+	own := map[string]string{"t-a": problemA, "t-b": problemB}[p.Tenant]
+	if id != own {
+		return nil, ai.ErrNotFound // cross-tenant/unknown — never reveal existence
+	}
+	return &ai.Problem{ID: id, Title: "BGP peer down", Verdict: "confirmed", Confidence: 0.8, SignalCount: 3, NodeCount: 1}, nil
+}
+
+func (d agentTestDS) GetProblemEvidence(ctx context.Context, p ai.Principal, id string) ([]ai.EvidenceItem, error) {
+	if _, err := d.GetProblem(ctx, p, id); err != nil {
+		return nil, err
+	}
+	return []ai.EvidenceItem{{CitationID: "log:os:1", Kind: "log", Text: "neighbor down", Href: "#/explore/logs"}}, nil
+}
+
+func (agentTestDS) ListActiveProblems(_ context.Context, p ai.Principal, _ int) ([]ai.Problem, error) {
+	if p.Tenant != "t-a" {
+		return nil, nil
+	}
+	return []ai.Problem{{ID: problemA, Title: "BGP peer down", Verdict: "confirmed", Confidence: 0.8}}, nil
+}
+
+func agentTestServer() *server { return &server{aiToolBudget: newAIDailyBudget()} }
+
+func agentTestSetup(tenant string) (*server, ai.Principal, *ai.ToolRegistry, *ai.PolicyEngine, []ai.ToolSpec) {
+	s := agentTestServer()
+	p := ai.Principal{Tenant: tenant, Perms: map[string]bool{"correlations:read": true, "events:read": true}}
+	reg := ai.Tools(agentTestDS{})
+	pol := ai.NewPolicyEngine(ai.PolicyConfig{}, func(string) bool { return false })
+	return s, p, reg, pol, ai.Manifest(reg, pol, p)
+}
+
+func TestAgentLoopHaltsRunawayModel(t *testing.T) {
+	s, p, reg, pol, specs := agentTestSetup("t-a")
+	rounds := 0
+	// A runaway model: requests another lookup on EVERY round it is offered
+	// tools; only answers when the loop withdraws them.
+	call := func(_ context.Context, _ string, _ []agentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		rounds++
+		if len(sp) == 0 {
+			return "final answer with what I have", nil, nil
+		}
+		return "", []ai.ToolCall{{ID: "c", Name: "get_active_major_incidents", Args: json.RawMessage(`{}`)}}, nil
+	}
+	res, err := s.runAgentLoop(context.Background(), jwtClaims{Tenant: "t-a", Sub: "u"}, p, reg, pol, specs, "sys",
+		[]copilotMessage{{Role: "user", Content: "loop forever"}}, nil, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Calls != 4 { // AI_TOOLS_MAX_CALLS default
+		t.Fatalf("loop must halt at the call cap: executed %d", res.Calls)
+	}
+	if !res.Truncated {
+		t.Fatal("truncation must be disclosed")
+	}
+	if res.Text != "final answer with what I have" {
+		t.Fatalf("forced final answer missing, got %q", res.Text)
+	}
+	if rounds > 7 {
+		t.Fatalf("model called %d times — loop not bounded", rounds)
+	}
+}
+
+// §3a.5 isolation: a model authenticated as tenant A asking for tenant B's
+// problem gets "not found" — no foreign row ever reaches the prompt, the
+// citations, or the narrative.
+func TestAgentLoopCrossTenantProbeDenied(t *testing.T) {
+	s, p, reg, pol, specs := agentTestSetup("t-a")
+	var probeReply ai.ToolReply
+	round := 0
+	call := func(_ context.Context, _ string, turns []agentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		round++
+		if round == 1 {
+			return "", []ai.ToolCall{{ID: "c1", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"` + problemB + `"}`)}}, nil
+		}
+		// Capture what the loop fed back for the probe, then try to cite the
+		// foreign problem anyway (fabricated grounding).
+		last := turns[len(turns)-1]
+		if len(last.Replies) > 0 {
+			probeReply = last.Replies[0]
+		}
+		return "Tenant B has an outage [problem:" + problemB + "] trust me.", nil, nil
+	}
+	res, err := s.runAgentLoop(context.Background(), jwtClaims{Tenant: "t-a", Sub: "u"}, p, reg, pol, specs, "sys",
+		[]copilotMessage{{Role: "user", Content: "what about tenant b?"}}, nil, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !probeReply.IsError || !strings.Contains(probeReply.Content, "not found") {
+		t.Fatalf("cross-tenant probe must return a bare not-found, got %+v", probeReply)
+	}
+	if strings.Contains(probeReply.Content, "tenant") || strings.Contains(probeReply.Content, "BGP") {
+		t.Fatalf("not-found reply leaks detail: %q", probeReply.Content)
+	}
+	// The invented citation of the foreign problem is stripped by the verifier.
+	if strings.Contains(res.Text, problemB) {
+		t.Fatalf("fabricated foreign citation survived: %q", res.Text)
+	}
+	for _, c := range res.Citations {
+		if strings.Contains(c.ID, problemB) {
+			t.Fatalf("foreign problem in citations: %+v", c)
+		}
+	}
+}
+
+func TestExecuteAgentToolPolicyAndValidation(t *testing.T) {
+	s := agentTestServer()
+	reg := ai.Tools(agentTestDS{})
+	pol := ai.NewPolicyEngine(ai.PolicyConfig{}, func(string) bool { return false })
+	noPerms := ai.Principal{Tenant: "t-a"}
+
+	// Policy denial (caller lacks the permission the manifest would have hidden).
+	rep, items := s.executeAgentTool(context.Background(), jwtClaims{Tenant: "t-a"}, noPerms, reg, pol,
+		ai.ToolCall{ID: "c", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"` + problemA + `"}`)})
+	if !rep.IsError || !strings.Contains(rep.Content, "not permitted") || len(items) != 0 {
+		t.Fatalf("policy denial expected, got %+v", rep)
+	}
+
+	// Unknown tool.
+	rep, _ = s.executeAgentTool(context.Background(), jwtClaims{}, noPerms, reg, pol, ai.ToolCall{ID: "c", Name: "rm_rf"})
+	if !rep.IsError || rep.Content != "unknown tool" {
+		t.Fatalf("unknown tool expected, got %+v", rep)
+	}
+
+	// Bad args (missing required).
+	perms := ai.Principal{Tenant: "t-a", Perms: map[string]bool{"correlations:read": true, "events:read": true}}
+	rep, _ = s.executeAgentTool(context.Background(), jwtClaims{Tenant: "t-a"}, perms, reg, pol,
+		ai.ToolCall{ID: "c", Name: "get_problem", Args: json.RawMessage(`{}`)})
+	if !rep.IsError || !strings.Contains(rep.Content, "invalid arguments") {
+		t.Fatalf("bad-args refusal expected, got %+v", rep)
+	}
+
+	// Happy path renders cited lines.
+	rep, items = s.executeAgentTool(context.Background(), jwtClaims{Tenant: "t-a"}, perms, reg, pol,
+		ai.ToolCall{ID: "c", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"` + problemA + `"}`)})
+	if rep.IsError || len(items) != 1 || !strings.Contains(rep.Content, "[problem:"+problemA+"]") {
+		t.Fatalf("happy path wrong: %+v items=%d", rep, len(items))
+	}
+}
+
+func TestAIDailyBudget(t *testing.T) {
+	t.Setenv("AI_TOOLS_DAILY_TOKENS", "100")
+	b := newAIDailyBudget()
+	if !b.allow("t-a") {
+		t.Fatal("fresh budget must allow")
+	}
+	b.charge("t-a", 150)
+	if b.allow("t-a") {
+		t.Fatal("over-budget tenant must be refused")
+	}
+	if !b.allow("t-b") {
+		t.Fatal("budget is per-tenant")
+	}
+	t.Setenv("AI_TOOLS_DAILY_TOKENS", "0")
+	if !b.allow("t-a") {
+		t.Fatal("<=0 disables metering")
+	}
+}
+
+func TestAgentLoopEligibility(t *testing.T) {
+	t.Setenv("FEATURE_AI_TOOLS", "")
+	if agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
+		t.Fatal("off by default")
+	}
+	t.Setenv("FEATURE_AI_TOOLS", "true")
+	if agentLoopEligible(jwtClaims{Tenant: "t-a", Sub: "user", Role: "admin"}) {
+		t.Fatal("tenant users are not in the P2 rollout")
+	}
+	t.Setenv("AI_TOOLS_ALL_TENANTS", "true")
+	if !agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
+		t.Fatal("AI_TOOLS_ALL_TENANTS widens the rollout")
+	}
+}

@@ -16,9 +16,10 @@ import (
 // → ErrNotFound, never revealing existence). No DB driver, no SQL, lives in the
 // ai package — only here, in the trusted server.
 type aiDataSource struct {
-	srv   *server
-	ctx   context.Context
-	scope string // chTenantScope(r) — encodes tenant / __all__ for cross-tenant
+	srv    *server
+	ctx    context.Context
+	scope  string    // chTenantScope(r) — encodes tenant / __all__ for cross-tenant
+	claims jwtClaims // caller claims for OS/VM scoping helpers (visibleDevice*)
 }
 
 // GetProblem fetches one correlation object (tenant-scoped) and maps it to the
@@ -219,6 +220,10 @@ func (d aiDataSource) ModuleQuery(_ context.Context, p ai.Principal, query strin
 		return d.moduleIntegrationHealth(p)
 	case "ticket_status":
 		return d.moduleTicketStatus(p, args["problem_id"])
+	case "search_logs":
+		return d.moduleSearchLogs(p, args)
+	case "device_health":
+		return d.moduleDeviceHealth(p, args["device"])
 	default:
 		return ai.ToolResult{}, ai.ErrNotImplemented
 	}

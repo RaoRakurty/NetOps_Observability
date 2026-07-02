@@ -94,7 +94,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		question = canonical
 	}
 
-	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r)}
+	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
 	orch := &ai.Orchestrator{
 		DS:        ds,
 		Tools:     ai.Tools(ds),

@@ -1602,6 +1602,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .op-fact.verdict-suspected { color: var(--warn); border-color: var(--warn); }
 .op-kv { font-size: 12.5px; line-height: 1.5; }
 .op-kv-k { color: var(--muted); margin-right: 4px; }
+.op-inv { display: flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .op-cites { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 1px; align-items: center; }
 .op-cites-h { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-right: 2px; }
 .op-cite {

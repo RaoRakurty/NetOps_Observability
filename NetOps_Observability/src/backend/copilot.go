@@ -169,6 +169,17 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Agent loop (intelligence plan P2): when FEATURE_AI_TOOLS is on and this
+	// caller is in the rollout, let the model investigate with governed read-only
+	// tools before answering. Falls back to plain chat when the loop can't start
+	// (no budget, provider refuses) — but a turn that already executed lookups
+	// fails cleanly rather than silently restarting as an unGrounded chat.
+	if agentLoopEligible(claims) {
+		if handled := s.tryAgentLoop(w, r, claims, msgs, system, docRefs); handled {
+			return
+		}
+	}
+
 	// Provider fallback chain: ChatGPT (OpenAI) → Gemini → Copilot (Anthropic).
 	// Each provider that has a key is tried in order; on error (no key is skipped,
 	// a provider error/non-2xx falls through) the next is attempted; the first
@@ -212,6 +223,111 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
+}
+
+// firstConfiguredProvider resolves the first provider in the chain that has a
+// key (env or UI-stored), plus its model — the agent loop uses exactly one
+// provider per turn (no cross-provider loop resumption, plan §3.d).
+func (s *server) firstConfiguredProvider() (name, key, model string) {
+	storedKey := s.copilotCfg.apiKey()
+	cfgProvider := s.copilotCfg.get().Provider
+	cfgModel := s.copilotCfg.get().Model
+	for _, n := range copilotProviderChain() {
+		k := providerKey(n)
+		if k == "" && storedKey != "" && n == cfgProvider {
+			k = storedKey
+		}
+		if k == "" {
+			continue
+		}
+		m := providerModel(n)
+		if n == cfgProvider && cfgModel != "" {
+			m = cfgModel
+		}
+		return n, k, m
+	}
+	return "", "", ""
+}
+
+// tryAgentLoop attempts the tool-driven investigation for this turn. Returns
+// true when it wrote the response (success OR a mid-loop failure that must not
+// silently restart as plain chat); false → caller falls through to plain chat.
+func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwtClaims, msgs []copilotMessage, system string, docRefs []copilotDocRef) bool {
+	name, key, model := s.firstConfiguredProvider()
+	if key == "" {
+		return false // no provider — plain path renders the "add a key" message
+	}
+	tenant, _ := principalTenant(claims)
+	if !s.aiToolBudget.allow(tenant) {
+		logWarn("ai", "agent loop skipped — daily token budget exhausted", map[string]any{"tenant": claims.Tenant})
+		return false // fail closed to chat-without-tools (plan §4.5), disclosed via provider note
+	}
+	p := s.aiPrincipal(claims)
+	ds := aiDataSource{srv: s, ctx: r.Context(), scope: chTenantScope(r), claims: claims}
+	reg := ai.Tools(ds)
+	reg.AddDocsSearch(aiDocsIndex)
+	pol := ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup) // safe default: read-only
+	specs := ai.Manifest(reg, pol, p)
+	if len(specs) == 0 {
+		return false // caller can run nothing — plain chat is strictly better
+	}
+	call := func(ctx context.Context, sys string, turns []agentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		return callProviderTools(ctx, name, key, model, sys, turns, sp)
+	}
+	preIDs := make([]string, 0, len(docRefs))
+	for _, dr := range docRefs {
+		preIDs = append(preIDs, dr.ID)
+	}
+	res, err := s.runAgentLoop(r.Context(), claims, p, reg, pol, specs, system, msgs, preIDs, call)
+	if err != nil {
+		logWarn("ai", "agent loop failed", map[string]any{"provider": name, "calls": res.Calls, "err": err.Error()})
+		if res.Calls == 0 {
+			return false // nothing executed — plain chat retry is safe
+		}
+		// Lookups already ran; disclose the failure instead of silently
+		// re-answering without them (plan §3.d: fail the turn cleanly).
+		writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't finish the investigation — please try again"))
+		return true
+	}
+	// Doc-kind citations from search_docs join the "From the docs" chips (and
+	// the [doc:…] strip set); everything else stays an evidence citation.
+	docSet := make(map[string]bool, len(docRefs))
+	for _, dr := range docRefs {
+		docSet[strings.ToLower(dr.ID)] = true
+	}
+	evCites := make([]ai.Citation, 0, len(res.Citations))
+	for _, c := range res.Citations {
+		if c.Kind != "doc" {
+			evCites = append(evCites, c)
+			continue
+		}
+		if docSet[strings.ToLower(c.ID)] {
+			continue
+		}
+		if ref, ok := docRefForChunkID(c.ID); ok {
+			docRefs = append(docRefs, ref)
+			docSet[strings.ToLower(c.ID)] = true
+		}
+	}
+	text := stripFabricatedDocRefs(res.Text, docRefs)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider": name, "text": text, "doc_refs": docRefs,
+		"lookups": res.Lookups, "investigated": len(res.Lookups),
+		"citations": evCites, "truncated": res.Truncated,
+	})
+	return true
+}
+
+// docRefForChunkID resolves a doc citation id back to its chunk so the UI chip
+// carries the clean breadcrumb + Help-drawer link (small embedded corpus — a
+// linear scan per doc citation is fine).
+func docRefForChunkID(id string) (copilotDocRef, bool) {
+	for _, c := range aiDocsIndex.All() {
+		if strings.EqualFold(c.ID, id) {
+			return copilotDocRef{ID: c.ID, Label: c.Breadcrumb, Href: c.Href}, true
+		}
+	}
+	return copilotDocRef{}, false
 }
 
 // copilotDocRef is one retrieved documentation section returned alongside the

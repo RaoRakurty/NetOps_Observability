@@ -225,6 +225,17 @@ var modules = []Module{
 		ResponseModes: []string{"investigation_plan", "module_health_summary"},
 	},
 	{
+		ID: "documentation", DisplayName: "Documentation",
+		Description:        "The Correlix product documentation portal: setup guides, operator procedures, and concept reference (platform-global, tenant-free corpus).",
+		Entities:           []string{"doc_page", "doc_section"},
+		QuestionCategories: []string{"product_setup", "how_to", "concepts"},
+		Tools:              []string{"search_docs"},
+		Permissions:        nil, // public product docs — no tenant data, no permission gate
+		Freshness:          FreshnessConfig, Sensitivity: SensitivityOperational, Availability: AvailabilityStable,
+		CrossModule:   []string{"product_navigation"},
+		ResponseModes: []string{"product_answer"},
+	},
+	{
 		ID: "product_navigation", DisplayName: "Product Navigation",
 		Description:        "Helps users find features: maps a capability to its UI route, required permission, and a short explanation.",
 		Entities:           []string{"feature", "ui_route"},
