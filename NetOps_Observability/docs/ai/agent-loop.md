@@ -2,7 +2,30 @@
 
 **Status:** shipped 2026-07-02 (intelligence plan P2, `docs/design/research/correlix-ai-intelligence-plan.md` §3.c–3.d, §4).
 **Flag:** `FEATURE_AI_TOOLS=true` (off by default). Rollout: platform-owner/cross-tenant
-principals only; `AI_TOOLS_ALL_TENANTS=true` widens to tenant users (planned for P4).
+principals always; tenant users when their tenant carries the **per-tenant "AI
+Investigations" entitlement** (P4a, `ai_tenant_config.go` — set by the platform owner in
+assistant settings → Workspace access, or `PUT /api/ai/tenants/{id}`).
+`AI_TOOLS_ALL_TENANTS=true` remains as a global override that entitles every tenant at once.
+
+## Per-tenant AI (P4a, shipped 2026-07-02)
+
+Correlix AI is a per-tenant feature (`ai_tenant_config.go`):
+
+- **Entitlement (platform owner):** per tenant, the assistant can be disabled
+  outright (`assistant_enabled`) and the agent loop granted (`investigations_enabled`).
+  Defaults: assistant ON, investigations OFF. Cross-tenant principals are never gated.
+- **BYO provider key (tenant admin):** `PUT /api/ai/tenant-config` stores the tenant's
+  own Anthropic/OpenAI/Gemini key — sealed at rest under the **tenant DEK**, write-only,
+  never returned. A tenant key **always wins** over the platform key, so that tenant's AI
+  traffic runs under its own provider agreement (LLM06).
+- **Strict mode:** `no_platform_key=true` forbids the platform-key fallback — with no key
+  of its own the tenant fails CLOSED to the key-free grounded engine instead of riding the
+  operator's provider account.
+- Provider resolution is per principal (`providerCandidates`): tenant BYO key →
+  platform chain (env keys, then the UI-stored platform key) unless opted out.
+  Isolation is test-enforced (`ai_tenant_config_test.go`): tenant A's key never serves
+  tenant B, a tenant admin cannot self-grant investigations, cross-tenant config access
+  is refused.
 
 ## What it does
 

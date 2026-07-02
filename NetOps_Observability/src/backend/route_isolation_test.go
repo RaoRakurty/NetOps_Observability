@@ -43,6 +43,11 @@ var routeIsolationLedger = map[string]string{
 	// /modules lists the caller's enabled modules (tenant config).
 	"/api/ai/ask":     "scoped",
 	"/api/ai/modules": "scoped",
+	// Per-tenant AI settings (P4a): the record read/written is ALWAYS the
+	// caller's own tenant (principalTenant, §3a.2 — tenant never taken from the
+	// request); the BYO key is write-only and sealed under the tenant DEK.
+	// Cross-tenant isolation proven by ai_tenant_config_test.go.
+	"/api/ai/tenant-config": "scoped",
 	// Static, identical-for-everyone reference: the slash-command registry + the
 	// caller's own answer feedback (audited). No tenant data crosses these.
 	"/api/ai/commands":                         "selfScoped",
@@ -184,6 +189,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/policy/validate":   "adminScoped",
 
 	// ── platform-GLOBAL plumbing, platform-owner only ──
+	// AI entitlement per tenant is platform PACKAGING (which tenants get the
+	// assistant / the agent loop) — requirePlatformAdmin, a tenant admin must
+	// never grant itself investigations (§3a.3).
+	"/api/ai/tenants":             "platform",
+	"/api/ai/tenants/":            "platform",
 	"/api/auth/ldap/config":       "platform",
 	"/api/auth/ldap/test":         "platform",
 	"/api/auth/tacacs/config":     "platform",

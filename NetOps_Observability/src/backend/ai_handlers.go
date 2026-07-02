@@ -69,6 +69,11 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Correlix AI rate limit exceeded — slow down"))
 		return
 	}
+	// Per-tenant entitlement (§3a): cross-tenant principals are never gated.
+	if !s.aiAssistantAllowed(claims) {
+		writeError(w, http.StatusForbidden, errAITenantDisabled)
+		return
+	}
 	// Bound the request before decoding (LLM10: no unbounded input).
 	r.Body = http.MaxBytesReader(w, r.Body, maxCopilotBodyBytes)
 	var req aiAskRequest
@@ -98,7 +103,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	orch := &ai.Orchestrator{
 		DS:        ds,
 		Tools:     ai.Tools(ds),
-		LLM:       aiLLM{srv: s},
+		LLM:       aiLLM{srv: s, claims: claims},
 		Flags:     envFlagLookup,
 		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
 		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)

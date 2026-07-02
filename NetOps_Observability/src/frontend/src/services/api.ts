@@ -949,6 +949,29 @@ export type CopilotConfig = {
   model_suggestions?: Record<string, string[]>;
 };
 
+// Per-workspace (tenant) AI settings — a tenant admin's own view. The key is
+// write-only; entitlement fields are read-only here (platform-controlled).
+export type AITenantConfig = {
+  provider: string;
+  model: string;
+  key_present: boolean;
+  no_platform_key: boolean;
+  assistant_enabled: boolean;
+  investigations_enabled: boolean;
+  platform_key_available: boolean;
+  providers?: string[];
+  model_suggestions?: Record<string, string[]>;
+};
+
+export type AITenantRow = {
+  tenant_id: string;
+  name: string;
+  assistant_enabled: boolean;
+  investigations_enabled: boolean;
+  key_present: boolean;
+  no_platform_key: boolean;
+};
+
 export const TOKEN_KEY = "netops_token";
 export const REFRESH_KEY = "netops_refresh";
 
@@ -1591,6 +1614,15 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(cfg),
     }),
+  // Per-workspace AI settings (tenant admin): own provider key + platform-service
+  // opt-out. 403 for non-admins, 400 for the platform owner (who uses the above).
+  aiTenantConfig: () => request<AITenantConfig>("/api/ai/tenant-config"),
+  setAITenantConfig: (cfg: { provider: string; model: string; key?: string; no_platform_key: boolean; clear_key?: boolean }) =>
+    request<AITenantConfig>("/api/ai/tenant-config", { method: "PUT", body: JSON.stringify(cfg) }),
+  // Per-tenant AI access (platform owner): who gets the assistant/investigations.
+  aiTenants: () => request<{ tenants: AITenantRow[] | null; tools_feature: boolean }>("/api/ai/tenants"),
+  setAITenantAccess: (id: string, body: { assistant_enabled: boolean; investigations_enabled: boolean }) =>
+    request<AITenantRow>(`/api/ai/tenants/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
 
   // Native metrics (Prometheus-compatible API via the Go proxy).
   metricNames: () => request<PromNamesResponse>("/api/metrics/names"),

@@ -10,6 +10,8 @@ import {
   AnthropicChatResponse,
   OpenAIChatResponse,
   CopilotConfig,
+  AITenantConfig,
+  AITenantRow,
   AiAnswer,
   AiCitation,
   AiCommand,
@@ -106,6 +108,12 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [cfg, setCfg] = useState<CopilotConfig | null>(null);
+  // Per-workspace settings (tenant admins): own provider key + platform-service
+  // opt-out. Loads only for tenant admins (403/400 otherwise → stays null).
+  const [tcfg, setTcfg] = useState<AITenantConfig | null>(null);
+  const [tKeyDraft, setTKeyDraft] = useState("");
+  // Per-workspace AI access rows (platform owner only).
+  const [tenantRows, setTenantRows] = useState<AITenantRow[] | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [savingCfg, setSavingCfg] = useState(false);
@@ -129,7 +137,14 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
 
   useEffect(() => {
     api.credentials().then((c) => setEnabled(Boolean(c?.copilot))).catch(() => setEnabled(false));
-    api.copilotConfig().then(setCfg).catch(() => setCfg(null));
+    // Platform owner → platform settings + the per-workspace access list;
+    // tenant admin → their own workspace settings. Whichever call the caller
+    // isn't authorized for simply stays null.
+    api.copilotConfig().then((c) => {
+      setCfg(c);
+      api.aiTenants().then((r) => setTenantRows(r.tenants ?? [])).catch(() => setTenantRows(null));
+    }).catch(() => setCfg(null));
+    api.aiTenantConfig().then(setTcfg).catch(() => setTcfg(null));
   }, []);
 
   useEffect(() => {
@@ -156,6 +171,44 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
       setError((e as Error).message);
     } finally {
       setSavingCfg(false);
+    }
+  };
+
+  // Save the tenant admin's own workspace settings (key is write-only: a blank
+  // draft leaves the stored key untouched).
+  const saveTCfg = async () => {
+    if (!tcfg) return;
+    setSavingCfg(true);
+    setError(null);
+    try {
+      const saved = await api.setAITenantConfig({
+        provider: tcfg.provider,
+        model: tcfg.model,
+        no_platform_key: tcfg.no_platform_key,
+        ...(tKeyDraft.trim() ? { key: tKeyDraft.trim() } : {}),
+      });
+      setTcfg(saved);
+      setTKeyDraft("");
+      setShowSettings(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSavingCfg(false);
+    }
+  };
+
+  // Flip one workspace's AI access (platform owner) — optimistic row update.
+  const setAccess = async (row: AITenantRow, patch: Partial<Pick<AITenantRow, "assistant_enabled" | "investigations_enabled">>) => {
+    const next = { ...row, ...patch };
+    setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? next : r)));
+    try {
+      await api.setAITenantAccess(row.tenant_id, {
+        assistant_enabled: next.assistant_enabled,
+        investigations_enabled: next.investigations_enabled,
+      });
+    } catch (e) {
+      setTenantRows((rows) => (rows ?? []).map((r) => (r.tenant_id === row.tenant_id ? row : r)));
+      setError((e as Error).message);
     }
   };
 
@@ -268,7 +321,13 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     );
   }
 
-  const ready = !!cfg?.feature_enabled && !!cfg?.key_present;
+  // Free-form readiness: the platform owner needs the platform key; a tenant
+  // admin's workspace is ready on its OWN key, or on the platform AI service
+  // when available and not opted out. (Non-admin users keep the grounded
+  // engine; the server decides per-turn either way.)
+  const tenantReady = !!tcfg?.assistant_enabled &&
+    (tcfg.key_present || (tcfg.platform_key_available && !tcfg.no_platform_key));
+  const ready = (!!cfg?.feature_enabled && !!cfg?.key_present) || tenantReady;
 
   // Slash menu: filter the pre-made questions by what's typed after "/".
   const slashQuery = draft.startsWith("/") ? draft.slice(1).toLowerCase().trim() : "";
@@ -304,7 +363,11 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
             <span className="op-hd-title">Correlix AI</span>
             <span className="op-hd-sub">
               <span className={`op-dot ${ready ? "ok" : "warn"}`} />
-              {cfg ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free") : "Network assistant"}
+              {cfg
+                ? (ready ? (cfg.provider === "anthropic" ? "Claude" : cfg.provider) + " · " + cfg.model : "Grounded engine · key-free")
+                : tcfg
+                  ? (tenantReady ? (tcfg.key_present ? (tcfg.provider === "openai" ? "GPT" : tcfg.provider === "gemini" ? "Gemini" : "Claude") + " · your key" : "Platform AI service") : "Grounded engine · key-free")
+                  : "Network assistant"}
             </span>
           </span>
         </span>
@@ -398,6 +461,102 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
             <button className="dash-btn accent" onClick={saveCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
             <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
           </div>
+
+          {/* Per-workspace access (platform owner): which customer workspaces get
+              the assistant, and which may run AI Investigations (tool lookups). */}
+          {tenantRows && tenantRows.length > 0 && (
+            <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Workspace access</div>
+              <p style={{ color: "var(--muted)", fontSize: 11, margin: "0 0 8px" }}>
+                Assistant answers are always scoped to each workspace&apos;s own data. Investigations
+                let the AI run governed, read-only lookups before answering.
+              </p>
+              {tenantRows.map((row) => (
+                <div key={row.tenant_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: 12 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.tenant_id}>
+                    {row.name || row.tenant_id}
+                    {row.key_present && <span className="badge good" style={{ fontSize: 9, marginLeft: 6 }}>own key</span>}
+                    {row.no_platform_key && !row.key_present && <span className="badge warn" style={{ fontSize: 9, marginLeft: 6 }}>own key required</span>}
+                  </span>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
+                    <input type="checkbox" checked={row.assistant_enabled}
+                      onChange={(e) => setAccess(row, { assistant_enabled: e.target.checked })} /> Assistant
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--muted)" }}>
+                    <input type="checkbox" checked={row.investigations_enabled} disabled={!row.assistant_enabled}
+                      onChange={(e) => setAccess(row, { investigations_enabled: e.target.checked })} /> Investigations
+                  </label>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Workspace settings — tenant admins manage their own AI service here:
+          bring their own provider key (write-only, encrypted at rest) or ride the
+          platform AI service when it's available. */}
+      {showSettings && !cfg && tcfg && (
+        <div className="op-settings">
+          <p style={{ color: "var(--muted)", fontSize: 12, margin: "0 0 10px" }}>
+            {tcfg.assistant_enabled
+              ? "Your workspace's AI settings. A key you add is encrypted at rest, never shown again, and only ever used for your workspace."
+              : "The assistant is currently disabled for this workspace — contact your administrator."}
+          </p>
+          <label className="op-field">
+            <span>
+              {tcfg.provider === "openai" ? "OpenAI" : tcfg.provider === "gemini" ? "Gemini" : "Anthropic"} API key{" "}
+              {tcfg.key_present
+                ? <span className="badge good" style={{ fontSize: 10 }}>configured</span>
+                : <span className="badge warn" style={{ fontSize: 10 }}>not set</span>}
+            </span>
+            <input
+              type="password"
+              value={tKeyDraft}
+              onChange={(e) => setTKeyDraft(e.target.value)}
+              placeholder={tcfg.key_present ? "•••••••• (stored — leave blank to keep)" : "paste your API key (e.g. sk-…)"}
+              autoComplete="off"
+            />
+          </label>
+          <div className="op-field">
+            <span>Provider</span>
+            <div className="op-tiles">
+              {(tcfg.providers ?? ["anthropic", "openai", "gemini"]).map((pv) => (
+                <button type="button" key={pv}
+                  className={`op-tile${tcfg.provider === pv || (!tcfg.provider && pv === "anthropic") ? " on" : ""}`}
+                  onClick={() => { const s = tcfg.model_suggestions?.[pv] ?? []; setTcfg({ ...tcfg, provider: pv, model: s[0] ?? "" }); }}>
+                  <span className="op-tile-name">{pv === "anthropic" ? "Anthropic" : pv === "openai" ? "OpenAI" : "Google"}</span>
+                  <span className="op-tile-sub">{pv === "anthropic" ? "Claude" : pv === "openai" ? "GPT" : "Gemini"}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="op-field">
+            <span>Model</span>
+            <input className="op-modelinput" value={tcfg.model}
+              onChange={(e) => setTcfg({ ...tcfg, model: e.target.value })}
+              placeholder="model id (blank = provider default)" />
+          </div>
+          {tcfg.platform_key_available && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)", margin: "2px 0 8px" }}>
+              <input type="checkbox" checked={!tcfg.no_platform_key}
+                onChange={(e) => setTcfg({ ...tcfg, no_platform_key: !e.target.checked })} />
+              Use the platform AI service when no key is set
+            </label>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button className="dash-btn accent" onClick={saveTCfg} disabled={savingCfg}>{savingCfg ? "Saving…" : "Save"}</button>
+            {tcfg.key_present && (
+              <button className="dash-btn" disabled={savingCfg}
+                onClick={async () => {
+                  setSavingCfg(true);
+                  try { setTcfg(await api.setAITenantConfig({ provider: tcfg.provider, model: tcfg.model, no_platform_key: tcfg.no_platform_key, clear_key: true })); setTKeyDraft(""); }
+                  catch (e) { setError((e as Error).message); }
+                  finally { setSavingCfg(false); }
+                }}>Remove key</button>
+            )}
+            <button className="dash-btn" onClick={() => setShowSettings(false)} disabled={savingCfg}>Cancel</button>
+          </div>
         </div>
       )}
 
@@ -425,7 +584,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
                 <button key={s} className="op-example" onClick={() => send(s)}>{s}</button>
               ))}
             </div>
-            {cfg && !cfg.key_present ? (
+            {(cfg && !cfg.key_present) || (!cfg && tcfg && tcfg.assistant_enabled && !tenantReady) ? (
               <div className="op-nokey">
                 <Icon name="key" size={15} /> Connect a provider key for free-form chat.
                 <button className="dash-btn accent" style={{ marginLeft: 6 }} onClick={() => setShowSettings(true)}>Add API key</button>

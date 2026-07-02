@@ -10,8 +10,13 @@ import (
 // ai_llm.go — adapts the existing provider-agnostic proxy (copilot.go's chain:
 // bounds, key custody, redaction, audit all live there) to the ai.LLMClient
 // seam. The ai package never holds a key or makes a raw HTTP call; it asks this
-// adapter to complete with a SERVER-OWNED system prompt (LLM01).
-type aiLLM struct{ srv *server }
+// adapter to complete with a SERVER-OWNED system prompt (LLM01). The provider
+// chain resolves PER PRINCIPAL (ai_tenant_config.go): a tenant's BYO key wins,
+// a strict tenant never rides the platform key.
+type aiLLM struct {
+	srv    *server
+	claims jwtClaims
+}
 
 func (l aiLLM) Complete(ctx context.Context, system string, msgs []ai.LLMMessage) (string, string, error) {
 	cmsgs := make([]copilotMessage, 0, len(msgs))
@@ -24,24 +29,10 @@ func (l aiLLM) Complete(ctx context.Context, system string, msgs []ai.LLMMessage
 		}
 		cmsgs = append(cmsgs, copilotMessage{Role: role, Content: m.Content})
 	}
-	storedKey := l.srv.copilotCfg.apiKey()
-	cfgProvider := l.srv.copilotCfg.get().Provider
-	cfgModel := l.srv.copilotCfg.get().Model
-	for _, name := range copilotProviderChain() {
-		key := providerKey(name)
-		if key == "" && storedKey != "" && name == cfgProvider {
-			key = storedKey
-		}
-		if key == "" {
-			continue // provider not configured — skip
-		}
-		model := providerModel(name)
-		if name == cfgProvider && cfgModel != "" {
-			model = cfgModel
-		}
-		text, err := callProvider(ctx, name, key, model, system, cmsgs)
+	for _, cand := range l.srv.providerCandidates(l.claims) {
+		text, err := callProvider(ctx, cand.name, cand.key, cand.model, system, cmsgs)
 		if err == nil {
-			return text, name, nil
+			return text, cand.name, nil
 		}
 		// Raw provider error stays server-side (SR-022); fall through to the next.
 	}

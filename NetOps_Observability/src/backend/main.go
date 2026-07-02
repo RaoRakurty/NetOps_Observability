@@ -106,6 +106,7 @@ type server struct {
 	copilotLimiter      *tenantRateLimiter       // per-principal copilot rate limit (SR-021)
 	aiToolBudget        *aiDailyBudget           // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg          *copilotConfigStore
+	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
 	netboxSync          *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
@@ -505,6 +506,7 @@ func newServer() *server {
 	engine.OnFire = srv.ingestAlertIncident
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
+	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
 	srv.netboxCfg = netboxCfg
 	srv.discoveryCfg = discoveryCfg
 	// Write-through: reconcile discovered devices INTO NetBox (the source of truth),
@@ -935,6 +937,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
 	// Correlix AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
+	mux.HandleFunc("/api/ai/tenant-config", s.handleAITenantConfig)
+	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
+	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)
 	mux.HandleFunc("/api/ai/modules", s.handleAIModules)
 	mux.HandleFunc("/api/ai/commands", s.handleAICommands)             // slash-command registry for the "/" menu
 	mux.HandleFunc("/api/ai/commands/suggestions", s.handleAICommands) // typed-fragment suggestions

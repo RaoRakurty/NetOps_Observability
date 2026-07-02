@@ -135,6 +135,12 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("copilot rate limit exceeded — slow down"))
 		return
 	}
+	// Per-tenant entitlement (§3a): the assistant is a per-tenant feature, not a
+	// platform-global one. Cross-tenant principals are never gated here.
+	if !s.aiAssistantAllowed(claims) {
+		writeError(w, http.StatusForbidden, errAITenantDisabled)
+		return
+	}
 
 	// Bound the request body before decoding (LLM04: no unbounded input).
 	r.Body = http.MaxBytesReader(w, r.Body, maxCopilotBodyBytes)
@@ -174,38 +180,23 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// tools before answering. Falls back to plain chat when the loop can't start
 	// (no budget, provider refuses) — but a turn that already executed lookups
 	// fails cleanly rather than silently restarting as an unGrounded chat.
-	if agentLoopEligible(claims) {
+	if s.agentLoopEligible(claims) {
 		if handled := s.tryAgentLoop(w, r, claims, msgs, system, docRefs); handled {
 			return
 		}
 	}
 
-	// Provider fallback chain: ChatGPT (OpenAI) → Gemini → Copilot (Anthropic).
-	// Each provider that has a key is tried in order; on error (no key is skipped,
-	// a provider error/non-2xx falls through) the next is attempted; the first
-	// success wins. Order configurable via COPILOT_PROVIDER_CHAIN.
-	// The UI-stored (encrypted) key + model apply to the configured provider, used
-	// as the fallback when no per-provider env key is set — so the platform owner
-	// can enable the assistant by pasting a key in settings (no .env edit).
-	storedKey := s.copilotCfg.apiKey()
-	cfgProvider := s.copilotCfg.get().Provider
-	cfgModel := s.copilotCfg.get().Model
-
+	// Provider fallback chain, resolved PER PRINCIPAL (ai_tenant_config.go): a
+	// tenant's own BYO key wins outright; a strict tenant (no_platform_key) gets
+	// nothing rather than riding the platform key; otherwise the platform chain
+	// applies (per-provider env keys, then the UI-stored platform key), order
+	// configurable via COPILOT_PROVIDER_CHAIN. Each candidate is tried in order;
+	// on provider error the next is attempted; the first success wins.
 	attempted := false
-	for _, name := range copilotProviderChain() {
-		key := providerKey(name)
-		if key == "" && storedKey != "" && name == cfgProvider {
-			key = storedKey
-		}
-		if key == "" {
-			continue // provider not configured — skip silently
-		}
-		model := providerModel(name)
-		if name == cfgProvider && cfgModel != "" {
-			model = cfgModel
-		}
+	for _, cand := range s.providerCandidates(claims) {
+		name := cand.name
 		attempted = true
-		text, err := callProvider(r.Context(), name, key, model, system, msgs)
+		text, err := callProvider(r.Context(), name, cand.key, cand.model, system, msgs)
 		if err == nil && strings.TrimSpace(text) != "" {
 			// Strip any doc citation the model INVENTED (an id not among the
 			// retrieved chunks) — same fake-authority guardrail as the grounded
@@ -225,26 +216,13 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
 }
 
-// firstConfiguredProvider resolves the first provider in the chain that has a
-// key (env or UI-stored), plus its model — the agent loop uses exactly one
-// provider per turn (no cross-provider loop resumption, plan §3.d).
-func (s *server) firstConfiguredProvider() (name, key, model string) {
-	storedKey := s.copilotCfg.apiKey()
-	cfgProvider := s.copilotCfg.get().Provider
-	cfgModel := s.copilotCfg.get().Model
-	for _, n := range copilotProviderChain() {
-		k := providerKey(n)
-		if k == "" && storedKey != "" && n == cfgProvider {
-			k = storedKey
-		}
-		if k == "" {
-			continue
-		}
-		m := providerModel(n)
-		if n == cfgProvider && cfgModel != "" {
-			m = cfgModel
-		}
-		return n, k, m
+// firstConfiguredProvider resolves the first provider candidate for this
+// principal (tenant BYO key first, then the platform chain) — the agent loop
+// uses exactly one provider per turn (no cross-provider loop resumption, plan
+// §3.d).
+func (s *server) firstConfiguredProvider(claims jwtClaims) (name, key, model string) {
+	if cands := s.providerCandidates(claims); len(cands) > 0 {
+		return cands[0].name, cands[0].key, cands[0].model
 	}
 	return "", "", ""
 }
@@ -253,7 +231,7 @@ func (s *server) firstConfiguredProvider() (name, key, model string) {
 // true when it wrote the response (success OR a mid-loop failure that must not
 // silently restart as plain chat); false → caller falls through to plain chat.
 func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwtClaims, msgs []copilotMessage, system string, docRefs []copilotDocRef) bool {
-	name, key, model := s.firstConfiguredProvider()
+	name, key, model := s.firstConfiguredProvider(claims)
 	if key == "" {
 		return false // no provider — plain path renders the "add a key" message
 	}

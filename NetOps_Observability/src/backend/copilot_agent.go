@@ -35,17 +35,19 @@ var errAIToolsBudget = errors.New("daily AI investigation budget exhausted")
 // featureAIToolsEnabled gates the loop (off by default — soak per plan §5 P2).
 func featureAIToolsEnabled() bool { return os.Getenv("FEATURE_AI_TOOLS") == "true" }
 
-// agentLoopEligible: the loop runs for the platform owner / cross-tenant
-// principals first; AI_TOOLS_ALL_TENANTS=true opens it to tenant users (P4).
-func agentLoopEligible(claims jwtClaims) bool {
+// agentLoopEligible: the loop always runs for the platform owner / cross-tenant
+// principals; tenant users need their tenant's per-tenant entitlement
+// (ai_tenant_config.go, "AI Investigations"). AI_TOOLS_ALL_TENANTS=true remains
+// as a global override that entitles every tenant at once.
+func (s *server) agentLoopEligible(claims jwtClaims) bool {
 	if !featureAIToolsEnabled() {
 		return false
 	}
-	if os.Getenv("AI_TOOLS_ALL_TENANTS") == "true" {
+	tenant, cross := principalTenant(claims)
+	if cross || os.Getenv("AI_TOOLS_ALL_TENANTS") == "true" {
 		return true
 	}
-	_, cross := principalTenant(claims)
-	return cross
+	return s.aiTenantCfg.agentToolsEnabled(tenant)
 }
 
 // ---- daily per-tenant token budget (LLM04/LLM10, plan §4.5) ------------------

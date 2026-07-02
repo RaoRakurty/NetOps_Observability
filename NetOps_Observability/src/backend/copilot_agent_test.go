@@ -46,7 +46,11 @@ func (agentTestDS) ListActiveProblems(_ context.Context, p ai.Principal, _ int) 
 	return []ai.Problem{{ID: problemA, Title: "BGP peer down", Verdict: "confirmed", Confidence: 0.8}}, nil
 }
 
-func agentTestServer() *server { return &server{aiToolBudget: newAIDailyBudget()} }
+// agentTestServer: the blank store path keeps the per-tenant AI config purely
+// in-memory (kvSave on "" fails and is ignored) — persistence has its own tests.
+func agentTestServer() *server {
+	return &server{aiToolBudget: newAIDailyBudget(), aiTenantCfg: newAITenantConfigStore("", nil)}
+}
 
 func agentTestSetup(tenant string) (*server, ai.Principal, *ai.ToolRegistry, *ai.PolicyEngine, []ai.ToolSpec) {
 	s := agentTestServer()
@@ -184,16 +188,27 @@ func TestAIDailyBudget(t *testing.T) {
 }
 
 func TestAgentLoopEligibility(t *testing.T) {
+	s := agentTestServer()
 	t.Setenv("FEATURE_AI_TOOLS", "")
-	if agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
+	if s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
 		t.Fatal("off by default")
 	}
 	t.Setenv("FEATURE_AI_TOOLS", "true")
-	if agentLoopEligible(jwtClaims{Tenant: "t-a", Sub: "user", Role: "admin"}) {
-		t.Fatal("tenant users are not in the P2 rollout")
+	if s.agentLoopEligible(jwtClaims{Tenant: "t-a", Sub: "user", Role: "admin"}) {
+		t.Fatal("tenant users are not entitled by default")
 	}
+	// Per-tenant entitlement (P4a): granting "AI Investigations" to ONE tenant
+	// enables its users — and nobody else's.
+	s.aiTenantCfg.setEntitlement("t-a", false, true)
+	if !s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
+		t.Fatal("entitled tenant must be eligible")
+	}
+	if s.agentLoopEligible(jwtClaims{Tenant: "t-b"}) {
+		t.Fatal("entitlement must not leak to other tenants")
+	}
+	s.aiTenantCfg.setEntitlement("t-a", false, false)
 	t.Setenv("AI_TOOLS_ALL_TENANTS", "true")
-	if !agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
-		t.Fatal("AI_TOOLS_ALL_TENANTS widens the rollout")
+	if !s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
+		t.Fatal("AI_TOOLS_ALL_TENANTS widens the rollout globally")
 	}
 }
