@@ -41,7 +41,6 @@ import AccessExplorer from "./tabs/AccessExplorer";
 import {
   IdentityAccess,
   RegionsAdmin,
-  BindingsAdmin,
   SessionsAdmin,
   AuthenticationAdmin,
   ApiAccessAdmin,
@@ -293,9 +292,11 @@ export const NAV: NavSection[] = [
       // independently). The tenant registry + per-tenant drill-in live inside it.
       { id: "regions", label: "Regions", platformOnly: true, render: () => <RegionsAdmin /> },
       { id: "identity", label: "Identity & Access", render: () => <IdentityAccess /> },
-      { id: "access", label: "Assign access", render: () => <BindingsAdmin /> },
-      { id: "sessions", label: "Sessions", platformOnly: true, render: () => <SessionsAdmin /> },
-      { id: "auth", label: "Authentication", render: () => <AuthenticationAdmin /> },
+      // Security — authentication providers, live sessions and the audit trail,
+      // grouped at the same level as Data Collection.
+      { id: "auth", label: "Authentication", group: "Security", render: () => <AuthenticationAdmin /> },
+      { id: "sessions", label: "Sessions", group: "Security", platformOnly: true, render: () => <SessionsAdmin /> },
+      { id: "audit", label: "Audit Log", group: "Security", render: () => <AuditLog /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
         subItems: [
@@ -305,8 +306,8 @@ export const NAV: NavSection[] = [
         ],
       },
       // Notifications + Integrations live under Incident Response (their
-      // operational home), not duplicated here.
-      { id: "audit", label: "Audit Log", render: () => <AuditLog /> },
+      // operational home), not duplicated here. Assign-access merged into the
+      // Identity & Access "＋ Add" guided flow (and each org's Access tab).
     ],
   },
 ];

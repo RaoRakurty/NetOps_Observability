@@ -14,6 +14,7 @@ import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, S
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
+import { Group } from "../components/board/panels";
 import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
 import Icon from "../components/Icon";
 import { useAuth } from "../hooks/useAuth";
@@ -817,30 +818,20 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
   const [regions] = useReload(() => api.listRegions());
   const [tenants] = useReload(() => api.listTenants());
   const [users] = useReload(() => api.listUsers());
-  const [name, setName] = useState("");
-  const [region, setRegion] = useState("");
-  const [sso, setSso] = useState("");
-  const [note, setNote] = useState("");
   const [edit, setEdit] = useState<Org | null>(null);
-  const [adding, setAdding] = useState(false); // create form is hidden until clicked
-  const [onboarding, setOnboarding] = useState(false); // one-step customer onboarding wizard
 
   const regionLabel = (id: string) => (regions ?? []).find((r) => r.id === id)?.label || id;
   const tenantCount = (orgId: string) =>
     (tenants ?? []).filter((t) => (t.org_id || "global") === orgId).length;
   // Org members = accounts strictly associated with the org (tenant_id = org id),
-  // mirroring tenant-user logic — no tenant record required.
+  // mirroring tenant-user logic — no tenant record required. Provider members are
+  // the platform-realm accounts (untagged or the global tenant), matching the
+  // Users directory's Global scope.
   const memberCount = (orgId: string) =>
-    (users ?? []).filter((u) => u.tenant_id === orgId).length;
+    orgId === "global"
+      ? (users ?? []).filter((u) => !u.tenant_id || u.tenant_id === "global").length
+      : (users ?? []).filter((u) => u.tenant_id === orgId).length;
 
-  const create = async () => {
-    if (!name.trim()) return;
-    setErr(null);
-    try {
-      await api.createOrg(name.trim(), { homeRegion: region, ssoConnection: sso.trim(), note: note.trim() });
-      setName(""); setRegion(""); setSso(""); setNote(""); setAdding(false); reload();
-    } catch (e) { setErr((e as Error).message); }
-  };
   const remove = async (o: Org) => {
     if (!window.confirm(`Delete organization "${o.name}"?\n\nThis can't be undone. An organization that still has tenants can't be deleted — move or remove its tenants first.`)) return;
     setErr(null);
@@ -852,58 +843,12 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
   return (
     <>
       <div className="admin-head-row">
-        <AdminHead title="Organizations" sub="Top-level accounts. Each organization has a home data region and sign-in, inherited by the tenants inside it." />
-        {!adding && (
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="dash-btn" onClick={() => { setOnboarding(true); setErr(null); }}>＋ Onboard customer</button>
-            <button className="dash-btn accent" onClick={() => { setAdding(true); setErr(null); }}>＋ Create organization</button>
-          </div>
-        )}
+        <AdminHead title="Organizations" sub="Open one to manage its users, tenants, roles and security — ＋ Add is the guided way to create anything new." />
       </div>
       <StatStrip>
         <Stat label="Organizations" value={orgs ? list.length : <Skeleton w={26} h={22} />} />
       </StatStrip>
-      {adding && (
-        <div className="card">
-          <div className="admin-card-head"><h2>New organization</h2></div>
-          <ErrLine msg={err} />
-          <div className="admin-form">
-            <label className="req-field">
-              <span>Name <Req /></span>
-              <input autoFocus placeholder="e.g. Acme Corp" value={name} onChange={(e) => setName(e.target.value)} />
-            </label>
-            <label className="req-field">
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                Region <Req />
-                <InfoTip label="The data-residency region for this organization — where its tenants' telemetry is meant to live. Tenants inherit it unless overridden.">
-                  The data-residency region for this organization — where its tenants' telemetry is meant to live. Tenants inherit this unless you override it per tenant.
-                </InfoTip>
-              </span>
-              <select value={region} onChange={(e) => setRegion(e.target.value)}>
-                <option value="">Select region…</option>
-                {(regions ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-              </select>
-            </label>
-            <label>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                Sign-in connection
-                <InfoTip label="Optional. Binds this organization to its own identity provider so its people sign in through their company's SSO; leave blank to use the platform's default sign-in.">
-                  Optional. Bind this organization to its own identity provider (SSO) so its people sign in through their company's login. Leave blank to use the platform default.
-                </InfoTip>
-              </span>
-              <input placeholder="optional" value={sso} onChange={(e) => setSso(e.target.value)} />
-            </label>
-            <label style={{ flex: 2 }}>
-              <span>Note</span>
-              <input placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
-            </label>
-            <button className="dash-btn" onClick={() => { setAdding(false); setName(""); setRegion(""); setSso(""); setNote(""); setErr(null); }}>Cancel</button>
-            <button className="dash-btn accent" disabled={!name.trim() || !region} onClick={create}>Create organization</button>
-          </div>
-          <RequiredLegend />
-        </div>
-      )}
-      {!adding && <ErrLine msg={err} />}
+      <ErrLine msg={err} />
       <div className="card" style={{ paddingTop: 8 }}>
         {list.length === 0 ? (
           <div className="empty">No organizations yet.</div>
@@ -926,19 +871,19 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
                 return (
                   <tr key={o.id}>
                     <td style={{ fontWeight: 600 }}>
-                      {onManageOrg && !isRoot
+                      {onManageOrg
                         ? <button className="ia-linkname" onClick={() => onManageOrg(o.id, o.name)}>{o.name}</button>
                         : o.name}
-                      {isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Parent Organization</span>}
+                      {isRoot && <span className="badge accent" style={{ marginLeft: 6 }}>Provider</span>}
                       <div className="mini-meta" style={{ fontFamily: "var(--mono, monospace)" }} title={o.id}>{o.slug}</div>
                     </td>
                     <td><span className="badge">{regionLabel(o.home_region)}</span></td>
-                    <td style={{ color: "var(--muted)" }}>{isRoot ? "—" : memberCount(o.id)}</td>
+                    <td style={{ color: "var(--muted)" }}>{memberCount(o.id)}</td>
                     <td style={{ color: "var(--muted)" }}>{tenantCount(o.id)}</td>
                     <td style={{ color: "var(--muted)", fontSize: 12 }}>{o.sso_connection || "Platform default"}</td>
                     <td style={{ color: "var(--muted)" }}>{o.note || "—"}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                      {onManageOrg && !isRoot && <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageOrg(o.id, o.name)}>Manage</button>}
+                      {onManageOrg && <button className="dash-btn accent" style={{ marginRight: 6 }} onClick={() => onManageOrg(o.id, o.name)}>Manage</button>}
                       <button className="dash-btn" style={{ marginRight: 6 }} onClick={() => setEdit(o)}>Edit</button>
                       {!isRoot && <button className="dash-btn" onClick={() => remove(o)}>Delete</button>}
                     </td>
@@ -958,87 +903,7 @@ export function OrgsAdmin({ onManageOrg }: { onManageOrg?: (id: string, name: st
           onSaved={() => { setEdit(null); reload(); }}
         />
       )}
-      {onboarding && (
-        <OnboardWizard
-          regions={regions ?? []}
-          onClose={() => setOnboarding(false)}
-          onDone={() => { setOnboarding(false); reload(); }}
-        />
-      )}
     </>
-  );
-}
-
-// OnboardWizard is the operator one-step "Onboard customer" flow: it creates the
-// organization AND its first tenant (the data boundary) in a single audited call
-// (POST /api/onboard), so a customer is never left as a tenant-less org. Slugs are
-// optional (derived from the names server-side); ids are minted opaque.
-function OnboardWizard({ regions, onClose, onDone }: { regions: Region[]; onClose: () => void; onDone: () => void }) {
-  const [orgName, setOrgName] = useState("");
-  const [region, setRegion] = useState("");
-  const [sso, setSso] = useState("");
-  const [tenantName, setTenantName] = useState("");
-  const [restricted, setRestricted] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [done, setDone] = useState<{ org: Org; tenant: Tenant } | null>(null);
-
-  const submit = async () => {
-    if (!orgName.trim() || !tenantName.trim() || !region) return;
-    setBusy(true); setErr(null);
-    try {
-      const res = await api.onboardCustomer({
-        org_name: orgName.trim(), home_region: region, sso_connection: sso.trim(),
-        tenant_name: tenantName.trim(), operator_restricted: restricted,
-      });
-      setDone(res);
-    } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <Modal title="Onboard customer" subtitle="Create an organization and its first tenant in one step" onClose={onClose}>
-      {done ? (
-        <div className="admin-form" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
-          <div className="empty" style={{ textAlign: "left" }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>✓ {done.org.name} onboarded</div>
-            <div className="mini-meta">Organization <b>{done.org.slug}</b> <span style={{ fontFamily: "var(--mono, monospace)" }}>({done.org.id})</span></div>
-            <div className="mini-meta">First tenant <b>{done.tenant.slug}</b> <span style={{ fontFamily: "var(--mono, monospace)" }}>({done.tenant.id})</span></div>
-          </div>
-          <button className="dash-btn accent" onClick={onDone}>Done</button>
-        </div>
-      ) : (
-        <div className="admin-form" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
-          <ErrLine msg={err} />
-          <label className="req-field"><span>Organization name <Req /></span>
-            <input autoFocus placeholder="e.g. Acme Corp" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
-          </label>
-          <label className="req-field"><span>Data region <Req /></span>
-            <select value={region} onChange={(e) => setRegion(e.target.value)}>
-              <option value="">Select region…</option>
-              {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-          </label>
-          <label><span>Sign-in connection</span>
-            <input placeholder="optional SSO connection" value={sso} onChange={(e) => setSso(e.target.value)} />
-          </label>
-          <label className="req-field"><span>First tenant name <Req /></span>
-            <input placeholder="e.g. Acme Production" value={tenantName} onChange={(e) => setTenantName(e.target.value)} />
-          </label>
-          <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" checked={restricted} onChange={(e) => setRestricted(e.target.checked)} style={{ width: "auto" }} />
-            <span>Hide this tenant's telemetry from the platform operator (compliance)</span>
-          </label>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <button className="dash-btn" onClick={onClose}>Cancel</button>
-            <button className="dash-btn accent" disabled={busy || !orgName.trim() || !tenantName.trim() || !region} onClick={submit}>
-              {busy ? "Onboarding…" : "Onboard"}
-            </button>
-          </div>
-          <RequiredLegend />
-        </div>
-      )}
-    </Modal>
   );
 }
 
@@ -1098,10 +963,10 @@ export function RegionsAdmin() {
   const active = rows.filter((r) => r.tenants > 0 || r.orgs > 0);
   return (
     <>
-      <AdminHead title="Regions" sub="Where each tenant's data lives. One global control plane routes tenants to a regional data plane by their assigned region." />
+      <AdminHead title="Regions" sub="Where each tenant's data lives. Every tenant is routed to its assigned data region automatically." />
       <ErrLine msg={err} />
       <StatStrip>
-        <Stat label="Control plane" value="Global" />
+        <Stat label="Management" value="Global" />
         <Stat label="Regions in use" value={topo ? active.length : <Skeleton w={20} h={20} />} tone="accent" />
         <Stat label="Tenants" value={cp?.tenants ?? "—"} />
         <Stat label="Organizations" value={cp?.orgs ?? "—"} />
@@ -1110,8 +975,8 @@ export function RegionsAdmin() {
       <div className="card">
         <div className="region-topo">
           <div className="region-topo-cp">
-            <div className="region-topo-tag">Control plane · Global</div>
-            <div className="region-topo-sub">Orgs · Identity · RBAC · Tenants · Billing</div>
+            <div className="region-topo-tag">Global management</div>
+            <div className="region-topo-sub">Organizations · Identity · Access · Tenants · Billing</div>
           </div>
           <div className="region-topo-arrow">routes by tenant → region ↓</div>
           <div className="region-topo-planes">
@@ -1121,10 +986,10 @@ export function RegionsAdmin() {
                 <div key={r.id} className={`region-plane${used ? " used" : ""}`}>
                   <div className="region-plane-head">
                     <b>{r.label}</b>
-                    <span className={`badge ${r.data_plane.local ? "" : "accent"}`}>{r.data_plane.local ? "Local stack" : "Dedicated"}</span>
+                    <span className={`badge ${r.data_plane.local ? "" : "accent"}`}>{r.data_plane.local ? "Primary" : "Dedicated"}</span>
                   </div>
                   <div className="region-plane-meta">{r.tenants} tenant{r.tenants === 1 ? "" : "s"} · {r.orgs} org{r.orgs === 1 ? "" : "s"}</div>
-                  <div className="region-plane-stack">ClickHouse · OpenSearch · Kafka · VictoriaMetrics</div>
+                  <div className="region-plane-stack">Metrics · Logs · Flows · Analytics</div>
                 </div>
               );
             })}
@@ -1151,7 +1016,7 @@ export function RegionsAdmin() {
                 <td style={{ color: "var(--muted)" }}>{r.tenants}</td>
                 <td style={{ color: "var(--muted)" }}>{r.orgs}</td>
                 <td className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>
-                  {r.data_plane.local ? "in-cluster" : (r.data_plane.clickhouse || "configured")}
+                  {r.data_plane.local ? "in-cluster" : "dedicated deployment"}
                 </td>
               </tr>
             ))}
@@ -1561,148 +1426,77 @@ function SsoRolesPanel() {
   );
 }
 
-// ReqChip — a Required / Optional / Inherited marker used across the IAM map+forms.
-function ReqChip({ kind }: { kind: "req" | "opt" | "inh" }) {
-  const map = {
-    req: { label: "Required", bg: "var(--accent-soft)", fg: "var(--accent)" },
-    opt: { label: "Optional", bg: "var(--surface-2)", fg: "var(--muted)" },
-    inh: { label: "Inherited", bg: "var(--surface-2)", fg: "var(--muted)" },
-  }[kind];
-  return <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase", padding: "1px 6px", borderRadius: 5, background: map.bg, color: map.fg }}>{map.label}</span>;
-}
-
-// IAMHierarchyMap — the "how it all ties together" box at the top of Identity &
-// Access (platform view). Read-only: a flow strip (create-down, assign-at-end)
-// + a live tree Provider → Orgs → Tenants, so "where do I start / what's
-// required vs optional" is answered at a glance. Grounded in the real model:
-// Provider is the root, Org is OPTIONAL (blank ⇒ Provider/Global), Tenant is the
-// REQUIRED unit, Region is inherited placement.
-function IAMHierarchyMap() {
-  const [orgs, setOrgs] = useState<Org[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [regions, setRegions] = useState<Region[]>([]);
-  useEffect(() => {
-    Promise.all([
-      api.listOrgs().catch(() => [] as Org[]),
-      api.listTenants().catch(() => [] as Tenant[]),
-      api.listUsers().catch(() => [] as AdminUser[]),
-      api.listRegions().catch(() => [] as Region[]),
-    ]).then(([o, t, u, r]) => { setOrgs(o); setTenants(t); setUsers(u); setRegions(r); });
-  }, []);
-
-  const orgKey = (id?: string) => (id && id !== "" ? id : "global");
-  const tByOrg: Record<string, Tenant[]> = {};
-  tenants.forEach((t) => { (tByOrg[orgKey(t.org_id)] ||= []).push(t); });
-  // Ensure the Provider/Global org node exists even with no custom orgs.
-  const orgList = orgs.length ? orgs : [{ id: "global", name: "Provider", slug: "global", home_region: "us-east" } as Org];
-  const usersByTenant: Record<string, number> = {};
-  users.forEach((u) => { if (u.tenant_id) usersByTenant[u.tenant_id] = (usersByTenant[u.tenant_id] || 0) + 1; });
-
-  const arrow = <span style={{ color: "var(--muted)", margin: "0 2px" }}>→</span>;
-  const step = (label: string, chip?: "req" | "opt", note?: string) => (
-    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 9px", borderRadius: 8, background: "var(--surface-2)", border: "1px solid var(--border, var(--panel-border))", fontSize: 12.5, fontWeight: 600 }}>
-        {label}{chip && <ReqChip kind={chip} />}
-      </span>
-      {note && <span style={{ fontSize: 10, color: "var(--muted)" }}>{note}</span>}
-    </span>
-  );
-
-  return (
-    <div className="card" style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-        <div>
-          <div style={{ fontWeight: 700 }}>How your account is organized</div>
-          <div className="mini-meta">Create flows down; you grant access at the end. A tenant is the unit that holds devices &amp; data — an org is an optional grouping.</div>
-        </div>
-      </div>
-
-      {/* Flow strip — the ordered create-then-assign path. */}
-      <div style={{ display: "flex", alignItems: "flex-start", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
-        {step("Provider", undefined, "you")}{arrow}
-        {step("Organization", "opt", "→ default Provider")}{arrow}
-        {step("Tenant", "req", "holds devices/data")}{arrow}
-        {step("User")}{arrow}
-        {step("Assign access", undefined, "user → role → scope")}
-      </div>
-
-      {/* Live tree — Provider → Orgs → Tenants. */}
-      <div style={{ borderTop: "1px solid var(--border, var(--panel-border))", paddingTop: 12, fontSize: 13 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-          <span>Provider</span>
-          <span className="mini-meta" style={{ fontWeight: 400 }}>the root · {regions.length || 5} regions · {users.length} users · {tenants.length} tenants</span>
-        </div>
-        <div style={{ marginLeft: 6, marginTop: 8, display: "grid", gap: 8 }}>
-          {orgList.map((o) => {
-            const ots = tByOrg[orgKey(o.id === "global" ? "" : o.id)] || tByOrg[o.id] || (o.id === "global" ? tByOrg["global"] : []) || [];
-            return (
-              <div key={o.id} style={{ borderLeft: "2px solid var(--border, var(--panel-border))", paddingLeft: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 600 }}>{o.name}</span>
-                  {o.id === "global" && <ReqChip kind="opt" />}
-                  <span className="mini-meta">{o.home_region || "us-east"} · {ots.length} tenant{ots.length === 1 ? "" : "s"}{o.sso_connection ? ` · SSO: ${o.sso_connection}` : ""}</span>
-                </div>
-                {ots.length > 0 && (
-                  <div style={{ marginLeft: 10, marginTop: 4, display: "grid", gap: 3 }}>
-                    {ots.slice(0, 6).map((t) => (
-                      <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--fg)" }}>
-                        <span style={{ color: "var(--muted)" }}>›</span>
-                        <span style={{ fontWeight: 500 }}>{t.name}</span>
-                        <span className="mini-meta">
-                          {t.region ? t.region : `${o.home_region || "us-east"} (inherited)`}
-                          {usersByTenant[t.id] ? ` · ${usersByTenant[t.id]} users` : ""}
-                          {t.status === "suspended" ? " · suspended" : ""}
-                        </span>
-                      </div>
-                    ))}
-                    {ots.length > 6 && <span className="mini-meta" style={{ marginLeft: 18 }}>+{ots.length - 6} more</span>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Legend. */}
-      <div style={{ display: "flex", gap: 14, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}><ReqChip kind="req" /><span className="mini-meta">the unit you must create (Tenant)</span></span>
-        <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}><ReqChip kind="opt" /><span className="mini-meta">grouping you can skip (Org → defaults to Provider)</span></span>
-        <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}><ReqChip kind="inh" /><span className="mini-meta">a tenant inherits its org's region</span></span>
-      </div>
-    </div>
-  );
-}
-
-// GuidedSetupWizard — the end-to-end "＋ Add" flow: walk from the start
-// (optionally an organization) → the tenant → a first user with a role, creating
-// the whole chain in order on Finish (nothing is created until then). Optional
-// steps (org, user) are skippable; a tenant is always created.
+// GuidedSetupWizard — THE single "＋ Add" path for Identity & Access. One guided
+// flow replaces every entry point that used to be a separate button or screen
+// (create organization / onboard customer / create tenant / create user / assign
+// access): the first step picks WHAT to set up, the remaining steps adapt.
+// Nothing is created until Finish.
+type AddMode = "org" | "tenant" | "user" | "access";
 function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
   const [regions, setRegions] = useState<Region[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [orgs, setOrgs] = useState<Org[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   useEffect(() => {
-    Promise.all([api.listRegions().catch(() => [] as Region[]), api.listRoles().catch(() => ({ modules: [], roles: [] as Role[] }))])
-      .then(([r, rl]) => { setRegions(r); setRoles(rl.roles || []); });
+    Promise.all([
+      api.listRegions().catch(() => [] as Region[]),
+      api.listRoles().catch(() => ({ modules: [], roles: [] as Role[] })),
+      api.listOrgs().catch(() => [] as Org[]),
+      api.listTenants().catch(() => [] as Tenant[]),
+      api.listUsers().catch(() => [] as AdminUser[]),
+    ]).then(([r, rl, o, t, u]) => { setRegions(r); setRoles(rl.roles || []); setOrgs(o); setTenants(t); setUsers(u); });
   }, []);
   const rlabel = (id?: string) => (id ? (regions.find((r) => r.id === id)?.label || id) : "");
+  const customerOrgs = orgs.filter((o) => o.id !== "global");
 
-  const [makeOrg, setMakeOrg] = useState(false);
+  const [mode, setMode] = useState<AddMode>("org");
+
+  // Organization (org mode).
   const [oName, setOName] = useState(""); const [oRegion, setORegion] = useState("us-east"); const [oSso, setOSso] = useState("");
+  // Tenant — optional first tenant in org mode; the subject in tenant mode.
+  const [makeTenant, setMakeTenant] = useState(true);
   const [tName, setTName] = useState(""); const [tRegion, setTRegion] = useState("");
+  const [tOrg, setTOrg] = useState("global"); // tenant mode: where the tenant lives
+  // User — optional in org/tenant modes; the subject in user mode.
   const [makeUser, setMakeUser] = useState(true);
   const [uName, setUName] = useState(""); const [uEmail, setUEmail] = useState(""); const [uPass, setUPass] = useState(""); const [uRole, setURole] = useState("operator");
+  const [uScope, setUScope] = useState(""); // user mode placement: "" = Provider, else org/tenant id
+  // Access grant (access mode).
+  const [aPrincipal, setAPrincipal] = useState(""); const [aRole, setARole] = useState("operator");
+  const [aScope, setAScope] = useState(""); const [aEffect, setAEffect] = useState<"allow" | "deny">("allow");
 
-  const orgLabel = makeOrg ? (oName.trim() || "new organization") : "Provider (default)";
   const opt = <span style={{ fontWeight: 400, color: "var(--muted)" }}>(optional)</span>;
+  const roleOptions = roles.length === 0
+    ? <option value="operator">operator</option>
+    : roles.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>);
+  const userList = users.slice().sort((a, b) => (a.display_name || a.username).localeCompare(b.display_name || b.username));
+  const scopeName = (id: string) =>
+    id === "" ? "Provider (platform)" :
+    orgs.find((o) => o.id === id)?.name || tenants.find((t) => t.id === id)?.name || id;
 
   const finish = async () => {
-    let orgId = "global";
-    if (makeOrg) { const o = await api.createOrg(oName.trim(), { homeRegion: oRegion, ssoConnection: oSso.trim() || undefined }); orgId = o.id; }
-    const t = await api.createTenant(tName.trim(), "", false, orgId, tRegion);
+    if (mode === "access") {
+      await api.grantBinding({ principal_id: aPrincipal, role_id: aRole, scope_id: aScope, effect: aEffect });
+      onDone(); return;
+    }
+    if (mode === "user") {
+      await api.createUser({ username: uName.trim(), email: uEmail.trim() || undefined, display_name: uName.trim(), password: uPass || undefined, role: uRole, tenant_id: uScope, status: "active" });
+      onDone(); return;
+    }
+    // org / tenant modes: create the chain in order.
+    let orgId = tOrg;
+    if (mode === "org") {
+      const o = await api.createOrg(oName.trim(), { homeRegion: oRegion, ssoConnection: oSso.trim() || undefined });
+      orgId = o.id;
+    }
+    let userHome = orgId; // no tenant → the user is an org (or Provider) member
+    if (mode === "tenant" || makeTenant) {
+      const t = await api.createTenant(tName.trim(), "", false, orgId, tRegion);
+      userHome = t.id;
+    }
     if (makeUser) {
-      await api.createUser({ username: uName.trim(), email: uEmail.trim() || undefined, display_name: uName.trim(), password: uPass || undefined, role: uRole, tenant_id: t.id, status: "active" });
+      await api.createUser({ username: uName.trim(), email: uEmail.trim() || undefined, display_name: uName.trim(), password: uPass || undefined, role: uRole, tenant_id: userHome === "global" ? "" : userHome, status: "active" });
     }
     onDone();
   };
@@ -1715,77 +1509,184 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
     </div>
   );
 
-  const steps: WizardStep[] = [
-    {
-      id: "org", title: "Organization", hint: "Optional — group tenants under a customer/BU. Skip to use the default Provider realm.",
-      isValid: () => !makeOrg || !!oName.trim(),
-      render: () => (
-        <div style={{ display: "grid", gap: 12 }}>
-          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={makeOrg} onChange={(e) => setMakeOrg(e.target.checked)} />
-            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>Create a new organization <ReqChip kind="opt" /></span>
-          </label>
-          {makeOrg ? (
-            <div className="admin-form">
-              <label className="req-field"><span>Organization name <Req /></span><input autoFocus placeholder="e.g. Acme Corp" value={oName} onChange={(e) => setOName(e.target.value)} /></label>
-              <label><span>Home region</span><select value={oRegion} onChange={(e) => setORegion(e.target.value)}>{regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
-              <label style={{ flex: 2 }}><span>SSO connection {opt}</span><input placeholder="e.g. okta (bind later in Authentication)" value={oSso} onChange={(e) => setOSso(e.target.value)} /></label>
-            </div>
-          ) : <div className="mini-meta">Your tenant will be created in the default <b>Provider</b> realm — you can add organizations later.</div>}
-        </div>
-      ),
-    },
-    {
-      id: "tenant", title: "Tenant", hint: "The workspace that holds devices & data — this is the required unit.",
-      isValid: () => !!tName.trim(),
-      render: () => (
-        <div className="admin-form">
-          <label className="req-field"><span>Tenant name <Req /></span><input autoFocus placeholder="e.g. acme-prod" value={tName} onChange={(e) => setTName(e.target.value)} /></label>
-          <label><span>Organization</span><div className="uf-fixed">{orgLabel}</div></label>
-          <label><span>Region <span style={{ fontWeight: 400, color: "var(--muted)" }}>(inherited)</span></span>
-            <select value={tRegion} onChange={(e) => setTRegion(e.target.value)}>
-              <option value="">{makeOrg ? `From ${oName.trim() || "organization"} (${rlabel(oRegion)})` : "From Provider"}</option>
-              {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select></label>
-        </div>
-      ),
-    },
-    {
-      id: "user", title: "First user", hint: "Create a user for this workspace (recommended).",
-      isValid: () => !makeUser || !!uName.trim(),
-      render: () => (
-        <div style={{ display: "grid", gap: 12 }}>
-          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={makeUser} onChange={(e) => setMakeUser(e.target.checked)} />
-            <span>Create a user for this tenant</span>
-          </label>
-          {makeUser && (
-            <div className="admin-form">
-              <label className="req-field"><span>Username <Req /></span><input autoFocus placeholder="e.g. jdoe" value={uName} onChange={(e) => setUName(e.target.value)} /></label>
-              <label><span>Email {opt}</span><input placeholder="jdoe@example.com" value={uEmail} onChange={(e) => setUEmail(e.target.value)} /></label>
-              <label><span>Password {opt}</span><input type="password" placeholder="blank = set later / via SSO" value={uPass} onChange={(e) => setUPass(e.target.value)} /></label>
-              <label><span>Role</span><select value={uRole} onChange={(e) => setURole(e.target.value)}>{roles.length === 0 ? <option value="operator">operator</option> : roles.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      id: "review", title: "Review & create", hint: "Here's what will be created, in order.",
-      isValid: () => !!tName.trim() && (!makeUser || !!uName.trim()),
-      render: () => (
-        <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
-          {sRow("1", "Organization", makeOrg ? `${oName.trim()} · ${rlabel(oRegion)}` : "Provider (default) — skipped", !makeOrg)}
-          {sRow("2", "Tenant", `${tName.trim() || "—"} · ${tRegion ? rlabel(tRegion) : `${orgLabel} region`}`)}
-          {makeUser ? sRow("3", "User", `${uName.trim() || "—"} · role ${uRole}`) : sRow("3", "User", "skipped", true)}
-          <div className="mini-meta" style={{ marginTop: 6 }}>Click Create to set these up in order. You can add more users under the tenant's Users tab.</div>
-        </div>
-      ),
-    },
+  // Step 1 — what to add. The four cards are the four things this wizard creates.
+  const MODES: { id: AddMode; name: string; desc: string }[] = [
+    { id: "org", name: "Customer organization", desc: "A customer or business-unit grouping — optionally with its first tenant and user." },
+    { id: "tenant", name: "Tenant", desc: "A workspace that holds devices & data — under the Provider or an organization." },
+    { id: "user", name: "User", desc: "A person — under the Provider, an organization or a tenant, with a role." },
+    { id: "access", name: "Access grant", desc: "Give an existing person a role on an organization." },
   ];
+  const modeStep: WizardStep = {
+    id: "what", title: "What to add", hint: "One guided path for everything — pick what you want to set up.",
+    isValid: () => true,
+    render: () => (
+      <div style={{ display: "grid", gap: 8 }}>
+        {MODES.map((m) => (
+          <label key={m.id} style={{
+            display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 8, cursor: "pointer",
+            border: `1px solid ${mode === m.id ? "var(--accent)" : "var(--border, var(--panel-border))"}`,
+            background: mode === m.id ? "var(--accent-soft)" : "var(--surface-2)",
+          }}>
+            <input type="radio" name="add-mode" checked={mode === m.id} onChange={() => setMode(m.id)} style={{ marginTop: 3 }} />
+            <span style={{ display: "grid", gap: 2 }}>
+              <span style={{ fontWeight: 650 }}>{m.name}</span>
+              <span className="mini-meta">{m.desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    ),
+  };
+
+  const orgStep: WizardStep = {
+    id: "org", title: "Organization", hint: "The customer/BU account. Its tenants inherit region and sign-in.",
+    isValid: () => !!oName.trim(),
+    render: () => (
+      <div className="admin-form">
+        <label className="req-field"><span>Organization name <Req /></span><input autoFocus placeholder="e.g. Acme Corp" value={oName} onChange={(e) => setOName(e.target.value)} /></label>
+        <label><span>Home region</span><select value={oRegion} onChange={(e) => setORegion(e.target.value)}>{regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
+        <label style={{ flex: 2 }}><span>SSO connection {opt}</span><input placeholder="e.g. okta (bind later in Authentication)" value={oSso} onChange={(e) => setOSso(e.target.value)} /></label>
+      </div>
+    ),
+  };
+
+  const tenantStep = (required: boolean): WizardStep => ({
+    id: "tenant",
+    title: required ? "Tenant" : "First tenant",
+    hint: required ? "The workspace that holds devices & data." : "Optional — add the organization's first tenant now.",
+    isValid: () => (required || makeTenant ? !!tName.trim() : true),
+    render: () => (
+      <div style={{ display: "grid", gap: 12 }}>
+        {!required && (
+          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={makeTenant} onChange={(e) => setMakeTenant(e.target.checked)} />
+            <span>Create a first tenant now</span>
+          </label>
+        )}
+        {(required || makeTenant) && (
+          <div className="admin-form">
+            <label className="req-field"><span>Tenant name <Req /></span><input autoFocus placeholder="e.g. acme-prod" value={tName} onChange={(e) => setTName(e.target.value)} /></label>
+            {required ? (
+              <label><span>Organization</span>
+                <select value={tOrg} onChange={(e) => setTOrg(e.target.value)}>
+                  <option value="global">Provider (platform)</option>
+                  {customerOrgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select></label>
+            ) : (
+              <label><span>Organization</span><div className="uf-fixed">{oName.trim() || "new organization"}</div></label>
+            )}
+            <label><span>Region <span style={{ fontWeight: 400, color: "var(--muted)" }}>(inherited)</span></span>
+              <select value={tRegion} onChange={(e) => setTRegion(e.target.value)}>
+                <option value="">{required ? "From the organization" : `From ${oName.trim() || "organization"} (${rlabel(oRegion)})`}</option>
+                {regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select></label>
+          </div>
+        )}
+      </div>
+    ),
+  });
+
+  // User fields — shared by every mode that can create a person. In user mode the
+  // person also picks WHERE they live (Provider / org / tenant); in org/tenant
+  // modes placement follows what the wizard just created.
+  const userFields = (withScope: boolean, autoFocus: boolean) => (
+    <div className="admin-form">
+      {withScope && (
+        <label><span>Belongs to</span>
+          <select value={uScope} onChange={(e) => setUScope(e.target.value)}>
+            <option value="">Provider (platform)</option>
+            {customerOrgs.length > 0 && (
+              <optgroup label="Organizations">
+                {customerOrgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </optgroup>
+            )}
+            {tenants.length > 0 && (
+              <optgroup label="Tenants">
+                {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </optgroup>
+            )}
+          </select></label>
+      )}
+      <label className="req-field"><span>Username <Req /></span><input autoFocus={autoFocus} placeholder="e.g. jdoe" value={uName} onChange={(e) => setUName(e.target.value)} /></label>
+      <label><span>Email {opt}</span><input placeholder="jdoe@example.com" value={uEmail} onChange={(e) => setUEmail(e.target.value)} /></label>
+      <label><span>Password {opt}</span><input type="password" placeholder="blank = set later / via SSO" value={uPass} onChange={(e) => setUPass(e.target.value)} /></label>
+      <label><span>Role</span><select value={uRole} onChange={(e) => setURole(e.target.value)}>{roleOptions}</select></label>
+    </div>
+  );
+
+  const userOptStep: WizardStep = {
+    id: "user", title: "First user", hint: "Optional — create a person here, with their role (access included).",
+    isValid: () => !makeUser || !!uName.trim(),
+    render: () => (
+      <div style={{ display: "grid", gap: 12 }}>
+        <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input type="checkbox" checked={makeUser} onChange={(e) => setMakeUser(e.target.checked)} />
+          <span>Create a first user</span>
+        </label>
+        {makeUser && userFields(false, false)}
+      </div>
+    ),
+  };
+
+  const userStep: WizardStep = {
+    id: "user", title: "User & access", hint: "Create the person and their role in one step — where they belong decides what they see.",
+    isValid: () => !!uName.trim(),
+    render: () => userFields(true, true),
+  };
+
+  const accessStep: WizardStep = {
+    id: "access", title: "Access grant", hint: "Give an existing person a role on an organization. Revocable any time.",
+    isValid: () => !!aPrincipal && !!aScope,
+    render: () => (
+      <div className="admin-form">
+        <label className="req-field"><span>Person <Req /></span>
+          <select autoFocus value={aPrincipal} onChange={(e) => setAPrincipal(e.target.value)}>
+            <option value="">Select a person…</option>
+            {userList.map((u) => <option key={u.username} value={u.username}>{u.display_name ? `${u.display_name} (${u.username})` : u.username}</option>)}
+          </select></label>
+        <label className="req-field"><span>Organization <Req /></span>
+          <select value={aScope} onChange={(e) => setAScope(e.target.value)}>
+            <option value="">Select an organization…</option>
+            {customerOrgs.map((o) => <option key={o.id} value={`org:${o.id}`}>{o.name}</option>)}
+          </select></label>
+        <label><span>Role</span><select value={aRole} onChange={(e) => setARole(e.target.value)}>{roleOptions}</select></label>
+        <label><span>Effect</span>
+          <select value={aEffect} onChange={(e) => setAEffect(e.target.value as "allow" | "deny")}>
+            <option value="allow">Allow</option><option value="deny">Deny</option>
+          </select></label>
+      </div>
+    ),
+  };
+
+  const reviewStep: WizardStep = {
+    id: "review", title: "Review & create", hint: "Here's what will be set up, in order.",
+    isValid: () => true,
+    render: () => (
+      <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+        {mode === "org" && (<>
+          {sRow("1", "Organization", `${oName.trim() || "—"} · ${rlabel(oRegion)}`)}
+          {makeTenant ? sRow("2", "Tenant", `${tName.trim() || "—"} · ${tRegion ? rlabel(tRegion) : "inherited region"}`) : sRow("2", "Tenant", "skipped — add one later", true)}
+          {makeUser ? sRow("3", "User", `${uName.trim() || "—"} · role ${uRole}`) : sRow("3", "User", "skipped", true)}
+        </>)}
+        {mode === "tenant" && (<>
+          {sRow("1", "Tenant", `${tName.trim() || "—"} · under ${scopeName(tOrg === "global" ? "" : tOrg)} · ${tRegion ? rlabel(tRegion) : "inherited region"}`)}
+          {makeUser ? sRow("2", "User", `${uName.trim() || "—"} · role ${uRole}`) : sRow("2", "User", "skipped", true)}
+        </>)}
+        {mode === "user" && sRow("1", "User", `${uName.trim() || "—"} · role ${uRole} · under ${scopeName(uScope)}`)}
+        {mode === "access" && sRow("1", "Access", `${aPrincipal || "—"} → ${aRole} (${aEffect}) on ${aScope ? scopeName(aScope.replace(/^org:/, "")) : "—"}`)}
+        <div className="mini-meta" style={{ marginTop: 6 }}>Click Create to set this up. Everything here can be managed later from the Organizations tree.</div>
+      </div>
+    ),
+  };
+
+  const steps: WizardStep[] =
+    mode === "org" ? [modeStep, orgStep, tenantStep(false), userOptStep, reviewStep] :
+    mode === "tenant" ? [modeStep, tenantStep(true), userOptStep, reviewStep] :
+    mode === "user" ? [modeStep, userStep, reviewStep] :
+    [modeStep, accessStep, reviewStep];
 
   return (
-    <Modal title="Guided setup" subtitle="Set up a workspace end to end — organization (optional), tenant, and a first user." onClose={onClose}>
+    <Modal title="Add" subtitle="One guided path — organization, tenant, user or access grant." onClose={onClose}>
       <Wizard steps={steps} onFinish={finish} onCancel={onClose} finishLabel="Create" />
     </Modal>
   );
@@ -1793,7 +1694,6 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
-  const [section, setSection] = useState<"provider" | "orgs">("provider");
   const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -1808,38 +1708,31 @@ export function IdentityAccess() {
     );
   }
 
+  // One tree: Organizations, with the Provider (the platform's own realm) as a
+  // clickable root-level row. Users live under whichever org/tenant they belong
+  // to; ＋ Add is the single guided way to create anything here.
+  const isProvider = sel?.id === "global";
   return (
     <>
       <div className="admin-head-row">
-        <AdminHead title="Identity & Access" sub="People, roles and security — for the Provider (platform) or per organization. A tenant is the required unit that holds data; an organization is an optional grouping." />
+        <AdminHead title="Identity & Access" sub="Organizations, their tenants, and the people inside them — one tree. Open the Provider row to manage the platform's own users." />
         <button className="dash-btn accent" onClick={() => setShowAdd(true)}>＋ Add</button>
       </div>
-      <IAMHierarchyMap key={refresh} />
-      {showAdd && <GuidedSetupWizard onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); setRefresh((r) => r + 1); }} />}
-      <div style={{ marginBottom: 12 }}>
-        <Segmented
-          ariaLabel="Identity scope"
-          value={section}
-          onChange={(v) => { setSection(v); setSel(null); }}
-          options={[{ value: "provider", label: "Provider" }, { value: "orgs", label: "Organizations" }]}
-        />
-      </div>
+      {showAdd && <GuidedSetupWizard onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); setSel(null); setRefresh((r) => r + 1); }} />}
 
-      {section === "provider" && <IAItems kind="provider" tabs={IA_TABS_PROVIDER} />}
-
-      {section === "orgs" && (
-        sel ? (
-          <>
-            <div className="ia-crumb">
-              <button className="dash-btn" onClick={() => setSel(null)}>← Organizations</button>
-              <span className="ia-crumb-name">{sel.name}</span>
-              <span className="mini-meta">users · roles · security · tenants</span>
-            </div>
-            <IAItems kind="org" id={sel.id} name={sel.name} tabs={IA_TABS_ORG} />
-          </>
-        ) : (
-          <OrgsAdmin onManageOrg={(id, name) => setSel({ id, name })} />
-        )
+      {sel ? (
+        <>
+          <div className="ia-crumb">
+            <button className="dash-btn" onClick={() => setSel(null)}>← Organizations</button>
+            <span className="ia-crumb-name">{sel.name}</span>
+            <span className="mini-meta">{isProvider ? "the platform's own realm — users · security" : "users · access · roles · security · tenants"}</span>
+          </div>
+          {isProvider
+            ? <IAItems kind="provider" tabs={IA_TABS_PROVIDER} />
+            : <IAItems kind="org" id={sel.id} name={sel.name} tabs={IA_TABS_ORG} />}
+        </>
+      ) : (
+        <OrgsAdmin key={refresh} onManageOrg={(id, name) => setSel({ id, name })} />
       )}
     </>
   );
@@ -1999,14 +1892,18 @@ export function ApiAccessAdmin() {
   ];
 
   return (
-    <>
-      <AdminHead title="API Access" sub={`${BRAND} is API-first — mint scoped credentials for machine clients and tune session tokens.`} />
+    <div className="dm-board">
+      <Group title="API access" hue="#3B82F6">
       <StatStrip>
         <Stat label="Keys" value={keys ? list.length : <Skeleton w={26} h={22} />} />
         <Stat label="Active" value={keys ? active : "—"} tone="good" />
         <Stat label="Revoked" value={keys ? list.length - active : "—"} tone={list.some((k) => k.revoked_at) ? "warn" : ""} />
         <Stat label="Rate-limited" value={keys ? list.filter((k) => (k.rate_limit_per_min || 0) > 0).length : "—"} />
       </StatStrip>
+      <p className="mini-meta" style={{ margin: 0 }}>
+        {BRAND} is API-first — mint <strong>scoped credentials</strong> for machine clients, tune <strong>session-token</strong> lifetimes,
+        and browse the live <strong>REST reference</strong>. A key never exceeds its scopes.
+      </p>
 
       <div className="conn-grid">
         {TILES.map((t) => (
@@ -2156,7 +2053,8 @@ export function ApiAccessAdmin() {
           <OpenAPIReference embedded />
         </Modal>
       )}
-    </>
+      </Group>
+    </div>
   );
 }
 

@@ -1195,13 +1195,29 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .ia-linkname:hover { text-decoration: underline; }
 .ia-linkname:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); border-radius: 3px; }
 
-/* Security Settings — flat scope-wide form. */
-.ss-grid { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-end; }
-.ss-grid > label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
-.ss-grid > label > span { color: var(--muted); font-size: 11.5px; }
-.ss-checks { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
-.ss-tog, .ss-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
-.ss-inline { gap: 10px; }
+/* Security Settings — scope-wide policy form, in the admin design language:
+   micro-labels, themed inputs with tabular numerals, and checkbox chips that
+   read as toggles (accent-tinted when on). */
+.ss-grid { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-end; }
+.ss-grid > label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.ss-grid > label > span { color: var(--muted); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.ss-grid input, .ss-grid select {
+  background: var(--surface-2); color: var(--fg);
+  border: 1px solid var(--border, var(--panel-border)); border-radius: 7px;
+  padding: 7px 10px; font: inherit; font-variant-numeric: tabular-nums;
+}
+.ss-grid input:focus, .ss-grid select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ss-checks { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+.ss-tog {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+  padding: 6px 11px; border: 1px solid var(--border, var(--panel-border));
+  border-radius: 8px; background: var(--surface-2); cursor: pointer; user-select: none;
+  transition: border-color .15s ease, background .15s ease;
+}
+.ss-tog:hover { border-color: var(--accent); }
+.ss-tog:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.ss-tog input { accent-color: var(--accent); margin: 0; }
+.ss-inline { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; flex-wrap: wrap; }
 
 /* Admin header row — title on the left, a primary action (e.g. Create) on the right. */
 .admin-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
