@@ -386,6 +386,8 @@ pending · ✅ shipped+deployed.
 5. **#17 swtpm** + **#18 TLS** + **#30 cert auto-rotation** as a paired crypto-infra effort.
 6. Lab tier (#4/#5/#9) when device config can be coordinated; polish (#28/#29) standalone.
 
+| 94 | **Interfaces table + Fiber/DOM module (owner spec 2026-07-02)** — Infrastructure→Devices device drill gains an **Interfaces section**: table of ALL interfaces w/ port characteristics — name, description (ifAlias), admin/oper status, speed (ifHighSpeed), duplex (dot3StatsDuplexStatus), MTU (ifMtu), in/out bytes (ifHC octets — already collected), and **media type ethernet vs fiber + transceiver identify (SFP/SFP+/QSFP/none via ENTITY-MIB/vendor transceiver MIBs)**. Phase 2 = **Fiber module: DOM (Digital Optical Monitoring) OIDs** — optical transceiver diagnostics (tx/rx power, temp, bias) — **owner will supply the design doc** before build. Today's collector has oper status+octets per ifName; speed/duplex/MTU/alias/ENTITY need new OIDs in profiles.go (baseline-audit gap list). NOTE: dmz-fw shows no interfaces because its SNMP agent is DISABLED device-side (#93 pending owner action, commands in that row) — platform polls correctly. | **High** | 🔴 queued — awaiting owner Fiber/DOM design for phase 2; phase 1 (table + OIDs) ready to build |
+
 ## Subagent usage
 - **#17** design doc draft, **#15** RLS test authoring → spin up on demand when that lane starts.
 - Lab tasks (#4/#5/#9) are **not** good autonomous-agent targets (need live device config / user scripts).
