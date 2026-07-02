@@ -59,6 +59,13 @@ KNOWN_PENDING: frozenset[str] = frozenset({
     "route_prefix_missing", "route_table_blackhole", "tls_handshake_fail",
     "vlan_reachability_fail", "vni_reachability_fail",
     "waf_block_spike", "waf_rule_match",
+    # Wave 2 v0 (failure-signature-catalog-wave2.md) — same catalog-leads-
+    # ingestion contract.
+    "arp_ownership_flip", "duplicate_ip_detected", "errdisable_event",
+    "fhrp_dual_active", "fw_probe_denied", "interconnect_peer_unreachable",
+    "ipsec_negotiation_fail", "ipsec_sa_rekey_fail", "k8s_ip_alloc_fail",
+    "k8s_pod_pending", "mesh_cert_rotation_fail", "mtls_handshake_fail",
+    "private_dns_missing", "sdwan_control_down", "subnet_capacity_exhausted",
 })
 
 

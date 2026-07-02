@@ -1,0 +1,30 @@
+{
+  "name": "Same IP alternates between MACs, links clean: suspected duplicate IP",
+  "signals": [
+    {
+      "kind": "arp_ownership_flip",
+      "entity_type": "device",
+      "entity_id": "sw-acc1:10.10.20.5",
+      "observer_id": "syslog-sw-acc1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "mac_flap",
+      "entity_type": "device",
+      "entity_id": "sw-acc1",
+      "observer_id": "syslog-sw-acc1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.access.dupip-arp-flux",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

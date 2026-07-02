@@ -1,0 +1,30 @@
+{
+  "name": "IKE negotiation failures aligned with rekey timer drops: suspected crypto mismatch",
+  "signals": [
+    {
+      "kind": "ipsec_negotiation_fail",
+      "entity_type": "device",
+      "entity_id": "vpn-gw1",
+      "observer_id": "syslog-vpn-gw1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "tunnel_flap",
+      "entity_type": "path",
+      "entity_id": "vpn-gw1:tun5",
+      "observer_id": "syslog-vpn-gw1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wan-edge.ipsec-rekey-mismatch",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

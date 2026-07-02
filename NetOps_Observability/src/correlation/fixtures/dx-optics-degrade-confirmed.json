@@ -1,0 +1,30 @@
+{
+  "name": "Low light + CRC on the cross-connect, loss precedes routing: confirmed optics degradation",
+  "signals": [
+    {
+      "kind": "optical_power_low",
+      "entity_type": "interface",
+      "entity_id": "wan-dx1:HundredGigE0/0/1",
+      "observer_id": "snmp-wan-dx1",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "probe_rtt_anomaly",
+      "entity_type": "path",
+      "entity_id": "dc->vpc-a",
+      "observer_id": "probe-agent-dc",
+      "observer_type": "vantage_agent",
+      "modality": "active_probe",
+      "collection_path": "direct",
+      "deviation": 3.5
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.dx-optics-degrade",
+    "tier": "confirmed",
+    "owner": "colo_provider"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "Peer unreachable on the VIF right after a config change: suspected tag mismatch",
+  "signals": [
+    {
+      "kind": "interconnect_peer_unreachable",
+      "entity_type": "device",
+      "entity_id": "wan-dx1:vif-102",
+      "observer_id": "syslog-wan-dx1",
+      "observer_type": "device",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 2.0
+    },
+    {
+      "kind": "config_change",
+      "entity_type": "device",
+      "entity_id": "wan-dx1",
+      "observer_id": "change-tracker",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 0.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.middle-mile.interconnect-vlan-tag-mismatch",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

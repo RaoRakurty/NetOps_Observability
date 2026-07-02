@@ -1,0 +1,30 @@
+{
+  "name": "Sidecar cert rotation failures, east-west only: suspected mesh identity failure",
+  "signals": [
+    {
+      "kind": "mesh_cert_rotation_fail",
+      "entity_type": "service",
+      "entity_id": "mesh/payments",
+      "observer_id": "k8s-api",
+      "observer_type": "cloud_api",
+      "modality": "control_plane",
+      "collection_path": "via_cloud_api",
+      "deviation": 3.0
+    },
+    {
+      "kind": "app_error_rate_high",
+      "entity_type": "service",
+      "entity_id": "mesh/payments",
+      "observer_id": "apm-platform",
+      "observer_type": "platform",
+      "modality": "control_plane",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.cloud.mesh-mtls-cert-rotation-failure",
+    "tier": "suspected",
+    "owner": "app_team"
+  }
+}
