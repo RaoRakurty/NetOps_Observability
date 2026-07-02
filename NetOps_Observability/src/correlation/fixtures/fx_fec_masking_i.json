@@ -1,0 +1,39 @@
+{
+  "name": "fx_fec_masking_i \u2014 fec-masking-highspeed",
+  "signals": [
+    {
+      "kind": "fec_corrected_rate_high",
+      "entity_type": "interface",
+      "entity_id": "leaf8:Et1",
+      "observer_id": "snmp-leaf8",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "prefec_ber_rising",
+      "entity_type": "interface",
+      "entity_id": "leaf8:Et1",
+      "observer_id": "snmp-leaf8",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "rx_margin_low",
+      "entity_type": "interface",
+      "entity_id": "leaf8:Et1",
+      "observer_id": "snmp-leaf8",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.fec-masking-highspeed",
+    "tier": "suspected"
+  }
+}

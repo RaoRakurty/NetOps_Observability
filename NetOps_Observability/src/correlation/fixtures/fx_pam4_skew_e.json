@@ -1,0 +1,39 @@
+{
+  "name": "fx_pam4_skew_e \u2014 pam4-lane-skew-excessive",
+  "signals": [
+    {
+      "kind": "pam4_lane_skew_high",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et12",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "pcs_deskew_fault",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et12",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "lane_divergence_high",
+      "entity_type": "interface",
+      "entity_id": "spine2:Et12",
+      "observer_id": "snmp-spine2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.pam4-lane-skew-excessive",
+    "tier": "suspected"
+  }
+}

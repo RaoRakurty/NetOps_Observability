@@ -1,0 +1,39 @@
+{
+  "name": "fx_remote_degrade_s \u2014 coherent-osnr-degradation",
+  "signals": [
+    {
+      "kind": "coherent_osnr_low",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et8",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "prefec_ber_rising",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et8",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "coherent_input_power_low",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et8",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.coherent-osnr-degradation",
+    "tier": "suspected"
+  }
+}

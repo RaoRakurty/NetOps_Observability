@@ -1,0 +1,39 @@
+{
+  "name": "fx_roadm_filter_l \u2014 roadm-filter-edge-impairment",
+  "signals": [
+    {
+      "kind": "roadm_filter_edge_penalty",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et4",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "coherent_osnr_low",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et4",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "carrier_freq_offset_high",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et4",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.roadm-filter-edge-impairment",
+    "tier": "suspected"
+  }
+}

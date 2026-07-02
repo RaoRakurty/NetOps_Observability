@@ -1,0 +1,39 @@
+{
+  "name": "fx_mpo_gender_b \u2014 mpo-pinout-gender-mismatch",
+  "signals": [
+    {
+      "kind": "mpo_gender_mismatch",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et50",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "link_down_no_light",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et50",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "connector_pinout_conflict",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et50",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-pinout-gender-mismatch",
+    "tier": "suspected"
+  }
+}

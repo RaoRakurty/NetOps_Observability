@@ -74,6 +74,25 @@ KNOWN_PENDING: frozenset[str] = frozenset({
     "proxy_fail", "size_dependent_loss", "snat_member_hotspot",
     "swg_health_degraded", "tcp_retransmit_high", "waf_body_limit_hit",
     "waf_oversize_block", "wpad_lookup_fail",
+    # Port Intelligence / physical-layer catalog (#94, port-intelligence.md) —
+    # optics/DOM/lane/coherent/fiber-path kinds; Layer-2 producers land in the
+    # module's P3 (SNMP ENTITY-SENSOR + gNMI/OpenConfig + vendor DOM adapters).
+    "carrier_freq_offset_high", "cassette_type_mismatch", "coherent_input_power_low",
+    "coherent_osnr_low", "connector_pinout_conflict", "crossconnect_endpoint_mismatch",
+    "dom_lane_bias_anomaly", "dom_rx_power_abnormal", "dom_rx_power_low",
+    "dom_temperature_high", "edfa_gain_tilt", "edfa_saturation",
+    "fec_corrected_rate_high", "fiber_path_budget_exceeded", "fiber_path_polarity_conflict",
+    "interop_mode_mismatch", "label_record_conflict", "lane_divergence_high",
+    "lane_group_dark", "lane_group_others_normal", "lane_map_swapped",
+    "lane_rx_absent_subset", "link_down_no_light", "link_flap", "link_flap_on_insert",
+    "lldp_neighbor_mismatch", "mode_descriptor_mismatch", "mpo_gender_mismatch",
+    "mpo_missing_fibers", "mpo_polarity_mismatch", "mpo_row_flip",
+    "multi_channel_power_skew", "mux_demux_insertion_loss_high", "neighbor_unexpected",
+    "optical_frequency_mismatch", "pam4_lane_ber_divergence", "pam4_lane_skew_high",
+    "parallel_lane_map_anomaly", "part_number_not_qualified", "pcs_deskew_fault",
+    "pcs_local_fault", "pcs_remote_fault", "prefec_ber_rising",
+    "roadm_filter_edge_penalty", "rx_margin_low", "single_lane_rx_absent",
+    "single_lane_tx_fail", "thermal_margin_low", "transceiver_unsupported",
 })
 
 

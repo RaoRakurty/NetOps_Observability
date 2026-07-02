@@ -1,0 +1,39 @@
+{
+  "name": "fx_cassette_mismatch_u \u2014 mpo-cassette-type-mismatch",
+  "signals": [
+    {
+      "kind": "cassette_type_mismatch",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et51",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 4.0
+    },
+    {
+      "kind": "link_down_no_light",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et51",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "fiber_path_polarity_conflict",
+      "entity_type": "interface",
+      "entity_id": "leaf5:Et51",
+      "observer_id": "snmp-leaf5",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-cassette-type-mismatch",
+    "tier": "suspected"
+  }
+}

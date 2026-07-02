@@ -12,7 +12,7 @@ from verdicts import VerdictTier
 
 def test_builtin_catalog_validates():
     cat = builtin_catalog()
-    assert len(cat.enabled_templates()) == 57  # + wave-3: 7 new + 3 promotions (46 backlog disabled)
+    assert len(cat.enabled_templates()) == 80  # + port-intelligence: 23 sig.spdc physical-layer families
     assert all(t.id.startswith("sig.ent.") for t in cat.templates)
 
 

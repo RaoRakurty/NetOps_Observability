@@ -1,0 +1,39 @@
+{
+  "name": "fx_congestion_t \u2014 cfp-osfp-vendor-interoperability-risk",
+  "signals": [
+    {
+      "kind": "interop_mode_mismatch",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et9",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "link_flap",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et9",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "mode_descriptor_mismatch",
+      "entity_type": "interface",
+      "entity_id": "wan-r2:Et9",
+      "observer_id": "snmp-wanr2",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.cfp-osfp-vendor-interoperability-risk",
+    "tier": "suspected"
+  }
+}

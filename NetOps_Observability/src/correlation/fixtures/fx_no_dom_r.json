@@ -1,0 +1,39 @@
+{
+  "name": "fx_no_dom_r \u2014 mpo-broken-strand",
+  "signals": [
+    {
+      "kind": "single_lane_rx_absent",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et12",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "lane_divergence_high",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et12",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    },
+    {
+      "kind": "fiber_path_strand_fault",
+      "entity_type": "interface",
+      "entity_id": "leaf6:Et12",
+      "observer_id": "snmp-leaf6",
+      "observer_type": "device",
+      "modality": "device_telemetry",
+      "collection_path": "direct",
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.spdc.mpo-broken-strand",
+    "tier": "suspected"
+  }
+}

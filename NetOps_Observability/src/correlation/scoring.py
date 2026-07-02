@@ -182,6 +182,17 @@ def score_template(
         matched_signals,
         required_modalities=frozenset(template.required_modalities) or None,
     )
+    # Port-Intelligence cap (#94): physical-layer families with
+    # allow_root_cause_confirmed=False never emit CONFIRMED from telemetry
+    # alone — the tier is capped at SUSPECTED with the reason on the record
+    # (fiber-path validation / human corroboration lifts it later).
+    if gate.tier is VerdictTier.CONFIRMED and not template.allow_root_cause_confirmed:
+        gate = GateVerdict(
+            tier=VerdictTier.SUSPECTED,
+            coverage=gate.coverage,
+            reasons=gate.reasons + (
+                "confirmed capped to suspected: physical-layer family requires fiber-path validation or human corroboration (allow_root_cause_confirmed=false)",),
+        )
 
     return HypothesisScore(
         template_id=template.id,
