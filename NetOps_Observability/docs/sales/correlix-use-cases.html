@@ -1,1240 +1,288 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Correlix — Two Use Cases: Evidence-Backed Root Cause</title>
-<meta name="description" content="Correlix product briefing — RCA-first network observability, shown through two use cases: the provider seam and the alert-storm cascade.">
+<title>Correlix — Prospect Briefing: Evidence-Backed Root Cause</title>
+<meta name="description" content="Correlix prospect briefing — RCA-first network observability: the gap, the trust model, two use cases, technical fit, and a scoped 30-day pilot.">
 <style>
-/* ============================================================
-   Correlix sales briefing — self-contained, offline, print-ready.
-   Palette derived from the product's dark "trading-floor NOC"
-   tokens; chart hues validated (dataviz six-checks) on #10151f:
-   series #5c7cf2 / #14a38f / #d97706 · status #f0526e #d97706
-   #16a34a #3b82f6.
-   ============================================================ */
-:root {
-  --canvas:   #0a0e17;
-  --surface:  #10151f;
-  --surface2: #161c28;
-  --well:     #0d1220;
-  --border:   rgba(148, 163, 184, 0.14);
-  --border-strong: rgba(148, 163, 184, 0.26);
-  --ink:      #eef2f9;
-  --body:     #b9c4d8;
-  --dim:      #8494ab;
-  --accent:   #5c7cf2;
-  --accent-2: #2f7df6;
-  --accent-deep: #4f46e5;
-  --teal:     #14a38f;
-  --amber:    #d97706;
-  --crit:     #f0526e;
-  --ok:       #16a34a;
-  --ok-bright:#2fbf71;
-  --info:     #3b82f6;
-  --grad: linear-gradient(92deg, #6d8bf5 0%, #4f9cf6 100%);
-  --grad-deep: linear-gradient(135deg, #4f46e5 0%, #2f7df6 100%);
-  --sans: "Inter", -apple-system, "SF Pro Text", "Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
-body {
-  background: var(--canvas);
-  color: var(--body);
-  font-family: var(--sans);
-  font-size: 16.5px;
-  line-height: 1.7;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-::selection { background: rgba(92, 124, 242, 0.35); color: #fff; }
+  /* ============================================================
+     Correlix prospect briefing — self-contained, offline.
+     Print-first business document: dense word-processor layout,
+     A4 flow, light paper palette so it converts cleanly to PDF.
+     ============================================================ */
+  :root {
+    --ink: #171923; --muted: #565d6d; --hair: #d8dbe2; --soft: #f4f5f8;
+    --accent: #4338ca; --accent-soft: #eceafb;
+    --good: #0f7b4d; --good-soft: #eef7f2;
+    --bad: #b42318; --bad-soft: #fdf1ef;
+    --warn: #b54708; --warn-soft: #fdf6ec;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+    --disp: "Space Grotesk", "Inter", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "Consolas", "Menlo", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: var(--sans); color: var(--ink); font-size: 10.5pt; line-height: 1.5; }
+  .page { max-width: 186mm; margin: 0 auto; padding: 10mm 6mm; }
+  @page { size: A4; margin: 14mm 13mm; }
+  @media print {
+    .page { max-width: none; padding: 0; }
+    a { color: inherit; text-decoration: none; }
+  }
 
-.wrap { max-width: 1060px; margin: 0 auto; padding: 0 34px; }
-section.page { padding: 96px 0 72px; border-top: 1px solid var(--border); }
+  /* Masthead */
+  .mast { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    border-bottom: 2.5px solid var(--ink); padding-bottom: 6px; }
+  .mast .brand { font-family: var(--disp); font-weight: 700; font-size: 13pt; letter-spacing: .02em; }
+  .mast .brand span { color: var(--accent); }
+  .mast .kind { font-family: var(--mono); font-size: 7.5pt; color: var(--muted); text-transform: uppercase; letter-spacing: .12em; }
 
-/* ---------- type roles ---------- */
-.eyebrow {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.eyebrow .glyph { flex: none; }
-h1, h2, h3 { color: var(--ink); font-weight: 750; letter-spacing: -0.022em; }
-h2 { font-size: clamp(28px, 3.6vw, 38px); line-height: 1.12; margin: 18px 0 14px; }
-h3 { font-size: 19px; letter-spacing: -0.012em; margin-bottom: 8px; }
-p  { max-width: 72ch; }
-p + p { margin-top: 14px; }
-.lead { font-size: 19px; line-height: 1.65; color: #cdd7e8; }
-.num { font-variant-numeric: tabular-nums; font-family: var(--mono); }
-strong { color: var(--ink); font-weight: 650; }
-em { color: #d6deed; }
+  h1 { font-family: var(--disp); font-size: 23pt; line-height: 1.12; letter-spacing: -.01em; margin: 14px 0 4px; }
+  .icp { font-size: 10.5pt; margin: 2px 0 0; }
+  .icp b { font-weight: 650; }
+  .define { color: var(--muted); margin: 6px 0 0; }
 
-/* ---------- cover ---------- */
-.cover {
-  position: relative;
-  min-height: min(94vh, 980px);
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  padding: 80px 0 64px;
-}
-.cover::before {
-  content: "";
-  position: absolute; inset: 0;
-  background:
-    radial-gradient(52rem 30rem at 18% 8%, rgba(79, 70, 229, 0.26), transparent 60%),
-    radial-gradient(46rem 28rem at 85% 90%, rgba(47, 125, 246, 0.16), transparent 60%);
-  pointer-events: none;
-}
-.cover .wrap { position: relative; width: 100%; }
-.wordmark {
-  font-size: clamp(58px, 9vw, 92px);
-  font-weight: 800;
-  letter-spacing: -0.045em;
-  line-height: 1;
-  margin: 26px 0 8px;
-  background: var(--grad);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.tagline {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-.thesis {
-  margin: 44px 0 18px;
-  font-size: clamp(30px, 4.8vw, 46px);
-  font-weight: 760;
-  letter-spacing: -0.028em;
-  line-height: 1.14;
-  color: var(--ink);
-  max-width: 21ch;
-}
-.thesis .hl {
-  background: var(--grad);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.position {
-  font-size: 19px;
-  color: #cdd7e8;
-  max-width: 62ch;
-}
-.cover-field { margin-top: 52px; }
-.cover-field svg { width: 100%; height: auto; display: block; }
-.cover-meta {
-  margin-top: 34px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 28px;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-.cover-meta b { color: #aebde0; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; font-size: 8pt; color: var(--muted);
+    border: 1px solid var(--hair); border-radius: 4px; padding: 5px 9px; margin-top: 10px; background: var(--soft); }
+  .legend b { font-family: var(--mono); font-size: 7.5pt; text-transform: uppercase; letter-spacing: .08em; color: var(--ink); }
+  .tag { font-family: var(--mono); font-size: 7pt; text-transform: uppercase; letter-spacing: .08em;
+    padding: 1px 5px; border-radius: 3px; border: 1px solid var(--hair); white-space: nowrap; }
+  .tag.demo { color: var(--good); border-color: #b9dcc9; background: var(--good-soft); }
+  .tag.illu { color: var(--warn); border-color: #ecd3b3; background: var(--warn-soft); }
 
-/* ---------- section header ---------- */
-.sec-kicker { display: flex; align-items: baseline; gap: 16px; }
-.sec-num {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 0.08em;
-}
+  /* Sections */
+  h2 { font-family: var(--disp); font-size: 13pt; margin: 20px 0 6px; padding-top: 10px; border-top: 1px solid var(--hair);
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  h2 .no { font-family: var(--mono); font-size: 8.5pt; color: var(--accent); font-weight: 600; }
+  p { margin: 6px 0; }
+  .lede { color: var(--muted); margin-top: 0; }
 
-/* ---------- cards & grids ---------- */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 26px 28px;
-}
-.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 34px; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-.pillar .pict { margin: 4px 0 16px; }
-.pillar .pict svg { width: 100%; height: auto; display: block; }
-.pillar h3 { font-size: 17px; }
-.pillar p { font-size: 14.5px; line-height: 1.65; color: #a7b3c9; }
-.pillar .tag {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--dim);
-  margin-bottom: 10px;
-}
+  /* Proof box (the trust discipline, elevated) */
+  .proof { border-left: 3.5px solid var(--accent); background: var(--accent-soft); padding: 8px 12px; margin: 10px 0;
+    break-inside: avoid; }
+  .proof b { font-family: var(--disp); }
 
-/* ---------- figures ---------- */
-figure.viz {
-  margin: 34px 0 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 24px 24px 18px;
-}
-figure.viz svg { width: 100%; height: auto; display: block; }
-figure.viz figcaption {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--dim);
-  max-width: none;
-}
-figure.viz figcaption b { color: #aebde0; font-weight: 600; }
+  /* Dense tables */
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 8px 0; break-inside: avoid; }
+  th { font-family: var(--mono); font-size: 7.5pt; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+    text-align: left; padding: 4px 8px 4px 0; border-bottom: 1.5px solid var(--ink); }
+  td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  td.t { font-family: var(--mono); font-size: 8.5pt; white-space: nowrap; color: var(--accent); font-weight: 600; }
+  td.k { font-weight: 650; }
+  .mono { font-family: var(--mono); font-size: 9pt; }
 
-/* ---------- callout ---------- */
-.callout {
-  margin-top: 30px;
-  border: 1px solid rgba(92, 124, 242, 0.35);
-  background: linear-gradient(180deg, rgba(79, 70, 229, 0.10), rgba(47, 125, 246, 0.05));
-  border-radius: 14px;
-  padding: 24px 28px;
-}
-.callout .rule-label {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 10px;
-}
-.callout p { font-size: 17px; color: #d6deed; max-width: none; }
-.chip {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 2px 9px;
-  border-radius: 999px;
-  vertical-align: 1px;
-}
-.chip.confirmed { color: #4ade80; background: rgba(22, 163, 74, 0.16); border: 1px solid rgba(22, 163, 74, 0.45); }
-.chip.suspected { color: #fbbf24; background: rgba(217, 119, 6, 0.14); border: 1px solid rgba(217, 119, 6, 0.45); }
-.chip.crit { color: #fda4af; background: rgba(240, 82, 110, 0.13); border: 1px solid rgba(240, 82, 110, 0.4); }
+  /* Before / after */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; break-inside: avoid; }
+  .duo .cell { border: 1px solid var(--hair); border-radius: 5px; padding: 8px 11px; }
+  .duo .cell h4 { margin: 0 0 4px; font-family: var(--mono); font-size: 7.5pt; text-transform: uppercase; letter-spacing: .1em; }
+  .duo .before h4 { color: var(--bad); } .duo .after h4 { color: var(--good); }
+  .duo p { margin: 2px 0; font-size: 9.5pt; }
 
-/* ---------- use-case scaffolding ---------- */
-.uc-title-sub {
-  font-size: 18px;
-  color: var(--dim);
-  margin-top: -4px;
-  margin-bottom: 6px;
-}
-.phase { margin-top: 40px; }
-.phase-label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  margin-bottom: 14px;
-}
-.phase-label::before {
-  content: "";
-  width: 22px; height: 3px; border-radius: 2px;
-  background: currentColor;
-}
-.phase-label.scenario { color: var(--dim); }
-.phase-label.today    { color: #e8918c; }
-.phase-label.correlix { color: #8ea6f8; }
-.phase-label.outcome  { color: #3ec98f; }
+  /* Compact figures */
+  figure { margin: 10px 0; break-inside: avoid; }
+  figcaption { font-size: 8pt; color: var(--muted); margin-top: 3px; }
+  svg text { font-family: var(--mono); }
 
-/* clock timeline (scenario storytelling) */
-.clock { list-style: none; margin-top: 18px; border-left: 2px solid var(--border-strong); }
-.clock li { position: relative; padding: 0 0 18px 26px; }
-.clock li:last-child { padding-bottom: 4px; }
-.clock li::before {
-  content: "";
-  position: absolute; left: -6px; top: 8px;
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--canvas);
-  border: 2px solid var(--dim);
-}
-.clock li.hot::before { border-color: var(--crit); background: rgba(240, 82, 110, 0.35); }
-.clock li.win::before { border-color: var(--ok-bright); background: rgba(22, 163, 74, 0.35); }
-.clock .t {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  font-weight: 700;
-  color: #aebde0;
-  letter-spacing: 0.02em;
-  display: inline-block;
-  min-width: 58px;
-}
-.clock li.hot .t { color: #fda4af; }
-.clock li.win .t { color: #4ade80; }
-.clock .d { font-size: 15px; color: #a7b3c9; }
+  /* Alert log excerpt */
+  .log { font-family: var(--mono); font-size: 7.8pt; line-height: 1.55; border: 1px solid var(--hair); border-radius: 5px;
+    padding: 7px 10px; background: var(--soft); break-inside: avoid; }
+  .log .crit { color: var(--bad); font-weight: 600; } .log .warnl { color: var(--warn); font-weight: 600; }
+  .log .root { background: var(--warn-soft); }
+  .log .more { color: var(--muted); }
 
-/* instrument strip (n alerts → 1 incident) */
-.strip {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 20px;
-  margin-top: 34px;
-  background: var(--well);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 26px 30px;
-}
-.strip .cell .big {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 40px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  color: var(--ink);
-}
-.strip .cell .big.one { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.strip .cell .sub {
-  margin-top: 8px;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--dim);
-  line-height: 1.8;
-}
-.strip .arrow { color: var(--accent); }
-.strip .cell.right { text-align: right; }
-
-/* alert wall vs incident card */
-.wall { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
-.wall .wall-rows { flex: 1 1 auto; overflow: hidden; }
-.wall .hd, .inc .hd {
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-.wall .hd { color: #e8918c; }
-.inc .hd { color: #8ea6f8; }
-.wall-rows { position: relative; padding: 10px 0 0; }
-.wall-rows::after {
-  content: "";
-  position: absolute; left: 0; right: 0; bottom: 0; height: 84px;
-  background: linear-gradient(180deg, transparent, var(--surface));
-  pointer-events: none;
-}
-.arow {
-  display: grid;
-  grid-template-columns: 66px 46px 96px 1fr;
-  gap: 10px;
-  align-items: baseline;
-  padding: 4px 20px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.arow .at { color: #66738c; }
-.arow .asev { font-weight: 700; font-size: 10px; letter-spacing: 0.06em; }
-.arow .asev.c { color: var(--crit); }
-.arow .asev.w { color: #e0a03c; }
-.arow .asrc { color: #aebde0; overflow: hidden; text-overflow: ellipsis; }
-.arow .amsg { color: #7d8aa3; overflow: hidden; text-overflow: ellipsis; }
-.wall-count {
-  position: relative;
-  padding: 12px 20px 16px;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: #e8918c;
-  border-top: 1px dashed var(--border);
-}
-.wall-count b { font-size: 16px; font-weight: 700; }
-
-.inc { padding: 0; border-color: rgba(92, 124, 242, 0.4); }
-.inc-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--border); }
-.inc-chips { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
-.inc-id { margin-left: auto; font-family: var(--mono); font-size: 11px; color: #66738c; }
-.inc-title { font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -0.01em; }
-.inc-kv { padding: 8px 22px 14px; }
-.inc-kv .kv {
-  display: grid;
-  grid-template-columns: 158px 1fr;
-  gap: 14px;
-  padding: 9px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
-  font-size: 13.5px;
-}
-.inc-kv .kv:last-child { border-bottom: 0; }
-.inc-kv .k {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--dim);
-  padding-top: 2px;
-}
-.inc-kv .v { color: #cdd7e8; }
-.inc-kv .v .num { font-size: 13px; color: #e6ecf7; }
-.inc-foot {
-  padding: 12px 22px 16px;
-  border-top: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--accent);
-}
-
-/* ---------- why-tiles ---------- */
-.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 34px; }
-.tile h3 { display: flex; align-items: center; gap: 10px; font-size: 16.5px; }
-.tile h3 svg { flex: none; }
-.tile p { font-size: 14.5px; color: #a7b3c9; margin-top: 8px; }
-.ai-line {
-  margin-top: 22px;
-  padding: 18px 24px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 12px;
-  font-size: 15px;
-  color: #a7b3c9;
-}
-.ai-line b { color: #cdd7e8; }
-.ai-line .q { font-family: var(--mono); font-size: 13.5px; color: #8ea6f8; }
-
-/* ---------- close ---------- */
-.cta {
-  margin-top: 36px;
-  border-radius: 18px;
-  padding: 2px;
-  background: var(--grad-deep);
-}
-.cta-in {
-  background: #0c1120;
-  border-radius: 16px;
-  padding: 52px 56px;
-}
-.cta-in h3 { font-size: clamp(26px, 3.4vw, 34px); letter-spacing: -0.02em; }
-.cta-in p { font-size: 17px; margin-top: 14px; color: #cdd7e8; }
-.cta-steps {
-  display: flex; flex-wrap: wrap; gap: 10px 0; align-items: center;
-  margin-top: 26px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #aebde0;
-}
-.cta-steps .s { padding: 6px 14px; border: 1px solid var(--border-strong); border-radius: 999px; white-space: nowrap; }
-.cta-steps .sep { color: var(--accent); padding: 0 12px; }
-.cta-thesis {
-  margin-top: 34px;
-  font-size: 21px;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-}
-.cta-thesis .hl { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-
-footer.doc-foot {
-  padding: 44px 0 56px;
-  border-top: 1px solid var(--border);
-  font-size: 12.5px;
-  color: #66738c;
-}
-footer.doc-foot .wrap { display: flex; flex-wrap: wrap; gap: 8px 32px; justify-content: space-between; }
-
-/* ---------- svg shared text ---------- */
-svg text { font-family: var(--mono); }
-.svg-label { font-size: 11px; fill: #8494ab; letter-spacing: 0.08em; }
-.svg-label-sm { font-size: 9.5px; fill: #66738c; letter-spacing: 0.06em; }
-
-/* ---------- motion ---------- */
-@keyframes dashflow { to { stroke-dashoffset: -46; } }
-.flowline { stroke-dasharray: 30 16; animation: dashflow 1.6s linear infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .flowline { animation: none; }
-  html { scroll-behavior: auto; }
-}
-
-/* ---------- responsive ---------- */
-@media (max-width: 920px) {
-  .grid-3 { grid-template-columns: 1fr; }
-  .grid-2, .tiles { grid-template-columns: 1fr; }
-  .strip { grid-template-columns: 1fr; text-align: left; }
-  .strip .cell.right { text-align: left; }
-  .strip .arrow { transform: rotate(90deg); width: 28px; }
-  .cta-in { padding: 36px 28px; }
-  section.page { padding: 68px 0 52px; }
-  .inc-kv .kv { grid-template-columns: 120px 1fr; }
-}
-
-/* ---------- print ---------- */
-@page { size: A4; margin: 0; }
-@media print {
-  body { background: var(--canvas) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .cover { min-height: auto; padding: 70px 0 56px; }
-  section.page { break-before: page; padding: 56px 0 40px; border-top: 0; }
-  .wrap { padding: 0 44px; }
-  .card, figure.viz, .callout, .strip, .cta, .clock li, .inc, .wall { break-inside: avoid; }
-  .grid-3, .grid-2, .tiles { break-inside: avoid; }
-  .flowline { animation: none; }
-  footer.doc-foot { break-before: avoid; }
-}
+  .foot { margin-top: 18px; border-top: 2.5px solid var(--ink); padding-top: 6px; display: flex;
+    justify-content: space-between; gap: 12px; font-size: 8pt; color: var(--muted); flex-wrap: wrap; }
+  .brk { break-before: page; }
+  .keep { break-inside: avoid; }
+  @media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
+<div class="page">
 
-<!-- ================================================================
-     COVER
-     ================================================================ -->
-<header class="cover">
-  <div class="wrap">
-    <div class="eyebrow">
-      <svg class="glyph" width="34" height="14" viewBox="0 0 34 14" aria-hidden="true">
-        <rect x="0" y="1"  width="10" height="2.6" rx="1.3" fill="#f0526e" opacity="0.75"/>
-        <rect x="2" y="6"  width="8"  height="2.6" rx="1.3" fill="#d97706" opacity="0.75"/>
-        <rect x="0" y="11" width="11" height="2.6" rx="1.3" fill="#3b82f6" opacity="0.75"/>
-        <path d="M13 2.3 C 18 2.3 18 7 22 7 M13 12.3 C 18 12.3 18 7 22 7" stroke="#5c7cf2" stroke-width="1.2" fill="none" opacity="0.7"/>
-        <rect x="22" y="5.6" width="12" height="2.8" rx="1.4" fill="#5c7cf2"/>
-      </svg>
-      Product briefing · Two use cases
-    </div>
-
-    <h1 class="wordmark">Correlix</h1>
-    <div class="tagline">Network Observability</div>
-
-    <p class="thesis">Two hundred alerts. <span class="hl">One cause.</span> Evidence attached.</p>
-    <p class="position">Correlix is <strong>RCA-first network observability</strong>: every telemetry plane your
-    network emits — metrics, flows, logs, traps, active path probes — correlated into one ranked incident
-    you can act on, and prove.</p>
-
-    <div class="cover-field">
-      <svg viewBox="0 0 960 300" role="img" aria-label="Dozens of scattered alert signals converging through the Correlix correlation engine into a single evidence-backed incident">
-        <title>Raw telemetry converging into one incident</title>
-        <!-- left: one hour of raw telemetry -->
-        <g>
-          <rect x="30" y="156" width="30" height="3" rx="1.5" fill="#d97706" opacity="0.44"/>
-          <rect x="109" y="264" width="25" height="3" rx="1.5" fill="#3b82f6" opacity="0.38"/>
-          <rect x="73" y="226" width="34" height="3" rx="1.5" fill="#d97706" opacity="0.37"/>
-          <rect x="129" y="75" width="21" height="3" rx="1.5" fill="#f0526e" opacity="0.65"/>
-          <rect x="244" y="233" width="30" height="3" rx="1.5" fill="#f0526e" opacity="0.52"/>
-          <rect x="82" y="237" width="24" height="3" rx="1.5" fill="#d97706" opacity="0.48"/>
-          <rect x="123" y="33" width="15" height="3" rx="1.5" fill="#8494ab" opacity="0.71"/>
-          <rect x="344" y="167" width="31" height="3" rx="1.5" fill="#3b82f6" opacity="0.42"/>
-          <rect x="180" y="94" width="22" height="3" rx="1.5" fill="#3b82f6" opacity="0.43"/>
-          <rect x="51" y="157" width="17" height="3" rx="1.5" fill="#d97706" opacity="0.41"/>
-          <rect x="107" y="46" width="36" height="3" rx="1.5" fill="#3b82f6" opacity="0.29"/>
-          <rect x="427" y="134" width="29" height="3" rx="1.5" fill="#f0526e" opacity="0.52"/>
-          <rect x="428" y="76" width="29" height="3" rx="1.5" fill="#d97706" opacity="0.47"/>
-          <rect x="329" y="73" width="32" height="3" rx="1.5" fill="#8494ab" opacity="0.30"/>
-          <rect x="42" y="62" width="28" height="3" rx="1.5" fill="#d97706" opacity="0.37"/>
-          <rect x="233" y="155" width="16" height="3" rx="1.5" fill="#8494ab" opacity="0.42"/>
-          <rect x="337" y="94" width="29" height="3" rx="1.5" fill="#8494ab" opacity="0.48"/>
-          <rect x="206" y="251" width="24" height="3" rx="1.5" fill="#8494ab" opacity="0.41"/>
-          <rect x="348" y="238" width="30" height="3" rx="1.5" fill="#3b82f6" opacity="0.66"/>
-          <rect x="242" y="104" width="22" height="3" rx="1.5" fill="#d97706" opacity="0.47"/>
-          <rect x="257" y="187" width="15" height="3" rx="1.5" fill="#d97706" opacity="0.48"/>
-          <rect x="34" y="198" width="23" height="3" rx="1.5" fill="#d97706" opacity="0.72"/>
-          <rect x="80" y="133" width="20" height="3" rx="1.5" fill="#d97706" opacity="0.37"/>
-          <rect x="176" y="200" width="35" height="3" rx="1.5" fill="#f0526e" opacity="0.49"/>
-          <rect x="359" y="158" width="17" height="3" rx="1.5" fill="#d97706" opacity="0.31"/>
-          <rect x="355" y="124" width="16" height="3" rx="1.5" fill="#3b82f6" opacity="0.42"/>
-          <rect x="131" y="123" width="21" height="3" rx="1.5" fill="#3b82f6" opacity="0.35"/>
-          <rect x="144" y="267" width="18" height="3" rx="1.5" fill="#3b82f6" opacity="0.51"/>
-          <rect x="344" y="61" width="22" height="3" rx="1.5" fill="#f0526e" opacity="0.40"/>
-          <rect x="97" y="260" width="30" height="3" rx="1.5" fill="#3b82f6" opacity="0.51"/>
-          <rect x="226" y="118" width="20" height="3" rx="1.5" fill="#d97706" opacity="0.45"/>
-          <rect x="202" y="107" width="22" height="3" rx="1.5" fill="#f0526e" opacity="0.61"/>
-          <rect x="194" y="32" width="22" height="3" rx="1.5" fill="#3b82f6" opacity="0.35"/>
-          <rect x="378" y="249" width="35" height="3" rx="1.5" fill="#8494ab" opacity="0.37"/>
-          <rect x="234" y="77" width="33" height="3" rx="1.5" fill="#8494ab" opacity="0.74"/>
-          <rect x="168" y="181" width="29" height="3" rx="1.5" fill="#8494ab" opacity="0.31"/>
-          <rect x="302" y="269" width="35" height="3" rx="1.5" fill="#f0526e" opacity="0.43"/>
-          <rect x="46" y="160" width="18" height="3" rx="1.5" fill="#3b82f6" opacity="0.33"/>
-          <rect x="347" y="90" width="19" height="3" rx="1.5" fill="#d97706" opacity="0.62"/>
-          <rect x="196" y="260" width="27" height="3" rx="1.5" fill="#d97706" opacity="0.57"/>
-          <rect x="405" y="148" width="24" height="3" rx="1.5" fill="#f0526e" opacity="0.63"/>
-          <rect x="91" y="167" width="27" height="3" rx="1.5" fill="#d97706" opacity="0.44"/>
-          <rect x="119" y="226" width="25" height="3" rx="1.5" fill="#3b82f6" opacity="0.50"/>
-          <rect x="53" y="181" width="29" height="3" rx="1.5" fill="#f0526e" opacity="0.65"/>
-          <rect x="115" y="42" width="24" height="3" rx="1.5" fill="#3b82f6" opacity="0.73"/>
-          <rect x="244" y="40" width="28" height="3" rx="1.5" fill="#d97706" opacity="0.50"/>
-          <rect x="177" y="121" width="33" height="3" rx="1.5" fill="#8494ab" opacity="0.71"/>
-          <rect x="251" y="43" width="30" height="3" rx="1.5" fill="#d97706" opacity="0.56"/>
-          <rect x="39" y="142" width="28" height="3" rx="1.5" fill="#8494ab" opacity="0.42"/>
-          <rect x="384" y="261" width="24" height="3" rx="1.5" fill="#d97706" opacity="0.69"/>
-          <rect x="40" y="39" width="25" height="3" rx="1.5" fill="#3b82f6" opacity="0.45"/>
-          <rect x="248" y="190" width="27" height="3" rx="1.5" fill="#3b82f6" opacity="0.31"/>
-        </g>
-        <!-- convergence guides -->
-        <g>
-          <path d="M339 217 C 459 217, 470 167, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M410 135 C 530 135, 470 146, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M92 137 C 212 137, 470 147, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M413 253 C 533 253, 470 176, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M206 113 C 326 113, 470 141, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M417 215 C 537 215, 470 166, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M195 108 C 315 108, 470 139, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M86 244 C 206 244, 470 174, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M286 243 C 406 243, 470 173, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M328 227 C 448 227, 470 169, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M113 145 C 233 145, 470 149, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M80 105 C 200 105, 470 139, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M150 134 C 270 134, 470 146, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-          <path d="M323 199 C 443 199, 470 162, 556 150" stroke="#5c7cf2" stroke-opacity="0.14" fill="none" stroke-width="1"/>
-        </g>
-        <!-- correlation gate -->
-        <defs>
-          <linearGradient id="gateGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#4f46e5"/><stop offset="1" stop-color="#2f7df6"/>
-          </linearGradient>
-          <linearGradient id="beamGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stop-color="#5c7cf2"/><stop offset="1" stop-color="#4f9cf6"/>
-          </linearGradient>
-        </defs>
-        <rect x="554" y="66" width="10" height="168" rx="5" fill="url(#gateGrad)"/>
-        <rect x="548" y="60" width="22" height="180" rx="11" fill="none" stroke="#5c7cf2" stroke-opacity="0.35"/>
-        <text x="559" y="48" text-anchor="middle" class="svg-label">CORRELATION</text>
-        <text x="559" y="262" text-anchor="middle" class="svg-label-sm">signatures · baselines · corroboration</text>
-        <!-- the one line that matters -->
-        <line x1="570" y1="150" x2="856" y2="150" stroke="url(#beamGrad)" stroke-width="3.5" stroke-linecap="round" class="flowline"/>
-        <circle cx="872" cy="150" r="7" fill="#5c7cf2"/>
-        <circle cx="872" cy="150" r="13" fill="none" stroke="#5c7cf2" stroke-opacity="0.4"/>
-        <text x="880" y="124" text-anchor="end" class="svg-label" fill="#cdd7e8">1 INCIDENT · RANKED</text>
-        <text x="880" y="182" text-anchor="end" class="svg-label-sm">root cause named · evidence attached</text>
-        <!-- field caption -->
-        <text x="30" y="294" class="svg-label-sm">ONE HOUR OF RAW TELEMETRY — METRICS · FLOWS · LOGS · TRAPS · PROBES</text>
-      </svg>
-    </div>
-
-    <div class="cover-meta">
-      <span><b>Use case 1</b> — Is it us, or the carrier?</span>
-      <span><b>Use case 2</b> — 200 alerts, one failing uplink</span>
-      <span><b>Format</b> — 10-minute read</span>
-    </div>
+  <!-- ───────────────────────── masthead + hero ───────────────────────── -->
+  <div class="mast">
+    <div class="brand">Correlix<span>.</span></div>
+    <div class="kind">Prospect briefing · Network observability · 10-minute read</div>
   </div>
-</header>
 
-<!-- ================================================================
-     01 · THE GAP
-     ================================================================ -->
-<section class="page" id="gap">
-  <div class="wrap">
-    <div class="eyebrow">The gap</div>
-    <div class="sec-kicker"><span class="sec-num">01</span><h2>What today's observability platforms miss</h2></div>
-    <p class="lead">Modern networks are not under-monitored. They are over-notified. Traditional platforms
-    collect everything and conclude nothing — the hardest work, turning signals into a cause, is left to
-    the engineer at 2&nbsp;a.m. Three gaps do the damage.</p>
+  <h1>Two hundred alerts. One cause. Evidence attached.</h1>
+  <p class="icp"><b>For network operations teams</b> — NOC leads, escalation engineers, and network architects — running WAN, campus, and provider-dependent environments where "is it us, or the carrier?" is a recurring, expensive question.</p>
+  <p class="define">Correlix is <b>RCA-first network observability</b>: metrics, flows, logs, traps, and active path probes correlated into one ranked incident — root cause named, owner recommended, evidence attached, ticket filed.</p>
 
-    <div class="grid-3">
-      <div class="card pillar">
-        <div class="tag">Gap A</div>
-        <div class="pict">
-          <svg viewBox="0 0 260 120" role="img" aria-label="A scatter of disconnected alert marks with no structure">
-            <title>Alerts without causality</title>
-            <rect x="18" y="22" width="24" height="3" rx="1.5" fill="#f0526e" opacity="0.7"/>
-            <rect x="64" y="14" width="18" height="3" rx="1.5" fill="#d97706" opacity="0.6"/>
-            <rect x="120" y="30" width="26" height="3" rx="1.5" fill="#f0526e" opacity="0.55"/>
-            <rect x="170" y="18" width="20" height="3" rx="1.5" fill="#3b82f6" opacity="0.5"/>
-            <rect x="214" y="34" width="24" height="3" rx="1.5" fill="#d97706" opacity="0.65"/>
-            <rect x="36" y="52" width="20" height="3" rx="1.5" fill="#3b82f6" opacity="0.5"/>
-            <rect x="92" y="58" width="26" height="3" rx="1.5" fill="#f0526e" opacity="0.7"/>
-            <rect x="150" y="50" width="18" height="3" rx="1.5" fill="#8494ab" opacity="0.55"/>
-            <rect x="198" y="62" width="26" height="3" rx="1.5" fill="#f0526e" opacity="0.5"/>
-            <rect x="24" y="84" width="26" height="3" rx="1.5" fill="#d97706" opacity="0.6"/>
-            <rect x="78" y="92" width="18" height="3" rx="1.5" fill="#f0526e" opacity="0.6"/>
-            <rect x="132" y="86" width="24" height="3" rx="1.5" fill="#3b82f6" opacity="0.55"/>
-            <rect x="186" y="94" width="20" height="3" rx="1.5" fill="#8494ab" opacity="0.5"/>
-            <text x="130" y="115" text-anchor="middle" class="svg-label-sm">SIGNAL EVERYWHERE · STRUCTURE NOWHERE</text>
-          </svg>
-        </div>
-        <h3>Alert storms without causality</h3>
-        <p>One fault produces two hundred notifications, each technically true, none of them the answer.
-        Dashboards show <em>what</em> is red; nothing says <em>why</em>. The correlation happens in an
-        engineer's head, under pressure, one console at a time.</p>
-      </div>
-
-      <div class="card pillar">
-        <div class="tag">Gap B</div>
-        <div class="pict">
-          <svg viewBox="0 0 260 120" role="img" aria-label="A sealed black box emitting a verdict with no evidence behind it">
-            <title>Black-box verdicts</title>
-            <defs>
-              <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-                <rect width="7" height="7" fill="#161c28"/>
-                <line x1="0" y1="0" x2="0" y2="7" stroke="#26324a" stroke-width="2"/>
-              </pattern>
-            </defs>
-            <line x1="16" y1="42" x2="70" y2="42" stroke="#8494ab" stroke-width="1.5" opacity="0.6"/>
-            <line x1="16" y1="58" x2="70" y2="58" stroke="#8494ab" stroke-width="1.5" opacity="0.6"/>
-            <line x1="16" y1="74" x2="70" y2="74" stroke="#8494ab" stroke-width="1.5" opacity="0.6"/>
-            <rect x="74" y="26" width="86" height="64" rx="8" fill="url(#hatch)" stroke="#33415a"/>
-            <text x="117" y="62" text-anchor="middle" font-size="12" fill="#66738c" font-weight="700">A I</text>
-            <line x1="160" y1="58" x2="188" y2="58" stroke="#8494ab" stroke-width="1.5"/>
-            <rect x="188" y="44" width="58" height="28" rx="6" fill="none" stroke="#d97706" stroke-opacity="0.7"/>
-            <text x="217" y="62" text-anchor="middle" font-size="11" fill="#e0a03c">VERDICT</text>
-            <text x="130" y="115" text-anchor="middle" class="svg-label-sm">SUPPORTING EVIDENCE: NOT SHOWN</text>
-          </svg>
-        </div>
-        <h3>Black-box AI, unverifiable RCA</h3>
-        <p>“AIOps” tools issue a verdict and hide the reasoning. A NOC cannot escalate, page a vendor, or
-        wake an executive on an unverifiable claim — so engineers re-verify everything by hand, and the
-        “automation” saves nothing.</p>
-      </div>
-
-      <div class="card pillar">
-        <div class="tag">Gap C</div>
-        <div class="pict">
-          <svg viewBox="0 0 260 120" role="img" aria-label="A network path crossing from your network into a provider network, with a question mark at the boundary">
-            <title>No responsibility seam</title>
-            <rect x="14" y="30" width="102" height="58" rx="8" fill="#0d1220" stroke="#26324a"/>
-            <rect x="144" y="30" width="102" height="58" rx="8" fill="none" stroke="#26324a" stroke-dasharray="5 4"/>
-            <text x="65" y="24" text-anchor="middle" class="svg-label-sm">YOU</text>
-            <text x="195" y="24" text-anchor="middle" class="svg-label-sm">PROVIDER</text>
-            <line x1="52" y1="59" x2="208" y2="59" stroke="#8494ab" stroke-width="1.5" opacity="0.7"/>
-            <circle cx="52" cy="59" r="5" fill="#0d1220" stroke="#8494ab"/>
-            <circle cx="208" cy="59" r="5" fill="#0d1220" stroke="#8494ab"/>
-            <line x1="130" y1="16" x2="130" y2="100" stroke="#8494ab" stroke-dasharray="3 5" opacity="0.7"/>
-            <circle cx="130" cy="59" r="12" fill="#0a0e17" stroke="#f0526e"/>
-            <text x="130" y="64" text-anchor="middle" font-size="13" fill="#f0526e" font-weight="700">?</text>
-            <text x="130" y="115" text-anchor="middle" class="svg-label-sm">WHOSE FAULT? NOBODY CAN PROVE IT</text>
-          </svg>
-        </div>
-        <h3>No responsibility seam</h3>
-        <p>The most expensive question in networking — <em>is it us, or the carrier?</em> — has no owner.
-        Tools stop measuring at the demarc, the provider says “no problem on our side,” and both parties
-        burn a night proving a negative.</p>
-      </div>
-    </div>
+  <div class="legend">
+    <b>How to read this document</b>
+    <span><span class="tag demo">Demonstrated</span>&nbsp; runs today, shown live in any demo</span>
+    <span><span class="tag illu">Illustrative</span>&nbsp; walkthrough scenario — timings are not measured benchmarks</span>
   </div>
-</section>
 
-<!-- ================================================================
-     02 · THE CORRELIX IDEA
-     ================================================================ -->
-<section class="page" id="idea">
-  <div class="wrap">
-    <div class="eyebrow">The idea</div>
-    <div class="sec-kicker"><span class="sec-num">02</span><h2>Correlate. Corroborate. Prove.</h2></div>
-    <p class="lead">Correlix ingests every telemetry plane into one correlation engine. The engine matches
-    event patterns against built-in <strong>network fault-family signatures</strong> and statistical
-    baselines, then does the thing no dashboard does: it <strong>corroborates independent streams</strong>
-    into one ranked incident — root cause named, owner recommended, evidence attached — and files the
-    ticket itself.</p>
+  <!-- ───────────────────────── 1 · the gap ───────────────────────── -->
+  <h2><span class="no">01</span> What today's tools miss</h2>
+  <p>Modern networks are not under-monitored — they are <b>over-notified</b>. Traditional platforms collect everything and conclude nothing; the hardest work, turning signals into a cause, is left to the engineer at 2&nbsp;a.m. Three gaps do the damage, and they land hardest on the people this document is for:</p>
+  <table>
+    <tr><th style="width:23%">Gap</th><th>What happens</th><th style="width:29%">Who feels it</th></tr>
+    <tr><td class="k">Alerts without causality</td>
+        <td>One fault produces two hundred notifications — each technically true, none of them the answer. The correlation happens in an engineer's head, under pressure, one console at a time.</td>
+        <td>The NOC lead staffing the alert queue; whoever owns MTTR.</td></tr>
+    <tr><td class="k">Black-box AI verdicts</td>
+        <td>"AIOps" tools issue a verdict and hide the reasoning. A NOC cannot page a vendor or wake an executive on an unverifiable claim — so engineers re-verify everything by hand, and the automation saves nothing.</td>
+        <td>The escalation engineer whose name is on the page-out.</td></tr>
+    <tr><td class="k">No responsibility seam</td>
+        <td>Tools stop measuring at the demarc. The provider says "no problem on our side," and both parties burn a night proving a negative.</td>
+        <td>The architect who owns the carrier relationship — and the bill.</td></tr>
+  </table>
 
-    <figure class="viz">
-      <svg viewBox="0 0 920 320" role="img" aria-label="Pipeline: five telemetry planes flow into the correlation engine, which produces one ranked incident and auto-files a ticket">
-        <title>The Correlix pipeline</title>
-        <defs>
-          <linearGradient id="engGrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#4f46e5"/><stop offset="1" stop-color="#2f7df6"/>
-          </linearGradient>
-          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0 0 L10 5 L0 10 z" fill="#5c7cf2"/>
-          </marker>
-        </defs>
-        <!-- telemetry planes -->
-        <g>
-          <text x="20" y="18" class="svg-label-sm">TELEMETRY PLANES</text>
-          <g font-size="11.5" fill="#cdd7e8" letter-spacing="0.08em">
-            <rect x="20" y="30"  width="172" height="36" rx="8" fill="#131a26" stroke="#26324a"/><circle cx="40" cy="48" r="3.5" fill="#8494ab"/><text x="54" y="52">METRICS</text>
-            <rect x="20" y="86"  width="172" height="36" rx="8" fill="#131a26" stroke="#26324a"/><circle cx="40" cy="104" r="3.5" fill="#8494ab"/><text x="54" y="108">FLOWS</text>
-            <rect x="20" y="142" width="172" height="36" rx="8" fill="#131a26" stroke="#26324a"/><circle cx="40" cy="160" r="3.5" fill="#8494ab"/><text x="54" y="164">LOGS</text>
-            <rect x="20" y="198" width="172" height="36" rx="8" fill="#131a26" stroke="#26324a"/><circle cx="40" cy="216" r="3.5" fill="#8494ab"/><text x="54" y="220">TRAPS</text>
-            <rect x="20" y="254" width="172" height="36" rx="8" fill="#131a26" stroke="#26324a"/><circle cx="40" cy="272" r="3.5" fill="#8494ab"/><text x="54" y="276">ACTIVE PATH PROBES</text>
-          </g>
-          <g stroke="#5c7cf2" stroke-opacity="0.35" fill="none" stroke-width="1.3">
-            <path d="M192 48  C 260 48,  268 130, 330 145"/>
-            <path d="M192 104 C 258 104, 266 140, 330 152"/>
-            <path d="M192 160 C 256 160, 264 160, 330 160"/>
-            <path d="M192 216 C 258 216, 266 180, 330 168"/>
-            <path d="M192 272 C 260 272, 268 190, 330 175"/>
-          </g>
-        </g>
-        <!-- engine -->
-        <rect x="330" y="98" width="256" height="124" rx="16" fill="#10151f" stroke="url(#engGrad)" stroke-width="1.6"/>
-        <text x="458" y="132" text-anchor="middle" font-size="13.5" font-weight="700" fill="#eef2f9" letter-spacing="0.1em">CORRELATION ENGINE</text>
-        <g font-size="10.5" fill="#8494ab" text-anchor="middle" letter-spacing="0.06em">
-          <text x="458" y="158">network fault-family signatures</text>
-          <text x="458" y="178">statistical baselines</text>
-          <text x="458" y="198">independent-stream corroboration</text>
-        </g>
-        <!-- engine -> incident -->
-        <line x1="586" y1="138" x2="636" y2="138" stroke="#5c7cf2" stroke-width="1.6" marker-end="url(#arr)"/>
-        <!-- incident card -->
-        <rect x="640" y="62" width="260" height="152" rx="12" fill="#131a26" stroke="#33415a"/>
-        <rect x="640" y="62" width="260" height="32" rx="12" fill="#161c28" stroke="#33415a"/>
-        <rect x="640" y="82" width="260" height="12" fill="#161c28"/>
-        <text x="658" y="83" font-size="11" font-weight="700" fill="#cdd7e8" letter-spacing="0.1em">ONE RANKED INCIDENT</text>
-        <g font-size="10.5" letter-spacing="0.04em">
-          <text x="658" y="116" fill="#8494ab">CONFIDENCE</text><text x="882" y="116" text-anchor="end" fill="#4ade80" font-weight="700">CONFIRMED</text>
-          <text x="658" y="140" fill="#8494ab">FAULT DOMAIN</text><text x="882" y="140" text-anchor="end" fill="#e6ecf7">NAMED</text>
-          <text x="658" y="164" fill="#8494ab">RECOMMENDED OWNER</text><text x="882" y="164" text-anchor="end" fill="#e6ecf7">ASSIGNED</text>
-          <text x="658" y="188" fill="#8494ab">EVIDENCE</text><text x="882" y="188" text-anchor="end" fill="#8ea6f8">ATTACHED · CLICKABLE</text>
-        </g>
-        <!-- incident -> ticket -->
-        <line x1="770" y1="214" x2="770" y2="248" stroke="#5c7cf2" stroke-width="1.6" marker-end="url(#arr)"/>
-        <rect x="640" y="252" width="260" height="40" rx="10" fill="none" stroke="#26324a"/>
-        <text x="770" y="277" text-anchor="middle" font-size="10.5" fill="#8494ab" letter-spacing="0.08em">TICKET AUTO-FILED → SERVICENOW / JIRA</text>
-      </svg>
-      <figcaption><b>One engine, every plane.</b> Signals stop being two hundred separate stories the moment
-      they enter the same correlation window.</figcaption>
-    </figure>
+  <!-- ───────────────────────── 2 · the idea ───────────────────────── -->
+  <h2><span class="no">02</span> Correlate. Corroborate. Prove.</h2>
+  <p>Correlix ingests every telemetry plane into one correlation engine with a shared clock and a shared topology. The engine matches event patterns against built-in <b>network fault-family signatures</b> and statistical baselines, then does the thing no dashboard does: it corroborates independent streams into <b>one ranked incident</b> — root cause named, fault domain assigned, owner recommended — and files the ticket itself into ServiceNow or Jira with the evidence bundle attached. <span class="tag demo">Demonstrated</span></p>
 
-    <div class="callout">
-      <div class="rule-label">The discipline that makes it trustworthy</div>
-      <p>Correlix marks an incident <span class="chip confirmed">CONFIRMED</span> only when <strong>at least
-      two independent telemetry streams agree</strong> — a control-plane event and a data-path measurement,
-      degrading in the same activity window. Anything less is honestly labeled
-      <span class="chip suspected">SUSPECTED</span>, with the missing evidence listed. Your NOC always knows
-      exactly how much to trust a verdict — because the verdict shows its work.</p>
-    </div>
+  <div class="proof">
+    <b>The discipline that makes the verdict trustworthy:</b> Correlix does not mark a root cause
+    <b>Confirmed</b> until <b>two independent telemetry streams</b> — for example a control-plane event and a
+    data-path measurement — degrade in the same activity window. Anything less is honestly labeled
+    <b>Suspected</b>, with the missing evidence listed. Every claim in an incident clicks through to the raw
+    signals behind it. The verdict shows its work.
   </div>
-</section>
 
-<!-- ================================================================
-     03 · USE CASE 1 — THE PROVIDER SEAM
-     ================================================================ -->
-<section class="page" id="uc1">
-  <div class="wrap">
-    <div class="eyebrow">Use case 1 · The provider seam</div>
-    <div class="sec-kicker"><span class="sec-num">03</span><h2>“Is it us, or the carrier?”</h2></div>
-    <p class="uc-title-sub">A WAN circuit degrades at night. Two independent streams answer the question — with proof.</p>
+  <!-- ───────────────────────── 3 · use case 1 ───────────────────────── -->
+  <h2><span class="no">03</span> Use case 1 — "Is it us, or the carrier?" <span class="tag illu">Illustrative</span></h2>
+  <p class="lede">A WAN circuit degrades at night. Two independent streams answer the question — with proof.</p>
+  <p>An enterprise runs its primary internet circuit through a national carrier. On a quiet Tuesday night the circuit begins to degrade — not down, just <i>wrong</i>. Nightly replication crawls; remote-workforce VPN sessions stutter.</p>
+  <table>
+    <tr><th style="width:11%">Time</th><th>Event</th></tr>
+    <tr><td class="t">22:04</td><td>Round-trip time on the circuit climbs — 24&nbsp;ms → 180&nbsp;ms over ten minutes, with intermittent packet loss.</td></tr>
+    <tr><td class="t">22:09</td><td>The BGP session to the provider edge flaps. Then again. And again.</td></tr>
+    <tr><td class="t">22:15</td><td>Alert queues fill: interface warnings, reachability checks, application slowness — <b>47 alerts across 9 devices</b>.</td></tr>
+    <tr><td class="t">22:19</td><td><b>Correlix confirms.</b> Control-plane events (BGP session state) and the active path probe (RTT/loss on the same circuit) degrade in the same activity window. Fault domain: <b>internet egress, provider side of the seam</b>.</td></tr>
+  </table>
+  <p><b>Without Correlix:</b> the NPM shows every interface up and green; the synthetic tool sees latency but can't say why; the routing logs sit in a third console. By 23:30 there's a war room — five engineers, three tools, one whiteboard — and the carrier answers with the sentence every engineer knows by heart: <i>"We see no problem on our side."</i></p>
 
-    <div class="phase">
-      <div class="phase-label scenario">The scenario</div>
-      <p>An enterprise runs its primary internet circuit through a national carrier. On a quiet Tuesday
-      night, the circuit begins to degrade — not down, just <em>wrong</em>. The BGP session to the provider
-      turns unstable, and latency that users feel climbs with it. Nightly replication crawls; the remote
-      workforce's VPN sessions stutter.</p>
-      <ul class="clock" aria-label="Scenario timeline">
-        <li class="hot"><span class="t">22:04</span> <span class="d">Round-trip time on the circuit starts climbing — <span class="num">24&nbsp;ms → 180&nbsp;ms</span> over ten minutes, with intermittent packet loss.</span></li>
-        <li class="hot"><span class="t">22:09</span> <span class="d">The BGP session to the provider edge flaps. Then again. And again.</span></li>
-        <li><span class="t">22:15</span> <span class="d">Alert queues fill: interface warnings, reachability checks, application slowness — <span class="num">47</span> alerts across <span class="num">9</span> devices.</span></li>
-      </ul>
-    </div>
+  <figure class="keep">
+    <svg viewBox="0 0 720 96" width="100%" role="img" aria-label="Responsibility seam diagram: fault pinned on the provider side">
+      <line x1="452" y1="6" x2="452" y2="90" stroke="#b42318" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="452" y="14" text-anchor="middle" font-size="8" fill="#b42318" font-weight="600">RESPONSIBILITY SEAM</text>
+      <rect x="10" y="30" width="120" height="34" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="70" y="50" text-anchor="middle" font-size="10">core-sw-01</text>
+      <rect x="180" y="30" width="120" height="34" rx="4" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="240" y="50" text-anchor="middle" font-size="10">edge-rtr-01</text>
+      <rect x="500" y="30" width="120" height="34" rx="4" fill="#fdf1ef" stroke="#b42318"/>
+      <text x="560" y="50" text-anchor="middle" font-size="10" fill="#b42318">carrier edge</text>
+      <text x="648" y="52" font-size="10" fill="#565d6d">INTERNET</text>
+      <line x1="130" y1="47" x2="180" y2="47" stroke="#565d6d"/>
+      <line x1="300" y1="47" x2="500" y2="47" stroke="#b42318" stroke-width="2"/>
+      <line x1="620" y1="47" x2="644" y2="47" stroke="#565d6d"/>
+      <text x="20" y="86" font-size="8" fill="#565d6d">YOUR NETWORK</text>
+      <text x="500" y="86" font-size="8" fill="#b42318" font-weight="600">FAULT DOMAIN — INTERNET EGRESS · PROVIDER SIDE</text>
+    </svg>
+    <figcaption>The seam is a first-class object: Correlix models where your responsibility ends and the provider's begins, so a fault domain can name a <i>side</i>, not just a device. <b>Corroboration:</b> BGP session flapping (control plane) + RTT 24→180&nbsp;ms with 4–9% loss (independent path probe) — same circuit, same window.</figcaption>
+  </figure>
 
-    <div class="phase">
-      <div class="phase-label today">Today's tools</div>
-      <p>The NPM shows every interface <em>up</em> and green — technically true, operationally useless. The
-      synthetic-monitoring tool sees the latency but can't say why; the routing logs sit in a third
-      console nobody has open. By <strong>23:30 there's a war room</strong>: five engineers, three tools,
-      one whiteboard. The carrier is called, and answers with the sentence every network engineer knows by
-      heart: <em>“We see no problem on our side.”</em> Without proof, the night becomes an exercise in
-      proving a negative.</p>
-    </div>
-
-    <div class="phase">
-      <div class="phase-label correlix">With Correlix</div>
-      <p>Correlix has two <strong>independent</strong> views of the same circuit: control-plane events from
-      the edge router (the BGP session state), and an <strong>active path probe</strong> continuously
-      measuring the customer path itself. At 22:09 both begin degrading — in the same activity window. The
-      engine corroborates them, promotes the incident to <span class="chip confirmed">CONFIRMED</span>, and
-      names the fault domain: <strong>internet egress, provider side of the seam</strong>.</p>
-
-      <figure class="viz">
-        <svg viewBox="0 0 920 250" role="img" aria-label="Topology seam diagram: your network's edge router connects across a responsibility seam to the carrier network; the fault is pinned on the provider side of the seam">
-          <title>The responsibility seam, with the fault pinned</title>
-          <!-- zones -->
-          <rect x="20" y="40" width="420" height="150" rx="14" fill="#0d1220" stroke="#26324a"/>
-          <rect x="480" y="40" width="420" height="150" rx="14" fill="none" stroke="#26324a" stroke-dasharray="6 5"/>
-          <text x="40" y="66" class="svg-label">YOUR NETWORK</text>
-          <text x="880" y="66" text-anchor="end" class="svg-label">PROVIDER</text>
-          <!-- seam -->
-          <line x1="460" y1="22" x2="460" y2="228" stroke="#8494ab" stroke-dasharray="3 6" opacity="0.75"/>
-          <text x="460" y="14" text-anchor="middle" class="svg-label-sm">RESPONSIBILITY SEAM</text>
-          <!-- nodes + circuit -->
-          <g font-size="10.5" letter-spacing="0.05em">
-            <rect x="60" y="108" width="96" height="38" rx="8" fill="#131a26" stroke="#33415a"/>
-            <text x="108" y="131" text-anchor="middle" fill="#cdd7e8">core-sw-01</text>
-            <line x1="156" y1="127" x2="248" y2="127" stroke="#33415a" stroke-width="1.5"/>
-            <rect x="248" y="108" width="120" height="38" rx="8" fill="#131a26" stroke="#33415a"/>
-            <text x="308" y="131" text-anchor="middle" fill="#cdd7e8">edge-rtr-01</text>
-            <line x1="368" y1="127" x2="560" y2="127" stroke="#8494ab" stroke-width="1.8"/>
-            <rect x="560" y="108" width="118" height="38" rx="8" fill="#131a26" stroke="#33415a" stroke-dasharray="4 3"/>
-            <text x="619" y="131" text-anchor="middle" fill="#8494ab">carrier edge</text>
-            <line x1="678" y1="127" x2="756" y2="127" stroke="#33415a" stroke-width="1.5" stroke-dasharray="4 3"/>
-            <rect x="756" y="108" width="112" height="38" rx="8" fill="none" stroke="#26324a"/>
-            <text x="812" y="131" text-anchor="middle" fill="#66738c">INTERNET</text>
-          </g>
-          <!-- fault pin, provider side of the seam -->
-          <circle cx="505" cy="127" r="7" fill="#f0526e"/>
-          <circle cx="505" cy="127" r="13" fill="none" stroke="#f0526e" stroke-opacity="0.5"/>
-          <circle cx="505" cy="127" r="19" fill="none" stroke="#f0526e" stroke-opacity="0.22"/>
-          <line x1="505" y1="108" x2="505" y2="88" stroke="#f0526e" stroke-opacity="0.6"/>
-          <rect x="356" y="66" width="298" height="24" rx="6" fill="rgba(240,82,110,0.10)" stroke="#f0526e" stroke-opacity="0.5"/>
-          <text x="505" y="82" text-anchor="middle" font-size="10" fill="#fda4af" letter-spacing="0.1em" font-weight="700">FAULT DOMAIN — INTERNET EGRESS · PROVIDER SIDE</text>
-          <!-- evidence chips -->
-          <g font-size="10">
-            <rect x="120" y="206" width="280" height="26" rx="13" fill="rgba(92,124,242,0.10)" stroke="#5c7cf2" stroke-opacity="0.5"/>
-            <circle cx="138" cy="219" r="3.5" fill="#5c7cf2"/>
-            <text x="150" y="223" fill="#aebde0" letter-spacing="0.05em">CONTROL PLANE — BGP SESSION FLAPPING</text>
-            <rect x="470" y="206" width="316" height="26" rx="13" fill="rgba(20,163,143,0.10)" stroke="#14a38f" stroke-opacity="0.6"/>
-            <circle cx="488" cy="219" r="3.5" fill="#14a38f"/>
-            <text x="500" y="223" fill="#9fd6cc" letter-spacing="0.05em">PATH PROBE — RTT 24 → 180 MS · SAME CIRCUIT</text>
-          </g>
-        </svg>
-        <figcaption><b>The seam is a first-class object.</b> Correlix models where your responsibility ends
-        and the provider's begins — so the fault domain can name a side, not just a device.</figcaption>
-      </figure>
-
-      <figure class="viz">
-        <svg viewBox="0 0 920 320" role="img" aria-label="Evidence timeline with two lanes: BGP control-plane session events on top, active path probe round-trip time below, both degrading in the same window from 22:09; incident confirmed at 22:19">
-          <title>Evidence timeline — two independent streams, one activity window</title>
-          <!-- correlation window -->
-          <rect x="200" y="52" width="160" height="200" fill="#5c7cf2" opacity="0.07"/>
-          <line x1="200" y1="52" x2="200" y2="252" stroke="#5c7cf2" stroke-opacity="0.35" stroke-dasharray="2 4"/>
-          <line x1="360" y1="52" x2="360" y2="252" stroke="#5c7cf2" stroke-opacity="0.35" stroke-dasharray="2 4"/>
-          <text x="280" y="46" text-anchor="middle" class="svg-label-sm" fill="#8ea6f8">SHARED ACTIVITY WINDOW</text>
-          <!-- time grid -->
-          <g stroke="#1c2536">
-            <line x1="80"  y1="60" x2="80"  y2="252"/>
-            <line x1="213" y1="60" x2="213" y2="252"/>
-            <line x1="347" y1="60" x2="347" y2="252"/>
-            <line x1="480" y1="60" x2="480" y2="252"/>
-            <line x1="613" y1="60" x2="613" y2="252"/>
-            <line x1="747" y1="60" x2="747" y2="252"/>
-            <line x1="880" y1="60" x2="880" y2="252"/>
-          </g>
-          <line x1="80" y1="252" x2="880" y2="252" stroke="#26324a"/>
-          <g font-size="10" fill="#66738c">
-            <text x="80"  y="270" text-anchor="middle">22:00</text>
-            <text x="213" y="270" text-anchor="middle">22:10</text>
-            <text x="347" y="270" text-anchor="middle">22:20</text>
-            <text x="480" y="270" text-anchor="middle">22:30</text>
-            <text x="613" y="270" text-anchor="middle">22:40</text>
-            <text x="747" y="270" text-anchor="middle">22:50</text>
-            <text x="880" y="270" text-anchor="middle">23:00</text>
-          </g>
-          <!-- lane 1: control plane -->
-          <text x="80" y="76" class="svg-label" fill="#8ea6f8">CONTROL PLANE — BGP SESSION EVENTS · edge-rtr-01</text>
-          <text x="80" y="90" class="svg-label-sm">tall tick = session down · short tick = session up</text>
-          <line x1="80" y1="122" x2="880" y2="122" stroke="#1c2536"/>
-          <g fill="#5c7cf2">
-            <rect x="198.5" y="96" width="3" height="26" rx="1"><title>22:09 — BGP session down</title></rect>
-            <rect x="226"   y="108" width="2" height="14" rx="1" opacity="0.5"><title>22:11 — BGP session up</title></rect>
-            <rect x="265.5" y="96" width="3" height="26" rx="1"><title>22:14 — BGP session down</title></rect>
-            <rect x="292"   y="108" width="2" height="14" rx="1" opacity="0.5"><title>22:16 — BGP session up</title></rect>
-            <rect x="318.5" y="96" width="3" height="26" rx="1"><title>22:18 — BGP session down</title></rect>
-            <rect x="359"   y="108" width="2" height="14" rx="1" opacity="0.5"><title>22:21 — BGP session up</title></rect>
-            <rect x="425.5" y="96" width="3" height="26" rx="1"><title>22:26 — BGP session down</title></rect>
-            <rect x="519"   y="108" width="2" height="14" rx="1" opacity="0.5"><title>22:33 — BGP session up</title></rect>
-            <rect x="625.5" y="96" width="3" height="26" rx="1"><title>22:41 — BGP session down</title></rect>
-            <rect x="772"   y="108" width="2" height="14" rx="1" opacity="0.5"><title>22:52 — BGP session up</title></rect>
-          </g>
-          <!-- lane 2: path probe -->
-          <text x="80" y="150" class="svg-label" fill="#9fd6cc">ACTIVE PATH PROBE — RTT (MS) · same circuit, independent stream</text>
-          <g stroke="#1c2536">
-            <line x1="80" y1="163" x2="880" y2="163"/>
-            <line x1="80" y1="203" x2="880" y2="203"/>
-            <line x1="80" y1="243" x2="880" y2="243"/>
-          </g>
-          <g font-size="9.5" fill="#66738c" text-anchor="end">
-            <text x="74" y="167">200</text>
-            <text x="74" y="207">100</text>
-            <text x="74" y="247">0</text>
-          </g>
-          <polyline fill="none" stroke="#14a38f" stroke-width="2" stroke-linejoin="round"
-            points="80,233 133,233 187,234 200,228 213,218 227,205 240,193 253,186 267,176 280,182 293,172 307,179 320,170 333,175 360,172 400,177 440,171 480,174 547,172 613,176 680,171 747,174 813,172 880,173">
-            <title>Round-trip time on the primary circuit: baseline 24 ms, degraded to roughly 180 ms from 22:14 onward</title>
-          </polyline>
-          <text x="96" y="224" font-size="9.5" fill="#9fd6cc">baseline 24 ms</text>
-          <text x="560" y="158" font-size="9.5" fill="#9fd6cc">≈180 ms · packet loss 4–9%</text>
-          <!-- confirmed marker -->
-          <line x1="333" y1="52" x2="333" y2="252" stroke="#2fbf71" stroke-dasharray="5 4"/>
-          <rect x="248" y="286" width="230" height="24" rx="12" fill="rgba(22,163,74,0.12)" stroke="#16a34a" stroke-opacity="0.55"/>
-          <line x1="333" y1="252" x2="333" y2="286" stroke="#2fbf71" stroke-opacity="0.5"/>
-          <text x="363" y="302" text-anchor="middle" font-size="10.5" fill="#4ade80" font-weight="700" letter-spacing="0.08em">22:19 · CONFIRMED — 2 STREAMS AGREE</text>
-        </svg>
-        <figcaption><b>Corroboration, visualized.</b> A routing protocol and a probe packet have no reason
-        to lie in unison. When both degrade in the same window, on the same path, the incident is
-        <b>Confirmed</b> — and the evidence timeline is the proof you forward to the carrier.</figcaption>
-      </figure>
-
-      <p>The <strong>recommended owner is the carrier</strong>. The RCA Auto-Ticketing policy files
-      <strong>one</strong> ticket — not forty-seven — carrying the evidence bundle: both streams, the
-      activity window, the fault-domain determination. The escalation to the ISP opens with proof, not
-      opinion. “We see no problem on our side” stops being the end of the conversation.</p>
-    </div>
-
-    <div class="phase">
-      <div class="phase-label outcome">The outcome</div>
-      <div class="strip" role="img" aria-label="Forty-seven alerts across nine devices and three consoles become one confirmed incident owned by the carrier">
-        <div class="cell">
-          <div class="big num">47</div>
-          <div class="sub">alerts · 9 devices · 3 consoles<br>a war room and a night of triage</div>
-        </div>
-        <svg class="arrow" width="46" height="24" viewBox="0 0 46 24" aria-hidden="true">
-          <line x1="2" y1="12" x2="36" y2="12" stroke="currentColor" stroke-width="2"/>
-          <path d="M34 4 L44 12 L34 20" fill="none" stroke="currentColor" stroke-width="2"/>
-        </svg>
-        <div class="cell right">
-          <div class="big num one">1</div>
-          <div class="sub">confirmed incident · fault domain named<br>recommended owner: carrier · ticket filed with evidence</div>
-        </div>
-      </div>
-      <p style="margin-top:22px">In this scenario the clock tells the story: degradation begins at
-      <span class="num">22:04</span>; Correlix confirms and names the fault domain at
-      <span class="num">22:19</span> — a <strong>time to identify of minutes</strong>, while the
-      traditional version of the same night was still assembling its war room at
-      <span class="num">23:30</span>. <em>Timings are from this illustrative walkthrough, not a measured
-      benchmark.</em></p>
-    </div>
+  <div class="duo">
+    <div class="cell before"><h4>The traditional night</h4>
+      <p>47 alerts · 9 devices · 3 consoles</p><p>A war room assembling at 23:30, still proving a negative.</p></div>
+    <div class="cell after"><h4>With Correlix</h4>
+      <p>1 confirmed incident · fault domain named · recommended owner: <b>carrier</b></p>
+      <p>One ticket filed — evidence bundle attached. The ISP escalation opens with proof, not opinion.</p></div>
   </div>
-</section>
 
-<!-- ================================================================
-     04 · USE CASE 2 — THE ALERT-STORM CASCADE
-     ================================================================ -->
-<section class="page" id="uc2">
-  <div class="wrap">
-    <div class="eyebrow">Use case 2 · The alert-storm cascade</div>
-    <div class="sec-kicker"><span class="sec-num">04</span><h2>200 alerts, one failing uplink</h2></div>
-    <p class="uc-title-sub">A degrading optic takes three floors with it. Correlix separates the cause from 213 symptoms.</p>
+  <!-- ───────────────────────── 4 · use case 2 ───────────────────────── -->
+  <h2 class="brk"><span class="no">04</span> Use case 2 — 200 alerts, one failing uplink <span class="tag illu">Illustrative</span></h2>
+  <p class="lede">A degrading optic takes three floors with it. Correlix separates the cause from 213 symptoms.</p>
+  <p>Tuesday, <b>09:12</b>, the campus full: on a distribution switch the optic on uplink <span class="mono">Te1/0/48</span> begins to fail — not dead, <i>flapping</i> (22 state transitions in eleven minutes). Each flap tears down the OSPF adjacency riding the link. Downstream, access switches and APs fall intermittently unreachable — and every one of them reports it. By 09:23: <b>214 device-level alerts</b>, every one marked critical. The actual cause is alert #147 — a one-line interface warning buried between two hundred consequences.</p>
 
-    <div class="phase">
-      <div class="phase-label scenario">The scenario</div>
-      <p>Tuesday, <span class="num">09:12</span>, the worst possible time: the campus is full. On a
-      distribution switch, the optic on uplink <span class="num">Te1/0/48</span> begins to fail — not
-      dead, <em>flapping</em>. Each flap tears down the OSPF adjacency riding the link; each recovery
-      rebuilds it. Downstream, access switches and access points fall intermittently unreachable, and
-      every one of them reports it. Syslog bursts from everywhere at once.</p>
-      <ul class="clock" aria-label="Scenario timeline">
-        <li class="hot"><span class="t">09:12</span> <span class="d">Uplink <span class="num">Te1/0/48</span> starts flapping — <span class="num">22</span> state transitions in eleven minutes.</span></li>
-        <li class="hot"><span class="t">09:13</span> <span class="d">OSPF adjacencies across the link flap in lock-step. Reconvergence ripples through the distribution layer.</span></li>
-        <li><span class="t">09:23</span> <span class="d"><span class="num">214</span> device-level alerts across switches, APs, and reachability monitors — every one marked critical.</span></li>
-      </ul>
-    </div>
-
-    <div class="phase">
-      <div class="phase-label today">Today's tools</div>
-      <p>Every traditional console lights up with the same storm, and every alert claims equal urgency: the
-      unreachable AP on floor 3 looks exactly as important as the flapping uplink that took it down. The
-      actual cause is <strong>alert #147 of 214</strong> — a one-line interface warning buried between two
-      hundred consequences. Triage runs on seniority and instinct. The engineer who happens to remember
-      “check the distribution uplinks first” is the monitoring strategy.</p>
-    </div>
-
-    <div class="phase">
-      <div class="phase-label correlix">With Correlix</div>
-      <p>The engine recognizes the shape of the storm. The event pattern matches two built-in
-      <strong>fault-family signatures</strong> — link-flap and routing-adjacency-flap — and the topology
-      says everything alarming sits <em>downstream</em> of one interface. Correlix separates cause from
-      symptom: the <strong>causal graph pins Te1/0/48</strong> as the root, and the other 213 alerts are
-      grouped under it <strong>as impact</strong> — evidence of blast radius, not competing emergencies.</p>
-
-      <figure class="viz">
-        <svg viewBox="0 0 920 300" role="img" aria-label="Causal graph: a red root-cause node for the flapping uplink drives an OSPF adjacency flap, which fans out to a grey group of 213 downstream symptom alerts">
-          <title>Causal graph — one root cause, 213 grouped symptoms</title>
-          <defs>
-            <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0 0 L10 5 L0 10 z" fill="#f0526e"/>
-            </marker>
-            <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0 0 L10 5 L0 10 z" fill="#66738c"/>
-            </marker>
-          </defs>
-          <!-- root cause -->
-          <text x="36" y="86" font-size="10" fill="#fda4af" font-weight="700" letter-spacing="0.12em">ROOT CAUSE</text>
-          <rect x="30" y="96" width="220" height="80" rx="12" fill="rgba(240,82,110,0.07)" stroke="#f0526e" stroke-width="1.6"/>
-          <text x="48" y="126" font-size="12.5" font-weight="700" fill="#eef2f9">dist-sw-01 · Te1/0/48</text>
-          <text x="48" y="146" font-size="10.5" fill="#c8a2ab">link-flap — degrading optic</text>
-          <text x="48" y="164" font-size="10" fill="#8494ab">22 transitions / 11 min</text>
-          <!-- cause edge -->
-          <line x1="250" y1="136" x2="332" y2="136" stroke="#f0526e" stroke-width="2.2" marker-end="url(#arrR)" class="flowline"/>
-          <text x="291" y="126" text-anchor="middle" font-size="9.5" fill="#fda4af" letter-spacing="0.1em">CAUSES</text>
-          <!-- intermediary -->
-          <rect x="336" y="106" width="212" height="60" rx="12" fill="rgba(217,119,6,0.06)" stroke="#d97706" stroke-opacity="0.7" stroke-width="1.3"/>
-          <text x="354" y="132" font-size="11.5" font-weight="700" fill="#e6ecf7">OSPF adjacency flaps</text>
-          <text x="354" y="150" font-size="10" fill="#8494ab">dist-sw-01 ⇄ core-01</text>
-          <!-- symptom group -->
-          <rect x="612" y="26" width="288" height="248" rx="14" fill="none" stroke="#33415a" stroke-dasharray="6 5"/>
-          <text x="628" y="48" font-size="10" fill="#8494ab" letter-spacing="0.1em" font-weight="700">GROUPED AS IMPACT — 213 ALERTS</text>
-          <g stroke="#66738c" stroke-width="1.2" fill="none" opacity="0.75">
-            <path d="M548 128 C 590 100, 590 84, 630 84" marker-end="url(#arrG)"/>
-            <path d="M548 136 C 592 136, 590 136, 630 136" marker-end="url(#arrG)"/>
-            <path d="M548 144 C 590 168, 590 188, 630 188" marker-end="url(#arrG)"/>
-            <path d="M548 150 C 588 208, 588 240, 630 240" marker-end="url(#arrG)"/>
-          </g>
-          <g font-size="10.5" fill="#8494ab">
-            <rect x="632" y="62"  width="250" height="40" rx="8" fill="#131a26" stroke="#26324a"/><text x="650" y="86">14 access switches unreachable</text>
-            <rect x="632" y="114" width="250" height="40" rx="8" fill="#131a26" stroke="#26324a"/><text x="650" y="138">61 access points offline</text>
-            <rect x="632" y="166" width="250" height="40" rx="8" fill="#131a26" stroke="#26324a"/><text x="650" y="190">syslog burst — 3.1k messages</text>
-            <rect x="632" y="218" width="250" height="40" rx="8" fill="#131a26" stroke="#26324a"/><text x="650" y="242">clients degraded — 3 floors</text>
-          </g>
-        </svg>
-        <figcaption><b>Cause on the left, consequences on the right.</b> The causal graph is the difference
-        between an incident and an argument: 213 alerts stop competing for attention the moment they are
-        classified as impact.</figcaption>
-      </figure>
-
-      <div class="grid-2" style="margin-top:18px">
-        <div class="card wall">
-          <div class="hd">Today — every alert equally urgent</div>
-          <div class="wall-rows" aria-label="A wall of undifferentiated alerts">
-            <div class="arow"><span class="at">09:12:04</span><span class="asev c">CRIT</span><span class="asrc">ap-3f-17</span><span class="amsg">lost contact with controller</span></div>
-            <div class="arow"><span class="at">09:12:09</span><span class="asev c">CRIT</span><span class="asrc">sw-acc-3f-02</span><span class="amsg">unreachable — ping timeout</span></div>
-            <div class="arow"><span class="at">09:12:11</span><span class="asev w">WARN</span><span class="asrc">dist-sw-01</span><span class="amsg">OSPF neighbor 10.20.0.1 down on Te1/0/48</span></div>
-            <div class="arow"><span class="at">09:12:12</span><span class="asev c">CRIT</span><span class="asrc">ap-2f-04</span><span class="amsg">lost contact with controller</span></div>
-            <div class="arow"><span class="at">09:12:15</span><span class="asev c">CRIT</span><span class="asrc">sw-acc-2f-01</span><span class="amsg">unreachable — ping timeout</span></div>
-            <div class="arow"><span class="at">09:12:18</span><span class="asev w">WARN</span><span class="asrc">dist-sw-01</span><span class="amsg">interface Te1/0/48 changed state to down</span></div>
-            <div class="arow"><span class="at">09:12:21</span><span class="asev c">CRIT</span><span class="asrc">voice-gw-02</span><span class="amsg">station registrations dropping</span></div>
-            <div class="arow"><span class="at">09:12:24</span><span class="asev w">WARN</span><span class="asrc">dist-sw-01</span><span class="amsg">interface Te1/0/48 changed state to up</span></div>
-            <div class="arow"><span class="at">09:12:27</span><span class="asev c">CRIT</span><span class="asrc">ap-3f-22</span><span class="amsg">lost contact with controller</span></div>
-            <div class="arow"><span class="at">09:12:30</span><span class="asev c">CRIT</span><span class="asrc">sw-acc-3f-04</span><span class="amsg">unreachable — ping timeout</span></div>
-            <div class="arow"><span class="at">09:12:31</span><span class="asev w">WARN</span><span class="asrc">core-01</span><span class="amsg">OSPF neighbor 10.20.0.2 down</span></div>
-            <div class="arow"><span class="at">09:12:33</span><span class="asev c">CRIT</span><span class="asrc">ap-1f-09</span><span class="amsg">lost contact with controller</span></div>
-            <div class="arow"><span class="at">09:12:36</span><span class="asev c">CRIT</span><span class="asrc">sw-acc-1f-03</span><span class="amsg">unreachable — ping timeout</span></div>
-            <div class="arow"><span class="at">09:12:38</span><span class="asev w">WARN</span><span class="asrc">dist-sw-01</span><span class="amsg">interface Te1/0/48 changed state to down</span></div>
-            <div class="arow"><span class="at">09:12:41</span><span class="asev c">CRIT</span><span class="asrc">ap-2f-11</span><span class="amsg">lost contact with controller</span></div>
-            <div class="arow"><span class="at">09:12:44</span><span class="asev c">CRIT</span><span class="asrc">ap-3f-05</span><span class="amsg">lost contact with controller</span></div>
-            <div class="arow"><span class="at">09:12:47</span><span class="asev c">CRIT</span><span class="asrc">sw-acc-2f-06</span><span class="amsg">unreachable — ping timeout</span></div>
-            <div class="arow"><span class="at">09:12:49</span><span class="asev w">WARN</span><span class="asrc">core-01</span><span class="amsg">OSPF neighbor 10.20.0.2 up — adjacency reset</span></div>
-            <div class="arow"><span class="at">09:12:52</span><span class="asev c">CRIT</span><span class="asrc">ap-1f-14</span><span class="amsg">lost contact with controller</span></div>
-          </div>
-          <div class="wall-count"><b class="num">+202</b>&nbsp; more in the next eleven minutes — the cause is row 147</div>
-        </div>
-
-        <div class="card inc">
-          <div class="hd">With Correlix — one ranked incident</div>
-          <div class="inc-head">
-            <div class="inc-chips">
-              <span class="chip confirmed">CONFIRMED</span>
-              <span class="chip crit">CRITICAL</span>
-              <span class="inc-id num">INC-2481</span>
-            </div>
-            <div class="inc-title">Uplink link-flap — dist-sw-01 · Te1/0/48</div>
-          </div>
-          <div class="inc-kv">
-            <div class="kv"><span class="k">Confidence</span><span class="v">Confirmed — 2 independent streams (interface state + routing adjacency events)</span></div>
-            <div class="kv"><span class="k">Fault domain</span><span class="v">Inside — access/distribution uplink</span></div>
-            <div class="kv"><span class="k">Root cause</span><span class="v">Degrading optic · <span class="num">22</span> link transitions / <span class="num">11</span> min</span></div>
-            <div class="kv"><span class="k">Impact</span><span class="v"><span class="num">213</span> alerts grouped · <span class="num">75</span> devices · 3 floors</span></div>
-            <div class="kv"><span class="k">Recommended owner</span><span class="v">Campus network team</span></div>
-            <div class="kv"><span class="k">Recommended action</span><span class="v">Replace optic on Te1/0/48 · redundant uplink verified available</span></div>
-            <div class="kv"><span class="k">Time to identify</span><span class="v"><span class="num">3m 40s</span> from first symptom <em>(scenario)</em></span></div>
-          </div>
-          <div class="inc-foot">EVIDENCE — 214 signals · 4 sources · causal graph + evidence timeline attached</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="phase">
-      <div class="phase-label outcome">The outcome</div>
-      <p>One incident. One ticket, auto-filed to the campus network team with the interface named, the
-      optic implicated, the blast radius quantified, and the recommended action attached. The other
-      <span class="num">213</span> alerts are not lost — they are <em>organized</em>, grouped under the
-      incident as impact, ready to close together when the optic is swapped. In this walkthrough the root
-      interface is named <strong>within minutes of the first symptom</strong>, before the storm finishes
-      arriving. <em>Timings are from this illustrative walkthrough, not a measured benchmark.</em></p>
-    </div>
+  <div class="log keep">
+    <div><span class="crit">09:12:04 CRIT</span> ap-3f-17 lost contact with controller</div>
+    <div><span class="crit">09:12:09 CRIT</span> sw-acc-3f-02 unreachable — ping timeout</div>
+    <div class="root"><span class="warnl">09:12:11 WARN</span> dist-sw-01 OSPF neighbor 10.20.0.1 down on Te1/0/48 &nbsp;◀ the cause</div>
+    <div><span class="crit">09:12:12 CRIT</span> ap-2f-04 lost contact with controller</div>
+    <div><span class="crit">09:12:15 CRIT</span> sw-acc-2f-01 unreachable — ping timeout</div>
+    <div><span class="crit">09:12:21 CRIT</span> voice-gw-02 station registrations dropping</div>
+    <div class="more">+208 more in the next eleven minutes — every alert claiming equal urgency</div>
   </div>
-</section>
 
-<!-- ================================================================
-     05 · WHY THIS WORKS
-     ================================================================ -->
-<section class="page" id="why">
-  <div class="wrap">
-    <div class="eyebrow">Execution</div>
-    <div class="sec-kicker"><span class="sec-num">05</span><h2>Why this works</h2></div>
-    <p class="lead">Both use cases run on the same four design decisions. They are the product.</p>
+  <p><b>With Correlix:</b> the event pattern matches two built-in fault-family signatures — <i>link-flap</i> and <i>routing-adjacency-flap</i> — and the topology says everything alarming sits downstream of one interface. The causal graph pins <span class="mono">Te1/0/48</span> as the root; the other 213 alerts are grouped under it as <b>impact</b> — evidence of blast radius, not competing emergencies. <span class="tag demo">Demonstrated</span></p>
 
-    <div class="tiles">
-      <div class="card tile">
-        <h3>
-          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10 h4 M13 10 h4 M10 3 v4 M10 13 v4" stroke="#5c7cf2" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="10" r="3" fill="none" stroke="#5c7cf2" stroke-width="1.8"/></svg>
-          Every plane, one platform
-        </h3>
-        <p>Metrics, flows, logs, traps, and active path probes land in the same correlation engine with a
-        shared clock and a shared topology. No tool-hopping, no reconstructing a timeline across three
-        consoles — the cross-plane comparison that solves incidents happens automatically.</p>
-      </div>
-      <div class="card tile">
-        <h3>
-          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16 V8 M10 16 V4 M16 16 v-6" stroke="#14a38f" stroke-width="1.8" stroke-linecap="round"/><path d="M3 17 h14" stroke="#14a38f" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
-          Evidence, or it didn't happen
-        </h3>
-        <p>Every conclusion carries its evidence log: click any claim in an incident and see the raw
-        signals behind it. Confirmed requires two independent streams; Suspected says so out loud and
-        lists what's missing. There is no black box to take on faith.</p>
-      </div>
-      <div class="card tile">
-        <h3>
-          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 v16" stroke="#d97706" stroke-width="1.6" stroke-dasharray="2 3"/><rect x="2" y="6" width="6" height="8" rx="2" fill="none" stroke="#d97706" stroke-width="1.6"/><rect x="12" y="6" width="6" height="8" rx="2" fill="none" stroke="#d97706" stroke-width="1.6" stroke-dasharray="3 2"/></svg>
-          The responsibility seam, built in
-        </h3>
-        <p>Fault domains are modeled on both sides of the demarc — inside your network, or on the
-        provider's side of the seam. When the evidence points outward, you escalate to the carrier with
-        proof attached, and the “no problem on our side” conversation changes shape.</p>
-      </div>
-      <div class="card tile">
-        <h3>
-          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10 a6 6 0 1 1 2 4.5" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round"/><path d="M3 15 v-3.5 h3.5" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Closes the loop
-        </h3>
-        <p>RCA Auto-Ticketing files one ticket per root cause into ServiceNow or Jira — evidence bundle
-        attached — and incident time decomposition shows where the minutes actually went: time to detect,
-        to correlate, to isolate the root, to assign the owner. You manage what you can finally measure.</p>
-      </div>
-    </div>
+  <figure class="keep">
+    <svg viewBox="0 0 720 84" width="100%" role="img" aria-label="Causal chain: root cause to grouped impact">
+      <defs><marker id="a1" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="#171923"/></marker></defs>
+      <rect x="6" y="18" width="176" height="48" rx="5" fill="#fdf1ef" stroke="#b42318"/>
+      <text x="94" y="34" text-anchor="middle" font-size="9" fill="#b42318" font-weight="700">ROOT CAUSE</text>
+      <text x="94" y="48" text-anchor="middle" font-size="9">dist-sw-01 · Te1/0/48</text>
+      <text x="94" y="60" text-anchor="middle" font-size="8" fill="#565d6d">link-flap · 22 transitions / 11 min</text>
+      <line x1="182" y1="42" x2="236" y2="42" stroke="#171923" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="240" y="18" width="168" height="48" rx="5" fill="#f4f5f8" stroke="#d8dbe2"/>
+      <text x="324" y="38" text-anchor="middle" font-size="9">OSPF adjacency flaps</text>
+      <text x="324" y="52" text-anchor="middle" font-size="8" fill="#565d6d">dist-sw-01 ⇄ core-01</text>
+      <line x1="408" y1="42" x2="462" y2="42" stroke="#171923" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="466" y="6" width="248" height="72" rx="5" fill="#eef7f2" stroke="#0f7b4d"/>
+      <text x="590" y="20" text-anchor="middle" font-size="8" fill="#0f7b4d" font-weight="700">GROUPED AS IMPACT — 213 ALERTS</text>
+      <text x="590" y="34" text-anchor="middle" font-size="8.5">14 access switches unreachable · 61 APs offline</text>
+      <text x="590" y="47" text-anchor="middle" font-size="8.5">syslog burst — 3.1k messages</text>
+      <text x="590" y="60" text-anchor="middle" font-size="8.5">clients degraded — 3 floors</text>
+    </svg>
+    <figcaption>Cause on the left, consequences grouped on the right. 213 alerts stop competing for attention the moment they are classified as impact — and close together when the optic is swapped.</figcaption>
+  </figure>
 
-    <div class="ai-line">
-      <b>And when you'd rather just ask:</b> <span class="q">“What's going on right now?”</span> —
-      Correlix AI answers in plain language from your live network data, every statement cited back to the
-      evidence it came from.
-    </div>
+  <table class="keep">
+    <tr><th colspan="2">The incident card — INC-2481 · Uplink link-flap — dist-sw-01 · Te1/0/48</th></tr>
+    <tr><td class="k" style="width:25%">Confidence</td><td><b>Confirmed</b> — 2 independent streams (interface state + routing adjacency events)</td></tr>
+    <tr><td class="k">Fault domain</td><td>Inside — access/distribution uplink</td></tr>
+    <tr><td class="k">Root cause</td><td>Degrading optic · 22 link transitions / 11 min</td></tr>
+    <tr><td class="k">Impact</td><td>213 alerts grouped · 75 devices · 3 floors</td></tr>
+    <tr><td class="k">Recommended owner</td><td>Campus network team</td></tr>
+    <tr><td class="k">Recommended action</td><td>Replace optic on <span class="mono">Te1/0/48</span> · redundant uplink verified available</td></tr>
+    <tr><td class="k">Evidence</td><td>214 signals · 4 sources · causal graph + evidence timeline attached · one ticket auto-filed</td></tr>
+  </table>
+
+  <!-- ───────────────────────── 5 · technical fit ───────────────────────── -->
+  <h2><span class="no">05</span> Will it fit your environment?</h2>
+  <p><b>Deployment.</b> Correlix is <b>self-hosted</b>: the full stack runs from a single Docker&nbsp;Compose install on one Linux host, behind one port. Your telemetry never leaves your network. Device onboarding is a subnet sweep — point discovery at your management ranges from the console and the inventory, topology, and collection start filling in. <span class="tag demo">Demonstrated</span></p>
+  <table>
+    <tr><th style="width:23%">Plane</th><th>Inputs today</th></tr>
+    <tr><td class="k">Metrics</td><td>SNMP v2c/v3 (multi-vendor profiles), gNMI streaming, NETCONF</td></tr>
+    <tr><td class="k">Events / logs</td><td>Syslog (per-vendor parsing incl. NGFW app/threat events), SNMP traps</td></tr>
+    <tr><td class="k">Flows</td><td>sFlow, NetFlow, IPFIX — with application-identity enrichment</td></tr>
+    <tr><td class="k">Active measurement</td><td>Path probes (STAMP-based RTT/jitter/loss), traceroute path discovery, per-WAN-interface SLA targets</td></tr>
+    <tr><td class="k">Context</td><td>Auto-discovered topology; sites &amp; source-of-truth import (CSV/JSON, NetBox connector)</td></tr>
+    <tr><td class="k">Outputs</td><td>ServiceNow / Jira auto-ticketing with evidence bundle; Slack, PagerDuty, email, SMS notifications; REST API</td></tr>
+  </table>
+  <p><b>Operational guardrails.</b> Per-tenant isolation enforced at every storage layer; role-based access with SSO (OIDC/LDAP/TACACS+); credentials encrypted at rest in a built-in vault; every verdict carries its clickable evidence log. The optional AI assistant answers from your live data with citations — it is off by default, bounded, and never required for the RCA itself.</p>
+  <p class="keep"><b>Proof maturity, stated honestly.</b> Correlix has no public customer case studies yet — that is what the pilot below exists to produce, and we would rather show you than tell you. What is real today, and shown live in any demo: the correlation engine, fault-family signatures, seam corroboration (control-plane + independent path probe), alert-storm grouping, and the auto-ticketing loop all run against a physical multi-vendor lab (Cisco, Arista, Nokia, Juniper, Fortinet) with real fault injection — BGP instability, adjacency loss, link flaps, firewall drops — and ticket creation validated end-to-end against a ServiceNow-format instance. <span class="tag demo">Demonstrated</span></p>
+
+  <!-- ───────────────────────── 6 · why it works ───────────────────────── -->
+  <h2><span class="no">06</span> Why this works — and why you'd care</h2>
+  <table>
+    <tr><th style="width:29%">Design decision</th><th>What it buys your team</th></tr>
+    <tr><td class="k">Every plane, one platform</td><td>Metrics, flows, logs, traps, and probes share one clock and one topology. The cross-plane comparison that solves incidents happens automatically — no tool-hopping, no timeline reconstruction across three consoles.</td></tr>
+    <tr><td class="k">Evidence, or it didn't happen</td><td>Confirmed requires two independent streams; Suspected says so out loud and lists what's missing. Your engineers stop re-verifying the automation — the re-verification is built in.</td></tr>
+    <tr><td class="k">The responsibility seam, built in</td><td>Fault domains are modeled on both sides of the demarc. When the evidence points outward, the carrier escalation opens with proof attached — "no problem on our side" stops ending the conversation.</td></tr>
+    <tr><td class="k">Closes the loop</td><td>One ticket per root cause, auto-filed with evidence. Incident time decomposition shows where the minutes went — detect, correlate, isolate, assign — so you manage what you can finally measure.</td></tr>
+  </table>
+
+  <!-- ───────────────────────── 7 · pilot ───────────────────────── -->
+  <h2><span class="no">07</span> Next step — a 30-day pilot, scoped</h2>
+  <p>Run Correlix on <b>one domain of your network</b> — a campus site, a WAN region, or a data-center pod. It discovers your devices, collects every plane, maps the topology, and correlates real incidents on your traffic and your provider seams. You judge the verdicts against what your engineers already know to be true. <b>That is the test we want.</b></p>
+  <table class="keep">
+    <tr><th style="width:14%">Week</th><th>Milestone</th></tr>
+    <tr><td class="k">Week 1</td><td>Deploy (one Linux host, Docker), subnet discovery, topology mapped, telemetry planes green.</td></tr>
+    <tr><td class="k">Week 2</td><td>Baselines established; path probes on the circuits that matter; ticketing connected (sandbox is fine).</td></tr>
+    <tr><td class="k">Week 3</td><td>First evidenced incident — live if your network provides one, otherwise injected in a change window.</td></tr>
+    <tr><td class="k">Week 4</td><td>Findings review against the scoreboard below; keep-or-kill decision with data.</td></tr>
+  </table>
+  <p><b>Prerequisites:</b> one Linux host, SNMP read credentials, syslog/flow export toward it, and optionally a ServiceNow/Jira sandbox. <b>You keep:</b> the discovered topology and inventory, the incident evidence bundles, and the scoreboard.</p>
+  <p class="keep"><b>The pilot scoreboard</b> — measured on your network, filled in together (no vendor-supplied numbers): incidents detected and their Confirmed/Suspected split · alerts collapsed per incident · time from first symptom to fault domain · owner-assignment accuracy judged by your engineers · duplicate tickets avoided · evidence completeness on escalations.</p>
+
+  <div class="proof" style="margin-top:14px">
+    <b>Two hundred alerts. One cause. Evidence attached.</b> — see it on your own network.
   </div>
-</section>
 
-<!-- ================================================================
-     06 · CLOSE
-     ================================================================ -->
-<section class="page" id="close">
-  <div class="wrap">
-    <div class="eyebrow">Next step</div>
-    <div class="sec-kicker"><span class="sec-num">06</span><h2>See it on your own network</h2></div>
-
-    <div class="cta">
-      <div class="cta-in">
-        <h3>A discovery-to-first-incident pilot</h3>
-        <p>Point Correlix at a corner of your network. It discovers your devices, starts collecting every
-        telemetry plane, maps the topology, and correlates its first real incident — on your traffic, your
-        paths, your provider seams. You judge the verdicts against what your engineers already know to be
-        true. That's the test we want.</p>
-        <div class="cta-steps" aria-label="Pilot steps">
-          <span class="s">Discover</span><span class="sep">→</span>
-          <span class="s">Collect every plane</span><span class="sep">→</span>
-          <span class="s">Correlate</span><span class="sep">→</span>
-          <span class="s">First evidenced incident</span>
-        </div>
-        <p class="cta-thesis">Two hundred alerts. <span class="hl">One cause.</span> Evidence attached.</p>
-      </div>
-    </div>
+  <div class="foot">
+    <span>Correlix — Network Observability · Prospect briefing</span>
+    <span>Scenario timings marked <i>Illustrative</i> are walkthroughs, not measured benchmarks.</span>
   </div>
-</section>
 
-<footer class="doc-foot">
-  <div class="wrap">
-    <span><strong style="color:#aebde0">Correlix</strong> — Network Observability · Product briefing</span>
-    <span>Scenario timings in this document are illustrative walkthroughs, not measured benchmarks.</span>
-  </div>
-</footer>
-
+</div>
 </body>
 </html>
