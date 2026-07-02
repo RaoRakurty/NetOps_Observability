@@ -164,11 +164,16 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
 		// without ENTITY-MIB yield nothing.
 		lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
-		// DOM/DDM optics (ENTITY-SENSOR-MIB) — Port Intelligence #94 P3, opt-in.
-		// Normalized rx/tx power, temp, voltage, bias per port; VM-only fast
-		// numerics (identity stays relational). Best-effort — no sensors, no lines.
+		// DOM/DDM optics — Port Intelligence #94 P3, opt-in. Prefer a vendor DOM
+		// adapter (Juniper jnxDom / Nokia DDM, ifName-resolved); fall back to the
+		// universal ENTITY-SENSOR-MIB. Normalized rx/tx power, temp, voltage, bias
+		// per port; VM-only fast numerics (identity stays relational). Best-effort.
 		if os.Getenv("FEATURE_PORT_DOM") == "true" {
-			lines = append(lines, collectDOMSensors(dctx, addr, creds, tg.ID, vendor, now)...)
+			if a := domAdapterFor(vendor); a != nil {
+				lines = append(lines, a.collect(dctx, addr, creds, tg.ID, ifNames, now)...)
+			} else {
+				lines = append(lines, collectDOMSensors(dctx, addr, creds, tg.ID, vendor, now)...)
+			}
 		}
 		// Topology enrichment: interface IP → ifName (reuses the ifName map already
 		// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
