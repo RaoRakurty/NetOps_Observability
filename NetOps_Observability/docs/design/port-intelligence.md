@@ -96,3 +96,57 @@ Known vendor gaps to research in P3: Nokia DDM exposure granularity; coherent
 PM availability per platform (Cisco/Arista enhanced DOM vs OpenConfig
 terminal-device); QSFP-DD per-lane DOM variance across optics vendors;
 laser-age exposure is rare.
+
+## UI design (owner, 2026-07-02) — P6, ENHANCE the existing page
+
+**Binding navigation constraint (owner):** do NOT create a new
+Monitor→Network→Interfaces&Ports path. Enhance the EXISTING
+**Infrastructure → Devices → Interfaces** page (`InterfacePerformance.tsx` +
+the device drill) into the workbench. Preserve the current Correlix nav model,
+design tokens, and table components; persist user view prefs if the UI supports
+it.
+
+**Internal hierarchy:** Site → Rack/Row → Device → Slot/Linecard → Port Group →
+Physical Port → Logical Interface → Transceiver → Lane(s) → Optical Channel →
+Fiber Path → Neighbor. **Principle: separate logical interface state from
+physical port/transceiver state, presented together.** A logical iface can be
+up while the optic degrades; a physical port has many logical children /
+breakout lanes / LAG / optical channels.
+
+**Six column-preset views** (NOT one mega-table): NOC · Troubleshooting ·
+Optics/DDM · 400G/800G Lane · Carrier Handoff · Inventory. Full per-view column
+lists + the filter set (site/device/vendor/model/role/seam/status/speed/media/
+form-factor/module-type/optic-pmd/connector/part/supported/dom-status +
+boolean chips: low_rx_power, high_tx_bias, high_temperature, high_crc,
+high_fec, fec_uncorrectable, flapping, carrier_handoff, cloud_interconnect,
+lag_member, breakout_port, rca_attached) are captured in the owner spec
+(chat 2026-07-02, mirror into components when P6 builds).
+
+**Row → right-side detail drawer** with 10 sections: Interface State · Traffic
+Counters · Ethernet Health · Transceiver Inventory · DDM/DOM · Lane
+Diagnostics · FEC/PCS/BER · Neighbor/Physical Path · Events · RCA Evidence.
+(RCA Evidence section binds directly to the sig.ent.spdc.* output shipped in
+P1: matched_signature_id/name, confidence, operator_phrase, manager_phrase,
+evidence supporting/missing/contradicting, next_check, correlation_id.)
+
+**Module-detection enums** (normalize, do NOT trust description text — derive
+from part number / EEPROM-CMIS / OpenConfig transceiver / ENTITY-MIB /
+ENTITY-SENSOR / vendor OIDs / speed / connector / lane count / wavelength /
+PMD app-code): module families (legacy GBIC..CDFP, SFP..SFP-DD, QSFP..
+QSFP-DD1600, OSFP..OSFP-XD, coherent CFP2-DCO/ZR/800ZR/1600ZR, cables
+DAC/AOC/AEC/ACC/copper), media type, optic PMD (SX..DWDM/BiDi/CR), connector
+(RJ45/LC/MPO-8..24/MTP/CS/SN/MDC). These belong in a shared
+`portTypes.ts`/`porttypes.go` enum + a detection resolver.
+
+**API (P5, enhance existing Infra/Devices/Interfaces convention):**
+`/api/infrastructure/{devices, devices/{id}, devices/{id}/interfaces,
+interfaces, interfaces/{id}, interfaces/{id}/lanes, interfaces/{id}/ddm,
+interfaces/{id}/events, transceivers, transceivers/changes, module-types,
+filter-options}` — tenant-scoped, PBAC/RLS, server-side pagination, searchable.
+
+**Acceptance criteria** (owner) recorded for P5/P6 sign-off: existing page
+stays canonical; view switching; the full filter set; DDM in table + drawer;
+module detection across all families incl. unknown; distinguish congestion vs
+physical impairment; worst-lane health for 400/800G; neighbor + physical path;
+RCA attaches iface/port/optic/DDM/FEC/lane evidence; tests for module
+detection, DDM normalization, filters, tenant isolation, detail-response shape.
