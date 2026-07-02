@@ -825,6 +825,14 @@ services:
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-openai}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-}
+      # AI agent loop ("Investigations"): the model may run governed read-only
+      # lookups before answering. DORMANT unless FEATURE_AI_TOOLS=true; per-tenant
+      # entitlement decides which workspaces get it (assistant settings →
+      # Workspace access). AI_TOOLS_ALL_TENANTS=true is the global override.
+      FEATURE_AI_TOOLS: ${FEATURE_AI_TOOLS:-false}
+      AI_TOOLS_ALL_TENANTS: ${AI_TOOLS_ALL_TENANTS:-false}
+      AI_TOOLS_MAX_CALLS: ${AI_TOOLS_MAX_CALLS:-4}
+      AI_TOOLS_DAILY_TOKENS: ${AI_TOOLS_DAILY_TOKENS:-250000}
       # Device SSH gateway: in-browser SSH to devices from Infrastructure →
       # Devices. DORMANT unless FEATURE_DEVICE_SSH=true — it opens an
       # authenticated, audited shell to devices (operator supplies their own
