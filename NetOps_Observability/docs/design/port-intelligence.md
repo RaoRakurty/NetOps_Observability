@@ -87,7 +87,8 @@ suspected/likely until a human or fiber-path validation corroborates).
 | **P1** | 23 sig.spdc.* catalog entries + new Template fields (score_impact, next_checks, allow_root_cause_confirmed w/ tier cap in scorer) + 20 fx_* fixtures + drill integration | ✅ shipped this session |
 | **P2** | Storage: migration 0019 (7 RLS models) + `portintel` domain pkg (enums, validated payloads, module-detection resolver, topics) | ✅ shipped `8774005` |
 | **P3a** | Universal DOM collector: ENTITY-SENSOR-MIB → `port_optics_*` VM series (scale/precision math, TX/RX disambiguation, cardinality-safe), `FEATURE_PORT_DOM` | ✅ shipped `f842b95` (needs real optics hw to render — lab is virtual) |
-| P3b | gNMI/OpenConfig transceiver streaming + per-vendor DOM adapters (Juniper/Nokia/Cisco/Arista + coherent PM) + trap/syslog port events + audited CLI fallback | queued |
+| **P3b(1)** | Physical-layer port-event producer: transceiver/optics/DOM/FEC syslog → sig.spdc evidence kinds (`producers.port_event_signal`), wired into the syslog path | ✅ shipped `e409338` |
+| P3b(2) | gNMI/OpenConfig transceiver streaming + per-vendor DOM MIB adapters (Juniper/Nokia/Cisco/Arista + coherent PM) + threshold-alarm traps + audited CLI fallback | queued |
 | P4 | Threshold policy engine + deterministic port-health scorer (weights above) + port_health_current | queued |
 | P5 | API endpoints + response models | queued |
 | P6 | UI surfaces (heatmap, explorer, detail tabs, fiber workbench, playbook drawer) | queued |
