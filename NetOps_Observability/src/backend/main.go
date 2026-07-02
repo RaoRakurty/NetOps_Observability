@@ -54,7 +54,9 @@ type server struct {
 	apiKeys          *apiKeyStore
 	refresh          *refreshStore
 	snmpCreds        *snmpCredStore
-	sshHosts         *sshHostStore // #20/device-ssh: TOFU host-key store for the SSH gateway
+	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
+	credSentinel     *credSentinel      // self-healing credential resolution loop
+	sshHosts         *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
 	snmpProfiles     *snmpProfileStore
 	saved            savedRepo
 	audit            auditRepo
@@ -188,6 +190,10 @@ func newServer() *server {
 	// SNMP credential store is created below; capture a pointer the target
 	// builder can resolve device credential_refs against (set after init).
 	var snmpCredsRef *snmpCredStore
+	// Learned credential overrides (credential sentinel): when a device's bound
+	// profile stops answering, the sentinel adopts a stored profile that does;
+	// the target builder honors that resolution so polling self-heals.
+	var credOverridesRef *credOverrideStore
 
 	// Feed collectors the live device inventory so they poll real targets,
 	// resolving each device's SNMP credential profile to its v2c community.
@@ -212,19 +218,16 @@ func newServer() *server {
 				GNMICapable: strings.EqualFold(dev.Labels["gnmi"], "true"),
 			}
 			if snmpCredsRef != nil && dev.CredentialRef != "" {
-				if c, ok := snmpCredsRef.Resolve(dev.CredentialRef); ok {
-					if c.Version == "v3" {
-						tgt.SNMPVersion = 3
-						tgt.V3User = c.SecurityName
-						tgt.V3Level = c.SecurityLevel
-						tgt.V3AuthProto = c.AuthProtocol
-						tgt.V3AuthKey = c.AuthKey
-						tgt.V3PrivProto = c.PrivProtocol
-						tgt.V3PrivKey = c.PrivKey
-						tgt.V3Context = c.Context
-					} else {
-						tgt.Community = c.Community
+				// The sentinel's learned override wins over the bound ref while it
+				// stands (it exists only when the bound profile stopped answering).
+				ref := dev.CredentialRef
+				if credOverridesRef != nil {
+					if ov, ok := credOverridesRef.Get(dev.ID); ok {
+						ref = ov.ProfileID
 					}
+				}
+				if c, ok := snmpCredsRef.Resolve(ref); ok {
+					applyCredToTarget(&tgt, c)
 				}
 			}
 			out = append(out, tgt)
@@ -378,6 +381,11 @@ func newServer() *server {
 		log.Fatalf("snmp cred store: %v", err)
 	}
 	snmpCredsRef = snmpCreds // make profiles resolvable by the target builder
+	credOverrides, err := newCredOverrideStore(envOr("CRED_OVERRIDES_FILE", "/data/credential_overrides.json"))
+	if err != nil {
+		log.Fatalf("credential overrides store: %v", err)
+	}
+	credOverridesRef = credOverrides
 
 	saved, err := newSavedStore(envOr("SAVED_FILE", "/data/saved.json"))
 	if err != nil {
@@ -437,6 +445,8 @@ func newServer() *server {
 		apiKeys:          apiKeys,
 		refresh:          refresh,
 		snmpCreds:        snmpCreds,
+		credOverrides:    credOverrides,
+		credSentinel:     newCredSentinel(credOverrides, snmpCreds, d.Devices),
 		sshHosts:         newSSHHostStore(envOr("SSH_KNOWN_HOSTS_FILE", "/data/ssh_known_hosts.json")),
 		snmpProfiles:     snmpProfiles,
 		saved:            saved,
@@ -539,6 +549,12 @@ func main() {
 	srv.discovery.Start(ctx)
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
+	// Credential sentinel — self-healing SNMP credential resolution. Runs with
+	// SNMP collection; CRED_AUTO_RESOLVE=false opts out (bound refs then fail
+	// dark exactly as before).
+	if os.Getenv("ENABLE_SNMP_COLLECTION") == "true" && os.Getenv("CRED_AUTO_RESOLVE") != "false" {
+		go srv.credSentinel.run(ctx)
+	}
 	srv.alerts.Start(ctx)
 	srv.loadUserRules() // re-feed persisted operator-created monitors (rules_user.go)
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
@@ -1011,7 +1027,7 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
+		writeJSON(w, http.StatusOK, s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims))))
 	case http.MethodPost:
 		// SR-003: creating a device is a write — gate it. Previously any
 		// authenticated principal (incl. read-only) could create/overwrite devices.

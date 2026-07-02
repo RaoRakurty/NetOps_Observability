@@ -7,22 +7,26 @@ import "time"
 
 // Device is the canonical representation of a managed network element.
 type Device struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	Address           string            `json:"address"`
-	Vendor            string            `json:"vendor,omitempty"`
-	Model             string            `json:"model,omitempty"`
-	OS                string            `json:"os,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Vendor  string `json:"vendor,omitempty"`
+	Model   string `json:"model,omitempty"`
+	OS      string `json:"os,omitempty"`
 	// Type — router|switch|firewall|load-balancer|ap|wlc|cloud-gw|generic.
 	// SNMP-inferred from vendor/model/sysDescr (InferDeviceType), operator-overridable
 	// via labels["device_type"]. Populated on-read by the devices API.
-	Type string `json:"type,omitempty"`
-	PreferredProtocol string            `json:"preferred_protocol,omitempty"`
-	CredentialRef     string            `json:"credential_ref,omitempty"`
-	TenantID          string            `json:"tenant_id,omitempty"` // owning tenant ("" = global/shared)
-	Labels            map[string]string `json:"labels,omitempty"`
-	Source            string            `json:"source"`
-	LastSeen          time.Time         `json:"last_seen"`
+	Type              string `json:"type,omitempty"`
+	PreferredProtocol string `json:"preferred_protocol,omitempty"`
+	CredentialRef     string `json:"credential_ref,omitempty"`
+	// CredentialActive — the profile actually answering (credential sentinel's
+	// learned override); "" means the bound CredentialRef is in use. Populated
+	// on-read by the devices API, never persisted.
+	CredentialActive string            `json:"credential_active,omitempty"`
+	TenantID         string            `json:"tenant_id,omitempty"` // owning tenant ("" = global/shared)
+	Labels           map[string]string `json:"labels,omitempty"`
+	Source           string            `json:"source"`
+	LastSeen         time.Time         `json:"last_seen"`
 }
 
 // Metric is a single time-series sample emitted by a collector.

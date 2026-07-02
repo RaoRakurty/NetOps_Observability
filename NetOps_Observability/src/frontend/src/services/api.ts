@@ -914,10 +914,13 @@ export type OpenAIChatResponse = {
   choices: { message: { role: string; content: string }; finish_reason: string }[];
   model: string;
 };
+// One retrieved documentation section returned with a chat answer — rendered
+// as a "From the docs" link that opens the Help drawer at that page+section.
+export type CopilotDocRef = { id: string; label: string; href: string };
 // The backend now normalizes every provider (ChatGPT/Gemini/Copilot) to a single
-// shape: { provider, text }. The old provider-native shapes are kept for
-// backward-compatible parsing.
-export type NormalizedChatResponse = { provider: string; text: string };
+// shape: { provider, text, doc_refs }. The old provider-native shapes are kept
+// for backward-compatible parsing.
+export type NormalizedChatResponse = { provider: string; text: string; doc_refs?: CopilotDocRef[] };
 export type CopilotChatResponse = NormalizedChatResponse | AnthropicChatResponse | OpenAIChatResponse;
 
 // Runtime assistant config (admin). The API key stays server-side and is never

@@ -22,6 +22,7 @@ type Orchestrator struct {
 	Redactor  func(string) string // strips secrets/PII before egress (LLM02); nil = identity
 	KB        *KB                 // Network Expert KB (curated playbooks); nil = no supporting knowledge
 	ProductKB *ProductKB          // Correlix product knowledge (concepts + how-tos); nil = no product answers
+	Docs      *DocsIndex          // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -1327,11 +1328,28 @@ func (o *Orchestrator) answerTimeRange(ctx context.Context, p Principal, questio
 	}, nil
 }
 
-// answerProduct answers a question ABOUT Correlix from the curated product
-// knowledge (§9). Deterministic: it returns the most relevant section(s) so the
-// key-free assistant is accurate on product/how-to questions. Falls back to the
-// capability clarification when nothing matches (honest — no product KB / no hit).
+// answerProduct answers a question ABOUT Correlix from the documentation index
+// (portal pages + curated product knowledge, §9 upgraded by the intelligence
+// plan §3.a) — deterministic, key-free, with citations that open the exact doc
+// page+section. Falls back to the legacy keyword KB when no docs index is
+// wired, and to an HONEST "the documentation doesn't cover that" when the
+// docs exist but genuinely don't answer (never a weak paraphrase source).
 func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) Answer {
+	if o.Docs != nil {
+		if a, ok := o.answerProductFromDocs(question, plan, disc); ok {
+			return a
+		}
+		// No documentation match → the honest decline. No navigation fallback
+		// here: FindFeature keyword-matches eagerly, and "3 places in Correlix"
+		// for an uncovered product question is noise dressed as an answer
+		// ("where is X" questions classify to navigation before reaching here).
+		return Answer{
+			Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
+			Text: "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
+			Citations: []Citation{}, ModeBadges: []string{"Product help"},
+			Disclaimers: append(disc, "No matching documentation — nothing was invented."),
+		}
+	}
 	if o.ProductKB == nil {
 		return o.answerCapability(plan)
 	}
@@ -1368,6 +1386,38 @@ func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) 
 		Text: body, Module: mh, Citations: cites, NextActions: related,
 		ModeBadges: []string{"Product help"}, Disclaimers: disc,
 	}
+}
+
+// answerProductFromDocs builds the documentation-grounded product answer: the
+// top chunk's text as the body, every hit as a citation that opens the Help
+// drawer at that page+section. ok=false when the index has no honest match.
+func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []string) (Answer, bool) {
+	hits := o.Docs.Search(question, 4)
+	if len(hits) == 0 {
+		return Answer{}, false
+	}
+	top := hits[0].Chunk
+	body := top.Body
+	if len(body) > 900 { // keep the card readable; the doc link has the rest
+		body = strings.TrimSpace(body[:900]) + " …"
+	}
+	cites := make([]Citation, 0, len(hits))
+	var related []string
+	for i, h := range hits {
+		c := h.Chunk
+		if c.Href != "" {
+			cites = append(cites, Citation{ID: c.ID, Kind: "doc", Label: c.Breadcrumb, Href: c.Href})
+		}
+		if i > 0 {
+			related = append(related, "See also: "+c.Breadcrumb)
+		}
+	}
+	mh := &ModuleHealthSummary{Module: "product_navigation", DisplayName: "Correlix", Headline: top.Breadcrumb}
+	return Answer{
+		Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
+		Text: body, Module: mh, Citations: cites, NextActions: related,
+		ModeBadges: []string{"Product help", "From the docs"}, Disclaimers: disc,
+	}, true
 }
 
 // answerCapability is the friendly "I didn't catch that" clarification for an

@@ -516,7 +516,7 @@ function WanInterfaces() {
     const speedBps = (spd[k] || 0) * 1e6; // device_if_speed is ifHighSpeed (Mbps)
     const maxBps = Math.max(inB[k] || 0, outB[k] || 0);
     return {
-      k, device: x.metric.device, ifx: x.metric.index,
+      k, device: x.metric.device, ifx: x.metric.ifName || `if${x.metric.index}`,
       inb: inB[k] || 0, outb: outB[k] || 0,
       util: speedBps > 0 ? (maxBps / speedBps) * 100 : 0,
       errs: erR[k] || 0,
@@ -570,7 +570,7 @@ function WanInterfaces() {
               {rows.map((r) => (
                 <tr key={r.k}>
                   <td><span className="dot" style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: r.up ? "var(--good)" : "var(--bad)", marginRight: 6 }} />
-                    <span className="mono">{r.device}</span> <span className="mini-meta">if{r.ifx}</span></td>
+                    <span className="mono">{r.device}</span> <span className="mini-meta">{r.ifx}</span></td>
                   <td style={{ textAlign: "right" }} className="mono">↓ {fmtBps(r.inb)}</td>
                   <td style={{ textAlign: "right" }} className="mono">↑ {fmtBps(r.outb)}</td>
                   <td style={{ width: 110 }}>

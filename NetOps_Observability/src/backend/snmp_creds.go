@@ -43,9 +43,9 @@ type SNMPCredential struct {
 	Name     string `json:"name"`
 	TenantID string `json:"tenant_id,omitempty"` // owning tenant ("" = global/platform-owned)
 	Version  string `json:"version"`             // v1 | v2c | v3
-	Port    int    `json:"port"`    // default 161
-	Timeout int    `json:"timeout_ms"`
-	Retries int    `json:"retries"`
+	Port     int    `json:"port"`                // default 161
+	Timeout  int    `json:"timeout_ms"`
+	Retries  int    `json:"retries"`
 
 	// v1 / v2c
 	Community string `json:"community,omitempty"` // secret
@@ -144,7 +144,7 @@ func validateSNMPCredential(c *SNMPCredential) error {
 type snmpCredStore struct {
 	mu    sync.RWMutex
 	path  string
-	vault *Vault // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
+	vault *Vault                    // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
 	creds map[string]SNMPCredential // id -> credential
 }
 
@@ -308,6 +308,20 @@ func (s *snmpCredStore) Resolve(ref string) (SNMPCredential, bool) {
 		}
 	}
 	return SNMPCredential{}, false
+}
+
+// ResolveAll returns every stored credential (secrets included) in stable id
+// order — the credential sentinel's candidate set for bounded fallback probing.
+// Callers must keep tenant scoping: filter by the device's tenant before use.
+func (s *snmpCredStore) ResolveAll() []SNMPCredential {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]SNMPCredential, 0, len(s.creds))
+	for _, c := range s.creds {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // Upsert creates or replaces a credential. On update, empty secret fields keep

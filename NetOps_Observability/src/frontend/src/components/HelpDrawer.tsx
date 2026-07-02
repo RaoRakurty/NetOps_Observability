@@ -8,7 +8,9 @@ import Icon from "./Icon";
 // framing for exactly this). Product docs carry no tenant data, so there's no gate
 // beyond being signed in — every operator can read them without leaving the app.
 export default function HelpDrawer() {
-  const { helpOpen, setHelpOpen } = useShell();
+  const { helpOpen, setHelpOpen, helpPath } = useShell();
+  // Deep link from a doc citation ("/docs/send-data/syslog#…"); home otherwise.
+  const src = helpPath && helpPath.startsWith("/docs") ? helpPath : "/docs/";
 
   // Esc closes the panel (matches the AI drawer).
   useEffect(() => {
@@ -39,7 +41,7 @@ export default function HelpDrawer() {
           <div className="help-actions">
             <a
               className="help-newtab"
-              href="/docs/"
+              href={src}
               target="_blank"
               rel="noopener noreferrer"
               title="Open documentation in a new tab"
@@ -59,9 +61,10 @@ export default function HelpDrawer() {
           </div>
         </header>
         {/* Only mount the iframe once opened, so the docs bundle isn't fetched
-            until the operator actually asks for help. */}
+            until the operator actually asks for help. Keyed by the deep-link
+            path so a doc citation re-navigates an already-open frame. */}
         {helpOpen && (
-          <iframe className="help-frame" src="/docs/" title="Correlix documentation" />
+          <iframe key={src} className="help-frame" src={src} title="Correlix documentation" />
         )}
       </aside>
     </>

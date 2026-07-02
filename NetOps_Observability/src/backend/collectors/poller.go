@@ -296,6 +296,14 @@ func snmpProbe(ctx context.Context, addr string, t Target) error {
 	return err
 }
 
+// ProbeSNMP is the exported credentialed reachability check — the exact probe
+// the SNMP collectors use (sysUpTime GET, v2c or v3 per the target's fields).
+// The credential sentinel uses it to verify which stored profile a device
+// actually answers. Bounded by ctx.
+func ProbeSNMP(ctx context.Context, t Target) error {
+	return snmpProbe(ctx, withPort(t.Address, 161), t)
+}
+
 // emitMetrics POSTs Prometheus-exposition samples to VictoriaMetrics so the
 // collectors' telemetry shows up in the Metrics Explorer. Best-effort.
 func emitMetrics(ctx context.Context, body string) {

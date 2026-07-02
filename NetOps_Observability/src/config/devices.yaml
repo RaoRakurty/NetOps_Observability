@@ -90,14 +90,19 @@ devices:
     labels:
       site: clos-lab
       role: lan
-  lan-sw2:
-    address: 172.40.40.52
-    preferred_protocol: snmp
-    vendor: cisco
-    credential_ref: cisco-v3
-    labels:
-      site: clos-lab
-      role: lan
+  # lan-sw2 (cisco c8000v, 172.40.40.52) — NOT in the running containerlab
+  # topology (verified 2026-07-02: no container, ARP incomplete on the .120
+  # bridge). Kept commented as a record of intent, same as wan-r1 above —
+  # re-add when the node returns, otherwise the collectors poll a dead IP and
+  # the Devices page shows a permanently-empty device.
+  # lan-sw2:
+  #   address: 172.40.40.52
+  #   preferred_protocol: snmp
+  #   vendor: cisco
+  #   credential_ref: cisco-v3
+  #   labels:
+  #     site: clos-lab
+  #     role: lan
   dmz-fw:
     address: 172.40.40.41
     preferred_protocol: snmp

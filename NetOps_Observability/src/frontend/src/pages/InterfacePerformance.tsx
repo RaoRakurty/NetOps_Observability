@@ -38,21 +38,42 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
   }, []);
 
   // Interface options for the chosen device, discovered from the metric labels.
+  // Options key on the REAL interface name (`ifName` from IF-MIB — identical to
+  // what the device itself reports for any vendor); the raw ifIndex is only a
+  // fallback for series that carry no name, never the display label.
   const ifaceQuery = device ? `device_if_oper_status${labelSelector({ device })}` : "";
   const { series: ifaceSeries } = useMetricRange(ifaceQuery || "vector(0)", m, 30);
   const ifaceOptions = useMemo(() => {
-    if (!device) return [];
-    const idx = new Set<string>();
-    for (const s of ifaceSeries) if (s.metric?.index) idx.add(s.metric.index);
-    return Array.from(idx).sort((a, b) => Number(a) - Number(b));
+    if (!device) return [] as { value: string; label: string; byIndex: boolean }[];
+    const byName = new Map<string, string>(); // ifName -> alias/description
+    const byIndex = new Set<string>();
+    for (const s of ifaceSeries) {
+      const name = (s.metric?.ifName || "").trim();
+      if (name) {
+        if (!byName.has(name) || (!byName.get(name) && s.metric?.ifAlias)) byName.set(name, (s.metric?.ifAlias || "").trim());
+      } else if (s.metric?.index) {
+        byIndex.add(s.metric.index);
+      }
+    }
+    const named = Array.from(byName.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+      .map(([name, alias]) => ({ value: name, label: alias ? `${name} — ${alias}` : name, byIndex: false }));
+    // Series without a name (rare/legacy): keep them reachable by index.
+    const unnamed = Array.from(byIndex)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((i) => ({ value: i, label: `Interface index ${i}`, byIndex: true }));
+    return [...named, ...unnamed];
   }, [ifaceSeries, device]);
 
   // Selectors: device-scoped (for top-N across a device's interfaces) and the
-  // fully-pinned scope (device + interface) for the focused timeseries.
+  // fully-pinned scope (device + interface) for the focused timeseries. The
+  // pin uses the label the chosen option actually carries (ifName, or index
+  // for the legacy fallback entries).
+  const chosen = ifaceOptions.find((o) => o.value === iface);
   const devSel = labelSelector({ device });
-  const sel = labelSelector({ device, index: iface });
+  const sel = labelSelector(chosen?.byIndex ? { device, index: iface } : { device, ifName: iface });
   // Fleet-wide selector when no device chosen.
-  const scopeNote = device ? (iface ? `${device} · if ${iface}` : device) : "all devices";
+  const scopeNote = device ? (iface ? `${device} · ${iface}` : device) : "all devices";
   // Flow filters key on the exporter IP (sampler_address) — resolve the device's
   // management address from inventory.
   const deviceAddr = devices.find((d) => d.name === device)?.address || "";
@@ -75,8 +96,8 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
             <span>Interface</span>
             <select value={iface} onChange={(e) => setIface(e.target.value)} disabled={!device}>
               <option value="">All interfaces</option>
-              {ifaceOptions.map((i) => (
-                <option key={i} value={i}>Interface {i}</option>
+              {ifaceOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
           </label>

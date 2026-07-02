@@ -27,6 +27,10 @@ export type ShellState = {
   // Documentation ("?") slide-over — embeds the /docs portal.
   helpOpen: boolean;
   setHelpOpen: (b: boolean) => void;
+  // Deep link inside the docs portal ("" = portal home). Set via openHelp.
+  helpPath: string;
+  // Open the Help drawer at a specific docs path (e.g. "/docs/send-data/syslog#step-1").
+  openHelp: (path?: string) => void;
   // Imperative navigation to a route id, e.g. "search/logs".
   navigate: (route: string) => void;
 };

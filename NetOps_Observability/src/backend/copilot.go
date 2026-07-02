@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+
+	"netops/backend/ai"
 )
 
 // appKnowledge is the authoritative, version-controlled brief about THIS product,
@@ -148,6 +151,24 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// Server-controlled system prompt — req.System is intentionally ignored.
 	system := s.copilotSystemPrompt()
 
+	// Docs-portal grounding (intelligence plan P1): retrieve the sections most
+	// relevant to the operator's LATEST question and append them as a labeled
+	// reference DATA block (LLM01: retrieved content is quoted material, never
+	// instructions). Retrieval is server-side and deterministic; the retrieved
+	// pages ride back to the UI as clickable "From the docs" links either way.
+	docRefs := []copilotDocRef{}
+	if q := latestUserMessage(msgs); q != "" {
+		hits := aiDocsIndex.Search(q, 3)
+		if block := ai.PromptBlock(hits, 2000, 7000); block != "" {
+			system += "\n\n" + block
+		}
+		for _, h := range hits {
+			if h.Chunk.Href != "" {
+				docRefs = append(docRefs, copilotDocRef{ID: h.Chunk.ID, Label: h.Chunk.Breadcrumb, Href: h.Chunk.Href})
+			}
+		}
+	}
+
 	// Provider fallback chain: ChatGPT (OpenAI) → Gemini → Copilot (Anthropic).
 	// Each provider that has a key is tried in order; on error (no key is skipped,
 	// a provider error/non-2xx falls through) the next is attempted; the first
@@ -175,7 +196,11 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		attempted = true
 		text, err := callProvider(r.Context(), name, key, model, system, msgs)
 		if err == nil && strings.TrimSpace(text) != "" {
-			writeJSON(w, http.StatusOK, map[string]string{"provider": name, "text": text})
+			// Strip any doc citation the model INVENTED (an id not among the
+			// retrieved chunks) — same fake-authority guardrail as the grounded
+			// engine, scoped to doc: ids so ordinary bracketed prose survives.
+			text = stripFabricatedDocRefs(text, docRefs)
+			writeJSON(w, http.StatusOK, map[string]any{"provider": name, "text": text, "doc_refs": docRefs})
 			return
 		}
 		// SR-022: the provider's raw error body is logged server-side by
@@ -187,6 +212,49 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
+}
+
+// copilotDocRef is one retrieved documentation section returned alongside the
+// answer, so the UI can render "From the docs" links that open the Help drawer.
+type copilotDocRef struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Href  string `json:"href"`
+}
+
+// latestUserMessage returns the newest user turn — the question retrieval runs on.
+func latestUserMessage(msgs []copilotMessage) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+// reCopilotDocRef matches only doc-namespace citations, e.g. [doc:send-data/syslog#step-1].
+var reCopilotDocRef = regexp.MustCompile(`\s?\[(doc:[^\]]{1,200})\]`)
+
+// stripFabricatedDocRefs removes bracketed [doc:…] citations the model invented
+// (ids not among the actually-retrieved chunks). Scoped to the doc: namespace on
+// purpose: free-form prose legitimately uses other bracketed text ("[RFC 5880:
+// BFD]"), which must survive untouched.
+func stripFabricatedDocRefs(text string, refs []copilotDocRef) string {
+	if !strings.Contains(text, "[doc:") {
+		return text
+	}
+	valid := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		valid[strings.ToLower(r.ID)] = true
+	}
+	return reCopilotDocRef.ReplaceAllStringFunc(text, func(m string) string {
+		inner := strings.TrimSpace(m)
+		inner = strings.ToLower(strings.Trim(inner, "[] "))
+		if valid[inner] {
+			return m
+		}
+		return ""
+	})
 }
 
 // ---- provider chain ---------------------------------------------------------

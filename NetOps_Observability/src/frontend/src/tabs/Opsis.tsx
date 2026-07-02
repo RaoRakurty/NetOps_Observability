@@ -3,6 +3,8 @@ import {
   api,
   CopilotMessage,
   CopilotChatResponse,
+  CopilotDocRef,
+  NormalizedChatResponse,
   AnthropicChatResponse,
   OpenAIChatResponse,
   CopilotConfig,
@@ -81,13 +83,16 @@ function cmdToSlash(c: AiCommand): SlashCmd {
 }
 
 export default function Opsis({ split, onToggleSplit }: { split?: boolean; onToggleSplit?: () => void }) {
-  const { setCopilotOpen } = useShell();
+  const { setCopilotOpen, openHelp } = useShell();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [history, setHistory] = useState<CopilotMessage[]>([]);
   // Grounded answers (from /api/ai/ask) keyed by their assistant-message index in
   // `history`, so those turns render the rich, cited card instead of plain text.
   // History only ever grows by append (or full clear), so the index stays stable.
   const [grounded, setGrounded] = useState<Record<number, AiAnswer>>({});
+  // Documentation sections retrieved for a free-form turn — rendered as
+  // "From the docs" links under that answer (they open the Help drawer).
+  const [docRefs, setDocRefs] = useState<Record<number, CopilotDocRef[]>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +116,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
 
   // New conversation — clear the thread + transient panels, focus the composer.
   const newConversation = () => {
-    setHistory([]); setGrounded({}); setDraft(""); setError(null);
+    setHistory([]); setGrounded({}); setDocRefs({}); setDraft(""); setError(null);
     setShowSettings(false); setShowHelp(false); setSlashOpen(false);
     taRef.current?.focus();
   };
@@ -162,6 +167,8 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
         // Free-form LLM chat — a provider key is configured.
         const r = await api.copilotChat(newHistory);
         setHistory([...newHistory, { role: "assistant", content: extractAssistantText(r) }]);
+        const refs = (r as NormalizedChatResponse).doc_refs;
+        if (refs?.length) setDocRefs((d) => ({ ...d, [idx]: refs }));
       } else {
         // No provider key: answer from the grounded engine instead of erroring, so
         // any typed question still gets a tenant-scoped, evidence-cited answer.
@@ -326,7 +333,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
             <li><b>Playbooks</b> — “how do I troubleshoot a BGP flap?”, CCIE-grade guidance.</li>
             <li><b>Navigation</b> — “where do I configure ServiceNow?”.</li>
           </ul>
-          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Answers are grounded, tenant-scoped and cited. Full documentation is coming soon.</div>
+          <div className="op-help-tip">Type <kbd>/</kbd> in the box for ready-made questions. Answers are grounded, tenant-scoped and cited — setup and how-to answers link to the documentation, and the <b>?</b> button opens the full docs.</div>
         </div>
       )}
 
@@ -432,6 +439,19 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
               {m.role === "assistant" && grounded[i]
                 ? <GroundedAnswer ans={grounded[i]} onCite={() => setCopilotOpen(false)} onClose={() => setCopilotOpen(false)} />
                 : renderContent(m.content)}
+              {/* Documentation the answer was grounded in — opens the Help drawer
+                  at the exact page + section. */}
+              {m.role === "assistant" && docRefs[i] && docRefs[i].length > 0 && (
+                <div className="op-cites">
+                  <span className="op-cites-h">From the docs</span>
+                  {docRefs[i].map((r) => (
+                    <a key={r.id} className="op-cite" href={r.href} title={r.label}
+                      onClick={(e) => { e.preventDefault(); openHelp(r.href); }}>
+                      <Icon name="docs" size={11} /> {r.label}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -545,6 +565,7 @@ function badgeTone(b: string): string {
 }
 
 function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () => void; onClose: () => void }) {
+  const { openHelp } = useShell();
   const [rated, setRated] = useState<"up" | "down" | null>(null);
   const rate = (r: "up" | "down") => {
     if (rated) return;
@@ -674,9 +695,16 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
       {ans.citations && ans.citations.length > 0 && (
         <div className="op-cites">
           {ans.citations.slice(0, 12).map((c: AiCitation) => (
-            <a key={c.id} className="op-cite" href={c.href} title={c.label} onClick={onCite}>
-              <Icon name="external" size={11} /> {c.label || c.id}
-            </a>
+            // Doc citations open the Help drawer at the exact page+section;
+            // evidence citations deep-link into the source view as before.
+            c.href && c.href.startsWith("/docs")
+              ? <a key={c.id} className="op-cite" href={c.href} title={c.label}
+                  onClick={(e) => { e.preventDefault(); openHelp(c.href); }}>
+                  <Icon name="docs" size={11} /> {c.label || c.id}
+                </a>
+              : <a key={c.id} className="op-cite" href={c.href} title={c.label} onClick={onCite}>
+                  <Icon name="external" size={11} /> {c.label || c.id}
+                </a>
           ))}
         </div>
       )}

@@ -69,6 +69,7 @@ export default function App() {
   const [query, setQuery] = useState<string>("*");
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [helpPath, setHelpPath] = useState("");
   const [collapsed, setCollapsed] = useState(false);
 
   // Shell-v2 (#24): the slim icon-rail + hover-flyout nav, navy header band, and
@@ -153,9 +154,15 @@ export default function App() {
     location.hash = `#/${route.replace(/^#?\/?/, "")}`;
   };
 
+  // Open the Help drawer, optionally deep-linked at a docs page ("" = home).
+  const openHelp = (path?: string) => {
+    setHelpPath(path || "");
+    setHelpOpen(true);
+  };
+
   const shell: ShellState = useMemo(
-    () => ({ range, setRange, query, setQuery, copilotOpen, setCopilotOpen, helpOpen, setHelpOpen, navigate }),
-    [range, query, copilotOpen, helpOpen],
+    () => ({ range, setRange, query, setQuery, copilotOpen, setCopilotOpen, helpOpen, setHelpOpen, helpPath, openHelp, navigate }),
+    [range, query, copilotOpen, helpOpen, helpPath],
   );
 
   if (loading) {

@@ -36,6 +36,14 @@ var aiKB = ai.LoadKB()
 // key-free assistant answers "what is a seam / how do I set up SNMP" accurately.
 var aiProductKB = ai.LoadProductKB(appKnowledge)
 
+// aiDocsIndex is the documentation retriever (intelligence plan P1): the whole
+// docs portal + the curated product knowledge + the copilot runbook brief in ONE
+// BM25 index, built once from embedded markdown. Both assistant brains ground
+// product/how-to answers in it and cite real /docs pages.
+var aiDocsIndex = ai.LoadDocsIndex(
+	ai.ExtraDoc{Name: "kb/runbook", Markdown: appKnowledge, Tier: ai.DocTierRunbook},
+)
+
 type aiAskRequest struct {
 	Question string            `json:"question"`
 	Context  map[string]string `json:"context,omitempty"` // e.g. {"correlation_id": "<uuid>"}
@@ -95,6 +103,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
 		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
 		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
+		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)
 	}
 	ans, err := orch.Ask(r.Context(), s.aiPrincipal(claims), question, req.Context)
 	if err != nil {
