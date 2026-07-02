@@ -4286,3 +4286,59 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   .help-panel { width: calc(100vw - var(--sidebar-w, 64px)); }
   .help-newtab span { display: none; }
 }
+
+/* ── Subnet discovery card (Collectors tab) ─────────────────────────────────
+   Instrument-panel treatment on shared tokens: Space Grotesk header, mono
+   readouts, live scope meter mirroring the server's address budget. */
+.disc-card .disc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; }
+.disc-eyebrow { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent); margin-bottom: 3px; }
+.disc-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.disc-card h2.disc-title { margin: 0; font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 16.5px; font-weight: 600; letter-spacing: 0.01em; }
+.disc-desc { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 6px 0 0; max-width: 700px; }
+.disc-actions { display: flex; gap: 8px; align-items: center; flex: none; padding-top: 18px; }
+.disc-state { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.disc-state.on   { background: var(--sev-ok-bg); color: var(--good); }
+.disc-state.warn { background: var(--sev-warning-bg); color: var(--warn); }
+.disc-state.off  { background: var(--hover); color: var(--muted); }
+.disc-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.disc-state.on .disc-dot { animation: disc-pulse 2.4s ease-in-out infinite; }
+@keyframes disc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .disc-state.on .disc-dot { animation: none; } }
+
+.disc-card .ds-stats { margin: 16px 0 0; }
+
+.disc-grid { display: grid; grid-template-columns: minmax(300px, 1.6fr) minmax(230px, 1fr); gap: 14px 20px; margin-top: 14px; }
+@media (max-width: 880px) { .disc-grid { grid-template-columns: 1fr; } }
+.disc-field { display: flex; flex-direction: column; gap: 5px; }
+.disc-field > span { color: var(--muted); font-size: 11.5px; }
+.disc-field input { padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 7px;
+  background: var(--panel); color: var(--fg); font-size: 13px; }
+.disc-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.disc-field input.mono { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; }
+
+/* Scope meter: live address-budget readout for the entered ranges. */
+.disc-meter { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.disc-meter-track { flex: 1 1 auto; height: 4px; border-radius: 999px; background: var(--hover); overflow: hidden; }
+.disc-meter-fill { height: 100%; border-radius: 999px; background: var(--accent-grad, var(--accent)); transition: width 0.25s ease; }
+.disc-meter.over .disc-meter-fill { background: var(--bad); }
+.disc-meter-read { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11px;
+  color: var(--muted); white-space: nowrap; }
+.disc-meter.over .disc-meter-read { color: var(--bad); }
+@media (prefers-reduced-motion: reduce) { .disc-meter-fill { transition: none; } }
+
+.disc-switches { display: flex; align-items: center; gap: 14px 24px; flex-wrap: wrap; margin-top: 16px; }
+.disc-note { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.disc-msg { font-size: 12.5px; margin: 12px 0 0; }
+.disc-msg.ok  { color: var(--good); }
+.disc-msg.err { color: var(--bad); }
+.disc-refusal { display: flex; align-items: baseline; gap: 10px; margin-top: 12px; padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: 7px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent); color: var(--warn); font-size: 12px; }
+.disc-refusal b { font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.1em; flex: none; }
+.disc-foot { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--panel-border);
+  color: var(--muted); font-size: 11.5px; }
+.disc-foot .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }

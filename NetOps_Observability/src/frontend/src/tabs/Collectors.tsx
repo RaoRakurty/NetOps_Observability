@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, CollectorStatus, DiscoveryConfig, DiscoveryConfigEnvelope } from "../services/api";
+import { StatStrip, Stat, InfoTip } from "../components/ui";
 
 // Friendly display names for collector ids. Unknown ids fall back to the raw
 // name uppercased, so new collectors still render sensibly.
@@ -30,6 +31,37 @@ function reachClass(c: CollectorStatus): string {
   if ((c.reachable ?? 0) === 0) return "cell-bad";
   if ((c.reachable ?? 0) < c.targets) return "cell-warn";
   return "cell-ok";
+}
+
+// scopeCount mirrors the server's range-expansion math (display only — the
+// server re-validates): each valid IPv4 CIDR contributes 2^(32-prefix)
+// addresses toward the scan budget. Unparseable tokens are reported so the
+// meter can flag them before a round-trip.
+function scopeCount(text: string): { total: number; invalid: string | null } {
+  let total = 0;
+  for (const raw of text.split(",")) {
+    const t = raw.trim();
+    if (!t) continue;
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(t);
+    if (!m || m.slice(1, 5).some((o) => Number(o) > 255) || Number(m[5]) > 32) {
+      return { total, invalid: t };
+    }
+    total += 2 ** (32 - Number(m[5]));
+  }
+  return { total, invalid: null };
+}
+
+// relSweepTime renders a sweep timestamp for operators: relative when recent,
+// "never" for the zero time a fresh process reports.
+function relSweepTime(iso?: string): string {
+  if (!iso) return "never";
+  const t = new Date(iso).getTime();
+  if (!isFinite(t) || t < 86_400_000) return "never"; // zero-time from a fresh process
+  const age = Date.now() - t;
+  if (age < 60_000) return "just now";
+  if (age < 3_600_000) return `${Math.round(age / 60_000)} min ago`;
+  if (age < 86_400_000) return `${Math.round(age / 3_600_000)} h ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 // Subnet discovery configuration (platform-owner). Scopes the SNMP prober:
@@ -91,35 +123,98 @@ function DiscoveryCard() {
     }
   };
 
-  return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <h2>Subnet discovery</h2>
-      <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 2 }}>
-        Sweep your management subnets for SNMP-reachable devices and add them to the
-        inventory automatically. Private (RFC&nbsp;1918) IPv4 ranges only, up to{" "}
-        {limits?.max_hosts ?? 4096} addresses total — scope it to the subnets you own.
-      </p>
+  const maxHosts = limits?.max_hosts ?? 4096;
+  const scope = scopeCount(ranges);
+  const over = scope.total > maxHosts;
+  const state: { cls: string; label: string } = !cfg.enabled
+    ? { cls: "off", label: "Off" }
+    : stats?.last_error
+    ? { cls: "warn", label: "Needs attention" }
+    : { cls: "on", label: "Active" };
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginTop: 10 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 6 }}>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          <span>Enabled</span>
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 320px" }}>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>
-            Ranges (CIDR, comma-separated) — e.g. 10.20.0.0/24, 10.30.5.0/26
-          </span>
+  const scanNow = async () => {
+    try {
+      await api.refreshDiscovery();
+      setMsg({ kind: "ok", text: "Sweep scheduled — rate-limited to one per minute." });
+    } catch (e) {
+      setMsg({ kind: "err", text: (e as Error).message });
+    }
+  };
+
+  return (
+    <div className="card disc-card" style={{ marginBottom: 16 }}>
+      <div className="disc-head">
+        <div>
+          <div className="disc-eyebrow">Device onboarding</div>
+          <div className="disc-title-row">
+            <h2 className="disc-title">Subnet discovery</h2>
+            <span className={`disc-state ${state.cls}`}>
+              <span className="disc-dot" aria-hidden />
+              {state.label}
+            </span>
+          </div>
+          <p className="disc-desc">
+            Sweep your management subnets for SNMP-reachable devices and add them to
+            the inventory automatically. Scope it to the subnets you own.
+          </p>
+        </div>
+        <div className="disc-actions">
+          <button
+            className="btn"
+            onClick={scanNow}
+            disabled={!cfg.enabled}
+            title={cfg.enabled ? "Run a sweep now" : "Enable and save first"}
+          >
+            Scan now
+          </button>
+          <button className="btn primary" onClick={save} disabled={saving || over}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </div>
+
+      <StatStrip>
+        <Stat label="Last sweep" value={relSweepTime(stats?.last_poll)} />
+        <Stat
+          label="Devices discovered"
+          value={stats?.devices ?? 0}
+          tone={(stats?.devices ?? 0) > 0 ? "good" : ""}
+        />
+        <Stat
+          label={cfg.ranges.length === 1 ? "Range in scope" : "Ranges in scope"}
+          value={cfg.ranges.length}
+          tone={cfg.ranges.length ? "accent" : ""}
+        />
+      </StatStrip>
+
+      <div className="disc-grid">
+        <label className="disc-field">
+          <span>Scan ranges — CIDR, comma-separated</span>
           <input
+            className="mono"
             value={ranges}
             onChange={(e) => setRanges(e.target.value)}
             placeholder="10.20.0.0/24, 10.30.5.0/26"
             spellCheck={false}
           />
+          <div className={`disc-meter${over ? " over" : ""}`}>
+            <div className="disc-meter-track">
+              <div
+                className="disc-meter-fill"
+                style={{ width: `${Math.min(100, (scope.total / maxHosts) * 100)}%` }}
+              />
+            </div>
+            <span className="disc-meter-read">
+              {scope.invalid
+                ? `"${scope.invalid}" is not CIDR notation`
+                : `${scope.total.toLocaleString()} / ${maxHosts.toLocaleString()} addresses`}
+            </span>
+          </div>
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "0 1 260px" }}>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+        <label className="disc-field">
+          <span>
             Probe communities, comma-separated{" "}
-            {cfg.community_set ? "(set — blank keeps them)" : "(default: public)"}
+            {cfg.community_set ? "· set — blank keeps them" : "· default: public"}
           </span>
           <input
             type="password"
@@ -128,52 +223,48 @@ function DiscoveryCard() {
             placeholder={cfg.community_set ? "••••••••" : "public, vendor-ro, …"}
             autoComplete="new-password"
           />
+          <span className="disc-note">
+            Tried per address in order until one answers. Stored encrypted, never shown again.
+          </span>
         </label>
-        <button className="btn primary" onClick={save} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
-        </button>
-        <button
-          className="btn"
-          onClick={async () => {
-            try {
-              await api.refreshDiscovery();
-              setMsg({ kind: "ok", text: "Sweep scheduled (rate-limited to one per minute)." });
-            } catch (e) {
-              setMsg({ kind: "err", text: (e as Error).message });
-            }
-          }}
-          disabled={!cfg.enabled}
-          title={cfg.enabled ? "Run a sweep now" : "Enable and save first"}
-        >
-          Scan now
-        </button>
       </div>
 
-      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13 }}>
-        <input
-          type="checkbox"
-          checked={allowNonPrivate}
-          onChange={(e) => setAllowNonPrivate(e.target.checked)}
-        />
-        <span>
-          Allow non-private ranges — only if your network uses public address space
-          internally (loopback, link-local and multicast stay blocked)
-        </span>
-      </label>
+      <div className="disc-switches">
+        <label className="uf-switch">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <span className="uf-switch-track" aria-hidden />
+          <span>Discovery enabled</span>
+        </label>
+        <label className="uf-switch">
+          <input
+            type="checkbox"
+            checked={allowNonPrivate}
+            onChange={(e) => setAllowNonPrivate(e.target.checked)}
+          />
+          <span className="uf-switch-track" aria-hidden />
+          <span>Allow non-private ranges</span>
+        </label>
+        <InfoTip label="About non-private ranges">
+          Only for networks that use public address space internally. Loopback,
+          link-local and multicast ranges stay blocked either way.
+        </InfoTip>
+      </div>
 
-      {msg && (
-        <p style={{ color: msg.kind === "ok" ? "var(--good)" : "var(--bad)", fontSize: 13, marginTop: 8 }}>
-          {msg.text}
-        </p>
+      {msg && <p className={`disc-msg ${msg.kind}`}>{msg.text}</p>}
+      {stats?.last_error && (
+        <div className="disc-refusal">
+          <b>Sweep refused</b>
+          <span>{stats.last_error}</span>
+        </div>
       )}
-      <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 8 }}>
-        Last sweep:{" "}
-        {stats?.last_poll ? new Date(stats.last_poll).toLocaleString() : "never"}
-        {typeof stats?.devices === "number" ? ` · ${stats.devices} device${stats.devices === 1 ? "" : "s"} discovered` : ""}
-        {stats?.last_error ? (
-          <span style={{ color: "var(--bad)" }}> · {stats.last_error}</span>
-        ) : null}
-      </p>
+
+      <div className="disc-foot">
+        <span>
+          Sweeps every 5 minutes while enabled · manual sweeps rate-limited to one per
+          minute · up to <span className="mono">{limits?.max_ranges ?? 32}</span> ranges,{" "}
+          <span className="mono">{maxHosts.toLocaleString()}</span> addresses
+        </span>
+      </div>
     </div>
   );
 }
