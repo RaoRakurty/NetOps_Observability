@@ -16,6 +16,15 @@ apiVersion: 1
 # another tenant's tagged data. See scripts/install.py:bootstrap_grafana and
 # deployment/docker/clickhouse/init.sql (#20 row policies).
 
+# Provisioning matches datasources BY NAME. Existing installs have a
+# datasource NAMED "Prometheus" already holding uid=prometheus, so the renamed
+# entry below would try to INSERT and fatally collide on the uid ("data source
+# with the same uid already exists" crash-loop). Retire the old name first —
+# idempotent: a no-op on fresh installs and after the first successful boot.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
 datasources:
   # uid stays "prometheus" so existing dashboards keep working, but the
   # Prometheus SERVICE is gone (#97): VictoriaMetrics scrapes the self-metrics
