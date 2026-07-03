@@ -544,6 +544,9 @@ services:
       - ./clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro
       # Native Prometheus endpoint on :9363 for stack self-monitoring.
       - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      # #96a: disable heavyweight system.* introspection logs + TTL the kept ones
+      # (measured 5.8 GiB of self-logging vs 0.45 GiB of data without this).
+      - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
       # Spill heavy GROUP BY/ORDER BY to disk instead of OOMing the lab memory cap.
       - ./clickhouse/query-spill.xml:/etc/clickhouse-server/users.d/query-spill.xml:ro
     ulimits:

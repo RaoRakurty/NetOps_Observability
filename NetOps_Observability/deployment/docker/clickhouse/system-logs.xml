@@ -1,0 +1,42 @@
+<!--
+  Bound ClickHouse's self-logging (#96a). Left at defaults, the system.* introspection
+  tables grow without TTL and dwarf the actual telemetry: measured 2026-07-03 on the
+  lab stack, system.* held 5.84 GiB (text_log alone 2.95 GiB) against 453 MiB of
+  netops data, on a host at 82% disk.
+
+  Policy:
+    * DISABLED  — logs that only matter during a deep server-side investigation.
+      Re-enable one temporarily by deleting its <remove> line here and
+      `docker compose restart clickhouse`; it starts logging again immediately.
+    * KEPT+TTL  — query_log (slow-query debugging, 7d) and metric_log (ad-hoc
+      perf history, 3d). asynchronous_metric_log is disabled because the same
+      gauges are already exported on :9363 (prometheus.xml) into the stack's own
+      VictoriaMetrics/Grafana self-monitoring.
+
+  NOTE: the <ttl> applies when the table is CREATED. On an existing deployment,
+  drop the old tables once after restart (they are recreated on next flush):
+    docker exec netops-clickhouse-1 clickhouse-client -q "
+      DROP TABLE IF EXISTS system.text_log; DROP TABLE IF EXISTS system.trace_log;
+      DROP TABLE IF EXISTS system.processors_profile_log; DROP TABLE IF EXISTS system.part_log;
+      DROP TABLE IF EXISTS system.query_views_log; DROP TABLE IF EXISTS system.asynchronous_metric_log;
+      DROP TABLE IF EXISTS system.query_log; DROP TABLE IF EXISTS system.metric_log;"
+  (documented in docs/runbooks/storage-and-volume-operations.md)
+-->
+<clickhouse>
+    <text_log remove="1"/>
+    <trace_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <part_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <session_log remove="1"/>
+
+    <query_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+    <metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </metric_log>
+</clickhouse>
