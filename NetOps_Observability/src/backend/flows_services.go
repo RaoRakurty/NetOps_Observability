@@ -115,6 +115,16 @@ func buildSelectorCondition(spec map[string]any) (string, bool) {
 	return "(" + strings.Join(ors, " OR ") + ")", true
 }
 
+// flowsServicesScanSQL renders the one-scan attribution query. tenantClause is
+// the addrTenantClauseFor fragment (" AND (src_addr IN … OR dst_addr IN …)" for
+// a scoped principal, "" for cross-tenant) — it bounds the scan because the
+// hybrid flows row policy alone does not isolate untagged rows.
+func flowsServicesScanSQL(sel []string, sinceSec int, tenantClause string) string {
+	return "SELECT " + strings.Join(sel, ", ") +
+		" FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(sinceSec) + " SECOND" +
+		tenantClause + " FORMAT JSON"
+}
+
 type svcFlowRow struct {
 	ServiceID   string  `json:"service_id"`
 	Name        string  `json:"name"`
@@ -160,8 +170,12 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 
-	// One scan: sumIf/countIf per attributed service over the window.
-	if len(conds) > 0 {
+	// One scan: sumIf/countIf per attributed service over the window. The flows
+	// row policy shares untagged rows to every tenant scope (hybrid model), so
+	// the scan is bounded to the caller's device addresses; a principal with no
+	// visible devices skips the scan entirely (all totals stay 0, default-closed).
+	tenantClause, noAddrs := s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	if len(conds) > 0 && !noAddrs {
 		since := durationQuery(r, "since", time.Hour)
 		var sel []string
 		for i, cond := range conds {
@@ -169,8 +183,7 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("sumIf(bytes*if(sampling_rate=0,1,sampling_rate), %s) AS b%d", cond, i),
 				fmt.Sprintf("countIf(%s) AS f%d", cond, i))
 		}
-		sql := "SELECT " + strings.Join(sel, ", ") +
-			" FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND FORMAT JSON"
+		sql := flowsServicesScanSQL(sel, int(since.Seconds()), tenantClause)
 		res, e := s.chRows(r, sql)
 		if e != nil {
 			writeError(w, http.StatusBadGateway, e)

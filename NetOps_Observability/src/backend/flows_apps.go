@@ -3,8 +3,10 @@ package main
 // flows_apps.go — GET /api/flows/apps (#81 P1b). Flow traffic attributed per
 // IDENTIFIED application (the app-centric flow view). QUERY-TIME, like
 // flows_services.go: one ClickHouse scan for the top destinations by volume over
-// the window (tenant-scoped via chRows → the CH row policy enforces isolation),
-// each destination resolved to an app by the in-memory catalog, then aggregated
+// the window. The flows row policy is HYBRID (untagged rows are shared to every
+// tenant scope), so the app-layer addrTenantClauseFor IS the isolation for
+// untagged telemetry — same contract as /api/flows and the dependency view.
+// Each destination is resolved to an app by the in-memory catalog, then aggregated
 // per app. No materialized view over netops.flows (the banned ingestion regressor).
 //
 // Coverage is the top-N destinations by bytes (reported honestly in the response);
@@ -95,14 +97,22 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	since := durationQuery(r, "since", time.Hour)
-	sql := "SELECT dst_addr AS d, " +
-		"sum(bytes*if(sampling_rate=0,1,sampling_rate)) AS b, count() AS f " +
-		"FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND " +
-		"GROUP BY dst_addr ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
-	rows, err := s.chRows(r, sql)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
+	// Tenant isolation: the flows row policy shares untagged rows to every tenant
+	// scope (hybrid model), so a scoped principal is narrowed to flows touching
+	// its own device addresses; no devices → nothing (default-closed).
+	clause, empty := s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
+	var rows []map[string]any
+	if !empty {
+		sql := "SELECT dst_addr AS d, " +
+			"sum(bytes*if(sampling_rate=0,1,sampling_rate)) AS b, count() AS f " +
+			"FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND" + clause + " " +
+			"GROUP BY dst_addr ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
+		var err error
+		rows, err = s.chRows(r, sql)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
 	}
 
 	cat := s.appCatalog.get()
