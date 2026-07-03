@@ -1,6 +1,9 @@
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  # 30s is ample for stack self-observability and halves scrape/series churn;
+  # every alert range window is >=5m (>=10 samples per window) so no rule
+  # loses resolution (#96d).
+  scrape_interval: 30s
+  evaluation_interval: 30s
 
 rule_files:
   - "rules.yaml"
