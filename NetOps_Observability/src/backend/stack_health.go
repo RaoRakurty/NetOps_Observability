@@ -66,7 +66,7 @@ func stackInventory() []stackProbe {
 		{"Visualization (Grafana)", "visualization", "http", envOr("GRAFANA_URL", "http://grafana:3000") + "/api/health"},
 		{"Event bus (Redpanda)", "bus", "tcp", net.JoinHostPort(envOr("REDPANDA_HOST", "redpanda"), envOr("REDPANDA_PORT", "9092"))},
 		{"App database (PostgreSQL)", "state", "tcp", net.JoinHostPort(envOr("DB_HOST", "postgres"), envOr("DB_PORT", "5432"))},
-		{"Cache (Redis)", "state", "tcp", net.JoinHostPort(envOr("REDIS_HOST", "redis"), envOr("REDIS_PORT", "6379"))},
+		{"Cache (Valkey)", "state", "tcp", net.JoinHostPort(envOr("REDIS_HOST", "redis"), envOr("REDIS_PORT", "6379"))},
 	}
 }
 

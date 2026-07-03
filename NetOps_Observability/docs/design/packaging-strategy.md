@@ -112,7 +112,7 @@ fleet; only then evaluate an operator.
 | Image | License | Action |
 |---|---|---|
 | Redpanda | **BSL** (source-available) | Get written OK for redistribution, or swap the bus to Apache Kafka (KRaft mode, Strimzi on K8s). Compose/K8s seam is small — Kafka-API compatible by design |
-| Redis `7-alpine` (**resolves to 7.4.9**) | **RSALv2/SSPL** | Pin `redis:7.2-alpine` (BSD) or swap to **Valkey** (BSD, drop-in). Recommended: Valkey |
+| ~~Redis `7-alpine` (7.4.9 = RSALv2/SSPL)~~ | ✅ **RESOLVED 2026-07-03** | Swapped to **Valkey 8-alpine** (BSD-3, digest-pinned; redis-* compat symlinks so the service name, `REDIS_HOST` consumers, and `redis-cli` callers are untouched). Upgrade note: Valkey can't read Redis 7.4 RDB v12 — existing installs drop `data/redis/dump.rdb` (TTL'd collector caches only) |
 | Grafana | AGPLv3 | Distributable with obligations; it's optional (self-observability) — `--core` bundle already omits it |
 | syslog-ng | GPLv3 | Fine unmodified |
 | OpenSearch, ClickHouse, VictoriaMetrics, Postgres, Vector (MPL-2), goflow2, Prometheus, gnmic | Apache-2/BSD/MPL | Fine |

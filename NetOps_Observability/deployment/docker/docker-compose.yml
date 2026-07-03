@@ -71,16 +71,23 @@ services:
     restart: *restart
 
   redis:
-    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
-    # maxmemory stays BELOW the cgroup cap so Redis returns clean OOM errors
+    # Valkey (BSD-3), not Redis: redis:7-alpine resolves to 7.4.9 = RSALv2/SSPL,
+    # which blocks external redistribution of the offline bundle (#97 licensing
+    # gate, docs/design/packaging-strategy.md §4). Valkey 8 is protocol- and
+    # CLI-compatible (ships redis-* symlinks, same uid 999); service name stays
+    # `redis` so REDIS_HOST consumers are untouched. NOTE: Valkey cannot load
+    # RDB v12 dumps written by Redis 7.4 — on upgrade of an existing install,
+    # remove data/redis/dump.rdb (contents are TTL'd collector caches only).
+    image: valkey/valkey:8-alpine@sha256:cfe71288f087704b06be45e270afa7a2abbf820093d6b11a23762081f5ff321d
+    # maxmemory stays BELOW the cgroup cap so Valkey returns clean OOM errors
     # (noeviction default — this is app STATE, never silently evict) instead of
     # the kernel killing it. Measured use is ~8 MiB; 96mb is 12× headroom.
     mem_limit: ${REDIS_MEM_LIMIT:-128m}
-    command: ["redis-server", "--save", "60", "1", "--maxmemory", "96mb"]
+    command: ["valkey-server", "--save", "60", "1", "--maxmemory", "96mb"]
     volumes:
       - ../../data/redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
