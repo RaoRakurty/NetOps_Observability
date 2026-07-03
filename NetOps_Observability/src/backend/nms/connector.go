@@ -110,6 +110,9 @@ type PollInput struct {
 	Checkpoint Checkpoint
 	Backfill   time.Duration // >0 on first run
 	Do         Doer
+	// Params resolves vendor path placeholders (e.g. Meraki {org}); the runtime
+	// populates it from Credentials.Extra.
+	Params map[string]string
 }
 
 // Poller fetches raw payloads for one stream. It returns the raw bytes (handed

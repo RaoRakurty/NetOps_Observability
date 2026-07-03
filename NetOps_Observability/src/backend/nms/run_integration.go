@@ -47,17 +47,16 @@ func RunPoll(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer
 
 	for _, stream := range cfg.Streams {
 		cp, _ := cps.Load(ctx, cfg.Tenant, cfg.IntegrationID, stream)
-		raws, next, perr := poller.Poll(ctx, PollInput{
+		in := PollInput{
 			Base: cfg.BaseURL, Stream: stream, Session: sess, Checkpoint: cp,
-			Backfill: cfg.Backfill, Do: do,
-		})
+			Backfill: cfg.Backfill, Do: do, Params: cfg.Creds.Extra,
+		}
+		raws, next, perr := poller.Poll(ctx, in)
 		// One re-auth retry on 401 (token expired mid-cycle).
 		if errors.Is(perr, ErrUnauthorized) {
 			if sess, err = conn.Auth().Authenticate(ctx, cfg.BaseURL, cfg.Creds, do); err == nil {
-				raws, next, perr = poller.Poll(ctx, PollInput{
-					Base: cfg.BaseURL, Stream: stream, Session: sess, Checkpoint: cp,
-					Backfill: cfg.Backfill, Do: do,
-				})
+				in.Session = sess
+				raws, next, perr = poller.Poll(ctx, in)
 			}
 		}
 		if perr != nil {

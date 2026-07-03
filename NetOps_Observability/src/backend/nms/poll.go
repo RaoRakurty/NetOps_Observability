@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -37,6 +38,16 @@ func (p restPoller) Poll(ctx context.Context, in PollInput) ([][]byte, Checkpoin
 			ms = formatInt(since.UnixMilli())
 		}
 		path = strings.ReplaceAll(tmpl, "{since}", ms)
+	}
+	// Vendor path placeholders (e.g. Meraki {org}) resolve from Params. An
+	// unresolved placeholder is a config error — fail loud, never send it raw.
+	for k, v := range in.Params {
+		path = strings.ReplaceAll(path, "{"+k+"}", url.PathEscape(v))
+	}
+	if i := strings.IndexByte(path, '{'); i >= 0 {
+		if j := strings.IndexByte(path[i:], '}'); j > 0 {
+			return nil, in.Checkpoint, fmt.Errorf("stream %q: unresolved path parameter %s (set it in the integration credentials)", in.Stream, path[i:i+j+1])
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(in.Base, "/")+path, nil)
 	if err != nil {

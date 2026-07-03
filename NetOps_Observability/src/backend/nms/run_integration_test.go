@@ -170,4 +170,42 @@ func TestSessionValidity(t *testing.T) {
 	}
 }
 
+// Meraki path params: {org} resolves from Credentials.Extra; an unresolved
+// placeholder is a config error, never sent to the vendor raw.
+func TestPollPathParams(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	do := NewRetryDoer(srv.Client(), NewTokenBucket(0), DefaultRetry())
+
+	p := merakiPoller()
+	sess, _ := (MerakiAuth{}).Authenticate(context.Background(), "", Credentials{APIKey: "k"}, nil)
+
+	// With the org id present, the placeholder resolves.
+	_, _, err := p.Poll(context.Background(), PollInput{
+		Base: srv.URL, Stream: "inventory", Session: sess, Do: do,
+		Params: map[string]string{"org": "o-123"},
+	})
+	if err != nil {
+		t.Fatalf("poll with params: %v", err)
+	}
+	if gotPath != "/api/v1/organizations/o-123/devices" {
+		t.Fatalf("path param not substituted: %q", gotPath)
+	}
+
+	// Without it, the poll refuses to send the raw placeholder.
+	gotPath = ""
+	_, _, err = p.Poll(context.Background(), PollInput{Base: srv.URL, Stream: "inventory", Session: sess, Do: do})
+	if err == nil || !strings.Contains(err.Error(), "unresolved path parameter") {
+		t.Fatalf("expected unresolved-parameter error, got %v", err)
+	}
+	if gotPath != "" {
+		t.Fatalf("request should not have been sent, but server saw %q", gotPath)
+	}
+}
+
 func itoa(n int) string { return string(rune('0' + n)) }
