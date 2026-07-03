@@ -209,3 +209,116 @@ func TestPollPathParams(t *testing.T) {
 }
 
 func itoa(n int) string { return string(rune('0' + n)) }
+
+// Session caching: a valid cached session skips the login round-trip entirely
+// (steady-state polls must not log in every cycle — controllers rate-limit and
+// audit logins); an expired cached session re-authenticates; and RunPollSession
+// returns the session it ended with so the scheduler can cache it.
+func TestRunPollSessionReusesValidSession(t *testing.T) {
+	fixture, _ := os.ReadFile(filepath.Join("fixtures", "vmanage", "tunnel_down.json"))
+	var logins int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jwt/login":
+			logins++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"tok` + itoa(logins) + `"}`))
+		case "/dataservice/alarms":
+			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer tok") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture)
+		}
+	}))
+	defer srv.Close()
+
+	conn, _ := NewRegistry().Get("vmanage")
+	do := NewRetryDoer(srv.Client(), NewTokenBucket(0), DefaultRetry())
+	cfg := IntegrationConfig{
+		Tenant: "t-a", IntegrationID: "int-vm", BaseURL: srv.URL,
+		Streams: []string{"alarms"}, Creds: Credentials{Username: "ro", Password: "pw"},
+	}
+	cps, pipe := NewMemCheckpoints(), NewPipeline(1000)
+
+	// Cycle 1: no cached session → exactly one login.
+	_, sess, err := RunPollSession(context.Background(), conn, cfg, do, cps, pipe, Session{})
+	if err != nil {
+		t.Fatalf("cycle 1: %v", err)
+	}
+	if logins != 1 {
+		t.Fatalf("cycle 1: want 1 login, got %d", logins)
+	}
+	if sess.Header == nil {
+		t.Fatal("cycle 1 must return the session it authenticated")
+	}
+
+	// Cycle 2 with the cached session: NO new login.
+	if _, sess, err = RunPollSession(context.Background(), conn, cfg, do, cps, pipe, sess); err != nil {
+		t.Fatalf("cycle 2: %v", err)
+	}
+	if logins != 1 {
+		t.Fatalf("cached session must skip login; got %d logins", logins)
+	}
+
+	// Cycle 3 with an EXPIRED cached session: fresh login.
+	sess.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+	if _, sess, err = RunPollSession(context.Background(), conn, cfg, do, cps, pipe, sess); err != nil {
+		t.Fatalf("cycle 3: %v", err)
+	}
+	if logins != 2 {
+		t.Fatalf("expired session must re-login; got %d logins", logins)
+	}
+	if !sess.Valid(time.Now().UTC()) {
+		t.Fatal("cycle 3 must return the fresh session")
+	}
+}
+
+// A cached session the CONTROLLER invalidated early (server-side revocation)
+// 401s mid-cycle: the run refreshes it via the existing re-auth path and
+// returns the FRESH session, not the revoked one.
+func TestRunPollSessionRefreshesRevokedSession(t *testing.T) {
+	fixture, _ := os.ReadFile(filepath.Join("fixtures", "vmanage", "tunnel_down.json"))
+	var logins int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jwt/login":
+			logins++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"tok` + itoa(logins) + `"}`))
+		case "/dataservice/alarms":
+			if r.Header.Get("Authorization") == "Bearer revoked" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture)
+		}
+	}))
+	defer srv.Close()
+
+	conn, _ := NewRegistry().Get("vmanage")
+	do := NewRetryDoer(srv.Client(), NewTokenBucket(0), DefaultRetry())
+	cfg := IntegrationConfig{
+		Tenant: "t-a", IntegrationID: "int-vm", BaseURL: srv.URL,
+		Streams: []string{"alarms"}, Creds: Credentials{Username: "ro", Password: "pw"},
+	}
+	revoked := Session{
+		Header:    http.Header{"Authorization": []string{"Bearer revoked"}},
+		ExpiresAt: time.Now().UTC().Add(time.Hour), // looks valid locally
+	}
+	res, sess, err := RunPollSession(context.Background(), conn, cfg, do, NewMemCheckpoints(), NewPipeline(1000), revoked)
+	if err != nil {
+		t.Fatalf("RunPollSession: %v", err)
+	}
+	if logins != 1 {
+		t.Fatalf("revoked session must trigger exactly one re-login, got %d", logins)
+	}
+	if len(res.Routed.Events) != 1 {
+		t.Fatalf("expected 1 event after refresh, got %d (errs=%v)", len(res.Routed.Events), res.Errors)
+	}
+	if sess.Header.Get("Authorization") == "Bearer revoked" {
+		t.Fatal("returned session must be the refreshed one, not the revoked one")
+	}
+}

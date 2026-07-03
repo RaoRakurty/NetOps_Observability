@@ -117,9 +117,17 @@ printf '%s' "$STATES" | grep -q '"stateKind": *"bfd"' || printf '%s' "$STATES" |
 ok "controller_state_current has the BFD session"
 
 say "6/7 Metric lane → VictoriaMetrics controller_metric_tunnel_latency_ms"
-sleep 3
-VMQ="$(docker exec netops-victoria-1 wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=controller_metric_tunnel_latency_ms')"
-printf '%s' "$VMQ" | grep -q '"__name__":"controller_metric_tunnel_latency_ms"' || die "metric not in VictoriaMetrics: $VMQ"
+# VictoriaMetrics hides the newest ~30s from instant queries by default
+# (-search.latencyOffset), so a fixed sleep races the import — poll with a
+# deadline like stage 7 does.
+VM_DEADLINE=$(( $(date +%s) + 60 ))
+VMQ=""
+while [ "$(date +%s)" -lt "$VM_DEADLINE" ]; do
+  VMQ="$(docker exec netops-victoria-1 wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=controller_metric_tunnel_latency_ms')"
+  printf '%s' "$VMQ" | grep -q '"__name__":"controller_metric_tunnel_latency_ms"' && break
+  sleep 5
+done
+printf '%s' "$VMQ" | grep -q '"__name__":"controller_metric_tunnel_latency_ms"' || die "metric not in VictoriaMetrics after 60s: $VMQ"
 ok "controller metrics landed in VictoriaMetrics"
 
 say "7/7 Event lane → correlation → ClickHouse corr_signals (source=controller)"

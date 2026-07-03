@@ -38,9 +38,10 @@ type nmsRuntime struct {
 	client         *http.Client // strict TLS (default)
 	insecureClient *http.Client // per-integration opt-in for self-signed controllers
 
-	mu      sync.Mutex
-	pipes   map[string]*nms.Pipeline // tenant\x00id → long-lived pipeline
-	lastRun map[string]time.Time     // tenant\x00id → last poll start
+	mu       sync.Mutex
+	pipes    map[string]*nms.Pipeline // tenant\x00id → long-lived pipeline
+	lastRun  map[string]time.Time     // tenant\x00id → last poll start
+	sessions map[string]nms.Session   // tenant\x00id → cached controller session (reused until expiry)
 }
 
 func newNMSRuntime(store nmsConfigStore) *nmsRuntime {
@@ -61,6 +62,7 @@ func newNMSRuntime(store nmsConfigStore) *nmsRuntime {
 		insecureClient: insecure,
 		pipes:          map[string]*nms.Pipeline{},
 		lastRun:        map[string]time.Time{},
+		sessions:       map[string]nms.Session{},
 	}
 }
 
@@ -129,6 +131,26 @@ func (rt *nmsRuntime) pipeline(key string) *nms.Pipeline {
 	return p
 }
 
+// session returns the integration's cached controller session (zero if none).
+func (rt *nmsRuntime) session(key string) nms.Session {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.sessions[key]
+}
+
+// storeSession caches the session a poll cycle ended with; a failed cycle
+// drops the cache so the next attempt performs a fresh login rather than
+// retrying a session of unknown state.
+func (rt *nmsRuntime) storeSession(key string, s nms.Session, err error) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if err != nil {
+		delete(rt.sessions, key)
+		return
+	}
+	rt.sessions[key] = s
+}
+
 func (rt *nmsRuntime) httpClient(ic nmsIntegration) *http.Client {
 	if ic.TLSSkipVerify {
 		return rt.insecureClient
@@ -192,7 +214,13 @@ func (rt *nmsRuntime) pollOnce(ctx context.Context, ic nmsIntegration) (int64, e
 		Backfill: durationOr("NMS_BACKFILL", nmsDefaultBackfill),
 		Creds:    creds,
 	}
-	res, err := nms.RunPoll(ctx, conn, cfg, do, rt.store.Checkpoints(), rt.pipeline(nmsKey(ic.Tenant, ic.ID)))
+	// Reuse the integration's cached controller session until it expires (or a
+	// 401 refreshes it inside the run) — steady 30-60s polls must not log in to
+	// the controller every cycle. An errored run clears the cache so the next
+	// attempt starts from a clean login.
+	key := nmsKey(ic.Tenant, ic.ID)
+	res, sess, err := nms.RunPollSession(ctx, conn, cfg, do, rt.store.Checkpoints(), rt.pipeline(key), rt.session(key))
+	rt.storeSession(key, sess, err)
 	if err != nil {
 		return 0, err
 	}

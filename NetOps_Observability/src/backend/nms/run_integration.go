@@ -34,15 +34,33 @@ type RunResult struct {
 // the injected connector + Doer + checkpoint store — fully testable with an
 // httptest server.
 func RunPoll(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer, cps CheckpointStore, pipe *Pipeline) (RunResult, error) {
+	res, _, err := RunPollSession(ctx, conn, cfg, do, cps, pipe, Session{})
+	return res, err
+}
+
+// RunPollSession is RunPoll with a caller-held session cache: a still-valid
+// cached Session skips the login round-trip (a scheduler polling every 30-60s
+// would otherwise log in on every cycle — controllers rate-limit and audit
+// logins, so steady-state polls must reuse the token until it expires). It
+// returns the session that ended the cycle so the caller can cache it; the
+// per-stream 401 re-auth stays the safety net for tokens the controller
+// invalidates early. A zero cached Session (or an expired one) authenticates
+// exactly like RunPoll.
+func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer, cps CheckpointStore, pipe *Pipeline, cached Session) (RunResult, Session, error) {
 	res := RunResult{Checkpoints: map[string]Checkpoint{}, Errors: map[string]error{}}
 	poller := conn.Poller()
 	if poller == nil {
-		return res, errors.New("connector is webhook-only (no poller)")
+		return res, Session{}, errors.New("connector is webhook-only (no poller)")
 	}
 
-	sess, err := conn.Auth().Authenticate(ctx, cfg.BaseURL, cfg.Creds, do)
-	if err != nil {
-		return res, err
+	// A zero Session has a nil Header; Valid() alone can't reject it because a
+	// zero ExpiresAt legitimately means "non-expiring" (static API key).
+	sess := cached
+	if sess.Header == nil || !sess.Valid(time.Now().UTC()) {
+		var err error
+		if sess, err = conn.Auth().Authenticate(ctx, cfg.BaseURL, cfg.Creds, do); err != nil {
+			return res, Session{}, err
+		}
 	}
 
 	for _, stream := range cfg.Streams {
@@ -52,9 +70,11 @@ func RunPoll(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer
 			Backfill: cfg.Backfill, Do: do, Params: cfg.Creds.Extra,
 		}
 		raws, next, perr := poller.Poll(ctx, in)
-		// One re-auth retry on 401 (token expired mid-cycle).
+		// One re-auth retry on 401 (token expired mid-cycle or a cached session
+		// the controller invalidated early).
 		if errors.Is(perr, ErrUnauthorized) {
-			if sess, err = conn.Auth().Authenticate(ctx, cfg.BaseURL, cfg.Creds, do); err == nil {
+			if fresh, aerr := conn.Auth().Authenticate(ctx, cfg.BaseURL, cfg.Creds, do); aerr == nil {
+				sess = fresh
 				in.Session = sess
 				raws, next, perr = poller.Poll(ctx, in)
 			}
@@ -78,5 +98,5 @@ func RunPoll(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer
 		res.Checkpoints[stream] = next
 		_ = cps.Save(ctx, cfg.Tenant, cfg.IntegrationID, stream, next)
 	}
-	return res, nil
+	return res, sess, nil
 }
