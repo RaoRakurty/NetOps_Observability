@@ -17,20 +17,25 @@ CREATE DATABASE IF NOT EXISTS netops;
 CREATE TABLE IF NOT EXISTS netops.flows
 (
     ts              DateTime64(3) DEFAULT now64(3),
-    time_received_ns UInt64,
+    -- Codecs (#96): near-sorted ns timestamps delta-encode well; per-row
+    -- counters shrink under T64 (values use few of their 64 bits); IP strings
+    -- compress ~2x better under ZSTD than the LZ4 default. Measured -19% on
+    -- 16.6M live rows; applied to the live table via ALTER, kept here for
+    -- fresh installs.
+    time_received_ns UInt64 CODEC(DoubleDelta, LZ4),
     sampler_address String,
-    src_addr        String,
-    dst_addr        String,
+    src_addr        String CODEC(ZSTD(1)),
+    dst_addr        String CODEC(ZSTD(1)),
     src_port        UInt16,
     dst_port        UInt16,
     proto           UInt8,
-    bytes           UInt64,
-    packets         UInt64,
+    bytes           UInt64 CODEC(T64, LZ4),
+    packets         UInt64 CODEC(T64, LZ4),
     in_if           UInt32,
     out_if          UInt32,
     src_as          UInt32,
     dst_as          UInt32,
-    sampling_rate   UInt32,
+    sampling_rate   UInt32 CODEC(T64, LZ4),
     vlan_id         UInt16,
     tcp_flags       UInt16 DEFAULT 0,  -- tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS) via goflow2; 0 = none/not exported
     flow_type       LowCardinality(String) DEFAULT 'unknown',  -- netflow | ipfix | sflow

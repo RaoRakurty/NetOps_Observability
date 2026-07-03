@@ -416,6 +416,11 @@ services:
     command:
       - "--retentionPeriod=${VICTORIA_RETENTION:-30d}"
       - "--storageDataPath=/victoria"
+      # Keep one sample per series per 30s window — every producer runs at
+      # >=30s cadence (SNMP 30-60s, gNMI sample-interval 30s, STAMP_INTERVAL
+      # 30s, Prometheus scrape 30s), so this only drops duplicates, never
+      # signal. Standard VM pairing with the scrape interval (#96).
+      - "--dedup.minScrapeInterval=${VICTORIA_DEDUP:-30s}"
     volumes:
       - ../../data/victoria:/victoria
     healthcheck:
