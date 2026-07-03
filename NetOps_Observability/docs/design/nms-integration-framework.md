@@ -332,24 +332,24 @@ the RCA object's evidence set + the modality/authority tags — no new retrieval
 Read-only throughout; the connector interface leaves room for a future
 write-back capability behind a separate flag (never in phase 1).
 
-## 6a. Reference validation — Datadog's Cisco SD-WAN integration
+## 6a. Reference validation — how mature SD-WAN monitoring works
 
-The owner cited Datadog's Cisco SD-WAN integration
-(docs.datadoghq.com/integrations/cisco_sdwan). It **confirms** the finalized
-model directly:
+Cross-checking the finalized model against how established network-monitoring
+products consume a Cisco SD-WAN controller (vManage / Catalyst SD-WAN Manager)
+confirms the design:
 
-- **REST polling, not webhooks** for vManage / Catalyst SD-WAN Manager (matches
-  the `Poller`; webhooks are Meraki/Catalyst).
-- **Least-privilege read-only creds** — only the "Device monitoring" permission
-  group. Reinforces phase-1 read-only + a documented minimal-permission service
-  account per vendor (security.md).
-- **Consistent site/device tagging** (`admin_status`/`oper_status`) — maps to
-  our metric tags + `device_id`/`site_id`/`interface_name` join keys.
-- **40+ continuous metrics AND discrete state** — Datadog blends them; Correlix
-  splits them across the **three signal classes** in §3 (metric → VM; state →
-  state table + change-events; alarms → controller_events). This is why §3's
-  three-class routing (owner update) is the right model, not "everything is an
-  event."
+- **REST polling, not webhooks** for vManage (matches the `Poller`; webhooks are
+  Meraki/Catalyst).
+- **Least-privilege read-only creds** — a "device monitoring"-scoped account is
+  sufficient. Reinforces phase-1 read-only + a documented minimal-permission
+  service account per vendor (security.md).
+- **Consistent site/device tagging** (`admin_status`/`oper_status`) — maps to our
+  metric tags + `device_id`/`site_id`/`interface_name` join keys.
+- **Continuous metrics AND discrete state** are both pulled (tunnel latency/loss/
+  jitter/QoE, BFD/OMP/control-connection counts, device CPU/mem, interface
+  stats). Correlix splits these across the **three signal classes** in §3 (metric
+  → VM; state → state table + change-events; alarms → controller_events) — the
+  three-class routing is the right model, not "everything is an event."
 
 ## 7. Key deviations from the brief (summary)
 
