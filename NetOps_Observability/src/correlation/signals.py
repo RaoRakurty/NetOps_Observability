@@ -38,6 +38,7 @@ class Source(str, Enum):
     SOT_DRIFT = "sot_drift"
     CLOUD = "cloud"  # #81 P3G: Cloud App Observability plane (cloud APIs + cloud logs)
     APP_IDENTITY = "app_identity"  # #81 P5: fused application identity (enrichment, not a fault)
+    CONTROLLER = "controller"  # NMS: vendor-controller intelligence (Meraki/vManage/Catalyst/…)
 
 
 class ObserverType(str, Enum):
@@ -46,6 +47,7 @@ class ObserverType(str, Enum):
     CLOUD_API = "cloud_api"
     FLOW_EXPORTER = "flow_exporter"
     PLATFORM = "platform"
+    CONTROLLER = "controller"  # NMS: a vendor management controller as the witness
 
 
 class ModalityClass(str, Enum):
@@ -53,6 +55,9 @@ class ModalityClass(str, Enum):
     PASSIVE_FLOW = "passive_flow"
     CONTROL_PLANE = "control_plane"
     DEVICE_TELEMETRY = "device_telemetry"
+    # NMS: a distinct modality so the independence gate treats a controller as a
+    # corroborating-but-not-confirming plane (controller-alone caps at suspected).
+    MANAGEMENT_PLANE = "management_plane"
 
 
 class EntityType(str, Enum):
