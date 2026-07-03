@@ -537,18 +537,50 @@ def ensure_data_dirs(root: Path) -> None:
 
 # ---- compose ----------------------------------------------------------------
 
-def compose_up(compose_dir: Path) -> None:
-    info("building and starting services (this can take a few minutes the first time)…")
+def compose_up(compose_dir: Path, offline: bool = False) -> None:
     # --profile osd brings up OpenSearch Dashboards alongside the base stack so the
     # platform-admin /search route is served rather than 502-ing (nginx still
     # graceful-degrades if it's later stopped). The "sso" profile (Keycloak) stays
     # opt-in. Profiles are additive: non-profiled services always start.
+    #
+    # Offline installs (client bundles built by scripts/make-installer.sh) start
+    # from pre-loaded images: --no-build means a missing image is a hard, honest
+    # error instead of a silent multi-GB build/pull attempt on a host that may
+    # have no registry access at all.
+    if offline:
+        info("starting services from pre-loaded images (offline install)…")
+        build_flag = "--no-build"
+    else:
+        info("building and starting services (this can take a few minutes the first time)…")
+        build_flag = "--build"
     subprocess.run(
-        ["docker", "compose", "--profile", "osd", "up", "-d", "--build"],
+        ["docker", "compose", "--profile", "osd", "up", "-d", build_flag],
         cwd=str(compose_dir),
         check=True,
     )
     ok("services started")
+
+
+def load_bundle(bundle: Path) -> None:
+    """docker-load the installer's image archive (.tar, .tar.gz, or .tar.zst).
+
+    docker load handles gzip natively; zstd archives are streamed through the
+    host's zstd binary (a documented prerequisite of the offline bundle).
+    """
+    if not bundle.is_file():
+        fail(f"image bundle not found: {bundle}")
+    info(f"loading images from {bundle.name} (this can take a few minutes)…")
+    if bundle.suffix == ".zst":
+        if shutil.which("zstd") is None:
+            fail("zstd is required to unpack the image bundle: apt-get install zstd")
+        zstd = subprocess.Popen(["zstd", "-dc", str(bundle)], stdout=subprocess.PIPE)
+        res = subprocess.run(["docker", "load"], stdin=zstd.stdout)
+        zstd.stdout.close()
+        if zstd.wait() != 0 or res.returncode != 0:
+            fail("docker load from bundle failed")
+    else:
+        subprocess.run(["docker", "load", "-i", str(bundle)], check=True)
+    ok("images loaded")
 
 
 def compose_status(compose_dir: Path) -> None:
@@ -702,7 +734,13 @@ def main() -> None:
                     help="Generate config but don't run docker compose up.")
     ap.add_argument("--reset-env", action="store_true",
                     help="Regenerate .env (rotates secrets).")
+    ap.add_argument("--offline", action="store_true",
+                    help="Air-gapped install: start from pre-loaded images, never build or pull.")
+    ap.add_argument("--bundle", type=Path, default=None, metavar="IMAGES.tar.zst",
+                    help="Image archive from make-installer.sh to docker-load first (implies --offline).")
     args = ap.parse_args()
+    if args.bundle:
+        args.offline = True
 
     # Project root = parent of `scripts/` containing this file.
     root = Path(__file__).resolve().parent.parent
@@ -725,8 +763,12 @@ def main() -> None:
         ok(".env and data/ ready. Skipping docker compose up (per --no-start).")
         return
 
+    if args.bundle:
+        step("loading image bundle")
+        load_bundle(args.bundle)
+
     step("starting stack")
-    compose_up(compose_dir)
+    compose_up(compose_dir, offline=args.offline)
 
     step("status")
     compose_status(compose_dir)
