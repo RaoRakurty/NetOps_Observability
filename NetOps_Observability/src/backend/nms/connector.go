@@ -24,17 +24,42 @@ const (
 
 // ConnectorSpec is a connector's static description — what it is and how it's
 // driven. Purely declarative; no secrets.
+//
+// AUTH POLICY (owner, 2026-07-03):
+//   - Every connector supports a simple credential auth for TESTING — Basic
+//     (username/password) wherever the vendor has that concept. The one
+//     exception is Meraki, which has no username/password at all: its simple
+//     test-path credential is the API key (we do not invent a Basic flow a
+//     vendor doesn't expose).
+//   - OAuth is implemented FULLY for every vendor that supports it (verified
+//     2026: Meraki OAuth 2.0, Versa Director/Concerto). Where OAuth exists it is
+//     the PreferredAuth; the runtime falls back to the supported list otherwise.
+//   - The other Cisco platforms expose no OAuth (verified): they use
+//     username/password → short-lived JWT/token (Catalyst Center, vManage,
+//     NDFC) or session (older vManage) or raw Basic (Prime, legacy). Basic /
+//     credential login is therefore always a supported path for them.
 type ConnectorSpec struct {
 	Vendor       string        // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
 	Product      string        // human product name
 	SourceSystem string        // maps to Signal source_system
-	Auth         AuthKind
+	SupportedAuth []AuthKind   // all auth flows this connector implements (Basic/API-key always present for testing)
+	PreferredAuth AuthKind     // the flow the wizard defaults to (OAuth where the vendor supports it)
 	Webhook      bool          // supports inbound webhooks
 	Poll         bool          // supports REST polling
 	Streams      []string      // logical streams it can poll (alarms, inventory, tunnels, …)
 	DefaultPoll  time.Duration // recommended poll interval
 	// RatePerSec bounds outbound calls (0 = connector default). E.g. Meraki 10/s.
 	RatePerSec float64
+}
+
+// SupportsAuth reports whether the connector implements an auth kind.
+func (s ConnectorSpec) SupportsAuth(k AuthKind) bool {
+	for _, a := range s.SupportedAuth {
+		if a == k {
+			return true
+		}
+	}
+	return false
 }
 
 // Credentials is the resolved (decrypted) secret material handed to an
