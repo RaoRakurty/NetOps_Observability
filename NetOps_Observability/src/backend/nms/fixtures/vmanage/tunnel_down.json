@@ -1,0 +1,29 @@
+{
+  "data": [
+    {
+      "uuid": "abcd-1234-ef56-7890",
+      "eventname": "bfd-state-change",
+      "type": "bfd_tloc_down",
+      "rule_name_display": "BFD Session Down",
+      "component": "BFD",
+      "severity": "Critical",
+      "severity_number": 1,
+      "entry_time": 1751540400000,
+      "system_ip": "10.1.1.1",
+      "host_name": "vEdge-Branch-1",
+      "site_id": "100",
+      "active": true,
+      "acknowledged": false,
+      "values": [
+        {
+          "system-ip": "10.1.1.1",
+          "local-color": "mpls",
+          "remote-color": "biz-internet",
+          "src-ip": "192.0.2.1",
+          "dst-ip": "198.51.100.7",
+          "proto": "ipsec"
+        }
+      ]
+    }
+  ]
+}

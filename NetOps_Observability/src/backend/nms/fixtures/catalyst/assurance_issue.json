@@ -1,0 +1,20 @@
+{
+  "response": [
+    {
+      "issueId": "e5b3a2c1-1111-2222-3333-444455556666",
+      "name": "Interface GigabitEthernet1/0/1 is down on switch SW-Access-3",
+      "priority": "P1",
+      "severity": "HIGH",
+      "category": "Connected",
+      "status": "active",
+      "deviceId": "aa:bb:cc:dd:ee:ff",
+      "deviceName": "SW-Access-3",
+      "siteId": "site-9f2",
+      "siteName": "Campus / Building A / Floor 2",
+      "entityType": "interface",
+      "entity": "GigabitEthernet1/0/1",
+      "lastOccurenceTime": 1751540370000,
+      "issueCount": 3
+    }
+  ]
+}
