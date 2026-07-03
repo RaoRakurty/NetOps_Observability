@@ -1945,6 +1945,10 @@ export const api = {
       ? request<SNMPCredential>(`/api/snmp/credentials/${encodeURIComponent(c.id)}`, { method: "PUT", body: JSON.stringify(c) })
       : request<SNMPCredential>("/api/snmp/credentials", { method: "POST", body: JSON.stringify(c) }),
   deleteSnmpCred: (id: string) => request<void>(`/api/snmp/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // SNMP config generator — returns the device CLI block + provisions the
+  // matching profile (secrets shown once). Platform-admin only.
+  generateSnmpConfig: (body: { vendor: string; version: string; mgmt_subnet?: string; mask?: string; skip_profile?: boolean }) =>
+    request<SnmpGenResult>("/api/onboard/snmp-config", { method: "POST", body: JSON.stringify(body) }),
 
   // ----- Security Policy (#24) — NIST-aligned controls resolved through the
   // System→Tenant→Role→User hierarchy. Admin-gated; system/global = platform
@@ -2089,6 +2093,18 @@ export type SNMPOptions = {
 };
 // Secrets (community/auth_key/priv_key) are write-only: sent on save, never
 // returned. has_* booleans report whether one is stored.
+export type SnmpGenResult = {
+  vendor: string;
+  version: string;
+  templated: boolean;
+  profile_id: string;
+  device_config: string;
+  community?: string;
+  security_name?: string;
+  auth_key?: string;
+  priv_key?: string;
+};
+
 export type SNMPCredential = {
   id?: string;
   name: string;

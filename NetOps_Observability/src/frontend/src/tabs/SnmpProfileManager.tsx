@@ -1,16 +1,18 @@
 import { useState } from "react";
 import SnmpCredentials from "./SnmpCredentials";
 import SnmpProfiles from "./SnmpProfiles";
+import SnmpConfigGenerator from "./SnmpConfigGenerator";
 
 // SnmpProfileManager — one roof for SNMP Credentials & Profiles (previously two
 // separate Infrastructure leaves). An internal segmented control switches between
 // the credential vault (per-device community / v3 USM secrets) and the vendor
 // OID/metric profile library, so operators manage both in one place.
-type Pane = "credentials" | "profiles";
+type Pane = "credentials" | "profiles" | "generate";
 
 const PANES: { id: Pane; label: string; hint: string }[] = [
   { id: "credentials", label: "Credentials", hint: "Per-device community / SNMPv3 USM secrets" },
   { id: "profiles", label: "Profiles", hint: "Vendor OID & metric library" },
+  { id: "generate", label: "Generate config", hint: "One-click device config + auto-provisioned profile" },
 ];
 
 export default function SnmpProfileManager() {
@@ -36,7 +38,7 @@ export default function SnmpProfileManager() {
           <span style={{ color: "var(--muted)", fontSize: 12 }}>{active.hint}</span>
         </div>
       </div>
-      {pane === "credentials" ? <SnmpCredentials /> : <SnmpProfiles />}
+      {pane === "credentials" ? <SnmpCredentials /> : pane === "profiles" ? <SnmpProfiles /> : <SnmpConfigGenerator />}
     </>
   );
 }
