@@ -246,6 +246,9 @@ func newServer() *server {
 	pool.Enable("netconf", os.Getenv("ENABLE_NETCONF_COLLECTION") == "true")
 	pool.Enable("tunnels", os.Getenv("ENABLE_TUNNEL_DISCOVERY") == "true")
 	pool.Enable("snmpmetrics", os.Getenv("ENABLE_SNMP_METRICS") == "true")
+	// Ubiquiti UniFi controller connector (device health via the controller API,
+	// not device SNMP). Opt-in; needs UNIFI_URL + creds.
+	pool.Enable("unifi", os.Getenv("FEATURE_UNIFI") == "true")
 	// LLDP neighbour discovery (real Layer-1 topology links via SNMP LLDP-MIB) —
 	// opt-in; without it the Device Topology keeps the labelled tier-inference
 	// fallback. Reuses the per-device SNMP creds; UDP/161, no raw socket.

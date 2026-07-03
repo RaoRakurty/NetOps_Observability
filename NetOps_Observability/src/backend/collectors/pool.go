@@ -64,6 +64,7 @@ func NewPool(targets TargetFunc) *Pool {
 	p.register(NewLLDP(targets))
 	p.register(NewCDP(targets))
 	p.register(NewBGPLS())
+	p.register(NewUniFi())
 	return p
 }
 

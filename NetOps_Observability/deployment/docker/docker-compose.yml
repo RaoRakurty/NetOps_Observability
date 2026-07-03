@@ -674,6 +674,14 @@ services:
       ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # Ubiquiti UniFi controller connector — device health via the controller
+      # API (client count, state, cpu/mem, satisfaction). Opt-in; needs URL+creds.
+      FEATURE_UNIFI: ${FEATURE_UNIFI:-false}
+      UNIFI_URL: ${UNIFI_URL:-}
+      UNIFI_SITE: ${UNIFI_SITE:-default}
+      UNIFI_USER: ${UNIFI_USER:-}
+      UNIFI_PASSWORD: ${UNIFI_PASSWORD:-}
+      UNIFI_OS: ${UNIFI_OS:-false}
       # Port Intelligence #94 P3: DOM/DDM optics via ENTITY-SENSOR-MIB (rx/tx
       # power, temp, voltage, bias per port → port_optics_* VM series). Opt-in;
       # best-effort (devices without ENTITY-SENSOR yield nothing).
