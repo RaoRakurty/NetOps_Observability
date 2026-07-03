@@ -789,6 +789,10 @@ services:
       # alert). DORMANT unless FEATURE_RCA_TICKETING=true; the connection is the
       # per-tenant ServiceNow configured in Incident Response → Integrations.
       FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
+      # NMS vendor-controller integrations (#95): poll 3rd-party controllers
+      # (Meraki / Catalyst Center / vManage / NDFC / Versa / Prime / generic)
+      # as normalized RCA evidence. DORMANT unless FEATURE_NMS_INTEGRATIONS=true.
+      FEATURE_NMS_INTEGRATIONS: ${FEATURE_NMS_INTEGRATIONS:-false}
       # SSRF allowlist for outbound integrations (ITSM/webhooks). The outbound
       # guard (safehttp) refuses private/internal targets by default; add a
       # self-hosted/lab ServiceNow or the bundled mock-servicenow fixture here

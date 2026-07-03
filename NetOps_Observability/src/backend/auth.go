@@ -659,6 +659,13 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// NMS controller webhooks (#95): external controllers call in with no
+		// JWT; the handler authenticates via the opaque path token + the
+		// connector's signature verification before touching state — fail-closed.
+		if strings.HasPrefix(r.URL.Path, "/api/nms/webhook/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Anything outside /api/ and /admin/ (i.e. /metrics is the only
 		// odd duck, already handled above) is fronted by the SPA / iframes
 		// and doesn't go through this Go server.

@@ -86,34 +86,36 @@ type ControllerState struct {
 }
 
 // ControllerEvent is a discrete alarm/audit/change/incident (§3.3). Field set
-// matches the design's canonical schema.
+// matches the design's canonical schema. The snake_case JSON tags are the WIRE
+// CONTRACT with the correlation consumer (controller_events.py reads exactly
+// these keys off netops.controller_events) — do not rename one side alone.
 type ControllerEvent struct {
-	TenantID            string
-	IntegrationID       string
-	SourceSystem        string
-	Vendor              string
-	Product             string
-	EventID             string // vendor's own event id (raw dedup key input)
-	EventTime           time.Time
-	IngestTime          time.Time
-	EventType           string // vendor-native type
-	NormalizedEventType string // controller_alarm | controller_tunnel_state | controller_policy_change | ...
-	Severity            string // info | warn | high | crit
-	Category            string
-	DeviceID            string
-	DeviceName          string
-	SiteID              string
-	SiteName            string
-	InterfaceName       string
-	TunnelID            string
-	PeerID              string
-	Application         string
-	Message             string
-	RawPayload          []byte
-	DedupeKey           string
-	Confidence          float64
-	EvidenceRole        EvidenceRole
-	CorrelationHints    map[string]string
+	TenantID            string            `json:"tenant_id"`
+	IntegrationID       string            `json:"integration_id"`
+	SourceSystem        string            `json:"source_system"`
+	Vendor              string            `json:"vendor"`
+	Product             string            `json:"product"`
+	EventID             string            `json:"event_id"` // vendor's own event id (raw dedup key input)
+	EventTime           time.Time         `json:"event_time"`
+	IngestTime          time.Time         `json:"ingest_time"`
+	EventType           string            `json:"event_type"`            // vendor-native type
+	NormalizedEventType string            `json:"normalized_event_type"` // controller_alarm | controller_tunnel_state | ...
+	Severity            string            `json:"severity"`              // info | warn | high | crit
+	Category            string            `json:"category"`
+	DeviceID            string            `json:"device_id"`
+	DeviceName          string            `json:"device_name"`
+	SiteID              string            `json:"site_id"`
+	SiteName            string            `json:"site_name"`
+	InterfaceName       string            `json:"interface_name"`
+	TunnelID            string            `json:"tunnel_id"`
+	PeerID              string            `json:"peer_id"`
+	Application         string            `json:"application"`
+	Message             string            `json:"message"`
+	RawPayload          []byte            `json:"raw_payload,omitempty"`
+	DedupeKey           string            `json:"dedupe_key,omitempty"`
+	Confidence          float64           `json:"confidence,omitempty"`
+	EvidenceRole        EvidenceRole      `json:"evidence_role,omitempty"`
+	CorrelationHints    map[string]string `json:"correlation_hints,omitempty"`
 }
 
 // Batch is what a Transformer returns for one raw response: the three classes,

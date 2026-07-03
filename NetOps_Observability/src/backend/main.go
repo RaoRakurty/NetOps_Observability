@@ -26,6 +26,7 @@ import (
 	"netops/backend/alerts"
 	"netops/backend/collectors"
 	"netops/backend/integration"
+	"netops/backend/nms"
 	"netops/backend/models"
 	"netops/backend/notify"
 	"netops/backend/reports"
@@ -98,6 +99,7 @@ type server struct {
 	cloudApp            *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	integrations        *integrationStore        // integration-platform persistence (nil on file backend)
 	providers           *integration.Registry    // inbound provider translators (registry)
+	nms                 *nmsRuntime              // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
 	intMetrics          *integrationMetrics      // integration-platform Prometheus counters
 	vault               *Vault                   // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv              *tlsServer               // opt-in HTTPS/mTLS listener config (nil = plaintext)
@@ -501,6 +503,16 @@ func newServer() *server {
 		srv.integrations = newIntegrationStore(ps.db, vault)
 	}
 	srv.providers = integration.DefaultRegistry()
+	// NMS vendor-controller framework (#95 P3b): dormant unless
+	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
+	// FORCE-RLS); in-memory store on the file backend (dev).
+	if nms.Enabled() {
+		if ps, ok := backend.(*pgStore); ok {
+			srv.nms = newNMSRuntime(newPGNMSStore(ps.db, vault))
+		} else {
+			srv.nms = newNMSRuntime(newMemNMSStore())
+		}
+	}
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
@@ -649,6 +661,13 @@ func main() {
 		// incident time-decomposition renders. Self-dormant when no connection is set.
 		go newTicketStateSyncer(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_INBOUND_INTERVAL", 45*time.Second))
 		logInfo("ticketing", "RCA auto-ticketing enabled", nil)
+	}
+	// NMS controller polling (#95 P3b): each enabled integration polls on its
+	// own interval; the tick only re-evaluates due-ness. Non-nil only when
+	// FEATURE_NMS_INTEGRATIONS=true.
+	if srv.nms != nil {
+		go srv.nms.Run(ctx, durationOr("NMS_POLL_TICK", 30*time.Second))
+		logInfo("nms", "NMS integration scheduler enabled", nil)
 	}
 	go srv.startBroadcaster(ctx.Done())
 	go srv.watchAlertsForBroadcast(ctx)
@@ -968,6 +987,12 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/integrations/reconcile", s.handleIntegrationReconcile) // exact path wins over the prefix below
 	mux.HandleFunc("/api/integrations/", s.handleIntegrations)
 	mux.HandleFunc("/api/integrations/webhook/", s.handleIntegrationWebhook)
+	// NMS vendor-controller framework (#95): handlers 404 when the feature is
+	// dormant (s.nms == nil), so registration is unconditional (tests included).
+	mux.HandleFunc("/api/nms/connectors", s.handleNMSConnectors)
+	mux.HandleFunc("/api/nms/integrations", s.handleNMSIntegrations)
+	mux.HandleFunc("/api/nms/integrations/", s.handleNMSIntegrationItem)
+	mux.HandleFunc("/api/nms/webhook/", s.handleNMSWebhook)
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	mux.HandleFunc("/api/audit", s.handleAudit)

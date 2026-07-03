@@ -50,6 +50,7 @@ from episodes import EpisodeDetector
 from cloud_log_parsers import cloud_log_event
 from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
+from controller_events import controller_event_to_signal
 from producers import (
     episode_signal,
     flow_sample,
@@ -86,7 +87,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events"]
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -198,6 +199,9 @@ CLOUD_SIGNALS = 0             # source=cloud signals written to corr_signals + b
 CLOUD_DROPPED = 0             # dropped: no tenant (default-closed) / malformed (dead-letter)
 APP_ID_RECEIVED = 0           # consumed from netops.app.identities.v1 (#81 P5 fusion lane)
 APP_ID_SIGNALS = 0            # source=app_identity enrichment signals written + buffered
+CONTROLLER_EVENTS_RECEIVED = 0  # consumed from netops.controller_events (#95 NMS lane)
+CONTROLLER_EVENTS_SIGNALS = 0   # source=controller signals written to corr_signals + buffered
+CONTROLLER_EVENTS_DROPPED = 0   # dropped: no tenant/kind identity (default-closed)
 APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
 
 # Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
@@ -889,6 +893,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_cloud(event)
     elif topic == "netops.app.identities.v1":
         await handle_app_identity(event)
+    elif topic == "netops.controller_events":
+        await handle_controller_event(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -1151,6 +1157,27 @@ async def handle_snmptrap(ev: dict) -> None:
     TRAPS_NORMALIZED += 1
     buffer_signal(sig)
     log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
+
+
+async def handle_controller_event(ev: dict) -> None:
+    """Normalized controller_event (netops.controller_events, the Go nms poll
+    runtime #95) → management-plane signal on the SAME spine. Vendor-neutral:
+    the producer already normalized kinds, so Meraki == Versa == vManage here.
+    A controller is ONE modality (Source.CONTROLLER + MANAGEMENT_PLANE): the
+    independence gate caps controller-alone pictures at suspected — confirmation
+    always needs corroborating direct telemetry (the 3-tier evidence hierarchy)."""
+    global CONTROLLER_EVENTS_RECEIVED, CONTROLLER_EVENTS_SIGNALS, CONTROLLER_EVENTS_DROPPED
+    CONTROLLER_EVENTS_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    sig = controller_event_to_signal(ev, datetime.now(timezone.utc))
+    if sig is None:
+        CONTROLLER_EVENTS_DROPPED += 1  # no tenant/kind identity — default-closed
+        return
+    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    CONTROLLER_EVENTS_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("controller signal %s: %s", sig.kind, sig.entity_id)
 
 
 async def handle_cloud(ev: dict) -> None:
@@ -1437,6 +1464,10 @@ async def health() -> dict:
             "app_identity_received": APP_ID_RECEIVED,
             "app_identity_signals": APP_ID_SIGNALS,
             "app_identity_dropped": APP_ID_DROPPED,
+            # #95 NMS controller lane: proves netops.controller_events is consumed.
+            "controller_events_received": CONTROLLER_EVENTS_RECEIVED,
+            "controller_events_signals": CONTROLLER_EVENTS_SIGNALS,
+            "controller_events_dropped": CONTROLLER_EVENTS_DROPPED,
         },
     }
 
