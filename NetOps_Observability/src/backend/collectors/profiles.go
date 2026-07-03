@@ -220,6 +220,47 @@ func builtinProfiles() []SNMPProfile {
 			Enterprise: 41112,
 			Metrics:    []SNMPMetric{},
 		},
+		// Huawei VRP (HUAWEI-ENTITY-EXTENT-MIB, hwEntityStateTable). Per-entity
+		// CPU / memory / temperature indexed by entPhysicalIndex. Verify against a
+		// live VRP device (CE/NE/AR lines vary).
+		{
+			Name:       "huawei",
+			Enterprise: 2011,
+			Metrics: []SNMPMetric{
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 5}, Table: true},  // hwEntityCpuUsage
+				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 7}, Table: true},  // hwEntityMemUsage
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 11}, Table: true}, // hwEntityTemperature
+			},
+		},
+		// Extreme EXOS (EXTREME-SYSTEM-MIB). CPU / free memory / temperature.
+		// Verify against a live EXOS switch.
+		{
+			Name:       "extreme",
+			Enterprise: 1916,
+			Metrics: []SNMPMetric{
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 1, 4, 1, 4}, Table: true},      // extremeCpuMonitorTotalUtilization
+				{Name: "device_mem_free_kb", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 2, 2, 1, 3}, Table: true},      // extremeMemoryMonitorSystemFree
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 1, 1, 8}},                          // extremeCurrentTemperature (scalar)
+			},
+		},
+		// Arista EOS — standard-MIB native: CPU/memory via HOST-RESOURCES and
+		// temperature via ENTITY-SENSOR are ALL supplied by the generic floor
+		// (hrProcessorLoad + entPhySensorValue). A dedicated profile would only
+		// duplicate the floor, so this stays registered-only for labelling.
+		{
+			Name:       "arista",
+			Enterprise: 30065,
+			Metrics:    []SNMPMetric{},
+		},
+		// Dell — networking OS is fragmented (OS10 / OS9-Force10 / PowerConnect,
+		// each a different enterprise sub-tree, and 674 also covers iDRAC servers).
+		// Registered for labelling + the generic floor; a real profile must target
+		// the specific Dell OS once identified (do not guess a shared OID tree).
+		{
+			Name:       "dell",
+			Enterprise: 674,
+			Metrics:    []SNMPMetric{},
+		},
 	}
 }
 
