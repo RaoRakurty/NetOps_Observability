@@ -119,7 +119,7 @@ func TestParseRetryAfter(t *testing.T) {
 
 func TestTokenBucketRateLimits(t *testing.T) {
 	// Deterministic clock: virtual time advanced by the fake sleep.
-	var vt time.Time = time.Unix(0, 0)
+	vt := time.Unix(0, 0)
 	b := NewTokenBucket(10) // 10/s, burst 10
 	b.now = func() time.Time { return vt }
 	b.sleep = func(_ context.Context, d time.Duration) error { vt = vt.Add(d); return nil }

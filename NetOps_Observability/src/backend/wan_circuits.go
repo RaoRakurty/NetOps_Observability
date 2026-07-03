@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: non-crypto stable fingerprint (wanCircuitID doc)
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -406,8 +406,11 @@ func deviceIDForName(name string, nameToID map[string]string) string {
 	return nameToID[strings.ToLower(name)]
 }
 
+// wanCircuitID derives the stable circuit identifier. SHA-1 here is a
+// non-cryptographic fingerprint: the ids are already persisted in metric
+// series and the UI, so the algorithm must stay put for continuity.
 func wanCircuitID(local, remote WanEndpoint) string {
-	h := sha1.Sum([]byte(local.Device + "|" + local.Interface + "|" + remote.Measurable))
+	h := sha1.Sum([]byte(local.Device + "|" + local.Interface + "|" + remote.Measurable)) //nolint:gosec // G401: see doc comment
 	return "wan-" + hex.EncodeToString(h[:6])
 }
 

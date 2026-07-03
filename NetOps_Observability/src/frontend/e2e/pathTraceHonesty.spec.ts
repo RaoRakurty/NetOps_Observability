@@ -60,9 +60,16 @@ async function openPathTrace(page: Page, pathSource: "computed" | "measured") {
 test("a COMPUTED path is labeled an inference, never a live trace (#8)", async ({ page }) => {
   await openPathTrace(page, "computed");
 
-  const chip = page.getByText(/Computed/);
+  // The provenance label appears on the header chip AND in the per-hop detail
+  // panel (#85) — anchor on the canonical chip, then require EVERY instance to
+  // carry the honesty wording.
+  const chip = page.locator("span.netpath-prov");
   await expect(chip).toBeVisible();
+  await expect(chip).toContainText(/Computed/);
   await expect(chip).toContainText(/not a live trace/i);
+  for (const el of await page.getByText(/Computed/).all()) {
+    await expect(el).toContainText(/not a live trace/i);
+  }
   // The non-negotiable: a computed path must NOT be presented as measured.
   await expect(page.getByText("Measured · live traceroute")).toHaveCount(0);
 });
@@ -70,6 +77,6 @@ test("a COMPUTED path is labeled an inference, never a live trace (#8)", async (
 test("a MEASURED path is labeled as measured ground truth", async ({ page }) => {
   await openPathTrace(page, "measured");
 
-  await expect(page.getByText(/Measured/)).toBeVisible();
+  await expect(page.locator("span.netpath-prov")).toContainText(/Measured/);
   await expect(page.getByText(/not a live trace/i)).toHaveCount(0);
 });

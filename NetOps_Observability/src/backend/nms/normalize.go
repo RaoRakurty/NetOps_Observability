@@ -77,14 +77,3 @@ func roleForEventType(net string) EvidenceRole {
 	return RoleSupporting
 }
 
-// upDownState maps common vendor state words to up|down (else the raw value).
-func upDownState(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "up", "reachable", "connected", "active", "green", "success", "deployed":
-		return "up"
-	case "down", "unreachable", "disconnected", "inactive", "red", "failed", "fail":
-		return "down"
-	default:
-		return strings.ToLower(strings.TrimSpace(v))
-	}
-}

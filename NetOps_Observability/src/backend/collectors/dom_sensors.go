@@ -48,13 +48,6 @@ var sensorScalePow = map[int64]int{
 	9: 0, 10: 3, 11: 6, 12: 9, 13: 12, 14: 15, 15: 18, 16: 21, 17: 24,
 }
 
-// domReading is one normalized sensor value bound to a physical index.
-type domReading struct {
-	physIndex string
-	metric    string  // port_optics_temperature_c | _supply_voltage_v | _tx_bias_ma | _tx_power_dbm | _rx_power_dbm
-	value     float64
-}
-
 // scaleSensorValue applies entPhySensorScale + entPhySensorPrecision to a raw
 // entPhySensorValue (RFC 3433 §3): real = value × 10^scalePow × 10^(-precision).
 // Pure + unit-tested — this is the arithmetic every DOM reading depends on.

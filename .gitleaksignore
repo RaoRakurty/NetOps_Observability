@@ -24,3 +24,16 @@ d1901eec32335027f08f5dbd384b806d494deba5:NetOps_Observability/src/backend/snmp_c
 # the rule fired on the comment. Reworded since; the historical commit is
 # immutable, hence its own fingerprint.
 05ff3a049c625feea97e4fb3ae6abbde0e7c2406:.gitleaksignore:generic-api-key:6
+
+# gitleaks 8.30.x new curl-auth rules — documentation examples, not credentials.
+# api-access.md shows operators the Authorization header shape with a placeholder
+# token (both the AI docs corpus copy and the docs-portal copy); the
+# mock-servicenow README documents the bundled TEST FIXTURE's published default
+# login. Nothing here is a real secret.
+d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/docs_corpus/administration/api-access.md:curl-auth-header:37
+d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/docs_corpus/administration/api-access.md:curl-auth-header:39
+d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/docs_corpus/administration/api-access.md:curl-auth-header:82
+4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:37
+4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:39
+4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:82
+f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/mock-servicenow/README.md:curl-auth-user:58

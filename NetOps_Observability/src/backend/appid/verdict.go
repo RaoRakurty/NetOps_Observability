@@ -197,8 +197,7 @@ func Fuse(signals []Signal) Verdict {
 		}
 	case win.best == 2: // medium — at best suspected
 		tier = Suspected
-	default: // weak / hint only
-		tier = Undetermined
+	default: // weak / hint only — stays Undetermined
 	}
 
 	conf := win.conf

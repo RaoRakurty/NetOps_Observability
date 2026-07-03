@@ -19,3 +19,14 @@ misconfigurations:
   - id: DS-0002
     paths:
       - "NetOps_Observability/scripts/lab/traffic-generator/Dockerfile"
+vulnerabilities:
+  # GHSA-5c6j-r48x-rmvq — serialize-javascript RCE via RegExp.flags/toISOString.
+  # Transitive dev-dependency of the DOCS PORTAL's Docusaurus/webpack build chain
+  # (copy-webpack-plugin / css-minimizer-webpack-plugin). It runs only at docs
+  # BUILD time on our own trusted markdown — never in the product runtime or on
+  # user input. The fixed major (v7) requires Node ≥20 and breaks the Docusaurus
+  # chain on the supported Node 18 toolchain; revisit when the docs toolchain
+  # moves to Node 20+.
+  - id: GHSA-5c6j-r48x-rmvq
+    paths:
+      - "NetOps_Observability/docs-portal/package-lock.json"

@@ -116,7 +116,11 @@ func ownerLabel(owner string) string {
 	case "", "unknown":
 		return "Owner"
 	default:
-		return strings.Title(strings.ReplaceAll(strings.ToLower(owner), "_", " "))
+		words := strings.Fields(strings.ReplaceAll(strings.ToLower(owner), "_", " "))
+		for i, w := range words {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+		return strings.Join(words, " ")
 	}
 }
 

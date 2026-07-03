@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pydantic
 import pytest
 
-from catalog import BUILTIN_TEMPLATES, Seam, builtin_catalog, load_catalog
+from catalog import BUILTIN_TEMPLATES, builtin_catalog, load_catalog
 from scoring import rank, score_template
 from signals import ModalityClass, Signal, Source, Observer, ObserverType, EntityType
 

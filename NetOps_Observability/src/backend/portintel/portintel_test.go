@@ -1,6 +1,9 @@
 package portintel
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestDetectFromExplicitFormFactor(t *testing.T) {
 	d := Detect(DetectInput{FormFactorHint: "QSFP-DD", MediaHint: "smf", PMDAppCode: "400GBASE-DR4"})
@@ -58,13 +61,13 @@ func TestInventoryValidate(t *testing.T) {
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("valid payload rejected: %v", err)
 	}
-	if err := (InventoryPayload{PortID: "x"}).Validate(); err != ErrNoDevice {
+	if err := (InventoryPayload{PortID: "x"}).Validate(); !errors.Is(err, ErrNoDevice) {
 		t.Fatalf("missing device must fail")
 	}
-	if err := (InventoryPayload{DeviceID: "d", PortID: "p", Family: "BOGUS"}).Validate(); err != ErrBadFamily {
+	if err := (InventoryPayload{DeviceID: "d", PortID: "p", Family: "BOGUS"}).Validate(); !errors.Is(err, ErrBadFamily) {
 		t.Fatalf("unknown family must fail")
 	}
-	if err := (InventoryPayload{DeviceID: "d", PortID: "p", MediaType: "plasma"}).Validate(); err != ErrBadMedia {
+	if err := (InventoryPayload{DeviceID: "d", PortID: "p", MediaType: "plasma"}).Validate(); !errors.Is(err, ErrBadMedia) {
 		t.Fatalf("unknown media must fail")
 	}
 	// Empty family/media normalize (present-but-unread optic) — not an error.
@@ -77,7 +80,7 @@ func TestLaneValidate(t *testing.T) {
 	if err := (LanePayload{DeviceID: "d", PortID: "p", LaneID: 3}).Validate(); err != nil {
 		t.Fatalf("valid lane rejected: %v", err)
 	}
-	if err := (LanePayload{DeviceID: "d", PortID: "p", LaneID: 99}).Validate(); err != ErrLaneRange {
+	if err := (LanePayload{DeviceID: "d", PortID: "p", LaneID: 99}).Validate(); !errors.Is(err, ErrLaneRange) {
 		t.Fatalf("out-of-range lane must fail")
 	}
 }
@@ -86,13 +89,13 @@ func TestPathAndEventValidate(t *testing.T) {
 	if err := (FiberPathPayload{PathID: "path-1"}).Validate(); err != nil {
 		t.Fatalf("valid path rejected: %v", err)
 	}
-	if err := (FiberPathPayload{}).Validate(); err != ErrNoPath {
+	if err := (FiberPathPayload{}).Validate(); !errors.Is(err, ErrNoPath) {
 		t.Fatalf("missing path id must fail")
 	}
 	if err := (EventPayload{DeviceID: "d", EventType: "link_down"}).Validate(); err != nil {
 		t.Fatalf("valid event rejected: %v", err)
 	}
-	if err := (EventPayload{DeviceID: "d"}).Validate(); err != ErrNoEventType {
+	if err := (EventPayload{DeviceID: "d"}).Validate(); !errors.Is(err, ErrNoEventType) {
 		t.Fatalf("missing event type must fail")
 	}
 }

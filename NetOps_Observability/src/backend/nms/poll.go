@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // poll.go — pollers. A Poller fetches raw payloads for one stream and advances
@@ -139,11 +138,3 @@ func merakiPoller() Poller {
 
 // ErrUnauthorized signals the runtime to re-authenticate and retry the poll once.
 var ErrUnauthorized = fmt.Errorf("nms: unauthorized (re-auth required)")
-
-// pollInterval clamps a configured interval to a sane floor.
-func pollInterval(d time.Duration, def time.Duration) time.Duration {
-	if d < 30*time.Second {
-		return def
-	}
-	return d
-}

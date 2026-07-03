@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"context"
 	"math"
 	"testing"
 )
@@ -86,7 +87,7 @@ func TestScoreLinear(t *testing.T) {
 func TestEchoTargetsEnvFallback(t *testing.T) {
 	t.Setenv("REDIS_HOST", "") // force the env path (no Redis)
 	t.Setenv("WAN_ECHO_TARGETS", "10.0.0.1, 192.0.2.10=198.51.100.5 , ")
-	got := echoTargets(nil)
+	got := echoTargets(context.Background())
 	if len(got) != 2 {
 		t.Fatalf("parsed %d targets, want 2: %+v", len(got), got)
 	}

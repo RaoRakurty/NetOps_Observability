@@ -12,8 +12,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"sort"
-	"strings"
 )
 
 // ── enums ────────────────────────────────────────────────────────────────────
@@ -242,49 +240,6 @@ func bandFor(score float64) HealthState {
 		return healthWatch
 	default:
 		return healthHealthy
-	}
-}
-
-func capFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-// elevatedSignals returns the human signal names whose severity is in Watch+ range,
-// strongest first — drives the reason/evidence wording.
-func elevatedSignals(sev map[string]float64) []string {
-	type kv struct {
-		k string
-		v float64
-	}
-	var hot []kv
-	for k, v := range sev {
-		if v >= 0.40 {
-			hot = append(hot, kv{k, v})
-		}
-	}
-	sort.Slice(hot, func(i, j int) bool { return hot[i].v > hot[j].v })
-	names := map[string]string{"latency": "latency", "jitter": "jitter", "loss": "packet loss"}
-	out := make([]string, 0, len(hot))
-	for _, h := range hot {
-		out = append(out, names[h.k])
-	}
-	return out
-}
-
-// joinAnd → "a", "a and b", "a, b and c".
-func joinAnd(xs []string) string {
-	switch len(xs) {
-	case 0:
-		return ""
-	case 1:
-		return xs[0]
-	case 2:
-		return xs[0] + " and " + xs[1]
-	default:
-		return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
 	}
 }
 

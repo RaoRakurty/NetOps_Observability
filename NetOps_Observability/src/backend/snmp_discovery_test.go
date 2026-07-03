@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,16 +151,16 @@ func TestSNMPSourceDisabledAndOversizedAreSafe(t *testing.T) {
 
 func TestSNMPSourceCooldownServesCache(t *testing.T) {
 	cfg := discoveryScanConfig{Enabled: true, Ranges: []string{"10.20.0.0/30"}}
-	probes := 0
+	var probeCount atomic.Int64 // probes run concurrently — unsynced counter races
 	src := NewSNMPSource(func() discoveryScanConfig { return cfg }, nil)
 	src.probe = func(_ context.Context, addr, _ string) (string, string, string, bool) {
-		probes++
+		probeCount.Add(1)
 		return "sw-" + addr, "", "", true
 	}
 	if _, err := src.Poll(context.Background()); err != nil {
 		t.Fatalf("first poll: %v", err)
 	}
-	first := probes
+	first := probeCount.Load()
 	if first == 0 {
 		t.Fatal("first poll should probe")
 	}
@@ -169,8 +170,8 @@ func TestSNMPSourceCooldownServesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second poll: %v", err)
 	}
-	if probes != first {
-		t.Fatalf("cooldown violated: probes went %d → %d", first, probes)
+	if got := probeCount.Load(); got != first {
+		t.Fatalf("cooldown violated: probes went %d → %d", first, got)
 	}
 	if len(devs) != 2 {
 		t.Fatalf("cached snapshot wrong: %v", devs)

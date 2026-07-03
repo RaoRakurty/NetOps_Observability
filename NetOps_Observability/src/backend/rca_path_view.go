@@ -451,7 +451,6 @@ func buildPath(attached []map[string]any, locus, src, dst, state string, interna
 				addEdge(rcaPathEdge{ID: prev + "~" + app, Source: prev, Target: app, Type: "provider_boundary", State: edgeStateInto(appState), Label: "cloud boundary"})
 			}
 		}
-		prev = app
 		for _, res := range resources {
 			if res == app {
 				continue

@@ -39,8 +39,11 @@ func TestCatalog_CacheConsistency(t *testing.T) {
 		t.Fatalf("cached result diverged: %+v vs %+v", first, second)
 	}
 	miss := netip.MustParseAddr("8.8.8.8")
-	if len(c.SignalsFor(miss)) != 0 || len(c.SignalsFor(miss)) != 0 {
-		t.Fatal("a miss must stay a miss (negative cache)")
+	if len(c.SignalsFor(miss)) != 0 {
+		t.Fatal("a miss must return no signals")
+	}
+	if len(c.SignalsFor(miss)) != 0 {
+		t.Fatal("a repeated miss must stay a miss (negative cache)")
 	}
 }
 

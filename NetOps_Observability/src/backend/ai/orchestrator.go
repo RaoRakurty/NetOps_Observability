@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"regexp"
@@ -368,7 +369,7 @@ func (o *Orchestrator) answerProblem(ctx context.Context, p Principal, question 
 	}
 
 	pr, err := o.DS.GetProblem(ctx, p, id)
-	if err == ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return Answer{
 			Mode: ModeProblemExplanation, Intent: plan.Intent, Modules: plan.Modules,
 			Text:      fmt.Sprintf("Problem %q isn't available in your scope.", id),

@@ -184,9 +184,6 @@ type lsNode struct {
 	srgbRange uint32
 	srAlgo    int // -1 when no SR Algorithm TLV present
 
-	// originatedPrefixes: CIDRs this node originates (origin-node → prefix join,
-	// RFC 7752). Carried as NODE metadata only — NEVER an adjacency/link.
-	originatedPrefixes []string
 }
 
 type lsLink struct {

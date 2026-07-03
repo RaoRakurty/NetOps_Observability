@@ -355,26 +355,6 @@ func (t actionableIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArg
 	}
 	return tr, nil
 }
-
-func shortIDFor(id string) string {
-	if i := indexByte(id, '-'); i > 0 {
-		return id[:i]
-	}
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}
-
 // ---- Module read tools (HLD P4, generic governed wrapper) -------------------
 
 // moduleReadTool is one governed, read-only tool over the ModuleDataSource seam.

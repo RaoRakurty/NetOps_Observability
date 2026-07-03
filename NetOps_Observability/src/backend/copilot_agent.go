@@ -30,7 +30,6 @@ const (
 	aiToolsMaxCitations  = 12              // citations returned to the UI
 )
 
-var errAIToolsBudget = errors.New("daily AI investigation budget exhausted")
 
 // agentDoctrine is the investigation playbook appended to the server-owned
 // system prompt on tool-enabled turns. It exists because models — especially

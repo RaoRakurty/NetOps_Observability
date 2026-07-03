@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from app_producers import app_identity_signal
 from catalog import builtin_catalog
-from engine import EngineConfig, SeamView, run_window
+from engine import SeamView, run_window
 from signals import (
     EntityType,
     ModalityClass,
