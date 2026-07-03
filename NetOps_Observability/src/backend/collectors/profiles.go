@@ -131,6 +131,37 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2636, 3, 1, 13, 1, 11}, Table: true}, // jnxOperatingBuffer
 			},
 		},
+		// F5 BIG-IP (F5-BIGIP-SYSTEM/LOCAL-MIB). Load-balancer health — the
+		// pool/VIP/member availability that directly feeds the lb-target-health
+		// signatures (#94), plus connection + resource load. OIDs transcribed from
+		// the published MIBs; verify against a live BIG-IP before production trust
+		// (no F5 in the lab — known-gap policy). Scalars unless Table:true.
+		{
+			Name:       "f5",
+			Enterprise: 3375,
+			Metrics: []SNMPMetric{
+				{Name: "device_lb_client_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 1, 2, 1, 8}},        // sysStatClientCurConns (scalar)
+				{Name: "device_lb_mem_used_bytes", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 1, 2, 1, 45}},     // sysStatMemoryUsed (scalar)
+				{Name: "device_lb_pool_member_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 5, 2, 1, 5}, Table: true, IndexLabel: "pool_member"}, // ltmPoolMbrStatusAvailState
+				{Name: "device_lb_pool_cur_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 2, 3, 1, 8}, Table: true, IndexLabel: "pool"},          // ltmPoolStatServerCurConns
+				{Name: "device_lb_vs_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 10, 13, 2, 1, 2}, Table: true, IndexLabel: "virtual_server"},    // ltmVsStatusAvailState
+			},
+		},
+		// Palo Alto (PAN-COMMON-MIB). NGFW health — the session table + dataplane
+		// utilization + HA state that make a firewall's own health observable
+		// (complements the FortiGate onboarding + firewall signatures). CPU rides
+		// the generic HOST-RESOURCES floor. Verify against a live PAN-OS device.
+		{
+			Name:       "paloalto",
+			Enterprise: 25461,
+			Metrics: []SNMPMetric{
+				{Name: "device_fw_session_active", OID: []int{1, 3, 6, 1, 4, 1, 25461, 2, 1, 2, 3, 3}},   // panSessionActive (scalar)
+				{Name: "device_fw_session_util_pct", OID: []int{1, 3, 6, 1, 4, 1, 25461, 2, 1, 2, 3, 1}}, // panSessionUtilization (scalar %)
+				{Name: "device_fw_session_max", OID: []int{1, 3, 6, 1, 4, 1, 25461, 2, 1, 2, 3, 2}},      // panSessionMax (scalar)
+				{Name: "device_fw_ha_state", OID: []int{1, 3, 6, 1, 4, 1, 25461, 2, 1, 2, 1, 11}},        // panSysHAState (scalar enum)
+				{Name: "device_fw_gp_tunnels", OID: []int{1, 3, 6, 1, 4, 1, 25461, 2, 1, 2, 5, 1, 3}},    // panGPGWUtilizationActiveTunnels (scalar)
+			},
+		},
 	}
 }
 

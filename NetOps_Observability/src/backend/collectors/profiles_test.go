@@ -41,7 +41,16 @@ func TestSelectProfiles(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"generic", "juniper"}) {
 		t.Errorf("juniper selection=%v", got)
 	}
-	// Unknown enterprise / detection failed: generic only.
+	// F5 (ent 3375): generic + f5 (the LB-health profile that feeds the
+	// lb-target-health signatures).
+	if got = names(selectProfiles(profs, 3375, true)); !reflect.DeepEqual(got, []string{"generic", "f5"}) {
+		t.Errorf("f5 selection=%v", got)
+	}
+	// Palo Alto (ent 25461): generic + paloalto.
+	if got = names(selectProfiles(profs, 25461, true)); !reflect.DeepEqual(got, []string{"generic", "paloalto"}) {
+		t.Errorf("paloalto selection=%v", got)
+	}
+	// Unknown enterprise / detection failed: generic only (the floor covers it).
 	if got = names(selectProfiles(profs, 99999, true)); !reflect.DeepEqual(got, []string{"generic"}) {
 		t.Errorf("unknown enterprise selection=%v", got)
 	}
