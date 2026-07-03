@@ -50,6 +50,9 @@ var enterpriseVendor = map[int]string{
 	674:   "dell",
 	11:    "hp",
 	2620:  "checkpoint",
+	21067: "sophos", // Sophos Ltd (SFOS / XG firewall)
+	9789:  "sophos", // Astaro GmbH (legacy Sophos UTM) — same vendor label
+	41112: "ubiquiti",
 	8072:  "net-snmp",
 }
 
@@ -109,6 +112,12 @@ func vendorFromDescr(d string) string {
 		return "huawei"
 	case strings.Contains(s, "mikrotik"), strings.Contains(s, "routeros"):
 		return "mikrotik"
+	case strings.Contains(s, "sophos"), strings.Contains(s, "sfos"), strings.Contains(s, "astaro"):
+		return "sophos"
+	case strings.Contains(s, "ubiquiti"), strings.Contains(s, "edgeos"), strings.Contains(s, "edgerouter"), strings.Contains(s, "unifi"):
+		return "ubiquiti"
+	case strings.Contains(s, "check point"), strings.Contains(s, "gaia"), strings.Contains(s, "checkpoint"):
+		return "checkpoint"
 	case strings.Contains(s, "linux"):
 		return "linux"
 	}

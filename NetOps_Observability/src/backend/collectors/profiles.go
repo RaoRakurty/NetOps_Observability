@@ -162,6 +162,64 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_fw_gp_tunnels", OID: []int{1, 3, 6, 1, 4, 1, 25461, 2, 1, 2, 5, 1, 3}},    // panGPGWUtilizationActiveTunnels (scalar)
 			},
 		},
+		// FortiGate (FORTINET-FORTIGATE-MIB). Firewall health metrics — complements
+		// the existing FortiGate onboarding/syslog lane (which had detection +
+		// events but no CPU/session/mem series). Verify against a live FortiOS.
+		{
+			Name:       "fortinet",
+			Enterprise: 12356,
+			Metrics: []SNMPMetric{
+				{Name: "device_fw_cpu_pct", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 3}},      // fgSysCpuUsage (scalar %)
+				{Name: "device_fw_mem_pct", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 4}},      // fgSysMemUsage (scalar %)
+				{Name: "device_fw_session_active", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 8}}, // fgSysSesCount (scalar)
+			},
+		},
+		// Check Point (CHECKPOINT-MIB). Gateway health — connections + CPU + memory.
+		// Verify against a live Gaia gateway.
+		{
+			Name:       "checkpoint",
+			Enterprise: 2620,
+			Metrics: []SNMPMetric{
+				{Name: "device_fw_conns", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 1, 25, 3}},        // fwNumConn (scalar)
+				{Name: "device_fw_cpu_pct", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 6, 7, 2, 7}},    // procUsage (scalar %)
+				{Name: "device_fw_mem_active_bytes", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 6, 7, 4, 6}}, // memActiveReal64 (scalar)
+			},
+		},
+		// MikroTik RouterOS (MIKROTIK-MIB, mtxrHealth). RouterOS exposes CPU/mem via
+		// the generic HOST-RESOURCES floor; the vendor niche is hardware health —
+		// temperature + voltage. Verify against a live RouterOS device.
+		{
+			Name:       "mikrotik",
+			Enterprise: 14988,
+			Metrics: []SNMPMetric{
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 10}},   // mtxrHlTemperature (scalar, deci-C on some models)
+				{Name: "device_cpu_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 11}}, // mtxrHlProcessorTemperature (scalar)
+				{Name: "device_voltage_dv", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 8}},        // mtxrHlVoltage (scalar, deci-V)
+			},
+		},
+		// Sophos SFOS / XG firewall. SFOS SNMP is sparse — most health rides the
+		// generic IF-MIB/HOST-RESOURCES floor; the identifiable vendor scalars are
+		// service/HA-oriented. Registered so Sophos devices are LABELLED (not
+		// "unknown") and pick up the floor; extend with SFOS OIDs once verified on
+		// a live device (their MIB coverage varies by SFOS version).
+		{
+			Name:       "sophos",
+			Enterprise: 21067,
+			Metrics:    []SNMPMetric{
+				// SFOS exposes little beyond standard MIBs; the generic profile
+				// (also selected) supplies interfaces/CPU/inventory. Left minimal on
+				// purpose rather than guessing OIDs that may not exist.
+			},
+		},
+		// Ubiquiti (EdgeRouter/EdgeSwitch/UniFi). EdgeOS is Vyatta-derived and
+		// speaks mostly standard MIBs; UniFi health lives in the controller, not
+		// device SNMP. Registered for LABELLING + the generic floor; a rich profile
+		// would target the controller API, not device OIDs (a separate connector).
+		{
+			Name:       "ubiquiti",
+			Enterprise: 41112,
+			Metrics:    []SNMPMetric{},
+		},
 	}
 }
 

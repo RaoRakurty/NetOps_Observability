@@ -50,6 +50,12 @@ func TestSelectProfiles(t *testing.T) {
 	if got = names(selectProfiles(profs, 25461, true)); !reflect.DeepEqual(got, []string{"generic", "paloalto"}) {
 		t.Errorf("paloalto selection=%v", got)
 	}
+	// Firewall/router fleet added 2026-07-03: each selects generic + its own.
+	for ent, name := range map[int]string{12356: "fortinet", 2620: "checkpoint", 14988: "mikrotik", 21067: "sophos", 41112: "ubiquiti"} {
+		if got = names(selectProfiles(profs, ent, true)); !reflect.DeepEqual(got, []string{"generic", name}) {
+			t.Errorf("%s (ent %d) selection=%v", name, ent, got)
+		}
+	}
 	// Unknown enterprise / detection failed: generic only (the floor covers it).
 	if got = names(selectProfiles(profs, 99999, true)); !reflect.DeepEqual(got, []string{"generic"}) {
 		t.Errorf("unknown enterprise selection=%v", got)
