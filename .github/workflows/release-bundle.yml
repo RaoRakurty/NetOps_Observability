@@ -77,6 +77,16 @@ jobs:
           set -euo pipefail
           sha256sum -c SHA256SUMS
           zstd -t correlix-images-*.tar.zst
+
+          # Licensing/broker assertions (#97): the customer bundle ships
+          # Apache Kafka + Valkey and must not contain Redpanda anywhere a
+          # customer looks — manifest, compose, or the bundle-root docs.
+          grep -q '^  - apache/kafka:' MANIFEST
+          grep -q '^  - valkey/valkey:' MANIFEST
+          ! grep -qi 'redpanda' MANIFEST
+          ! grep -qi 'redpanda' README.md ADVANCED.md TROUBLESHOOTING.md
+          test -x install-correlix.sh
+
           # docker-load round-trip: exercises decompression + per-layer digest
           # verification on the exact archive a client would load.
           zstd -dc correlix-images-*.tar.zst | docker load
@@ -84,10 +94,15 @@ jobs:
           sed -n 's/^  - //p' MANIFEST | while read -r img; do
             docker image inspect "$img" >/dev/null || { echo "MISSING after load: $img"; exit 1; }
           done
-          # Static install integrity on the tree the client actually receives.
+          # Static install integrity on the tree the client actually receives —
+          # includes the [bus] guardrails (kafka pinned, no functional redpanda
+          # reference, BROKER_URLS/KAFKA_CLUSTER_ID provisioned).
           SMOKE="$(mktemp -d)"
           tar -xzf correlix-source-*.tar.gz -C "$SMOKE"
           python3 "$SMOKE/NetOps_Observability/scripts/preflight-install.py"
+          # Belt-and-braces: no redpanda image/service in the shipped compose.
+          ! grep -Ei 'redpandadata|image:.*redpanda' \
+              "$SMOKE/NetOps_Observability/deployment/docker/docker-compose.yml"
 
       # Release assets are capped at 2 GiB/file — split anything bigger.
       - name: Prepare assets (split >1900 MiB)
@@ -100,9 +115,14 @@ jobs:
               echo "-- splitting $f"
               split -b 1900m -d "$f" "$f.part"
               rm "$f"
-              echo "Rejoin before install: cat $f.part* > $f  (then sha256sum -c SHA256SUMS)" >> INSTALL.md
+              echo "Note: $f ships as .partNN pieces; ./install-correlix.sh rejoins them automatically." >> README.md
+              # README changed after SHA256SUMS was written — refresh its entry
+              # so the customer's `sha256sum -c` (and install-correlix.sh's
+              # verify) still pass.
+              sed -i "\|  \./README\.md\$|c\\$(sha256sum ./README.md)" SHA256SUMS
             fi
           done
+          sha256sum -c --ignore-missing SHA256SUMS   # self-check post-split
           ls -lh
 
       - name: Attach to release
@@ -115,7 +135,7 @@ jobs:
           set -euo pipefail
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --verify-tag --title "Correlix $TAG" \
-              --notes "Offline client installer bundle (core profile). Verify with \`sha256sum -c SHA256SUMS\`; see INSTALL.md. Split \`.partNN\` files: \`cat <name>.part* > <name>\` first."
+              --notes "Offline Correlix installer bundle (core profile). Download all files into one directory and run \`./install-correlix.sh\` — it verifies checksums, rejoins split \`.partNN\` pieces, and installs. See README.md."
           gh release upload "$TAG" ./* --clobber
 
       # Dispatch runs (no tag) keep the bundle as a short-lived artifact so a

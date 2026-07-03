@@ -6,15 +6,18 @@
 # Compose v2 + zstd on the target host — no Node, no registry access, no PyPI:
 #
 #   dist/correlix-<version>/
+#     install-correlix.sh                THE customer entry point (one command)
 #     correlix-source-<version>.tar.gz   source tree (compose, configs, installer)
 #     correlix-images-<profile>-<version>.tar.zst   every image, prebuilt
 #     SHA256SUMS                         integrity manifest
 #     MANIFEST                           version, git sha, profile, image list
-#     INSTALL.md                         client instructions
+#     README.md                          customer quickstart (run one command)
+#     ADVANCED.md                        external-Kafka + advanced settings
+#     TROUBLESHOOTING.md                 customer-safe fixes
+#     LICENSES.md                        third-party distribution notices
 #
-# Client install:
-#   tar -xzf correlix-source-<version>.tar.gz && cd NetOps_Observability
-#   python3 scripts/install.py --bundle ../correlix-images-<profile>-<version>.tar.zst
+# Client install (the whole thing):
+#   ./install-correlix.sh
 #
 # Usage (from anywhere in the repo):
 #   scripts/make-installer.sh [--core] [--out DIR]
@@ -28,10 +31,10 @@
 # gitignored — the classic stale-dist trap — so the bundle never depends on a
 # developer having built them recently: REBUILD_FRONTEND=1 forces both).
 #
-# ⚠️ LICENSING GATE (see docs/design/packaging-strategy.md §4): before any
-# EXTERNAL distribution, resolve Redpanda (BSL — written OK or Kafka swap).
-# Redis→Valkey done 2026-07-03; Grafana (AGPL) is omitted by --core. Internal/
-# lab bundles are unaffected either way.
+# LICENSING (see docs/design/packaging-strategy.md §4 + bundle LICENSES.md):
+# gate CLOSED 2026-07-03 — bus = Apache Kafka (Apache-2.0, replaced Redpanda
+# BSL), cache = Valkey (BSD-3, replaced Redis RSAL). Guards below hard-fail
+# the build if a flagged image ever reappears in the bundle set.
 
 set -euo pipefail
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
@@ -67,20 +70,37 @@ if [ ! -d "$ROOT/src/frontend/dist" ] || [ "${REBUILD_FRONTEND:-0}" = "1" ]; the
   (cd "$ROOT/src/frontend" && npm ci --silent && npm run build)
 fi
 
+# The customer profile set: embedded Apache Kafka bus + prober + (full only)
+# OpenSearch Dashboards. Lab/dev profiles (mock-*, sso, netbox, seal, flowgen)
+# stay out of client bundles by construction.
+BUNDLE_PROFILES=(--profile embedded-bus --profile prober --profile osd)
+
 # 2. Build every application image at the pinned bases.
 echo "-- docker compose build"
-(cd "$COMPOSE_DIR" && docker compose --profile osd --profile prober build --quiet)
+# A CI runner has no .env; compose interpolation needs the :?-guarded vars.
+export KAFKA_CLUSTER_ID="${KAFKA_CLUSTER_ID:-bundle-resolve-only-000000}"
+(cd "$COMPOSE_DIR" && docker compose "${BUNDLE_PROFILES[@]}" build --quiet)
 
 # 3. Resolve the exact image set for the bundle profile. `config --images`
-#    honours pinned digests; profiles not enabled here (mock-*, sso, netbox,
-#    seal, flowgen) stay out of the client bundle by construction.
+#    honours pinned digests.
 echo "-- resolving image list"
-IMAGES="$(cd "$COMPOSE_DIR" && docker compose --profile osd --profile prober config --images | sort -u)"
+IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BUNDLE_PROFILES[@]}" config --images | sort -u)"
 if [ "$PROFILE" = "core" ]; then
   IMAGES="$(printf '%s\n' "$IMAGES" | grep -vE 'opensearch-dashboards|grafana|cadvisor|node-exporter')"
 fi
 COUNT="$(printf '%s\n' "$IMAGES" | grep -c .)"
 echo "   $COUNT images"
+
+# 3a. LICENSING GUARDS (#97): a customer bundle must never ship Redpanda (BSL)
+#     and must ship Apache Kafka (bus) + Valkey (cache). Hard build failures.
+if printf '%s\n' "$IMAGES" | grep -qi 'redpanda'; then
+  echo "FATAL: redpanda image in bundle set — BSL-licensed, not redistributable" >&2; exit 1
+fi
+printf '%s\n' "$IMAGES" | grep -q '^apache/kafka:' \
+  || { echo "FATAL: apache/kafka missing from bundle image set" >&2; exit 1; }
+printf '%s\n' "$IMAGES" | grep -q '^valkey/valkey:' \
+  || { echo "FATAL: valkey missing from bundle image set" >&2; exit 1; }
+echo "   licensing guards passed (kafka+valkey in, redpanda out)"
 
 # 3b. Ensure every bundled image exists locally. App images were just built;
 #     third-party ones are digest-pinned pulls that a dev host has but a fresh
@@ -116,24 +136,144 @@ git -C "$ROOT" archive --format=tar.gz --prefix=NetOps_Observability/ -o "$SRC_O
   printf '%s\n' "$IMAGES" | sed 's/^/  - /'
 } > "$BUNDLE_DIR/MANIFEST"
 
-cat > "$BUNDLE_DIR/INSTALL.md" <<EOF
-# Correlix offline install ($VERSION, $PROFILE profile)
+# 7. The appliance installer + customer docs. install-correlix.sh at the
+#    bundle root is THE customer entry point — one command, no choices.
+cp "$ROOT/scripts/install-correlix.sh" "$BUNDLE_DIR/install-correlix.sh"
+chmod +x "$BUNDLE_DIR/install-correlix.sh"
 
-Target host: Linux x86_64 · 4 vCPU / 16 GB RAM / 100 GB disk recommended
-(2 vCPU / 8 GB / 40 GB minimum for evaluation) · Docker Engine + Compose v2
-plugin · zstd. No other network or toolchain access is needed.
+cat > "$BUNDLE_DIR/README.md" <<EOF
+# Correlix — Quick Start ($VERSION)
 
-    sha256sum -c SHA256SUMS
-    tar -xzf correlix-source-$VERSION.tar.gz
-    cd NetOps_Observability
-    python3 scripts/install.py --bundle ../correlix-images-$PROFILE-$VERSION.tar.zst
+1. Install Docker Engine (with the Compose v2 plugin) and \`zstd\`.
+2. Extract this bundle (you have, if you can read this).
+3. Run:
 
-The installer generates fresh secrets on this host, loads the images, and
-starts the stack on port 8000 (override: --port). First sign-in credentials
-are printed at the end. Stop: \`cd deployment/docker && docker compose down\`.
+       ./install-correlix.sh
+
+4. Open the UI URL printed at the end.
+5. Sign in with the generated credentials shown on screen.
+
+That's it. The installer checks your host, verifies the bundle, loads the
+software, starts everything, waits until it's healthy, and prints where to go.
+
+Host guidance: Linux x86_64 · 4 vCPU / 16 GB RAM / 100 GB disk recommended
+(2 vCPU / 8 GB / 40 GB minimum for evaluation). No internet access needed.
+
+Day-to-day:
+
+    ./install-correlix.sh status            service health
+    ./install-correlix.sh logs [service]    recent logs
+    ./install-correlix.sh stop | start      stop/start (data kept)
+    ./install-correlix.sh uninstall         remove (add --purge to delete data)
+    ./install-correlix.sh reset-demo-data   fresh evaluation state, same login
+
+Something not working? See TROUBLESHOOTING.md.
+Larger deployments and advanced configuration: ADVANCED.md.
+Third-party license information: LICENSES.md.
 EOF
 
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* MANIFEST INSTALL.md > SHA256SUMS)
+cat > "$BUNDLE_DIR/ADVANCED.md" <<EOF
+# Correlix — Advanced Configuration
+
+Most installations should use the default \`./install-correlix.sh\` and never
+read this file.
+
+## Event bus modes
+
+Correlix moves telemetry internally over a Kafka-compatible event bus.
+
+1. **Embedded (default).** The bundle includes Apache Kafka (Apache-2.0),
+   run as a single-node service inside the appliance. It is internal-only
+   (never exposed on a host port), sized for evaluation and small
+   deployments, and needs no configuration.
+
+2. **External Kafka-compatible broker (enterprise).** Point Correlix at a
+   broker cluster you operate instead of starting the embedded one:
+
+       ./install-correlix.sh install --external-kafka \\
+           --broker-urls broker1:9092,broker2:9092
+
+   Requirements: Kafka-compatible API (Apache Kafka 3.x/4.x or compatible),
+   reachable from this host's Docker network, PLAINTEXT listener (TLS/SASL
+   support: contact us). Correlix creates/uses topics under the \`netops.\`
+   prefix. All services resolve the bus through the single BROKER_URLS
+   setting in \`NetOps_Observability/deployment/docker/.env\`.
+
+## Other settings
+
+- UI port: \`./install-correlix.sh install --ui-port 9443\`
+- All tunables live in \`NetOps_Observability/deployment/docker/.env\`
+  (generated at install; treat it as a secret).
+EOF
+
+cat > "$BUNDLE_DIR/TROUBLESHOOTING.md" <<EOF
+# Correlix — Troubleshooting
+
+**The installer said a check failed.** The message names the fix (install
+Docker, free a port, more RAM/disk). Re-running \`./install-correlix.sh\` is
+always safe.
+
+**A service shows "not running" or "unhealthy" in status.**
+Look at its logs: \`./install-correlix.sh logs <service>\` — then
+\`./install-correlix.sh stop && ./install-correlix.sh start\`. Most one-off
+startup issues clear on a restart.
+
+**The UI URL doesn't load.** Check the Web Front Door and Correlix UI rows in
+\`./install-correlix.sh status\`; confirm the port isn't firewalled
+(\`curl http://localhost:<port>/\` from the host itself).
+
+**I lost the admin password.** It's stored in
+\`NetOps_Observability/deployment/docker/.env\` (ADMIN_INITIAL_PASSWORD) —
+valid until you change it in Settings.
+
+**I want a clean slate.** \`./install-correlix.sh reset-demo-data\` wipes
+collected data but keeps your URL and login.
+
+**Slow on small hosts.** 8 GB RAM is the evaluation floor; give the VM
+16 GB / 4 vCPU for real use.
+EOF
+
+cat > "$BUNDLE_DIR/LICENSES.md" <<EOF
+# Correlix $VERSION — Third-party distribution notices
+
+Correlix bundles the following third-party components as container images.
+Exact pinned versions/digests: see MANIFEST.
+
+| Component | Role | License | Distribution status |
+|---|---|---|---|
+| Apache Kafka | embedded event bus | Apache-2.0 | included — allowed with notices (this file + upstream NOTICE inside the image) |
+| Valkey | cache | BSD-3-Clause | included — allowed |
+| PostgreSQL | app database | PostgreSQL License | included — allowed |
+| OpenSearch (+ Dashboards, full bundle) | log search | Apache-2.0 | included — allowed |
+| ClickHouse | analytics store | Apache-2.0 | included — allowed |
+| VictoriaMetrics | metrics store | Apache-2.0 | included — allowed |
+| Prometheus | metrics scrape | Apache-2.0 | included — allowed |
+| Vector | telemetry pipeline | MPL-2.0 | included — allowed |
+| goflow2 | flow receiver | BSD-3-Clause | included — allowed |
+| syslog-ng | syslog receiver | GPL-3.0 (unmodified) | included — allowed |
+| gnmic | gNMI collector | Apache-2.0 | included — allowed |
+| nginx | web front door | BSD-2-Clause | included — allowed |
+| Grafana (full bundle only) | self-observability | AGPL-3.0 | included unmodified — allowed with source availability obligations; omitted from core bundles |
+| cadvisor / node-exporter (full bundle only) | self-monitoring | Apache-2.0 | included — allowed |
+
+Resolved licensing history:
+
+| Component | Status |
+|---|---|
+| Redis | **removed** — replaced by Valkey (BSD-3-Clause). Redis ≥7.4 is RSALv2/SSPL-licensed and is not distributed with Correlix. Closed. |
+| Redpanda | **removed from customer distribution** — the event bus is Apache Kafka. Redpanda (BSL) is not shipped in any Correlix bundle. |
+
+Correlix application code and this bundle's install tooling are proprietary
+to Correlix.
+EOF
+
+# Customer-doc licensing guard: nothing customer-facing mentions Redpanda
+# outside LICENSES.md's "not shipped" statement.
+if grep -qi 'redpanda' "$BUNDLE_DIR/README.md" "$BUNDLE_DIR/ADVANCED.md" "$BUNDLE_DIR/TROUBLESHOOTING.md"; then
+  echo "FATAL: customer-facing bundle docs mention redpanda" >&2; exit 1
+fi
+
+(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh > SHA256SUMS)
 
 echo "== done"
 du -sh "$BUNDLE_DIR"/* | sed 's/^/   /'

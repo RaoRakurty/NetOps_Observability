@@ -164,7 +164,36 @@ def main() -> int:
     else:
         ok("all bind-mounted data dirs are created by install.py")
 
-    # 4) informational: migrations auto-apply on api start; just surface the count
+    # 4) event-bus distribution guardrails (#97 Redpanda→Apache Kafka swap).
+    # The customer bundle must ship Apache Kafka + Valkey and must not depend
+    # on Redpanda in any functional way (comments are stripped before checking,
+    # so historical/explanatory notes don't false-positive).
+    print("[bus] event-bus + cache distribution guardrails")
+    compose_text = _decomment(COMPOSE.read_text())
+    if re.search(r"redpanda", compose_text, re.IGNORECASE):
+        bad("compose references redpanda outside comments — customer bundles must not ship or require it")
+    else:
+        ok("no functional redpanda reference in compose")
+    if re.search(r"image:\s*apache/kafka:[0-9][^\s@]*@sha256:", compose_text):
+        ok("embedded bus is apache/kafka, version+digest pinned")
+    else:
+        bad("kafka service image must be apache/kafka, pinned by version AND digest")
+    if re.search(r"image:\s*valkey/valkey:[^\s@]+@sha256:", compose_text):
+        ok("cache is valkey, digest pinned")
+    else:
+        bad("cache image must be valkey (BSD-3), digest pinned")
+    for var in ("BROKER_URLS", "KAFKA_CLUSTER_ID", "COMPOSE_PROFILES"):
+        if var in prov_env:
+            ok(f"install.py provisions {var}")
+        else:
+            bad(f"install.py must provision {var} (bus abstraction / KRaft identity / profile set)")
+    inst_text = INSTALL.read_text()
+    if re.search(r'DEFAULT_PROFILES\s*=\s*"[^"]*embedded-bus', inst_text):
+        ok("default install activates the embedded-bus profile (embedded Apache Kafka)")
+    else:
+        bad("install.py DEFAULT_PROFILES must include embedded-bus (default = embedded Kafka)")
+
+    # 5) informational: migrations auto-apply on api start; just surface the count
     migs = sorted((ROOT / "src" / "backend" / "migrations").glob("*.sql"))
     print(f"[migrations] {len(migs)} present, auto-applied by the api on startup (latest: {migs[-1].name if migs else 'none'})")
 
