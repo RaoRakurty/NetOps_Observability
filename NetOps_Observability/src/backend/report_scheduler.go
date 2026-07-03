@@ -368,13 +368,13 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 	case "health_summary":
 		summary, body = rs.renderHealth(now, tenant)
 	case "wan_utilization":
-		summary, body = rs.renderWANUtilization()
+		summary, body = rs.renderWANUtilization(tenant)
 	case "security_threats":
-		summary, body = rs.renderSecurityThreats()
+		summary, body = rs.renderSecurityThreats(tenant)
 	case "device_utilization":
-		summary, body = rs.renderDeviceUtilization()
+		summary, body = rs.renderDeviceUtilization(tenant)
 	case "latency_jitter_sla":
-		summary, body = rs.renderLatencyJitterSLA()
+		summary, body = rs.renderLatencyJitterSLA(tenant)
 	default: // alerts_summary
 		summary, body = rs.renderAlerts(tenant)
 	}
@@ -411,13 +411,13 @@ func (rs *reportScheduler) buildViewModel(o SavedObject, spec reportSpec, now ti
 	case "health_summary":
 		summary, sections = rs.datasetHealth(now, tenant)
 	case "wan_utilization":
-		summary, sections = rs.datasetWAN()
+		summary, sections = rs.datasetWAN(tenant)
 	case "security_threats":
-		summary, sections = rs.datasetSecurity()
+		summary, sections = rs.datasetSecurity(tenant)
 	case "device_utilization":
-		summary, sections = rs.datasetDeviceUtil()
+		summary, sections = rs.datasetDeviceUtil(tenant)
 	case "latency_jitter_sla":
-		summary, sections = rs.datasetLatency()
+		summary, sections = rs.datasetLatency(tenant)
 	default:
 		summary, sections = rs.datasetAlerts(tenant)
 	}
@@ -590,14 +590,18 @@ func (rs *reportScheduler) datasetHealth(now time.Time, tenant string) (string, 
 	return fmt.Sprintf("%.1f%% availability · %d devices · %d active alerts (%d critical)", avail, len(devs), len(alerts), crit), secs
 }
 
-func (rs *reportScheduler) datasetWAN() (string, []reports.Section) {
-	rows := chQuery(`
+func (rs *reportScheduler) datasetWAN(tenant string) (string, []reports.Section) {
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var rows []string
+	if platform || len(keys) > 0 {
+		rows = chQuery(`
 SELECT local_device, remote_device, type, status,
        round(latency_ms,1), round(jitter_ms,1), round(loss_pct,2), round(qoe,1)
   FROM netops.tunnels
- ORDER BY ts DESC
+` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
+	}
 	if len(rows) == 0 {
 		return "no WAN/overlay links reporting", []reports.Section{{Title: "WAN / overlay links", Note: "No tunnel/overlay telemetry yet."}}
 	}
@@ -632,21 +636,26 @@ SELECT local_device, remote_device, type, status,
 	}
 }
 
-func (rs *reportScheduler) datasetSecurity() (string, []reports.Section) {
-	sev := chQuery(`
+func (rs *reportScheduler) datasetSecurity(tenant string) (string, []reports.Section) {
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var sev, recent []string
+	if platform || len(keys) > 0 {
+		cond := findingsReportCond(platform, keys)
+		sev = chQuery(`
 SELECT severity, count()
   FROM netops.findings
- WHERE ts >= now() - INTERVAL 24 HOUR
+ WHERE ts >= now() - INTERVAL 24 HOUR` + cond + `
  GROUP BY severity
  ORDER BY count() DESC
  FORMAT TSV`)
-	recent := chQuery(`
+		recent = chQuery(`
 SELECT severity, device, summary
   FROM netops.findings
- WHERE ts >= now() - INTERVAL 24 HOUR
+ WHERE ts >= now() - INTERVAL 24 HOUR` + cond + `
  ORDER BY ts DESC
  LIMIT 10
  FORMAT TSV`)
+	}
 	var secs []reports.Section
 	total := 0
 	if len(sev) == 0 {
@@ -663,14 +672,17 @@ SELECT severity, device, summary
 		secs = append(secs, reports.Section{Title: "By severity (24h)", Header: []string{"Severity", "Count"}, Rows: sevRows})
 	}
 	// Top affected devices (24h) — where to look first.
-	byDev := chQuery(`
+	var byDev []string
+	if platform || len(keys) > 0 {
+		byDev = chQuery(`
 SELECT device, count()
   FROM netops.findings
- WHERE ts >= now() - INTERVAL 24 HOUR AND device != ''
+ WHERE ts >= now() - INTERVAL 24 HOUR AND device != ''` + findingsReportCond(platform, keys) + `
  GROUP BY device
  ORDER BY count() DESC
  LIMIT 10
  FORMAT TSV`)
+	}
 	if len(byDev) > 0 {
 		var rows [][]string
 		for _, r := range byDev {
@@ -692,7 +704,7 @@ SELECT device, count()
 		secs = append(secs, reports.Section{Title: "Recent findings", Header: []string{"Severity", "Device", "Summary"}, Rows: rows})
 	}
 	crit := 0
-	for _, a := range rs.alerts.Active() {
+	for _, a := range rs.tenantAlerts(tenant) {
 		if strings.EqualFold(a.Severity, "critical") {
 			crit++
 		}
@@ -701,10 +713,17 @@ SELECT device, count()
 	return fmt.Sprintf("%d finding(s)/24h · %d critical alert(s)", total, crit), secs
 }
 
-func (rs *reportScheduler) datasetDeviceUtil() (string, []reports.Section) {
+func (rs *reportScheduler) datasetDeviceUtil(tenant string) (string, []reports.Section) {
 	// Join CPU + memory per device into one ranked table (was two text blobs).
-	cpu := vmQueryMap(`device_cpu_percent`)
-	mem := vmQueryMap(`device_mem_percent`)
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var cpu, mem map[string]float64
+	if platform || len(keys) > 0 {
+		cpu = vmQueryMap(`device_cpu_percent`)
+		mem = vmQueryMap(`device_mem_percent`)
+		if !platform {
+			cpu, mem = filterDeviceMap(cpu, keys), filterDeviceMap(mem, keys)
+		}
+	}
 	if len(cpu) == 0 && len(mem) == 0 {
 		return "no device utilisation metrics", []reports.Section{{Title: "Device utilisation", Note: "No CPU/memory metrics reporting yet."}}
 	}
@@ -758,16 +777,20 @@ func (rs *reportScheduler) datasetDeviceUtil() (string, []reports.Section) {
 	}
 }
 
-func (rs *reportScheduler) datasetLatency() (string, []reports.Section) {
+func (rs *reportScheduler) datasetLatency(tenant string) (string, []reports.Section) {
 	// Per-link latency/jitter/loss as a real table + an availability SLA (was a
 	// single text blob).
-	rows := chQuery(`
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var rows []string
+	if platform || len(keys) > 0 {
+		rows = chQuery(`
 SELECT local_device, remote_device, status,
        round(latency_ms,1), round(jitter_ms,1), round(loss_pct,2)
   FROM netops.tunnels
- ORDER BY ts DESC
+` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
+	}
 	if len(rows) == 0 {
 		return "no latency/SLA telemetry", []reports.Section{{Title: "Latency, jitter & SLA", Note: "No tunnel latency/jitter telemetry yet."}}
 	}
@@ -842,6 +865,93 @@ func (rs *reportScheduler) tenantAlerts(tenant string) []models.Alert {
 	return out
 }
 
+// reportDeviceKeys returns the device ids/names a tenant-owned report may
+// reference (the visibleDeviceKeys key set, derived from the report's owner
+// instead of request claims). platform=true means the report is global or
+// unassigned and stays platform-wide — the contract renderDevices/renderAlerts
+// already follow. Default-closed: a scoped tenant with no visible devices gets
+// an empty key set, and renderers must emit their "no data" note without
+// querying rather than fall back to unscoped telemetry.
+func (rs *reportScheduler) reportDeviceKeys(tenant string) (keys []string, platform bool) {
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if t == "" || t == TenantGlobal {
+		return nil, true
+	}
+	seen := map[string]bool{}
+	for _, d := range rs.tenantDevices(t) {
+		for _, k := range []string{d.ID, d.Name} {
+			if k != "" && !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys, false
+}
+
+// tunnelReportCond narrows netops.tunnels rows to tunnels terminating on one of
+// the report tenant's devices (either endpoint) — the same contract as
+// /api/tunnels. The tunnels row policy is hybrid (untagged rows shared), so
+// this app-layer clause is what keeps a tenant report from describing other
+// tenants' links. Injection-safe via sqlInList (inventory values, escaped
+// regardless).
+func tunnelReportCond(platform bool, keys []string) string {
+	if platform {
+		return ""
+	}
+	in := sqlInList(keys)
+	return ` WHERE (local_device IN (` + in + `) OR remote_device IN (` + in + `))
+`
+}
+
+// findingsReportCond is the findings sibling, keyed on the device name column.
+// Scoped reports exclude device-less platform findings (default-closed).
+func findingsReportCond(platform bool, keys []string) string {
+	if platform {
+		return ""
+	}
+	return " AND device IN (" + sqlInList(keys) + ")"
+}
+
+// filterDeviceMap keeps only the metric entries whose device label matches one
+// of the tenant's device keys. Pure.
+func filterDeviceMap(m map[string]float64, keys []string) map[string]float64 {
+	allow := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		allow[k] = true
+	}
+	out := make(map[string]float64, len(m))
+	for k, v := range m {
+		if allow[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// topDeviceLines renders the top-n devices of a metric map as "name value<unit>"
+// lines, highest first (ties broken by name for determinism). Pure.
+func topDeviceLines(m map[string]float64, n int, unit string) []string {
+	devs := make([]string, 0, len(m))
+	for d := range m {
+		devs = append(devs, d)
+	}
+	sort.Slice(devs, func(i, j int) bool {
+		if m[devs[i]] != m[devs[j]] {
+			return m[devs[i]] > m[devs[j]]
+		}
+		return devs[i] < devs[j]
+	})
+	if len(devs) > n {
+		devs = devs[:n]
+	}
+	lines := make([]string, 0, len(devs))
+	for _, d := range devs {
+		lines = append(lines, fmt.Sprintf("%s %.0f%s", d, m[d], unit))
+	}
+	return lines
+}
+
 func (rs *reportScheduler) renderAlerts(tenant string) (string, string) {
 	active := rs.tenantAlerts(tenant)
 	bySev := map[string]int{}
@@ -912,14 +1022,18 @@ func (rs *reportScheduler) renderHealth(now time.Time, tenant string) (string, s
 // renderWANUtilization summarises per-WAN/overlay link load + health from the
 // tunnels telemetry (status, loss, qoe) — the closest the stack has to circuit
 // utilisation until per-circuit bandwidth counters land.
-func (rs *reportScheduler) renderWANUtilization() (string, string) {
-	rows := chQuery(`
+func (rs *reportScheduler) renderWANUtilization(tenant string) (string, string) {
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var rows []string
+	if platform || len(keys) > 0 {
+		rows = chQuery(`
 SELECT local_device, remote_device, type, status,
        round(loss_pct,2), round(qoe,2)
   FROM netops.tunnels
- ORDER BY ts DESC
+` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
+	}
 	if len(rows) == 0 {
 		return "no WAN/overlay links reporting", "No tunnel/overlay telemetry yet.\n"
 	}
@@ -948,21 +1062,26 @@ SELECT local_device, remote_device, type, status,
 // renderSecurityThreats rolls up correlation findings (severity breakdown +
 // recent items) and critical active alerts — the executive "are we under
 // threat" view.
-func (rs *reportScheduler) renderSecurityThreats() (string, string) {
-	sev := chQuery(`
+func (rs *reportScheduler) renderSecurityThreats(tenant string) (string, string) {
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var sev, recent []string
+	if platform || len(keys) > 0 {
+		cond := findingsReportCond(platform, keys)
+		sev = chQuery(`
 SELECT severity, count()
   FROM netops.findings
- WHERE ts >= now() - INTERVAL 24 HOUR
+ WHERE ts >= now() - INTERVAL 24 HOUR` + cond + `
  GROUP BY severity
  ORDER BY count() DESC
  FORMAT TSV`)
-	recent := chQuery(`
+		recent = chQuery(`
 SELECT severity, device, summary
   FROM netops.findings
- WHERE ts >= now() - INTERVAL 24 HOUR
+ WHERE ts >= now() - INTERVAL 24 HOUR` + cond + `
  ORDER BY ts DESC
  LIMIT 10
  FORMAT TSV`)
+	}
 	var b strings.Builder
 	total := 0
 	if len(sev) == 0 {
@@ -987,7 +1106,7 @@ SELECT severity, device, summary
 		}
 	}
 	crit := 0
-	for _, a := range rs.alerts.Active() {
+	for _, a := range rs.tenantAlerts(tenant) {
 		if strings.EqualFold(a.Severity, "critical") {
 			crit++
 		}
@@ -997,10 +1116,21 @@ SELECT severity, device, summary
 }
 
 // renderDeviceUtilization lists the busiest devices by CPU and memory from the
-// metrics VictoriaMetrics already stores (SNMP + gNMI collectors).
-func (rs *reportScheduler) renderDeviceUtilization() (string, string) {
-	cpu := vmTopk(`topk(10, device_cpu_percent)`, "%")
-	mem := vmTopk(`topk(10, device_mem_percent)`, "%")
+// metrics VictoriaMetrics already stores (SNMP + gNMI collectors), ranked
+// in-app so a tenant-owned report's top-N is computed over ITS devices only
+// (a server-side topk would rank platform-wide and then filter).
+func (rs *reportScheduler) renderDeviceUtilization(tenant string) (string, string) {
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var cpuMap, memMap map[string]float64
+	if platform || len(keys) > 0 {
+		cpuMap = vmQueryMap(`device_cpu_percent`)
+		memMap = vmQueryMap(`device_mem_percent`)
+		if !platform {
+			cpuMap, memMap = filterDeviceMap(cpuMap, keys), filterDeviceMap(memMap, keys)
+		}
+	}
+	cpu := topDeviceLines(cpuMap, 10, "%")
+	mem := topDeviceLines(memMap, 10, "%")
 	if len(cpu) == 0 && len(mem) == 0 {
 		return "no device utilisation metrics", "No CPU/memory metrics reporting yet.\n"
 	}
@@ -1022,14 +1152,18 @@ func (rs *reportScheduler) renderDeviceUtilization() (string, string) {
 
 // renderLatencyJitterSLA reports per-link latency/jitter/loss and a simple SLA
 // (% of links currently up) from the tunnels telemetry.
-func (rs *reportScheduler) renderLatencyJitterSLA() (string, string) {
-	rows := chQuery(`
+func (rs *reportScheduler) renderLatencyJitterSLA(tenant string) (string, string) {
+	keys, platform := rs.reportDeviceKeys(tenant)
+	var rows []string
+	if platform || len(keys) > 0 {
+		rows = chQuery(`
 SELECT local_device, remote_device, status,
        round(latency_ms,2), round(jitter_ms,2), round(loss_pct,2)
   FROM netops.tunnels
- ORDER BY ts DESC
+` + tunnelReportCond(platform, keys) + ` ORDER BY ts DESC
  LIMIT 1 BY id
  FORMAT TSV`)
+	}
 	if len(rows) == 0 {
 		return "no latency/SLA telemetry", "No tunnel latency/jitter telemetry yet.\n"
 	}
@@ -1094,39 +1228,6 @@ func chQuery(sql string) []string {
 		}
 	}
 	return out
-}
-
-// vmTopk runs an instant PromQL query against VictoriaMetrics and formats each
-// returned series as "<device> <value><unit>". Best-effort (nil on error).
-func vmTopk(query, unit string) []string {
-	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
-	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(query)
-	resp, err := backendHTTPClient(6 * time.Second).Get(endpoint)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	var out struct {
-		Data struct {
-			Result []struct {
-				Metric map[string]string `json:"metric"`
-				Value  [2]any            `json:"value"`
-			} `json:"result"`
-		} `json:"data"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return nil
-	}
-	var lines []string
-	for _, r := range out.Data.Result {
-		name := firstNonEmpty(r.Metric["device"], r.Metric["instance"], r.Metric["host"], "device")
-		val := ""
-		if s, ok := r.Value[1].(string); ok {
-			val = s
-		}
-		lines = append(lines, fmt.Sprintf("%s %s%s", name, val, unit))
-	}
-	return lines
 }
 
 func atoiSafe(s string) int {

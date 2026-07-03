@@ -122,48 +122,65 @@ func TestChQueryNonOKReturnsNil(t *testing.T) {
 	}
 }
 
-// vmTopk runs an instant PromQL query and formats each series as
-// "<device> <value><unit>", preferring device > instance > host for the label.
-func TestVMTopkParsesAndFormats(t *testing.T) {
+// vmQueryMap runs an instant PromQL query and maps each series to its value,
+// preferring device > instance > host for the label.
+func TestVMQueryMapParsesAndPrefersLabels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("query"); got != "topk(2, x)" {
-			t.Errorf("vmTopk query = %q, want topk(2, x)", got)
+		if got := r.URL.Query().Get("query"); got != "device_cpu_percent" {
+			t.Errorf("vmQueryMap query = %q, want device_cpu_percent", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"data": {"result": [
 				{"metric": {"device": "core1"}, "value": [1700000000, "93.5"]},
 				{"metric": {"instance": "10.0.0.2"}, "value": [1700000000, "80"]},
-				{"metric": {"host": "edge9", "device": "edge9-dev"}, "value": [1700000000, "12"]},
-				{"metric": {}, "value": [1700000000, "1"]}
+				{"metric": {"host": "edge9", "device": "edge9-dev"}, "value": [1700000000, "12"]}
 			]}
 		}`))
 	}))
 	defer srv.Close()
 	t.Setenv("VICTORIA_URL", srv.URL)
 
-	got := vmTopk("topk(2, x)", "%")
-	want := []string{
-		"core1 93.5%",
-		"10.0.0.2 80%",  // falls back to instance
-		"edge9-dev 12%", // device wins over host
-		"device 1%",     // no labels -> literal "device"
+	got := vmQueryMap("device_cpu_percent")
+	want := map[string]float64{
+		"core1":     93.5,
+		"10.0.0.2":  80, // falls back to instance
+		"edge9-dev": 12, // device wins over host
 	}
 	if len(got) != len(want) {
-		t.Fatalf("vmTopk returned %v, want %v", got, want)
+		t.Fatalf("vmQueryMap returned %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("map[%q] = %v, want %v", k, got[k], v)
+		}
+	}
+}
+
+func TestVMQueryMapUnreachableReturnsNil(t *testing.T) {
+	// Point at a closed port so the GET fails fast -> nil.
+	t.Setenv("VICTORIA_URL", "http://127.0.0.1:1")
+	t.Setenv("METRICS_URL", "http://127.0.0.1:1")
+	if got := vmQueryMap("device_cpu_percent"); got != nil {
+		t.Fatalf("vmQueryMap unreachable = %v, want nil", got)
+	}
+}
+
+// topDeviceLines ranks a metric map highest-first (name-tiebroken), caps at n,
+// and renders "name value<unit>" lines.
+func TestTopDeviceLines(t *testing.T) {
+	m := map[string]float64{"b": 90, "a": 90, "c": 12, "d": 50}
+	got := topDeviceLines(m, 3, "%")
+	want := []string{"a 90%", "b 90%", "d 50%"}
+	if len(got) != len(want) {
+		t.Fatalf("topDeviceLines = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
 		}
 	}
-}
-
-func TestVMTopkUnreachableReturnsNil(t *testing.T) {
-	// Point at a closed port so the GET fails fast -> nil.
-	t.Setenv("VICTORIA_URL", "http://127.0.0.1:1")
-	t.Setenv("METRICS_URL", "http://127.0.0.1:1")
-	if got := vmTopk("topk(1, x)", "%"); got != nil {
-		t.Fatalf("vmTopk unreachable = %v, want nil", got)
+	if lines := topDeviceLines(nil, 5, "%"); len(lines) != 0 {
+		t.Errorf("empty map should yield no lines, got %v", lines)
 	}
 }
