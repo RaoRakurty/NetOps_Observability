@@ -1,0 +1,130 @@
+name: release-bundle
+
+# #97 Phase 1 CI leg (docs/design/packaging-strategy.md §6): on a version tag,
+# build the offline client installer bundle (make-installer.sh --core), smoke-
+# test it (checksums, archive integrity, docker-load round-trip, extracted-tree
+# install preflight), and attach it to the GitHub Release. Manual dispatch runs
+# the same build + smoke and uploads a workflow artifact instead (no release).
+#
+# NOT here (documented limits, not oversights):
+#   - Full-stack boot smoke (`install.py --bundle` bringing 17 services up):
+#     the standard runner (2 vCPU / 7 GB on private repos) is below the 8 GB
+#     evaluation floor — the static preflight + image round-trip cover the
+#     bundle mechanics; boot coverage stays with fresh-install-integrity.
+#   - GPG signing of SHA256SUMS: needs the product signing key (owner-held).
+#
+# GitHub Releases cap assets at 2 GiB per file; any larger bundle member is
+# split into .partNN pieces (client: `cat <name>.part* > <name>`, then verify
+# against SHA256SUMS as usual — the sums cover the joined file).
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write # attach bundle assets to the release (tag runs only)
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # make-installer.sh versions the bundle via `git describe --tags`
+
+      # The image set + save/compress needs ~12 GB of scratch; the stock runner
+      # image ships ~25 GB of toolchains we never touch. Reclaim them first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h /
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: NetOps_Observability/src/frontend/package-lock.json
+
+      - name: Install zstd
+        run: command -v zstd >/dev/null || sudo apt-get install -y --no-install-recommends zstd
+
+      # compose config/build require a provisioned .env (:?-guarded vars).
+      # --no-start generates env + data dirs exactly as a client install would,
+      # without bringing the stack up. Secrets are throwaway CI randoms and
+      # never enter the bundle (make-installer.sh archives HEAD, not the tree).
+      - name: Provision build env
+        run: python3 NetOps_Observability/scripts/install.py --no-start
+
+      - name: Build bundle (core profile)
+        id: build
+        run: |
+          bash NetOps_Observability/scripts/make-installer.sh --core
+          BUNDLE_DIR="$(ls -d NetOps_Observability/dist/correlix-*/ | head -1)"
+          echo "dir=${BUNDLE_DIR%/}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test bundle
+        working-directory: ${{ steps.build.outputs.dir }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          zstd -t correlix-images-*.tar.zst
+          # docker-load round-trip: exercises decompression + per-layer digest
+          # verification on the exact archive a client would load.
+          zstd -dc correlix-images-*.tar.zst | docker load
+          # Every image the MANIFEST promises must now be present.
+          sed -n 's/^  - //p' MANIFEST | while read -r img; do
+            docker image inspect "$img" >/dev/null || { echo "MISSING after load: $img"; exit 1; }
+          done
+          # Static install integrity on the tree the client actually receives.
+          SMOKE="$(mktemp -d)"
+          tar -xzf correlix-source-*.tar.gz -C "$SMOKE"
+          python3 "$SMOKE/NetOps_Observability/scripts/preflight-install.py"
+
+      # Release assets are capped at 2 GiB/file — split anything bigger.
+      - name: Prepare assets (split >1900 MiB)
+        id: assets
+        working-directory: ${{ steps.build.outputs.dir }}
+        run: |
+          set -euo pipefail
+          for f in *.tar.zst *.tar.gz; do
+            if [ "$(stat -c%s "$f")" -gt $((1900*1024*1024)) ]; then
+              echo "-- splitting $f"
+              split -b 1900m -d "$f" "$f.part"
+              rm "$f"
+              echo "Rejoin before install: cat $f.part* > $f  (then sha256sum -c SHA256SUMS)" >> INSTALL.md
+            fi
+          done
+          ls -lh
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ${{ steps.build.outputs.dir }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag --title "Correlix $TAG" \
+              --notes "Offline client installer bundle (core profile). Verify with \`sha256sum -c SHA256SUMS\`; see INSTALL.md. Split \`.partNN\` files: \`cat <name>.part* > <name>\` first."
+          gh release upload "$TAG" ./* --clobber
+
+      # Dispatch runs (no tag) keep the bundle as a short-lived artifact so a
+      # branch build can be validated without publishing anything.
+      - name: Upload workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: correlix-bundle-core
+          path: ${{ steps.build.outputs.dir }}
+          retention-days: 7
+          compression-level: 0 # members are already zstd/gzip-compressed

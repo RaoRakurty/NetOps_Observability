@@ -29,8 +29,9 @@
 # developer having built them recently: REBUILD_FRONTEND=1 forces both).
 #
 # ⚠️ LICENSING GATE (see docs/design/packaging-strategy.md §4): before any
-# EXTERNAL distribution, resolve the flagged images (Redpanda BSL, Redis 7.4
-# RSAL — swap to Valkey/redis:7.2, Grafana AGPL). Internal/lab bundles are fine.
+# EXTERNAL distribution, resolve Redpanda (BSL — written OK or Kafka swap).
+# Redis→Valkey done 2026-07-03; Grafana (AGPL) is omitted by --core. Internal/
+# lab bundles are unaffected either way.
 
 set -euo pipefail
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
@@ -80,6 +81,15 @@ if [ "$PROFILE" = "core" ]; then
 fi
 COUNT="$(printf '%s\n' "$IMAGES" | grep -c .)"
 echo "   $COUNT images"
+
+# 3b. Ensure every bundled image exists locally. App images were just built;
+#     third-party ones are digest-pinned pulls that a dev host has but a fresh
+#     CI runner does not — `docker save` hard-fails on any missing reference.
+#     Pull AFTER the core filter so a trimmed bundle never downloads images it
+#     won't ship.
+for img in $IMAGES; do
+  docker image inspect "$img" >/dev/null 2>&1 || { echo "-- pulling $img"; docker pull -q "$img"; }
+done
 
 # 4. Save + compress. zstd -3 multi-threaded: ~2x smaller than the raw save
 #    at near-disk-speed compression.
