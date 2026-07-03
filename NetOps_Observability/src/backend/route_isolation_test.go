@@ -231,6 +231,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/breakglass":             "platform",
 	"/api/breakglass/":            "platform",
 	"/api/onboard":                "platform",
+	// SNMP config generator — platform-owner action that mints a credential.
+	"/api/onboard/snmp-config":    "platform",
 	"/api/discovery/refresh":      "platform",
 	"/api/integrations/reconcile": "platform",
 
