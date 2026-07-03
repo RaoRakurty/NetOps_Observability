@@ -8,7 +8,7 @@ listeners so the Flows tab shows live NetFlow/IPFIX/sFlow data. Pure stdlib
 The clos-multivendor fabric is virtual (cEOS/SR Linux have no ASIC), so its sFlow
 only ever produces counter-samples, never per-flow records — goflow2 can't turn
 those into rows. This generator stands in for real exporters so the analytics
-pipeline (goflow2 -> vector -> redpanda -> vector-router -> ClickHouse) has data.
+pipeline (goflow2 -> vector -> kafka -> vector-router -> ClickHouse) has data.
 
 Run on the stack host (sends to the published goflow2 ports), or as a container
 on the stack's docker network (point --host at goflow2). Defaults assume the

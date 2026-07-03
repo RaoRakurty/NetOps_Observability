@@ -7,7 +7,7 @@ actually working?"
 
 Tiers checked (internal ones via `docker compose exec`):
   nginx · API · OpenSearch · VictoriaMetrics · Prometheus · Grafana ·
-  ClickHouse · Redpanda · correlation
+  ClickHouse · Kafka · correlation
 API endpoints checked through nginx (:8000). Endpoints behind auth are
 verified live either way: with a token we expect 200; without, a 401 still
 proves the route is wired (reported as WARN, not FAIL).
@@ -205,8 +205,12 @@ def check_grafana():
 
 
 def check_clickhouse():
+    # tenant_scope: the RLS row policies call getSetting('tenant_scope'), which
+    # ERRORS (not "empty") when the session never defines it — define the
+    # platform scope explicitly, same as correlation_e2e.py does.
     rc, out, err = dexec("clickhouse", "clickhouse-client", "-q",
-                         "SELECT (SELECT count() FROM netops.flows), (SELECT count() FROM netops.findings)")
+                         "SELECT (SELECT count() FROM netops.flows), (SELECT count() FROM netops.findings) "
+                         "SETTINGS tenant_scope='__all__'")
     if rc == 0 and out.strip():
         parts = out.split()
         flows = parts[0] if parts else "?"
@@ -216,18 +220,19 @@ def check_clickhouse():
         record(FAIL, "ClickHouse", (err.strip()[:100] or "query failed"))
 
 
-def check_redpanda():
-    rc, out, _ = dexec("redpanda", "rpk", "topic", "list")
+def check_kafka():
+    rc, out, _ = dexec("kafka", "/opt/kafka/bin/kafka-topics.sh",
+                       "--bootstrap-server", "localhost:9092", "--list")
     if rc == 0:
-        topics = [l.split()[0] for l in out.splitlines()[1:] if l.strip()]
+        topics = [l.strip() for l in out.splitlines() if l.strip()]
         want = {"netops.applogs", "netops.flows", "netops.metrics", "netops.syslog"}
         missing = want - set(topics)
         if missing:
-            record(WARN, "Redpanda", f"topics present={len(topics)}, missing: {', '.join(missing)}")
+            record(WARN, "Kafka", f"topics present={len(topics)}, missing: {', '.join(missing)}")
         else:
-            record(PASS, "Redpanda", f"all 4 netops topics present")
+            record(PASS, "Kafka", "all 4 core netops topics present")
     else:
-        record(FAIL, "Redpanda", "topic list failed")
+        record(FAIL, "Kafka", "topic list failed")
 
 
 def check_correlation():
@@ -328,7 +333,7 @@ def main():
     check_prometheus()
     check_grafana()
     check_clickhouse()
-    check_redpanda()
+    check_kafka()
     check_correlation()
 
     print(f"\n{B}API surface{X}")

@@ -22,7 +22,7 @@ import (
 // asynchronous notifications devices PUSH (linkDown, authenticationFailure,
 // coldStart, vendor-specific). Traps are log/event-shaped, not metrics, so the
 // receiver normalizes each one to a structured event and forwards it onto the
-// EXISTING log bus (an HTTP source on the Vector aggregator → Redpanda
+// EXISTING log bus (an HTTP source on the Vector aggregator → the Kafka bus
 // netops.snmptrap → vector-router → OpenSearch netops-snmptrap-*), where it
 // inherits the same per-tenant stamping, retention and export as syslog/flows.
 // Displayed as the "SNMP traps" signal in Explore → Logs.

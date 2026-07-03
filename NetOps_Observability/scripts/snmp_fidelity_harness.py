@@ -506,12 +506,12 @@ def hop_f_sanity(ep: dict) -> None:
                ("; ".join(bad[:8]) if bad else ("in range" if rows else "no series")))
 
 
-def rpk(args: list[str]) -> str:
-    """Run rpk inside the redpanda container → stdout ('' on error)."""
+def kafka_cli(args: list[str]) -> str:
+    """Run a Kafka CLI tool inside the kafka container → stdout ('' on error)."""
     try:
         out = subprocess.run(
-            ["docker", "exec", f"{PROJECT}-redpanda-1", "rpk", *args],
-            capture_output=True, text=True, timeout=20,
+            ["docker", "exec", f"{PROJECT}-kafka-1", *args],
+            capture_output=True, text=True, timeout=30,
         )
         return out.stdout
     except Exception:
@@ -523,18 +523,23 @@ def hop_g_exit(ep: dict) -> None:
 
     # G1: the correlation engine is actually consuming (group Stable, lag bounded).
     # This is liveness — independent of whether any anomaly fired.
-    desc = rpk(["group", "describe", "netops-correlation"])
+    # kafka-consumer-groups --describe columns:
+    #   GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID ...
+    desc = kafka_cli(["/opt/kafka/bin/kafka-consumer-groups.sh",
+                      "--bootstrap-server", "localhost:9092",
+                      "--describe", "--group", "netops-correlation"])
     if not desc:
-        record("G", "correlation consumer group reachable", SKIP, "rpk unavailable")
+        record("G", "correlation consumer group reachable", SKIP, "kafka CLI unavailable")
         metrics_fed = None
     else:
         total_lag = None
-        m = re.search(r"TOTAL-LAG\s+(\d+)", desc)
-        if m:
-            total_lag = int(m.group(1))
-        record("G", "correlation engine consuming Redpanda (lag bounded)",
+        lags = [int(c[5]) for c in (ln.split() for ln in desc.splitlines())
+                if len(c) > 5 and c[0] == "netops-correlation" and c[5].isdigit()]
+        if lags:
+            total_lag = sum(lags)
+        record("G", "correlation engine consuming the Kafka bus (lag bounded)",
                PASS if (total_lag is not None and total_lag < 10000) else FAIL,
-               f"TOTAL-LAG={total_lag}" if total_lag is not None else "no lag line")
+               f"TOTAL-LAG={total_lag}" if total_lag is not None else "no lag rows")
 
         # G2: is the SNMP-metric lane FED at all? Telegraf writes straight to VM;
         # correlation's metric-anomaly path consumes the netops.metrics topic. If
@@ -544,7 +549,7 @@ def hop_g_exit(ep: dict) -> None:
             for ln in desc.splitlines():
                 if ln.lstrip().startswith(topic + " ") or f" {topic} " in ln:
                     cols = ln.split()
-                    # TOPIC PARTITION CURRENT LOG-START LOG-END LAG ...
+                    # GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG ...
                     try:
                         return int(cols[4])
                     except (IndexError, ValueError):

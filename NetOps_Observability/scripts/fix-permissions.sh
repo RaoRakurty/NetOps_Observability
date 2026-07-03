@@ -29,7 +29,7 @@ declare -A OWNERS=(
     [grafana]="472:472"
     [opensearch]="1000:1000"
     [clickhouse]="101:101"
-    [redpanda]="101:101"
+    [kafka]="1000:1000"
     [victoria]="1000:1000"
     # postgres, redis, and api handle their own ownership; not listed
 )

@@ -50,12 +50,12 @@ scrape_configs:
     # /metrics is exposed there too.
     metrics_path: '/grafana/metrics'
 
-  # Redpanda exposes Prometheus metrics on the admin port 9644
-  # (/public_metrics = curated, /metrics = full internal).
-  - job_name: 'redpanda'
-    static_configs:
-      - targets: ['redpanda:9644']
-    metrics_path: '/public_metrics'
+  # NOTE (Redpanda→Apache Kafka swap, #97): the embedded Kafka broker has no
+  # native Prometheus endpoint (JMX only — a jmx-exporter sidecar was judged
+  # not worth the image/licensing surface for a transit-only bus). Broker
+  # liveness is covered by the compose healthcheck + the api stack-health TCP
+  # probe; consumer progress by pipeline-watchdog.sh high-watermark deltas and
+  # Vector's own kafka sink/source metrics (vector-* jobs above).
 
   # ClickHouse native Prometheus endpoint (enabled via <prometheus> in config).
   - job_name: 'clickhouse'

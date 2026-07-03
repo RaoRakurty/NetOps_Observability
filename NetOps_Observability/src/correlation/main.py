@@ -1036,8 +1036,8 @@ _INTERNAL_PROBE_TARGETS = {
     t.strip().lower() for t in os.getenv(
         "CORR_INTERNAL_PROBE_TARGETS",
         "nginx,api,frontend,clickhouse,redis,postgres,netbox,grafana,keycloak,"
-        "opensearch,victoriametrics,prometheus,redpanda,vector,loki,promtail,"
-        "correlation,prober",
+        "opensearch,victoriametrics,prometheus,kafka,redpanda,vector,loki,"
+        "promtail,correlation,prober",
     ).split(",") if t.strip()
 }
 _SERVICE_DEP_TARGETS = {

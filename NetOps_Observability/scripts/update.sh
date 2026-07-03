@@ -138,8 +138,10 @@ EXPECTED = {
     "NETFLOW_PORT":              "2055",
     "IPFIX_PORT":                "4739",
     "SFLOW_PORT":                "6343",
-    "REDPANDA_KAFKA_PORT":       "19092",
-    "REDPANDA_PROXY_PORT":       "18082",
+    # event bus (Redpanda→Apache Kafka swap, #97)
+    "BROKER_URLS":               "kafka:9092",
+    "KAFKA_CLUSTER_ID":          "__KAFKA_UUID__",
+    "COMPOSE_PROFILES":          "embedded-bus,prober,osd",
     # expanded notifier (new in the alert-channels landing)
     "SMTP_USER":                 "",
     "SMTP_PASS":                 "",
@@ -160,11 +162,21 @@ EXPECTED = {
 alphabet = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 def randpw(n=24): return "".join(secrets.choice(alphabet) for _ in range(n))
 
+def kafka_uuid():
+    # kafka-storage random-uuid format: 22-char base64url uuid, no padding.
+    import base64, uuid
+    return base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("=")
+
 missing = []
 for k, default in EXPECTED.items():
     if k in existing:
         continue
-    v = randpw(20) if default == "__RANDOM__" else default
+    if default == "__RANDOM__":
+        v = randpw(20)
+    elif default == "__KAFKA_UUID__":
+        v = kafka_uuid()
+    else:
+        v = default
     missing.append((k, v))
 
 if not missing:

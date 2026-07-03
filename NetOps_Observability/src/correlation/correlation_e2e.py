@@ -3,11 +3,11 @@
 
 Proves the engine is WORKING, not just running, across the full pipeline:
 
-    event injection -> Redpanda topics -> correlation service ->
+    event injection -> Kafka topics -> correlation service ->
     corr_signals / corr_objects / corr_edges / corr_evidence -> (API)
 
 This is the LIVE-STACK complement to test_e2e_rca.py (which is the in-process
-engine integration test). It produces real events with `rpk` to the same topics
+engine integration test). It produces real events with the Kafka console producer to the same topics
 the engine consumes, waits for the ~30s engine window, then validates ClickHouse
 (the source of truth) and — when a token is provided — the Go API.
 
@@ -16,7 +16,7 @@ Every injected event is tagged with a unique run id via ENTITY NAMING
 each run and never collides with live data.
 
 Run:  make test-correlation-e2e        (or: python3 correlation_e2e.py)
-Env:  E2E_REDPANDA, E2E_CLICKHOUSE (container names), E2E_API (base url),
+Env:  E2E_KAFKA, E2E_CLICKHOUSE (container names), E2E_API (base url),
       E2E_TOKEN (bearer for the API check), E2E_WAIT (seconds, default 75).
 
 Guardrails asserted (not just exercised):
@@ -34,7 +34,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-RP = os.environ.get("E2E_REDPANDA", "netops-redpanda-1")
+BUS = os.environ.get("E2E_KAFKA", "netops-kafka-1")
 CH = os.environ.get("E2E_CLICKHOUSE", "netops-clickhouse-1")
 API = os.environ.get("E2E_API", "http://localhost:8000").rstrip("/")
 TOKEN = os.environ.get("E2E_TOKEN", "")
@@ -51,12 +51,15 @@ def iso(offset_s: float = 0.0) -> str:
 
 
 def produce(topic: str, events: list[dict]) -> int:
-    """Produce records (one per line) to a topic via rpk. Returns count produced."""
+    """Produce records (one per line) to a topic via the embedded Kafka's
+    console producer. Returns count produced."""
     payload = "\n".join(json.dumps(e) for e in events) + "\n"
-    p = subprocess.run(["docker", "exec", "-i", RP, "rpk", "topic", "produce", topic],
+    p = subprocess.run(["docker", "exec", "-i", BUS,
+                        "/opt/kafka/bin/kafka-console-producer.sh",
+                        "--bootstrap-server", "localhost:9092", "--topic", topic],
                        input=payload, capture_output=True, text=True)
     if p.returncode != 0:
-        print(f"{RED}rpk produce {topic} failed: {p.stderr.strip()}{RST}", file=sys.stderr)
+        print(f"{RED}kafka produce {topic} failed: {p.stderr.strip()}{RST}", file=sys.stderr)
     return len(events)
 
 
@@ -268,7 +271,7 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
 
 def main() -> int:
     print(f"{BOLD}Correlation Engine E2E — run {RUN} (tag {TAG}){RST}")
-    print(f"{DIM}redpanda={RP} clickhouse={CH} api={API} token={'set' if TOKEN else 'none'} wait={WAIT}s{RST}\n")
+    print(f"{DIM}kafka={BUS} clickhouse={CH} api={API} token={'set' if TOKEN else 'none'} wait={WAIT}s{RST}\n")
     injected = inject_and_collect()
     total = sum(n for _, n in injected.values())
     print(f"injected {total} events across {len(injected)} scenarios → waiting {WAIT}s for the engine window…\n")

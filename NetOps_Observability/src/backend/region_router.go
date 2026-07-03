@@ -49,7 +49,7 @@ func localDataPlane(region string) DataPlane {
 		ClickHouse:      envOr("CLICKHOUSE_URL", "http://clickhouse:8123"),
 		OpenSearch:      envOr("OPENSEARCH_URL", "http://opensearch:9200"),
 		VictoriaMetrics: envOr("VICTORIA_URL", "http://victoriametrics:8428"),
-		Kafka:           envOr("REDPANDA_BROKERS", "redpanda:9092"),
+		Kafka:           envOr("BROKER_URLS", "kafka:9092"),
 	}
 }
 

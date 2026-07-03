@@ -1,8 +1,8 @@
 # Vector — ROUTER tier.
 #
-# Consumes the netops.* topics from Redpanda and fans into the storage
+# Consumes the netops.* topics from the Kafka bus and fans into the storage
 # tier. Decoupling consumers via Kafka means:
-#   * Storage outages don't drop ingestion — events buffer on Redpanda.
+#   * Storage outages don't drop ingestion — events buffer on the bus.
 #   * Replay is one Vector restart + offset reset away.
 #   * We can add new consumers (a SIEM, a data lake) without touching
 #     the aggregator.
@@ -21,28 +21,28 @@ sources:
 
   kafka_applogs:
     type: kafka
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
     decoding: { codec: json }
 
   kafka_syslog:
     type: kafka
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
     decoding: { codec: json }
 
   kafka_flows:
     type: kafka
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
     decoding: { codec: json }
 
   kafka_snmptrap:
     type: kafka
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }

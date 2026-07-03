@@ -1,7 +1,7 @@
 # Vector — AGGREGATION tier.
 #
 # Receives from edge collectors (syslog-ng, goflow2) plus container
-# stdout. Parses, normalizes, enriches, buffers, ships to Redpanda
+# stdout. Parses, normalizes, enriches, buffers, ships to the Kafka bus
 # topics keyed by signal:
 #
 #   syslog   → topic netops.syslog
@@ -91,6 +91,16 @@ sources:
       codec: json
     framing:
       method: newline_delimited
+
+  # Bus bridge (replaces the Redpanda pandaproxy). The stdlib-only Go backend
+  # has no Kafka client, so it POSTs bus records here as JSON envelopes
+  # {topic, key, event} (bus_producer.go) and this lane forwards each event to
+  # its topic. Internal compose network only — never exposed on the host.
+  bus_in:
+    type: http_server
+    address: 0.0.0.0:8692
+    decoding:
+      codec: json
 
   # Vector's own internal metrics. Exposed at /metrics on port 9598
   # so Prometheus can scrape it (added as a target in prometheus.yml).
@@ -351,15 +361,32 @@ transforms:
         }
       }
 
+  # Bus-bridge envelopes → topic-tagged events. Zero-trust guard: only
+  # netops.* topics are producible through the bridge; anything else (or a
+  # non-object event) is dropped, not forwarded.
+  bus_bridge:
+    type: remap
+    inputs: [bus_in]
+    drop_on_abort: true
+    source: |
+      t = to_string(.topic) ?? ""
+      if !starts_with(t, "netops.") { abort }
+      k = to_string(.key) ?? ""
+      ev, err = object(.event)
+      if err != null { abort }
+      . = ev
+      .__topic = t
+      .__key = k
+
 # ----------------------------------------------------------------------------
-# SINKS — Redpanda topics, one per signal.
+# SINKS — Kafka netops.* topics, one per signal.
 # ----------------------------------------------------------------------------
 
 sinks:
   kafka_applogs:
     type: kafka
     inputs: [applogs_normalized]
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.applogs"
     encoding: { codec: json }
     compression: snappy
@@ -367,7 +394,7 @@ sinks:
   kafka_syslog:
     type: kafka
     inputs: [syslog_normalized]
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.syslog"
     encoding: { codec: json }
     compression: snappy
@@ -375,7 +402,7 @@ sinks:
   kafka_flows:
     type: kafka
     inputs: [flows_normalized]
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.flows"
     encoding: { codec: json }
     compression: snappy
@@ -383,7 +410,7 @@ sinks:
   kafka_snmptrap:
     type: kafka
     inputs: [snmptrap_normalized]
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.snmptrap"
     encoding: { codec: json }
     compression: snappy
@@ -391,7 +418,7 @@ sinks:
   kafka_probes:
     type: kafka
     inputs: [probe_normalized]
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.probes"
     encoding: { codec: json }
     compression: snappy
@@ -399,9 +426,25 @@ sinks:
   kafka_metrics:
     type: kafka
     inputs: [metrics_normalized]
-    bootstrap_servers: "redpanda:9092"
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.metrics"
     encoding: { codec: json }
+    compression: snappy
+
+  # Bus-bridge events land on whatever netops.* topic their envelope named
+  # (today: netops.app.identities.v1 from the fusion worker and
+  # netops.controller_events from the NMS scheduler). The __topic/__key
+  # routing fields are stripped from the encoded payload so the on-topic
+  # value stays exactly the record the producer sent.
+  kafka_bus:
+    type: kafka
+    inputs: [bus_bridge]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "{{ __topic }}"
+    key_field: "__key"
+    encoding:
+      codec: json
+      except_fields: ["__topic", "__key"]
     compression: snappy
 
   # Operator metrics — exposed for Prometheus to scrape.

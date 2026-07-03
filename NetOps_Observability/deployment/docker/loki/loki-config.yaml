@@ -1,6 +1,6 @@
 # DEPRECATED — replaced by OpenSearch.
 #
-# As of the streaming-bus refactor (Redpanda + OpenSearch + ClickHouse),
+# As of the streaming-bus refactor (Kafka + OpenSearch + ClickHouse),
 # Loki has been removed from the stack. The Logs tab in the dashboard
 # now queries OpenSearch directly via the Go API, and search uses
 # OpenSearch's Query DSL instead of LogQL.

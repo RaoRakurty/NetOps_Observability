@@ -18,7 +18,7 @@ import (
 // and fans the three class-routed outputs to their sinks:
 //
 //   controller_metric → VictoriaMetrics /api/v1/import/prometheus (Lane 1)
-//   controller_event  → Redpanda pandaproxy → netops.controller_events
+//   controller_event  → Vector bus bridge → netops.controller_events
 //   controller_state  → controller_state_current (PG, flap-tracked)
 //
 // Dormant unless FEATURE_NMS_INTEGRATIONS=true. Per-integration Pipelines are

@@ -22,14 +22,23 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import secrets
 import shutil
+import socket
 import string
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Compose profiles a default install activates (written to .env as
+# COMPOSE_PROFILES — the single source of truth; see compose_up). --core
+# bundles install with --profiles "embedded-bus,prober" (no OSD image in the
+# bundle); external-broker installs drop embedded-bus.
+DEFAULT_PROFILES = "embedded-bus,prober,osd"
 
 # ---- styling ----------------------------------------------------------------
 
@@ -202,10 +211,31 @@ def validate_scaffold(root: Path) -> None:
 
 # ---- .env generation --------------------------------------------------------
 
-def write_env(env_path: Path, port: int, *, force: bool) -> dict[str, str]:
+def write_env(env_path: Path, port: int, *, force: bool,
+              profiles: str = DEFAULT_PROFILES,
+              broker_urls: str | None = None) -> dict[str, str]:
     if env_path.exists() and not force:
         info(f".env already exists at {env_path} — keeping existing secrets")
-        return _parse_env(env_path)
+        env = _parse_env(env_path)
+        # Migration (Redpanda→Kafka, #97): a pre-Kafka .env lacks the bus vars
+        # the compose file now requires. Append them idempotently so rerunning
+        # the installer upgrades an existing install instead of failing on
+        # ${KAFKA_CLUSTER_ID:?}.
+        additions: list[str] = []
+        if "BROKER_URLS" not in env:
+            additions.append("BROKER_URLS=kafka:9092")
+        if "KAFKA_CLUSTER_ID" not in env:
+            additions.append("KAFKA_CLUSTER_ID="
+                             + base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="))
+        if "COMPOSE_PROFILES" not in env:
+            additions.append(f"COMPOSE_PROFILES={profiles}")
+        if additions:
+            with env_path.open("a") as f:
+                f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
+                f.write("\n".join(additions) + "\n")
+            ok(f"migrated .env: added {', '.join(a.split('=')[0] for a in additions)}")
+            env = _parse_env(env_path)
+        return env
 
     # When forcing a fresh .env, also wipe the user store. Otherwise the
     # bootstrap admin keeps the password from the FIRST .env it was
@@ -235,6 +265,11 @@ def write_env(env_path: Path, port: int, *, force: bool) -> dict[str, str]:
         "NETBOX_DB_PASSWORD":        generate_password(24),
         "NETBOX_SUPERUSER_PASSWORD": generate_password(20),
         "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
+        # KRaft storage id for the embedded Kafka broker (22-char base64url
+        # uuid, same format kafka-storage random-uuid emits). Generated ONCE
+        # per install: the data dir is formatted with it, and a changed id
+        # would make the broker refuse its own volume on recreation.
+        "KAFKA_CLUSTER_ID":          base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="),
     }
 
     body = f"""# NetOps Observability — environment.
@@ -413,10 +448,22 @@ NETFLOW_PORT=2055
 IPFIX_PORT=4739
 SFLOW_PORT=6343
 
-# Redpanda client ports (host side). Devices and external producers
-# can publish directly to REDPANDA_KAFKA_PORT if you ever skip Vector.
-REDPANDA_KAFKA_PORT=19092
-REDPANDA_PROXY_PORT=18082
+# ---- Event bus (Apache Kafka) ------------------------------------------
+# Kafka bootstrap list every service resolves the bus through. The default
+# is the embedded single-node broker (service `kafka`, internal network
+# only — no host port). External-broker mode points this at your own
+# Kafka-compatible cluster and removes `embedded-bus` from
+# COMPOSE_PROFILES below (install-correlix.sh --external-kafka does both).
+BROKER_URLS={broker_urls or "kafka:9092"}
+# KRaft storage id for the embedded broker. Do NOT change it after first
+# start — the broker's data dir is formatted with this id.
+KAFKA_CLUSTER_ID={secrets_map["KAFKA_CLUSTER_ID"]}
+
+# Active compose profiles (additive; non-profiled services always start).
+#   embedded-bus  the bundled Apache Kafka broker + topic init
+#   prober        raw-socket active-measurement sidecar
+#   osd           OpenSearch Dashboards (omitted by --core bundles)
+COMPOSE_PROFILES={profiles}
 """
     env_path.write_text(body)
     env_path.chmod(0o600)
@@ -447,7 +494,7 @@ def ensure_data_dirs(root: Path) -> None:
         opensearch   1000 (opensearch)
         clickhouse    101 (clickhouse)
         victoria     1000
-        redpanda      101
+        kafka        1000 (appuser)
     The other services (postgres, redis, api correlation store) either
     chown their own data dirs on first boot or write as root."""
     owners: dict[str, tuple[int, int] | None] = {
@@ -456,7 +503,7 @@ def ensure_data_dirs(root: Path) -> None:
         "victoria":   (1000, 1000),
         "grafana":    (472, 472),
         "prometheus": (65534, 65534),
-        "redpanda":   (101, 101),
+        "kafka":      (1000, 1000),
         "opensearch": (1000, 1000),
         "clickhouse": (101, 101),
         "api":        None,             # Go API runs as nonroot but writes JSON only
@@ -538,10 +585,12 @@ def ensure_data_dirs(root: Path) -> None:
 # ---- compose ----------------------------------------------------------------
 
 def compose_up(compose_dir: Path, offline: bool = False) -> None:
-    # --profile osd brings up OpenSearch Dashboards alongside the base stack so the
-    # platform-admin /search route is served rather than 502-ing (nginx still
-    # graceful-degrades if it's later stopped). The "sso" profile (Keycloak) stays
-    # opt-in. Profiles are additive: non-profiled services always start.
+    # Profiles come from COMPOSE_PROFILES in the generated .env — NOT from a
+    # --profile flag here: the CLI flag would OVERRIDE (not merge with) the env
+    # var, silently dropping profiles like embedded-bus/prober. The .env is the
+    # single source of truth so every later `docker compose ...` an operator
+    # runs in this directory sees the same service set. The "sso" profile
+    # (Keycloak) stays opt-in.
     #
     # Offline installs (client bundles built by scripts/make-installer.sh) start
     # from pre-loaded images: --no-build means a missing image is a hard, honest
@@ -554,7 +603,7 @@ def compose_up(compose_dir: Path, offline: bool = False) -> None:
         info("building and starting services (this can take a few minutes the first time)…")
         build_flag = "--build"
     subprocess.run(
-        ["docker", "compose", "--profile", "osd", "up", "-d", build_flag],
+        ["docker", "compose", "up", "-d", build_flag],
         cwd=str(compose_dir),
         check=True,
     )
@@ -738,9 +787,35 @@ def main() -> None:
                     help="Air-gapped install: start from pre-loaded images, never build or pull.")
     ap.add_argument("--bundle", type=Path, default=None, metavar="IMAGES.tar.zst",
                     help="Image archive from make-installer.sh to docker-load first (implies --offline).")
+    ap.add_argument("--profiles", default=DEFAULT_PROFILES, metavar="CSV",
+                    help=f"Compose profiles to activate (default: {DEFAULT_PROFILES}). "
+                         "Core bundles use 'embedded-bus,prober'.")
+    ap.add_argument("--broker-urls", default=None, metavar="HOST:PORT[,HOST:PORT...]",
+                    help="ADVANCED: use an external Kafka-compatible broker instead of the "
+                         "embedded one. Disables the embedded-bus profile and points every "
+                         "service at this bootstrap list.")
     args = ap.parse_args()
     if args.bundle:
         args.offline = True
+
+    # External-broker mode: the embedded Kafka must not start, and the
+    # bootstrap list must actually be usable. Reachability is best-effort
+    # advisory (the broker may be firewalled from the installer shell but
+    # reachable from containers) — an empty value is the hard error.
+    if args.broker_urls is not None:
+        args.broker_urls = args.broker_urls.strip()
+        if not args.broker_urls:
+            fail("--broker-urls needs a value, e.g. --broker-urls broker1:9092,broker2:9092")
+        args.profiles = ",".join(
+            p for p in args.profiles.split(",") if p.strip() and p.strip() != "embedded-bus")
+        first = args.broker_urls.split(",")[0].strip()
+        host, _, port = first.partition(":")
+        try:
+            with socket.create_connection((host, int(port or "9092")), timeout=5):
+                ok(f"external broker reachable: {first}")
+        except (OSError, ValueError) as e:
+            warn(f"could not reach external broker {first} from this shell ({e}) — "
+                 "continuing; services will retry from inside the network")
 
     # Project root = parent of `scripts/` containing this file.
     root = Path(__file__).resolve().parent.parent
@@ -754,7 +829,8 @@ def main() -> None:
     validate_scaffold(root)
 
     step("generating environment")
-    secrets_map = write_env(env_path, args.port, force=args.reset_env)
+    secrets_map = write_env(env_path, args.port, force=args.reset_env,
+                            profiles=args.profiles, broker_urls=args.broker_urls)
 
     step("preparing data directories")
     ensure_data_dirs(root)

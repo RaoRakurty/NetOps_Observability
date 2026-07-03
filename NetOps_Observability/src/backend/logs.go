@@ -18,7 +18,7 @@ import (
 
 // ----------------------------------------------------------------------------
 // Structured logger — emits one JSON line per event to stdout. Vector's
-// docker_logs source picks them up, parses the JSON, ships to Redpanda
+// docker_logs source picks them up, parses the JSON, ships to the Kafka bus
 // (topic netops.applogs), and vector-router then writes them into the
 // `netops-applogs-YYYY.MM.DD` OpenSearch index.
 // ----------------------------------------------------------------------------

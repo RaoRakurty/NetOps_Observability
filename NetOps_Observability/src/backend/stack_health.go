@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -64,10 +65,26 @@ func stackInventory() []stackProbe {
 		{"OLAP / flows (ClickHouse)", "olap", "http", envOr("CLICKHOUSE_URL", "http://clickhouse:8123") + "/ping"},
 		{"Correlation service", "analytics", "http", envOr("CORRELATION_URL", "http://correlation:8000") + "/findings"},
 		{"Visualization (Grafana)", "visualization", "http", envOr("GRAFANA_URL", "http://grafana:3000") + "/api/health"},
-		{"Event bus (Redpanda)", "bus", "tcp", net.JoinHostPort(envOr("REDPANDA_HOST", "redpanda"), envOr("REDPANDA_PORT", "9092"))},
+		{"Event bus (Apache Kafka)", "bus", "tcp", firstBrokerAddr()},
 		{"App database (PostgreSQL)", "state", "tcp", net.JoinHostPort(envOr("DB_HOST", "postgres"), envOr("DB_PORT", "5432"))},
 		{"Cache (Valkey)", "state", "tcp", net.JoinHostPort(envOr("REDIS_HOST", "redis"), envOr("REDIS_PORT", "6379"))},
 	}
+}
+
+// firstBrokerAddr resolves the event-bus probe target from BROKER_URLS (a
+// comma-separated Kafka bootstrap list — embedded default kafka:9092, or the
+// customer's own cluster in external-broker mode). Only the first entry is
+// probed: this is a liveness signal, not a cluster-health assessment.
+func firstBrokerAddr() string {
+	urls := envOr("BROKER_URLS", "kafka:9092")
+	first := strings.TrimSpace(strings.SplitN(urls, ",", 2)[0])
+	if first == "" {
+		first = "kafka:9092"
+	}
+	if !strings.Contains(first, ":") {
+		first += ":9092"
+	}
+	return first
 }
 
 // probeOne liveness-checks a single stack dependency. An HTTP response (even a

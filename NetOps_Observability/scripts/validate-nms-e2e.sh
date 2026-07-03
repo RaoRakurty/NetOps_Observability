@@ -4,7 +4,7 @@
 #
 # It proves the WHOLE path on real data (not a unit): create a vManage
 # integration pointed at mock-nms → live auth test → poll → transformer →
-# 3-class routing → VictoriaMetrics (controller_metric_*), Redpanda
+# 3-class routing → VictoriaMetrics (controller_metric_*), Kafka topic
 # netops.controller_events → correlation → ClickHouse corr_signals, and the
 # controller_state_current table via the /states API.
 #

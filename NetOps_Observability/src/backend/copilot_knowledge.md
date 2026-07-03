@@ -17,7 +17,7 @@ behind a single nginx entry point on `:8000`. Multi-tenant, zero-trust.
    plus an SNMP-trap receiver in the Go backend.
 2. **Aggregation** — a Vector "aggregator" normalizes/enriches (stamps
    `tenant_id`) all edge streams.
-3. **Event bus** — Redpanda (Kafka API): topics `netops.syslog`, `netops.flows`,
+3. **Event bus** — Apache Kafka: topics `netops.syslog`, `netops.flows`,
    `netops.metrics`, `netops.snmptrap`.
 4. **Routing** — a Vector "router" fans the bus out to the stores.
 5. **Storage** — OpenSearch (hot log/flow search), VictoriaMetrics + Prometheus

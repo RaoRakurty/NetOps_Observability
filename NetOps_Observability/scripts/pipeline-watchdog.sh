@@ -8,7 +8,7 @@
 # CONSUMER kept advancing — so "container up" and "lag 0" both looked fine —
 # while the sink silently stopped writing to OpenSearch for hours.
 #
-# The reliable signal for that is per-stream: INPUT is advancing (the Redpanda
+# The reliable signal for that is per-stream: INPUT is advancing (the Kafka
 # topic high-watermark grew) but OUTPUT is stale (no fresh docs in the store).
 # That combination = a wedged consumer/sink, so we restart vector-router. A
 # stream that is simply quiet (no input) is NOT flagged — input must be moving.
@@ -36,7 +36,7 @@ COOLDOWN_SECS="${COOLDOWN_SECS:-600}"    # min seconds between heals
 STATE_FILE="${STATE_FILE:-/tmp/pipeline-watchdog.state}"
 COMPOSE_DIR="${COMPOSE_DIR:-$SCRIPT_DIR/../deployment/docker}"
 OS_CONTAINER="${OS_CONTAINER:-netops-opensearch-1}"
-RP_CONTAINER="${RP_CONTAINER:-netops-redpanda-1}"
+BUS_CONTAINER="${BUS_CONTAINER:-netops-kafka-1}"
 HEAL_TARGET="${HEAL_TARGET:-vector-router}"
 NTFY_TOPIC="${NTFY_TOPIC:-}"             # optional phone push on heal
 DRY_RUN=0; LOOP=0
@@ -50,7 +50,7 @@ esac; done
 
 log(){ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 
-# Streams to watch: "name redpanda_topic os_index_glob"
+# Streams to watch: "name kafka_topic os_index_glob"
 STREAMS=(
   "syslog   netops.syslog   netops-syslog-*"
   "flows    netops.flows    netops-flows-*"
@@ -59,9 +59,11 @@ STREAMS=(
 )
 
 # topic_hwm <topic> -> sum of partition high-watermarks (input progress marker)
+# kafka-get-offsets --time -1 prints "topic:partition:latest-offset" per line.
 topic_hwm(){
-  docker exec "$RP_CONTAINER" rpk topic describe "$1" -p 2>/dev/null \
-    | awk 'NR>1{s+=$NF} END{print s+0}'
+  docker exec "$BUS_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh \
+    --bootstrap-server localhost:9092 --topic "$1" --time -1 2>/dev/null \
+    | awk -F: '{s+=$NF} END{print s+0}'
 }
 
 # os_age_secs <index_glob> -> seconds since the newest doc (huge if none/error)

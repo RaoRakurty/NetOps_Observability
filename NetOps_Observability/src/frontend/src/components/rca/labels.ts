@@ -295,7 +295,9 @@ const INFRA_DISPLAY: Record<string, string> = {
   clickhouse: "Monitoring data store", opensearch: "Monitoring data store",
   "opensearch-dashboards": "Monitoring data store", prometheus: "Monitoring data store",
   victoriametrics: "Monitoring data store", victoria: "Monitoring data store",
-  loki: "Monitoring data store", redpanda: "Internal service", redis: "Internal service",
+  // kafka is current; redpanda/redis stay mapped for historical rows only.
+  loki: "Monitoring data store", kafka: "Internal service", valkey: "Internal service",
+  redpanda: "Internal service", redis: "Internal service",
   postgres: "Internal service", "netbox-postgres": "Internal service",
   // app / gateway / platform services
   nginx: "Web gateway", api: "Platform service", backend: "Platform service",

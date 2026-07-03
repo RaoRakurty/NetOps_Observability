@@ -159,7 +159,7 @@ func identityEvent(fi appid.FusedIdentity) (map[string]any, bool) {
 }
 
 // emitIdentities publishes nameable fused identities to the correlation topic via the
-// Redpanda REST proxy (P5b). Best-effort: returns the count actually produced. The
+// Bus bridge emit (P5b, via Vector → Kafka). Best-effort: returns the count actually produced. The
 // partition key is the tenant, so one tenant's identities stay ordered. Skipped
 // (returns 0) when the topic transport is disabled — offline-safe.
 func emitIdentities(ctx context.Context, ids []appid.FusedIdentity) (int, error) {
