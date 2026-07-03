@@ -1922,6 +1922,24 @@ export const api = {
     body: Partial<{ enabled: boolean; sync_mode: string; webhook_enabled: boolean; webhook_secret: string; state_map: Record<string, string> }>,
   ) => request<IntegrationConfig>("/api/integrations/" + provider, { method: "PUT", body: JSON.stringify(body) }),
 
+  // NMS vendor-controller integrations (#95) — controller-intelligence
+  // ingestion. Credentials are WRITE-ONLY: responses carry set field names
+  // only. All routes 404 while FEATURE_NMS_INTEGRATIONS is off (dormant).
+  nmsConnectors: () => request<{ connectors: NmsConnector[] }>("/api/nms/connectors"),
+  nmsIntegrations: () => request<{ integrations: NmsIntegration[] }>("/api/nms/integrations"),
+  createNmsIntegration: (body: NmsIntegrationInput) =>
+    request<NmsIntegration>("/api/nms/integrations", { method: "POST", body: JSON.stringify(body) }),
+  updateNmsIntegration: (id: string, body: Partial<NmsIntegrationInput>) =>
+    request<NmsIntegration>("/api/nms/integrations/" + id, { method: "PUT", body: JSON.stringify(body) }),
+  deleteNmsIntegration: (id: string) =>
+    request<{ deleted: boolean }>("/api/nms/integrations/" + id, { method: "DELETE" }),
+  testNmsIntegration: (id: string) =>
+    request<{ ok: boolean; error?: string }>("/api/nms/integrations/" + id + "/test", { method: "POST" }),
+  pollNmsIntegration: (id: string) =>
+    request<NmsPollResult>("/api/nms/integrations/" + id + "/poll", { method: "POST" }),
+  nmsHealth: (id: string) => request<NmsHealth>("/api/nms/integrations/" + id + "/health"),
+  nmsStates: (id: string) => request<{ states: NmsStateRow[] }>("/api/nms/integrations/" + id + "/states"),
+
   listApiKeys: () => request<ApiKey[]>("/api/apikeys"),
   createApiKey: (req: CreateApiKeyRequest) =>
     request<{ key: ApiKey; secret: string }>("/api/apikeys", {
@@ -2521,6 +2539,76 @@ export type IntegrationConfig = {
 // inbound_enabled mirrors the server's FEATURE_ITSM_INBOUND flag — inbound
 // state changes are recorded regardless but only drive incident state when true.
 export type IntegrationsResponse = { integrations: IntegrationConfig[]; inbound_enabled: boolean };
+
+// ── NMS vendor-controller integrations (#95) ─────────────────────────────────
+
+export type NmsConnector = {
+  vendor: string;
+  product: string;
+  supportedAuth: string[];
+  preferredAuth: string;
+  webhook: boolean;
+  poll: boolean;
+  streams: string[];
+  defaultPollS: number;
+};
+
+export type NmsIntegration = {
+  id: string;
+  vendor: string;
+  product?: string;
+  displayName: string;
+  enabled: boolean;
+  baseUrl: string;
+  authType?: string;
+  pollIntervalS: number;
+  streams?: string[];
+  tlsSkipVerify?: boolean;
+  webhookUrl?: string;
+  credentialFieldsSet?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type NmsIntegrationInput = {
+  vendor: string;
+  displayName: string;
+  enabled?: boolean;
+  baseUrl: string;
+  authType?: string;
+  pollIntervalS?: number;
+  streams?: string[];
+  tlsSkipVerify?: boolean;
+  // Write-only: encrypted at rest, never returned.
+  credentials?: Record<string, string>;
+};
+
+export type NmsPollResult = { status: string; events: number; durationMs: number; error?: string };
+
+export type NmsRun = { runId: string; started: string; finished: string; status: string; events: number; error?: string };
+
+export type NmsHealth = {
+  healthy: boolean;
+  lastSuccess?: string;
+  lastError?: string;
+  lastErrorAt?: string;
+  eventsIngested: number;
+  errorRate: number;
+  updatedAt?: string;
+  runs?: NmsRun[];
+};
+
+export type NmsStateRow = {
+  entityKey: string;
+  stateKind: string;
+  currentState: string;
+  previousState: string;
+  firstSeen: string;
+  lastSeen: string;
+  flapCount: number;
+  deviceId: string;
+  siteId: string;
+};
 
 export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig };
 export type ItsmConfigInput = {

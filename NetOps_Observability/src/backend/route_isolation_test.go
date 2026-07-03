@@ -108,6 +108,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/tickets/outbox":         "scoped",
 	"/api/integrations":           "scoped",
 	"/api/integrations/":          "scoped",
+	// NMS vendor-controller integrations (#95): per-tenant config/health/state,
+	// tenant stamped from the principal, cross-tenant id → 404. Cross-org
+	// isolation test: nms_isolation_test.go (TestNMSCrossOrgIsolation).
+	"/api/nms/integrations":  "scoped",
+	"/api/nms/integrations/": "scoped",
 	"/api/itsm/jira":              "scoped",
 	"/api/itsm/servicenow":        "scoped",
 	"/api/logs/export":            "scoped",
@@ -265,6 +270,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/exports/view/":         "token",
 	"/api/reports/view/":         "token",
 	"/api/integrations/webhook/": "token",
+	// NMS controller webhook: JWT-exempt; authenticated by opaque path token +
+	// the connector's signature verification, tenant derived from the token row.
+	"/api/nms/webhook/": "token",
+	// NMS connector catalog: static vendor specs (no tenant data, auth required).
+	"/api/nms/connectors": "globalRef",
 
 	// ── unauthenticated / pure auth-flow (no tenant data) ──
 	"/api/auth/login":           "public",

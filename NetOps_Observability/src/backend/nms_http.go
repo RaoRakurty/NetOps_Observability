@@ -226,9 +226,83 @@ func (s *server) handleNMSIntegrationItem(w http.ResponseWriter, r *http.Request
 		s.nmsIntegrationTest(w, r, id)
 	case "health":
 		s.nmsIntegrationHealth(w, r, id)
+	case "poll":
+		s.nmsIntegrationPollNow(w, r, id)
+	case "states":
+		s.nmsIntegrationStates(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// nmsIntegrationPollNow runs one poll cycle synchronously — the operator's
+// "Poll now" button. Works even on a disabled integration (explicit action),
+// so a setup can be exercised before it is enabled for the scheduler.
+func (s *server) nmsIntegrationPollNow(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	c, found, err := s.nms.store.Get(r.Context(), tenant, cross, id)
+	if err != nil || !found {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	rec := s.nms.pollIntegration(ctx, c)
+	out := map[string]any{
+		"status":     rec.Status,
+		"events":     rec.Events,
+		"durationMs": rec.Finished.Sub(rec.Started).Milliseconds(),
+	}
+	if rec.Error != "" {
+		out["error"] = rec.Error
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// nmsIntegrationStates returns the tracked controller-state rows (§3.2 view).
+func (s *server) nmsIntegrationStates(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	// Existence check first so a cross-tenant id 404s (never an empty 200).
+	if _, found, err := s.nms.store.Get(r.Context(), tenant, cross, id); err != nil || !found {
+		http.NotFound(w, r)
+		return
+	}
+	states, err := s.nms.store.States(r.Context(), tenant, cross, id)
+	if err != nil {
+		http.Error(w, "states read failed", http.StatusInternalServerError)
+		return
+	}
+	out := make([]map[string]any, 0, len(states))
+	for _, st := range states {
+		out = append(out, map[string]any{
+			"entityKey":     st.EntityKey,
+			"stateKind":     st.StateKind,
+			"currentState":  st.CurrentState,
+			"previousState": st.PreviousState,
+			"firstSeen":     st.FirstSeen,
+			"lastSeen":      st.LastSeen,
+			"flapCount":     st.FlapCount,
+			"deviceId":      st.DeviceID,
+			"siteId":        st.SiteID,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"states": out})
 }
 
 func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id string) {

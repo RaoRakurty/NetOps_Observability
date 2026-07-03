@@ -84,9 +84,10 @@ func (d *RetryDoer) Do(req *http.Request) (*http.Response, error) {
 
 // Routed is the class-routed output of the Pipeline for one poll/webhook batch.
 type Routed struct {
-	MetricLines  []string      // exposition lines for VictoriaMetrics
+	MetricLines  []string          // exposition lines for VictoriaMetrics
 	Events       []ControllerEvent // deduped, ready for netops.controller_events
-	StateChanges []StateChange // transitions worth emitting as change-events
+	States       []StateRecord     // EVERY state applied this batch (first sightings + refreshes) — persist these
+	StateChanges []StateChange     // the subset that TRANSITIONED — emit these as change-events
 }
 
 // Pipeline routes normalized batches: dedupes events, folds state (flap
@@ -112,7 +113,9 @@ func (p *Pipeline) Route(b Batch) Routed {
 		}
 	}
 	for _, s := range b.States {
-		if _, chg := p.State.Apply(s); chg != nil {
+		rec, chg := p.State.Apply(s)
+		out.States = append(out.States, rec)
+		if chg != nil {
 			out.StateChanges = append(out.StateChanges, *chg)
 		}
 	}

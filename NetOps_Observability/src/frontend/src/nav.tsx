@@ -7,6 +7,7 @@ import Devices from "./pages/Devices";
 import DeviceMonitoring from "./pages/DeviceMonitoring";
 import InterfacePerformance from "./pages/InterfacePerformance";
 import PortsWorkbench from "./pages/PortsWorkbench";
+import NmsIntegrations from "./pages/NmsIntegrations";
 import BgpOspf from "./pages/BgpOspf";
 import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
@@ -190,6 +191,10 @@ export const NAV: NavSection[] = [
       { id: "devices", label: "Devices", group: "Inventory", render: () => <Devices /> },
       // Port Intelligence workbench (#94) — fleet interfaces/ports/optics/DDM.
       { id: "ports", label: "Interfaces & Optics", group: "Inventory", render: () => <PortsWorkbench /> },
+      // NMS vendor-controller integrations (#95): harvest 3rd-party controller
+      // intelligence (Meraki / Catalyst / vManage / NDFC / Versa / Prime) as
+      // normalized RCA evidence. Dormant unless FEATURE_NMS_INTEGRATIONS.
+      { id: "nms", label: "NMS Integrations", group: "Inventory", render: () => <NmsIntegrations /> },
       // Dashboards — the device-monitoring board suite (see
       // docs/design/device-monitoring-dashboards.md).
       { id: "monitoring", label: "Device Monitoring", group: "Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },

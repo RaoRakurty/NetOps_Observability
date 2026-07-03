@@ -94,7 +94,7 @@ func (rt *nmsRuntime) tickOnce(ctx context.Context) {
 		if !rt.due(ic) {
 			continue
 		}
-		rt.runOne(ctx, ic)
+		_ = rt.pollIntegration(ctx, ic)
 	}
 }
 
@@ -136,10 +136,16 @@ func (rt *nmsRuntime) httpClient(ic nmsIntegration) *http.Client {
 	return rt.client
 }
 
-// runOne executes one poll cycle for one integration and records the outcome.
-func (rt *nmsRuntime) runOne(ctx context.Context, ic nmsIntegration) {
+// pollIntegration executes one poll cycle for one integration, records the
+// outcome, and returns the run record (the scheduler discards it; the "Poll
+// now" API returns it to the operator). Marks lastRun so a manual poll also
+// resets the scheduler's interval.
+func (rt *nmsRuntime) pollIntegration(ctx context.Context, ic nmsIntegration) nmsRunRecord {
 	started := time.Now().UTC()
 	runID := fmt.Sprintf("%d-%s", started.UnixMilli(), randHex(4))
+	rt.mu.Lock()
+	rt.lastRun[nmsKey(ic.Tenant, ic.ID)] = started
+	rt.mu.Unlock()
 
 	rec := nmsRunRecord{Tenant: ic.Tenant, IntegrationID: ic.ID, RunID: runID, Started: started}
 	events, err := rt.pollOnce(ctx, ic)
@@ -156,6 +162,7 @@ func (rt *nmsRuntime) runOne(ctx context.Context, ic nmsIntegration) {
 	if rerr := rt.store.RecordRun(ctx, rec); rerr != nil {
 		logError("nms", "record run", map[string]any{"integration": ic.ID, "error": rerr.Error()})
 	}
+	return rec
 }
 
 // pollOnce runs nms.RunPoll and sinks the routed output. Returns the number of
@@ -221,8 +228,8 @@ func (rt *nmsRuntime) sinkRouted(ctx context.Context, ic nmsIntegration, routed 
 			produced = int64(len(recs))
 		}
 	}
-	if len(routed.StateChanges) > 0 {
-		if err := rt.store.UpsertStates(ctx, ic.Tenant, ic.ID, routed.StateChanges); err != nil {
+	if len(routed.States) > 0 {
+		if err := rt.store.UpsertStates(ctx, ic.Tenant, ic.ID, routed.States); err != nil {
 			logWarn("nms", "state sink", map[string]any{"integration": ic.ID, "error": err.Error()})
 		}
 	}

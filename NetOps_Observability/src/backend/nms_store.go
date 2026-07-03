@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,7 +121,10 @@ type nmsConfigStore interface {
 	ByWebhookToken(ctx context.Context, token string) (nmsIntegration, bool, error)
 	Checkpoints() nms.CheckpointStore
 	RecordRun(ctx context.Context, rec nmsRunRecord) error
-	UpsertStates(ctx context.Context, tenant, integrationID string, chs []nms.StateChange) error
+	UpsertStates(ctx context.Context, tenant, integrationID string, recs []nms.StateRecord) error
+	// States returns the tracked controller-state rows for one integration
+	// (tenant-scoped read — the UI's state table).
+	States(ctx context.Context, tenant string, cross bool, integrationID string) ([]nms.StateRecord, error)
 	Health(ctx context.Context, tenant string, cross bool, id string) (nmsHealth, bool, error)
 }
 
@@ -289,14 +293,34 @@ func (m *memNMSStore) RecordRun(_ context.Context, rec nmsRunRecord) error {
 	return nil
 }
 
-func (m *memNMSStore) UpsertStates(_ context.Context, tenant, integrationID string, chs []nms.StateChange) error {
+func (m *memNMSStore) UpsertStates(_ context.Context, tenant, integrationID string, recs []nms.StateRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, ch := range chs {
-		r := ch.Record
+	for _, r := range recs {
 		m.states[tenant+"\x00"+integrationID+"\x00"+r.EntityKey+"\x00"+r.StateKind] = r
 	}
 	return nil
+}
+
+func (m *memNMSStore) States(_ context.Context, tenant string, cross bool, integrationID string) ([]nms.StateRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []nms.StateRecord
+	for k, r := range m.states {
+		parts := strings.SplitN(k, "\x00", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		if parts[1] != integrationID {
+			continue
+		}
+		if !cross && parts[0] != tenant {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	return out, nil
 }
 
 func (m *memNMSStore) Health(_ context.Context, tenant string, cross bool, id string) (nmsHealth, bool, error) {
@@ -589,13 +613,12 @@ INSERT INTO connector_health (tenant_id, integration_id, healthy, last_success, 
 	})
 }
 
-func (s *pgNMSStore) UpsertStates(ctx context.Context, tenant, integrationID string, chs []nms.StateChange) error {
-	if len(chs) == 0 {
+func (s *pgNMSStore) UpsertStates(ctx context.Context, tenant, integrationID string, recs []nms.StateRecord) error {
+	if len(recs) == 0 {
 		return nil
 	}
 	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
-		for _, ch := range chs {
-			r := ch.Record
+		for _, r := range recs {
 			if _, err := tx.Exec(ctx, `
 INSERT INTO controller_state_current
    (tenant_id, integration_id, entity_key, state_kind, current_state, previous_state, first_seen, last_seen, flap_count, device_id, site_id, data)
@@ -611,6 +634,30 @@ INSERT INTO controller_state_current
 		}
 		return nil
 	})
+}
+
+func (s *pgNMSStore) States(ctx context.Context, tenant string, cross bool, integrationID string) ([]nms.StateRecord, error) {
+	var out []nms.StateRecord
+	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT entity_key, state_kind, current_state, previous_state,
+			first_seen, last_seen, flap_count, device_id, site_id
+			FROM controller_state_current WHERE integration_id=$1
+			ORDER BY last_seen DESC LIMIT 500`, integrationID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r nms.StateRecord
+			if err := rows.Scan(&r.EntityKey, &r.StateKind, &r.CurrentState, &r.PreviousState,
+				&r.FirstSeen, &r.LastSeen, &r.FlapCount, &r.DeviceID, &r.SiteID); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 func (s *pgNMSStore) Health(ctx context.Context, tenant string, cross bool, id string) (nmsHealth, bool, error) {

@@ -1030,6 +1030,34 @@ services:
     networks: [netops]
     restart: *restart
 
+  # Mock NMS controller (#95) — a stdlib-only vManage (Catalyst SD-WAN Manager)
+  # API stand-in, used to exercise the NMS controller-intelligence cycle
+  # end-to-end with NO real controller. TEST FIXTURE, off by default:
+  #   docker compose --profile mock-nms up -d --build mock-nms
+  # Then connect a vManage integration in Infrastructure → NMS Integrations at
+  #   http://mock-nms:8091  (user/pass = MOCK_NMS_USER/MOCK_NMS_PASSWORD)
+  # with FEATURE_NMS_INTEGRATIONS=true on the api. It serves a flapping BFD
+  # session (events + state flaps) and jittering approute metrics whose loss
+  # follows the BFD phase. Watch:  curl -s http://localhost:8098/inspect
+  mock-nms:
+    profiles: ["mock-nms"]
+    build:
+      context: ../..
+      dockerfile: deployment/docker/mock-nms/Dockerfile
+    mem_limit: ${MOCK_NMS_MEM_LIMIT:-64m}
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      MOCK_NMS_ADDR: ":8091"
+      MOCK_NMS_USER: ${MOCK_NMS_USER:-correlix}
+      MOCK_NMS_PASSWORD: ${MOCK_NMS_PASSWORD:-correlix-mock-secret}
+    # Host port for /inspect convenience (NOT used by the api, which reaches it
+    # in-network on :8091). Off the public surface — bind localhost only.
+    ports:
+      - "127.0.0.1:${MOCK_NMS_HOST_PORT:-8098}:8091"
+    networks: [netops]
+    restart: *restart
+
   # Headless-Chromium PDF renderer for reports (optional). The Go API stays
   # stdlib-only; PDF generation lives here and is reached over HTTP. Opt-in:
   #   docker compose --profile pdf up -d gotenberg

@@ -1,6 +1,7 @@
 package nms
 
 import (
+	"bytes"
 	"encoding/json"
 )
 
@@ -57,4 +58,19 @@ func (VManageStatsTransformer) Transform(tenant, integrationID string, raw []byt
 		)
 	}
 	return b, nil
+}
+
+// VManageAutoTransformer is the connector-level transformer: it routes each
+// polled payload to the stats or alarms transformer BY SHAPE — approute rows
+// carry vqoe_score / loss_percentage keys an alarm never does. RunPoll drives
+// every stream through one Transformer seam, so without this the statistics
+// stream would fall into the alarms parser and the metric lane would stay
+// silently empty.
+type VManageAutoTransformer struct{}
+
+func (VManageAutoTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {
+	if bytes.Contains(raw, []byte(`"vqoe_score"`)) || bytes.Contains(raw, []byte(`"loss_percentage"`)) {
+		return VManageStatsTransformer{}.Transform(tenant, integrationID, raw)
+	}
+	return VManageTransformer{}.Transform(tenant, integrationID, raw)
 }

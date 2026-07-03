@@ -33,7 +33,9 @@ func NewRegistry() *Registry {
 	}
 	reg("meraki", MerakiAuth{}, merakiPoller(), MerakiWebhook{}, MerakiTransformer{})
 	reg("catalyst_center", CatalystAuth{}, catalystPoller(), nil, CatalystTransformer{})
-	reg("vmanage", VManageAuth{}, vmanagePoller(), nil, VManageTransformer{})
+	// vmanage uses the shape-routing transformer so BOTH lanes work through the
+	// single Transformer seam: alarms → events/states, approute → metrics.
+	reg("vmanage", VManageAuth{}, vmanagePoller(), nil, VManageAutoTransformer{})
 	reg("ndfc", NDFCAuth{}, ndfcPoller(), nil, NDFCTransformer{})
 	reg("prime", PrimeAuth{}, primePoller(), nil, PrimeTransformer{})
 	reg("versa_director", VersaAuth{}, versaPoller(), nil, VersaDirectorTransformer{})

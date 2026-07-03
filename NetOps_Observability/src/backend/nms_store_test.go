@@ -128,12 +128,11 @@ func TestNMSSchedulerDue(t *testing.T) {
 func TestMemNMSStoreStateUpsert(t *testing.T) {
 	ctx := context.Background()
 	st := newMemNMSStore()
-	chs := []nms.StateChange{{
-		Record: nms.StateRecord{EntityKey: "dev1|tunnel|t1", StateKind: "tunnel", CurrentState: "down",
-			PreviousState: "up", FlapCount: 1, DeviceID: "dev1"},
-		From: "up", To: "down",
+	recs := []nms.StateRecord{{
+		EntityKey: "dev1|tunnel|t1", StateKind: "tunnel", CurrentState: "down",
+		PreviousState: "up", FlapCount: 1, DeviceID: "dev1",
 	}}
-	if err := st.UpsertStates(ctx, "t-a", "i-a", chs); err != nil {
+	if err := st.UpsertStates(ctx, "t-a", "i-a", recs); err != nil {
 		t.Fatal(err)
 	}
 	if len(st.states) != 1 {

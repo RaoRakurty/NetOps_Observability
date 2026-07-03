@@ -2,6 +2,8 @@ package nms
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -42,5 +44,38 @@ func TestControllerEventWireContract(t *testing.T) {
 	// would silently drop every event.
 	if m["tenant_id"] != "t-a" || m["normalized_event_type"] != "controller_bfd_down" {
 		t.Fatalf("wire values wrong: %s", b)
+	}
+}
+
+// The connector-level vmanage transformer must route BOTH lanes: an approute
+// payload → metrics, an alarms payload → events/states. A registry regression
+// back to the alarms-only transformer silently empties the metric lane.
+func TestVManageAutoTransformerRoutesBothLanes(t *testing.T) {
+	reg := NewRegistry()
+	conn, ok := reg.Get("vmanage")
+	if !ok {
+		t.Fatal("vmanage not registered")
+	}
+	stats, err := os.ReadFile(filepath.Join("fixtures", "vmanage", "approute_stats.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := conn.Transformer().Transform("t-a", "i-1", stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Metrics) == 0 || len(b.Events) != 0 {
+		t.Fatalf("approute payload must route to metrics: metrics=%d events=%d", len(b.Metrics), len(b.Events))
+	}
+	alarms, err := os.ReadFile(filepath.Join("fixtures", "vmanage", "tunnel_down.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err = conn.Transformer().Transform("t-a", "i-1", alarms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Events) == 0 || len(b.Metrics) != 0 {
+		t.Fatalf("alarms payload must route to events: metrics=%d events=%d", len(b.Metrics), len(b.Events))
 	}
 }
