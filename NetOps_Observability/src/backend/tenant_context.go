@@ -13,7 +13,6 @@ package main
 
 import (
 	"net/http"
-	"strings"
 )
 
 // resolved_from provenance — how a TenantContext's identity was established.
@@ -35,59 +34,6 @@ type TenantContext struct {
 	TenantRegion string `json:"tenant_region,omitempty"`
 	TenantStatus string `json:"tenant_status,omitempty"`
 	ResolvedFrom string `json:"resolved_from,omitempty"`
-}
-
-// resolveTenantContext resolves an UNTRUSTED id-or-slug reference (URL path,
-// ?as_tenant, header) to a canonical TenantContext. This is the single edge
-// boundary: accept a slug here, hand back the opaque tenant_id. Fails closed —
-// ok=false means the reference did not resolve and the caller MUST deny.
-func (s *server) resolveTenantContext(ref string) (TenantContext, bool) {
-	if s.tenants == nil {
-		return TenantContext{}, false
-	}
-	t, ok := s.tenants.Resolve(ref)
-	if !ok {
-		return TenantContext{}, false
-	}
-	from := ResolvedFromSlug
-	if strings.EqualFold(strings.TrimSpace(ref), t.ID) {
-		from = ResolvedFromID
-	}
-	return s.tenantContext(t, from), true
-}
-
-// tenantContextFromClaims builds the TenantContext for the actor's OWN tenant from
-// the authenticated token (the trusted source). The platform owner (cross-tenant,
-// tenant = global) resolves to the global sentinel context.
-func (s *server) tenantContextFromClaims(c jwtClaims) (TenantContext, bool) {
-	if s.tenants == nil {
-		return TenantContext{}, false
-	}
-	tenant, _ := principalTenant(c)
-	t, ok := s.tenants.Resolve(tenant)
-	if !ok {
-		return TenantContext{}, false
-	}
-	return s.tenantContext(t, ResolvedFromToken), true
-}
-
-// tenantContext assembles the full context from a resolved tenant, enriching with
-// the owning org's slug for human-facing audit/display.
-func (s *server) tenantContext(t Tenant, from string) TenantContext {
-	tc := TenantContext{
-		OrgID:        orgOf(t),
-		TenantID:     t.ID,
-		TenantSlug:   t.Slug,
-		TenantRegion: t.Region,
-		TenantStatus: t.status(),
-		ResolvedFrom: from,
-	}
-	if s.orgs != nil {
-		if o, ok := s.orgs.Get(tc.OrgID); ok {
-			tc.OrgSlug = o.Slug
-		}
-	}
-	return tc
 }
 
 // auditTenantDetail is the identity snapshot for an audit record on a tenant

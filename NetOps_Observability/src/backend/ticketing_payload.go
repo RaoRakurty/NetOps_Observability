@@ -94,9 +94,7 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 	// already named. Path src→dst is the most operator-legible scope.
 	devices, paths, ifaces := parseAffectedScope(meta)
 	f.AffectedEntities = dedupeNonEmpty(append(append(append([]string{}, devices...), ifaces...), paths...))
-	for _, a := range view.AppImpact.apps() {
-		f.ImpactedApps = append(f.ImpactedApps, a)
-	}
+	f.ImpactedApps = append(f.ImpactedApps, view.AppImpact.apps()...)
 	switch {
 	case view.Path.Source != "" && view.Path.Destination != "":
 		f.AffectedScope = view.Path.Source + " → " + view.Path.Destination

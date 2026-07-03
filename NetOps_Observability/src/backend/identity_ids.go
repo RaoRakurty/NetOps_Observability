@@ -10,7 +10,7 @@ package main
 //     directory GUIDs / GCP project numbers.
 //   - A SLUG is a human URL/display handle ONLY. It is untrusted input: validate,
 //     normalize, then resolve it to the opaque id — code NEVER authorizes on a
-//     slug (see TenantContext / resolveTenantContext).
+//     slug (see TenantContext).
 //
 // This is the single source of id minting + slug validation; everything else
 // calls these so the rules can't drift. Stdlib-only (crypto/rand + hex).

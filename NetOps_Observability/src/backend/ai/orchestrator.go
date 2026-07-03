@@ -1188,12 +1188,12 @@ func (o *Orchestrator) answerShiftHandoff(ctx context.Context, p Principal, plan
 	if len(actionable) == 0 {
 		b.WriteString("Quiet shift: no confirmed or suspected incidents to hand off.")
 		if undet > 0 {
-			b.WriteString(fmt.Sprintf(" %s under investigation (low evidence) — keep in watch mode.", plural(undet, "correlation")))
+			fmt.Fprintf(&b, " %s under investigation (low evidence) — keep in watch mode.", plural(undet, "correlation"))
 		}
 	} else {
-		b.WriteString(fmt.Sprintf("Shift pass-down: %s to action (%d confirmed, %d suspected)", plural(len(actionable), "incident"), conf, susp))
+		fmt.Fprintf(&b, "Shift pass-down: %s to action (%d confirmed, %d suspected)", plural(len(actionable), "incident"), conf, susp)
 		if undet > 0 {
-			b.WriteString(fmt.Sprintf(", plus %s under investigation", plural(undet, "correlation")))
+			fmt.Fprintf(&b, ", plus %s under investigation", plural(undet, "correlation"))
 		}
 		top := actionable[0]
 		b.WriteString(". Priority for the incoming shift: " + top.Display() + " — " + top.Title + ".")

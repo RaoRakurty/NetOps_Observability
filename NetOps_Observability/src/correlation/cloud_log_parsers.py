@@ -145,9 +145,11 @@ def cloud_log_event(fname: str, line: str) -> dict | None:
     (.alb → ALB access log, .vpc → VPC flow log), returning a signal-worthy
     netops.cloud event or None. Pure (no IO) — the runtime tailer adds tenancy + IO."""
     if fname.endswith(".alb"):
-        return alb_lb_signal(parse_alb_access_log(line))
+        alb = parse_alb_access_log(line)
+        return alb_lb_signal(alb) if alb is not None else None
     if fname.endswith(".vpc"):
-        return vpc_flow_signal(parse_vpc_flow_log(line))
+        vpc = parse_vpc_flow_log(line)
+        return vpc_flow_signal(vpc) if vpc is not None else None
     return None
 
 

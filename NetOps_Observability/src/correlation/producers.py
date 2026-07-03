@@ -367,7 +367,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         peer = sysid_m.group(1) if sysid_m else ""
         tgt_m = re.search(r"to state\s+(\w+)", msg, re.IGNORECASE)
         state = _state_of(tgt_m.group(1)) if tgt_m else _state_of(msg)
-        tokens = (host, peer) if peer else (host,)
+        tokens: tuple[str, ...] = (host, peer) if peer else (host,)
         return Signal(
             tenant_id=tenant,
             ts=ts,
@@ -616,6 +616,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
         facility = (str(ev.get("facility") or "")
                     or (tag.split("-", 1)[0].lstrip("%") if "-" in tag else tag.lstrip("%")))
         mnem = tag.rsplit("-", 1)[-1] if "-" in tag else str(ev.get("event_type") or "")
+        toks_: tuple[str, ...]
         if ifname:
             etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{ifname}", (host, ifname)
         else:
@@ -834,6 +835,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
     sev_num = _SEVERITY_NUM.get(str(ev.get("severity") or "").strip().lower())
     if sev_num is not None and sev_num <= ALARM_SEVERITY_FLOOR:
         iface = _trap_interface(ev)
+        toks_: tuple[str, ...]
         if iface and iface != "unknown":
             etype_, eid_, toks_ = EntityType.INTERFACE, f"{device}:{iface}", (device, iface)
         else:
@@ -923,6 +925,7 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> "Signal | N
         if not pat.search(ctoken):
             continue
         port = _port_of(ev)
+        toks_: tuple[str, ...]
         if iface_scoped and port:
             etype_, eid_, toks_ = EntityType.INTERFACE, f"{host}:{port}", (host, port)
         else:

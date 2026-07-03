@@ -172,7 +172,7 @@ def _coerce_int(raw: object) -> int:
     if raw is None or isinstance(raw, bool):
         return 0
     try:
-        return int(float(raw))
+        return int(float(str(raw)))
     except (TypeError, ValueError):
         return 0
 
