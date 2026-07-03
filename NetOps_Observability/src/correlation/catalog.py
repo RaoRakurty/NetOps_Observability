@@ -840,6 +840,10 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "tunnel_degraded|tunnel_flap", "entity_type": "path"},
             {"kind": "probe_loss|probe_rtt_anomaly"},
             {"kind": "path_change|if_errors|if_util_high", "optional": True},
+            # NMS corroboration: the SD-WAN controller's own tunnel/BFD state, when
+            # present, adds a management-plane witness (via_controller authority) —
+            # optional so telemetry-only detection is unchanged.
+            {"kind": "controller_tunnel_state|controller_bfd_down", "entity_type": "path", "optional": True},
         ],
         "required_modalities": ["active_probe", "control_plane"],
         "discriminators": [
@@ -1381,6 +1385,9 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "sdwan_control_down", "entity_type": "device"},
             {"kind": "tunnel_flap|path_change", "optional": True},
             {"kind": "cert_expiry_warning", "optional": True},
+            # NMS corroboration: the controller's own control-connection/OMP loss
+            # (management-plane witness), optional so existing detection is unchanged.
+            {"kind": "controller_control_connection_loss", "entity_type": "device", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -2545,6 +2552,89 @@ def _spdc_template(row: tuple) -> dict:
 
 SPDC_TEMPLATES: list[dict] = [_spdc_template(r) for r in _SPDC]
 BUILTIN_TEMPLATES.extend(SPDC_TEMPLATES)
+
+
+# ---------------------------------------------------------------------------
+# NMS controller-intelligence templates (P4b, design docs/design/nms-integration-
+# framework.md). These consume the NORMALIZED controller_* kinds emitted by the
+# vendor-controller framework — NEVER per-vendor (a Meraki and a vManage
+# tunnel-down are both controller_tunnel_state, so one template covers every
+# vendor). Each pairs a controller witness (management_plane, via_controller
+# authority) with an OPTIONAL direct-telemetry clause: controller-alone yields
+# SUSPECTED (single modality), controller + independent telemetry confirms — the
+# "corroborate, don't confirm alone" rule, enforced by the existing gate.
+# required_modalities is left empty on purpose: the second corroborating modality
+# can be any independent plane (probe/device/control), so the general
+# independence gate (≥2 modalities, independent non-fate-shared pair) decides.
+# ---------------------------------------------------------------------------
+NMS_TEMPLATES: list[dict] = [
+    {
+        "id": "sig.ent.wan-edge.sdwan-tunnel-controller-corroborated",
+        "title": "SD-WAN tunnel fault (controller-witnessed)",
+        "domain": "ent.wan-edge",
+        "requires": [
+            {"kind": "controller_tunnel_state|controller_bfd_down", "entity_type": "path"},
+            {"kind": "tunnel_degraded|tunnel_flap|probe_loss|probe_latency_departure",
+             "entity_type": "path", "optional": True},
+        ],
+        "seams": ["WAN_SDWAN"],
+        "verdict": {
+            "owner": "netops", "layer": "Tunnel/L4",
+            "first_steps": [
+                "Confirm the controller's tunnel/BFD state against direct path probes (STAMP/loss)",
+                "If probes agree, treat as a real overlay fault; if they disagree, the controller view may be stale",
+                "Check the underlay transport (color/circuit) carrying the affected tunnel",
+            ],
+        },
+        "operator_phrase": "SD-WAN controller reports tunnel/BFD down on this path",
+        "manager_phrase": "The SD-WAN system flagged a site-to-site link problem",
+        "false_positives": ("stale controller state after a recovered flap",),
+    },
+    {
+        "id": "sig.ent.wan-edge.controller-change-induced",
+        "title": "Change-induced incident (config/policy push then fault)",
+        "domain": "ent.wan-edge",
+        "requires": [
+            {"kind": "controller_policy_change", "entity_type": "device"},
+            {"kind": "tunnel_degraded|tunnel_flap|link_state_change|bgp_adjacency_change|probe_loss|if_util_high|device_resource_anomaly",
+             "optional": True},
+        ],
+        "seams": ["WAN_SDWAN"],
+        "verdict": {
+            "owner": "netops", "layer": "Change/Config",
+            "first_steps": [
+                "Correlate the controller config/policy/template push time with the fault onset",
+                "Review the change (audit log) for scope: which devices/sites/policies it touched",
+                "If the fault window follows the push, stage a rollback of the change as mitigation",
+            ],
+        },
+        "operator_phrase": "A controller config/policy push preceded this fault — probable change-induced incident",
+        "manager_phrase": "A recent configuration change lines up with the start of this problem",
+        "composition_hints": ("what-changed timeline",),
+    },
+    {
+        "id": "sig.ent.campus.controller-device-unreachable",
+        "title": "Device unreachable (controller-reported)",
+        "domain": "ent.campus",
+        "requires": [
+            {"kind": "controller_device_unreachable", "entity_type": "device"},
+            {"kind": "link_state_change|probe_loss|device_resource_anomaly", "optional": True},
+        ],
+        "seams": ["LAN", "WAN_SDWAN"],
+        "verdict": {
+            "owner": "netops", "layer": "Reachability/L3",
+            "first_steps": [
+                "Confirm the controller's unreachable verdict with a direct probe / link-state check",
+                "If direct telemetry agrees, treat as a real outage; if not, suspect a controller polling gap",
+                "Check the management path from the controller to the device (it may be a mgmt-plane-only loss)",
+            ],
+        },
+        "operator_phrase": "Controller reports device unreachable",
+        "manager_phrase": "A managed device stopped responding to its controller",
+        "false_positives": ("controller-to-device management path loss with the device still forwarding",),
+    },
+]
+BUILTIN_TEMPLATES.extend(NMS_TEMPLATES)
 
 
 def builtin_catalog() -> Catalog:

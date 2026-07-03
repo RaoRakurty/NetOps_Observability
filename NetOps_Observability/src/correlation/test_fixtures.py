@@ -42,6 +42,7 @@ MODALITY_SOURCE = {
     ModalityClass.PASSIVE_FLOW: Source.FLOW,
     ModalityClass.CONTROL_PLANE: Source.TOPOLOGY,
     ModalityClass.DEVICE_TELEMETRY: Source.METRIC,
+    ModalityClass.MANAGEMENT_PLANE: Source.CONTROLLER,  # NMS controller intelligence
 }
 
 

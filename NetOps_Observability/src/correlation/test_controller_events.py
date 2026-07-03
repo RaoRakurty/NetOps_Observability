@@ -97,3 +97,41 @@ def test_vendor_neutral_meraki_and_versa_same_kind_same_shape():
     assert sm.kind == sv.kind == "controller_tunnel_state"
     assert sm.modality_class == sv.modality_class == ModalityClass.MANAGEMENT_PLANE
     assert sm.entity_type == sv.entity_type == EntityType.PATH
+
+
+def test_controller_kinds_are_consumed_by_catalog():
+    """ACCURACY GUARD (owner: 'build accurately else it won't match'): every
+    actionable controller kind the transformers/producer emit must be referenced
+    by at least one ENABLED catalog clause — otherwise a controller event would
+    normalize fine but silently never match a signature."""
+    from catalog import builtin_catalog
+
+    actionable = {
+        "controller_tunnel_state",
+        "controller_bfd_down",
+        "controller_control_connection_loss",
+        "controller_device_unreachable",
+        "controller_policy_change",
+    }
+    referenced: set[str] = set()
+    for t in builtin_catalog().enabled_templates():
+        for clause in t.requires:
+            referenced |= clause.kinds()
+    missing = actionable - referenced
+    assert not missing, f"controller kinds not consumed by any signature: {missing}"
+
+
+def test_producer_kind_matches_a_catalog_clause():
+    """End-to-end: a controller event → producer signal → its kind is present in
+    an enabled catalog clause (the wiring actually connects)."""
+    from catalog import builtin_catalog
+
+    ev = {
+        "tenant_id": "t-a", "source_system": "vmanage",
+        "normalized_event_type": "controller_tunnel_state",
+        "device_id": "10.1.1.1", "tunnel_id": "t1",
+        "event_id": "e1", "event_time": "2026-07-03T11:59:00Z", "severity": "crit",
+    }
+    sig = controller_event_to_signal(ev, INGEST)
+    clause_kinds = {k for t in builtin_catalog().enabled_templates() for c in t.requires for k in c.kinds()}
+    assert sig.kind in clause_kinds, f"producer kind {sig.kind} matches no catalog clause"
