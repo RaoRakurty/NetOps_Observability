@@ -82,8 +82,8 @@ only — api, ui (frontend+nginx), correlation, prober/collectors — and
 | VictoriaMetrics | `victoria-metrics-operator` (VMSingle → VMCluster) | |
 | OpenSearch | OpenSearch operator | or external/managed |
 | PostgreSQL | CloudNativePG | |
-| Redis | Valkey chart | licensing swap, §4 |
-| Redpanda | Redpanda operator | **BSL** — or swap to Strimzi/Kafka (KRaft), §4 |
+| Valkey (cache) | Valkey chart | swap done, §4 |
+| Apache Kafka (bus) | Strimzi (KRaft) | swap done, §4 — embedded single-node in compose; Strimzi when a K8s chart exists |
 
 K8s-specific design points:
 - **UDP ingest is the hard part** (syslog 5514, NetFlow 2055/4739, sFlow 6343,
@@ -109,16 +109,22 @@ fleet; only then evaluate an operator.
 
 ## 4. Licensing gate (blocks EXTERNAL distribution of bundles)
 
-| Image | License | Action |
-|---|---|---|
-| Redpanda | **BSL** (source-available) | Get written OK for redistribution, or swap the bus to Apache Kafka (KRaft mode, Strimzi on K8s). Compose/K8s seam is small — Kafka-API compatible by design |
-| ~~Redis `7-alpine` (7.4.9 = RSALv2/SSPL)~~ | ✅ **RESOLVED 2026-07-03** | Swapped to **Valkey 8-alpine** (BSD-3, digest-pinned; redis-* compat symlinks so the service name, `REDIS_HOST` consumers, and `redis-cli` callers are untouched). Upgrade note: Valkey can't read Redis 7.4 RDB v12 — existing installs drop `data/redis/dump.rdb` (TTL'd collector caches only) |
-| Grafana | AGPLv3 | Distributable with obligations; it's optional (self-observability) — `--core` bundle already omits it |
-| syslog-ng | GPLv3 | Fine unmodified |
-| OpenSearch, ClickHouse, VictoriaMetrics, Postgres, Vector (MPL-2), goflow2, Prometheus, gnmic | Apache-2/BSD/MPL | Fine |
+**GATE CLOSED 2026-07-03** — both flagged images are out of the product; the
+guards in `make-installer.sh` + `preflight-install.py` + the release-bundle
+smoke keep them out. The customer-facing statement of this table ships in the
+bundle as `LICENSES.md`.
 
-Internal/lab bundles are unaffected. This table must be re-verified at each
-base-image bump (digests are pinned, so licenses can't drift silently).
+| Image | License | Status |
+|---|---|---|
+| ~~Redpanda~~ | ~~BSL~~ | ✅ **REMOVED 2026-07-03** — bus swapped to **Apache Kafka 4.1** (Apache-2.0, `apache/kafka` official image, single-node KRaft, digest-pinned). Redpanda is not shipped in any bundle and no lab profile was retained (clients were Kafka-API-only, so nothing needed it). The Go pandaproxy producer became the Vector bus bridge (`bus_producer.go` → :8692). External Kafka-compatible brokers supported via `BROKER_URLS` |
+| ~~Redis `7-alpine` (7.4.9 = RSALv2/SSPL)~~ | ~~RSALv2~~ | ✅ **REMOVED 2026-07-03** — swapped to **Valkey 8-alpine** (BSD-3, digest-pinned; redis-* compat symlinks so the service name, `REDIS_HOST` consumers, and `redis-cli` callers are untouched). Upgrade note: Valkey can't read Redis 7.4 RDB v12 — existing installs drop `data/redis/dump.rdb` (TTL'd collector caches only) |
+| Apache Kafka | Apache-2.0 | ✅ included — allowed with notices (bundle `LICENSES.md`; upstream NOTICE ships inside the image) |
+| Grafana | AGPLv3 | Distributable unmodified with obligations; optional (self-observability) — `--core` bundle omits it |
+| syslog-ng | GPLv3 | Fine unmodified |
+| OpenSearch, ClickHouse, VictoriaMetrics, Postgres, Vector (MPL-2), goflow2, Prometheus, gnmic, Valkey | Apache-2/BSD/MPL | Fine |
+
+This table must be re-verified at each base-image bump (digests are pinned,
+so licenses can't drift silently).
 
 ## 5. Analytics (ClickHouse) growth — the owner's question
 
@@ -164,5 +170,5 @@ retention ambition.
 3. Analytics ships embedded by default with a supported dedicated-tier
    profile; BYO waits for a CH migration runner.
 4. No operator/CRDs before the chart has users. No Bitnami dependencies.
-5. Licensing gate (§4) blocks external distribution until Redpanda/Redis
-   items are resolved (Valkey swap recommended regardless).
+5. Licensing gate (§4) — CLOSED 2026-07-03: Redis→Valkey and Redpanda→Apache
+   Kafka both shipped; build/preflight/CI guards keep flagged images out.

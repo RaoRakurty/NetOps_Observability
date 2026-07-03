@@ -1,7 +1,7 @@
 # Architecture
 
 The platform follows the reference NOC/SOC architecture: dedicated edge
-collectors, a Vector aggregation layer, a Redpanda streaming bus, fan-
+collectors, a Vector aggregation layer, an Apache Kafka streaming bus, fan-
 out to OpenSearch (hot search) + VictoriaMetrics (TS) + ClickHouse
 (OLAP), a Python correlation/AI engine, a Go API + GraphQL gateway, and
 a React UI with ECharts and an LLM-backed copilot.
@@ -18,7 +18,7 @@ a React UI with ECharts and an LLM-backed copilot.
        VECTOR AGGREGATOR  (parse, normalize, enrich, buffer)
                      │
                      ▼
-       REDPANDA / KAFKA  ─ topics: netops.{syslog, metrics, flows, applogs}
+       APACHE KAFKA (KRaft) ─ topics: netops.{syslog, metrics, flows, applogs}
                      │
                      ▼
               VECTOR ROUTER
@@ -68,7 +68,7 @@ behind a Layer-4 load balancer without affecting syslog or SNMP paths.
 
 `deployment/docker/vector/vector.yaml`. Receives from the three edges,
 parses (JSON unpacking on app logs), normalizes (uniform `signal`
-field), enriches (device labels), buffers, and produces to four Redpanda
+field), enriches (device labels), buffers, and produces to four Kafka
 topics:
 
 | Topic              | Source             | Sink (router)                    |
@@ -78,14 +78,17 @@ topics:
 | `netops.metrics`   | Telegraf           | VictoriaMetrics remote_write     |
 | `netops.flows`     | goflow2 (stdout)   | OpenSearch + ClickHouse          |
 
-### Redpanda
+### Apache Kafka
 
-Single-node Kafka-API-compatible broker. Provides the decoupling
-benefits of a streaming bus (replay, multi-consumer fan-out, ingestion
-absorption during storage outages) without a Zookeeper dependency or
-JVM tuning. The external Kafka port (host 19092 by default) is exposed
-so future producers — a SIEM, a data-lake exporter, a custom analytics
-job — can subscribe without touching the aggregator.
+Single-node broker in KRaft mode. Provides the decoupling benefits of
+a streaming bus (replay, multi-consumer fan-out, ingestion absorption
+during storage outages) without a Zookeeper dependency. The broker is
+internal to the compose network (`kafka:9092`, no host ports); every
+client resolves it via `BROKER_URLS` in `.env`, and a one-shot
+`kafka-init` service pre-creates the netops.* topics. Future producers
+— a SIEM, a data-lake exporter, a custom analytics job — attach by
+pointing the stack at an external Kafka-compatible cluster
+(`install-correlix.sh --external-kafka --broker-urls ...`).
 
 ### Vector router
 

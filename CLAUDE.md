@@ -23,9 +23,9 @@ React dashboard, all behind nginx on a single port (`:8000`).
   REST + JSON, a WebSocket event hub, a GraphQL stub, and an LLM copilot proxy.
   Subsystems: `alerts/`, `collectors/` (snmp/gnmi/netconf), `notify/`
   (slack/pagerduty/email/sns/twilio), `transport/`, `store/`, `models/`.
-- **`src/correlation/`** — Python 3.10 + FastAPI service. Consumes Redpanda
-  topics, runs rolling z-score anomaly detection + event correlation, writes
-  findings to ClickHouse, serves `/findings`. Deps in `requirements.txt`.
+- **`src/correlation/`** — Python 3.10 + FastAPI service. Consumes the Kafka
+  netops.* topics, runs rolling z-score anomaly detection + event correlation,
+  writes findings to ClickHouse, serves `/findings`. Deps in `requirements.txt`.
 - **`src/frontend/`** — React 18 + TypeScript + Vite + ECharts dashboard
   (small: `App.tsx` ~100 lines). `node_modules/` is gitignored.
 - **`src/config/`** — YAML templates mounted into the stack.
@@ -35,11 +35,14 @@ React dashboard, all behind nginx on a single port (`:8000`).
   secrets, creates `data/` dirs, builds and starts the stack.
 
 ### Stack tiers (see `docs/ARCHITECTURE.md`)
-Edge ingest (syslog-ng · Telegraf · goflow2) → Vector aggregator → Redpanda
-(Kafka API) → Vector router → OpenSearch (hot search) · VictoriaMetrics +
+Edge ingest (syslog-ng · Telegraf · goflow2) → Vector aggregator → Apache
+Kafka (single-node KRaft, service `kafka`, profile `embedded-bus`; every
+client resolves it via `BROKER_URLS` — external Kafka-compatible brokers
+supported) → Vector router → OpenSearch (hot search) · VictoriaMetrics +
 Prometheus (metrics) · ClickHouse (OLAP/flows/findings) → correlation service →
-Go API → React UI → nginx. App state in PostgreSQL + Redis. Grafana for
-self-observability.
+Go API → React UI → nginx. App state in PostgreSQL + Valkey. Grafana for
+self-observability. Redpanda and Redis are fully removed (licensing, #97) —
+never reintroduce them.
 
 ### Build / run / test
 ```bash

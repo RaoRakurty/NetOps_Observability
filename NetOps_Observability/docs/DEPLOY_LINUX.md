@@ -159,7 +159,7 @@ expect terminators in front.
 ## 8. Back up data
 
 The whole `data/` directory is what you back up. Postgres, Redis,
-VictoriaMetrics, OpenSearch, ClickHouse, Redpanda, and the user store
+VictoriaMetrics, OpenSearch, ClickHouse, Kafka, and the user store
 all persist there. `scripts/backup.sh` wraps the right `docker compose
 exec ... pg_dump` / `clickhouse-backup` / file-copy commands; cron
 `backup.sh` nightly and rsync the output off-host.
@@ -193,4 +193,4 @@ password.
 - [ ] Network ACL: management ports (8000, 514, 2055, 4739, 6343) restricted to known device ranges
 - [ ] `JWT_SECRET` is not the installer-generated default if you've forked the repo
 - [ ] OpenSearch `DISABLE_SECURITY_PLUGIN` flipped to `false` and TLS + auth configured
-- [ ] Redpanda SASL configured for any remote producers
+- [ ] Kafka SASL configured if using an external broker (the embedded broker publishes no host ports)

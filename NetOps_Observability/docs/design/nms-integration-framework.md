@@ -123,7 +123,7 @@ Vendor NMS (Meraki / Catalyst / vManage / NDFC / Versa / Prime)
                               raw landing (controller_events index, audit/replay)
                                                 │  POST → Vector source
                                                 ▼
-                                netops.controller_events (Redpanda)
+                                netops.controller_events (Kafka)
                                                 │
                                                 ▼
                      Python correlation → Signal(source=controller,
@@ -218,7 +218,7 @@ Tunnel-down alarm, device-unreachable alarm, config/template push, policy
 change, controller audit log, fabric alarm, site-health-degraded, app SLA
 violation.
 
-- **Storage:** Redpanda `netops.controller_events` + normalized `netops.events`
+- **Storage:** Kafka `netops.controller_events` + normalized `netops.events`
   + a raw payload table for replay/debug.
 - **Canonical fields** (the spec's set): `tenant_id, integration_id,
   source_system, vendor, product, event_id, event_time, ingest_time,
@@ -247,7 +247,7 @@ discrete corr_signals; `controller_metric` rides the metrics plane.
 ## 4. Migration proposal (0020_nms_integrations.sql — Postgres, RLS)
 
 Config + state (relational). The three *data* classes land on their own lanes
-(§3): metrics → VictoriaMetrics; events → ClickHouse/Redpanda; only state's
+(§3): metrics → VictoriaMetrics; events → ClickHouse/Kafka; only state's
 current-snapshot is relational here.
 
 - `integrations` — id, tenant_id, vendor, product, display_name, enabled,
@@ -265,7 +265,7 @@ current-snapshot is relational here.
   (the §3.2 state lane; ClickHouse if volume warrants, PG for low-volume).
 
 All `tenant_iso` FORCE-RLS. Metric samples (§3.1) and controller events (§3.3)
-do NOT live in PG — they ride VictoriaMetrics and the ClickHouse/Redpanda
+do NOT live in PG — they ride VictoriaMetrics and the ClickHouse/Kafka
 evidence path respectively.
 
 ## 5. RCA & AI integration (finalized)

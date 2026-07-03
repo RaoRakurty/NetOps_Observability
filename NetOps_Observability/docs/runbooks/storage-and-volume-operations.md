@@ -115,11 +115,12 @@ Production layout:
   happened.
 - **Every datastore states its retention**: CH TTLs (init.sql, with
   `ttl_only_drop_parts=1` so daily-partitioned expiry is a free part drop),
-  OpenSearch ISM (14d), VictoriaMetrics `-retentionPeriod=30d`, Redpanda
-  cluster defaults `delete_retention_ms=72h` + `retention_bytes=512MB` (the
-  `redpanda-init` one-shot sets them on every fresh install; per-topic
-  overrides like flows/applogs/syslog still win), Prometheus
-  `--storage.tsdb.retention`. A store without retention is a future outage.
+  OpenSearch ISM (14d), VictoriaMetrics `-retentionPeriod=30d`, Kafka
+  broker-wide bounds `BUS_RETENTION_MS` (72h) + `BUS_RETENTION_BYTES`
+  (512MB) set via `.env` on the broker itself (per-topic overrides still
+  win), Prometheus `--storage.tsdb.retention`. A store without retention
+  is a future outage. The Kafka data dir is `data/kafka/` (uid 1000);
+  `data/redpanda/` is legacy on upgraded installs and can be removed.
 
 ### 2.3 Watermarks and automation (defense in depth)
 

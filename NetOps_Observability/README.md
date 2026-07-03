@@ -24,7 +24,7 @@ installer refuses to run with the legacy `docker-compose` binary.
 |-----------------|---------------------------------------------------------|
 | Edge ingestion  | syslog-ng · Telegraf · goflow2                          |
 | Aggregation     | Vector (parse, normalize, enrich, buffer)               |
-| Event bus       | Redpanda (Kafka-API)                                    |
+| Event bus       | Apache Kafka (KRaft)                                    |
 | Routing         | Vector router (Kafka → storage fan-out)                 |
 | Hot search      | OpenSearch + OpenSearch Dashboards                      |
 | Time-series     | VictoriaMetrics (+ Prometheus for rules)                |
@@ -43,7 +43,7 @@ NetOps_Observability/
 ├── README.md
 ├── docs/
 │   ├── ARCHITECTURE.md      — full topology and design rationale
-│   ├── STREAMING.md         — Redpanda topics and replay
+│   ├── STREAMING.md         — Kafka topics and replay
 │   ├── ANALYTICS.md         — ClickHouse schema and queries
 │   ├── COPILOT.md           — LLM integration details
 │   ├── INGESTION.md         — device-side syslog / SNMP / NetFlow config

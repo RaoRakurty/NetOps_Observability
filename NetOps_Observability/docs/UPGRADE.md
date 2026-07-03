@@ -58,6 +58,17 @@ docker compose stop api
 docker compose start api    # api re-seeds from ADMIN_INITIAL_PASSWORD in .env
 ```
 
+## Redpanda → Apache Kafka (2026-07)
+
+The embedded event bus changed from Redpanda to Apache Kafka (single-node KRaft). Existing installs migrate by re-running the installer, which appends the new variables (`BROKER_URLS`, `KAFKA_CLUSTER_ID`, `COMPOSE_PROFILES`) to your `.env`, then recreating the stack:
+
+```bash
+python3 scripts/install.py
+docker compose up -d --remove-orphans
+```
+
+The old redpanda container is removed automatically by `--remove-orphans`, and `data/redpanda/` can be deleted afterwards. In-flight bus data is transit-only (the durable copies live in OpenSearch / VictoriaMetrics / ClickHouse) and is not migrated.
+
 ## When `.env` reconciliation isn't enough
 
 The reconciliation step appends new variables with safe defaults. It does **not** rotate existing secrets or change values you've set. If you want fresh secrets across the board (e.g., a known JWT_SECRET leak), there's no graceful path — rotating the DB password while Postgres has data, or rotating CLICKHOUSE_PASSWORD while ClickHouse has data, requires altering the running container's credentials first. The simplest path:
@@ -84,9 +95,9 @@ docker compose up -d
 
 `restore.sh` puts `data/` back, restores `.env`, and lays the configs back in place. The next `up -d` is the rollback.
 
-## If you're far behind (e.g., the original pre-Redpanda scaffold)
+## If you're far behind (e.g., the original pre-bus scaffold)
 
-Upgrades within a generation are easy. Crossing a major architecture change is not — between the early "Loki + Promtail" scaffold and the current "Redpanda + OpenSearch + ClickHouse" stack, too many services were added/removed for an in-place upgrade to be safe. In that case:
+Upgrades within a generation are easy. Crossing a major architecture change is not — between the early "Loki + Promtail" scaffold and the current "Kafka + OpenSearch + ClickHouse" stack, too many services were added/removed for an in-place upgrade to be safe. In that case:
 
 1. Take the backup.
 2. `docker compose down -v` (yes, the `-v` — orphan services from old stack go too).

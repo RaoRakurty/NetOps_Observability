@@ -164,7 +164,7 @@ In the dashboard, the **Logs** tab takes the same LogQL queries:
 This phase replaces Promtail with Vector and adds device-side ingestion.
 The next steps in the reference architecture are:
 
-1. **Kafka / Redpanda** between Vector and Loki/Victoria so producers and
+1. **Apache Kafka** between Vector and Loki/Victoria so producers and
    consumers decouple and replay becomes possible. goflow2 has a native
    Kafka transport; Vector has a Kafka sink. The change is mostly
    reconfiguration.
