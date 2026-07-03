@@ -44,8 +44,11 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, sampler_address, src_addr, dst_addr)
 -- ts is DateTime64(3); TTL expressions must be Date/DateTime, so cast it.
+-- ttl_only_drop_parts: partitioning is daily, so expiry drops whole parts
+-- (instant, no I/O) instead of rewriting rows out of live parts (#96, on every
+-- TTL'd table here).
 TTL toDateTime(ts) + INTERVAL 7 DAY
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- ---------------------------------------------------------------------------
 -- (Removed: the flows_hourly materialized view.) #20 Phase 2 puts a tenant
@@ -111,7 +114,7 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, id)
 TTL toDateTime(ts) + INTERVAL 30 DAY
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- ---------------------------------------------------------------------------
 -- Correlation findings — populated by the Python correlation service.
@@ -135,7 +138,8 @@ CREATE TABLE IF NOT EXISTS netops.findings
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, severity, score)
-TTL toDateTime(ts) + INTERVAL 30 DAY;
+TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS ttl_only_drop_parts = 1;
 
 -- ---------------------------------------------------------------------------
 -- #20 Phase 2 — DATABASE-ENFORCED per-tenant isolation (defense in depth under
@@ -206,7 +210,7 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (tenant_id, ts, source, entity_type, entity_id)
 TTL toDateTime(ts) + INTERVAL 30 DAY
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- 2.1b Replay input archive (owner review — closes the replay/TTL gap): the FULL
 -- window slice of every persisted object, written at pipeline stage [8] with the
@@ -382,7 +386,7 @@ ENGINE = ReplacingMergeTree(ingest_time)       -- dedup by observation_id (idemp
 PARTITION BY (tenant_id, toYYYYMMDD(event_time))
 ORDER BY (tenant_id, observation_id)
 TTL toDateTime(event_time) + INTERVAL 30 DAY
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- app_identities: the fused, explainable result per scope + fusion version. Keyed by
 -- (scope, catalog_version, fusion_version) so a catalog/engine bump yields a NEW
@@ -421,7 +425,7 @@ ENGINE = ReplacingMergeTree(fused_at)
 PARTITION BY (tenant_id, toYYYYMMDD(fused_at))
 ORDER BY (tenant_id, fusion_id)
 TTL toDateTime(fused_at) + INTERVAL 90 DAY
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_flows ON netops.flows
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''

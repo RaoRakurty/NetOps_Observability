@@ -72,7 +72,11 @@ services:
 
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
-    command: ["redis-server", "--save", "60", "1"]
+    # maxmemory stays BELOW the cgroup cap so Redis returns clean OOM errors
+    # (noeviction default — this is app STATE, never silently evict) instead of
+    # the kernel killing it. Measured use is ~8 MiB; 96mb is 12× headroom.
+    mem_limit: ${REDIS_MEM_LIMIT:-128m}
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "96mb"]
     volumes:
       - ../../data/redis:/data
     healthcheck:
@@ -157,6 +161,26 @@ services:
       retries: 10
     networks: [netops]
     restart: *restart
+
+  # One-shot: bounds every auto-created topic once the broker is healthy, then
+  # exits (#96e). Sets CLUSTER-WIDE retention defaults — any topic without an
+  # explicit per-topic override inherits them. The bus is a transit lane, not a
+  # store (ClickHouse/OpenSearch/VictoriaMetrics hold the durable copies), so a
+  # stalled consumer must never be able to grow the log unbounded.
+  redpanda-init:
+    image: redpandadata/redpanda:v24.2.4@sha256:9b91885f3add2d9033724fad39f9dda3b0adda8084edcb57aa08d21f2868b6b6
+    restart: "no"
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        rpk cluster config set delete_retention_ms "${RP_RETENTION_MS:-259200000}"
+        -X admin.hosts=redpanda:9644 &&
+        rpk cluster config set retention_bytes "${RP_RETENTION_BYTES:-536870912}"
+        -X admin.hosts=redpanda:9644
+    depends_on:
+      redpanda: { condition: service_healthy }
+    networks: [netops]
 
   # =========================================================================
   # EDGE INGESTION TIER (per reference architecture)
@@ -1102,6 +1126,7 @@ services:
     # SC-008: nginx-unprivileged (non-root, :8080); lock down escalation+caps.
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.frontend
@@ -1113,6 +1138,7 @@ services:
     # lock down escalation + caps.
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    mem_limit: ${NGINX_MEM_LIMIT:-128m}
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.nginx

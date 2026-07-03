@@ -113,10 +113,13 @@ Production layout:
   e.g. `defaultKeepStorage: 2GB`) beats cron-only pruning — the cap holds even
   during a heavy build session, which is exactly when the 2026-06-12 outage
   happened.
-- **Every datastore states its retention**: CH TTLs (init.sql), OpenSearch ISM
-  (14d), VictoriaMetrics `-retentionPeriod=30d`, Redpanda `retention.ms`
-  (**still open — #96e**), Prometheus `--storage.tsdb.retention`. A store
-  without retention is a future outage.
+- **Every datastore states its retention**: CH TTLs (init.sql, with
+  `ttl_only_drop_parts=1` so daily-partitioned expiry is a free part drop),
+  OpenSearch ISM (14d), VictoriaMetrics `-retentionPeriod=30d`, Redpanda
+  cluster defaults `delete_retention_ms=72h` + `retention_bytes=512MB` (the
+  `redpanda-init` one-shot sets them on every fresh install; per-topic
+  overrides like flows/applogs/syslog still win), Prometheus
+  `--storage.tsdb.retention`. A store without retention is a future outage.
 
 ### 2.3 Watermarks and automation (defense in depth)
 
