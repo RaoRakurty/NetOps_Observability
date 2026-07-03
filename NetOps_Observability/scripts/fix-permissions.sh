@@ -25,7 +25,6 @@ fi
 
 # service → "uid:gid"
 declare -A OWNERS=(
-    [prometheus]="65534:65534"
     [grafana]="472:472"
     [opensearch]="1000:1000"
     [clickhouse]="101:101"

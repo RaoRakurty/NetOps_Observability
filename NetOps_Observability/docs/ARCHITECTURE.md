@@ -112,7 +112,9 @@ consumer-group offset, not from scratch — replay is free.
 * **OpenSearch Dashboards** — power-user UI for ad-hoc exploration,
   served under `/search/`.
 * **VictoriaMetrics** — long-term time-series for SNMP + telemetry.
-  Scraped by Prometheus on the side for rule evaluation.
+  Self-metrics are scraped by VictoriaMetrics itself (vmscrape.yml — the
+  Prometheus service was removed; VM serves the same PromQL API the alert
+  engine evaluates rules.yaml against).
 * **ClickHouse** — OLAP. Tables: `netops.flows` (raw flow records, TTL
   90 days), `netops.flows_hourly` (materialized rollup for top-talker
   dashboards), `netops.findings` (correlation engine output). Init SQL
@@ -173,8 +175,7 @@ Tabs:
 | Logs       | `/api/logs/search` (OpenSearch DSL)  |
 | Flows      | `/api/flows/*` (ClickHouse + ECharts) |
 | Copilot    | `/api/copilot/chat` (LLM)            |
-| Prometheus | iframe                               |
-| Grafana    | iframe (Prometheus + Victoria + ClickHouse datasources) |
+| Grafana    | iframe (self-monitoring add-on; Victoria + ClickHouse datasources) |
 | OS Dashboards | iframe (`/search/`)               |
 | Settings   | integration status + manual refresh  |
 

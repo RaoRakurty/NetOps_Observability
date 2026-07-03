@@ -23,7 +23,10 @@ groups:
     interval: 30s
     rules:
       - alert: ScrapeTargetDown
-        expr: up == 0
+        # Scoped to the always-on jobs: cadvisor/node/grafana belong to the
+        # optional self-monitoring add-on and legitimately read up==0 while it
+        # is disabled (vmscrape.yml keeps their targets, errors suppressed).
+        expr: up{job=~"netops-api|victoria|clickhouse|vector"} == 0
         for: 5m
         labels:
           severity: critical

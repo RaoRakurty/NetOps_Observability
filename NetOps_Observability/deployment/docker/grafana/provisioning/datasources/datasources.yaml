@@ -17,11 +17,14 @@ apiVersion: 1
 # deployment/docker/clickhouse/init.sql (#20 row policies).
 
 datasources:
-  - name: Prometheus
+  # uid stays "prometheus" so existing dashboards keep working, but the
+  # Prometheus SERVICE is gone (#97): VictoriaMetrics scrapes the self-metrics
+  # and serves the same PromQL API, so this points at VM.
+  - name: Prometheus (VictoriaMetrics)
     uid: prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    url: http://victoria:8428
     isDefault: true
     editable: false
     jsonData:

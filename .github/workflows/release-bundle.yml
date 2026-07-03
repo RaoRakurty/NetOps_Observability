@@ -64,10 +64,10 @@ jobs:
       - name: Provision build env
         run: python3 NetOps_Observability/scripts/install.py --no-start
 
-      - name: Build bundle (core profile)
+      - name: Build bundle (base + add-on packs)
         id: build
         run: |
-          bash NetOps_Observability/scripts/make-installer.sh --core
+          bash NetOps_Observability/scripts/make-installer.sh
           BUNDLE_DIR="$(ls -d NetOps_Observability/dist/correlix-*/ | head -1)"
           echo "dir=${BUNDLE_DIR%/}" >> "$GITHUB_OUTPUT"
 
@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum -c SHA256SUMS
-          zstd -t correlix-images-*.tar.zst
+          zstd -t ./*.tar.zst
 
           # Licensing/broker assertions (#97): the customer bundle ships
           # Apache Kafka + Valkey and must not contain Redpanda anywhere a
@@ -89,7 +89,7 @@ jobs:
 
           # docker-load round-trip: exercises decompression + per-layer digest
           # verification on the exact archive a client would load.
-          zstd -dc correlix-images-*.tar.zst | docker load
+           zstd -dc correlix-images-core-*.tar.zst | docker load
           # Every image the MANIFEST promises must now be present.
           sed -n 's/^  - //p' MANIFEST | while read -r img; do
             docker image inspect "$img" >/dev/null || { echo "MISSING after load: $img"; exit 1; }

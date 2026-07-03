@@ -8,7 +8,8 @@
 #   dist/correlix-<version>/
 #     install-correlix.sh                THE customer entry point (one command)
 #     correlix-source-<version>.tar.gz   source tree (compose, configs, installer)
-#     correlix-images-<profile>-<version>.tar.zst   every image, prebuilt
+#     correlix-images-core-<version>.tar.zst        base appliance images
+#     correlix-addon-<name>-<version>.tar.zst       optional add-on packs
 #     SHA256SUMS                         integrity manifest
 #     MANIFEST                           version, git sha, profile, image list
 #     README.md                          customer quickstart (run one command)
@@ -21,9 +22,8 @@
 #
 # Usage (from anywhere in the repo):
 #   scripts/make-installer.sh [--core] [--out DIR]
-#     --core   trimmed bundle: drops OpenSearch Dashboards, Grafana, cadvisor,
-#              node-exporter (the in-app Logs view + boards cover them) — for
-#              demo/eval VMs. Default is the full stack.
+#     --core   base appliance archive ONLY (skip the add-on packs) — smallest
+#              possible bundle for demo/eval. Default builds base + all packs.
 #     --out    output directory (default: <repo>/dist)
 #
 # Prereqs on the BUILD host: docker+compose v2, zstd, node/npm (frontend dist),
@@ -70,26 +70,29 @@ if [ ! -d "$ROOT/src/frontend/dist" ] || [ "${REBUILD_FRONTEND:-0}" = "1" ]; the
   (cd "$ROOT/src/frontend" && npm ci --silent && npm run build)
 fi
 
-# The customer profile set: embedded Apache Kafka bus + prober + (full only)
-# OpenSearch Dashboards. Lab/dev profiles (mock-*, sso, netbox, seal, flowgen)
-# stay out of client bundles by construction.
-BUNDLE_PROFILES=(--profile embedded-bus --profile prober --profile osd)
+# The customer BASE = the appliance every install gets (embedded Apache Kafka
+# bus + prober + all always-on services). Optional capability ships as ADD-ON
+# PACKS — a small image archive per pack, enabled post-install with
+# `./install-correlix.sh enable <addon>` (which flips the compose profile).
+# Lab/dev profiles (mock-*, sso, netbox, seal, flowgen) stay out of client
+# bundles by construction.
+BASE_PROFILES=(--profile embedded-bus --profile prober)
+ADDONS="log-search-ui:osd self-monitoring:self-monitoring"   # name:profile
+[ "$PROFILE" = "core" ] && ADDONS=""   # --core: base appliance only, no packs
 
-# 2. Build every application image at the pinned bases.
+# 2. Build every application image at the pinned bases (all profiles, so
+#    add-on packs can be cut from the same build).
 echo "-- docker compose build"
 # A CI runner has no .env; compose interpolation needs the :?-guarded vars.
 export KAFKA_CLUSTER_ID="${KAFKA_CLUSTER_ID:-bundle-resolve-only-000000}"
-(cd "$COMPOSE_DIR" && docker compose "${BUNDLE_PROFILES[@]}" build --quiet)
+(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile osd --profile self-monitoring build --quiet)
 
-# 3. Resolve the exact image set for the bundle profile. `config --images`
-#    honours pinned digests.
+# 3. Resolve the image sets. `config --images` honours pinned digests; an
+#    add-on pack's set = (base + its profile) minus base.
 echo "-- resolving image list"
-IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BUNDLE_PROFILES[@]}" config --images | sort -u)"
-if [ "$PROFILE" = "core" ]; then
-  IMAGES="$(printf '%s\n' "$IMAGES" | grep -vE 'opensearch-dashboards|grafana|cadvisor|node-exporter')"
-fi
+IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" config --images | sort -u)"
 COUNT="$(printf '%s\n' "$IMAGES" | grep -c .)"
-echo "   $COUNT images"
+echo "   $COUNT base images"
 
 # 3a. LICENSING GUARDS (#97): a customer bundle must never ship Redpanda (BSL)
 #     and must ship Apache Kafka (bus) + Valkey (cache). Hard build failures.
@@ -112,11 +115,32 @@ for img in $IMAGES; do
 done
 
 # 4. Save + compress. zstd -3 multi-threaded: ~2x smaller than the raw save
-#    at near-disk-speed compression.
-IMG_OUT="$BUNDLE_DIR/correlix-images-$PROFILE-$VERSION.tar.zst"
-echo "-- docker save -> $IMG_OUT"
+#    at near-disk-speed compression. Bundle keeps the historical "core" name
+#    for the base archive (install-correlix.sh globs correlix-images-*.tar.zst).
+IMG_OUT="$BUNDLE_DIR/correlix-images-core-$VERSION.tar.zst"
+echo "-- docker save (base) -> $IMG_OUT"
 # shellcheck disable=SC2086
 docker save $IMAGES | zstd -q -T0 -3 -f -o "$IMG_OUT"
+
+# 4b. Add-on packs: per pack, the images its profile adds on top of base.
+ADDON_MANIFEST=""
+for spec in $ADDONS; do
+  name="${spec%%:*}"; prof="${spec##*:}"
+  PACK_IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile "$prof" config --images | sort -u | comm -13 <(printf '%s\n' "$IMAGES") -)"
+  [ -n "$PACK_IMAGES" ] || { echo "FATAL: addon $name resolved no images" >&2; exit 1; }
+  if printf '%s\n' "$PACK_IMAGES" | grep -qi 'redpanda'; then
+    echo "FATAL: redpanda image in addon $name" >&2; exit 1
+  fi
+  for img in $PACK_IMAGES; do
+    docker image inspect "$img" >/dev/null 2>&1 || { echo "-- pulling $img"; docker pull -q "$img"; }
+  done
+  PACK_OUT="$BUNDLE_DIR/correlix-addon-$name-$VERSION.tar.zst"
+  echo "-- docker save (addon $name) -> $PACK_OUT"
+  # shellcheck disable=SC2086
+  docker save $PACK_IMAGES | zstd -q -T0 -3 -f -o "$PACK_OUT"
+  ADDON_MANIFEST="$ADDON_MANIFEST$(printf 'addon %s (profile %s):\n' "$name" "$prof"; printf '%s\n' "$PACK_IMAGES" | sed 's/^/  - /')
+"
+done
 
 # 5. Source tree (dist/ and .env are gitignored and intentionally absent: the
 #    client neither builds the frontend nor inherits our secrets — install.py
@@ -130,10 +154,11 @@ git -C "$ROOT" archive --format=tar.gz --prefix=NetOps_Observability/ -o "$SRC_O
   echo "product:  Correlix (NetOps Observability)"
   echo "version:  $VERSION"
   echo "git_sha:  $GITSHA"
-  echo "profile:  $PROFILE"
+  echo "profile:  core"
   echo "built:    $(date -Is)"
   echo "images:"
   printf '%s\n' "$IMAGES" | sed 's/^/  - /'
+  [ -n "$ADDON_MANIFEST" ] && printf '%s' "$ADDON_MANIFEST"
 } > "$BUNDLE_DIR/MANIFEST"
 
 # 7. The appliance installer + customer docs. install-correlix.sh at the
@@ -166,6 +191,11 @@ Day-to-day:
     ./install-correlix.sh stop | start      stop/start (data kept)
     ./install-correlix.sh uninstall         remove (add --purge to delete data)
     ./install-correlix.sh reset-demo-data   fresh evaluation state, same login
+
+Optional add-ons (not started by default; enable any time):
+
+    ./install-correlix.sh enable log-search-ui     power-user log forensics UI
+    ./install-correlix.sh enable self-monitoring   Grafana + container/host metrics
 
 Something not working? See TROUBLESHOOTING.md.
 Larger deployments and advanced configuration: ADVANCED.md.
@@ -244,17 +274,18 @@ Exact pinned versions/digests: see MANIFEST.
 | Apache Kafka | embedded event bus | Apache-2.0 | included — allowed with notices (this file + upstream NOTICE inside the image) |
 | Valkey | cache | BSD-3-Clause | included — allowed |
 | PostgreSQL | app database | PostgreSQL License | included — allowed |
-| OpenSearch (+ Dashboards, full bundle) | log search | Apache-2.0 | included — allowed |
+| OpenSearch | log search | Apache-2.0 | included — allowed |
+| OpenSearch Dashboards (log-search-ui add-on) | log forensics UI | Apache-2.0 | add-on pack — allowed |
 | ClickHouse | analytics store | Apache-2.0 | included — allowed |
 | VictoriaMetrics | metrics store | Apache-2.0 | included — allowed |
-| Prometheus | metrics scrape | Apache-2.0 | included — allowed |
+
 | Vector | telemetry pipeline | MPL-2.0 | included — allowed |
 | goflow2 | flow receiver | BSD-3-Clause | included — allowed |
 | syslog-ng | syslog receiver | GPL-3.0 (unmodified) | included — allowed |
 | gnmic | gNMI collector | Apache-2.0 | included — allowed |
 | nginx | web front door | BSD-2-Clause | included — allowed |
-| Grafana (full bundle only) | self-observability | AGPL-3.0 | included unmodified — allowed with source availability obligations; omitted from core bundles |
-| cadvisor / node-exporter (full bundle only) | self-monitoring | Apache-2.0 | included — allowed |
+| Grafana (self-monitoring add-on) | self-observability | AGPL-3.0 | add-on pack, unmodified — allowed with source availability obligations |
+| cadvisor / node-exporter (self-monitoring add-on) | container/host metrics | Apache-2.0 | add-on pack — allowed |
 
 Resolved licensing history:
 

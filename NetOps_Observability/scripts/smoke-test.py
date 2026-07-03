@@ -6,7 +6,7 @@ each, with a summary. Designed to answer one question: "is every module
 actually working?"
 
 Tiers checked (internal ones via `docker compose exec`):
-  nginx · API · OpenSearch · VictoriaMetrics · Prometheus · Grafana ·
+  nginx · API · OpenSearch · VictoriaMetrics (store + self-scrape) · Grafana ·
   ClickHouse · Kafka · correlation
 API endpoints checked through nginx (:8000). Endpoints behind auth are
 verified live either way: with a token we expect 200; without, a 401 still
@@ -175,24 +175,35 @@ def check_victoria():
         record(FAIL, "VictoriaMetrics", f"health HTTP {code}")
 
 
-def check_prometheus():
-    code, out = probe("http://prometheus:9090/api/v1/targets?state=active")
+def check_scrapes():
+    # VictoriaMetrics scrapes the self-metrics (Prometheus removed, #97).
+    # Optional add-on targets (cadvisor/node/grafana) read down while the
+    # self-monitoring add-on is disabled — report them, don't fail on them.
+    code, out = probe("http://victoria:8428/api/v1/targets?state=active")
     if code != 200:
-        record(FAIL, "Prometheus", f"targets HTTP {code}")
+        record(FAIL, "Self-metrics scrape (VM)", f"targets HTTP {code}")
         return
     try:
         tg = json.loads(out)["data"]["activeTargets"]
+        core = {"netops-api", "victoria", "clickhouse", "vector"}
         up = sum(1 for t in tg if t.get("health") == "up")
-        down = [t["labels"].get("job") for t in tg if t.get("health") != "up"]
-        if down:
-            record(WARN, "Prometheus", f"{up}/{len(tg)} targets up; down: {', '.join(down)}")
+        down_core = [t["labels"].get("job") for t in tg
+                     if t.get("health") != "up" and t["labels"].get("job") in core]
+        if down_core:
+            record(FAIL, "Self-metrics scrape (VM)", f"core targets down: {', '.join(down_core)}")
         else:
-            record(PASS, "Prometheus", f"{up}/{len(tg)} targets up")
+            record(PASS, "Self-metrics scrape (VM)", f"{up}/{len(tg)} targets up (core all up)")
     except (json.JSONDecodeError, KeyError):
-        record(WARN, "Prometheus", "targets unparseable")
+        record(WARN, "Self-metrics scrape (VM)", "targets unparseable")
 
 
 def check_grafana():
+    # Grafana rides the optional self-monitoring add-on; absence is a state,
+    # not a failure.
+    rc, psout, _ = dexec_ps()
+    if rc == 0 and "grafana" not in psout:
+        record(WARN, "Grafana", "self-monitoring add-on not enabled (skipped)")
+        return
     code, out = probe("http://grafana:3000/api/health")
     if code == 200 and out:
         try:
@@ -330,7 +341,7 @@ def main():
     print(f"\n{B}Storage & ingest tiers{X}")
     check_opensearch()
     check_victoria()
-    check_prometheus()
+    check_scrapes()
     check_grafana()
     check_clickhouse()
     check_kafka()

@@ -20,7 +20,7 @@ behind a single nginx entry point on `:8000`. Multi-tenant, zero-trust.
 3. **Event bus** — Apache Kafka: topics `netops.syslog`, `netops.flows`,
    `netops.metrics`, `netops.snmptrap`.
 4. **Routing** — a Vector "router" fans the bus out to the stores.
-5. **Storage** — OpenSearch (hot log/flow search), VictoriaMetrics + Prometheus
+5. **Storage** — OpenSearch (hot log/flow search), VictoriaMetrics
    (metrics), ClickHouse (OLAP: flows/findings/tunnels).
 6. **Analytics** — the Python/FastAPI **correlation** service: rolling z-score
    anomaly detection + event correlation; writes findings to ClickHouse.
@@ -28,7 +28,7 @@ behind a single nginx entry point on `:8000`. Multi-tenant, zero-trust.
    (`/api/events`), a GraphQL stub, the copilot proxy, a device-SSH gateway.
 8. **UI** — React 18 + TypeScript + Vite + ECharts SPA.
 9. **Edge** — nginx reverse proxy on `:8000` routes `/` (SPA), `/api/*`,
-   `/admin/*`, and platform-owner-gated consoles `/grafana`, `/prometheus`,
+   `/admin/*`, and platform-owner-gated consoles `/grafana`,
    `/search` (OpenSearch Dashboards).
 App state lives in **PostgreSQL** + **Redis**.
 
@@ -63,7 +63,7 @@ and shown under **Infrastructure → Devices**.
   so the operator can't see its telemetry. Enforced by PostgreSQL Row-Level
   Security + ClickHouse row policies + per-tenant OpenSearch indices. Platform-
   owner-only surfaces: Stack, Collectors, Tenants, the raw consoles (Grafana/
-  Prometheus/OpenSearch).
+  OpenSearch).
 - RBAC roles: super-admin, admin, operator, read-only (+ Auditor, API-Client).
 
 ## Key UI sections (left rail → hover flyout)
@@ -135,7 +135,7 @@ Administration → Identity & Access → Tenants → New (optionally tick **Hide
 - **"A backend service shows 502 via :8000"**: nginx resolves upstreams via
   Docker DNS with a `valid=10s` TTL using variable `proxy_pass`; if a recreated
   container’s 502 persists, check the service is healthy (`docker compose ps`).
-- **"Grafana/Prometheus/OpenSearch console returns 403"**: those are
+- **"Grafana/OpenSearch console returns 403"**: those are
   platform-owner-only (sign in as the global-tenant super-admin).
 - **"Source of Truth / inventory not loading"**: it's an optional service —
   start it with `docker compose --profile netbox up -d`; first boot runs DB

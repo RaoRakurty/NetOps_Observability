@@ -37,7 +37,8 @@ fi
 # --- image pins (keep in sync with docker-compose.yml) -----------------------
 VECTOR_IMG="timberio/vector:0.40.0-alpine"
 NGINX_IMG="nginx:1.27-alpine"
-PROM_IMG="prom/prometheus:v2.54.1"
+PROM_IMG="prom/prometheus:v2.54.1"   # promtool only (rules.yaml validation); not shipped
+VM_IMG="victoriametrics/victoria-metrics:v1.101.0"
 SYSLOGNG_IMG="balabit/syslog-ng:4.7.1"
 
 # --- vector: BOOT the config (topology build catches the E651 class) ----------
@@ -83,18 +84,28 @@ check_nginx(){
   fi
 }
 
-# --- prometheus: promtool check config (also validates rule_files) ------------
-check_prometheus(){
-  [ -f "$ROOT/src/config/prometheus.yml" ] || { skip "prometheus (no prometheus.yml)"; return; }
+# --- metrics: VM validates its scrape config; promtool validates rules.yaml ---
+# (Prometheus the SERVICE is gone — #97 footprint pass — but promtool remains
+# the best build-time validator for the Prometheus-rules-format file the Go
+# alert engine consumes. Dev/CI-only pull; the image ships in no bundle.)
+check_metrics_configs(){
+  [ -f "$ROOT/src/config/vmscrape.yml" ] || { skip "victoria (no vmscrape.yml)"; return; }
   local out rc
-  out="$(docker run --rm --entrypoint promtool \
-      -v "$ROOT/src/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
-      -v "$ROOT/src/config/rules.yaml:/etc/prometheus/rules.yaml:ro" \
-      "$PROM_IMG" check config /etc/prometheus/prometheus.yml 2>&1)"; rc=$?
+  out="$(docker run --rm \
+      -v "$ROOT/src/config/vmscrape.yml:/etc/victoria/vmscrape.yml:ro" \
+      "$VM_IMG" -promscrape.config=/etc/victoria/vmscrape.yml -dryRun 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then
-    green "prometheus (promtool check config + rules)"
+    green "victoria (-promscrape.config -dryRun)"
   else
-    red "prometheus — $(grep -iE 'FAILED|error' <<<"$out" | head -1)"
+    red "victoria scrape config — $(grep -iE 'cannot|error|invalid' <<<"$out" | head -1)"
+  fi
+  out="$(docker run --rm --entrypoint promtool \
+      -v "$ROOT/src/config/rules.yaml:/etc/prometheus/rules.yaml:ro" \
+      "$PROM_IMG" check rules /etc/prometheus/rules.yaml 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    green "rules.yaml (promtool check rules)"
+  else
+    red "rules.yaml — $(grep -iE 'FAILED|error' <<<"$out" | head -1)"
   fi
 }
 
@@ -119,7 +130,7 @@ echo "=== config preflight: fresh-load every committed service config ==="
 check_vector "deployment/docker/vector/vector.yaml"        "vector-aggregator"
 check_vector "deployment/docker/vector-router/vector.yaml" "vector-router"
 check_nginx
-check_prometheus
+check_metrics_configs
 check_syslogng
 
 echo ""

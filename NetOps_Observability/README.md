@@ -27,12 +27,12 @@ installer refuses to run with the legacy `docker-compose` binary.
 | Event bus       | Apache Kafka (KRaft)                                    |
 | Routing         | Vector router (Kafka → storage fan-out)                 |
 | Hot search      | OpenSearch + OpenSearch Dashboards                      |
-| Time-series     | VictoriaMetrics (+ Prometheus for rules)                |
+| Time-series     | VictoriaMetrics (store + self-metrics scrape + rules)   |
 | OLAP            | ClickHouse (flow analytics, findings, capacity planning) |
 | Correlation/AI  | Python + FastAPI service (anomaly detection, RCA)       |
 | API             | Go REST + GraphQL stub + LLM copilot proxy              |
 | App state       | PostgreSQL + Redis                                      |
-| Observability of itself | Grafana (Prometheus + Victoria + ClickHouse datasources) |
+| Observability of itself | VM self-scrape; Grafana add-on (Victoria + ClickHouse datasources) |
 | UI              | React + ECharts + Tailwind-compatible styles            |
 | Entrypoint      | nginx (single port :8000)                               |
 
@@ -64,7 +64,7 @@ NetOps_Observability/
 ## Tabs in the dashboard
 
 Dashboard · Devices · Topology · Collectors · Alerts · Rules · Findings ·
-Logs · Flows · Copilot · Prometheus · Grafana · OpenSearch Dashboards · Settings
+Logs · Flows · Copilot · Grafana · OpenSearch Dashboards · Settings
 
 ## Security defaults
 

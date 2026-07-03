@@ -19,6 +19,8 @@
 #     ./install-correlix.sh start
 #     ./install-correlix.sh uninstall [--purge]
 #     ./install-correlix.sh reset-demo-data
+#     ./install-correlix.sh enable  <add-on>    log-search-ui | self-monitoring
+#     ./install-correlix.sh disable <add-on>
 #
 # Advanced (documented in ADVANCED.md, hidden from the quickstart):
 #     --external-kafka --broker-urls host1:9092[,host2:9092]
@@ -73,10 +75,15 @@ PURGE=0
 LOG_SVC=""
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
-    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data" ;;
+    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable" ;;
   esac
+fi
+# enable/disable take the add-on name as their positional argument.
+ADDON_ARG=""
+if { [ "$CMD" = "enable" ] || [ "$CMD" = "disable" ]; } && [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  ADDON_ARG="$1"; shift
 fi
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -265,17 +272,17 @@ cmd_install() {
   # Assemble install.py arguments. Defaults are the appliance path: embedded
   # Apache Kafka + embedded Valkey + everything else, zero questions asked.
   local args=(--port "$UI_PORT")
-  local profiles="embedded-bus,prober,osd"
+  # Bundle installs start as the BASE appliance (add-ons come later via
+  # `enable`); source checkouts get the developer default incl. dashboards +
+  # self-monitoring.
+  local profiles="embedded-bus,prober,osd,self-monitoring"
   local images=""
   if [ "$MODE" = "bundle" ]; then
     images=$(compgen -G "$BUNDLE_DIR/correlix-images-*.tar.zst" | head -1 || true)
     [ -n "$images" ] || die "Image archive not found in the bundle." \
-      "Expected correlix-images-<profile>-<version>.tar.zst (or its .partNN pieces) next to this script."
+      "Expected correlix-images-core-<version>.tar.zst (or its .partNN pieces) next to this script."
     args+=(--bundle "$images")
-    # --core bundles ship without the optional dashboards image.
-    if grep -q '^profile:  *core' "$BUNDLE_DIR/MANIFEST" 2>/dev/null; then
-      profiles="embedded-bus,prober"
-    fi
+    profiles="embedded-bus,prober"
   fi
   if [ "$EXTERNAL_KAFKA" = 1 ]; then
     [ -n "$BROKER_URLS_ARG" ] || die "External Kafka mode needs your broker endpoints." \
@@ -343,6 +350,61 @@ cmd_reset_demo() {
   fi
 }
 
+# ---------- add-on packs ------------------------------------------------
+# name → "profile|services|side-effect". Optional capability ships as image
+# packs next to the bundle; enable = load pack (if present) + flip the compose
+# profile in .env + up. Keep this registry in sync with make-installer.sh.
+addon_spec() {
+  case "$1" in
+    log-search-ui)   echo "osd|opensearch-dashboards" ;;
+    self-monitoring) echo "self-monitoring|grafana cadvisor node-exporter" ;;
+    *) echo "" ;;
+  esac
+}
+
+set_env_var() { # KEY VALUE — replace or append in .env
+  if grep -q "^$1=" "$ENV_FILE"; then sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
+  else printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"; fi
+}
+
+cmd_enable() {
+  [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet." "Run: ./install-correlix.sh"
+  local spec; spec=$(addon_spec "$ADDON_ARG")
+  [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "Available add-ons: log-search-ui (log forensics UI), self-monitoring (Grafana + container/host metrics)"
+  local prof="${spec%%|*}"
+  # Load the add-on's image pack when installing from a bundle.
+  if [ "$MODE" = "bundle" ]; then
+    local pack; pack=$(compgen -G "$BUNDLE_DIR/correlix-addon-$ADDON_ARG-"*.tar.zst | head -1 || true)
+    if [ -n "$pack" ]; then
+      say "Loading $ADDON_ARG images..."
+      zstd -dc "$pack" | docker load >/dev/null
+    fi
+  fi
+  local cur; cur=$(env_get COMPOSE_PROFILES)
+  case ",$cur," in *",$prof,"*) ;; *) set_env_var COMPOSE_PROFILES "${cur:+$cur,}$prof" ;; esac
+  [ "$ADDON_ARG" = "self-monitoring" ] && set_env_var GRAFANA_URL "http://grafana:3000"
+  say "Starting $ADDON_ARG..."
+  compose up -d
+  # The api reads GRAFANA_URL at start — recreate so status reflects the add-on.
+  [ "$ADDON_ARG" = "self-monitoring" ] && compose up -d api
+  ok "$ADDON_ARG enabled. Check: ./install-correlix.sh status"
+}
+
+cmd_disable() {
+  [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."
+  local spec; spec=$(addon_spec "$ADDON_ARG")
+  [ -n "$spec" ] || die "Unknown add-on: '${ADDON_ARG:-}'" "Available add-ons: log-search-ui, self-monitoring"
+  local prof="${spec%%|*}" svcs="${spec##*|}"
+  local cur; cur=$(env_get COMPOSE_PROFILES)
+  set_env_var COMPOSE_PROFILES "$(printf '%s' "$cur" | tr ',' '\n' | grep -vx "$prof" | paste -sd, -)"
+  # shellcheck disable=SC2086
+  compose --profile "$prof" stop $svcs >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086
+  compose --profile "$prof" rm -f $svcs >/dev/null 2>&1 || true
+  if [ "$ADDON_ARG" = "self-monitoring" ]; then set_env_var GRAFANA_URL ""; compose up -d api; fi
+  ok "$ADDON_ARG disabled (its images and data were kept)."
+}
+
 case "$CMD" in
   install)         cmd_install ;;
   status)          friendly_status ;;
@@ -353,4 +415,6 @@ case "$CMD" in
   start)           compose start; ok "Correlix starting — check with: ./install-correlix.sh status" ;;
   uninstall)       cmd_uninstall ;;
   reset-demo-data) cmd_reset_demo ;;
+  enable)          cmd_enable ;;
+  disable)         cmd_disable ;;
 esac

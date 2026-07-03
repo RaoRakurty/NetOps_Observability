@@ -1,0 +1,66 @@
+# VictoriaMetrics self-monitoring scrape config (-promscrape.config).
+#
+# Prometheus was removed from the stack (#97 footprint pass): VM scrapes these
+# targets natively, so the `up` series and all self-metrics land in the SAME
+# store the alert engine (rules.yaml → /api/v1/query) and the in-app boards
+# already read. One metrics store, one query API, one less service.
+#
+# Optional targets (cadvisor / node / grafana) belong to the `self-monitoring`
+# add-on. When the add-on is disabled they simply don't resolve: VM runs with
+# -promscrape.suppressScrapeErrors so that is silent, their `up` goes 0, and
+# rules.yaml's ScrapeTargetDown is scoped to the always-on jobs so nothing
+# false-fires on a default install.
+
+global:
+  # 30s is ample for stack self-observability and halves scrape/series churn;
+  # every alert range window is >=5m (>=10 samples per window) so no rule
+  # loses resolution (#96d).
+  scrape_interval: 30s
+
+scrape_configs:
+  # ---- always-on (core appliance) -------------------------------------------
+  - job_name: 'netops-api'
+    static_configs:
+      - targets: ['api:8080']
+    metrics_path: '/metrics'
+
+  - job_name: 'victoria'
+    static_configs:
+      - targets: ['localhost:8428']
+    metrics_path: '/metrics'
+
+  # ClickHouse native Prometheus endpoint (enabled via <prometheus> in config).
+  - job_name: 'clickhouse'
+    static_configs:
+      - targets: ['clickhouse:9363']
+
+  # Vector internal metrics (both aggregator + router expose a prometheus
+  # exporter on :9598 — see each vector.yaml internal_metrics source).
+  - job_name: 'vector'
+    static_configs:
+      - targets: ['vector-aggregator:9598', 'vector-router:9598']
+
+  # NOTE: the embedded Kafka broker has no native Prometheus endpoint (JMX
+  # only — a jmx-exporter sidecar was judged not worth the image/licensing
+  # surface for a transit-only bus). Broker liveness = compose healthcheck +
+  # api stack-health TCP probe; consumer progress = pipeline-watchdog.sh
+  # high-watermark deltas + the vector job above.
+
+  # ---- self-monitoring add-on (optional; silent no-ops when disabled) -------
+  # cAdvisor: per-CONTAINER cpu / memory / network / restart / OOM for EVERY
+  # service in the stack — backbone for resource-exhaustion + restart alerts.
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # node-exporter: host cpu / memory / disk / load / filesystem.
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    # Grafana serves under the /grafana sub-path (serve_from_sub_path), so its
+    # /metrics is exposed there too.
+    metrics_path: '/grafana/metrics'

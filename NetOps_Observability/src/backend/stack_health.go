@@ -58,17 +58,25 @@ type stackComponentHealth struct {
 // reach the stack (with compose-network defaults), so health targets are never
 // guesswork — they track whatever the deployment is actually configured to use.
 func stackInventory() []stackProbe {
-	return []stackProbe{
+	probes := []stackProbe{
 		{"Search (OpenSearch)", "search", "http", envOr("OPENSEARCH_URL", "http://opensearch:9200") + "/_cluster/health"},
+		// VM is both the metrics store AND the self-metrics scraper since the
+		// Prometheus removal (#97): rules.yaml queries + vmscrape.yml targets
+		// all live here.
 		{"Metrics store (VictoriaMetrics)", "metrics", "http", envOr("VICTORIA_URL", "http://victoria:8428") + "/health"},
-		{"Metrics scrape (Prometheus)", "metrics", "http", envOr("PROMETHEUS_URL", "http://prometheus:9090") + "/-/healthy"},
 		{"OLAP / flows (ClickHouse)", "olap", "http", envOr("CLICKHOUSE_URL", "http://clickhouse:8123") + "/ping"},
 		{"Correlation service", "analytics", "http", envOr("CORRELATION_URL", "http://correlation:8000") + "/findings"},
-		{"Visualization (Grafana)", "visualization", "http", envOr("GRAFANA_URL", "http://grafana:3000") + "/api/health"},
 		{"Event bus (Apache Kafka)", "bus", "tcp", firstBrokerAddr()},
 		{"App database (PostgreSQL)", "state", "tcp", net.JoinHostPort(envOr("DB_HOST", "postgres"), envOr("DB_PORT", "5432"))},
 		{"Cache (Valkey)", "state", "tcp", net.JoinHostPort(envOr("REDIS_HOST", "redis"), envOr("REDIS_PORT", "6379"))},
 	}
+	// Grafana rides the optional self-monitoring add-on: probe it only when the
+	// deployment declares it (GRAFANA_URL set by install tooling when the
+	// add-on is enabled) — a disabled add-on must not paint status red.
+	if g := envOr("GRAFANA_URL", ""); g != "" {
+		probes = append(probes, stackProbe{"Visualization (Grafana)", "visualization", "http", g + "/api/health"})
+	}
+	return probes
 }
 
 // firstBrokerAddr resolves the event-bus probe target from BROKER_URLS (a

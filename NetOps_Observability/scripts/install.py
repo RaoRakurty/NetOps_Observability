@@ -38,7 +38,7 @@ from pathlib import Path
 # COMPOSE_PROFILES — the single source of truth; see compose_up). --core
 # bundles install with --profiles "embedded-bus,prober" (no OSD image in the
 # bundle); external-broker installs drop embedded-bus.
-DEFAULT_PROFILES = "embedded-bus,prober,osd"
+DEFAULT_PROFILES = "embedded-bus,prober,osd,self-monitoring"
 
 # ---- styling ----------------------------------------------------------------
 
@@ -184,7 +184,7 @@ REQUIRED_PATHS = [
     "src/config/config.yaml",
     "src/config/rules.yaml",
     "src/config/devices.yaml",
-    "src/config/prometheus.yml",
+    "src/config/vmscrape.yml",
     # Deployment
     "deployment/docker/docker-compose.yml",
     "deployment/docker/Dockerfile.backend",
@@ -308,6 +308,9 @@ VICTORIA_RETENTION=30d
 # Grafana admin login (force a password change on first browse anyway).
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD={secrets_map["GRAFANA_ADMIN_PASSWORD"]}
+# Set only while the self-monitoring add-on is enabled — gates the Grafana
+# stack-health probe (empty = probe skipped, no false red).
+GRAFANA_URL={"http://grafana:3000" if "self-monitoring" in profiles else ""}
 # Read-only ClickHouse user Grafana's provisioned ClickHouse datasource binds to.
 # Its CH profile pins tenant_scope='' (readonly CONST) so it sees only untagged
 # platform/infra rows — never another tenant's data. Created by bootstrap_grafana.
@@ -489,7 +492,6 @@ def ensure_data_dirs(root: Path) -> None:
     the container runs as a non-root user) chown them to that UID/GID.
 
     Container UIDs are derived from each upstream image:
-        prometheus  65534 (nobody)
         grafana       472 (grafana)
         opensearch   1000 (opensearch)
         clickhouse    101 (clickhouse)
@@ -502,7 +504,6 @@ def ensure_data_dirs(root: Path) -> None:
         "redis":      None,             # writes as redis user via its own init
         "victoria":   (1000, 1000),
         "grafana":    (472, 472),
-        "prometheus": (65534, 65534),
         "kafka":      (1000, 1000),
         "opensearch": (1000, 1000),
         "clickhouse": (101, 101),
@@ -789,7 +790,7 @@ def main() -> None:
                     help="Image archive from make-installer.sh to docker-load first (implies --offline).")
     ap.add_argument("--profiles", default=DEFAULT_PROFILES, metavar="CSV",
                     help=f"Compose profiles to activate (default: {DEFAULT_PROFILES}). "
-                         "Core bundles use 'embedded-bus,prober'.")
+                         "Customer bundle installs use 'embedded-bus,prober' (add-ons enable more).")
     ap.add_argument("--broker-urls", default=None, metavar="HOST:PORT[,HOST:PORT...]",
                     help="ADVANCED: use an external Kafka-compatible broker instead of the "
                          "embedded one. Disables the embedded-bus profile and points every "
@@ -852,8 +853,9 @@ def main() -> None:
     step("bootstrap OpenSearch index templates")
     bootstrap_opensearch(root)
 
-    step("wiring grafana clickhouse datasource")
-    bootstrap_grafana(root, secrets_map)
+    if "self-monitoring" in args.profiles:
+        step("wiring grafana clickhouse datasource")
+        bootstrap_grafana(root, secrets_map)
 
     print()
     print("==============================================================")

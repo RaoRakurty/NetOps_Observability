@@ -38,8 +38,8 @@ React dashboard, all behind nginx on a single port (`:8000`).
 Edge ingest (syslog-ng · Telegraf · goflow2) → Vector aggregator → Apache
 Kafka (single-node KRaft, service `kafka`, profile `embedded-bus`; every
 client resolves it via `BROKER_URLS` — external Kafka-compatible brokers
-supported) → Vector router → OpenSearch (hot search) · VictoriaMetrics +
-Prometheus (metrics) · ClickHouse (OLAP/flows/findings) → correlation service →
+supported) → Vector router → OpenSearch (hot search) · VictoriaMetrics
+(metrics store + self-metrics scrape; Prometheus removed) · ClickHouse (OLAP/flows/findings) → correlation service →
 Go API → React UI → nginx. App state in PostgreSQL + Valkey. Grafana for
 self-observability. Redpanda and Redis are fully removed (licensing, #97) —
 never reintroduce them.

@@ -32,7 +32,6 @@ import Flows from "./tabs/Flows";
 import Tunnels from "./tabs/Tunnels";
 import WanCircuits from "./pages/WanCircuits";
 import MetricsExplorer from "./tabs/MetricsExplorer";
-import PrometheusTab from "./tabs/Prometheus";
 import GrafanaTab from "./tabs/Grafana";
 import SearchDashboardsTab from "./tabs/SearchDashboards";
 import Settings from "./tabs/Settings";
@@ -267,7 +266,6 @@ export const NAV: NavSection[] = [
     children: [
       { id: "health", label: "Stack Health", render: () => <StackHealth /> },
       { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
-      { id: "prometheus", label: "Prometheus", render: () => <PrometheusTab /> },
       { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
       // Developer — power-user, API-first tooling.
       { id: "graphql", label: "GraphQL Explorer", group: "Developer", render: () => <GraphQLExplorer /> },

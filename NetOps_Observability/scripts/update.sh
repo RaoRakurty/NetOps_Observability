@@ -141,7 +141,8 @@ EXPECTED = {
     # event bus (Redpanda→Apache Kafka swap, #97)
     "BROKER_URLS":               "kafka:9092",
     "KAFKA_CLUSTER_ID":          "__KAFKA_UUID__",
-    "COMPOSE_PROFILES":          "embedded-bus,prober,osd",
+    "COMPOSE_PROFILES":          "embedded-bus,prober,osd,self-monitoring",
+    "GRAFANA_URL":               "http://grafana:3000",
     # expanded notifier (new in the alert-channels landing)
     "SMTP_USER":                 "",
     "SMTP_PASS":                 "",

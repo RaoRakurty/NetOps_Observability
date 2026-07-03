@@ -428,6 +428,7 @@ services:
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:2.16.0@sha256:14fd4d7882d1adf71fcb01142e38b571add4d7e65dedcd8beffc444520b22a8b
+    profiles: ["osd"]
     # Power-user log/index forensics UI (served under /search). Always-on so its
     # index patterns and Discover are available out of the box. ~0.7 GiB; cap via
     # OSD_MEM_LIMIT. To run leaner, comment this service out and use the in-app
@@ -459,8 +460,14 @@ services:
       # 30s, Prometheus scrape 30s), so this only drops duplicates, never
       # signal. Standard VM pairing with the scrape interval (#96).
       - "--dedup.minScrapeInterval=${VICTORIA_DEDUP:-30s}"
+      # VM scrapes the stack's self-metrics itself (Prometheus removed, #97
+      # footprint pass). suppressScrapeErrors: optional add-on targets
+      # (cadvisor/node/grafana) are silent no-ops while their add-on is off.
+      - "--promscrape.config=/etc/victoria/vmscrape.yml"
+      - "--promscrape.suppressScrapeErrors"
     volumes:
       - ../../data/victoria:/victoria
+      - ../../src/config/vmscrape.yml:/etc/victoria/vmscrape.yml:ro
     healthcheck:
       # 127.0.0.1, not localhost: busybox wget tries ::1 first and the server
       # only listens on IPv4 → false "unhealthy" while the service is fine.
@@ -471,29 +478,18 @@ services:
     networks: [netops]
     restart: *restart
 
-  prometheus:
-    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
-    mem_limit: ${PROMETHEUS_MEM_LIMIT:-512m}
-    cpus: ${PROMETHEUS_CPU_LIMIT:-1.5}
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--web.external-url=http://localhost:8000/prometheus/"
-      - "--web.route-prefix=/"
-    volumes:
-      - ../../src/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../../src/config/rules.yaml:/etc/prometheus/rules.yaml:ro
-      - ../../data/prometheus:/prometheus
-    networks: [netops]
-    restart: *restart
+  # Prometheus was REMOVED (#97 footprint pass): VictoriaMetrics scrapes the
+  # stack's self-metrics itself (vmscrape.yml above) and the alert engine
+  # already evaluated rules.yaml against VM — one store, one query API.
 
   # cAdvisor — per-container CPU/memory/network/restart/OOM metrics for EVERY
   # service (reads the docker runtime). The backbone of stack self-monitoring:
-  # one scrape gives Prometheus resource + restart data for all containers, so
-  # the resource-exhaustion / restart-loop alerts work without per-service
-  # instrumentation. Read-only host mounts.
+  # one scrape gives VM resource + restart data for all containers, so the
+  # resource-exhaustion / restart-loop alerts work without per-service
+  # instrumentation. Read-only host mounts. `self-monitoring` add-on.
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1@sha256:524779a2661c9ea1b4b87d47fedfc56c3aed182511fcdac031f345a1fd229461
+    profiles: ["self-monitoring"]
     mem_limit: ${CADVISOR_MEM_LIMIT:-256m}
     cpus: ${CADVISOR_CPU_LIMIT:-1}
     # 30s housekeeping halves cadvisor's steady sampling cost; container-level
@@ -518,6 +514,7 @@ services:
   # node-exporter — host CPU/memory/disk/load/filesystem metrics.
   node-exporter:
     image: prom/node-exporter:v1.8.2@sha256:065914c03336590ebed517e7df38520f0efb44465fde4123c3f6b7328f5a9396
+    profiles: ["self-monitoring"]
     mem_limit: ${NODE_EXPORTER_MEM_LIMIT:-128m}
     cpus: ${NODE_EXPORTER_CPU_LIMIT:-0.5}
     command:
@@ -531,6 +528,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
+    profiles: ["self-monitoring"]
     mem_limit: ${GRAFANA_MEM_LIMIT:-512m}
     cpus: ${GRAFANA_CPU_LIMIT:-1.5}
     environment:
@@ -584,7 +582,7 @@ services:
     volumes:
       - ../../data/grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on: [prometheus, victoria, clickhouse]
+    depends_on: [victoria, clickhouse]
     networks: [netops]
     restart: *restart
 
@@ -710,6 +708,9 @@ services:
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
       BUS_BRIDGE_URL: "http://vector-aggregator:8692"
       VICTORIA_URL: "http://victoria:8428"
+      # Set (by install tooling) only when the self-monitoring add-on is
+      # enabled — gates the Grafana stack-health probe.
+      GRAFANA_URL: ${GRAFANA_URL:-}
       # Native Metrics Explorer + alert evaluator query this Prometheus-API
       # endpoint. Point it at VictoriaMetrics (drop-in /api/v1/query) so the
       # SNMP/device telemetry Telegraf remote_writes there is visible — see
@@ -1198,13 +1199,13 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    # opensearch-dashboards is profile-gated ("osd"); nginx proxies /search to it
-    # only when started, so it's intentionally not a hard dependency.
+    # opensearch-dashboards ("osd") and grafana ("self-monitoring") are
+    # profile-gated add-ons; nginx proxies /search and /grafana to them only
+    # when started, so they're intentionally not dependencies. Prometheus is
+    # gone entirely (#97 — VM scrapes the self-metrics).
     depends_on:
       - api
       - frontend
-      - prometheus
-      - grafana
     networks: [netops]
     restart: *restart
 
