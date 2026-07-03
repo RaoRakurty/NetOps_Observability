@@ -91,22 +91,11 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 // — the top hypothesis). Empty for pre-v1 signatures; the wording engine's
 // derived phrasing remains the fallback.
 func topHypothesisVoice(raw any) (operatorPhrase, confidenceLabel string) {
-	var blob struct {
-		Ranking struct {
-			Hypotheses []struct {
-				OperatorPhrase  string `json:"operator_phrase"`
-				ConfidenceLabel string `json:"confidence_label"`
-			} `json:"hypotheses"`
-		} `json:"ranking"`
-	}
-	if err := json.Unmarshal([]byte(asStr(raw)), &blob); err != nil {
+	hyps := parseRankedHypotheses(raw)
+	if len(hyps) == 0 {
 		return "", ""
 	}
-	if len(blob.Ranking.Hypotheses) == 0 {
-		return "", ""
-	}
-	top := blob.Ranking.Hypotheses[0]
-	return strings.TrimSpace(top.OperatorPhrase), strings.TrimSpace(top.ConfidenceLabel)
+	return strings.TrimSpace(hyps[0].OperatorPhrase), strings.TrimSpace(hyps[0].ConfidenceLabel)
 }
 
 // GetProblemEvidence derives bounded, cited evidence items for the problem from
@@ -133,26 +122,32 @@ SELECT hypotheses, affected, tenant_id
 	href := "#/monitoring/correlations?id=" + id
 	var items []ai.EvidenceItem
 
-	// Candidate root-cause hypotheses (bounded to top 5).
-	for i, h := range jsonObjects(rows[0]["hypotheses"]) {
-		if i >= 5 {
-			break
+	// Candidate root-cause hypotheses + evidence basis (modalities, controller
+	// corroboration, contradictions) from the engine's ranking blob.
+	if hyps := parseRankedHypotheses(rows[0]["hypotheses"]); len(hyps) > 0 {
+		items = append(items, rankedHypothesisItems(id, href, hyps)...)
+	} else {
+		// Legacy pre-v1 blob: a bare array of {signature|hypothesis|name, score}.
+		for i, h := range jsonObjects(rows[0]["hypotheses"]) {
+			if i >= 5 {
+				break
+			}
+			name := aiFirst(asStr(h["signature"]), asStr(h["hypothesis"]), asStr(h["name"]))
+			if name == "" {
+				continue
+			}
+			if strings.HasPrefix(name, "sig.") { // humanize the engine signature to NOC language
+				name = signatureNocTitle(name)
+			}
+			text := "candidate cause: " + name
+			if sc := asFloat(h["score"]); sc > 0 {
+				text += fmt.Sprintf(" (score %.2f)", sc)
+			}
+			items = append(items, ai.EvidenceItem{
+				CitationID: fmt.Sprintf("hypothesis:%s:%d", shortID(id), i),
+				Kind:       "finding", Text: text, Href: href,
+			})
 		}
-		name := aiFirst(asStr(h["signature"]), asStr(h["hypothesis"]), asStr(h["name"]))
-		if name == "" {
-			continue
-		}
-		if strings.HasPrefix(name, "sig.") { // humanize the engine signature to NOC language
-			name = signatureNocTitle(name)
-		}
-		text := "candidate cause: " + name
-		if sc := asFloat(h["score"]); sc > 0 {
-			text += fmt.Sprintf(" (score %.2f)", sc)
-		}
-		items = append(items, ai.EvidenceItem{
-			CitationID: fmt.Sprintf("hypothesis:%s:%d", shortID(id), i),
-			Kind:       "finding", Text: text, Href: href,
-		})
 	}
 	// Affected entities — humanized + de-duplicated for NOC readability.
 	if devs := aiEntityLabels(affectedDevices(rows[0]["affected"])); len(devs) > 0 {

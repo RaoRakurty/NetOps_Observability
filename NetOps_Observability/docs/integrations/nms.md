@@ -88,6 +88,50 @@ integration (per-integration opt-in; default is strict TLS).
 > been exercised against live vendor controllers — expect one-line fixes per
 > vendor on first real contact (each transformer is a single file).
 
+## Rate limits, retries, backfill
+
+Every connector call goes through the same politeness runtime (`nms/`):
+
+- **Rate limiting** — a per-integration token bucket at the connector spec's
+  `RatePerSec` (Meraki 10/s — the documented per-org limit; Prime 2/s; other
+  vendors currently unlimited client-side, bounded by poll interval). Bucket
+  burst = the sustained rate (min 1).
+- **Retries** — `ExpoRetry`: base 500ms, cap 30s, 5 tries, full jitter.
+  A `429`/`503` with `Retry-After` always wins (we obey the server). Retries
+  on 429/5xx/transport errors; other 4xx are terminal (401 triggers ONE
+  re-auth + retry per cycle instead).
+- **Checkpointing** — pollers persist a `{since}` cursor per stream; restarts
+  resume, never re-ingest. First poll backfills a bounded window only.
+- **Dedup** — 3 levels (vendor event id → dedupe key LRU → correlation-side),
+  so steady-state re-polls of the same alarms produce no new signals.
+- **Scheduling** — each integration polls on its own `poll_interval_s`
+  (floored at 30s, default 5m); the scheduler tick (`NMS_POLL_TICK`, 30s)
+  only re-evaluates due-ness.
+
+Known inefficiency (accepted): `RunPoll` re-authenticates at the start of
+every poll cycle (~1 login per interval). `Session.Valid` exists if caching
+becomes worth it.
+
+## Canonical schema (wire contract)
+
+The vendor-neutral shapes every transformer emits (`nms/model.go`). The
+`ControllerEvent` snake_case JSON tags are the **wire contract** with the
+correlation consumer (`controller_events.py` reads exactly these keys off
+`netops.controller_events`) — never rename one side alone
+(`nms/wire_test.go` guards this).
+
+| Class | Key fields |
+|---|---|
+| `ControllerEvent` | `tenant_id`, `integration_id`, `source_system`, `vendor`, `product`, `event_id`, `event_time`, `event_type` (vendor-native), `normalized_event_type` (`controller_alarm` \| `controller_bfd_down` \| `controller_tunnel_state` \| `controller_control_connection_loss` \| `controller_device_unreachable` \| `controller_policy_change` \| `controller_health_score`), `severity` (info\|warn\|high\|crit), entity binds (`device_id/name`, `site_id/name`, `interface_name`, `tunnel_id`, `peer_id`, `application`), `message`, `dedupe_key`, `evidence_role`, `correlation_hints` |
+| `ControllerState` | `entity_key`, `state_kind` (bfd \| omp \| control_conn \| tunnel \| bgp \| reachability \| intf_oper \| deploy \| fabric_node), `current_state`, `device_id`, `site_id`, `time`, `data` — persisted to `controller_state_current` with first/last-seen + flap count |
+| `ControllerMetric` | rendered as Prometheus exposition `controller_metric_<name>{tags…}` → VictoriaMetrics; tags always include `device`/`tunnel` binds the transformer resolved |
+
+Correlation side: `controller_event_to_signal` maps events to `corr_signals`
+with `source=controller`, `observer_type=controller`,
+`modality_class=management_plane`, `collection_path=via_controller:<system>`
+— which is exactly why the independence gate caps controller-only evidence at
+`suspected` with no special-casing.
+
 ## Upgrading a live stack (ClickHouse enum drift)
 
 `init.sql` shapes **fresh** ClickHouse volumes only. A stack whose
@@ -122,3 +166,11 @@ reach `corr_signals`.
   (floored at 30s); `NMS_POLL_TICK` (default 30s) only re-evaluates due-ness.
 - Correlation `/healthz` → `ingest.controller_events_*` counters prove the
   event lane end-to-end.
+- **AI evidence answers** (P6): the assistant answers "what did the controller
+  report / is this controller-only or telemetry-confirmed / what contradicts"
+  from the corr object's persisted ranking blob — `ai_evidence_language.go`
+  renders modality coverage, the independent pair, `controller_*` satisfied
+  clauses (with the corroborated vs controller-only-capped verdict), and
+  contradictions as cited evidence items. Customer-facing doc:
+  docs-portal `infrastructure/nms-integrations.md` (mirrored into the
+  assistant's `search_docs` corpus).
