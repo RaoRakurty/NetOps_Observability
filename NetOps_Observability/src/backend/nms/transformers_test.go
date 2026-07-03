@@ -264,3 +264,39 @@ func hmacHex(secret, body []byte) string {
 	mac.Write(body)
 	return hexEncode(mac.Sum(nil))
 }
+
+func TestVManageStatsTransformerMetrics(t *testing.T) {
+	b, err := VManageStatsTransformer{}.Transform("t-b", "int-vm", loadFixture(t, "vmanage/approute_stats.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2 tunnels × 4 metrics each = 8 controller_metric samples; no events/states.
+	if len(b.Metrics) != 8 || len(b.Events) != 0 || len(b.States) != 0 {
+		t.Fatalf("want 8 metrics only, got m=%d e=%d s=%d", len(b.Metrics), len(b.Events), len(b.States))
+	}
+	// Check the mandatory join tags + a value.
+	var sawLatency bool
+	for _, m := range b.Metrics {
+		if m.Tags["tenant_id"] != "t-b" || m.Tags["device"] != "vEdge-Branch-1" || m.Tags["site"] != "100" {
+			t.Fatalf("metric tags wrong: %+v", m.Tags)
+		}
+		if m.Name == "controller_metric_tunnel_latency_ms" && m.Value == 12.4 {
+			sawLatency = true
+		}
+	}
+	if !sawLatency {
+		t.Fatal("expected the 12.4ms latency sample")
+	}
+}
+
+func TestVManageOMPStateKind(t *testing.T) {
+	// An OMP alarm must map to the omp state kind (not generic).
+	raw := `{"data":[{"uuid":"o1","type":"omp-state-change","component":"OMP","severity":"Major","entry_time":1751540400000,"system_ip":"10.1.1.1","host_name":"vEdge-1","site_id":"100","active":true}]}`
+	b, err := VManageTransformer{}.Transform("t-b", "int-vm", []byte(raw))
+	if err != nil || len(b.States) != 1 {
+		t.Fatalf("omp: %v states=%d", err, len(b.States))
+	}
+	if b.States[0].StateKind != "omp" {
+		t.Fatalf("omp state kind = %s", b.States[0].StateKind)
+	}
+}

@@ -86,6 +86,9 @@ func vmanageNormType(typ, component, eventName string) (string, string) {
 		return "controller_bfd_down", "bfd"
 	case strings.Contains(t, "control") && strings.Contains(t, "conn"):
 		return "controller_control_connection_loss", "control_conn"
+	case strings.Contains(t, "omp"):
+		// OMP is SD-WAN's overlay control-plane routing — its own state kind.
+		return "controller_control_connection_loss", "omp"
 	case strings.Contains(t, "tunnel") || strings.Contains(t, "tloc"):
 		return "controller_tunnel_state", "tunnel"
 	case strings.Contains(t, "bgp"):

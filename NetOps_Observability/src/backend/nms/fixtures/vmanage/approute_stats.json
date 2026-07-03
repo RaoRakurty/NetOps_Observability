@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "vdevice_name": "vEdge-Branch-1",
+      "local_system_ip": "10.1.1.1",
+      "remote_system_ip": "10.2.2.2",
+      "local_color": "mpls",
+      "remote_color": "biz-internet",
+      "site_id": "100",
+      "name": "10.1.1.1:mpls-10.2.2.2:biz-internet",
+      "latency": 12.4,
+      "jitter": 3.1,
+      "loss_percentage": 0.5,
+      "vqoe_score": 9.2,
+      "entry_time": 1751540400000
+    },
+    {
+      "vdevice_name": "vEdge-Branch-1",
+      "local_system_ip": "10.1.1.1",
+      "remote_system_ip": "10.2.2.2",
+      "local_color": "biz-internet",
+      "remote_color": "biz-internet",
+      "site_id": "100",
+      "name": "10.1.1.1:biz-internet-10.2.2.2:biz-internet",
+      "latency": 88.0,
+      "jitter": 21.5,
+      "loss_percentage": 4.2,
+      "vqoe_score": 3.6,
+      "entry_time": 1751540400000
+    }
+  ]
+}
