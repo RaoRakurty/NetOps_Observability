@@ -7,6 +7,32 @@
 > phase 1, no config push.** This document is the *finalized* design: it analyzes
 > the proposed architecture against what Correlix already has and adapts it.
 
+## 0. Governing principle — controller INTELLIGENCE ingestion, not log ingestion
+
+> **We are not building "vendor log ingestion." We are building "vendor
+> controller intelligence ingestion."** (Owner, 2026-07-03 — the north star.)
+
+A vendor controller is a **domain expert** that already computed things Correlix
+would otherwise infer: which tunnels are up, which sites are degraded, what the
+per-app QoE is, what changed and when, what the fabric topology is, how it scores
+health. The framework's job is to **harvest that intelligence** and reconcile it
+against direct telemetry — NOT to tail the controller's logs.
+
+This flips the default posture in concrete ways:
+
+| "Log ingestion" (rejected) | "Controller intelligence ingestion" (this design) |
+|---|---|
+| Tail alarm/audit streams; everything is an event | Extract **metrics + state + events** — the three classes (§3); alarms are the *smallest* slice |
+| Store lines, search later | Normalize into typed **state** (with flap history) + **metrics** (tagged) + **evidence**, joined to Correlix entities |
+| Controller = another noisy feed | Controller = a **second opinion from a domain authority** — reconciled against telemetry, with contradiction/staleness made explicit |
+| Value = "we have the logs" | Value = **topology, inventory, health, change-windows, ownership, per-app SLA** the controller already knows, turned into RCA leverage |
+
+Everything below serves this principle: the three-class model (§3) exists so we
+capture the *intelligence* (state + metrics), not just the *log* (events); the
+evidence hierarchy (§5) exists so the controller's view *informs* RCA without
+overriding ground truth. If a design choice would reduce a controller to a log
+tail, it's wrong.
+
 ## 1. Analysis — what the spec gets right, and the three things to change
 
 The brief is strong on the connector runtime (retry/429/checkpoint/dedup/rate
