@@ -53,7 +53,9 @@ warn() { printf '%s!%s %s\n' "$YELLOW" "$RST" "$*"; }
 die()  { printf '\n%sERROR:%s %s\n' "$RED$BOLD" "$RST" "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2"; exit 1; }
 
 # ---------- locate ourselves -------------------------------------------------
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks so the PATH alias (/usr/local/bin/install-correlix, made
+# by prepare-host.sh) still finds the real bundle directory.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 if [ -f "$HERE/../deployment/docker/docker-compose.yml" ]; then
   MODE="source"; ROOT="$(cd "$HERE/.." && pwd)"; BUNDLE_DIR=""
 elif compgen -G "$HERE/correlix-source-*.tar.gz" >/dev/null; then

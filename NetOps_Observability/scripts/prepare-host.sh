@@ -225,6 +225,17 @@ if [ "$FIREWALL" = 1 ]; then
   fi
 fi
 
+# ---- PATH alias: `install-correlix` works from anywhere ----------------
+SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+if [ -x "$SELF_DIR/install-correlix.sh" ]; then
+  if [ "$CHECK" = 1 ]; then
+    [ "$(readlink -f /usr/local/bin/install-correlix 2>/dev/null)" = "$SELF_DIR/install-correlix.sh" ]       && pass "command alias 'install-correlix' on PATH"       || need "command alias 'install-correlix' (symlink to this bundle)"
+  else
+    ln -sf "$SELF_DIR/install-correlix.sh" /usr/local/bin/install-correlix
+    fixd "command alias installed — run 'install-correlix' from anywhere"
+  fi
+fi
+
 echo
 if [ "$CHECK" = 1 ]; then
   if [ "$FIXES" -eq 0 ]; then echo "${GREEN}${BOLD}Audit clean — host is ready for Correlix.${RST}"; exit 0
