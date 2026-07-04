@@ -143,6 +143,8 @@ EXPECTED = {
     "KAFKA_CLUSTER_ID":          "__KAFKA_UUID__",
     "COMPOSE_PROFILES":          "embedded-bus,prober,osd,self-monitoring",
     "GRAFANA_URL":               "http://grafana:3000",
+    "CORRELIX_UID":              "__UID__",
+    "CORRELIX_GID":              "__GID__",
     # expanded notifier (new in the alert-channels landing)
     "SMTP_USER":                 "",
     "SMTP_PASS":                 "",
@@ -176,6 +178,10 @@ for k, default in EXPECTED.items():
         v = randpw(20)
     elif default == "__KAFKA_UUID__":
         v = kafka_uuid()
+    elif default == "__UID__":
+        v = str(os.getuid())
+    elif default == "__GID__":
+        v = str(os.getgid())
     else:
         v = default
     missing.append((k, v))

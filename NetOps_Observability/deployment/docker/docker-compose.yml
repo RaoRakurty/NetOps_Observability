@@ -529,6 +529,9 @@ services:
   grafana:
     image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
     profiles: ["self-monitoring"]
+    # Same bind-mount ownership rule as the api: run as the installing user so
+    # data/grafana (created unprivileged) is writable. Default = image's 472.
+    user: "${CORRELIX_UID:-472}:${CORRELIX_GID:-472}"
     mem_limit: ${GRAFANA_MEM_LIMIT:-512m}
     cpus: ${GRAFANA_CPU_LIMIT:-1.5}
     environment:
@@ -681,6 +684,12 @@ services:
   api:
     # SC-008: distroless-nonroot already; lock down escalation + caps (pure Go
     # binary on :8080 needs none).
+    # user: run as the INSTALLING user's uid (install.py writes CORRELIX_UID/
+    # GID into .env) so the bind-mounted /data — created by that user — is
+    # writable without sudo chown. Fifth virgin-host finding (2026-07-04): the
+    # image default uid 65532 cannot write a customer-created data/api and the
+    # api crash-loops on its user store. Default = image's nonroot uid.
+    user: "${CORRELIX_UID:-65532}:${CORRELIX_GID:-65532}"
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     # Admit every gid to datagram-ICMP (echo only, this netns only) so the

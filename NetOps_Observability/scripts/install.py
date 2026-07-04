@@ -234,6 +234,9 @@ def write_env(env_path: Path, port: int, *, force: bool,
                              + base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="))
         if "COMPOSE_PROFILES" not in env:
             additions.append(f"COMPOSE_PROFILES={profiles}")
+        if "CORRELIX_UID" not in env:
+            additions.append(f"CORRELIX_UID={os.getuid()}")
+            additions.append(f"CORRELIX_GID={os.getgid()}")
         if additions:
             with env_path.open("a") as f:
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
@@ -284,6 +287,11 @@ def write_env(env_path: Path, port: int, *, force: bool,
 # --reset-env to roll a new copy.
 
 BASE_PORT={port}
+
+# Containers that write bind-mounted data/ dirs (api, grafana add-on) run as
+# THIS user, so no sudo/chown is ever needed. Written once at install.
+CORRELIX_UID={os.getuid()}
+CORRELIX_GID={os.getgid()}
 
 # Initial admin user. The API creates this on first start (only if the
 # user store is empty), then never again. Change the password from the
@@ -508,7 +516,7 @@ def ensure_data_dirs(root: Path) -> None:
         "postgres":   None,             # initdb chowns its own
         "redis":      None,             # writes as redis user via its own init
         "victoria":   (1000, 1000),
-        "grafana":    (472, 472),
+        "grafana":    None,             # user-mapped to the installing user (CORRELIX_UID)
         "kafka":      (1000, 1000),
         "opensearch": (1000, 1000),
         "clickhouse": (101, 101),

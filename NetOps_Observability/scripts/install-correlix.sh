@@ -248,7 +248,14 @@ wait_healthy() {
       | awk -F'|' '$1 ~ /-init$/ {next} $2!="running" || $3=="unhealthy" || $3=="starting" {print}' | wc -l)
     if [ "$total" -gt 0 ] && [ "$unhealthy" -eq 0 ] \
        && curl -fsS -m 5 -o /dev/null "http://127.0.0.1:${UI_PORT}/" 2>/dev/null; then
-      return 0
+      # Require STABILITY, not a lucky sample: a service can pass its first
+      # seconds and then crash-loop (seen live: the api on a perms bug).
+      # Re-verify after a pause before declaring success.
+      sleep 25
+      local bad2
+      bad2=$(compose ps --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null \
+        | awk -F'|' '$1 ~ /-init$/ {next} $2!="running" || $3=="unhealthy" {print}' | wc -l)
+      [ "$bad2" -eq 0 ] && return 0
     fi
     sleep 10
   done
