@@ -4,6 +4,7 @@ import { useShell } from "../context/shell";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
+import BrandMark from "./BrandMark";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
 import MfaCard from "./MfaCard";
@@ -164,35 +165,11 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         title={BRAND}
         aria-label={BRAND}
       >
-        {/* Eye brand mark (placeholder for the final logo): a flat almond eye —
-            eyelids (the outline), an iris ring and a pupil. The "Correlix"
-            wordmark lives in the top bar (UI-16); the rail carries just this mark. */}
+        {/* Eye brand mark — deep-space constellation iris (see BrandMark.tsx).
+            The "Correlix" wordmark lives in the top bar (UI-16); the rail
+            carries just this mark. */}
         <span className="brand-eye" aria-hidden="true">
-          <svg viewBox="0 0 28 28" width="26" height="26" fill="none">
-            <defs>
-              {/* Outer-layer gradient — indigo → cyan sweep across the lids + lashes. */}
-              <linearGradient id="brandEyeLid" x1="2" y1="8" x2="26" y2="20" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="#818cf8" />
-                <stop offset="50%" stopColor="#22d3ee" />
-                <stop offset="100%" stopColor="#34d399" />
-              </linearGradient>
-            </defs>
-            {/* Eyelashes — a fan of short strokes radiating off the upper lid */}
-            <g stroke="url(#brandEyeLid)" strokeWidth="1.6" strokeLinecap="round">
-              <path d="M3.6 12 L1.3 9.4" />
-              <path d="M7.2 9 L6.1 5.6" />
-              <path d="M14 7.9 L14 4.1" />
-              <path d="M20.8 9 L21.9 5.6" />
-              <path d="M24.4 12 L26.7 9.4" />
-            </g>
-            {/* Eyelids — symmetric almond/lens (outer layer) */}
-            <path d="M2 14 C 7 6.5, 21 6.5, 26 14 C 21 21.5, 7 21.5, 2 14 Z"
-              stroke="url(#brandEyeLid)" strokeWidth="1.8" strokeLinejoin="round" />
-            {/* Iris ring — theme accent */}
-            <circle cx="14" cy="14" r="4.2" stroke="currentColor" strokeWidth="1.8" />
-            {/* Pupil */}
-            <circle cx="14" cy="14" r="1.7" fill="currentColor" />
-          </svg>
+          <BrandMark size={26} />
         </span>
         <span className="rail-brand-name">{BRAND}</span>
       </button>
