@@ -103,8 +103,47 @@ port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&-; re
 
 preflight() {
   say "${BOLD}Checking this host...${RST}"
+
+  # --- platform gates (hard stops) -------------------------------------
+  [ "$(uname -m)" = "x86_64" ] || die "Unsupported CPU architecture: $(uname -m). Correlix requires x86_64."
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-}" in
+      ubuntu) dpkg --compare-versions "${VERSION_ID:-0}" ge 22.04 2>/dev/null \
+        || die "Ubuntu ${VERSION_ID:-?} is too old. Correlix requires Ubuntu 22.04 LTS or newer." ;;
+      debian) [ "${VERSION_ID%%.*}" -ge 12 ] 2>/dev/null \
+        || die "Debian ${VERSION_ID:-?} is too old. Correlix requires Debian 12 or newer." ;;
+      *) [ "${CORRELIX_SKIP_OS_CHECK:-0}" = 1 ] \
+        || die "Unsupported OS: ${PRETTY_NAME:-unknown}. Supported: Ubuntu 22.04+/Debian 12." \
+          "Other Linux distributions may work but are not validated; see ADVANCED.md." ;;
+    esac
+  fi
+  local cpus; cpus=$(nproc 2>/dev/null || echo 0)
+  if [ "$cpus" -lt 2 ]; then die "This host has $cpus vCPU; Correlix needs at least 2 (4 recommended)."
+  elif [ "$cpus" -lt 4 ]; then warn "$cpus vCPU — fine for evaluation; 4 vCPU recommended."
+  else ok "cpu: $cpus vCPU"; fi
+  command -v python3 >/dev/null || die "python3 is missing." \
+    "Prepare the host first:  sudo ./prepare-host.sh"
+
+  # --- host readiness audit (hard gate) --------------------------------
+  # prepare-host.sh --check is the single source of truth for prerequisites
+  # (Docker best-practice config, kernel settings, packages, time sync).
+  # If it reports anything unfixed, the install STOPS — no partial installs
+  # on an unready host.
+  local prep=""
+  if [ -x "$HERE/prepare-host.sh" ]; then prep="$HERE/prepare-host.sh"
+  elif [ -x "$ROOT/scripts/prepare-host.sh" ]; then prep="$ROOT/scripts/prepare-host.sh"; fi
+  if [ -n "$prep" ]; then
+    if ! bash "$prep" --check; then
+      die "This host is not ready for Correlix (see FIX items above)." \
+        "Prepare it with one command, then re-run the installer:
+  sudo ./prepare-host.sh"
+    fi
+  fi
+
   command -v docker >/dev/null || die "Docker is not installed." \
-    "Install Docker Engine first: https://docs.docker.com/engine/install/  Then re-run ./install-correlix.sh"
+    "Prepare the host first:  sudo ./prepare-host.sh"
   docker info >/dev/null 2>&1 || die "The Docker daemon is not running (or you lack permission to use it)." \
     "Start it (e.g. 'sudo systemctl start docker') or add your user to the docker group, then re-run."
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required ('docker compose' plugin)." \

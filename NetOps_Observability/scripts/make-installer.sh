@@ -236,6 +236,21 @@ Correlix moves telemetry internally over a Kafka-compatible event bus.
    prefix. All services resolve the bus through the single BROKER_URLS
    setting in \`NetOps_Observability/deployment/docker/.env\`.
 
+## Host preparation & preflight
+
+- \`sudo ./prepare-host.sh\` — one-time host setup: Docker Engine + Compose v2
+  (Docker official repo), zstd/python3, docker daemon baseline (live-restore,
+  log caps, no-new-privileges), dedicated \`correlix\` service account, kernel
+  settings (incl. \`vm.max_map_count\` the log store requires), time sync,
+  unattended security updates. Add \`--firewall\` for a UFW profile scoped to
+  Correlix's ports.
+- \`sudo ./prepare-host.sh --check\` — read-only audit (PASS/FIX per item);
+  the installer runs this automatically and REFUSES to install on an
+  unready host.
+- Supported platforms: Ubuntu 22.04+ / Debian 12, x86_64. Other Linux may
+  work (set \`CORRELIX_SKIP_OS_CHECK=1\` to bypass the gate) but is not
+  validated.
+
 ## Other settings
 
 - UI port: \`./install-correlix.sh install --ui-port 9443\`
