@@ -112,6 +112,9 @@ echo "   licensing guards passed (kafka+valkey in, redpanda out)"
 #     won't ship.
 for img in $IMAGES; do
   docker image inspect "$img" >/dev/null 2>&1 || { echo "-- pulling $img"; docker pull -q "$img"; }
+  # Pulls by digest don't create the plain tag, and we SAVE by tag (a digest
+  # ref saves untagged — see §4). Ensure the tag exists locally; metadata-only.
+  case "$img" in *@sha256:*) docker tag "$img" "${img%%@*}" ;; esac
 done
 
 # 4. Save + compress. zstd -3 multi-threaded: ~2x smaller than the raw save
@@ -128,7 +131,7 @@ strip_digests() { sed 's/@sha256:[0-9a-f]*$//' | sort -u; }
 # verify_archive_tags <archive.tar.zst> — every image in the archive must
 # carry a RepoTag, or a fresh host cannot use it. Build-time hard failure.
 verify_archive_tags() {
-  zstd -dc "$1" | tar -xO manifest.json | python3 -c '
+  zstd -dc "$1" | tar -xOf - manifest.json | python3 -c '
 import json,sys
 ms=json.load(sys.stdin)
 bad=[m.get("Config","?") for m in ms if not m.get("RepoTags")]
@@ -156,6 +159,7 @@ for spec in $ADDONS; do
   fi
   for img in $PACK_IMAGES; do
     docker image inspect "$img" >/dev/null 2>&1 || { echo "-- pulling $img"; docker pull -q "$img"; }
+    case "$img" in *@sha256:*) docker tag "$img" "${img%%@*}" ;; esac
   done
   PACK_OUT="$BUNDLE_DIR/correlix-addon-$name-$VERSION.tar.zst"
   echo "-- docker save (addon $name) -> $PACK_OUT"
