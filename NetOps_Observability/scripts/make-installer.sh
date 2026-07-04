@@ -117,10 +117,33 @@ done
 # 4. Save + compress. zstd -3 multi-threaded: ~2x smaller than the raw save
 #    at near-disk-speed compression. Bundle keeps the historical "core" name
 #    for the base archive (install-correlix.sh globs correlix-images-*.tar.zst).
+#
+#    CRITICAL: save by TAG, never by tag@digest — `docker save ref@sha256:...`
+#    exports the image UNTAGGED (empty RepoTags), so a virgin host loads
+#    anonymous images and compose can't match anything (second virgin-host
+#    finding, 2026-07-04). On this build host the tag resolves to the exact
+#    digest-pinned image we just built/pulled, so the bytes are identical.
+strip_digests() { sed 's/@sha256:[0-9a-f]*$//' | sort -u; }
+
+# verify_archive_tags <archive.tar.zst> — every image in the archive must
+# carry a RepoTag, or a fresh host cannot use it. Build-time hard failure.
+verify_archive_tags() {
+  zstd -dc "$1" | tar -xO manifest.json | python3 -c '
+import json,sys
+ms=json.load(sys.stdin)
+bad=[m.get("Config","?") for m in ms if not m.get("RepoTags")]
+if bad:
+    print(f"FATAL: {len(bad)} untagged image(s) in archive — virgin hosts cannot use them", file=sys.stderr)
+    sys.exit(1)
+print(f"   archive tag check: {len(ms)} images, all tagged")'
+}
+
 IMG_OUT="$BUNDLE_DIR/correlix-images-core-$VERSION.tar.zst"
 echo "-- docker save (base) -> $IMG_OUT"
+SAVE_REFS="$(printf '%s\n' "$IMAGES" | strip_digests)"
 # shellcheck disable=SC2086
-docker save $IMAGES | zstd -q -T0 -3 -f -o "$IMG_OUT"
+docker save $SAVE_REFS | zstd -q -T0 -3 -f -o "$IMG_OUT"
+verify_archive_tags "$IMG_OUT"
 
 # 4b. Add-on packs: per pack, the images its profile adds on top of base.
 ADDON_MANIFEST=""
@@ -136,8 +159,10 @@ for spec in $ADDONS; do
   done
   PACK_OUT="$BUNDLE_DIR/correlix-addon-$name-$VERSION.tar.zst"
   echo "-- docker save (addon $name) -> $PACK_OUT"
+  PACK_REFS="$(printf '%s\n' "$PACK_IMAGES" | strip_digests)"
   # shellcheck disable=SC2086
-  docker save $PACK_IMAGES | zstd -q -T0 -3 -f -o "$PACK_OUT"
+  docker save $PACK_REFS | zstd -q -T0 -3 -f -o "$PACK_OUT"
+  verify_archive_tags "$PACK_OUT"
   ADDON_MANIFEST="$ADDON_MANIFEST$(printf 'addon %s (profile %s):\n' "$name" "$prof"; printf '%s\n' "$PACK_IMAGES" | sed 's/^/  - /')
 "
 done
