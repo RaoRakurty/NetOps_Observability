@@ -22,7 +22,7 @@ CX, CY = 256.0, 256.0
 # Iris deliberately larger than the palpebral opening: both lids crop it
 # (sclera shows only as corner wedges) — the single strongest "real human
 # eye" cue from the EYE-CORRELIX reference art.
-IRIS_R = 128.0
+IRIS_R = 118.0
 PUPIL_R = 40.0
 
 # ---- constellation ---------------------------------------------------------
@@ -209,9 +209,9 @@ def svg(defs_prefix, react=False):
       <radialGradient id="{space}" cx="0.5" cy="0.5" r="0.5">
         <stop offset="0%" {a}="#05060f"/>
         <stop offset="45%" {a}="#0b1026"/>
-        <stop offset="78%" {a}="#1e1b4b"/>
-        <stop offset="92%" {a}="#312e81"/>
-        <stop offset="100%" {a}="#4338ca"/>
+        <stop offset="78%" {a}="#312e81"/>
+        <stop offset="92%" {a}="#4338ca"/>
+        <stop offset="100%" {a}="#6366f1"/>
       </radialGradient>
       <clipPath id="{clip}"><circle cx="256" cy="256" r="{IRIS_R}"/></clipPath>
       <clipPath id="{eclip}"><path d="{EYE_PATH}"/></clipPath>
@@ -220,21 +220,21 @@ def svg(defs_prefix, react=False):
       {lashes}
     </g>
     <g {cp}="url(#{eclip})">
-      <path d="{EYE_PATH}" fill="#dbe3f4" opacity="0.10"/>
+      <path d="{EYE_PATH}" fill="#cdd9ee" opacity="0.30"/>
       <circle cx="256" cy="256" r="{IRIS_R}" fill="url(#{space})"/>
       <g {cp}="url(#{clip})">
         {links_s}
         {nodes_s}
       </g>
-      <circle cx="256" cy="256" r="{IRIS_R}" fill="none" stroke="#22d3ee" {sw}="2.5" opacity="0.55"/>
+      <circle cx="256" cy="256" r="{IRIS_R}" fill="none" stroke="#22d3ee" {sw}="4" opacity="0.75"/>
       <circle cx="256" cy="256" r="{PUPIL_R}" fill="#05060f"/>
-      <circle cx="256" cy="256" r="{PUPIL_R}" fill="none" stroke="#67e8f9" {sw}="3" opacity="0.9"/>
+      <circle cx="256" cy="256" r="{PUPIL_R}" fill="none" stroke="#7dd3fc" {sw}="5" opacity="0.95"/>
       <circle cx="256" cy="256" r="{PUPIL_R - 8}" fill="none" stroke="#22d3ee" {sw}="1.5" opacity="0.3"/>
-      <circle cx="273" cy="231" r="13" fill="#e0e7ff" opacity="0.22"/>
-      <circle cx="273" cy="231" r="7" fill="#f1f5ff" opacity="0.92"/>
+      <circle cx="273" cy="231" r="16" fill="#e0e7ff" opacity="0.22"/>
+      <circle cx="273" cy="231" r="9" fill="#f1f5ff" opacity="0.92"/>
     </g>
     <path d="{EYE_PATH}"
-      fill="none" stroke="url(#{lid})" {sw}="15" {sl}="round"/>"""
+      fill="none" stroke="url(#{lid})" {sw}="20" {sl}="round"/>"""
     return body
 
 
