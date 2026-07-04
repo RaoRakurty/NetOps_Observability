@@ -341,7 +341,13 @@ friendly_status() {
 
 # ---------- commands ----------------------------------------------------
 cmd_install() {
+  # Full transcript of the installation — tail-able live from another
+  # terminal, and the first thing support asks for when something fails.
+  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
   say "${BOLD}Correlix installer${RST}"
+  say "Full log: $INSTALL_LOG"
+  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
+  exec > >(tee -a "$INSTALL_LOG") 2>&1
   preflight
   [ "$MODE" = "bundle" ] && verify_bundle
 
