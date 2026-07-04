@@ -178,7 +178,8 @@ cat > "$BUNDLE_DIR/README.md" <<EOF
    then log out and back in. (Hosts that already run Docker can skip this;
    the installer verifies everything either way.)
 2. Extract this bundle (you have, if you can read this).
-3. Run:
+3. Run the setup console and choose Install (or just let it run —
+   scripted/non-interactive runs install directly):
 
        ./install-correlix.sh
 

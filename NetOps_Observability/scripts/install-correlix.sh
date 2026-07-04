@@ -6,6 +6,11 @@
 #
 #     ./install-correlix.sh
 #
+# In an interactive terminal with no arguments this opens the SETUP CONSOLE —
+# numbered menu navigation over every operation (prepare host, install,
+# health, logs, add-ons, stop/start, reset, uninstall). In a pipeline/script
+# it installs non-interactively. Explicit subcommands below always work.
+#
 # Everything under the hood (Apache Kafka event bus, Valkey cache, PostgreSQL,
 # OpenSearch, ClickHouse, VictoriaMetrics, the Correlix services) is embedded,
 # configured with generated credentials, and started automatically. No broker
@@ -75,10 +80,14 @@ PURGE=0
 LOG_SVC=""
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
-    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable" ;;
+    *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable menu" ;;
   esac
+elif [ -t 0 ] && [ -t 1 ]; then
+  # No arguments in an interactive terminal → the setup console (menu
+  # navigation). Pipelines/automation with no args still default to install.
+  CMD="menu"
 fi
 # enable/disable take the add-on name as their positional argument.
 ADDON_ARG=""
@@ -463,7 +472,77 @@ cmd_disable() {
   ok "$ADDON_ARG disabled (its images and data were kept)."
 }
 
+# ---------- setup console (menu navigation) ------------------------------
+menu_state() {
+  if [ ! -f "$ENV_FILE" ]; then echo "not installed"
+  else
+    local total run
+    total=$(compose ps --format '{{.Service}}' 2>/dev/null | wc -l)
+    if [ "$total" -eq 0 ]; then echo "installed, stopped"
+    else run=$(compose ps --format '{{.State}}' 2>/dev/null | grep -c running || true)
+         echo "running ($run/$total services up)"; fi
+  fi
+}
+
+pause() { printf '\n%s' "${DIM}Press Enter to return to the menu...${RST}"; read -r _ || true; }
+
+pick_addon() { # sets PICKED or empty
+  PICKED=""
+  say ""; say "  1) log-search-ui     power-user log forensics UI"
+  say "  2) self-monitoring   Grafana + container/host metrics"
+  printf '%s' "  Add-on [1-2, Enter to cancel]: "
+  read -r a || true
+  case "${a:-}" in 1) PICKED="log-search-ui" ;; 2) PICKED="self-monitoring" ;; esac
+}
+
+cmd_menu() {
+  while true; do
+    clear 2>/dev/null || true
+    say "${BOLD}┌──────────────────────────────────────────────┐${RST}"
+    say "${BOLD}│  Correlix Setup                              │${RST}"
+    say "${BOLD}└──────────────────────────────────────────────┘${RST}"
+    say "  State: $(menu_state)"
+    say ""
+    say "  1) Prepare this host        (runs: sudo ./prepare-host.sh)"
+    say "  2) Install Correlix"
+    say "  3) Service health"
+    say "  4) Logs"
+    say "  5) Enable add-on"
+    say "  6) Disable add-on"
+    say "  7) Stop        8) Start"
+    say "  9) Reset demo data"
+    say "  0) Uninstall"
+    say "  q) Quit"
+    say ""
+    printf '%s' "  Choose: "
+    read -r choice || exit 0
+    case "${choice:-}" in
+      1) local prep="$HERE/prepare-host.sh"; [ -x "$prep" ] || prep="$ROOT/scripts/prepare-host.sh"
+         ( sudo "$prep" ) || true; pause ;;
+      2) ( cmd_install ) || true; pause ;;
+      3) ( friendly_status ) || true; pause ;;
+      4) printf '%s' "  Service name (Enter for all): "; read -r svc || true
+         ( if [ -n "${svc:-}" ]; then compose logs --tail 200 "$svc"; else compose logs --tail 80; fi ) || true; pause ;;
+      5) pick_addon; [ -n "$PICKED" ] && { ADDON_ARG="$PICKED"; ( cmd_enable ) || true; }; pause ;;
+      6) pick_addon; [ -n "$PICKED" ] && { ADDON_ARG="$PICKED"; ( cmd_disable ) || true; }; pause ;;
+      7) ( compose stop && ok "Correlix stopped (data kept)." ) || true; pause ;;
+      8) ( compose start && ok "Correlix starting." ) || true; pause ;;
+      9) printf '%s' "  This wipes all collected data (login kept). Type yes to confirm: "
+         read -r conf || true
+         [ "${conf:-}" = "yes" ] && { ( cmd_reset_demo ) || true; } || say "  cancelled."
+         pause ;;
+      0) printf '%s' "  Remove Correlix containers? Type yes to confirm: "
+         read -r conf || true
+         [ "${conf:-}" = "yes" ] && { ( cmd_uninstall ) || true; } || say "  cancelled."
+         pause ;;
+      q|Q) exit 0 ;;
+      *) : ;;
+    esac
+  done
+}
+
 case "$CMD" in
+  menu)            cmd_menu ;;
   install)         cmd_install ;;
   status)          friendly_status ;;
   logs)            [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."
