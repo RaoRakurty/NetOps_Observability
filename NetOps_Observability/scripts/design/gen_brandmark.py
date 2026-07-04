@@ -19,11 +19,14 @@ import math, random, sys
 rng = random.Random(20260704)
 
 CX, CY = 256.0, 256.0
-IRIS_R = 103.0
-PUPIL_R = 34.0
+# Iris deliberately larger than the palpebral opening: both lids crop it
+# (sclera shows only as corner wedges) — the single strongest "real human
+# eye" cue from the EYE-CORRELIX reference art.
+IRIS_R = 128.0
+PUPIL_R = 40.0
 
 # ---- constellation ---------------------------------------------------------
-N = 140
+N = 165
 nodes = []
 attempts = 0
 while len(nodes) < N and attempts < 20000:
@@ -38,7 +41,14 @@ while len(nodes) < N and attempts < 20000:
     if all((x - nx) ** 2 + (y - ny) ** 2 > 81 for nx, ny, *_ in nodes):
         size = rng.choice([1.6, 1.9, 2.2, 2.5, 2.9, 3.3])
         roll = rng.random()
-        color = "#e0e7ff" if roll < 0.60 else ("#67e8f9" if roll < 0.85 else "#a5b4fc")
+        # mostly starlight + cyan/indigo, with a sprinkle of gold — echoes the
+        # amber accent nodes (and the gold X) in the EYE-CORRELIX reference
+        color = (
+            "#e0e7ff" if roll < 0.55
+            else "#67e8f9" if roll < 0.78
+            else "#a5b4fc" if roll < 0.92
+            else "#fbbf24"
+        )
         op = round(rng.uniform(0.35, 0.95), 2)
         nodes.append((x, y, size, color, op))
 
@@ -78,13 +88,29 @@ for i, j in sorted(links):
 node_el = []
 for x, y, s, c, op in nodes:
     node_el.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{s}" fill="{c}" opacity="{op}"/>')
-for x, y in hubs:
-    node_el.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="#22d3ee" opacity="0.16"/>')
-    node_el.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.6" fill="#22d3ee" opacity="0.95"/>')
+for k, (x, y) in enumerate(hubs):
+    hc = "#fbbf24" if k == 3 else "#22d3ee"  # one gold hub, per the reference art
+    node_el.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="{hc}" opacity="0.16"/>')
+    node_el.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.6" fill="{hc}" opacity="0.95"/>')
+
+# ---- lid geometry -----------------------------------------------------------
+# Human almond, not a symmetric lens: the inner canthus (left) sits lower and
+# the outer canthus rides higher (positive canthal tilt); the upper-lid peak
+# is shifted toward the inner corner while the lower lid runs flatter with its
+# depth shifted outward — the asymmetries that make a real eye read as real.
+INNER = (34, 272)
+OUTER = (478, 234)
+UP_C1, UP_C2 = (96, 126), (330, 84)     # upper lid: steep inner rise, long outer descent
+LO_C1, LO_C2 = (392, 414), (156, 406)   # lower lid: deepest just outboard of centre
+EYE_PATH = (
+    f"M{INNER[0]} {INNER[1]} "
+    f"C {UP_C1[0]} {UP_C1[1]}, {UP_C2[0]} {UP_C2[1]}, {OUTER[0]} {OUTER[1]} "
+    f"C {LO_C1[0]} {LO_C1[1]}, {LO_C2[0]} {LO_C2[1]}, {INNER[0]} {INNER[1]} Z"
+)
 
 # ---- lashes -----------------------------------------------------------------
-# upper lid cubic: P0(37,256) C1(128,100) C2(384,100) P3(475,256)
-P0, P1, P2, P3 = (37, 256), (128, 100), (384, 100), (475, 256)
+# lash roots ride the upper-lid cubic
+P0, P1, P2, P3 = INNER, UP_C1, UP_C2, OUTER
 
 
 def bez(t):
@@ -120,8 +146,11 @@ LASH_N = 12
 LASH_T = [0.055 + i * (0.89 / (LASH_N - 1)) for i in range(LASH_N)]
 for t in LASH_T:
     u = (t - 0.5) * 2                     # -1 .. 1 across the lash line
-    ln = (46 + 30 * math.cos(u * math.pi / 2)) * lrng.uniform(0.95, 1.06)
-    w = 5.2 + 1.6 * math.cos(u * math.pi / 2)
+    # Human lash-length distribution: shortest at the inner canthus, peaking
+    # just outboard of centre, still long at the outer corner.
+    v = max(-1.0, min(1.0, (u - 0.3) / 1.3))
+    ln = (46 + 30 * math.cos(v * math.pi / 2)) * lrng.uniform(0.95, 1.06)
+    w = 5.2 + 1.6 * math.cos(v * math.pi / 2)
     x, y = bez(t)
     # Fan in ABSOLUTE angles (0 = straight up, positive = away from centre):
     # the centre lashes stand tall, tips fan out to ~62deg at the corners —
@@ -163,6 +192,7 @@ def svg(defs_prefix, react=False):
     lid = f"{defs_prefix}Lid"
     space = f"{defs_prefix}Space"
     clip = f"{defs_prefix}Clip"
+    eclip = f"{defs_prefix}Eye"
     lashes = "\n      ".join(lash_el).replace("stroke-linecap", slc) if not react else \
              "\n      ".join(lash_el).replace("stroke-linecap", "strokeLinecap")
     links_s = "\n      ".join(link_el)
@@ -184,20 +214,26 @@ def svg(defs_prefix, react=False):
         <stop offset="100%" {a}="#4338ca"/>
       </radialGradient>
       <clipPath id="{clip}"><circle cx="256" cy="256" r="{IRIS_R}"/></clipPath>
+      <clipPath id="{eclip}"><path d="{EYE_PATH}"/></clipPath>
     </defs>
     <g fill="url(#{lid})">
       {lashes}
     </g>
-    <circle cx="256" cy="256" r="{IRIS_R}" fill="url(#{space})"/>
-    <g {cp}="url(#{clip})">
-      {links_s}
-      {nodes_s}
+    <g {cp}="url(#{eclip})">
+      <path d="{EYE_PATH}" fill="#dbe3f4" opacity="0.10"/>
+      <circle cx="256" cy="256" r="{IRIS_R}" fill="url(#{space})"/>
+      <g {cp}="url(#{clip})">
+        {links_s}
+        {nodes_s}
+      </g>
+      <circle cx="256" cy="256" r="{IRIS_R}" fill="none" stroke="#22d3ee" {sw}="2.5" opacity="0.55"/>
+      <circle cx="256" cy="256" r="{PUPIL_R}" fill="#05060f"/>
+      <circle cx="256" cy="256" r="{PUPIL_R}" fill="none" stroke="#67e8f9" {sw}="3" opacity="0.9"/>
+      <circle cx="256" cy="256" r="{PUPIL_R - 8}" fill="none" stroke="#22d3ee" {sw}="1.5" opacity="0.3"/>
+      <circle cx="273" cy="231" r="13" fill="#e0e7ff" opacity="0.22"/>
+      <circle cx="273" cy="231" r="7" fill="#f1f5ff" opacity="0.92"/>
     </g>
-    <circle cx="256" cy="256" r="{IRIS_R}" fill="none" stroke="#22d3ee" {sw}="2.5" opacity="0.55"/>
-    <circle cx="256" cy="256" r="{PUPIL_R}" fill="#05060f"/>
-    <circle cx="256" cy="256" r="{PUPIL_R}" fill="none" stroke="#67e8f9" {sw}="3" opacity="0.9"/>
-    <circle cx="256" cy="256" r="{PUPIL_R - 7}" fill="none" stroke="#22d3ee" {sw}="1.5" opacity="0.3"/>
-    <path d="M37 256 C 128 100, 384 100, 475 256 C 384 412, 128 412, 37 256 Z"
+    <path d="{EYE_PATH}"
       fill="none" stroke="url(#{lid})" {sw}="15" {sl}="round"/>"""
     return body
 
@@ -212,10 +248,12 @@ react_body = (
     .replace('id="UIDLid"', 'id={uid + "Lid"}')
     .replace('id="UIDSpace"', 'id={uid + "Space"}')
     .replace('id="UIDClip"', 'id={uid + "Clip"}')
+    .replace('id="UIDEye"', 'id={uid + "Eye"}')
     .replace('stroke="url(#UIDLid)"', 'stroke={"url(#" + uid + "Lid)"}')
     .replace('fill="url(#UIDLid)"', 'fill={"url(#" + uid + "Lid)"}')
     .replace('fill="url(#UIDSpace)"', 'fill={"url(#" + uid + "Space)"}')
     .replace('clipPath="url(#UIDClip)"', 'clipPath={"url(#" + uid + "Clip)"}')
+    .replace('clipPath="url(#UIDEye)"', 'clipPath={"url(#" + uid + "Eye)"}')
 )
 
 tsx = f"""import {{ useId }} from "react";
