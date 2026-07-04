@@ -64,7 +64,7 @@ const PORT_NAMES: Record<string, string> = {
   "179": "BGP", "646": "LDP", "500": "IKE", "4500": "IPsec-NAT-T", "1701": "L2TP", "1723": "PPTP",
   // mgmt / telemetry
   "161": "SNMP", "162": "SNMP-trap", "514": "syslog", "6343": "sFlow", "2055": "NetFlow", "4739": "IPFIX",
-  "57400": "gNMI", "9339": "gNMI", "9090": "Prometheus", "8428": "metrics",
+  "57400": "gNMI", "9339": "gNMI", "9090": "metrics", "8428": "metrics",
   // AAA / voice
   "49": "TACACS+", "1812": "RADIUS-auth", "1813": "RADIUS-acct", "5060": "SIP", "5061": "SIP-TLS",
   // dhcp / misc

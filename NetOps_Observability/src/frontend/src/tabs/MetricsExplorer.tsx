@@ -268,7 +268,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
       <div className="card">
         <div className="xpl-head">
           <h2>Metric Workbench</h2>
-          <span className="xpl-sub">Pick a metric or write PromQL · queries <code>/api/metrics/query_range</code></span>
+          <span className="xpl-sub">Pick a metric from the catalog, or write a query</span>
         </div>
 
         {/* categorized quick-picks of real telemetry. */}
@@ -303,7 +303,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
             className="xpl-q"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="PromQL, e.g. rate(device_if_in_octets[5m]) * 8"
+            placeholder="query, e.g. rate(device_if_in_octets[5m]) * 8"
           />
           <button className="btn-primary" disabled={busy} type="submit">{busy ? "Running…" : "Run"}</button>
           <div className="seg-mini" role="group" aria-label="Live streaming">

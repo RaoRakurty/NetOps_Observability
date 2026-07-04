@@ -166,7 +166,7 @@ export default function Rules() {
                       <label className="form-label" htmlFor="rule-expr">Expression<span className="form-req">*</span></label>
                       <input id="rule-expr" className="form-input mono" placeholder="e.g. device_cpu_percent > 90"
                         value={draft.expr} onChange={(e) => setDraft({ ...draft, expr: e.target.value })} />
-                      <span className="form-hint">PromQL / z-score condition evaluated against the metric store.</span>
+                      <span className="form-hint">Metric query or z-score condition, evaluated against the metric store.</span>
                     </div>
                     <div className="form-field">
                       <label className="form-label" htmlFor="rule-for">Must hold for</label>

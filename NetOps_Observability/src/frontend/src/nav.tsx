@@ -266,7 +266,7 @@ export const NAV: NavSection[] = [
     platformOnly: true,
     children: [
       { id: "health", label: "Stack Health", render: () => <StackHealth /> },
-      { id: "grafana", label: "Grafana", requiresGrafana: true, render: () => <GrafanaTab /> },
+      { id: "grafana", label: "Self-Monitoring", requiresGrafana: true, render: () => <GrafanaTab /> },
       { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
       // Developer — power-user, API-first tooling.
       { id: "graphql", label: "GraphQL Explorer", group: "Developer", render: () => <GraphQLExplorer /> },

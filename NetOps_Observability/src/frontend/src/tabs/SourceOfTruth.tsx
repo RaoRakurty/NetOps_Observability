@@ -290,14 +290,7 @@ export default function SourceOfTruth() {
             <Icon name="directory" size={20} />
           </div>
           <div style={{ flex: 1, minWidth: 180 }}>
-            <div style={{ fontWeight: 700, display: "flex", gap: 8, alignItems: "center" }}>
-              Source of Truth
-              {cfg?.managed && <span className="badge" style={{ fontSize: 10 }}>Built-in</span>}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              Optional automation connector. Your SNMP-discovered inventory (Infrastructure → Devices) remains the
-              source of truth — this exchanges device records with the external inventory, it doesn't replace discovery.
-            </div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>Source of Truth</div>
           </div>
           <span className={`badge ${st.tone}`}>{st.label}</span>
           {embeddable && (
@@ -319,25 +312,25 @@ export default function SourceOfTruth() {
           >
             <Icon name="settings" size={14} /> {st.label === "Not set up" || st.label === "Bundled · off" ? "Set up" : "Manage"}
           </button>
-          <button className="btn" disabled={refreshing} onClick={refresh} title="Poll the inventory now (inventory → Infrastructure → Devices)">
+          <button className="btn" disabled={refreshing} onClick={refresh} title="Pull device records in now">
             <Icon name="refresh" size={14} /> {refreshing ? "…" : "Sync devices"}
           </button>
           {cfg?.enabled && (cfg.direction === "write" || cfg.direction === "both") && (
-            <button className="btn" disabled={pushing} onClick={pushToNetbox} title="Push discovered devices INTO the inventory (runs automatically every 5 min)">
-              <Icon name="arrow-up-right" size={14} /> {pushing ? "…" : "Push to inventory"}
+            <button className="btn" disabled={pushing} onClick={pushToNetbox} title="Push discovered devices out now (also runs automatically)">
+              <Icon name="arrow-up-right" size={14} /> {pushing ? "…" : "Push devices"}
             </button>
           )}
         </div>
         {poll && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-            Inventory → Devices (poll): {poll.last_poll ? new Date(poll.last_poll).toLocaleString() : "—"} · {poll.devices ?? 0} device(s)
+            Last sync: {poll.last_poll ? new Date(poll.last_poll).toLocaleString() : "—"} · {poll.devices ?? 0} device(s)
             {poll.last_error ? <span style={{ color: "var(--bad)" }}> · error: {poll.last_error}</span> : null}
           </div>
         )}
         {syncStat?.enabled && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            Devices → inventory (write-through): {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
-            {syncStat.last_run ? <> · {syncStat.created} created · {syncStat.present} already present</> : null}
+            Last push: {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
+            {syncStat.last_run ? <> · {syncStat.created} added · {syncStat.present} already present</> : null}
             {syncStat.last_error ? <span style={{ color: "var(--bad)" }}> · error: {syncStat.last_error}</span> : null}
           </div>
         )}

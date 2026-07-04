@@ -35,7 +35,7 @@ export default function GrafanaTab() {
         )}
         <iframe
           ref={ref}
-          title="Grafana"
+          title="Self-Monitoring"
           className="sot-frame"
           src="/grafana/"
         />
