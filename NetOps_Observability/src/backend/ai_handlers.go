@@ -17,10 +17,20 @@ import (
 // orchestrator (classify → route → Policy Engine → tenant-scoped evidence →
 // grounded answer). Read-only (v1); FEATURE_AI gates it (off by default).
 
-// aiEnabled gates the Correlix AI endpoints. FEATURE_AI is the flag; the legacy
-// FEATURE_COPILOT is honored for back-compat with existing deployments.
+// aiEnabled gates the Correlix AI endpoints. ON BY DEFAULT (owner directive,
+// 2026-07-04): key-free grounded mode is in-process, deterministic, and makes
+// NO external calls — external LLM answers still require a provider key, so no
+// data leaves the host without explicit config (LLM06). Disable explicitly
+// with FEATURE_AI=false or FEATURE_COPILOT=false. FEATURE_AI wins when both are
+// set; the legacy FEATURE_COPILOT is honored for existing deployments.
 func aiEnabled() bool {
-	return os.Getenv("FEATURE_AI") == "true" || os.Getenv("FEATURE_COPILOT") == "true"
+	if v := os.Getenv("FEATURE_AI"); v != "" {
+		return v == "true"
+	}
+	if v := os.Getenv("FEATURE_COPILOT"); v != "" {
+		return v == "true"
+	}
+	return true
 }
 
 // envFlagLookup answers module-availability flags (ENABLE_*) from the env.

@@ -32,7 +32,7 @@ type Direction = "write" | "read" | "both" | "none";
 const DIRECTIONS: { v: Direction; label: string; help: string }[] = [
   { v: "none", label: "Off", help: "No automatic sync. The Source of Truth stays empty (and browsable) — discovery neither populates it nor reads from it. Best when you already run an external Source of Truth and will sync it through its own API. (Default)" },
   { v: "write", label: "Devices → Source of Truth", help: "One-way: devices discovered via SNMP (Infrastructure → Devices) are written into the Source of Truth. It becomes a downstream record and is never read back, so nothing is duplicated. Choose this to build the Source of Truth from scratch — SNMP discovery seeds it." },
-  { v: "read", label: "Source of Truth → Devices", help: "One-way: NetBox-declared devices are pulled in and appear under Infrastructure → Devices alongside SNMP-discovered ones. Discovery does not write anything back up. (Pulled records are added to the inventory, not treated as the authority over it.)" },
+  { v: "read", label: "Source of Truth → Devices", help: "One-way: externally-declared devices are pulled in and appear under Infrastructure → Devices alongside SNMP-discovered ones. Discovery does not write anything back up. (Pulled records are added to the inventory, not treated as the authority over it.)" },
   { v: "both", label: "Bidirectional", help: "Two-way: read Source-of-Truth devices in AND write discovered devices up. Records are de-duplicated by IP / serial / name." },
 ];
 
@@ -296,7 +296,7 @@ export default function SourceOfTruth() {
             </div>
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
               Optional automation connector. Your SNMP-discovered inventory (Infrastructure → Devices) remains the
-              source of truth — this exchanges device records with NetBox, it doesn't replace discovery.
+              source of truth — this exchanges device records with the external inventory, it doesn't replace discovery.
             </div>
           </div>
           <span className={`badge ${st.tone}`}>{st.label}</span>
@@ -336,7 +336,7 @@ export default function SourceOfTruth() {
         )}
         {syncStat?.enabled && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            Devices → NetBox (write-through): {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
+            Devices → inventory (write-through): {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
             {syncStat.last_run ? <> · {syncStat.created} created · {syncStat.present} already present</> : null}
             {syncStat.last_error ? <span style={{ color: "var(--bad)" }}> · error: {syncStat.last_error}</span> : null}
           </div>

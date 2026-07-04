@@ -15,4 +15,16 @@ const (
 )
 
 // Enabled reports whether the NMS integration framework is turned on.
-func Enabled() bool { return os.Getenv("FEATURE_NMS_INTEGRATIONS") == "true" }
+// Enabled reports whether the NMS vendor-controller framework is active. ON BY
+// DEFAULT (owner directive, 2026-07-04): the runtime is read-only and inert
+// until a customer actually connects a controller — an empty runtime just
+// serves the static connector catalog + an empty integration list (so the
+// gallery renders on a fresh install, matching the reference deployment). No
+// polling, no external calls, no data until an integration is created. Disable
+// explicitly with FEATURE_NMS_INTEGRATIONS=false.
+func Enabled() bool {
+	if v := os.Getenv("FEATURE_NMS_INTEGRATIONS"); v != "" {
+		return v == "true"
+	}
+	return true
+}

@@ -400,7 +400,10 @@ cmd_uninstall() {
   if [ "$PURGE" = 1 ]; then
     say "Purging data, configuration, and loaded images..."
     if [ "$MODE" = "bundle" ] && [ -f "$BUNDLE_DIR/MANIFEST" ]; then
-      sed -n 's/^  - //p' "$BUNDLE_DIR/MANIFEST" | while read -r img; do
+      # MANIFEST pins images as tag@sha256:digest, but docker-load restored
+      # them by TAG only (digests are pull-time metadata) — so `docker rmi
+      # tag@digest` no-ops on a virgin host. Strip the digest and remove by tag.
+      sed -n 's/^  - //p' "$BUNDLE_DIR/MANIFEST" | sed 's/@sha256:[0-9a-f]*$//' | sort -u | while read -r img; do
         docker rmi "$img" >/dev/null 2>&1 || true
       done
     fi

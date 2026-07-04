@@ -879,8 +879,9 @@ services:
       FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
       # NMS vendor-controller integrations (#95): poll 3rd-party controllers
       # (Meraki / Catalyst Center / vManage / NDFC / Versa / Prime / generic)
-      # as normalized RCA evidence. DORMANT unless FEATURE_NMS_INTEGRATIONS=true.
-      FEATURE_NMS_INTEGRATIONS: ${FEATURE_NMS_INTEGRATIONS:-false}
+      # as normalized RCA evidence. ON by default (read-only, inert until a
+      # controller is connected); set =false to hide the integrations page.
+      FEATURE_NMS_INTEGRATIONS: ${FEATURE_NMS_INTEGRATIONS:-true}
       # SSRF allowlist for outbound integrations (ITSM/webhooks). The outbound
       # guard (safehttp) refuses private/internal targets by default; add a
       # self-hosted/lab ServiceNow or the bundled mock-servicenow fixture here
@@ -922,11 +923,12 @@ services:
       APIKEY_RATE_LIMIT_PER_MIN: ${APIKEY_RATE_LIMIT_PER_MIN:-600}
       # Max local user accounts (0/unset = unlimited; a cap aids abuse/licensing)
       MAX_USERS: ${MAX_USERS:-0}
-      # AI assistant. FEATURE_COPILOT gates it; the product default provider is
+      # AI assistant. ON by default (key-free grounded mode = no external calls);
+      # =false disables it. The product default provider is
       # Gemini (free tier — owner decision 2026-07-02); switch to anthropic or
       # openai in the assistant settings UI or via COPILOT_PROVIDER. The model
       # default tracks the provider in the backend unless COPILOT_MODEL is set.
-      FEATURE_COPILOT: ${FEATURE_COPILOT:-false}
+      FEATURE_COPILOT: ${FEATURE_COPILOT:-true}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-gemini}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-}

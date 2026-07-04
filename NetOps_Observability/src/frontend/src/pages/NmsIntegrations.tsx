@@ -205,12 +205,11 @@ export default function NmsIntegrations() {
       <div className="nms-page">
         <PageHead />
         <div className="board-empty">
-          <div className="board-empty-msg">Controller integrations are dormant.</div>
+          <div className="board-empty-msg">Controller integrations are turned off.</div>
           <div className="board-empty-hint">
-            Set <code>FEATURE_NMS_INTEGRATIONS=true</code> on the <code>api</code> service and restart it.
-            To try the full cycle without a real controller, also start the bundled stand-in:{" "}
-            <code>docker compose --profile mock-nms up -d --build mock-nms</code> and connect vManage at{" "}
-            <code>http://mock-nms:8091</code>.
+            This deployment has NMS controller integrations disabled. Re-enable them
+            from the platform configuration to connect vendor controllers (Cisco
+            Catalyst Center, Nexus Dashboard, Meraki, Cisco vManage, Versa and more).
           </div>
         </div>
       </div>

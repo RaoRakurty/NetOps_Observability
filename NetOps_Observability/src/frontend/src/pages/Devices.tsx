@@ -67,7 +67,7 @@ function vendorColor(vendor: string): string {
 const SOURCE_META: Record<string, { label: string; tone: string }> = {
   static: { label: "Static", tone: "" },
   snmp: { label: "SNMP", tone: "good" },
-  netbox: { label: "NetBox", tone: "accent" },
+  netbox: { label: "Source of Truth", tone: "accent" },
   manual: { label: "Manual", tone: "warn" },
 };
 const sourceLabel = (s: string) => SOURCE_META[s]?.label ?? (s || "—");

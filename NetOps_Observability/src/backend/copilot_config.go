@@ -133,7 +133,7 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 			"provider":        c.Provider,
 			"model":           c.Model,
 			"system":          c.System,
-			"feature_enabled": os.Getenv("FEATURE_COPILOT") == "true",
+			"feature_enabled": aiEnabled(),
 			"key_present":     s.copilotKeyPresent(),
 			"key_source":      s.copilotKeySource(),
 			"providers":       []string{"anthropic", "openai", "gemini"},
@@ -155,7 +155,7 @@ func (s *server) handleCopilotConfig(w http.ResponseWriter, r *http.Request) {
 			"provider":        out.Provider,
 			"model":           out.Model,
 			"system":          out.System,
-			"feature_enabled": os.Getenv("FEATURE_COPILOT") == "true",
+			"feature_enabled": aiEnabled(),
 			"key_present":     s.copilotKeyPresent(),
 			"key_source":      s.copilotKeySource(),
 		})
