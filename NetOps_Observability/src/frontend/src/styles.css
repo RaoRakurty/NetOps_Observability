@@ -1670,7 +1670,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .op-send:hover:not(:disabled) { background: var(--accent-bright, var(--accent)); }
 .op-send:disabled { opacity: .4; cursor: default; }
 
-/* ===== Correlix AI — futuristic refinement (P4-UI) ============================
+/* ===== Iris AI — futuristic refinement (P4-UI) ============================
    A calm, instrument-grade surface with a single accent system: a hairline
    gradient signature on the drawer edge, glass answer cards with a left accent
    rail, mono ids, and a glowing send control. Tuned for both light + dark. */
@@ -1763,7 +1763,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* Cite chips: tabular, hairline, futuristic. */
 .op-cite { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 
-/* ===== Correlix AI — LEFT-docked panel (attached to the rail knob) ===========
+/* ===== Iris AI — LEFT-docked panel (attached to the rail knob) ===========
    Slides in from the icon rail; overlay by default, or split (page reflows). */
 :root { --ai-panel-w: 432px; }
 
@@ -4233,7 +4233,7 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 /* ═══════════════════════════════════════════════════════════════════════════
    Documentation ("?") — top-bar button + right-docked Help drawer (HelpDrawer.tsx)
    The drawer embeds the bundled docs portal (served same-origin at /docs/).
-   Right-docked so it never collides with the LEFT-docked Correlix AI panel.
+   Right-docked so it never collides with the LEFT-docked Iris AI panel.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Top-bar "?" button — sits in the right cluster beside the health chip. */

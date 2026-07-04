@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Correlix AI golden Q&A set (intelligence plan P3). Versioned eval fixtures: docs items gate retrieval hit@k + citation correctness, intent items gate the deterministic router, agent_tool items gate the bounded loop's plumbing (and model tool CHOICE in -live mode), decline items gate the honesty floor, injection items gate containment. Loaded by src/backend/ai/golden_eval_test.go and src/backend/golden_agent_eval_test.go. The problem_id UUID below is the harness's mock-tenant fixture id, shared with the mock DataSource.",
+  "description": "Iris AI golden Q&A set (intelligence plan P3). Versioned eval fixtures: docs items gate retrieval hit@k + citation correctness, intent items gate the deterministic router, agent_tool items gate the bounded loop's plumbing (and model tool CHOICE in -live mode), decline items gate the honesty floor, injection items gate containment. Loaded by src/backend/ai/golden_eval_test.go and src/backend/golden_agent_eval_test.go. The problem_id UUID below is the harness's mock-tenant fixture id, shared with the mock DataSource.",
   "items": [
     {
       "id": "docs-001",
@@ -103,7 +103,7 @@
       "question": "Where do I paste the AI provider API key?",
       "expect": {
         "slugs": [
-          "correlix-ai/setup"
+          "iris-ai/setup"
         ]
       }
     },
@@ -113,7 +113,7 @@
       "question": "What slash commands does the assistant support?",
       "expect": {
         "slugs": [
-          "correlix-ai/using"
+          "iris-ai/using"
         ]
       }
     },

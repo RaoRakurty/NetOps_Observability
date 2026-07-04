@@ -1,4 +1,4 @@
--- 0018_ai_feedback.sql — Correlix AI feedback loop (HLD Phase 5 / spec §14, §16).
+-- 0018_ai_feedback.sql — Iris AI feedback loop (HLD Phase 5 / spec §14, §16).
 -- Persists thumbs up/down on AI answers so answer quality can be measured over
 -- time (the "feedback loop"). PRIVACY BY DESIGN: it stores only the rating + the
 -- intent/mode/conversation id — NEVER the question text, the answer, evidence, or

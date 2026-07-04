@@ -1,6 +1,6 @@
 # Golden examples
 
-Representative Correlix AI answers — the expected *shape* of each answer-mode
+Representative Iris AI answers — the expected *shape* of each answer-mode
 card. The eval suite (`docs/ai/evals.md`) enforces the invariants behind these.
 All are grounded, tenant-scoped, and honest about gaps.
 

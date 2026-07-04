@@ -90,6 +90,6 @@ The device is listed, but its **SNMP metrics** cell in <kbd>Administration → D
 
 ## Still stuck?
 
-- Ask **[Correlix AI](/correlix-ai/overview)** in the console — e.g. *"why isn't leaf1 collecting SNMP?"* — it can reason over your instance's own state.
+- Ask **[Iris AI](/iris-ai/overview)** in the console — e.g. *"why isn't leaf1 collecting SNMP?"* — it can reason over your instance's own state.
 - Re-check the [Connectivity requirements](/reference/connectivity-requirements) port table against your firewall rules.
 - Walk the four-layer check in [Verify a device is monitored](/onboard-devices/verify-monitoring) to find exactly which layer breaks.

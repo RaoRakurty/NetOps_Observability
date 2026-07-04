@@ -1,6 +1,6 @@
 # Network Expert Knowledge Base
 
-The Network Expert KB gives Correlix AI **CCIE-level troubleshooting knowledge** so
+The Network Expert KB gives Iris AI **CCIE-level troubleshooting knowledge** so
 it can reason about *what to check* and *who owns it* — while live Correlix evidence
 always remains the source of truth.
 

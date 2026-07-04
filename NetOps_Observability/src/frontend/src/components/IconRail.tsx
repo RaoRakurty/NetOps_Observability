@@ -29,7 +29,7 @@ const MOD_HUE: Record<string, string> = {
   logs: "#EAB308", // Logs — vivid amber/gold
   explain: "#D946EF", // Explain (access reasoning) — vivid fuchsia
   stack: "#64748B", // Stack — slate (utility)
-  copilot: "#8B5CF6", // Correlix AI — violet (kept)
+  copilot: "#8B5CF6", // Iris AI — violet (kept)
   admin: "#94A3B8", // Admin — slate (utility)
 };
 const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";

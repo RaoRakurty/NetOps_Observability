@@ -13,11 +13,11 @@ import (
 	"netops/backend/ai"
 )
 
-// ai_handlers.go — the Correlix AI HTTP surface. POST /api/ai/ask runs the
+// ai_handlers.go — the Iris AI HTTP surface. POST /api/ai/ask runs the
 // orchestrator (classify → route → Policy Engine → tenant-scoped evidence →
 // grounded answer). Read-only (v1); FEATURE_AI gates it (off by default).
 
-// aiEnabled gates the Correlix AI endpoints. ON BY DEFAULT (owner directive,
+// aiEnabled gates the Iris AI endpoints. ON BY DEFAULT (owner directive,
 // 2026-07-04): key-free grounded mode is in-process, deterministic, and makes
 // NO external calls — external LLM answers still require a provider key, so no
 // data leaves the host without explicit config (LLM06). Disable explicitly
@@ -66,7 +66,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !aiEnabled() {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Correlix AI is disabled — set FEATURE_AI=true"))
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI is disabled — set FEATURE_AI=true"))
 		return
 	}
 	claims, ok := userFrom(r.Context())
@@ -76,7 +76,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	// Per-principal rate limit — each ask may be a paid provider call (SR-021).
 	if !s.copilotLimiter.allowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
-		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Correlix AI rate limit exceeded — slow down"))
+		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
 		return
 	}
 	// Per-tenant entitlement (§3a): cross-tenant principals are never gated.
@@ -166,7 +166,7 @@ func (s *server) aiPrincipal(claims jwtClaims) ai.Principal {
 
 // handleAIModules: GET /api/ai/modules — the Application Knowledge Layer's view
 // for this caller (which modules are enabled + their question categories), so the
-// UI can show what Correlix AI can answer. Read-only, any authenticated user.
+// UI can show what Iris AI can answer. Read-only, any authenticated user.
 func (s *server) handleAIModules(w http.ResponseWriter, r *http.Request) {
 	if _, ok := userFrom(r.Context()); !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))

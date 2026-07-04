@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// ai_tenant_config.go — per-tenant Correlix AI configuration (intelligence plan
+// ai_tenant_config.go — per-tenant Iris AI configuration (intelligence plan
 // P4a: "AI is per-tenant", CLAUDE.md §3a).
 //
 // Two concerns live here, both keyed by tenant in the store itself (no
@@ -118,7 +118,7 @@ func (s *aiTenantConfigStore) get(tenant string) aiTenantConfig {
 	return c
 }
 
-// assistantEnabled: may this tenant's users talk to Correlix AI at all?
+// assistantEnabled: may this tenant's users talk to Iris AI at all?
 func (s *aiTenantConfigStore) assistantEnabled(tenant string) bool {
 	return !s.get(tenant).AssistantOff
 }
@@ -236,7 +236,7 @@ func (s *server) aiAssistantAllowed(claims jwtClaims) bool {
 	return s.aiTenantCfg.assistantEnabled(tenant)
 }
 
-var errAITenantDisabled = errors.New("Correlix AI isn't enabled for this account — contact your administrator")
+var errAITenantDisabled = errors.New("Iris AI isn't enabled for this account — contact your administrator")
 
 // providerCandidate is one resolved (provider, key, model) the assistant may
 // call for a given principal, in fallback order.

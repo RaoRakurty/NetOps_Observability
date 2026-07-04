@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { signatureNocTitle, friendlyProblemId } from "./labels";
 
 // Friendly Problem ID — the NOC handle shown in the Action Queue, RCA inspector
-// and Correlix AI. MUST stay byte-identical to the Go backend problemDisplayID
+// and Iris AI. MUST stay byte-identical to the Go backend problemDisplayID
 // ("P-" + first 6 hex of the UUID, uppercased) so one id reads the same
 // everywhere. Display-only; the raw UUID stays the routing/API key.
 describe("friendlyProblemId — P-XXXXXX handle", () => {

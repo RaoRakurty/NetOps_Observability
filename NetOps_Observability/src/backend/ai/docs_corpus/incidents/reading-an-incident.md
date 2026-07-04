@@ -89,7 +89,7 @@ The **Evidence timeline** plots every signal on one time axis, one lane per sign
 - **Hypothesis ranking** lists the competing explanations with a confidence pill and the reason each ranks where it does.
 - **Ticket & escalation decision** restates the ticket recommendation with its rationale.
 - **Next actions** is a numbered playbook from the matched failure signature — ESCALATE / INVESTIGATE / CHECK / MONITOR steps in priority order.
-- **Ask RCA Assistant** answers questions grounded *only* in this RCA's evidence (e.g. "Why is this not confirmed?"). It requires Correlix AI to be connected; otherwise it shows the suggested reasoning inline.
+- **Ask RCA Assistant** answers questions grounded *only* in this RCA's evidence (e.g. "Why is this not confirmed?"). It requires Iris AI to be connected; otherwise it shows the suggested reasoning inline.
 
 ## Debug View
 

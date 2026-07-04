@@ -1,15 +1,15 @@
 ---
-title: Correlix AI overview
+title: Iris AI overview
 sidebar_label: Overview
 sidebar_position: 1
 description: Ask about your network in plain language and get grounded, cited answers.
 ---
 
-# Correlix AI
+# Iris AI
 
-**Correlix AI** is the in‑app assistant. Ask about your network in plain language and get answers grounded in your live, tenant‑scoped data — with clickable evidence, never a black box.
+**Iris AI** is the in‑app assistant. Ask about your network in plain language and get answers grounded in your live, tenant‑scoped data — with clickable evidence, never a black box.
 
-Open it from the **Correlix AI** button pinned near the bottom of the left icon rail, or press <kbd>Ctrl/Cmd + K</kbd> and choose **Open Copilot** from the command palette. It slides in as a panel you can float over the page (overlay) or dock beside it (split screen) — see [Using Correlix AI](/correlix-ai/using).
+Open it from the **Iris AI** button pinned near the bottom of the left icon rail, or press <kbd>Ctrl/Cmd + K</kbd> and choose **Open Copilot** from the command palette. It slides in as a panel you can float over the page (overlay) or dock beside it (split screen) — see [Using Iris AI](/iris-ai/using).
 
 ## What you can ask
 
@@ -20,11 +20,11 @@ Open it from the **Correlix AI** button pinned near the bottom of the left icon 
 - **Playbooks** — *"How do I troubleshoot a BGP flap?"* returns curated network‑engineering guidance.
 - **Product help and navigation** — *"How do I set up SNMP discovery?"*, *"Where do I configure ServiceNow?"*.
 
-Typing <kbd>/</kbd> in the composer opens a menu of ready‑made commands (`/status`, `/top`, `/focus`, `/explain`, `/playbook`, …) that run the same grounded questions with one keystroke. The full table is in [Using Correlix AI](/correlix-ai/using#slash-commands).
+Typing <kbd>/</kbd> in the composer opens a menu of ready‑made commands (`/status`, `/top`, `/focus`, `/explain`, `/playbook`, …) that run the same grounded questions with one keystroke. The full table is in [Using Iris AI](/iris-ai/using#slash-commands).
 
 ## Two answer paths
 
-Correlix AI has two ways of answering, and it always picks one that works:
+Iris AI has two ways of answering, and it always picks one that works:
 
 1. **Grounded answers (no API key required).** Questions about *your network* — live state, incidents, RCA, flows, telemetry — are answered by a deterministic, evidence‑grounded engine that reads your tenant's data directly. Answers come back as a structured card: a narrative, incident counts, a recommended focus, missing evidence, next actions, and **citations that deep‑link into the source view**. This path works out of the box, with no external AI provider configured.
 2. **Free‑form chat (provider key required).** When a platform administrator adds an AI provider API key (Anthropic or OpenAI, selectable in the assistant settings), typed free‑form questions are answered conversationally by that provider — and grounded answers get a model‑written narrative instead of the built‑in phrasing. Slash commands and the built‑in quick actions **always** use the grounded engine, key or no key, so triage answers stay deterministic and cited.
@@ -55,5 +55,5 @@ Each provider call is a paid, per‑token request. Correlix bounds the exposure:
 
 ## Next steps
 
-- **[Set up Correlix AI](/correlix-ai/setup)** — enable the feature, add a provider key, verify it's live.
-- **[Using Correlix AI](/correlix-ai/using)** — asking questions, slash commands, and reading an answer card.
+- **[Set up Iris AI](/iris-ai/setup)** — enable the feature, add a provider key, verify it's live.
+- **[Using Iris AI](/iris-ai/using)** — asking questions, slash commands, and reading an answer card.

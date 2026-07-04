@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ai_feedback_store.go — persistence for the Correlix AI feedback loop (spec §14).
+// ai_feedback_store.go — persistence for the Iris AI feedback loop (spec §14).
 // Thumbs up/down on AI answers, PRIVACY-SAFE (rating + intent/mode/conversation id
 // only, never question/answer text). Two backends like every other store: in-memory
 // (default, tenant-filtered in the store) and Postgres (tenant_iso FORCE-RLS via

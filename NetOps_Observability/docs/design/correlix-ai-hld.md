@@ -1,4 +1,4 @@
-# Correlix AI — High-Level Design (HLD)
+# Iris AI — High-Level Design (HLD)
 
 **Status:** Design baseline for build · **Date:** 2026-06-29
 **Supersedes/merges:** owner's "application-aware NOC copilot" scope expansion (2026-06-29) +
@@ -10,7 +10,7 @@ research proposal `docs/design/ai-strategy-and-guardrails-2026-06-29.md`.
 
 ## 0. Core design statement
 
-> **Correlix AI is an application-aware, evidence-grounded NOC copilot that understands Correlix
+> **Iris AI is an application-aware, evidence-grounded NOC copilot that understands Correlix
 > modules, live operational state, topology, RCA evidence, telemetry, ITSM context, and product
 > workflows through *governed tools* — not through unrestricted database access or hardcoded
 > question lists.**

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AI_NAME } from "../brand";
 import {
   api,
   CopilotMessage,
@@ -20,7 +21,7 @@ import Icon from "../components/Icon";
 import { friendlyProblemId } from "../components/rca/labels";
 import { useShell } from "../context/shell";
 
-// Correlix AI — the in-app assistant chat. Posts to /api/copilot/chat (provider
+// Iris AI — the in-app assistant chat. Posts to /api/copilot/chat (provider
 // fallback chain server-side); key-free questions fall through to the grounded
 // /api/ai/ask engine. Rendered inside the right-side drawer. Assistant output is
 // rendered as ESCAPED React text only (OWASP LLM02 — never dangerouslySetInnerHTML).
@@ -62,7 +63,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/itsm", title: "ITSM update", desc: "Draft a ticket-ready update for the top incident", module: "ITSM", kind: "send", text: "Generate an ITSM-ready update", soon: true },
   // Help / navigation
   { cmd: "/where", title: "Where do I…", desc: "Find a feature and its page in Correlix", module: "Navigation", kind: "send", text: "Where do I configure ServiceNow?" },
-  { cmd: "/help", title: "Help", desc: "What Correlix AI can do", module: "Help", kind: "send", text: "What can you do?" },
+  { cmd: "/help", title: "Help", desc: "What Iris AI can do", module: "Help", kind: "send", text: "What can you do?" },
 ];
 
 // A short module badge per backend intent, for the "/" menu rows.
@@ -327,7 +328,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
     return (
       <div className="op-chat" style={{ padding: 20 }}>
         <p style={{ color: "var(--muted)", fontSize: 13 }}>
-          Correlix AI is turned off. Set <code>FEATURE_COPILOT=true</code> in{" "}
+          Iris AI is turned off. Set <code>FEATURE_COPILOT=true</code> in{" "}
           <code>deployment/docker/.env</code> and restart the API.
         </p>
       </div>
@@ -373,7 +374,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
         <span className="op-hd-brand">
           <span className="op-hd-logo"><Icon name="copilot" size={15} /></span>
           <span className="op-hd-text">
-            <span className="op-hd-title">Correlix AI</span>
+            <span className="op-hd-title">{AI_NAME}</span>
             <span className="op-hd-sub">
               <span className={`op-dot ${ready ? "ok" : "warn"}`} />
               {cfg
@@ -408,7 +409,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
 
       {showHelp && (
         <div className="op-settings op-help">
-          <div className="op-help-h">What Correlix AI can do</div>
+          <div className="op-help-h">What Iris AI can do</div>
           <ul className="op-help-list">
             <li><b>Live state</b> — “what’s going on right now”, what to focus on first.</li>
             <li><b>Incidents</b> — “show me the critical incidents”, the prioritized action list.</li>
@@ -619,7 +620,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
               </button>
             </div>
             {/* Module-aware example questions (P4) — grounded + key-free, so they
-                showcase what Correlix AI can read across modules. */}
+                showcase what Iris AI can read across modules. */}
             <div className="op-examplerow">
               {["Show me the top talkers", "Any metric anomalies right now?"].map((s) => (
                 <button key={s} className="op-example" onClick={() => send(s)}>{s}</button>
@@ -723,7 +724,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
             setSlashOpen(open);
             if (open) setSlashIdx(0);
           }}
-          placeholder="Ask Correlix AI…   ( / for quick questions · ⏎ send · ⇧⏎ newline )"
+          placeholder="Ask Iris AI…   ( / for quick questions · ⏎ send · ⇧⏎ newline )"
           rows={1}
           onKeyDown={(e) => {
             if (slashOpen && slashMatches.length > 0) {
@@ -818,7 +819,7 @@ function GroundedAnswer({ ans, onCite, onClose }: { ans: AiAnswer; onCite: () =>
         <span className="op-ans-kind">{kind}</span>
         {pr && <span className="op-ans-id" title={pr.problem_id}>{friendlyProblemId(pr.problem_id)}</span>}
         <span className="op-ans-spacer" />
-        <button type="button" className="op-ans-x" title="Close Correlix AI" aria-label="Close" onClick={onClose}>
+        <button type="button" className="op-ans-x" title="Close Iris AI" aria-label="Close" onClick={onClose}>
           <Icon name="close" size={13} />
         </button>
       </div>

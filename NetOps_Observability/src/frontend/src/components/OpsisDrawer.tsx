@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import Opsis from "../tabs/Opsis";
 import { useShell } from "../context/shell";
+import { AI_NAME } from "../brand";
 
-// Correlix AI panel — a LEFT-docked assistant that slides in from the icon rail
-// (attached to the "Correlix AI" knob), not a right slide-over (which clipped on
+// Iris AI panel — a LEFT-docked assistant that slides in from the icon rail
+// (attached to the "Iris AI" knob), not a right slide-over (which clipped on
 // narrow screens). Two modes:
 //   • overlay (default) — floats over the page with a light scrim; click-away closes.
 //   • split            — docks beside the page; the main content reflows (no scrim)
@@ -51,7 +52,7 @@ export default function OpsisDrawer() {
         className={`op-panel${copilotOpen ? " open" : ""}${split ? " split" : ""}`}
         aria-hidden={!copilotOpen}
         role="complementary"
-        aria-label="Correlix AI assistant"
+        aria-label={AI_NAME + " assistant"}
       >
         {copilotOpen && <Opsis split={split} onToggleSplit={toggleSplit} />}
       </aside>

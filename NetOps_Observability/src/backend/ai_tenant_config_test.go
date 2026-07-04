@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// ai_tenant_config_test.go — per-tenant Correlix AI settings (P4a): store
+// ai_tenant_config_test.go — per-tenant Iris AI settings (P4a): store
 // semantics, per-principal provider resolution, HTTP isolation (§3a.5), and
 // the entitlement gates. The invariants under test:
 //

@@ -1,11 +1,11 @@
-# Correlix AI — Intelligence Plan (design review + phased improvement plan)
+# Iris AI — Intelligence Plan (design review + phased improvement plan)
 
 **Status:** DRAFT for owner review — not committed, no code changed
 **Date:** 2026-07-02
-**Scope:** Review of the current Correlix AI (copilot proxy + grounded `ai/` engine), competitive
+**Scope:** Review of the current Iris AI (copilot proxy + grounded `ai/` engine), competitive
 research, and a phased plan to make the assistant answer **non-documented questions** — grounded in
 the in-app docs portal (#88) AND live, tenant-scoped platform data.
-**Builds on (does not replace):** `docs/design/correlix-ai-hld.md` (the approved HLD) and
+**Builds on (does not replace):** `docs/design/iris-ai-hld.md` (the approved HLD) and
 `docs/design/ai-strategy-and-guardrails-2026-06-29.md`. This plan is the *next increment* on that
 architecture, triggered by the owner's ask: "give the assistant the docs-portal content and let it
 draft answers; make it genuinely intelligent, not a knowledge-file parrot."
@@ -222,7 +222,7 @@ trail · MCP interop · tenant-level AI disable + training opt-out.
 Four layers, in dependency order:
 
 ```
- Correlix AI drawer (one surface; answer cards render doc citations + evidence citations)
+ Iris AI drawer (one surface; answer cards render doc citations + evidence citations)
         │
         ▼
  /api/copilot/chat  ──────────────►  Agent Loop (server-owned, bounded)      [layer c]

@@ -152,7 +152,7 @@ func (k *ProductKB) Search(query string, limit int) []ProductHit {
 			return hits[i].Score > hits[j].Score
 		}
 		// Tie → prefer the more FOCUSED section (shorter title), then alphabetical,
-		// so "What is Correlix" beats "What Correlix AI can do" for "what is correlix".
+		// so "What is Correlix" beats "What Iris AI can do" for "what is correlix".
 		if len(hits[i].Section.Title) != len(hits[j].Section.Title) {
 			return len(hits[i].Section.Title) < len(hits[j].Section.Title)
 		}

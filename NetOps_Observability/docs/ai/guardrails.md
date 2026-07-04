@@ -1,4 +1,4 @@
-# Correlix AI — Guardrails
+# Iris AI — Guardrails
 
 Guardrails are **first-class code**, not prompt text. They sit in the deterministic
 path so the model cannot talk its way past them.

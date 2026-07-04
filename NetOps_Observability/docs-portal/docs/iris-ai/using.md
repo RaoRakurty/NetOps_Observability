@@ -1,17 +1,17 @@
 ---
-title: Using Correlix AI
+title: Using Iris AI
 sidebar_label: Using the assistant
 sidebar_position: 3
 description: Ask questions, run slash commands, and read grounded answer cards.
 ---
 
-# Using Correlix AI
+# Using Iris AI
 
-Day‑to‑day use: opening the panel, the two triage questions every shift starts with, the slash‑command menu, and how to read an answer card. The assistant must be enabled first — see [Setup](/correlix-ai/setup).
+Day‑to‑day use: opening the panel, the two triage questions every shift starts with, the slash‑command menu, and how to read an answer card. The assistant must be enabled first — see [Setup](/iris-ai/setup).
 
 ## Open the assistant
 
-1. Click **Correlix AI** — the button pinned near the foot of the left icon rail. The panel slides in from the rail.
+1. Click **Iris AI** — the button pinned near the foot of the left icon rail. The panel slides in from the rail.
 2. Alternatively press <kbd>Ctrl/Cmd + K</kbd> and pick **Open Copilot** from the command palette.
 3. Press <kbd>Esc</kbd> (or click the **×** in the panel header, or click anywhere outside the panel in overlay mode) to close it.
 
@@ -34,7 +34,7 @@ The header also has a **＋** button (*New conversation*) that clears the thread
 Both actions use the grounded engine, so they work identically with or without a provider key.
 
 :::tip
-You can also ask from inside an incident: the **Correlix AI** card on an incident's RCA view has an **Explain this problem** button that runs the same grounded explanation for exactly that correlation. See [Incidents](/incidents/overview).
+You can also ask from inside an incident: the **Iris AI** card on an incident's RCA view has an **Explain this problem** button that runs the same grounded explanation for exactly that correlation. See [Incidents](/incidents/overview).
 :::
 
 ## Slash commands
@@ -99,8 +99,8 @@ Free‑form chat answers (provider‑backed) render as plain conversation text; 
 
 ## Troubleshooting
 
-- **Footer says "Evidence‑only mode: AI provider not configured."** — Normal in key‑free mode; the grounded engine answered. A platform administrator can [add a provider key](/correlix-ai/setup#step-4--paste-the-api-key) for model‑written narratives.
-- **A free‑form question returns "Correlix AI isn't connected to an AI provider yet…"** — No key is configured. Use slash commands and the quick actions (key‑free), or configure a provider.
-- **"Correlix AI rate limit exceeded — slow down"** — You hit the per‑user budget (default 20 requests/minute). Wait and retry.
-- **A context command answers "no active incident"** — Nothing is active in your tenant's queue. Open a specific incident and use its **Correlix AI → Explain this problem** card instead.
+- **Footer says "Evidence‑only mode: AI provider not configured."** — Normal in key‑free mode; the grounded engine answered. A platform administrator can [add a provider key](/iris-ai/setup#step-4--paste-the-api-key) for model‑written narratives.
+- **A free‑form question returns "Iris AI isn't connected to an AI provider yet…"** — No key is configured. Use slash commands and the quick actions (key‑free), or configure a provider.
+- **"Iris AI rate limit exceeded — slow down"** — You hit the per‑user budget (default 20 requests/minute). Wait and retry.
+- **A context command answers "no active incident"** — Nothing is active in your tenant's queue. Open a specific incident and use its **Iris AI → Explain this problem** card instead.
 - **A module answer says the module is unavailable** — That data source isn't enabled on your deployment, or your role lacks read access; the assistant only answers from modules you can see.

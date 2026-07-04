@@ -3,7 +3,7 @@ package ai
 import "fmt"
 
 // policy.go — the Tool Policy Engine (HLD P0 deliverable). This is the SINGLE,
-// deterministic (non-LLM) place that decides what Correlix AI may run vs. not.
+// deterministic (non-LLM) place that decides what Iris AI may run vs. not.
 // Every tool call and module route passes through here BEFORE execution. The
 // model never decides its own permissions; this Go code does.
 //

@@ -1,11 +1,11 @@
-# Correlix AI — Response Quality Layer, Answer Modes & Ask-Correlix Commands
+# Iris AI — Response Quality Layer, Answer Modes & Ask-Correlix Commands
 
 Status: **shipped** (2026-06-30). Code: `src/backend/ai/` (orchestrator, quality,
 tools, registry, schemas), `src/backend/ai_datasource.go` (tenant-scoped reads),
 `src/backend/ai_labels.go` (NOC label mirror), `src/frontend/src/tabs/Opsis.tsx`
 (panel + reusable answer card + slash menu).
 
-This document is the contract for **how Correlix AI answers** — not one-off RCA
+This document is the contract for **how Iris AI answers** — not one-off RCA
 formatting. Every answer mode goes through the same governed flow and the same
 reusable Response-Quality Layer.
 

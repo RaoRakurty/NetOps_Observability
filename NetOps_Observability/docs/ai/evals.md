@@ -1,4 +1,4 @@
-# Correlix AI — Evals
+# Iris AI — Evals
 
 The eval suite (`src/backend/ai/evals_test.go`) encodes the design's
 **definition-of-done** (§16) as runnable assertions over the orchestrator, so a

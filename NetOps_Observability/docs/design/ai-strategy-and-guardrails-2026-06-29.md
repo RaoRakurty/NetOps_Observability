@@ -1,4 +1,4 @@
-# Correlix AI Strategy & Guardrails — Design Proposal
+# Iris AI Strategy & Guardrails — Design Proposal
 
 **Status:** Draft for decision · **Author:** AI architecture pass · **Date:** 2026-06-29
 **Scope:** How Correlix builds product AI on top of existing LLMs (we will NOT train our own),

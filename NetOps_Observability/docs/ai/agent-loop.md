@@ -1,6 +1,6 @@
 # The Agent Loop (P2) — model-driven tool use, bounded and governed
 
-**Status:** shipped 2026-07-02 (intelligence plan P2, `docs/design/research/correlix-ai-intelligence-plan.md` §3.c–3.d, §4).
+**Status:** shipped 2026-07-02 (intelligence plan P2, `docs/design/research/iris-ai-intelligence-plan.md` §3.c–3.d, §4).
 **Flag:** `FEATURE_AI_TOOLS=true` (off by default). Rollout: platform-owner/cross-tenant
 principals always; tenant users when their tenant carries the **per-tenant "AI
 Investigations" entitlement** (P4a, `ai_tenant_config.go` — set by the platform owner in
@@ -9,7 +9,7 @@ assistant settings → Workspace access, or `PUT /api/ai/tenants/{id}`).
 
 ## Per-tenant AI (P4a, shipped 2026-07-02)
 
-Correlix AI is a per-tenant feature (`ai_tenant_config.go`):
+Iris AI is a per-tenant feature (`ai_tenant_config.go`):
 
 - **Entitlement (platform owner):** per tenant, the assistant can be disabled
   outright (`assistant_enabled`) and the agent loop granted (`investigations_enabled`).

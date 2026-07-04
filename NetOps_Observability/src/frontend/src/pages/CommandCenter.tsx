@@ -121,7 +121,7 @@ const rcaHref = (corrId: string) => `#/monitoring/correlations?id=${encodeURICom
 // shortProblemId renders a correlation UUID as a friendly, stable NOC handle
 // (P-5564D1) — the SAME scheme the backend AI cites (problemDisplayID in Go) so
 // an operator sees one consistent id across the queue, the RCA inspector and
-// Correlix AI. Display-only: the full UUID stays in the hover title + the RCA
+// Iris AI. Display-only: the full UUID stays in the hover title + the RCA
 // deep link, which is what the routes/API key on.
 const shortProblemId = (corrId: string): string => friendlyProblemId(corrId);
 // Topology Canvas leaf is infrastructure/topology-canvas; the old infrastructure/

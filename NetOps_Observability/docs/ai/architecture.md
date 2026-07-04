@@ -1,6 +1,6 @@
-# Correlix AI — Architecture
+# Iris AI — Architecture
 
-Correlix AI is an **application-aware, evidence-grounded NOC copilot**, not a thin
+Iris AI is an **application-aware, evidence-grounded NOC copilot**, not a thin
 wrapper around an LLM. Correlix tools and evidence remain the system of truth; the
 model explains, reasons, summarizes, and recommends — it never invents facts and
 never reaches a database directly.

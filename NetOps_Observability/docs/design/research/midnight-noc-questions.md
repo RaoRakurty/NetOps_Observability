@@ -1,10 +1,10 @@
-# Midnight NOC Questions — the operator bar for Correlix AI
+# Midnight NOC Questions — the operator bar for Iris AI
 
 > **Provenance:** written by the product owner (2026-07-02) as the canonical set of
 > questions a NOC engineer actually asks during a midnight outage, with intent,
 > data sources, evidence thresholds and pitfalls — grounded in Google SRE
 > incident guidance and AWS/Azure/GCP/Cisco troubleshooting runbooks. This is
-> the **requirements bar** for Correlix AI answers and for the platform's
+> the **requirements bar** for Iris AI answers and for the platform's
 > capability roadmap: §2 maps each question to what Correlix can answer TODAY
 > and what is missing. The golden eval set carries fixtures for the answerable
 > ones (`docs/ai/golden-examples/golden-qa.json`, `agent-midnight-*`).

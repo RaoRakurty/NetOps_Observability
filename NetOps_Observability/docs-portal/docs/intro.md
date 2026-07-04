@@ -73,10 +73,10 @@ import Link from '@docusaurus/Link';
     <p className="cx-card__desc">The correlation engine groups related signals into one ranked incident with a fault domain.</p>
     <span className="cx-card__arrow">Explore →</span>
   </Link>
-  <Link className="cx-card cx-card--ai" to="/correlix-ai/overview">
+  <Link className="cx-card cx-card--ai" to="/iris-ai/overview">
     <span className="cx-card__icon">🤖</span>
     <p className="cx-card__title">Ask in plain language</p>
-    <p className="cx-card__desc">Correlix AI answers "what's going on right now?" grounded in your live, tenant-scoped data.</p>
+    <p className="cx-card__desc">Iris AI answers "what's going on right now?" grounded in your live, tenant-scoped data.</p>
     <span className="cx-card__arrow">Explore →</span>
   </Link>
   <Link className="cx-card" to="/incident-response/overview">
@@ -100,7 +100,7 @@ This portal is **task-oriented** — it tells you *how to configure and use* eac
 1. **[Getting Started](/getting-started/overview)** — what you need, and a 15-minute quickstart to onboard your first device.
 2. **[Onboard Network Devices](/onboard-devices/overview)** — the full device-onboarding journey: discovery, credentials, streaming telemetry, and verification.
 3. **[Send Data](/send-data/overview)** — point metrics, flows, logs, and traps at Correlix.
-4. **Product sections** — Infrastructure, Monitoring, Incidents, Incident Response, Security, Explore, Correlix AI, Dashboards, Automation.
+4. **Product sections** — Infrastructure, Monitoring, Incidents, Incident Response, Security, Explore, Iris AI, Dashboards, Automation.
 5. **[Administration](/administration/overview)** — users, roles, SSO, API access, tenants, and audit.
 6. **[Reference](/reference/connectivity-requirements)** — connectivity requirements, glossary, and troubleshooting.
 

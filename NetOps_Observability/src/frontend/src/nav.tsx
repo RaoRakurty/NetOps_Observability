@@ -1,4 +1,5 @@
 import { SectionCtx } from "./context/shell";
+import { AI_NAME } from "./brand";
 
 // Pages / tabs (existing components, reparented into product sections).
 import Dashboard from "./pages/Dashboard";
@@ -93,7 +94,7 @@ export type NavSection = {
 //   Monitor    — Dashboards · Monitoring · Incident Response · Automation
 //   Infra      — Infrastructure (the device fleet) · Security
 //   Data       — Metrics · Flows · Logs (the raw telemetry planes)
-// with Correlix AI pinned to the foot and Governance (Explain · Stack ·
+// with Iris AI pinned to the foot and Governance (Explain · Stack ·
 // Administration) anchored beneath it. Order here is the canonical order; the
 // rail's GROUPS map sections into the zones above.
 export const NAV: NavSection[] = [
@@ -274,7 +275,7 @@ export const NAV: NavSection[] = [
   },
   {
     id: "copilot",
-    label: "Correlix AI",
+    label: AI_NAME,
     icon: "copilot",
     action: "copilot",
     footer: true,

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api, AiAnswer } from "../../services/api";
 import Icon from "../Icon";
 
-// RcaAskAi — the Correlix AI "Ask AI" card on the RCA Inspector. One click asks
+// RcaAskAi — the Iris AI "Ask AI" card on the RCA Inspector. One click asks
 // the orchestrator to explain THIS correlation; the backend retrieves the
 // tenant-scoped evidence, grounds the model, and returns a cited answer. All
 // model text renders as escaped React text (never HTML) — OWASP LLM05.
@@ -30,18 +30,18 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
     <div className="card" style={{ borderColor: "var(--accent)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <Icon name="copilot" size={15} /> Correlix AI
+          <Icon name="copilot" size={15} /> Iris AI
         </h3>
         <button className="btn-accent" onClick={ask} disabled={busy}>
           {busy ? "Thinking…" : ans ? "Re-ask" : "Explain this problem"}
         </button>
       </div>
 
-      {err && <p style={{ color: "var(--bad)", fontSize: 13, marginBottom: 0 }}>Correlix AI: {err}</p>}
+      {err && <p style={{ color: "var(--bad)", fontSize: 13, marginBottom: 0 }}>Iris AI: {err}</p>}
 
       {!ans && !busy && !err && (
         <p className="mini-meta" style={{ marginTop: 8, marginBottom: 0 }}>
-          Ask Correlix AI for a grounded, evidence-cited explanation of this correlation — root cause, supporting
+          Ask Iris AI for a grounded, evidence-cited explanation of this correlation — root cause, supporting
           evidence, what's missing, and a recommended next action.
         </p>
       )}

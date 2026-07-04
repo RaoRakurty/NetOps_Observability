@@ -95,8 +95,8 @@ Under Incident Response → Integrations, connect ServiceNow or Jira; under
 Notifications, configure email/Slack/PagerDuty contact points. RCA auto-ticketing
 (Incident Response → RCA Auto-Ticketing) files one ticket per correlation by policy.
 
-## What Correlix AI can do
-Correlix AI is an evidence-grounded NOC assistant. It can summarize what's going on
+## What Iris AI can do
+Iris AI is an evidence-grounded NOC assistant. It can summarize what's going on
 right now, list the actionable incidents, explain a specific incident's RCA, show
 flows/telemetry/app or integration health, look up a troubleshooting playbook, and
 answer product questions like this one — all scoped to your tenant and cited. Type

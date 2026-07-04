@@ -72,7 +72,7 @@ const config = {
           { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Documentation' },
           { to: '/getting-started/quickstart', label: 'Quickstart', position: 'left' },
           { to: '/onboard-devices/overview', label: 'Onboard Devices', position: 'left' },
-          { to: '/correlix-ai/overview', label: 'Correlix AI', position: 'left' },
+          { to: '/iris-ai/overview', label: 'Iris AI', position: 'left' },
         ],
       },
       footer: {
@@ -91,7 +91,7 @@ const config = {
             items: [
               { label: 'Monitoring & alerting', to: '/monitoring/overview' },
               { label: 'Incidents & correlation', to: '/incidents/overview' },
-              { label: 'Correlix AI', to: '/correlix-ai/overview' },
+              { label: 'Iris AI', to: '/iris-ai/overview' },
             ],
           },
           {

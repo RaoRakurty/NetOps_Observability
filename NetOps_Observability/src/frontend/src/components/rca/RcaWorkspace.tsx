@@ -35,7 +35,7 @@ function groundingText(d: RcaCase): string {
   ].join("\n");
 }
 
-// AskRcaPanel — wires the assistant box to Correlix AI (the copilot proxy).
+// AskRcaPanel — wires the assistant box to Iris AI (the copilot proxy).
 // The server owns the system prompt (LLM01); we ground the question with the
 // operator-facing RCA context as a normal user turn and never inject a system
 // role. Degrades honestly when the assistant isn't enabled (no key / feature off).
@@ -89,9 +89,9 @@ function AskRcaPanel({ data }: { data: RcaCase }) {
       </div>
       <div className="rw-tdetail" style={{ marginTop: 10 }}>
         {answer ? (
-          <><b>Correlix AI:</b> {answer}</>
+          <><b>Iris AI:</b> {answer}</>
         ) : offline ? (
-          <><b>Assistant not connected.</b> Correlix AI isn&apos;t enabled yet — an administrator can connect a provider and key under Assistant settings. Until then, use the suggested reasoning: {data.assistant.sampleAnswer}</>
+          <><b>Assistant not connected.</b> Iris AI isn&apos;t enabled yet — an administrator can connect a provider and key under Assistant settings. Until then, use the suggested reasoning: {data.assistant.sampleAnswer}</>
         ) : (
           <><b>Sample answer:</b> {data.assistant.sampleAnswer}</>
         )}
@@ -150,7 +150,7 @@ export default function RcaWorkspace({
   topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
-  aiSlot?: ReactNode;         // Correlix AI — grounded "Ask AI" RCA explanation card
+  aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -219,7 +219,7 @@ export default function RcaWorkspace({
             </div>
           </section>
 
-          {/* Correlix AI — grounded, cited "Ask AI" explanation of this RCA. */}
+          {/* Iris AI — grounded, cited "Ask AI" explanation of this RCA. */}
           {aiSlot && <section style={{ marginBottom: 4 }}>{aiSlot}</section>}
 
           {/* RCA Time Intelligence — where this incident's time was spent. */}

@@ -1,18 +1,18 @@
 ---
-title: Set up Correlix AI
+title: Set up Iris AI
 sidebar_label: Setup
 sidebar_position: 2
 description: Enable the assistant, connect an AI provider, and verify it's live.
 ---
 
-# Set up Correlix AI
+# Set up Iris AI
 
 This page walks a **platform administrator** through enabling the assistant, connecting an AI provider (optional), and verifying the result.
 
 ## Before you begin
 
 - **Who can do this:** enabling the feature requires access to the deployment host (`.env` file). Configuring the provider, model, and API key in the UI requires a **platform administrator** account — tenant and organization admins can use the assistant but cannot open its settings.
-- **Do you need an API key?** No — the assistant answers network questions (live state, incidents, RCA, flows, telemetry, playbooks) from your own data without any provider. A key only adds free‑form conversational chat and model‑written narratives. See [the overview](/correlix-ai/overview#two-answer-paths).
+- **Do you need an API key?** No — the assistant answers network questions (live state, incidents, RCA, flows, telemetry, playbooks) from your own data without any provider. A key only adds free‑form conversational chat and model‑written narratives. See [the overview](/iris-ai/overview#two-answer-paths).
 
 ## Step 1 — Enable the feature
 
@@ -32,13 +32,13 @@ The assistant is **off by default**. On the deployment host:
    docker compose restart api
    ```
 
-4. Refresh the browser. The **Correlix AI** button at the foot of the left icon rail now opens the assistant panel. (If the feature is still off, the panel shows *"Correlix AI is turned off. Set `FEATURE_COPILOT=true` in `deployment/docker/.env` and restart the API."*)
+4. Refresh the browser. The **Iris AI** button at the foot of the left icon rail now opens the assistant panel. (If the feature is still off, the panel shows *"Iris AI is turned off. Set `FEATURE_COPILOT=true` in `deployment/docker/.env` and restart the API."*)
 
 At this point the assistant is fully usable in **key‑free grounded mode** — the panel header shows an amber dot with **Grounded engine · key‑free**.
 
 ## Step 2 — Open the assistant settings
 
-1. Click the **Correlix AI** button on the icon rail to open the panel.
+1. Click the **Iris AI** button on the icon rail to open the panel.
 2. In the panel header, click the **gear icon** (*Assistant settings*).
 
 The settings form shows three fields — **API key**, **Provider**, and **Model** — plus a status badge next to the key field: **not set**, **configured** (a key was saved in the UI), or **via environment** (a key is supplied through the deployment's environment variables).
@@ -66,14 +66,14 @@ Switching the provider tile automatically proposes that provider's first suggest
 The key is **encrypted at rest and never displayed again**. The field afterwards shows `•••••••• (stored — leave blank to keep)` — saving the form with a blank key field keeps the stored key; it never wipes it.
 
 :::warning
-Once a key is saved, free‑form questions and grounded evidence summaries are sent to that external provider. Review [what leaves the platform](/correlix-ai/overview#privacy--what-leaves-the-platform) before enabling this in a restricted environment.
+Once a key is saved, free‑form questions and grounded evidence summaries are sent to that external provider. Review [what leaves the platform](/iris-ai/overview#privacy--what-leaves-the-platform) before enabling this in a restricted environment.
 :::
 
 **Alternative — key via environment.** Instead of the UI, the key can be supplied in `deployment/docker/.env` (`COPILOT_API_KEY` for the configured provider, or the per‑provider variables `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`). When any environment key is present, the UI key field is disabled and badged **via environment** — clear the variable from `.env` to manage the key in the UI. An environment key always wins over a UI‑stored one.
 
 ## Step 5 — Verify it's live
 
-1. Look at the panel header, under the **Correlix AI** title:
+1. Look at the panel header, under the **Iris AI** title:
    - **Green dot + provider and model** (for example *Claude · claude-sonnet-4-6*) — the provider is connected.
    - **Amber dot + "Grounded engine · key‑free"** — no usable key yet; grounded answers still work.
 2. Type a free‑form question (for example *"Why might my edge router be dropping BGP sessions?"*) and send it. A conversational answer confirms the provider round‑trip.
@@ -95,13 +95,13 @@ Google **Gemini** can participate in the fallback chain via `GEMINI_API_KEY`, bu
 
 | Symptom | Cause and fix |
 |---|---|
-| Panel says *"Correlix AI is turned off"* | `FEATURE_COPILOT` is not `true`. Set it in `deployment/docker/.env` and restart the API. |
-| *"Correlix AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"* | You asked a free‑form question with no key configured anywhere. Add a key (Step 4), or use the quick actions / slash commands, which work key‑free. |
-| *"Correlix AI couldn't reach the AI provider"* | The provider rejected the call (bad key, exhausted quota, or network egress blocked). Re‑paste the key in settings; check the provider account. Provider error details are in the API service logs, never shown to users. |
-| *"Correlix AI rate limit exceeded — slow down"* | You exceeded the per‑user budget (20 requests/minute by default). Wait a minute, or raise `COPILOT_RATE_PER_MIN`. |
+| Panel says *"Iris AI is turned off"* | `FEATURE_COPILOT` is not `true`. Set it in `deployment/docker/.env` and restart the API. |
+| *"Iris AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"* | You asked a free‑form question with no key configured anywhere. Add a key (Step 4), or use the quick actions / slash commands, which work key‑free. |
+| *"Iris AI couldn't reach the AI provider"* | The provider rejected the call (bad key, exhausted quota, or network egress blocked). Re‑paste the key in settings; check the provider account. Provider error details are in the API service logs, never shown to users. |
+| *"Iris AI rate limit exceeded — slow down"* | You exceeded the per‑user budget (20 requests/minute by default). Wait a minute, or raise `COPILOT_RATE_PER_MIN`. |
 | Key field is disabled, badge says **via environment** | A key is set in `.env`. Remove it there and restart the API to manage the key from the UI. |
 | Answers carry the footer *"Evidence‑only mode: AI provider not configured."* | Not an error — the grounded engine answered deterministically. Add a provider key if you want model‑written narratives. |
 
 ## Next steps
 
-- **[Using Correlix AI](/correlix-ai/using)** — slash commands, answer anatomy, and split‑screen mode.
+- **[Using Iris AI](/iris-ai/using)** — slash commands, answer anatomy, and split‑screen mode.

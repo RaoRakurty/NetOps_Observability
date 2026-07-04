@@ -27,7 +27,7 @@ var appKnowledge string
 
 // copilot.go — AI Copilot endpoint.
 //
-// The frontend Correlix AI tab posts a chat history to /api/copilot/chat.
+// The frontend Iris AI tab posts a chat history to /api/copilot/chat.
 // We forward to the configured LLM provider and stream the response back.
 // Provider credentials are read from env at request time so rotating
 // COPILOT_API_KEY doesn't require a restart.
@@ -228,10 +228,10 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
+		writeError(w, http.StatusBadGateway, fmt.Errorf("Iris AI couldn't reach the AI provider — please try again; if it persists, check the API key in settings"))
 		return
 	}
-	writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Correlix AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
+	writeError(w, http.StatusServiceUnavailable, fmt.Errorf("Iris AI isn't connected to an AI provider yet — open the assistant settings (gear icon) and add an API key"))
 }
 
 // firstConfiguredProvider resolves the first provider candidate for this
@@ -285,7 +285,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		}
 		// Lookups already ran; disclose the failure instead of silently
 		// re-answering without them (plan §3.d: fail the turn cleanly).
-		writeError(w, http.StatusBadGateway, fmt.Errorf("Correlix AI couldn't finish the investigation — please try again"))
+		writeError(w, http.StatusBadGateway, fmt.Errorf("Iris AI couldn't finish the investigation — please try again"))
 		return true
 	}
 	// Doc-kind citations from search_docs join the "From the docs" chips (and

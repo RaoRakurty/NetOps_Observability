@@ -1,15 +1,15 @@
-// Package ai is the Correlix AI platform: an application-aware, evidence-grounded
+// Package ai is the Iris AI platform: an application-aware, evidence-grounded
 // NOC assistant. It turns a natural-language question into a governed plan
 // (intent → module routing → read-only tool selection → cited evidence bundle →
 // LLM answer in a typed answer-mode schema), enforcing tenant/RBAC + module
-// availability throughout. See docs/design/correlix-ai-hld.md.
+// availability throughout. See docs/design/iris-ai-hld.md.
 //
 // Design notes:
 //   - The package depends only on INTERFACES (LLMClient, DataSource), never on
 //     the http server, so it imports cleanly and is unit-testable with mocks.
 //   - v1 is strictly READ-ONLY. No write/device tools live here; controlled
 //     actions are a separate, human-gated subsystem (HLD P6) the model can't call.
-//   - "copilot" is being retired as a name; user-facing is "Correlix AI".
+//   - "copilot" is being retired as a name; user-facing is "Iris AI".
 package ai
 
 import "strings"

@@ -120,7 +120,7 @@ describe("RcaWorkspace — view toggle + export wiring", () => {
   });
 });
 
-describe("RcaWorkspace — Ask RCA assistant (Correlix AI) wiring", () => {
+describe("RcaWorkspace — Ask RCA assistant (Iris AI) wiring", () => {
   it("sends the question to copilotChat and shows the answer", async () => {
     copilotChat.mockResolvedValue({ provider: "test", text: "Because evidence is single-source." });
     renderWS();

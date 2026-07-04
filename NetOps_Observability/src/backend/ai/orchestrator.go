@@ -1456,7 +1456,7 @@ func (o *Orchestrator) answerProductFromDocs(question string, plan Plan, disc []
 
 // answerCapability is the friendly "I didn't catch that" clarification for an
 // unrecognized question. It NEVER dumps the current-state briefing — instead it
-// says what Correlix AI can do so the operator can pick. Deterministic.
+// says what Iris AI can do so the operator can pick. Deterministic.
 func (o *Orchestrator) answerCapability(plan Plan) Answer {
 	return Answer{
 		Mode: ModeUnavailable, Intent: "capability", Modules: plan.Modules,
@@ -1495,7 +1495,7 @@ func (o *Orchestrator) answerFuturePhase(plan Plan) Answer {
 // non-fabricating NOC answers that cite the evidence ids provided.
 func (o *Orchestrator) systemPrompt() string {
 	return strings.Join([]string{
-		"You are Correlix AI, an evidence-grounded NOC assistant for a network observability platform.",
+		"You are Iris AI, an evidence-grounded NOC assistant for a network observability platform.",
 		"Answer ONLY from the EVIDENCE provided in the user message. Be concise and operational (a NOC engineer is reading).",
 		"Cite the evidence ids you used in square brackets, e.g. [problem:<id>].",
 		"NEVER invent device names, numbers, causes, or events that are not in the evidence.",

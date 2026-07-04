@@ -1628,7 +1628,7 @@ export const api = {
       body: JSON.stringify({ messages, system }),
     }),
 
-  // Correlix AI — application-aware assistant. Ask a question (optionally with a
+  // Iris AI — application-aware assistant. Ask a question (optionally with a
   // context id like the open RCA's correlation_id); returns a grounded, cited
   // answer in a typed answer-mode schema. Read-only (FEATURE_AI gated server-side).
   aiAsk: (question: string, context?: Record<string, string>) =>
@@ -2753,7 +2753,7 @@ export type CloudIdentityMappingRow = {
   updated_at: string;
 };
 
-// ── Correlix AI ───────────────────────────────────────────────────────────────
+// ── Iris AI ───────────────────────────────────────────────────────────────
 export type AiCitation = { id: string; kind: string; label: string; href: string };
 export type AiProblemExplanation = {
   problem_id: string;

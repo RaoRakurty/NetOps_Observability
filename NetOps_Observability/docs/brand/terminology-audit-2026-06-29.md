@@ -66,7 +66,7 @@ Severity:
 
 ## 🟢 Clear — distinctive to Correlix (keep)
 
-- **Correlix** / **Correlix AI** — the brand (assumed cleared by owner).
+- **Correlix** / **Iris AI** — the brand (assumed cleared by owner).
 - **Evidence** / **Evidence engine** — our anti-black-box RCA concept; distinctive in this framing.
 - **Witness** / **Blast radius** — "blast radius" is common in SRE but our *Witness* lane + evidence framing is ours; fine.
 - **RCA Auto-Ticketing**, **Path Health**, **Link Quality**, **Attribution** — descriptive, safe.

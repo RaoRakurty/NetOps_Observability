@@ -48,7 +48,7 @@ Once signed in, the left **icon rail** is your main navigation. It's organized i
 - **Monitor** — Dashboards, Monitoring, Incident Response, Automation.
 - **Infrastructure** — the device fleet: Devices, monitoring dashboards, maps, paths, and tunnels — plus Security.
 - **Data** — the raw telemetry planes: Metrics, Flows, Logs.
-- **Correlix AI** and **Administration** are pinned at the bottom.
+- **Iris AI** and **Administration** are pinned at the bottom.
 
 Hovering an icon opens a flyout listing that section's pages. You can also press <kbd>Ctrl+K</kbd> (or <kbd>⌘K</kbd>) and type a page name to jump anywhere.
 
