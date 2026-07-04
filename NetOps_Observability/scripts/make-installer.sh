@@ -164,12 +164,19 @@ git -C "$ROOT" archive --format=tar.gz --prefix=NetOps_Observability/ -o "$SRC_O
 # 7. The appliance installer + customer docs. install-correlix.sh at the
 #    bundle root is THE customer entry point — one command, no choices.
 cp "$ROOT/scripts/install-correlix.sh" "$BUNDLE_DIR/install-correlix.sh"
-chmod +x "$BUNDLE_DIR/install-correlix.sh"
+cp "$ROOT/scripts/prepare-host.sh" "$BUNDLE_DIR/prepare-host.sh"
+chmod +x "$BUNDLE_DIR/install-correlix.sh" "$BUNDLE_DIR/prepare-host.sh"
 
 cat > "$BUNDLE_DIR/README.md" <<EOF
 # Correlix — Quick Start ($VERSION)
 
-1. Install Docker Engine (with the Compose v2 plugin) and \`zstd\`.
+1. Prepare the host (installs Docker, Compose v2, zstd, kernel settings —
+   one time, needs your package mirror):
+
+       sudo ./prepare-host.sh
+
+   then log out and back in. (Hosts that already run Docker can skip this;
+   the installer verifies everything either way.)
 2. Extract this bundle (you have, if you can read this).
 3. Run:
 
@@ -304,7 +311,7 @@ if grep -qi 'redpanda' "$BUNDLE_DIR/README.md" "$BUNDLE_DIR/ADVANCED.md" "$BUNDL
   echo "FATAL: customer-facing bundle docs mention redpanda" >&2; exit 1
 fi
 
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh > SHA256SUMS)
+(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh prepare-host.sh > SHA256SUMS)
 
 echo "== done"
 du -sh "$BUNDLE_DIR"/* | sed 's/^/   /'

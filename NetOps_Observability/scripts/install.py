@@ -174,8 +174,12 @@ REQUIRED_PATHS = [
     "src/frontend/src/hooks/useAuth.ts",
     "src/frontend/src/tabs/Logs.tsx",
     "src/frontend/src/tabs/Flows.tsx",
-    "src/frontend/src/tabs/Topology.tsx",
-    "src/frontend/src/tabs/Copilot.tsx",
+    # Topology.tsx/Copilot.tsx no longer exist (renamed to the canvas pages /
+    # Opsis in old refactors); their stale entries broke the FIRST real bundle
+    # install (2026-07-04) because only install.py runs this validator. It now
+    # also runs in CI via preflight-install.py so the list can't rot again.
+    "src/frontend/src/features/topology/renderers/react-flow/TopologyCanvas.tsx",
+    "src/frontend/src/tabs/Opsis.tsx",
     "src/frontend/src/tabs/Findings.tsx",
     # Correlation/AI service
     "src/correlation/main.py",

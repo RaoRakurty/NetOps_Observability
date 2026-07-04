@@ -141,6 +141,25 @@ preflight() {
       "Either stop the service using it, or install on another port:
   ./install-correlix.sh install --ui-port 9443"
   fi
+
+  # OpenSearch (the log-search store) needs this kernel setting; without it
+  # the store crash-loops after an otherwise clean install. Self-heal when we
+  # can do so silently, otherwise tell the customer the exact fix.
+  local mmc; mmc=$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)
+  if [ "$mmc" -lt 262144 ]; then
+    if sudo -n sysctl -w vm.max_map_count=262144 >/dev/null 2>&1; then
+      echo "vm.max_map_count=262144" | sudo -n tee /etc/sysctl.d/99-correlix.conf >/dev/null 2>&1 || true
+      ok "kernel setting vm.max_map_count raised to 262144"
+    else
+      die "Kernel setting vm.max_map_count is $mmc; Correlix needs 262144." \
+        "Run the host preparation script (installs/fixes everything at once):
+  sudo ./prepare-host.sh
+or apply just this setting:
+  sudo sysctl -w vm.max_map_count=262144
+  echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-correlix.conf
+then re-run ./install-correlix.sh"
+    fi
+  fi
   ok "docker + compose ready"
 }
 

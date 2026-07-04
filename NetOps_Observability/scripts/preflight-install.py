@@ -193,7 +193,31 @@ def main() -> int:
     else:
         bad("install.py DEFAULT_PROFILES must include embedded-bus (default = embedded Kafka)")
 
-    # 5) informational: migrations auto-apply on api start; just surface the count
+    # 5) install.py's own scaffold validator must be satisfiable by the GIT
+    # tree (what a bundle actually ships) — untracked working-tree leftovers
+    # can mask a stale REQUIRED_PATHS entry until a customer install trips it
+    # (exactly what happened with tabs/Topology.tsx on the first bundle
+    # install, 2026-07-04).
+    print("[scaffold] install.py REQUIRED_PATHS exist in the committed tree")
+    import subprocess
+    req = re.search(r"REQUIRED_PATHS = \[(.*?)\]", INSTALL.read_text(), re.S)
+    req_paths = re.findall(r'"([^"]+)"', req.group(1)) if req else []
+    try:
+        tracked = set(subprocess.run(["git", "ls-files"], capture_output=True,
+                                     text=True, cwd=ROOT, check=True).stdout.splitlines())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        tracked = None  # no git (extracted customer tree) → filesystem is truth
+    if tracked is not None:
+        stale = [p for p in req_paths if p not in tracked]
+    else:
+        stale = [p for p in req_paths if not (ROOT / p).exists()]
+    if stale:
+        for p in stale:
+            bad(f"scaffold path required by install.py is not in the shipped tree: {p}")
+    else:
+        ok(f"all {len(req_paths)} required scaffold paths ship")
+
+    # 6) informational: migrations auto-apply on api start; just surface the count
     migs = sorted((ROOT / "src" / "backend" / "migrations").glob("*.sql"))
     print(f"[migrations] {len(migs)} present, auto-applied by the api on startup (latest: {migs[-1].name if migs else 'none'})")
 
