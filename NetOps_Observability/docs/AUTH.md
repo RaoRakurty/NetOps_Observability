@@ -38,7 +38,7 @@ The protected paths are everything under `/api/` and `/admin/` except:
 | `/api/auth/login`       | needed to obtain a token |
 | `/admin/health`         | docker healthchecks, monitoring |
 | `/admin/version`        | trivial, no PII |
-| `/metrics`              | Prometheus scrape |
+| `/metrics`              | metrics scrape (Prometheus exposition format, scraped by VictoriaMetrics) |
 
 Everything else (devices, logs, flows, findings, copilot, GraphQL,
 admin endpoints) requires a valid bearer token.

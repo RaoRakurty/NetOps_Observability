@@ -64,11 +64,18 @@ docker compose exec postgres pg_dump -U netops netops > backup.sql
 docker compose exec -i postgres psql -U netops netops < backup.sql
 ```
 
-## Configuring Netbox
+## Configuring the Source of Truth (external inventory)
+
+Configure it in the UI: **Automation → Source of Truth → Set up** — pick the
+bundled inventory (auto-wired) or point at an external instance (URL + API
+token, stored encrypted). No restart needed; the collector picks up changes
+on its next poll.
+
+Legacy env-based setup still works as a fallback:
 
 1. Edit `deployment/docker/.env`:
    ```
-   NETBOX_URL=https://netbox.example.com
+   NETBOX_URL=https://inventory.example.com
    NETBOX_TOKEN=...
    ```
 2. `docker compose up -d` (recreates the api container with the new env).
@@ -201,6 +208,6 @@ curl http://localhost:8000/loki/loki/api/v1/labels | jq
 | `localhost:8000` won't load          | `docker compose ps` — is nginx Up?                                |
 | Health endpoint returns 502          | `docker compose logs api`                                         |
 | "Disconnected" banner in dashboard   | API container crash or env mismatch — check logs                  |
-| Grafana 404s under /grafana/         | `GF_SERVER_SERVE_FROM_SUB_PATH=true` must be set (it is, by default) |
-| Prometheus shows no `netops` job     | `prometheus.yml` mount path wrong — check the compose volumes      |
+| Self-Monitoring 404s under /grafana/ | `GF_SERVER_SERVE_FROM_SUB_PATH=true` must be set (it is, by default); the self-monitoring add-on must be enabled |
+| Self-metrics missing (ScrapeTargetDown) | VictoriaMetrics scrapes them itself — check the `vmscrape.yml` mount and `docker compose logs victoria` |
 | Port 8000 already in use             | Edit `BASE_PORT` in `.env`, then `up -d`                          |

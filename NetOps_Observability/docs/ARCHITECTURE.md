@@ -174,8 +174,8 @@ Tabs:
 | Findings   | `/api/findings` (ClickHouse)         |
 | Logs       | `/api/logs/search` (OpenSearch DSL)  |
 | Flows      | `/api/flows/*` (ClickHouse + ECharts) |
-| Copilot    | `/api/copilot/chat` (LLM)            |
-| Grafana    | iframe (self-monitoring add-on; Victoria + ClickHouse datasources) |
+| Correlix AI | `/api/copilot/chat` (LLM)           |
+| Self-Monitoring | iframe (Grafana, self-monitoring add-on; Victoria + ClickHouse datasources) |
 | OS Dashboards | iframe (`/search/`)               |
 | Settings   | integration status + manual refresh  |
 

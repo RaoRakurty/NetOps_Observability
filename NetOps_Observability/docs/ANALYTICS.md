@@ -62,8 +62,9 @@ docker compose exec clickhouse clickhouse-client --query "SELECT count() FROM ne
 docker compose exec clickhouse clickhouse-client --query "SHOW TABLES FROM netops"
 ```
 
-Grafana has a provisioned ClickHouse datasource — `Explore` → pick
-ClickHouse → write SQL.
+The self-monitoring add-on's console (Stack → Self-Monitoring in the UI)
+has a provisioned ClickHouse datasource — `Explore` → pick ClickHouse →
+write SQL.
 
 ## Operational notes
 

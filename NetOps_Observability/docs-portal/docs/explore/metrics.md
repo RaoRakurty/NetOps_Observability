@@ -39,7 +39,7 @@ This is the raw catalog: every metric the collectors are writing, including per-
 
 ## Write a query
 
-The query box accepts **PromQL** — the industry-standard metrics query language. Type a query and click **Run** (or press Enter).
+The query box accepts full **PromQL syntax** (the industry-standard metrics query language). Type a query and click **Run** (or press Enter).
 
 The essentials, all verified against the metrics the platform collects:
 

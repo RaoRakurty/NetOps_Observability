@@ -157,7 +157,7 @@ In the dashboard, the **Logs** tab takes the same LogQL queries:
 
 * **Vector backpressure.** If Loki falls behind, Vector will reject new
   syslog packets at the UDP socket level. Watch `vector_buffer_*` and
-  `vector_events_received_total` in Prometheus.
+  `vector_events_received_total` in VictoriaMetrics (self-scrape).
 
 ## Where this is going
 

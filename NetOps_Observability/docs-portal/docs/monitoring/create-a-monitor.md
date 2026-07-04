@@ -35,7 +35,7 @@ Every signal template is backed by telemetry the platform already collects. If a
 | Routing | **OSPF neighbor down** | An OSPF adjacency left the Full state | — (state) | 120 s / critical |
 | Path SLA | **Path RTT** | Active-probe round-trip time above a threshold | 150 ms | 300 s / warning |
 | Path SLA | **Path loss** | Active-probe packet loss above a threshold | 1 % | 300 s / critical |
-| Custom | **Custom PromQL** | Any query-language condition you write yourself | — | 300 s / warning |
+| Custom | **Custom query** | Any query-language condition you write yourself | — | 300 s / warning |
 
 Templates marked "— (state)" watch a state transition rather than a numeric level, so they have no threshold field in the next step.
 
@@ -51,7 +51,7 @@ Fill in the **Condition** step. Which fields appear depends on the template:
 | **Threshold** | The breach level, shown with the template's unit (%, ms, errs/s, …). Only present on threshold templates. | `80` |
 | **Must hold for** | Seconds the condition must hold **continuously** before the alert fires. `0` fires on the first matching evaluation (the engine evaluates every 30 seconds). A brief drop below the condition restarts the clock. | `300` |
 | **Severity** | How loud the alert is: `info`, `warning`, or `critical`. Drives the color and sorting on Active Alerts and the routing weight downstream. | `critical` |
-| **PromQL expression** | Custom template only — replaces scope and threshold. Write any query-language condition; the monitor fires while it returns at least one series. | `avg by (device) (device_cpu_percent) > 90` |
+| **Query expression** | Custom template only — replaces scope and threshold. Write any query-language condition; the monitor fires while it returns at least one series. | `avg by (device) (device_cpu_percent) > 90` |
 
 :::tip
 Keep a non-zero **Must hold for** on anything noisy (CPU, utilization, errors) — it's the difference between "sustained problem" and "someone ran a backup for 40 seconds".

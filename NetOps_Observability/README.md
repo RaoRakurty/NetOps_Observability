@@ -61,10 +61,11 @@ NetOps_Observability/
 └── data/                    — generated at install time (gitignored)
 ```
 
-## Tabs in the dashboard
+## Navigation
 
-Dashboard · Devices · Topology · Collectors · Alerts · Rules · Findings ·
-Logs · Flows · Copilot · Grafana · OpenSearch Dashboards · Settings
+Dashboards · Monitoring · Incident Response · Automation (Source of Truth) ·
+Infrastructure · Data · Stack (Stack Health · Self-Monitoring · OpenSearch) ·
+Correlix AI · Administration
 
 ## Security defaults
 
