@@ -31,6 +31,7 @@ import socket
 import string
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -446,12 +447,11 @@ REFRESH_TOKEN_TTL=168h
 APIKEY_RATE_LIMIT_PER_MIN=600
 
 # Correlix AI assistant. ON by default in key-free GROUNDED mode (deterministic,
-# in-process, no external calls). Add a provider key in the UI (or here) to
-# enable LLM answers + investigations.
+# in-process, no external calls). Set FEATURE_COPILOT=false to disable. Add a
+# provider key in the assistant settings UI (or COPILOT_API_KEY here) to enable
+# LLM answers + investigations. Provider: 'gemini' (default, free tier),
+# 'anthropic' or 'openai'.
 FEATURE_COPILOT=true
-# to disable. Provider: 'gemini' (default — free tier), 'anthropic' or 'openai';
-# the key is usually pasted in the assistant settings UI instead of here.
-FEATURE_COPILOT=false
 COPILOT_PROVIDER=gemini
 COPILOT_API_KEY=
 COPILOT_MODEL=
@@ -668,12 +668,27 @@ def compose_up(compose_dir: Path, offline: bool = False) -> None:
     else:
         info("building and starting services (this can take a few minutes the first time)…")
         build_flag = "--build"
-    subprocess.run(
-        ["docker", "compose", "up", "-d", build_flag],
-        cwd=str(compose_dir),
-        check=True,
-    )
-    ok("services started")
+    # First-boot resilience (virgin-host finding, 2026-07-04): on a fresh host the
+    # data tier (OpenSearch/ClickHouse JVM cold start + first-time index/schema
+    # init) can take longer to report HEALTHY than a single `compose up` waits for
+    # a depends_on: service_healthy gate — compose then aborts the dependency wait
+    # and leaves api/correlation/nginx in "Created". `up -d` is idempotent, so a
+    # second/third pass starts exactly those stragglers once their deps have since
+    # gone healthy. Retry before giving up.
+    last = 1
+    for attempt in range(1, 4):
+        r = subprocess.run(["docker", "compose", "up", "-d", build_flag],
+                           cwd=str(compose_dir))
+        if r.returncode == 0:
+            ok("services started")
+            return
+        last = r.returncode
+        if attempt < 3:
+            warn(f"start pass {attempt} incomplete (slow first-boot health) — "
+                 "waiting 30s and retrying…")
+            time.sleep(30)
+    fail(f"docker compose up did not converge after 3 attempts (last exit {last}). "
+         "Check: docker compose ps")
 
 
 def load_bundle(bundle: Path) -> None:

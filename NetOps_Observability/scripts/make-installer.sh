@@ -63,10 +63,14 @@ mkdir -p "$BUNDLE_DIR"
 
 echo "== correlix installer bundle $VERSION ($PROFILE) -> $BUNDLE_DIR"
 
-# 1. Frontend dist + docs portal (gitignored build artifacts the frontend
-#    image COPYs; without them `compose build frontend` fails or ships stale UI).
-if [ ! -d "$ROOT/src/frontend/dist" ] || [ "${REBUILD_FRONTEND:-0}" = "1" ]; then
-  echo "-- building frontend dist/"
+# 1. Frontend dist + docs portal (gitignored build artifacts the frontend image
+#    COPYs). ALWAYS rebuild for a bundle: dist/ is gitignored and long-lived, so
+#    a "build only if missing" check silently ships a STALE UI whenever a dev's
+#    dist predates their source edits — exactly what shipped four bundles' worth
+#    of un-scrubbed UI on 2026-07-04. Correctness over the ~30s build cost.
+#    (REBUILD_FRONTEND=0 can force-skip only if you KNOW dist is fresh.)
+if [ "${REBUILD_FRONTEND:-1}" != "0" ]; then
+  echo "-- building frontend dist/ (fresh)"
   (cd "$ROOT/src/frontend" && npm ci --silent && npm run build)
 fi
 
