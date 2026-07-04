@@ -46,7 +46,7 @@ const TEMPLATES: Template[] = [
   { id: "rtt", category: "Path SLA", title: "Path RTT", desc: "Active-probe (STAMP) round-trip time above a threshold.", expr: `probe_rtt_ms{S} > {T}`, threshold: 150, unit: "ms", forSec: 300, severity: "warning", nameHint: "PathRTTHigh" },
   { id: "loss", category: "Path SLA", title: "Path loss", desc: "Active-probe (STAMP) packet loss above a threshold.", expr: `probe_loss_pct{S} > {T}`, threshold: 1, unit: "%", forSec: 300, severity: "critical", nameHint: "PathLossHigh" },
   // Custom
-  { id: "custom", category: "Custom", title: "Custom PromQL", desc: "Write any PromQL/MetricsQL condition — full expressive power, no guardrails.", expr: ``, forSec: 300, severity: "warning", nameHint: "" },
+  { id: "custom", category: "Custom", title: "Custom query", desc: "Write any metric-query condition — full expressive power, no guardrails.", expr: ``, forSec: 300, severity: "warning", nameHint: "" },
 ];
 
 const CATEGORIES = [...new Set(TEMPLATES.map((t) => t.category))];
@@ -185,7 +185,7 @@ export default function NewMonitor() {
               <div className="form-grid">
                 {tpl?.id === "custom" ? (
                   <div className="form-field wide">
-                    <label className="form-label" htmlFor="nm-expr">PromQL expression<span className="form-req">*</span></label>
+                    <label className="form-label" htmlFor="nm-expr">Query expression<span className="form-req">*</span></label>
                     <input id="nm-expr" className="form-input mono" placeholder='e.g. avg by (device) (device_cpu_percent) > 90' value={customExpr} onChange={(e) => setCustomExpr(e.target.value)} />
                     <span className="form-hint">Evaluated as an instant query; the monitor fires while it returns ≥ 1 series.</span>
                   </div>

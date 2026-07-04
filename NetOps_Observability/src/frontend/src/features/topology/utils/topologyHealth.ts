@@ -90,7 +90,7 @@ export const SOURCE_LABEL: Record<TopologySource, string> = {
   bgp_ls: "BGP-LS",
   isis_lsdb: "IS-IS LSDB",
   ospf_lsdb: "OSPF LSDB",
-  netbox: "NetBox",
+  netbox: "Source of Truth",
   cloud_api: "Cloud API",
   k8s_api: "Kubernetes",
   flow: "Flow",
