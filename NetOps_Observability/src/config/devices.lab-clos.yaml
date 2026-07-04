@@ -1,0 +1,113 @@
+# Static device inventory — containerlab "clos-multivendor" fabric (172.40.40.0/24).
+#
+# SNMP community/credentials are configured in the GUI (Administration → SNMP
+# Credentials) as profiles; each device references one via `credential_ref`
+# (the profile id/slug, e.g. "arista-v2c"). Communities/keys live only in the
+# credential store — never in this file. Reachability requires the stack host
+# (.122) to route 172.40.40.0/24 via .120.
+devices:
+  spine1:
+    address: 172.40.40.11
+    preferred_protocol: snmp
+    vendor: nokia
+    credential_ref: nokia-v3
+    labels:
+      site: clos-lab
+      role: spine
+      gnmi: "true"   # SR Linux gNMI: owns BGP + IS-IS (gnmic srl-bgp/srl-isis)
+  spine2:
+    address: 172.40.40.12
+    preferred_protocol: snmp
+    vendor: nokia
+    credential_ref: nokia-v3
+    labels:
+      site: clos-lab
+      role: spine
+      gnmi: "true"   # SR Linux gNMI: owns BGP + IS-IS (gnmic srl-bgp/srl-isis)
+  leaf1:
+    address: 172.40.40.21
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v3
+    labels:
+      site: clos-lab
+      role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
+  leaf2:
+    address: 172.40.40.22
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v3
+    labels:
+      site: clos-lab
+      role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
+  leaf3:
+    address: 172.40.40.23
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v3
+    labels:
+      site: clos-lab
+      role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
+  leaf4:
+    address: 172.40.40.24
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v3
+    labels:
+      site: clos-lab
+      role: leaf
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
+  # wan-r1 (juniper, 172.40.40.31) — REMOVED from the clos lab topology
+  # (containerlab node deleted 2026-06-10). Kept here, commented, as a record of
+  # intent for re-add; uncomment when the node is back in the topology. While
+  # absent it must NOT be in the active inventory or the collector polls a dead
+  # IP and the fidelity harness flags a false coverage gap.
+  # wan-r1:
+  #   address: 172.40.40.31
+  #   preferred_protocol: snmp
+  #   vendor: juniper
+  #   credential_ref: juniper-v2c
+  #   labels:
+  #     site: clos-lab
+  #     role: wan
+  wan-r2:
+    address: 172.40.40.32
+    preferred_protocol: snmp
+    vendor: arista
+    credential_ref: arista-v3
+    labels:
+      site: clos-lab
+      role: wan
+      gnmi: "true"   # cEOS gNMI: owns BGP (gnmic oc-bgp)
+  lan-sw1:
+    address: 172.40.40.51
+    preferred_protocol: snmp
+    vendor: cisco
+    credential_ref: cisco-v3
+    labels:
+      site: clos-lab
+      role: lan
+  # lan-sw2 (cisco c8000v, 172.40.40.52) — NOT in the running containerlab
+  # topology (verified 2026-07-02: no container, ARP incomplete on the .120
+  # bridge). Kept commented as a record of intent, same as wan-r1 above —
+  # re-add when the node returns, otherwise the collectors poll a dead IP and
+  # the Devices page shows a permanently-empty device.
+  # lan-sw2:
+  #   address: 172.40.40.52
+  #   preferred_protocol: snmp
+  #   vendor: cisco
+  #   credential_ref: cisco-v3
+  #   labels:
+  #     site: clos-lab
+  #     role: lan
+  dmz-fw:
+    address: 172.40.40.41
+    preferred_protocol: snmp
+    vendor: fortinet
+    credential_ref: fortinet-v3
+    labels:
+      site: clos-lab
+      role: firewall

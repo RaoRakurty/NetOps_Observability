@@ -63,6 +63,7 @@ export type NavLeaf = {
   label: string;
   render: (c: SectionCtx) => JSX.Element;
   platformOnly?: boolean; // visible only to the cross-tenant platform owner
+  requiresGrafana?: boolean; // shown only when the self-monitoring add-on runs
   // group: render this leaf under a labelled heading in the hover flyout
   // (e.g. "Developer"). Consecutive leaves sharing a group sit under one header.
   group?: string;
@@ -265,7 +266,7 @@ export const NAV: NavSection[] = [
     platformOnly: true,
     children: [
       { id: "health", label: "Stack Health", render: () => <StackHealth /> },
-      { id: "grafana", label: "Grafana", render: () => <GrafanaTab /> },
+      { id: "grafana", label: "Grafana", requiresGrafana: true, render: () => <GrafanaTab /> },
       { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
       // Developer — power-user, API-first tooling.
       { id: "graphql", label: "GraphQL Explorer", group: "Developer", render: () => <GraphQLExplorer /> },
@@ -326,10 +327,16 @@ export type Resolved = {
 // filteredNav drops platform-owner-only sections/leaves for tenant-scoped users.
 // The platform owner sees the full tree. This is UX gating; the backend enforces
 // the boundary independently (e.g. /api/stack/health returns 403).
-export function filteredNav(platformAdmin: boolean): NavSection[] {
-  if (platformAdmin) return NAV;
+export function filteredNav(platformAdmin: boolean, grafanaEnabled = true): NavSection[] {
+  // Grafana is the self-monitoring ADD-ON's console: hide its tab entirely
+  // when the deployment doesn't run it (a dead iframe is not navigation).
+  const dropGrafana = (s: NavSection): NavSection =>
+    s.children && !grafanaEnabled
+      ? { ...s, children: s.children.filter((l) => !l.requiresGrafana) }
+      : s;
+  if (platformAdmin) return NAV.map(dropGrafana);
   return NAV.filter((s) => !s.platformOnly).map((s) =>
-    s.children ? { ...s, children: s.children.filter((l) => !l.platformOnly) } : s,
+    dropGrafana(s.children ? { ...s, children: s.children.filter((l) => !l.platformOnly) } : s),
   );
 }
 

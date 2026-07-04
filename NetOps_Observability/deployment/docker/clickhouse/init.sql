@@ -289,6 +289,12 @@ CREATE TABLE IF NOT EXISTS netops.corr_objects
     topology_version LowCardinality(String),
     catalog_version  LowCardinality(String), -- signature-catalog version scored against
     merged_into      Nullable(UUID),
+    -- App-Identity fusion (#81) + layer coverage: added live via ALTER on the
+    -- lab but MISSED here until the first virgin-host install 500'd the home
+    -- page (UNKNOWN_IDENTIFIER o.app_impact, 2026-07-04). init.sql is the
+    -- fresh-install schema authority — every live ALTER must land here too.
+    layer_coverage   String DEFAULT '{}',    -- JSON: per-layer signal coverage
+    app_impact       String DEFAULT '{}',    -- JSON: impacted app identities
     created_at       DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree

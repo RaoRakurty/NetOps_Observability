@@ -733,7 +733,7 @@ services:
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.
       TENANT_ENRICHMENT_DIR: /data/enrichment
-      STATIC_DEVICES_PATH: /config/devices.yaml
+      STATIC_DEVICES_PATH: ${STATIC_DEVICES_PATH:-/config/devices.yaml}
       RULES_FILE: /config/rules.yaml
       # #81 P1: Application Identification IP→app catalog. Opt-in snapshot dir of
       # vendor IP-range feeds (aws/azure/gcp/m365.json — populate via

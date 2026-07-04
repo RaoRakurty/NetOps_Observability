@@ -334,8 +334,10 @@ JWT_SECRET={secrets_map["JWT_SECRET"]}
 ENCRYPTION_KEY={secrets_map["ENCRYPTION_KEY"]}
 
 # Feature toggles
-ENABLE_SNMP_DISCOVERY=true
-SNMP_CIDR_RANGES=10.0.0.0/8
+# Discovery is OPT-IN: an appliance must never scan a network unasked.
+# Enable + scope it in the UI (Administration -> Discovery) or here.
+ENABLE_SNMP_DISCOVERY=false
+SNMP_CIDR_RANGES=
 ENABLE_SNMP_COLLECTION=true
 ENABLE_GNMI_COLLECTION=false
 ENABLE_NETCONF_COLLECTION=false
@@ -443,7 +445,10 @@ REFRESH_TOKEN_TTL=168h
 # app-level limit. Over-cap calls return 429 + Retry-After.
 APIKEY_RATE_LIMIT_PER_MIN=600
 
-# AI Copilot (chat pane in the dashboard). Leave FEATURE_COPILOT=false
+# Correlix AI assistant. ON by default in key-free GROUNDED mode (deterministic,
+# in-process, no external calls). Add a provider key in the UI (or here) to
+# enable LLM answers + investigations.
+FEATURE_COPILOT=true
 # to disable. Provider: 'gemini' (default — free tier), 'anthropic' or 'openai';
 # the key is usually pasted in the assistant settings UI instead of here.
 FEATURE_COPILOT=false

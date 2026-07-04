@@ -1189,6 +1189,7 @@ export type AuthUser = {
   // platform_admin = the cross-tenant platform owner. Gates infra-stack
   // monitoring + platform-wide admin in the UI. Mirrors the backend rule.
   platform_admin?: boolean;
+  grafana_enabled?: boolean;
   // org_id = the organization the caller belongs to (its tenant's org; Global
   // for the platform owner).
   org_id?: string;

@@ -47,7 +47,8 @@ export default function App() {
   // platform's own infra-stack monitoring (Stack Health + raw backends). The
   // backend enforces the same boundary independently.
   const platformAdmin = !!user?.platform_admin;
-  const nav = useMemo(() => filteredNav(platformAdmin), [platformAdmin]);
+  const grafanaEnabled = user?.grafana_enabled !== false; // absent (old api) = show
+  const nav = useMemo(() => filteredNav(platformAdmin, grafanaEnabled), [platformAdmin, grafanaEnabled]);
   // The brand/Home button goes to the configured landing (if it resolves for this
   // principal), else the first nav section — so Home matches "where I start".
   const homeRoute = useMemo(() => {

@@ -491,12 +491,13 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		publicUser
 		PlatformAdmin     bool     `json:"platform_admin"`
+		GrafanaEnabled    bool     `json:"grafana_enabled"`
 		OrgID             string   `json:"org_id"`
 		AccessibleTenants []string `json:"accessible_tenants"`
 		AllTenants        bool     `json:"all_tenants"`
 		OrgAdminOf        []string `json:"org_admin_of"`
 		DefaultLanding    string   `json:"default_landing,omitempty"`
-	}{toPublic(user), owner, s.principalOrg(claims), tenants, allTenants, s.orgAdminOrgs(claims.Sub), s.resolveLanding(claims)})
+	}{toPublic(user), owner, envOr("GRAFANA_URL", "") != "", s.principalOrg(claims), tenants, allTenants, s.orgAdminOrgs(claims.Sub), s.resolveLanding(claims)})
 }
 
 // resolveLanding returns the administratively-configured landing route for the
