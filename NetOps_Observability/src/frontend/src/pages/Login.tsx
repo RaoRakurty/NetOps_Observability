@@ -23,14 +23,30 @@ function EyeWordmark() {
   );
 }
 
-// Shared cinematic scene: dark brand stage on the left, form card on the
+// Shared cinematic scene: brand stage on the left, glass form card on the
 // right. All three login views (sign-in, MFA, change password) render inside
-// it so the whole pre-auth experience is one continuous space.
+// it so the whole pre-auth experience is one continuous space. Two versions
+// exist — the deep-space "Dark" scene and the calm white "Light" scene — and
+// the visitor's pick persists across visits.
+const SCENE_KEY = "netops.login.scene";
+type Scene = "dark" | "light";
+
 function LoginScene({ children }: { children: React.ReactNode }) {
+  const [scene, setScene] = useState<Scene>(
+    () => (localStorage.getItem(SCENE_KEY) === "light" ? "light" : "dark"),
+  );
+  const pick = (s: Scene) => {
+    localStorage.setItem(SCENE_KEY, s);
+    setScene(s);
+  };
   return (
-    <div className="login-scene">
+    <div className={scene === "light" ? "login-scene login-light" : "login-scene"}>
       {/* The eye artwork at full presence — the scene the glass card floats in. */}
       <img className="login-bg-eye" src={EYE_HERO_URL} alt="" decoding="async" />
+      <div className="login-scene-toggle" role="group" aria-label="Background style">
+        <button type="button" className={scene === "dark" ? "on" : ""} aria-pressed={scene === "dark"} onClick={() => pick("dark")}>Dark</button>
+        <button type="button" className={scene === "light" ? "on" : ""} aria-pressed={scene === "light"} onClick={() => pick("light")}>Light</button>
+      </div>
       <div className="login-stage">
         <header className="login-brandside">
           <p className="login-eyebrow">{BRAND_TAGLINE}</p>
