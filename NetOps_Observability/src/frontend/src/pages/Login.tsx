@@ -3,8 +3,49 @@ import { api, AuthMethods, takeSessionEndMessage } from "../services/api";
 import { BRAND, BRAND_TAGLINE } from "../brand";
 import Icon from "../components/Icon";
 import ChangePasswordCard from "../components/ChangePasswordCard";
+import eyeIris from "../assets/brand/eye-iris.webp";
+
+// Served from public/ under a stable URL so index.html can <link rel="preload">
+// it — the artwork starts downloading before the app bundle finishes parsing.
+const EYE_HERO_URL = "/brand/eye-hero.webp";
 
 type Method = "local" | "ldap" | "tacacs";
+
+// The wordmark: CORRELIX with the O replaced by the iris of the eye artwork.
+// Screen readers get the brand name once; the split glyphs are decorative.
+function EyeWordmark() {
+  return (
+    <h1 className="login-wordmark" aria-label={BRAND}>
+      <span aria-hidden="true">C</span>
+      <span aria-hidden="true" className="login-wm-eye"><img src={eyeIris} alt="" /></span>
+      <span aria-hidden="true">RRELIX</span>
+    </h1>
+  );
+}
+
+// Shared cinematic scene: dark brand stage on the left, form card on the
+// right. All three login views (sign-in, MFA, change password) render inside
+// it so the whole pre-auth experience is one continuous space.
+function LoginScene({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="login-scene">
+      {/* The eye artwork at full presence — the scene the glass card floats in. */}
+      <img className="login-bg-eye" src={EYE_HERO_URL} alt="" decoding="async" />
+      <div className="login-stage">
+        <header className="login-brandside">
+          <p className="login-eyebrow">{BRAND_TAGLINE}</p>
+          <EyeWordmark />
+          <ul className="login-creed">
+            <li><em>See</em> everything</li>
+            <li><em>Correlate</em> everything</li>
+            <li><em>Resolve</em> anything</li>
+          </ul>
+        </header>
+        <div className="login-formside">{children}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   // The login window doubles as the self-service "Change password" entry point
@@ -75,9 +116,9 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   // Step 2: authenticator code entry (after a password succeeds for an MFA account).
   if (mfaToken) {
     return (
-      <div className="login-wrap">
+      <LoginScene>
         <form onSubmit={submitMfa} className="card login-card">
-          <h1 className="login-brand">{BRAND}</h1>
+          <h2 className="login-card-title">Two-step verification</h2>
           <p className="login-sub">Enter the 6-digit code from your authenticator app.</p>
           <div className="login-form">
             <div className="form-field">
@@ -104,23 +145,22 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             </button>
           </div>
         </form>
-      </div>
+      </LoginScene>
     );
   }
 
   if (view === "changepw") {
     return (
-      <div className="login-wrap">
+      <LoginScene>
         <ChangePasswordCard preAuth onDone={() => setView("signin")} />
-      </div>
+      </LoginScene>
     );
   }
 
   return (
-    <div className="login-wrap">
+    <LoginScene>
       <form onSubmit={submit} className="card login-card">
-        <h1 className="login-brand">{BRAND}</h1>
-        <p className="login-sub">{BRAND_TAGLINE} · sign in to continue.</p>
+        <h2 className="login-card-title">Sign in</h2>
 
         {notice && <p className="login-msg" role="status" aria-live="polite" style={{ color: "var(--muted)" }}>{notice}</p>}
 
@@ -208,14 +248,7 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             ))}
           </div>
         )}
-
-        <p className="login-note">
-          First-time install? Initial credentials are in{" "}
-          <code>deployment/docker/.env</code> as <code>ADMIN_USERNAME</code> and{" "}
-          <code>ADMIN_INITIAL_PASSWORD</code>. Use “Change password” above to set
-          your own (local accounts only).
-        </p>
       </form>
-    </div>
+    </LoginScene>
   );
 }

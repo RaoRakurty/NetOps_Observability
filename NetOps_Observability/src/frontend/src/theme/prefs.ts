@@ -22,13 +22,13 @@ export type Density = "comfortable" | "compact";
 // treatment is shared; only the hue/lightness shifts. "navy" is the bare :root
 // tokens (default), so it needs no override block. `swatch` is the picker dot's
 // base color. Three curated, professional options: Navy (default), a dark
-// graphite, and a soft light-grey "Mist".
-export type Chrome = "navy" | "graphite" | "mist";
+// graphite, and a clean "White" (replaced the old grey "Mist").
+export type Chrome = "navy" | "graphite" | "white";
 
 export const CHROME_PRESETS: { id: Chrome; label: string; swatch: string }[] = [
   { id: "navy", label: "Navy", swatch: "#20283c" },
   { id: "graphite", label: "Graphite", swatch: "#23262d" },
-  { id: "mist", label: "Mist", swatch: "#cbd5e1" },
+  { id: "white", label: "White", swatch: "#ffffff" },
 ];
 const CHROME_IDS = CHROME_PRESETS.map((c) => c.id);
 
@@ -47,8 +47,9 @@ function readDensity(): Density {
 }
 
 function readChrome(): Chrome {
-  const v = localStorage.getItem(CHROME_KEY) as Chrome | null;
-  return v && CHROME_IDS.includes(v) ? v : "navy";
+  const v = localStorage.getItem(CHROME_KEY);
+  if (v === "mist") return "white"; // migrate the removed Mist preset
+  return v && CHROME_IDS.includes(v as Chrome) ? (v as Chrome) : "navy";
 }
 
 // applyPrefs reflects the stored prefs onto <html>. Called once at boot (before

@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <!-- Login backdrop artwork: preload so it's on screen the instant the app
+         paints (it lives in public/ under a stable URL for exactly this). -->
+    <link rel="preload" as="image" type="image/webp" href="/brand/eye-hero.webp" fetchpriority="high" />
     <title>Correlix — Network Observability</title>
     <!--
       No external CSS/CDN: the entire UI is styled by the bundled

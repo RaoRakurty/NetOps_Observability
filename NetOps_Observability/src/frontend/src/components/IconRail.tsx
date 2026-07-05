@@ -4,7 +4,7 @@ import { useShell } from "../context/shell";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
 import Icon from "./Icon";
-import BrandMark from "./BrandMark";
+import eyeMark from "../assets/brand/eye-mark.webp";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
 import MfaCard from "./MfaCard";
@@ -165,11 +165,12 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         title={BRAND}
         aria-label={BRAND}
       >
-        {/* Eye brand mark — deep-space constellation iris (see BrandMark.tsx).
-            The "Correlix" wordmark lives in the top bar (UI-16); the rail
-            carries just this mark. */}
+        {/* Eye brand mark — the complete Correlix eye artwork including the
+            lash fringe (src/assets/brand/eye-mark.webp, exported whole from
+            eye-hero.webp — no crop). Sized well above the 22px nav glyphs so
+            it reads as the brand rather than another icon. */}
         <span className="brand-eye" aria-hidden="true">
-          <BrandMark size={26} />
+          <img src={eyeMark} width={48} alt="" />
         </span>
         <span className="rail-brand-name">{BRAND}</span>
       </button>

@@ -101,13 +101,19 @@
 /* Chrome presets (data-chrome on <html>) — the rail/topbar share one frosted-
    glass treatment; each preset only shifts the hue/lightness. navy == the :root
    defaults above (no block). */
-:root[data-chrome="mist"] {               /* soft light-grey — pale slate rail */
-  --rail-bg:        #424855;
-  --rail-bg-2:      #4d5462;
-  --rail-fg-muted:  #c7cdd8;
-  --rail-active-bg: rgba(203,213,225,0.20);
-  --rail-accent:    #f8fafc;             /* lightest grey, almost white */
-  --rail-glass:     rgba(203,213,225,0.12);
+:root[data-chrome="white"] {              /* clean white — light rail, dark text
+                                             (replaced the old grey "Mist") */
+  --rail-bg:        #ffffff;
+  --rail-bg-2:      #f3f5fa;
+  --rail-fg:        #1c2434;
+  --rail-fg-muted:  #64708a;
+  --rail-border:    rgba(23, 33, 60, 0.10);
+  --rail-hover:     rgba(23, 33, 60, 0.05);
+  --rail-active-bg: rgba(30, 40, 70, 0.10);
+  --rail-active-fg: #10151f;
+  --rail-accent:    #334155;             /* dark slate — legible on white */
+  --rail-glass:     rgba(226, 232, 240, 0.35);
+  --rail-sheen:     rgba(255, 255, 255, 0.85);
   /* content accent — refined neutral slate, AA-legible on the light canvas */
   --accent:          #475569;
   --accent-bright:   #64748b;
@@ -363,7 +369,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .shell-v2 .rail-account-id, .shell-v2 .rail-util-icon span { display: none; }
 .shell-v2 .rail-main { padding: var(--sp-1) 0; }
 .shell-v2 .rail-group { align-items: center; }
-.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 2px 0 var(--sp-2); }
+.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 6px 0 var(--sp-2); }
 .shell-v2 .rail-util { padding: var(--sp-1) 0; align-items: center; }
 .shell-v2 .rail-util-row { justify-content: center; }
 .shell-v2 .rail-util-icon { flex-direction: column; }
@@ -1118,7 +1124,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   display: inline-flex; align-items: center; justify-content: center;
   flex: none; color: var(--rail-accent);
 }
-.brand-eye svg { display: block; }
+.brand-eye svg, .brand-eye img { display: block; height: auto; filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.30)); }
 
 /* Compact search — thinner bar, fixed width, parked in the top-right cluster
    (no longer flex-grows across the bar). */
@@ -2755,20 +2761,200 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .form-msg.err { color: var(--bad); }
 @media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } }
 
-/* ===== Login ============================================================== */
-.login-wrap { min-height: 100vh; display: grid; place-items: center; background: var(--bg); padding: 24px; }
-.login-card { width: 380px; max-width: 100%; padding: 30px 30px 26px; margin: 0; }
-.login-brand { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: var(--fg); }
-.login-sub { margin: 4px 0 20px; color: var(--muted); font-size: var(--fs-meta); }
-.login-form { display: flex; flex-direction: column; gap: var(--sp-3); }
-.login-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 4px; color: var(--muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; }
+/* ===== Login — through the lens =========================================== */
+/* Cinematic pre-auth gate: the cosmic eye artwork IS the scene — shown at
+   full vibrancy on a deep-space stage — and the sign-in card is a pane of
+   near-clear glass floating in front of it, so the eye stays visible THROUGH
+   the form. Its signature is an iridescent hairline sampled from the artwork
+   (iris cyan → lash violet → constellation amber). Scoped under .login-scene;
+   the semantic tokens are re-pointed at dark-glass values so the shared
+   primitives (.card, .form-*, .pw-*, .btn, .btn-accent) restyle themselves
+   without forking the app theme. No entrance animations: the page must feel
+   instantly there. */
+.login-scene {
+  /* The login is ALWAYS the deep-space scene — pin the full dark ramp here
+     so the page is immune to data-theme on <html> (light themes would
+     otherwise turn var(--fg) text dark-on-dark). */
+  --fg: #eef2fb;
+  --fg-muted: #9aa7c4;
+  --fg-subtle: #71809f;
+  --muted: #9aa7c4;
+  --good: #34d399; --warn: #fbbf24; --bad: #fb8199;
+  --panel: rgba(9, 14, 30, 0.46);
+  --panel-border: rgba(148, 183, 255, 0.22);
+  --hover: rgba(148, 183, 255, 0.10);
+  --accent: #7dd3fc;                       /* iris cyan, from the artwork */
+  --accent-soft: rgba(56, 189, 248, 0.16);
+  --accent-ring: rgba(125, 211, 252, 0.45);
+  color-scheme: dark;
+
+  position: relative; min-height: 100vh; display: grid; place-items: center;
+  padding: 48px 24px; overflow: hidden;
+  background:
+    radial-gradient(1100px 700px at 16% 8%, rgba(99, 102, 241, 0.15), transparent 62%),
+    radial-gradient(900px 640px at 86% 92%, rgba(34, 211, 238, 0.10), transparent 60%),
+    radial-gradient(720px 520px at 80% 10%, rgba(168, 85, 247, 0.10), transparent 60%),
+    #04060f;
+  color: var(--fg);
+}
+/* Theme pattern — two offset pinprick grids read as a quiet starfield that
+   fades away near the artwork and breathes at the edges. */
+.login-scene::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background-image:
+    radial-gradient(rgba(220, 232, 255, 0.40) 1px, transparent 1.4px),
+    radial-gradient(rgba(160, 190, 255, 0.26) 1px, transparent 1.4px);
+  background-size: 34px 34px, 21px 21px;
+  background-position: 0 0, 9px 13px;
+  -webkit-mask-image: radial-gradient(85% 85% at 50% 50%, transparent 42%, #000 88%);
+  mask-image: radial-gradient(85% 85% at 50% 50%, transparent 42%, #000 88%);
+}
+/* The eye at full presence — the world the user is signing into. The glass
+   card floats in front of it without hiding it. */
+.login-bg-eye {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(100vmin, 940px); max-width: none; height: auto; z-index: 0;
+  opacity: 0.92; pointer-events: none; user-select: none; -webkit-user-drag: none;
+  filter: drop-shadow(0 0 90px rgba(59, 91, 219, 0.35));
+}
+
+.login-stage {
+  position: relative; z-index: 1;
+  display: grid; grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 72px; align-items: center; width: min(1040px, 100%);
+}
+
+/* --- Brand side --- */
+/* Soft dark halos keep the type serene and legible over the artwork. */
+.login-brandside { display: flex; flex-direction: column; gap: 24px; }
+.login-eyebrow {
+  margin: 0; font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.42em;
+  text-transform: uppercase; color: #93a3c8;
+  text-shadow: 0 0 14px rgba(4, 6, 15, 0.95);
+}
+.login-wordmark {
+  margin: 0; display: flex; align-items: center; gap: 0.03em;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: clamp(44px, 5.6vw, 68px); font-weight: 700; line-height: 1; letter-spacing: 0.02em;
+  background: linear-gradient(168deg, #ffffff 12%, #dbe6ff 48%, #93a8dc 94%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 2px 18px rgba(4, 6, 15, 0.85));
+}
+.login-wm-eye { position: relative; display: inline-flex; align-items: center; justify-content: center; margin: 0 0.03em; }
+.login-wm-eye img, .login-wm-eye svg {
+  width: 1.04em; height: 1.04em; display: block; border-radius: 50%;
+  filter: drop-shadow(0 2px 14px rgba(56, 189, 248, 0.45));
+}
+.login-creed {
+  list-style: none; margin: 0; padding: 20px 0 0;
+  display: flex; flex-direction: column; gap: 11px;
+  border-top: 1px solid rgba(148, 183, 255, 0.16);
+}
+.login-creed li {
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 13px; font-weight: 500; letter-spacing: 0.32em; text-transform: uppercase;
+  color: #7f8db3; white-space: nowrap; text-shadow: 0 0 12px rgba(4, 6, 15, 0.95);
+}
+.login-creed li em { font-style: normal; color: #e9effd; }
+.login-creed li::after { content: "."; color: #fbbf24; }
+
+/* --- Form side: a pane of near-clear glass floating in front of the eye --- */
+/* Transparency comes from the low-alpha tint; legibility comes from the blur
+   and the slight backdrop dim — the iris ring and constellation glow stay
+   visible through the pane. */
+.login-scene .card {
+  position: relative; border-radius: 20px;
+  background: linear-gradient(158deg, rgba(15, 22, 46, 0.55), rgba(6, 10, 24, 0.40) 48%, rgba(13, 19, 40, 0.50));
+  border: 1px solid transparent;
+  backdrop-filter: blur(10px) saturate(1.25) brightness(0.88);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25) brightness(0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 32px 90px rgba(2, 5, 16, 0.60);
+}
+/* The signature: an iridescent hairline ring — iris cyan → lash violet →
+   glass-clear → constellation amber — drawn with a masked gradient border. */
+.login-scene .card::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  background: linear-gradient(150deg,
+    rgba(125, 211, 252, 0.75), rgba(139, 92, 246, 0.42) 34%,
+    rgba(255, 255, 255, 0.10) 58%, rgba(251, 191, 36, 0.48) 92%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* Specular streak along the top edge — glass catching the light. */
+.login-scene .card::after {
+  content: ""; position: absolute; left: 10%; right: 42%; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  pointer-events: none;
+}
+.login-card { width: 400px; max-width: 100%; padding: 32px 32px 28px; margin: 0; }
+.login-card-title {
+  margin: 0 0 4px; font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 24px; font-weight: 600; letter-spacing: -0.01em;
+  background: linear-gradient(120deg, #ffffff 30%, #b9cdf7 90%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.login-sub { margin: 0 0 4px; color: var(--muted); font-size: var(--fs-meta); }
+.login-form { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: 14px; }
+/* Label voice: tracked-out micro caps in the display face. */
+.login-scene .form-label, .login-scene .pw-label {
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+  color: #93a3c8;
+}
+.login-scene .form-input, .login-scene .form-select, .login-scene .pw-input {
+  height: 42px; border-radius: 10px;
+  background: rgba(5, 9, 22, 0.42); border-color: rgba(148, 183, 255, 0.24);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  font-family: "Manrope Variable", var(--font-sans, sans-serif); font-size: 14px;
+}
+.login-scene .form-input:focus, .login-scene .form-select:focus, .login-scene .pw-input:focus {
+  border-color: rgba(125, 211, 252, 0.75);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16), 0 0 22px rgba(56, 189, 248, 0.14);
+}
+/* Autofill must not paint the glass white. */
+.login-scene input:-webkit-autofill,
+.login-scene input:-webkit-autofill:hover,
+.login-scene input:-webkit-autofill:focus {
+  -webkit-box-shadow: inset 0 0 0 1000px #0a1126;
+  -webkit-text-fill-color: #eef2fb; caret-color: #eef2fb;
+}
+/* The one luminous action — light from the iris, aimed at the door. */
+.login-scene .btn-accent {
+  height: 44px; border-radius: 10px;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 14px; font-weight: 600; letter-spacing: 0.04em;
+  color: #05122a;
+  background: linear-gradient(135deg, #9be1ff, #60a5fa 55%, #818cf8);
+  border: 1px solid rgba(190, 227, 255, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 6px 26px rgba(56, 189, 248, 0.28);
+  transition: box-shadow .15s ease, filter .15s ease;
+}
+.login-scene .btn-accent:hover:not(:disabled) {
+  filter: brightness(1.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.60), 0 8px 34px rgba(56, 189, 248, 0.42);
+}
+.login-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 4px; color: var(--fg-subtle); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; }
 .login-divider::before, .login-divider::after { content: ""; flex: 1; height: 1px; background: var(--panel-border); }
 .login-sso { display: flex; flex-direction: column; gap: 8px; }
 .login-link { background: none; border: 0; color: var(--accent); font-size: var(--fs-meta); cursor: pointer;
   padding: 2px 0; align-self: center; text-decoration: none; }
 .login-link:hover { text-decoration: underline; }
-.login-note { color: var(--muted); font-size: var(--fs-micro); line-height: 1.5; margin: 18px 0 0; }
+.login-link:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: 4px; }
 .login-msg { margin: 0; display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--bad); }
+
+@media (max-width: 920px) {
+  .login-scene { padding: 36px 20px; }
+  .login-stage { grid-template-columns: 1fr; gap: 36px; justify-items: center; width: min(440px, 100%); }
+  .login-brandside { align-items: center; text-align: center; gap: 16px; }
+  .login-bg-eye { width: min(150vmin, 760px); }
+  .login-wordmark { font-size: clamp(38px, 10vw, 52px); }
+  .login-creed { border-top: 0; padding-top: 4px; gap: 8px; align-items: center; }
+  .login-card { width: 100%; }
+}
 
 /* ===== Change-password card =============================================== */
 .pw-card { max-width: 460px; }
