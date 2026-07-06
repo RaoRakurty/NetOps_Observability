@@ -14,6 +14,10 @@ Legend: ✅ done · 🟡 in progress · 🔜 next · ⏳ open · 🔬 needs rese
 
 ---
 
+> **🚀 GTM:** the ordered road-to-launch master plan (product + testing + company
+> formation + marketing) lives in [`GTM_PLAN.md`](GTM_PLAN.md) (2026-07-06). The
+> execution streams below feed its Phases 0–3.
+
 ## 🧭 Execution streams (2026-06-25) — finish whole streams, not bits & pieces
 
 Organizing lens agreed with the owner: stop touching items piecemeal; drive ONE
