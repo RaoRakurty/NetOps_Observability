@@ -82,13 +82,14 @@ KIND_MODALITY: dict[str, ModalityClass] = {
 # Kinds whose PRODUCTION signals can ground on an application/service entity
 # (app:/host: tokens) so they can co-locate on an app-impact object. The
 # synthetic lane resolves app identity (synthetic_normalize.resolve_app).
-# flow_volume_anomaly is deliberately ABSENT: production flow anomalies ground
-# on the exporting interface (`<sampler>:if<N>`, main._flush_flow_aggregator)
-# with no app token — the Phase 4 attribution gap. Do NOT add it here until
-# per-app flow attribution actually ships.
+# flow_volume_anomaly joined in #98 Phase 4: flow_app_attribution.py +
+# main._flush_flow_aggregator emit an app-grounded anomaly WHEN a confirming
+# attribution source names the app (explicit metadata / appid fusion /
+# operator prefix map) — unattributed flows stay interface-grounded and do
+# not count toward app confirmation.
 APP_GROUNDABLE_KINDS: frozenset[str] = frozenset(
     k for k in KIND_MODALITY if k.startswith("synthetic_")
-)
+) | frozenset({"flow_volume_anomaly"})
 
 # App-impact domains whose objects ground on app/service entities, so a second
 # modality only helps them if its producer can reach that entity.
@@ -98,15 +99,6 @@ APP_DOMAINS: frozenset[str] = frozenset({"ent.app"})
 # cannot reach confirmed today and are ALLOWED to ship in that state, each with
 # an owner and a target resolution. Anything not listed fails CI.
 DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
-    "sig.ent.app.saas-experience-degraded": {
-        "reason": "synthetic-only evidence is intentionally suspected-only; the "
-                  "confirming corroborators are passive flow (app attribution "
-                  "pending — production flow anomalies ground on interfaces) "
-                  "and LB/app 5xx (collector pending)",
-        "owner": "correlix",
-        "date_added": "2026-07-09",
-        "target_resolution": "Phase 4 per-app flow attribution; Phase 5 LB/proxy lane",
-    },
     "sig.ent.fabric.spine-leaf-path-degradation": {
         "reason": "demands device_telemetry + active_probe, but its telemetry "
                   "witnesses (if_errors/if_crc) are a NORMALIZATION gap — the "

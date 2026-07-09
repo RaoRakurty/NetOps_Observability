@@ -138,14 +138,18 @@ def episode_signal(
     kind_prefix: str = "metric_anomaly",
     entity_tokens: tuple[str, ...] = (),
     path_id: str | None = None,
+    extra_attrs: dict | None = None,
 ) -> Signal:
     """EpisodeEvent → canonical Signal row (deterministic identity: the episode
     is identified by its onset, so onset+clear rows share native_id lineage).
     Provenance is parameterized so probe-path episodes carry active_probe /
-    vantage-agent provenance instead of device telemetry (#67 build ⑦)."""
+    vantage-agent provenance instead of device telemetry (#67 build ⑦);
+    extra_attrs carries lane-specific provenance (e.g. flow app-attribution
+    source/confidence, #98 Phase 4) without touching the episode fields."""
     tenant_id, entity_id, metric = ev.key
     onset_ms = int(ev.onset_ts.timestamp() * 1000)
     attrs = {
+        **(extra_attrs or {}),
         "phase": ev.phase,
         "onset_uncertainty_s": round(ev.onset_uncertainty_s, 3),
         "peak_deviation": round(ev.peak_deviation, 4),

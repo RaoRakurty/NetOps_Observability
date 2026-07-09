@@ -61,6 +61,7 @@ from producers import (
     trap_control_signal,
 )
 from replay import replay_object
+from flow_app_attribution import AppIdentityIndex, resolve_flow_app
 from synthetic_normalize import synthetic_app_signal
 from signals import (
     DeadLetter,
@@ -232,6 +233,11 @@ STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
 # O(1) per flow and the flush is bounded by (samplers × interfaces).
 FLOW_CORRELATION_ENABLED = os.environ.get("ENABLE_FLOW_CORRELATION", "true") == "true"
 _FLOW_AGG: Dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
+# #98 Phase 4 — per-application flow volume, populated ONLY for records with a
+# confirming attribution (explicit / appid-fusion / operator prefix map). The
+# interface aggregation above is untouched: one flow can feed BOTH groundings.
+_FLOW_APP_AGG: Dict[tuple, dict] = {}   # (tenant, app_slug) -> {bytes, sampler, source, confidence}
+_APPID_INDEX = AppIdentityIndex()       # tenant-scoped dst_ip → fused app identity
 FLOWS_RECEIVED = 0
 PASSIVE_FLOW_SIGNALS = 0
 # C7.3 NetFlow direction: directed per-pair volume, tenant → {(src_dev,dst_dev): bytes}.
@@ -679,6 +685,7 @@ async def feed_episode_detector(
     source: Source = Source.METRIC,
     modality: ModalityClass = ModalityClass.DEVICE_TELEMETRY,
     observer_type: ObserverType = ObserverType.DEVICE,
+    extra_attrs: dict | None = None,
 ) -> bool:
     """Stage [1]+[2]: run CUSUM over the canonical (entity, metric) series and
     persist episode signals. Identity is the canonical entity_id (device:ifName
@@ -706,6 +713,7 @@ async def feed_episode_detector(
             entity_type=entity_type,
             kind_prefix=kind_prefix,
             entity_tokens=entity_tokens,
+            extra_attrs=extra_attrs,
         )
         row = sig.to_ch_row()
     except DeadLetter as exc:
@@ -1257,6 +1265,10 @@ async def handle_app_identity(ev: dict) -> None:
     await ch.insert("netops.corr_signals", [sig.to_ch_row()])
     APP_ID_SIGNALS += 1
     buffer_signal(sig)
+    # #98 Phase 4 — feed the tenant-scoped dst_ip→app index the flow lane joins
+    # against (attribution level 2). TTL'd + bounded in the index itself.
+    _APPID_INDEX.observe(tenant, str(ev.get("dst_ip") or ""), sig.entity_id,
+                         str(sig.attrs.get("band", "")), sig.ts)
     log.info("app-identity signal %s: app=%s band=%s state=%s",
              sig.kind, sig.entity_id,
              sig.attrs.get("band", ""), sig.attrs.get("state", ""))
@@ -1338,6 +1350,16 @@ async def handle_flow(ev: dict) -> None:
     tenant = str(ev.get("tenant_id") or "") or tenant_for(sampler)
     agg = _FLOW_AGG.setdefault((tenant, entity), {"bytes": 0.0, "sampler": sampler})
     agg["bytes"] += bytes_est
+    # #98 Phase 4 — SECOND grounding: when a confirming attribution source names
+    # the application this flow serves, also accumulate a per-app volume series.
+    # No attribution → nothing here; the flow stays infrastructure-grounded.
+    att = resolve_flow_app(ev, tenant, _APPID_INDEX, datetime.now(timezone.utc))
+    if att is not None and att.confirming:
+        aagg = _FLOW_APP_AGG.setdefault(
+            (tenant, att.app),
+            {"bytes": 0.0, "sampler": sampler, "source": att.source,
+             "confidence": att.confidence})
+        aagg["bytes"] += bytes_est
     # C7.3: directed per-pair volume. Resolve src/dst → devices (best-effort; abstains
     # when an endpoint is unknown) and accumulate a directed byte total → the oracle's
     # NetFlow direction source.
@@ -1357,7 +1379,7 @@ async def _flush_flow_aggregator(now: datetime) -> None:
     cycle interval — regular sampling, exactly like a metric poll — so the existing
     episode machinery baselines and fires flow_volume_anomaly episodes."""
     global PASSIVE_FLOW_SIGNALS
-    if not _FLOW_AGG:
+    if not _FLOW_AGG and not _FLOW_APP_AGG:
         return
     snapshot = dict(_FLOW_AGG)
     _FLOW_AGG.clear()
@@ -1373,6 +1395,26 @@ async def _flush_flow_aggregator(now: datetime) -> None:
         )
         if emitted:
             PASSIVE_FLOW_SIGNALS += 1  # count ACTUAL passive_flow signals, not flushes
+    # #98 Phase 4 — the app-grounded series (same canonical kind, app entity).
+    # Tokens mirror the synthetic lane's grounding vocabulary (bare slug +
+    # app:<slug>) so an app-attributed flow anomaly co-locates with the
+    # synthetic app-experience signal on ONE application-impact object;
+    # attribution provenance rides the signal (attribution_source/confidence).
+    app_snapshot = dict(_FLOW_APP_AGG)
+    _FLOW_APP_AGG.clear()
+    for (tenant, app), a in sorted(app_snapshot.items()):
+        emitted = await feed_episode_detector(
+            tenant, app, "flow_bytes_rate", a["bytes"] / interval, now,
+            observer_id=a["sampler"], collection_path="flow_export",
+            entity_type=EntityType.APP, kind_prefix="flow_volume_anomaly",
+            entity_tokens=(app, f"app:{app}", a["sampler"]),
+            source=Source.FLOW, modality=ModalityClass.PASSIVE_FLOW,
+            observer_type=ObserverType.FLOW_EXPORTER,
+            extra_attrs={"attribution_source": a["source"],
+                         "attribution_confidence": a["confidence"]},
+        )
+        if emitted:
+            PASSIVE_FLOW_SIGNALS += 1
 
 
 async def emit(**kwargs) -> None:

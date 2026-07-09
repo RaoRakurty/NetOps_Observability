@@ -36,9 +36,10 @@ def test_every_emitted_kind_is_modality_classified():
 
 def test_app_groundable_is_a_subset_of_emitted():
     assert APP_GROUNDABLE_KINDS <= EMITTED_KINDS
-    # the Phase 4 gap is encoded, not forgotten: production flow anomalies are
-    # NOT app-groundable. When Phase 4 ships this assertion flips deliberately.
-    assert "flow_volume_anomaly" not in APP_GROUNDABLE_KINDS
+    # Phase 4 shipped: app-ATTRIBUTED flow anomalies ground on the app entity
+    # (flow_app_attribution.py); unattributed flows stay interface-grounded,
+    # which test_flow_app_attribution.py asserts separately.
+    assert "flow_volume_anomaly" in APP_GROUNDABLE_KINDS
 
 
 def test_audit_covers_every_enabled_signature():
@@ -54,14 +55,13 @@ def test_audit_covers_every_enabled_signature():
 
 
 def test_known_ground_truths():
-    # The #98 app signature: matchable, two modality classes exist on paper
-    # (active_probe + passive_flow), but flow cannot reach the app entity →
-    # entity_mismatch, max suspected. Phase 4's exit criterion is flipping this.
+    # The #98 app signature: Phase 4 flipped it — app-attributed passive flow
+    # reaches the app entity, so active_probe + passive_flow can confirm
+    # (proven end-to-end by test_flow_app_attribution.py test D).
     saas = ROWS["sig.ent.app.saas-experience-degraded"]
-    assert saas["status"] == "entity_mismatch"
-    assert saas["max_possible_verdict"] == "suspected"
-    assert "passive_flow" in saas["producer_classes_available"]
-    assert saas["app_groundable_classes"] == ["active_probe"]
+    assert saas["status"] == "confirmable_now"
+    assert saas["max_possible_verdict"] == "confirmed"
+    assert sorted(saas["app_groundable_classes"]) == ["active_probe", "passive_flow"]
 
     # spine-leaf demands device_telemetry whose witnesses (if_errors/if_crc)
     # are a normalization gap → verdict capped at suspected.
@@ -117,8 +117,8 @@ def test_reconciliation_table_is_consistent():
     teams_kind = rows["synthetic_http_5xx"]
     assert teams_kind["class"] == "fully_connected"
     assert "sig.ent.app.saas-experience-degraded" in teams_kind["consuming_signatures"]
-    # the flow kind is honest about not being app-groundable
-    assert rows["flow_volume_anomaly"]["app_groundable"] is False
+    # the flow kind is app-groundable since Phase 4 (attribution-gated)
+    assert rows["flow_volume_anomaly"]["app_groundable"] is True
 
 
 def test_write_reports(tmp_path):

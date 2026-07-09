@@ -75,12 +75,28 @@ def normalize_probe_event(ev: dict, tenant: str, now: datetime) -> list[Signal]:
 
 
 def normalize_flow_records(records: list[dict], tenant: str, now: datetime,
-                           detected: dict | None) -> list[Signal]:
-    """Raw goflow2-shaped records → the per-interface aggregation production
-    performs (REAL flow_sample parsing), then the flow_volume_anomaly signal
-    those aggregates yield when CUSUM fires (detection_assumed — see module
-    docstring). Returns [] when nothing parses or no detection is declared."""
+                           detected: dict | None,
+                           identities: list[dict] | None = None) -> list[Signal]:
+    """Raw goflow2-shaped records → the aggregations production performs (REAL
+    flow_sample parsing + REAL resolve_flow_app attribution), then the
+    flow_volume_anomaly signal(s) those aggregates yield when CUSUM fires
+    (detection_assumed — see module docstring). ``identities`` are raw
+    netops.app.identities events fed to the same AppIdentityIndex production
+    maintains (attribution level 2). Returns [] when nothing parses or no
+    detection is declared."""
+    from flow_app_attribution import AppIdentityIndex, resolve_flow_app
+    from producers import parse_event_ts
+
+    index = AppIdentityIndex()
+    for ident in identities or []:
+        index.observe(str(ident.get("tenant_id") or tenant),
+                      str(ident.get("dst_ip") or ""),
+                      str(ident.get("app") or ""),
+                      str(ident.get("band") or ""),
+                      parse_event_ts(ident.get("ts")) or now)
+
     agg: dict[tuple[str, str], dict] = {}
+    app_agg: dict[tuple[str, str], dict] = {}
     for rec in records:
         sample = flow_sample(rec)
         if sample is None:
@@ -88,29 +104,49 @@ def normalize_flow_records(records: list[dict], tenant: str, now: datetime,
         sampler, entity, nbytes = sample
         a = agg.setdefault((tenant, entity), {"bytes": 0.0, "sampler": sampler})
         a["bytes"] += nbytes
+        att = resolve_flow_app(rec, tenant, index, now)
+        if att is not None and att.confirming:
+            aa = app_agg.setdefault(
+                (tenant, att.app),
+                {"bytes": 0.0, "sampler": sampler, "source": att.source,
+                 "confidence": att.confidence})
+            aa["bytes"] += nbytes
     if not agg or not detected:
         return []
-    out: list[Signal] = []
-    for (ten, entity), a in sorted(agg.items()):
-        # Field-for-field what main._flush_flow_aggregator's episode emission
-        # grounds on: INTERFACE entity `<sampler>:if<N>`, sampler token only.
-        out.append(Signal(
+
+    def anomaly(ten: str, entity_id: str, entity_type: EntityType,
+                tokens: tuple[str, ...], sampler: str, extra: dict) -> Signal:
+        return Signal(
             tenant_id=ten,
             ts=now,
             source=Source.FLOW,
             kind="flow_volume_anomaly",
-            observer=Observer(observer_id=a["sampler"],
+            observer=Observer(observer_id=sampler,
                               observer_type=ObserverType.FLOW_EXPORTER,
                               collection_path="flow_export"),
             modality_class=ModalityClass.PASSIVE_FLOW,
-            entity_type=EntityType.INTERFACE,
-            entity_id=entity,
+            entity_type=entity_type,
+            entity_id=entity_id,
             severity=Severity.WARN,
-            native_id=f"golden|flow|{entity}",
-            entity_tokens=(a["sampler"],),
+            native_id=f"golden|flow|{entity_id}",
+            entity_tokens=tokens,
             deviation=float(detected.get("deviation", 0.0)),
-            attrs={"detection_assumed": True, "flow_bytes": a["bytes"]},
-        ))
+            attrs={"detection_assumed": True, **extra},
+        )
+
+    out: list[Signal] = []
+    for (ten, entity), a in sorted(agg.items()):
+        # Field-for-field what main._flush_flow_aggregator grounds on:
+        # INTERFACE entity `<sampler>:if<N>`, sampler token only.
+        out.append(anomaly(ten, entity, EntityType.INTERFACE, (a["sampler"],),
+                           a["sampler"], {"flow_bytes": a["bytes"]}))
+    for (ten, app), a in sorted(app_agg.items()):
+        # …and the #98 Phase 4 app grounding, same kind, app entity + tokens.
+        out.append(anomaly(ten, app, EntityType.APP,
+                           (app, f"app:{app}", a["sampler"]), a["sampler"],
+                           {"flow_bytes": a["bytes"],
+                            "attribution_source": a["source"],
+                            "attribution_confidence": a["confidence"]}))
     return out
 
 
@@ -132,7 +168,8 @@ def replay_fixture_through_engine(name: str, monkeypatch=None):
             signals.extend(normalize_probe_event(item["event"], tenant, T0))
         elif lane == "flow":
             signals.extend(normalize_flow_records(
-                item["records"], tenant, T0, item.get("detected")))
+                item["records"], tenant, T0, item.get("detected"),
+                item.get("identities")))
         else:
             raise ValueError(f"unknown golden-wire lane {lane!r} in {name}")
     cat = builtin_catalog()

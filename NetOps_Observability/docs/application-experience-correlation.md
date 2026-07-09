@@ -102,8 +102,13 @@ which names the affected app.
   `site_id` (`PROBER_SITE_ID`, optional) on the `ProbeEvent`. All fields are
   `omitempty`: STAMP/ICMP events keep the old wire shape byte-for-byte
   (pinned by `TestProbeEventWireContract`).
-- **Full per-app flow attribution:** flow anomalies are per-interface today; app
-  entity/token attach is opportunistic (design P2 appid attribution).
+- ~~**Full per-app flow attribution**~~ — **bounded version done (#98 Phase 4,
+  `docs/passive-flow-app-attribution.md`).** An attributed flow (explicit
+  metadata → appid-fusion dst-IP join → operator `CORR_APP_PREFIX_MAP`) also
+  feeds a per-app volume series whose `flow_volume_anomaly` grounds on the app
+  entity with `attribution_source`/`attribution_confidence` — synthetic +
+  app-attributed flow now CONFIRMS. Unattributed flows stay interface-grounded
+  (never faked). Still future: DNS/SNI flow enrichment, five-tuple fusion joins.
 - **LB / app 5xx collector coverage:** `lb_5xx` / `app_error_rate_high` arrive via
   cloud logs today; an on-prem LB/app metrics collector would broaden confirmation.
 - **SaaS provider status-page ingestion:** not present; a candidate corroborating
