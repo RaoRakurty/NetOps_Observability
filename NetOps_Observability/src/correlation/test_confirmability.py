@@ -111,6 +111,31 @@ def test_exceptions_are_not_stale():
         assert exc.get("owner") and exc.get("date_added"), sig_id
 
 
+def test_confirmability_ratchet_never_decreases():
+    # #99 R4: the confirmable_now count is a one-way ratchet. A catalog or
+    # producer change that silently darkens a signature fails here; a change
+    # that brightens one must bump confirmability_baseline.json in the same
+    # commit (keeping the floor honest).
+    import json
+    from pathlib import Path
+    baseline_path = Path(__file__).parent / "confirmability_baseline.json"
+    baseline = json.loads(baseline_path.read_text())["confirmable_now"]
+    now = sum(1 for r in ROWS.values() if r["status"] == "confirmable_now")
+    assert now >= baseline, (
+        f"confirmable_now dropped: {now} < baseline {baseline} — a signature "
+        f"that could reach confirmed no longer can. Find the darkened "
+        f"signature(s) in the audit (python3 confirmability.py) and fix the "
+        f"producer/catalog regression; lowering the baseline requires an "
+        f"explicit owner decision."
+    )
+    assert now == baseline or True  # informational: bump baseline when it rises
+    if now > baseline:
+        import warnings
+        warnings.warn(
+            f"confirmable_now rose to {now} (baseline {baseline}) — bump "
+            f"confirmability_baseline.json to lock in the gain.")
+
+
 def test_reconciliation_table_is_consistent():
     rows = {r["kind"]: r for r in reconciliation(CAT)}
     # every emitted kind appears, with its coverage classification

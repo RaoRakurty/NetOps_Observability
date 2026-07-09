@@ -150,6 +150,39 @@ def normalize_flow_records(records: list[dict], tenant: str, now: datetime,
     return out
 
 
+def normalize_metric_event(ev: dict, tenant: str, now: datetime,
+                           detected: dict | None) -> list[Signal]:
+    """Raw MetricEvent (netops.metrics wire shape) → the entity/kind grounding
+    production derives (REAL main.metric_identity), then the episode signal
+    that series yields when CUSUM fires (detection_assumed — same honesty rule
+    as the flow lane; detection math is covered by the episode tests)."""
+    import main as _main  # lazy: metric_identity lives with the runtime
+
+    ident = _main.metric_identity(ev)
+    if ident is None or not detected:
+        return []
+    entity_id, entity_type, kind_prefix, tokens = ident
+    return [Signal(
+        tenant_id=tenant,
+        ts=now,
+        source=Source.METRIC,
+        kind=kind_prefix,
+        observer=Observer(observer_id=str(ev.get("device") or "collector"),
+                          observer_type=ObserverType.DEVICE,
+                          collection_path=str(ev.get("collection_path") or "snmp_poll")),
+        modality_class=ModalityClass.DEVICE_TELEMETRY,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        severity=Severity.WARN,
+        native_id=f"golden|metric|{entity_id}|{ev.get('metric')}",
+        entity_tokens=tokens,
+        metric_name=str(ev.get("metric") or ""),
+        value=float(ev.get("value") or 0.0),
+        deviation=float(detected.get("deviation", 0.0)),
+        attrs={"detection_assumed": True},
+    )]
+
+
 def replay_fixture_through_engine(name: str, monkeypatch=None):
     """load fixture → production normalizers → engine. Returns
     (signals, snapshots, ranking). ``env`` entries are applied via monkeypatch
@@ -175,6 +208,30 @@ def replay_fixture_through_engine(name: str, monkeypatch=None):
             sig = normalize_lb_event(item["event"], tenant, T0)
             if sig is not None:
                 signals.append(sig)
+        elif lane == "syslog":
+            from producers import syslog_control_signal
+            sig = syslog_control_signal(item["event"], tenant, T0)
+            if sig is not None:
+                signals.append(sig)
+        elif lane == "snmptrap":
+            from producers import trap_control_signal
+            sig = trap_control_signal(item["event"], tenant, T0)
+            if sig is not None:
+                signals.append(sig)
+        elif lane == "cloud":
+            from cloud_producers import cloud_signal_from_event
+            signals.append(cloud_signal_from_event(item["event"], tenant, T0))
+        elif lane == "controller":
+            from controller_events import controller_event_to_signal
+            sig = controller_event_to_signal(item["event"], T0)
+            if sig is not None:
+                signals.append(sig)
+        elif lane == "app_identity":
+            from app_producers import app_identity_from_event
+            signals.append(app_identity_from_event(item["event"], tenant, T0))
+        elif lane == "metric":
+            signals.extend(normalize_metric_event(item["event"], tenant, T0,
+                                                  item.get("detected")))
         else:
             raise ValueError(f"unknown golden-wire lane {lane!r} in {name}")
     cat = builtin_catalog()

@@ -267,16 +267,9 @@ COLLECTION_PENDING: dict[str, dict] = {
         "roadm_filter_edge_penalty", "rx_margin_low", "single_lane_rx_absent",
         "single_lane_tx_fail", "thermal_margin_low", "transceiver_unsupported",
     ]),
-    # NMS vendor-controller intelligence (design nms-integration-framework.md) —
-    # the transformers (P2) + producer (P4) normalize these; the catalog leads
-    # the live BUS wiring (P3: poll/webhook → netops.controller_events consumer),
-    # so they attach the moment a controller is connected.
-    **_group("NMS controller-intelligence kind; attaches when a controller is connected (P3 wiring)",
-             "#nms-framework", "2026-07-06", [
-        "controller_tunnel_state", "controller_bfd_down",
-        "controller_control_connection_loss", "controller_device_unreachable",
-        "controller_policy_change",
-    ]),
+    # (controller_* kinds left this ledger 2026-07-09: the #95 producer + bus
+    # wiring are LIVE — handle_controller_event emits them onto the spine. Found
+    # stale by the #99 R3 all-lanes golden test.)
 }
 
 # DEPRECATED compatibility view — the flat union the pre-#98 gate used. Do not

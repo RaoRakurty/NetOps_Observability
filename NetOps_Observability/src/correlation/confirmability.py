@@ -84,6 +84,12 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "app_error_rate_high": ModalityClass.DEVICE_TELEMETRY,
     "app_latency_high": ModalityClass.DEVICE_TELEMETRY,
     "lb_4xx_high": ModalityClass.DEVICE_TELEMETRY,
+    # NMS controller lane (management plane — corroborating, never self-confirming)
+    "controller_tunnel_state": ModalityClass.MANAGEMENT_PLANE,
+    "controller_bfd_down": ModalityClass.MANAGEMENT_PLANE,
+    "controller_control_connection_loss": ModalityClass.MANAGEMENT_PLANE,
+    "controller_device_unreachable": ModalityClass.MANAGEMENT_PLANE,
+    "controller_policy_change": ModalityClass.MANAGEMENT_PLANE,
 }
 
 # Kinds whose PRODUCTION signals can ground on an application/service entity

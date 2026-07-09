@@ -131,6 +131,12 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # outage-confirming).
     "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high",
     "lb_4xx_high",
+    # NMS controller-intelligence lane (controller_events.py, netops.controller_events
+    # — #95 P4 producer + runtime wiring LIVE; found unregistered by the #99 R3
+    # all-lanes golden test): management-plane witnesses from vendor controllers.
+    "controller_tunnel_state", "controller_bfd_down",
+    "controller_control_connection_loss", "controller_device_unreachable",
+    "controller_policy_change",
 })
 
 

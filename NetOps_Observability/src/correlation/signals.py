@@ -26,6 +26,11 @@ SIGNAL_NS = uuid.UUID("6e1f8c3a-67aa-5b9e-9d40-8a52c0de0001")
 
 ATTRS_MAX_BYTES = 4096  # §2.1: attrs JSON bounded
 
+# Grounding-token guard (#99 R2): token prefixes that scope WIDER than one
+# entity. See Signal.__post_init__ — constructing a signal with one of these
+# in entity_tokens dead-letters loudly (tests and CI included).
+_FORBIDDEN_TOKEN_PREFIXES: frozenset[str] = frozenset({"tenant", "org", "global", "all"})
+
 
 class Source(str, Enum):
     FLOW = "flow"
@@ -254,6 +259,22 @@ class Signal:
             raise DeadLetter("entity_id is mandatory")
         if self.ts.tzinfo is None:
             raise DeadLetter("ts must be timezone-aware (event-time discipline)")
+        # Grounding-token guard (#99 R2): entity_tokens are the engine's
+        # CO-LOCATION keys and the correlation window is single-tenant by
+        # construction — a tenant-/org-wide token merges UNRELATED entities into
+        # one object (the cross-app confirmed-object bug, tracker #99). Enforced
+        # at the model so the bug class is unwritable by any producer. Gated to
+        # fresh constructions: rows stored before this rule still rehydrate for
+        # replay (from_ch_row sets stored_signal_id).
+        if self.stored_signal_id is None:
+            for tok in self.entity_tokens:
+                prefix = tok.split(":", 1)[0].lower()
+                if prefix in _FORBIDDEN_TOKEN_PREFIXES and ":" in tok:
+                    raise DeadLetter(
+                        f"entity_token {tok!r} is {prefix}-wide — grounding tokens "
+                        f"must identify ONE entity (app:/host:/site:/device:/…), "
+                        f"never a tenant/org/global scope"
+                    )
 
     @property
     def signal_id(self) -> uuid.UUID:
