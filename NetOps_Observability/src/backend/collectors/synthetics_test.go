@@ -6,6 +6,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +205,45 @@ func TestCheckHTTPEnrichment(t *testing.T) {
 	}
 	if res.certDays == nil || *res.certDays <= 0 {
 		t.Errorf("certDays not captured for TLS check: %+v", res.certDays)
+	}
+}
+
+// TestProbeEventGoldenContract (#99 R5) — the CROSS-LANGUAGE contract: this
+// side must MARSHAL the canonical event to exactly the JSON checked into
+// src/contracts/probe_event_wire.json, which the Python CI normalizes from
+// the same file. Field renames/type changes break exactly one CI against the
+// shared artifact instead of each side pinning its own idea of the wire.
+func TestProbeEventGoldenContract(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "probe_event_wire.json"))
+	if err != nil {
+		t.Fatalf("shared contract file: %v", err)
+	}
+	var contract struct {
+		Event map[string]any `json:"event"`
+	}
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		t.Fatal(err)
+	}
+	days := 143.5
+	got, err := json.Marshal(ProbeEvent{
+		Kind: "http", Prober: "syn-frisco", Target: "https://teams.microsoft.com",
+		OK: false, RTTms: 842.1, LossPct: 100, TS: "2026-07-09T09:00:00.000000Z",
+		SiteID: "frisco", FailClass: "tls", StatusCode: 503,
+		Method: "GET", Path: "/",
+		DNSMs: 11.2, TCPConnectMs: 34.8, TLSMs: 51.3, TTFBMs: 700.4, TotalMs: 842.1,
+		CertDaysToExpiry: &days,
+		CertSubject:      "teams.microsoft.com",
+		CertIssuer:       "Microsoft Azure TLS Issuing CA 05",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotMap map[string]any
+	if err := json.Unmarshal(got, &gotMap); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotMap, contract.Event) {
+		t.Errorf("marshaled ProbeEvent diverges from src/contracts/probe_event_wire.json:\n got: %s\nwant: %v", got, contract.Event)
 	}
 }
 
