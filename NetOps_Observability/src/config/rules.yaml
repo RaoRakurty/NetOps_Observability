@@ -712,3 +712,43 @@ groups:
         labels: { severity: warning, layer: host }
         annotations:
           summary: "Host 5m load {{ $value }}× core count — sustained overload"
+
+  # ----------------------------------------------------------------------------
+  # Correlation-engine ingest health (#99 R6) — silent ingestion failures page.
+  # Counters come from the correlation /metrics exposition (vmscrape job
+  # 'correlation'); they are monotonic per process, so increase()/rate() are safe
+  # across restarts.
+  # ----------------------------------------------------------------------------
+  - name: noc-corr-ingest
+    interval: 60s
+    rules:
+      - alert: CorrDeadLettersRising
+        expr: increase(corr_deadletters[15m]) > 0
+        for: 5m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation dead-letters rising ({{ $value }} in 15m) — malformed events are being parked; check correlation logs"
+
+      - alert: CorrEventsDroppedRising
+        expr: sum by (counter) (increase(corr_ingest_events{counter=~".*_dropped"}[15m])) > 10
+        for: 5m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation lane {{ $labels.counter }} rising ({{ $value }} in 15m) — events are being rejected (tenancy/normalization); check correlation logs"
+
+      - alert: CorrProbeLaneFlatlined
+        # The prober ticks 24/7 (30-60s interval), so probes_received must always
+        # advance — a flat line means bus→consumer ingest is dead even if every
+        # container looks healthy (the failure mode that hid the July lab outage).
+        expr: increase(corr_ingest_events{counter="probes_received"}[15m]) == 0
+        for: 15m
+        labels: { severity: critical, layer: correlation }
+        annotations:
+          summary: "Correlation probe intake flat-lined 30m — bus→engine ingest is dead (check kafka, vector, correlation consumer)"
+
+      - alert: CorrSyslogLaneFlatlined
+        expr: increase(corr_ingest_events{counter="flows_received"}[30m]) == 0 and increase(corr_ingest_events{counter="metrics_received"}[30m]) == 0
+        for: 30m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation flow+metric intake flat-lined 1h — telemetry sources silent (lab down or edge-ingest broken)"

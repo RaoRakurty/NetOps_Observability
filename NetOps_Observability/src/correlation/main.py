@@ -206,6 +206,7 @@ CONTROLLER_EVENTS_RECEIVED = 0  # consumed from netops.controller_events (#95 NM
 CONTROLLER_EVENTS_SIGNALS = 0   # source=controller signals written to corr_signals + buffered
 CONTROLLER_EVENTS_DROPPED = 0   # dropped: no tenant/kind identity (default-closed)
 APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
+PROBES_RECEIVED = 0           # consumed from netops.probes (the 24/7 heartbeat lane — R6 flatline alert)
 APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/ingress lane)
 APP_EDGE_SIGNALS = 0          # canonical app-edge signals written + buffered
 APP_EDGE_DROPPED = 0          # dropped: no tenant (default-closed) / unclassifiable
@@ -1115,7 +1116,8 @@ async def handle_probe(ev: dict) -> None:
     (#67 build ⑦). The probe path is the evidence class device telemetry
     cannot supply — gray failures are invisible to counters. Each signal is
     classified for probe authority + fate (Step 3) before it enters the spine."""
-    global DEADLETTER_COUNT
+    global DEADLETTER_COUNT, PROBES_RECEIVED
+    PROBES_RECEIVED += 1
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
     host = str(ev.get("target") or "")
@@ -1516,6 +1518,33 @@ class Finding(BaseModel):
     description: str
 
 
+@app.get("/metrics")
+async def metrics_exposition():
+    """Prometheus text exposition of the intake/drop counters (#99 R6) — the
+    same numbers /healthz reports, scrapeable by VictoriaMetrics so silent
+    ingestion failures (received flat-lined, dropped rising, dead-letters)
+    become alerts instead of archaeology."""
+    from fastapi.responses import PlainTextResponse
+    h = await health()
+    lines = [
+        "# HELP corr_ingest_events Correlation intake counters by lane (monotonic since process start).",
+        "# TYPE corr_ingest_events counter",
+    ]
+    for key, val in h["ingest"].items():
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            lines.append(f'corr_ingest_events{{counter="{key}"}} {val}')
+    eng = h["engine_v2"]
+    lines += [
+        "# TYPE corr_deadletters counter",
+        f"corr_deadletters {eng['deadletter_count']}",
+        "# TYPE corr_window_signals gauge",
+        f"corr_window_signals {eng['window_signals']}",
+        "# TYPE corr_open_objects gauge",
+        f"corr_open_objects {eng['open_objects']}",
+    ]
+    return PlainTextResponse("\n".join(lines) + "\n")
+
+
 @app.get("/healthz")
 async def health() -> dict:
     return {
@@ -1538,6 +1567,7 @@ async def health() -> dict:
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).
         "ingest": {
+            "probes_received": PROBES_RECEIVED,
             "metrics_received": METRICS_RECEIVED,
             "metrics_accepted": METRICS_ACCEPTED,
             "metrics_dropped": METRICS_DROPPED,

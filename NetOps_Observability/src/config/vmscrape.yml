@@ -29,6 +29,13 @@ scrape_configs:
       - targets: ['localhost:8428']
     metrics_path: '/metrics'
 
+  # Correlation engine intake counters (#99 R6) — silent ingestion failures
+  # (received flat-lined / dropped rising / dead-letters) become alertable.
+  - job_name: 'correlation'
+    static_configs:
+      - targets: ['correlation:8000']
+    metrics_path: '/metrics'
+
   # ClickHouse native Prometheus endpoint (enabled via <prometheus> in config).
   - job_name: 'clickhouse'
     static_configs:
