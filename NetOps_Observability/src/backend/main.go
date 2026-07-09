@@ -583,6 +583,9 @@ func main() {
 	srv.startTenantEnrichment(ctx)
 	// Self-heal the ClickHouse tenant row policies (#20 Phase 2) in the background.
 	ensureCHRowPolicies()
+	// corr_current projection drift repair (#101): detect + re-seed hot-read rows
+	// whose dual-write was lost. No-op when ClickHouse is not configured.
+	go srv.corrCurrentReconcileLoop(ctx)
 	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
 	srv.startDriftReconciler(ctx)
 	// App-identity catalog hot-reload (#81 P1b). No-op unless APPID_FEEDS_DIR set.

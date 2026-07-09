@@ -28,7 +28,7 @@ import logging
 import os
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -239,6 +239,146 @@ CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
 CORR_VERSION_HEARTBEAT_S = float(os.environ.get("CORR_VERSION_HEARTBEAT_S", "900"))
 VERSIONS_PERSISTED = 0   # object versions written to ClickHouse (monotonic)
 VERSIONS_DAMPED = 0      # persists suppressed by the material-hash gate (monotonic)
+# #101: corr_current is the HOT-read source of truth (Command Center serves
+# from it), so a lost projection dual-write means a STALE incident list — that
+# must be alertable, not WARN-only. Monotonic; exposed on /metrics + /healthz,
+# alerted by CorrCurrentProjectionFailing (src/config/rules.yaml), repaired by
+# the Go corr_current reconciler.
+PROJECTION_WRITE_FAILURES = 0
+
+# --- #101 chaos/storm fixtures -------------------------------------------
+# CORR_CHAOS_FIXTURES names INTENTIONAL storm sources: "name=match[,name=match]"
+# e.g. "lab_probe_storm_fixture_120=10.70.245.120". A persisted object whose
+# affected entities contain a match is tagged with the fixture name in
+# corr_current.chaos_fixture: Command Center badges it, the ticketing sweeper
+# skips it, and NOC dashboards can tell "known chaos" from a real incident —
+# while the storm still exercises damping + bounded IO end to end (that is the
+# fixture's job).
+
+
+def _parse_chaos_fixtures(raw: str) -> dict[str, str]:
+    """'name=match,...' → {match_substring: fixture_name}. Malformed pairs are
+    dropped loudly (observable, §10) — a silent typo would untag a storm."""
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        name, sep, match = pair.partition("=")
+        if not sep or not name.strip() or not match.strip():
+            log.warning("CORR_CHAOS_FIXTURES: ignoring malformed pair %r", pair)
+            continue
+        out[match.strip()] = name.strip()
+    return out
+
+
+CHAOS_FIXTURES = _parse_chaos_fixtures(os.environ.get("CORR_CHAOS_FIXTURES", ""))
+
+
+def _chaos_fixture_for(snap: "ObjectSnapshot") -> str:
+    """Fixture name when any affected entity matches a registered chaos source
+    ('' = real incident). Substring match: probe entities carry the target in
+    path/entity ids (e.g. 'path:prober->10.70.245.120')."""
+    if not CHAOS_FIXTURES:
+        return ""
+    for entities in snap.affected().values():
+        for ent in entities:
+            for match, name in CHAOS_FIXTURES.items():
+                if match in ent:
+                    return name
+    return ""
+
+
+# --- #101 per-tenant write-amplification accounting ------------------------
+# Bounded-cardinality storm attribution: per-tenant raw/persisted/damped counts
+# accumulate in-process and flush every CORR_WA_FLUSH_S seconds as ONE row per
+# (tenant, window) into netops.corr_tenant_write_amp (30-day TTL). Prometheus
+# exposure is capped at the top-K noisiest tenants of the LAST window — never
+# one series per tenant (metric-cardinality rule; the full per-tenant truth
+# lives in the rollup table, see docs/runbooks/correlation-storm.md).
+CORR_WA_FLUSH_S = float(os.environ.get("CORR_WA_FLUSH_S", "300"))
+CORR_WA_TOPK = int(os.environ.get("CORR_WA_TOPK", "5"))
+_WA_ENTITY_CAP = 1000  # bounded per-tenant entity Counter under a storm (§9)
+TENANT_WA: Dict[str, dict] = {}   # tenant -> raw/persisted/damped + kind/entity Counters
+TENANT_WA_LAST: list[dict] = []   # last flushed window rows, sorted, top-K (for /metrics)
+_WA_WINDOW_START: datetime | None = None
+
+
+def _wa_slot(tenant: str) -> dict:
+    slot = TENANT_WA.get(tenant)
+    if slot is None:
+        slot = {"raw_seen": 0, "persisted": 0, "damped": 0,
+                "kinds": Counter(), "entities": Counter()}
+        TENANT_WA[tenant] = slot
+    return slot
+
+
+def _wa_note_raw(sig: Signal) -> None:
+    slot = _wa_slot(sig.tenant_id)
+    slot["raw_seen"] += 1
+    slot["kinds"][sig.kind] += 1
+    # Entity Counter is capped: past the cap only already-seen entities count,
+    # so the top-entity answer stays useful (a storm hammers few entities) and
+    # memory stays bounded under an adversarial entity spray.
+    if sig.entity_id in slot["entities"] or len(slot["entities"]) < _WA_ENTITY_CAP:
+        slot["entities"][sig.entity_id] += 1
+
+
+def _wa_note_outcome(tenant: str, outcome: str) -> None:
+    _wa_slot(tenant)[outcome] += 1
+
+
+async def _flush_tenant_write_amp(now: datetime) -> None:
+    """Flush the accumulated per-tenant window to ClickHouse + refresh the
+    top-K exposition. Failure is observable and non-fatal; the window resets
+    either way (accounting is best-effort, never backpressure)."""
+    global TENANT_WA, TENANT_WA_LAST, _WA_WINDOW_START
+    if _WA_WINDOW_START is None:
+        _WA_WINDOW_START = now
+        return
+    elapsed = (now - _WA_WINDOW_START).total_seconds()
+    if elapsed < CORR_WA_FLUSH_S:
+        return
+    window_start, TENANT_WA_ROWS, TENANT_WA = _WA_WINDOW_START, TENANT_WA, {}
+    _WA_WINDOW_START = now
+    if not TENANT_WA_ROWS:
+        TENANT_WA_LAST = []
+        return
+    ages: Dict[str, float] = {}
+    for reg in OPEN_OBJECTS.values():
+        t = reg["snapshot"].tenant_id
+        age = (now - reg.get("opened_at", now)).total_seconds()
+        ages[t] = max(ages.get(t, 0.0), age)
+    open_counts: Dict[str, int] = {}
+    for reg in OPEN_OBJECTS.values():
+        t = reg["snapshot"].tenant_id
+        open_counts[t] = open_counts.get(t, 0) + 1
+    rows = []
+    for tenant, wa in TENANT_WA_ROWS.items():
+        total = wa["persisted"] + wa["damped"]
+        top_kind = wa["kinds"].most_common(1)
+        top_entity = wa["entities"].most_common(1)
+        rows.append({
+            "tenant_id": tenant,
+            "window_start": window_start.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            "window_s": int(elapsed),
+            "raw_seen": wa["raw_seen"],
+            "persisted": wa["persisted"],
+            "damped": wa["damped"],
+            "damping_ratio": round(wa["damped"] / total, 4) if total else 0.0,
+            "top_signal_kind": top_kind[0][0] if top_kind else "",
+            "top_entity": top_entity[0][0] if top_entity else "",
+            "open_objects": open_counts.get(tenant, 0),
+            "max_incident_age_s": int(ages.get(tenant, 0)),
+        })
+    if ch is not None:
+        try:
+            await ch.insert("netops.corr_tenant_write_amp", rows)
+        except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
+            log.warning("tenant write-amp flush failed (window kept in metrics): %s", exc)
+    TENANT_WA_LAST = sorted(
+        rows, key=lambda r: (r["persisted"] + r["damped"], r["raw_seen"]), reverse=True,
+    )[:CORR_WA_TOPK]
 # §8 degradation. Topology is stale when the Go exporter stopped refreshing the
 # seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
 CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
@@ -517,6 +657,9 @@ def buffer_signal(sig: Signal) -> None:
         _BUFFERED_IDS.discard(str(WINDOW_BUFFER[0].signal_id))
     _BUFFERED_IDS.add(sid)
     WINDOW_BUFFER.append(sig)
+    # #101 write-amp accounting: raw lane pressure per tenant (post-dedup, so a
+    # redelivered signal never double-counts).
+    _wa_note_raw(sig)
 
 
 def _prune_buffer(now: datetime) -> None:
@@ -565,14 +708,32 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     # Dual-write the narrow current-state row (app-level, NOT an MV — row
     # policies break MV inserts). ReplacingMergeTree(created_at) keeps the
     # latest write per (tenant, correlation_id). Projection failure must never
-    # block the history write (truth); it self-heals on the next persist.
+    # block the history write (truth) — but it MUST be counted and alertable
+    # (#101): corr_current is what Command Center reads, so a lost dual-write
+    # is a stale incident list. It self-heals on the next material persist and
+    # is force-repaired by the Go corr_current reconciler.
+    global PROJECTION_WRITE_FAILURES
+    failure: tuple[str, bool] | None = None  # (error, retryable)
     try:
         current_row = {k: obj_row[k] for k in CORR_CURRENT_FIELDS if k in obj_row}
         current_row.update(_current_badges(obj_row.get("hypotheses", "")))
-        await ch.insert("netops.corr_current", [current_row])
+        current_row["chaos_fixture"] = _chaos_fixture_for(snap)
+        if not await ch.insert("netops.corr_current", [current_row]):
+            failure = ("clickhouse rejected insert (see preceding error log)", True)
     except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
-        log.warning("corr_current projection write failed for %s v%d: %s",
-                    snap.correlation_id[:8], version, exc)
+        # Network/timeout errors are retryable; anything else (serialization,
+        # schema shape) will not fix itself by retrying.
+        retryable = isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+        failure = (f"{type(exc).__name__}: {exc}", retryable)
+    if failure is not None:
+        PROJECTION_WRITE_FAILURES += 1
+        err, retryable = failure
+        log.warning(
+            "corr_current projection write FAILED tenant_id=%s corr_id=%s "
+            "version_id=%d material_hash=%s retryable=%s error=%s",
+            snap.tenant_id, snap.correlation_id, version,
+            snap.material_hash(), retryable, err,
+        )
     edge_rows = snap.to_edge_rows(version)
     if edge_rows:
         await ch.insert("netops.corr_edges", edge_rows)
@@ -673,9 +834,11 @@ async def engine_cycle() -> None:
                 OPEN_OBJECTS[snap.correlation_id] = {
                     "version": 1, "hash": chash, "material": snap.material_hash(),
                     "last_seen": now, "last_persist": now, "snapshot": snap,
+                    "opened_at": now,  # #101: max_incident_age in the write-amp rollup
                 }
                 await _persist_snapshot(snap, 1, "open", window)
                 VERSIONS_PERSISTED += 1
+                _wa_note_outcome(tenant, "persisted")
             elif reg["hash"] != chash:
                 # #100 damping: content moved (it always does while an incident
                 # persists — instance ids rotate through the window), but only a
@@ -690,8 +853,10 @@ async def engine_cycle() -> None:
                     reg["last_persist"] = now
                     await _persist_snapshot(snap, reg["version"], "open", window)
                     VERSIONS_PERSISTED += 1
+                    _wa_note_outcome(tenant, "persisted")
                 else:
                     VERSIONS_DAMPED += 1
+                    _wa_note_outcome(tenant, "damped")
                 reg["hash"] = chash
                 reg["material"] = mhash
                 reg["last_seen"] = now
@@ -713,6 +878,7 @@ async def engine_cycle() -> None:
             continue
         reg["version"] += 1
         VERSIONS_PERSISTED += 1
+        _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
         await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid)
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
@@ -727,9 +893,13 @@ async def engine_cycle() -> None:
         if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
             reg["version"] += 1
             VERSIONS_PERSISTED += 1
+            _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
             await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
             del OPEN_OBJECTS[cid]
     LAST_GAP_HINTS = gap_hints
+    # #101: flush the per-tenant write-amplification window (no-op until
+    # CORR_WA_FLUSH_S has elapsed; resets even when the insert fails).
+    await _flush_tenant_write_amp(now)
 
 
 async def engine_loop() -> None:
@@ -835,10 +1005,14 @@ class CH:
         self.auth = (user, password)
         self.client = httpx.AsyncClient(timeout=10.0)
 
-    async def insert(self, table: str, rows: Iterable[dict]) -> None:
+    async def insert(self, table: str, rows: Iterable[dict]) -> bool:
+        """True on success. An HTTP-level failure is logged AND reported to the
+        caller (#101: the corr_current projection write must be able to count
+        its own failures — before this, a 4xx/5xx insert was log-only and
+        indistinguishable from success at the call site)."""
         body = "\n".join(json.dumps(r) for r in rows)
         if not body:
-            return
+            return True
         params = {"query": f"INSERT INTO {table} FORMAT JSONEachRow"}
         r = await self.client.post(
             self.base, params=params, content=body, auth=self.auth,
@@ -846,6 +1020,8 @@ class CH:
         )
         if r.status_code >= 300:
             log.error("clickhouse insert failed: %s %s", r.status_code, r.text)
+            return False
+        return True
 
     async def query(self, sql: str) -> list[dict]:
         # #20 Phase 2: trusted internal reader — pass tenant_scope=__all__ so the
@@ -1617,7 +1793,25 @@ async def metrics_exposition():
         "# TYPE corr_versions counter",
         f'corr_versions{{outcome="persisted"}} {eng["versions_persisted"]}',
         f'corr_versions{{outcome="damped"}} {eng["versions_damped"]}',
+        # #101: lost corr_current dual-writes = stale Command Center. Alerted
+        # by CorrCurrentProjectionFailing; repaired by the Go reconciler.
+        "# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).",
+        "# TYPE corr_current_projection_write_failures_total counter",
+        f"corr_current_projection_write_failures_total {PROJECTION_WRITE_FAILURES}",
     ]
+    # #101 tenant write-amp, BOUNDED cardinality: only the top-K noisiest
+    # tenants of the last flushed window get series (K=CORR_WA_TOPK); the full
+    # per-tenant history lives in netops.corr_tenant_write_amp (SQL, 30d TTL).
+    if TENANT_WA_LAST:
+        lines += [
+            "# HELP corr_tenant_writes_window Last write-amp window counts, top-K noisiest tenants only.",
+            "# TYPE corr_tenant_writes_window gauge",
+        ]
+        for row in TENANT_WA_LAST:
+            t = row["tenant_id"] or "platform"
+            for outcome in ("raw_seen", "persisted", "damped"):
+                lines.append(
+                    f'corr_tenant_writes_window{{tenant_id="{t}",outcome="{outcome}"}} {row[outcome]}')
     return PlainTextResponse("\n".join(lines) + "\n")
 
 
@@ -1633,6 +1827,12 @@ async def health() -> dict:
             "open_objects": len(OPEN_OBJECTS),
             "versions_persisted": VERSIONS_PERSISTED,
             "versions_damped": VERSIONS_DAMPED,
+            # #101: projection health + intentional-storm registry + top-K
+            # write-amp of the last flushed window (bounded; full per-tenant
+            # truth in netops.corr_tenant_write_amp).
+            "projection_write_failures": PROJECTION_WRITE_FAILURES,
+            "chaos_fixtures": sorted(CHAOS_FIXTURES.values()),
+            "tenant_write_amp_topk": TENANT_WA_LAST,
             "window_signals": len(WINDOW_BUFFER),
             "seam_inventory": len(seam_inventory()),
             "topology_gap_hints": LAST_GAP_HINTS,

@@ -12,9 +12,13 @@ package main
 //     location/trust_domain, collection_path, modality_class,
 //     source_clock_quality) with CHECK observer_id != '' — the evidence-
 //     independence gate (§4.5) and fate-sharing analysis depend on it
-//   - corr_signals_archive mirrors corr_signals + archiving provenance, NO TTL:
-//     replay re-runs over signals, so every persisted object's full window
-//     slice is archived forever while the hot spine keeps a 30-day TTL
+//   - corr_signals_archive mirrors corr_signals + archiving provenance. Hot
+//     retention is bounded (#101, corr_retention.go): the archive keeps
+//     CORR_RETENTION_ARCHIVE_DAYS hot for replay/Inspector, and ages to the
+//     cold Parquet tier (scripts/ch-cold-export.sh) instead of growing forever
+//     (it hit 29.9M rows in the 2026-07-09 storm era). The original "archived
+//     forever" freeze note is superseded by the retention contract:
+//     docs/design/correlation-data-contract.md
 //   - corr_objects carries catalog_version (replay contract, research C6)
 //     and verdict_tier + evidence_missing (pre-freeze amendments)
 //   - corr_edges grounding_ref carries a CHECK nonempty constraint — non-Nullable
@@ -220,7 +224,8 @@ LIMIT 1 BY tenant_id, correlation_id`,
     owner            LowCardinality(String) DEFAULT '',
     plane_count      UInt8 DEFAULT 0,
     debug_excluded   UInt8 DEFAULT 0,
-    low_authority    UInt8 DEFAULT 0
+    low_authority    UInt8 DEFAULT 0,
+    chaos_fixture    LowCardinality(String) DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY (tenant_id)
@@ -240,32 +245,20 @@ ORDER BY (tenant_id, correlation_id)`,
 		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS debug_excluded UInt8 DEFAULT 0 AFTER plane_count`,
 		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS low_authority UInt8 DEFAULT 0 AFTER debug_excluded`,
 
+		// #101 chaos-fixture visibility: a named, INTENTIONAL storm source (e.g.
+		// the lab .120 target kept dead on purpose) is tagged by the engine at
+		// persist time so Command Center badges it and the ticketing sweeper
+		// skips it. Narrow LowCardinality column — '' means "real incident".
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS chaos_fixture LowCardinality(String) DEFAULT '' AFTER low_authority`,
+
 		// One-time backfill from history (idempotent: the NOT IN makes a re-run a
 		// no-op). Sanctioned #100 shape: the FOLD picks narrow keys only; the wide
 		// hypotheses badge-extracts run ONLY in the outer read, keyed by the folded
 		// (tenant, id, version) set — no blob ever crosses a sort. Runs at
-		// tenant_scope=__all__ (chExec) so every tenant's objects seed.
-		`INSERT INTO netops.corr_current
-    (tenant_id, correlation_id, version, state, window_start, window_end,
-     top_hypothesis, top_confidence, verdict_tier, evidence_missing, affected,
-     signal_count, node_count, engine_version, catalog_version, merged_into,
-     created_at, owner, plane_count, debug_excluded, low_authority)
-SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.window_end,
-       o.top_hypothesis, o.top_confidence, o.verdict_tier, o.evidence_missing, o.affected,
-       o.signal_count, o.node_count, o.engine_version, o.catalog_version, o.merged_into,
-       o.created_at,
-       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner'),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','modality_coverage','Array(String)'))),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','excluded_debug_probes','Array(String)')) > 0),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','low_authority_probe_scopes','Array(String)')) > 0)
-  FROM netops.corr_objects AS o
- WHERE (o.tenant_id, o.correlation_id, o.version) IN (
-       SELECT tenant_id, correlation_id, version
-         FROM netops.corr_objects
-        WHERE (tenant_id, correlation_id) NOT IN
-              (SELECT tenant_id, correlation_id FROM netops.corr_current)
-        ORDER BY tenant_id, correlation_id, version DESC
-        LIMIT 1 BY tenant_id, correlation_id)`,
+		// tenant_scope=__all__ (chExec) so every tenant's objects seed. The same
+		// statement is the missing-row half of the corr_current reconciler
+		// (corr_current_reconcile.go), which also repairs DRIFTED rows on a timer.
+		corrCurrentBackfillSQL(),
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_edges
 (
@@ -311,6 +304,32 @@ ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
 		// numbers → no reorder), mirroring the corr_signals.source widening.
 		`ALTER TABLE netops.corr_evidence MODIFY COLUMN subject_kind Enum8('edge'=1,'hypothesis'=2,'app'=3)`,
 
+		// #101 tenant write-amplification rollup — bounded-cardinality storm
+		// attribution. The correlation engine flushes one row per (tenant,
+		// window) with raw/persisted/damped counts + the dominant kind/entity,
+		// so operators can answer "which tenant/source is generating this
+		// storm?" from SQL without per-tenant Prometheus label cardinality.
+		// Small by construction (tenants × windows); fixed 30-day TTL.
+		`CREATE TABLE IF NOT EXISTS netops.corr_tenant_write_amp
+(
+    tenant_id          LowCardinality(String) DEFAULT '',
+    window_start       DateTime64(3),
+    window_s           UInt32,
+    raw_seen           UInt64,
+    persisted          UInt64,
+    damped             UInt64,
+    damping_ratio      Float32,
+    top_signal_kind    LowCardinality(String) DEFAULT '',
+    top_entity         String DEFAULT '',
+    open_objects       UInt32 DEFAULT 0,
+    max_incident_age_s UInt32 DEFAULT 0
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(window_start))
+ORDER BY (tenant_id, window_start)
+TTL toDateTime(window_start) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
+
 		chRowPolicyDDL("corr_signals"),
 		chRowPolicyDDL("corr_signals_archive"),
 		chRowPolicyDDL("corr_objects"),
@@ -321,6 +340,11 @@ ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
 		// untagged. The generic chRowPolicyDDL is the loose telemetry variant and
 		// would leak platform-global objects into every tenant's Command Center.
 		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_current ON netops.corr_current
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL`,
+		// Same strict model for the write-amp rollup: a tenant may see its own
+		// storm accounting; platform-global (untagged '') rows are platform-only.
+		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_tenant_write_amp ON netops.corr_tenant_write_amp
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL`,
 	}

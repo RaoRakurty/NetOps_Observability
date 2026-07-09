@@ -153,9 +153,34 @@ A lane = anything that turns raw telemetry into correlation signals
   (>8 days) or erroring — the silent-cron trap that muddied this incident.
 - **Canary:** `rca-canary.sh` (cron */15) asserts bus → signals → confirmed
   RCA → delivered ticket, damping-aware.
-- **TODO (deferred):** per-tenant write-amplification counters (label
-  cardinality needs a design pass — bounded top-K by tenant, not a label per
-  tenant); alert on `corr_current` projection-write failures (today: WARN log).
+- ~~**TODO (deferred):** per-tenant write-amplification counters; alert on
+  `corr_current` projection-write failures~~ — **CLOSED by #101** (see below).
+
+## #101 follow-up — the deferred items are now the data contract
+
+The deferred half of this incident shipped as tracker **#101** and is codified
+in `docs/design/correlation-data-contract.md` (binding):
+
+- **Retention/TTL-to-cold:** profile-driven hot TTLs (`corr_retention.go`,
+  `CORR_RETENTION_PROFILE`) + cold Parquet export (`scripts/ch-cold-export.sh`)
+  + preview (`scripts/ch-retention-dry-run.sh`). No corr table grows forever.
+- **Projection reliability:** `corr_current_projection_write_failures_total`
+  metric + `CorrCurrentProjectionFailing` alert + Go `corr-current-reconcile`
+  drift repair worker (hourly; boot backfill for missing rows).
+- **Tenant write-amp visibility:** `netops.corr_tenant_write_amp` rollup +
+  bounded top-K `corr_tenant_writes_window` metrics +
+  `CorrTenantWriteAmpOverBudget` alert (runbook: `correlation-storm.md`).
+- **Chaos fixture:** the .120 storm source is now the REGISTERED
+  `lab_probe_storm_fixture_120` (`CORR_CHAOS_FIXTURES`) — badged in Command
+  Center, skipped by auto-ticketing, still exercising damping continuously.
+- **Fairness:** `hot_ui`/`background` ClickHouse settings profiles routed by
+  attribution tag (`ch_workload.go` + `workload-profiles.xml`).
+- **Release gate:** `make release-gate` (storm SLOs: write budget ≥0.9 damping,
+  tenant blast radius, RCA integrity + the SQL-shape guardrails).
+
+Runbooks: `docs/runbooks/clickhouse-query-budget.md` (this incident's 502
+shape), `docs/runbooks/correlation-storm.md`,
+`docs/runbooks/correlation-retention-cold-archive.md`.
 
 ## Scaling roadmap
 

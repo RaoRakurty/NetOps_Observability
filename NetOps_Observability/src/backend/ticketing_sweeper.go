@@ -102,14 +102,20 @@ func (sw *ticketSweeper) tick(ctx context.Context, now time.Time) (int, error) {
 // Only suspected/confirmed, non-merged objects in the look-back window — the
 // policy still re-checks every gate; this is just a cheap pre-filter that keeps
 // the per-object loadCorrSlice work bounded.
+// Served from the corr_current HOT projection (#101): the sweeper runs every
+// 60s, so its pre-filter must be O(active objects) like every other hot read —
+// corr_objects_latest folds the whole history table per sweep. chaos_fixture
+// rows are excluded HERE, not in the policy gates: an intentional storm source
+// (e.g. the lab .120 fixture) must never open customer tickets.
 func (sw *ticketSweeper) candidates(ctx context.Context) ([]sweepCandidate, error) {
 	sql := `
 SELECT toString(correlation_id) AS correlation_id,
        tenant_id                AS tenant_id
-  FROM netops.corr_objects_latest
+  FROM netops.corr_current FINAL
  WHERE window_start >= now() - INTERVAL ` + intToString(int(sw.since.Seconds())) + ` SECOND
    AND verdict_tier IN ('suspected','confirmed')
    AND merged_into IS NULL
+   AND chaos_fixture = ''
  ORDER BY window_start ASC
  LIMIT ` + intToString(sw.limit) + `
  FORMAT JSON`

@@ -619,6 +619,10 @@ services:
       - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
       # Spill heavy GROUP BY/ORDER BY to disk instead of OOMing the lab memory cap.
       - ./clickhouse/query-spill.xml:/etc/clickhouse-server/users.d/query-spill.xml:ro
+      # #101 workload fairness: named settings profiles (hot_ui/background) the
+      # API selects per query via ch_workload.go — hot UI reads fail small and
+      # alone; background workers yield to interactive load.
+      - ./clickhouse/workload-profiles.xml:/etc/clickhouse-server/users.d/workload-profiles.xml:ro
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     healthcheck:
@@ -665,6 +669,14 @@ services:
       CLOUD_LOGS_DIR: ${CLOUD_LOGS_DIR:-/data/cloud-logs}
       CLOUD_LOGS_TENANT: ${CLOUD_LOGS_TENANT:-}
       CLOUD_LOGS_REFRESH_S: ${CLOUD_LOGS_REFRESH_S:-30}
+      # #101 chaos-fixture registry: name=match pairs (comma-separated) tagging
+      # INTENTIONAL storm sources (e.g. a lab target kept dead on purpose) so
+      # Command Center badges them and auto-ticketing skips them, while the
+      # storm still exercises damping + bounded IO end to end.
+      CORR_CHAOS_FIXTURES: ${CORR_CHAOS_FIXTURES:-}
+      # #101 tenant write-amplification rollup cadence + top-K exposition size.
+      CORR_WA_FLUSH_S: ${CORR_WA_FLUSH_S:-300}
+      CORR_WA_TOPK: ${CORR_WA_TOPK:-5}
     volumes:
       - ../../data/api/enrichment:/data/enrichment:ro
       - ../../data/cloud-logs:/data/cloud-logs:ro
@@ -729,6 +741,17 @@ services:
       CLICKHOUSE_URL: "http://clickhouse:8123"
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      # #101 correlation retention contract (corr_retention.go): hot horizons
+      # per environment profile (lab/demo/production/extended), individually
+      # overridable. Cold Parquet export: scripts/ch-cold-export.sh.
+      CORR_RETENTION_PROFILE: ${CORR_RETENTION_PROFILE:-production}
+      CORR_RETENTION_HISTORY_DAYS: ${CORR_RETENTION_HISTORY_DAYS:-}
+      CORR_RETENTION_ARCHIVE_DAYS: ${CORR_RETENTION_ARCHIVE_DAYS:-}
+      CORR_RETENTION_CLOSED_DAYS: ${CORR_RETENTION_CLOSED_DAYS:-}
+      # #101 corr_current projection drift repair cadence (0 = off).
+      CORR_CURRENT_RECONCILE_INTERVAL: ${CORR_CURRENT_RECONCILE_INTERVAL:-1h}
+      # #101 workload fairness profiles (ch_workload.go; "off" = kill-switch).
+      CH_WORKLOAD_PROFILES: ${CH_WORKLOAD_PROFILES:-}
       CORRELATION_URL: "http://correlation:8000"
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.

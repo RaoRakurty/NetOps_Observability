@@ -57,6 +57,10 @@ func ensureCHRowPolicies() {
 	// Correlation Engine v2 (#67) frozen schema — tables + view + row policies
 	// (corr_schema.go). Same converge-on-boot contract as everything above.
 	stmts = append(stmts, corrSchemaDDL()...)
+	// #101 retention contract: profile-driven hot TTLs for the correlation
+	// history tables (corr_retention.go). Metadata-only ALTERs; expiry happens
+	// as background part drops. Cold Parquet export runs ahead of the horizon.
+	stmts = append(stmts, corrRetentionDDL(corrRetentionConfig())...)
 	go func() {
 		var errs []string
 		for attempt := 0; attempt < 10; attempt++ {

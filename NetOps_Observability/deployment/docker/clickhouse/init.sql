@@ -221,9 +221,13 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 -- window slice of every persisted object, written at pipeline stage [8] with the
 -- snapshot. Whole window, not just attached signals — candidate-pool decisions
 -- depend on non-attached episodes, so a participating-only archive would break
--- bit-perfect replay. NO TTL: objects are re-runnable forever; non-participating
--- hot-spine signals age out at 30 days (the honest, stated guarantee). Columns
--- mirror corr_signals exactly + archiving provenance.
+-- bit-perfect replay. Hot retention is BOUNDED (#101): the API boot converge
+-- applies a profile-driven TTL (corr_retention.go, default 90 days hot) and
+-- history ages to the cold Parquet tier (scripts/ch-cold-export.sh) instead of
+-- growing forever (29.9M rows by 2026-07-09). In-horizon objects replay
+-- bit-perfect; older objects replay from the cold tier offline. Contract:
+-- docs/design/correlation-data-contract.md. Columns mirror corr_signals
+-- exactly + archiving provenance.
 CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
 (
     tenant_id      LowCardinality(String) DEFAULT '',
@@ -266,8 +270,10 @@ PARTITION BY (tenant_id, toYYYYMM(ts))
 ORDER BY (tenant_id, ts, signal_id)
 SETTINGS index_granularity = 8192;
 
--- 2.2 Correlation objects — versioned, append-only snapshots. No TTL: objects
--- are queryable forever (replay contract).
+-- 2.2 Correlation objects — versioned, append-only snapshots. Hot retention is
+-- bounded (#101): profile-driven TTL applied by the API boot converge
+-- (corr_retention.go, default 180 days hot), cold Parquet export keeps history
+-- for calibration/audit (docs/design/correlation-data-contract.md).
 CREATE TABLE IF NOT EXISTS netops.corr_objects
 (
     tenant_id        LowCardinality(String) DEFAULT '',
@@ -342,11 +348,40 @@ CREATE TABLE IF NOT EXISTS netops.corr_current
     owner            LowCardinality(String) DEFAULT '',
     plane_count      UInt8 DEFAULT 0,
     debug_excluded   UInt8 DEFAULT 0,
-    low_authority    UInt8 DEFAULT 0
+    low_authority    UInt8 DEFAULT 0,
+    -- #101: non-empty names an INTENTIONAL chaos/storm source (engine-tagged
+    -- from CORR_CHAOS_FIXTURES); Command Center badges it, ticketing skips it.
+    chaos_fixture    LowCardinality(String) DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY (tenant_id)
 ORDER BY (tenant_id, correlation_id);
+
+-- #101 tenant write-amplification rollup — bounded-cardinality storm
+-- attribution. One row per (tenant, window) flushed by the correlation engine
+-- (CORR_WA_FLUSH_S): raw signals seen vs versions persisted vs damped, plus the
+-- dominant kind/entity, so "which tenant/source is generating this storm?" is
+-- one SQL query (docs/runbooks/correlation-storm.md) instead of per-tenant
+-- Prometheus label cardinality. Small by construction; fixed 30-day TTL.
+CREATE TABLE IF NOT EXISTS netops.corr_tenant_write_amp
+(
+    tenant_id          LowCardinality(String) DEFAULT '',
+    window_start       DateTime64(3),
+    window_s           UInt32,
+    raw_seen           UInt64,
+    persisted          UInt64,
+    damped             UInt64,
+    damping_ratio      Float32,
+    top_signal_kind    LowCardinality(String) DEFAULT '',
+    top_entity         String DEFAULT '',
+    open_objects       UInt32 DEFAULT 0,
+    max_incident_age_s UInt32 DEFAULT 0
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(window_start))
+ORDER BY (tenant_id, window_start)
+TTL toDateTime(window_start) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- 2.3 Graph edges. The owner's grounded-edges hard constraint is enforced by the
 -- CHECK constraint, not by non-Nullability alone: ClickHouse silently coerces an
@@ -527,5 +562,9 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_evidence ON netops.corr_evidence
 -- device names/hypotheses and has NO app-layer device narrowing on its read
 -- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_current ON netops.corr_current
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+-- STRICT: a tenant may see its own storm accounting; untagged platform-only.
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_tenant_write_amp ON netops.corr_tenant_write_amp
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;

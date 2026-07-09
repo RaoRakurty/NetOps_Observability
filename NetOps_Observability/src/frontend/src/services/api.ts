@@ -405,6 +405,7 @@ export type CorrObject = {
   owner?: string;              // verdict owner (netops/isp/…)
   debug_excluded?: number;     // 0/1
   low_authority?: number;      // 0/1
+  chaos_fixture?: string;      // non-empty = named intentional storm source (#101)
   ticket_status?: TicketStatus; // #78: external ticket state for this RCA object
 };
 

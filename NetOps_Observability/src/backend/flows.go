@@ -617,6 +617,12 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	// scripts/ch-query-budget-check.sh) instead of reverse-engineered from
 	// normalized query hashes during an incident.
 	q.Set("log_comment", "api:"+r.URL.Path)
+	// #101 workload fairness: hot UI reads run under a stricter settings
+	// profile than analytics/background work, so a regressed hot query fails
+	// small and alone instead of competing with the whole platform.
+	if p := chWorkloadProfile("api:" + r.URL.Path); p != "" {
+		q.Set("profile", p)
+	}
 	u.RawQuery = q.Encode()
 	user := envOr("CLICKHOUSE_USER", "netops")
 	pass := envOr("CLICKHOUSE_PASSWORD", "")

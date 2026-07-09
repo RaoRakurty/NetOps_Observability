@@ -1,5 +1,24 @@
 # NetOps_Observability — developer make targets.
-.PHONY: test-correlation-e2e mib-index test-ticketing-unit test-servicenow-mock
+.PHONY: test-correlation-e2e mib-index test-ticketing-unit test-servicenow-mock \
+        release-gate release-gate-live
+
+# #101 release-gate storm SLOs — the shippable-lane contract. Every NEW signal
+# lane must pass this BEFORE it ships (docs/design/correlation-data-contract.md
+# §new-lane): broken-source write budget, tenant blast radius, RCA integrity
+# under damping, bounded-IO SQL shapes, retention safety. Pure/offline (runs in
+# normal CI too — this target exists so it is one discoverable command).
+release-gate:
+	cd src/correlation && python3 -m pytest -q test_lane_soak.py \
+	    test_storm_release_gate.py test_corr_current_projection.py \
+	    test_tenant_write_amp.py
+	cd src/backend && go test . -count=1 -run \
+	    'TestNoSelectStarOnCorrTables|TestNoWideColumnsThroughFolds|TestCorrCurrent|TestCorrelationsListSQLShape|TestNoWholeTableEdgesAggregation|TestCorrRetention|TestCHWorkload'
+
+# Same gate against the LIVE stack: per-endpoint read budgets from
+# system.query_log + a retention/cold-tier preview. Requires the stack up.
+release-gate-live: release-gate
+	scripts/ch-query-budget-check.sh
+	scripts/ch-retention-dry-run.sh
 
 # RCA auto-ticketing (#78) — pure unit + mock-ServiceNow tests (no live stack).
 # The mock is httptest-backed (ticketing_servicenow_test.go); SSRF_ALLOW_PRIVATE

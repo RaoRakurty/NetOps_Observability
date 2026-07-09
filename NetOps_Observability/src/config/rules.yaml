@@ -752,6 +752,33 @@ groups:
         annotations:
           summary: "Correlation persisting {{ $value }} versions/30m with ZERO damped writes — the #100 write damper is not suppressing storm churn"
 
+      - alert: CorrCurrentProjectionFailing
+        # #101: corr_current is the hot-read source of truth for Command Center.
+        # A lost projection dual-write = a STALE incident list (an incident that
+        # closed still shows open, or never appears). The engine's history write
+        # succeeded, so nothing else looks broken — this counter is the only
+        # signal. Recovery: docs/runbooks/correlation-storm.md §projection;
+        # the Go corr-current-reconcile worker force-repairs hourly.
+        expr: increase(corr_current_projection_write_failures_total[10m]) > 0
+        for: 5m
+        labels: { severity: critical, layer: correlation }
+        annotations:
+          summary: "corr_current projection lost {{ $value }} write(s)/10m — Command Center may be serving STALE incidents; check correlation logs (corr_current projection write FAILED) and ClickHouse health"
+
+      - alert: CorrTenantWriteAmpOverBudget
+        # #101 tenant storm budget: >120 persisted versions inside one 5-minute
+        # write-amp window (~24/min sustained) means one tenant's lane is
+        # writing far beyond the damped steady-state (heartbeat-paced storms
+        # persist ~1 version/object/15min). Bounded cardinality by design: the
+        # metric only carries the top-K noisiest tenants. Attribution + full
+        # history: SELECT from netops.corr_tenant_write_amp (correlation-storm
+        # runbook).
+        expr: max by (tenant_id) (corr_tenant_writes_window{outcome="persisted"}) > 120
+        for: 15m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Tenant {{ $labels.tenant_id }} persisted {{ $value }} correlation versions in one write-amp window — storm exceeding write budget; see correlation-storm runbook (chaos fixture? damping regression? real multi-entity incident?)"
+
   # Counters come from the correlation /metrics exposition (vmscrape job
   # 'correlation'); they are monotonic per process, so increase()/rate() are safe
   # across restarts.

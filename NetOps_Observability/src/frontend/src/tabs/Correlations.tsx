@@ -121,8 +121,16 @@ export default function Correlations() {
     { key: "verdict_tier", header: "Status", width: 116, sortable: true, text: (o) => o.verdict_tier,
       render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</span> },
     { key: "quality", header: "Quality", width: 90, sortable: true,
-      sortValue: (o) => QUAL_RANK[qualityOf(o)],
-      render: (o) => { const q = qualityOf(o); return pill(q, QUAL_TONE[q], q !== "weak"); } },
+      sortValue: (o) => (o.chaos_fixture ? -1 : QUAL_RANK[qualityOf(o)]),
+      // A named chaos fixture is an INTENTIONAL storm source (planned platform
+      // drill, e.g. a lab target kept unreachable on purpose): badge it so the
+      // NOC never triages it as a customer incident. Auto-ticketing already
+      // skips it server-side.
+      render: (o) => o.chaos_fixture
+        ? <span title={`Planned resilience drill (${o.chaos_fixture}) — not a customer incident`}>
+            {pill("planned drill", "#7C3AED")}
+          </span>
+        : (() => { const q = qualityOf(o); return pill(q, QUAL_TONE[q], q !== "weak"); })() },
     { key: "top_hypothesis", header: "Likely cause", width: 200, sortable: true,
       text: (o) => (o.top_hypothesis === "undetermined" ? "" : signatureName(o.top_hypothesis)),
       render: (o) => o.top_hypothesis === "undetermined"

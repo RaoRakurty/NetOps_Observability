@@ -55,6 +55,10 @@ func (s *server) chRowsScope(ctx context.Context, scope, sql string, comment ...
 		tag = comment[0]
 	}
 	q.Set("log_comment", tag)
+	// #101 workload fairness: same profile routing as proxyClickHouse.
+	if p := chWorkloadProfile(tag); p != "" {
+		q.Set("profile", p)
+	}
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
 	if err != nil {
@@ -196,7 +200,8 @@ SELECT toString(c.correlation_id)  AS correlation_id,
        c.plane_count                AS plane_count,
        c.owner                      AS owner,
        c.debug_excluded > 0         AS debug_excluded,
-       c.low_authority > 0          AS low_authority
+       c.low_authority > 0          AS low_authority,
+       c.chaos_fixture              AS chaos_fixture
   FROM netops.corr_current AS c FINAL
   LEFT JOIN (
        SELECT correlation_id, version, count() AS edge_count,
