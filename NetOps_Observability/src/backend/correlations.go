@@ -145,11 +145,19 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	// picked objects — the previous shape GROUP BY'd the ENTIRE corr_edges table
 	// (771k rows, ~1.5 GiB hash of groupUniqArray strings) to decorate ≤limit
 	// rows, and concurrent Command Center polls pinned ClickHouse.
+	//
+	// Narrow fold (2026-07-09 incident, part 2): the latest-version fold must sort
+	// ONLY key columns. `SELECT *` here pulled the ~5.7KB hypotheses blob through
+	// the ORDER BY over every in-window version row (2.6 GiB per query at 237k
+	// rows → the memory OvercommitTracker killed queries server-wide). Wide
+	// columns are fetched afterwards, keyed by the ≤limit picked (id, version)
+	// pairs, so the sort stays a few MB no matter how large the storm backlog is.
 	const hp = "o.hypotheses,'ranking','hypotheses',1,'verdict'"
 	sql := `
 WITH picked AS (
-     SELECT * FROM (
-          SELECT * FROM netops.corr_objects
+     SELECT correlation_id, version, created_at FROM (
+          SELECT tenant_id, correlation_id, version, created_at, state, verdict_tier
+            FROM netops.corr_objects
            WHERE ` + sinceCond + `
            ORDER BY tenant_id, correlation_id, version DESC
            LIMIT 1 BY tenant_id, correlation_id
@@ -180,7 +188,7 @@ SELECT toString(o.correlation_id)  AS correlation_id,
        JSONExtractString(` + hp + `,'owner')                                          AS owner,
        length(JSONExtract(` + hp + `,'excluded_debug_probes','Array(String)')) > 0    AS debug_excluded,
        length(JSONExtract(` + hp + `,'low_authority_probe_scopes','Array(String)')) > 0 AS low_authority
-  FROM picked AS o
+  FROM netops.corr_objects AS o
   LEFT JOIN (
        SELECT correlation_id, version, count() AS edge_count,
               arrayStringConcat(arraySort(groupUniqArray(grounding_kind)), '+') AS grounding
@@ -188,6 +196,8 @@ SELECT toString(o.correlation_id)  AS correlation_id,
         WHERE (correlation_id, version) IN (SELECT correlation_id, version FROM picked)
         GROUP BY correlation_id, version
   ) AS e ON e.correlation_id = o.correlation_id AND e.version = o.version
+ WHERE o.` + sinceCond + `
+   AND (o.correlation_id, o.version) IN (SELECT correlation_id, version FROM picked)
  ORDER BY o.created_at DESC
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)

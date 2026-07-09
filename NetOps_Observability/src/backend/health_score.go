@@ -409,21 +409,38 @@ func (s *server) fetchPathHealthClass(ctx context.Context) healthClassResult {
 // Best-effort: a ClickHouse/engine outage drops the class, never errors the strip.
 func (s *server) fetchCorrelationClass(r *http.Request, site string) healthClassResult {
 	res := healthClassResult{Class: "correlation"}
+	// Bounded read (2026-07-09 incident, part 2): fold narrow keys only — pulling
+	// o.hypotheses (~5.7KB/row) through corr_objects_latest's LIMIT-1-BY sort, and
+	// GROUP BY'ing the ENTIRE corr_edges table to decorate 200 rows, are the exact
+	// shapes that pinned ClickHouse. Wide columns + edges are fetched keyed by the
+	// picked (id, version) pairs.
 	const hp = "o.hypotheses,'ranking','hypotheses',1,'verdict'"
 	sql := `
+WITH picked AS (
+     SELECT correlation_id, version, created_at FROM (
+          SELECT tenant_id, correlation_id, version, created_at, state, verdict_tier, top_hypothesis
+            FROM netops.corr_objects
+           ORDER BY tenant_id, correlation_id, version DESC
+           LIMIT 1 BY tenant_id, correlation_id
+     )
+      WHERE state='open' AND verdict_tier IN ('confirmed','suspected')
+        AND top_hypothesis != 'undetermined'
+      ORDER BY created_at DESC
+      LIMIT 200
+)
 SELECT toString(o.correlation_id) AS id, o.top_hypothesis AS hyp, o.top_confidence AS conf,
        o.verdict_tier AS tier, toString(o.created_at) AS created_at,
        coalesce(e.grounding,'none') AS grounding,
        length(JSONExtract(` + hp + `,'modality_coverage','Array(String)')) AS planes,
        length(JSONExtract(` + hp + `,'excluded_debug_probes','Array(String)')) > 0 AS debug_excluded,
        length(JSONExtract(` + hp + `,'low_authority_probe_scopes','Array(String)')) > 0 AS low_authority
-  FROM (SELECT * FROM netops.corr_objects_latest
-         WHERE state='open' AND verdict_tier IN ('confirmed','suspected')
-           AND top_hypothesis != 'undetermined'
-         ORDER BY created_at DESC LIMIT 200) AS o
+  FROM netops.corr_objects AS o
   LEFT JOIN (SELECT correlation_id, version, arrayStringConcat(arraySort(groupUniqArray(grounding_kind)),'+') AS grounding
-               FROM netops.corr_edges GROUP BY correlation_id, version) AS e
+               FROM netops.corr_edges
+              WHERE (correlation_id, version) IN (SELECT correlation_id, version FROM picked)
+              GROUP BY correlation_id, version) AS e
     ON e.correlation_id = o.correlation_id AND e.version = o.version
+ WHERE (o.correlation_id, o.version) IN (SELECT correlation_id, version FROM picked)
  FORMAT JSON`
 	rows, err := s.chRows(r, sql)
 	if err != nil {

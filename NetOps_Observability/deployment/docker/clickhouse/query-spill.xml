@@ -18,6 +18,15 @@
                  fast; only pathological queries spill instead of being killed. -->
             <max_bytes_before_external_group_by>1610612736</max_bytes_before_external_group_by>
             <max_bytes_before_external_sort>1610612736</max_bytes_before_external_sort>
+            <!-- Hard per-query ceiling (2026-07-09 incident): a single 2.6 GiB read
+                 (wide columns sorted through a latest-version fold) pushed the whole
+                 server to its cgroup limit and the OvercommitTracker killed *other*
+                 queries — platform-wide 502s from one bad query shape. 2 GiB sits
+                 above the spill thresholds (a heavy query spills at 1.5 GiB and
+                 finishes) but at half the server allowance, so a runaway query fails
+                 alone instead of taking the stack down. Scale with
+                 CLICKHOUSE_MEM_LIMIT at prod sizing. -->
+            <max_memory_usage>2147483648</max_memory_usage>
         </default>
     </profiles>
 </clickhouse>

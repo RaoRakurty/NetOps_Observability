@@ -114,7 +114,23 @@ func (s *server) backfillIncidentTimeMetrics(ctx context.Context, lookback time.
 	// Extract owner + seam_type server-side (JSONExtractString) instead of pulling
 	// the whole hypotheses blob per object — at scale the blobs would blow past the
 	// read cap and truncate. tenant_id leads so each row is written to its own scope.
+	//
+	// Bounded read (2026-07-09 incident, part 2): even JSONExtractString(o.hypotheses)
+	// through corr_objects_latest forces the ~5.7KB blob through the view's full-table
+	// LIMIT-1-BY sort on every ticker run. Fold narrow keys first; extract from the
+	// blob only for the ≤cap picked (id, version) pairs.
 	sql := `
+WITH picked AS (
+     SELECT correlation_id, version, window_start FROM (
+          SELECT tenant_id, correlation_id, version, window_start
+            FROM netops.corr_objects
+           ORDER BY tenant_id, correlation_id, version DESC
+           LIMIT 1 BY tenant_id, correlation_id
+     )
+      WHERE window_start >= now() - INTERVAL ` + intToString(secs) + ` SECOND
+      ORDER BY window_start ASC
+      LIMIT ` + intToString(timeIntelBackfillCap) + `
+)
 SELECT toString(o.tenant_id)      AS tenant_id,
        toString(o.correlation_id) AS correlation_id,
        toString(o.window_start)   AS window_start,
@@ -126,10 +142,9 @@ SELECT toString(o.tenant_id)      AS tenant_id,
        o.affected                 AS affected,
        JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner') AS owner,
        JSONExtractString(o.hypotheses,'grounding_context','seams',1,'seam_type')  AS seam_type
-  FROM netops.corr_objects_latest AS o
- WHERE o.window_start >= now() - INTERVAL ` + intToString(secs) + ` SECOND
+  FROM netops.corr_objects AS o
+ WHERE (o.correlation_id, o.version) IN (SELECT correlation_id, version FROM picked)
  ORDER BY o.window_start ASC
- LIMIT ` + intToString(timeIntelBackfillCap) + `
  FORMAT JSON`
 	rows, err := chWorkerQuery(ctx, sql)
 	if err != nil {
