@@ -3,14 +3,17 @@ package collectors
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -62,6 +65,22 @@ type synResult struct {
 	rttMs   float64
 	lossPct float64
 	lines   []string
+
+	// Application-experience enrichment forwarded on the ProbeEvent (the
+	// semantic lane, synthetic_normalize.py). Zero values are omitted on the
+	// wire; certDays is a pointer because 0/negative days are meaningful.
+	failClass   string // dns|tls|connect_refused|connect_timeout|timeout|reset|unknown ("" = none)
+	statusCode  int
+	method      string
+	path        string
+	dnsMs       float64
+	connectMs   float64
+	tlsMs       float64
+	ttfbMs      float64
+	totalMs     float64
+	certDays    *float64
+	certSubject string
+	certIssuer  string
 }
 
 type synthetics struct {
@@ -162,6 +181,7 @@ func (s *synthetics) tick(ctx context.Context) {
 
 	now := time.Now().UnixMilli()
 	prober := proberID()
+	site := proberSite()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	up := 0
 	var lines []string
@@ -180,6 +200,11 @@ func (s *synthetics) tick(ctx context.Context) {
 		events = append(events, ProbeEvent{
 			Kind: r.target.check, Prober: prober, Target: r.target.dst,
 			OK: r.up, RTTms: r.rttMs, LossPct: loss, TS: ts,
+			SiteID: site, FailClass: r.failClass, StatusCode: r.statusCode,
+			Method: r.method, Path: r.path,
+			DNSMs: r.dnsMs, TCPConnectMs: r.connectMs, TLSMs: r.tlsMs,
+			TTFBMs: r.ttfbMs, TotalMs: r.totalMs,
+			CertDaysToExpiry: r.certDays, CertSubject: r.certSubject, CertIssuer: r.certIssuer,
 		})
 		lines = append(lines, fmt.Sprintf(`synthetic_up{dst=%q,check=%q} %d %d`, r.target.dst, r.target.check, b2i(r.up), now))
 		for _, l := range r.lines {
@@ -200,12 +225,16 @@ func (s *synthetics) tick(ctx context.Context) {
 
 // ── HTTP(S) ───────────────────────────────────────────────────────────────────
 
-// httpPhases holds the httptrace-derived phase boundaries for one request.
+// httpPhases holds the httptrace-derived phase boundaries for one request,
+// plus each phase's error so a failure classifies to the phase that broke
+// (the client wraps everything in one *url.Error; the trace sees the truth).
 type httpPhases struct {
 	dnsStart, dnsDone   time.Time
 	connStart, connDone time.Time
 	tlsStart, tlsDone   time.Time
 	wroteReq, firstByte time.Time
+	dnsErr, connErr     error
+	tlsErr              error
 }
 
 // ms returns the millisecond delta between two phase marks, 0 when either is
@@ -225,17 +254,21 @@ func (s *synthetics) checkHTTP(ctx context.Context, tgt synTarget) synResult {
 	var ph httpPhases
 	trace := &httptrace.ClientTrace{
 		DNSStart:             func(httptrace.DNSStartInfo) { ph.dnsStart = time.Now() },
-		DNSDone:              func(httptrace.DNSDoneInfo) { ph.dnsDone = time.Now() },
+		DNSDone:              func(i httptrace.DNSDoneInfo) { ph.dnsDone, ph.dnsErr = time.Now(), i.Err },
 		ConnectStart:         func(string, string) { ph.connStart = time.Now() },
-		ConnectDone:          func(_, _ string, _ error) { ph.connDone = time.Now() },
+		ConnectDone:          func(_, _ string, err error) { ph.connDone, ph.connErr = time.Now(), err },
 		TLSHandshakeStart:    func() { ph.tlsStart = time.Now() },
-		TLSHandshakeDone:     func(tls.ConnectionState, error) { ph.tlsDone = time.Now() },
+		TLSHandshakeDone:     func(_ tls.ConnectionState, err error) { ph.tlsDone, ph.tlsErr = time.Now(), err },
 		WroteRequest:         func(httptrace.WroteRequestInfo) { ph.wroteReq = time.Now() },
 		GotFirstResponseByte: func() { ph.firstByte = time.Now() },
 	}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodGet, tgt.dst, nil)
 	if err != nil {
 		return res
+	}
+	res.method = http.MethodGet
+	if u, uerr := url.Parse(tgt.dst); uerr == nil {
+		res.path = u.Path
 	}
 	req.Header.Set("User-Agent", "netops-synthetics/1")
 	client := &http.Client{Timeout: s.timeout}
@@ -245,6 +278,7 @@ func (s *synthetics) checkHTTP(ctx context.Context, tgt synTarget) synResult {
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		res.failClass = classifyHTTPErr(err, ph)
 		return res
 	}
 	defer resp.Body.Close()
@@ -254,6 +288,12 @@ func (s *synthetics) checkHTTP(ctx context.Context, tgt synTarget) synResult {
 
 	res.up = resp.StatusCode >= 200 && resp.StatusCode < 400
 	res.rttMs = total
+	res.statusCode = resp.StatusCode
+	res.dnsMs = ms(ph.dnsStart, ph.dnsDone)
+	res.connectMs = ms(ph.connStart, ph.connDone)
+	res.tlsMs = ms(ph.tlsStart, ph.tlsDone)
+	res.ttfbMs = ms(ph.wroteReq, ph.firstByte)
+	res.totalMs = total
 	q := func(name string, v float64) string {
 		return fmt.Sprintf(`%s{dst=%q,check="http"} %.3f`, name, tgt.dst, v)
 	}
@@ -266,10 +306,59 @@ func (s *synthetics) checkHTTP(ctx context.Context, tgt synTarget) synResult {
 		q("synthetic_http_total_ms", total),
 	)
 	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
-		days := time.Until(resp.TLS.PeerCertificates[0].NotAfter).Hours() / 24
+		leaf := resp.TLS.PeerCertificates[0]
+		days := time.Until(leaf.NotAfter).Hours() / 24
 		res.lines = append(res.lines, q("synthetic_http_cert_expiry_days", days))
+		res.certDays = &days
+		res.certSubject = leaf.Subject.CommonName
+		res.certIssuer = leaf.Issuer.CommonName
 	}
 	return res
+}
+
+// classifyHTTPErr maps a failed HTTP check to its fail_class — the phase that
+// actually broke, preferring the per-phase trace errors over parsing the
+// client's wrapped error. Values are the ProbeEvent.FailClass wire vocabulary
+// consumed by synthetic_normalize.py.
+func classifyHTTPErr(err error, ph httpPhases) string {
+	switch {
+	case ph.dnsErr != nil:
+		return "dns"
+	case ph.tlsErr != nil:
+		return "tls"
+	case ph.connErr != nil:
+		if errors.Is(ph.connErr, syscall.ECONNREFUSED) {
+			return "connect_refused"
+		}
+		return "connect_timeout"
+	}
+	// No phase reported an error — classify from the wrapped client error.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns"
+	}
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return "tls"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connect_refused"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "reset"
+	}
+	var nerr net.Error
+	if (errors.As(err, &nerr) && nerr.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
+		if ph.connDone.IsZero() {
+			return "connect_timeout" // never got a connection
+		}
+		return "timeout" // connected, then the response never arrived
+	}
+	// TLS started but never completed (some handshake aborts surface only here).
+	if !ph.tlsStart.IsZero() && ph.tlsDone.IsZero() {
+		return "tls"
+	}
+	return "unknown"
 }
 
 // ── TCP connect ───────────────────────────────────────────────────────────────
@@ -280,12 +369,18 @@ func (s *synthetics) checkTCP(ctx context.Context, tgt synTarget) synResult {
 	start := time.Now()
 	conn, err := d.DialContext(ctx, "tcp", withPort(tgt.dst, 443))
 	if err != nil {
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			res.failClass = "connect_refused"
+		} else {
+			res.failClass = "connect_timeout"
+		}
 		return res
 	}
 	connectMs := float64(time.Since(start)) / float64(time.Millisecond)
 	_ = conn.Close()
 	res.up = true
 	res.rttMs = connectMs
+	res.connectMs = connectMs
 	res.lines = append(res.lines,
 		fmt.Sprintf(`synthetic_tcp_connect_ms{dst=%q,check="tcp"} %.3f`, tgt.dst, connectMs))
 	return res

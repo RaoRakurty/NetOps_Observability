@@ -82,11 +82,15 @@ which names the affected app.
 
 ## Known gaps / follow-ups
 
-- **Go `ProbeEvent` enrichment (production wiring):** to derive the *specific*
-  semantic kinds (5xx vs TLS vs DNS vs cert) on live traffic, `probe_events.go` /
-  `synthetics.go` must carry `status_code`, phase timings, cert days, and a
-  fail-class hint on the wire. The normalizer already reads these when present and
-  degrades to coarse kinds when absent (older collectors) — **enrichment pending.**
+- ~~**Go `ProbeEvent` enrichment (production wiring)**~~ — **done.**
+  `synthetics.go` now classifies every failed check into a `fail_class`
+  (dns | tls | connect_refused | connect_timeout | timeout | reset | unknown, from
+  the httptrace per-phase errors) and forwards `status_code`, `method`, `path`,
+  per-phase timings (`dns_ms`/`tcp_connect_ms`/`tls_ms`/`ttfb_ms`/`total_ms`),
+  cert fields (`cert_days_to_expiry`/`cert_subject`/`cert_issuer`) and the vantage
+  `site_id` (`PROBER_SITE_ID`, optional) on the `ProbeEvent`. All fields are
+  `omitempty`: STAMP/ICMP events keep the old wire shape byte-for-byte
+  (pinned by `TestProbeEventWireContract`).
 - **Full per-app flow attribution:** flow anomalies are per-interface today; app
   entity/token attach is opportunistic (design P2 appid attribution).
 - **LB / app 5xx collector coverage:** `lb_5xx` / `app_error_rate_high` arrive via

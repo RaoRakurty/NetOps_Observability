@@ -25,6 +25,11 @@ import (
 
 // ProbeEvent is one active-measurement observation. Field names are the wire
 // contract with src/correlation handle_probe — change them only together.
+//
+// The enrichment block is optional (omitempty): synthetic HTTP/TCP checks fill
+// what they measured, STAMP/ICMP leave it empty. The correlation side
+// (synthetic_normalize.py) degrades gracefully when fields are absent —
+// coarse-but-correct semantic kinds from ok/loss_pct alone.
 type ProbeEvent struct {
 	Kind     string  `json:"kind"`   // stamp | icmp | tcp | http
 	Prober   string  `json:"prober"` // observer id (vantage-point instance)
@@ -34,6 +39,25 @@ type ProbeEvent struct {
 	JitterMs float64 `json:"jitter_ms,omitempty"`
 	LossPct  float64 `json:"loss_pct"`
 	TS       string  `json:"ts"` // RFC3339Nano event time (sender clock)
+
+	// Synthetic application-experience enrichment (docs/
+	// application-experience-correlation.md). A zero timing means the phase
+	// did not occur (IP literal → no DNS, plain http → no TLS) and is omitted.
+	SiteID       string  `json:"site_id,omitempty"`    // vantage site (PROBER_SITE_ID)
+	FailClass    string  `json:"fail_class,omitempty"` // dns|tls|connect_refused|connect_timeout|timeout|reset|unknown
+	StatusCode   int     `json:"status_code,omitempty"`
+	Method       string  `json:"method,omitempty"`
+	Path         string  `json:"path,omitempty"`
+	DNSMs        float64 `json:"dns_ms,omitempty"`
+	TCPConnectMs float64 `json:"tcp_connect_ms,omitempty"`
+	TLSMs        float64 `json:"tls_ms,omitempty"`
+	TTFBMs       float64 `json:"ttfb_ms,omitempty"`
+	TotalMs      float64 `json:"total_ms,omitempty"`
+	// Pointer: 0 and negative days (expired) are meaningful values, distinct
+	// from "no TLS / not measured".
+	CertDaysToExpiry *float64 `json:"cert_days_to_expiry,omitempty"`
+	CertSubject      string   `json:"cert_subject,omitempty"`
+	CertIssuer       string   `json:"cert_issuer,omitempty"`
 }
 
 // probeEventSink returns the bus ingest URL for probe events. Defaults to the
@@ -47,6 +71,13 @@ func probeEventSink() string {
 		return ""
 	}
 	return v
+}
+
+// proberSite is the operator-declared site/vantage label for this prober
+// (PROBER_SITE_ID). Optional: empty means the event carries no site token and
+// the correlation side simply skips site grounding.
+func proberSite() string {
+	return os.Getenv("PROBER_SITE_ID")
 }
 
 // proberID identifies this vantage point as an observer (PROBER_ID, falling

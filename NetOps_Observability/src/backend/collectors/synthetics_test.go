@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,9 @@ func TestCheckHTTPDown(t *testing.T) {
 	if len(res.lines) != 0 {
 		t.Fatalf("expected no phase metrics on failure, got %v", res.lines)
 	}
+	if res.failClass != "connect_refused" {
+		t.Errorf("failClass = %q, want connect_refused", res.failClass)
+	}
 }
 
 func TestCheckHTTPBadStatus(t *testing.T) {
@@ -95,6 +99,57 @@ func TestCheckHTTPBadStatus(t *testing.T) {
 		t.Fatal("5xx must count as down")
 	}
 	assertLine(t, res.lines, "synthetic_http_status_code", "503")
+	// Status-based failure: the semantic lane classifies by status_code, so
+	// the event must carry it and must NOT invent a transport fail_class.
+	if res.statusCode != 503 {
+		t.Errorf("statusCode = %d, want 503", res.statusCode)
+	}
+	if res.failClass != "" {
+		t.Errorf("failClass = %q, want empty for status-based failure", res.failClass)
+	}
+}
+
+func TestCheckHTTPDNSFail(t *testing.T) {
+	s := &synthetics{timeout: 5 * time.Second}
+	// RFC 6761 reserves .invalid — resolution must fail everywhere.
+	res := s.checkHTTP(context.Background(), synTarget{check: "http", dst: "https://synthetics-probe.invalid"})
+	if res.up {
+		t.Fatal("expected down for unresolvable host")
+	}
+	if res.failClass != "dns" {
+		t.Errorf("failClass = %q, want dns", res.failClass)
+	}
+}
+
+func TestCheckHTTPTLSUntrusted(t *testing.T) {
+	srv := httptest.NewTLSServer(httpOK())
+	defer srv.Close()
+	// No transport override: the self-signed test CA is NOT trusted, so the
+	// handshake must fail verification — and classify as tls, not unknown.
+	s := &synthetics{timeout: 5 * time.Second}
+	res := s.checkHTTP(context.Background(), synTarget{check: "http", dst: srv.URL})
+	if res.up {
+		t.Fatal("expected down for untrusted certificate")
+	}
+	if res.failClass != "tls" {
+		t.Errorf("failClass = %q, want tls", res.failClass)
+	}
+}
+
+func TestCheckHTTPResponseTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+	s := &synthetics{timeout: 300 * time.Millisecond}
+	res := s.checkHTTP(context.Background(), synTarget{check: "http", dst: srv.URL})
+	if res.up {
+		t.Fatal("expected down for stalled response")
+	}
+	// Connected fine, then the response never arrived: timeout, not connect_timeout.
+	if res.failClass != "timeout" {
+		t.Errorf("failClass = %q, want timeout", res.failClass)
+	}
 }
 
 func TestCheckTCP(t *testing.T) {
@@ -122,6 +177,71 @@ func TestCheckTCP(t *testing.T) {
 	res = s.checkTCP(context.Background(), synTarget{check: "tcp", dst: "127.0.0.1:1"})
 	if res.up {
 		t.Fatal("expected down for refused connect")
+	}
+	if res.failClass != "connect_refused" {
+		t.Errorf("failClass = %q, want connect_refused", res.failClass)
+	}
+}
+
+func TestCheckHTTPEnrichment(t *testing.T) {
+	srv := httptest.NewTLSServer(httpOK())
+	defer srv.Close()
+	s := &synthetics{timeout: 5 * time.Second, transport: srv.Client().Transport}
+	res := s.checkHTTP(context.Background(), synTarget{check: "http", dst: srv.URL + "/health"})
+	if !res.up {
+		t.Fatalf("expected up, got %+v", res)
+	}
+	if res.statusCode != 200 {
+		t.Errorf("statusCode = %d, want 200", res.statusCode)
+	}
+	if res.method != http.MethodGet || res.path != "/health" {
+		t.Errorf("method/path = %q %q, want GET /health", res.method, res.path)
+	}
+	if res.totalMs <= 0 || res.connectMs <= 0 || res.ttfbMs <= 0 {
+		t.Errorf("phase timings not captured: %+v", res)
+	}
+	if res.certDays == nil || *res.certDays <= 0 {
+		t.Errorf("certDays not captured for TLS check: %+v", res.certDays)
+	}
+}
+
+// TestProbeEventWireContract pins the JSON field names the correlation side
+// (synthetic_normalize.py) consumes, and that enrichment is omitted when
+// absent — STAMP/ICMP events must stay byte-compatible with the old shape.
+func TestProbeEventWireContract(t *testing.T) {
+	days := 12.5
+	full, err := json.Marshal(ProbeEvent{
+		Kind: "http", Prober: "syn-1", Target: "https://a.example", OK: false,
+		RTTms: 42, LossPct: 100, TS: "2026-07-09T09:00:00Z",
+		SiteID: "frisco", FailClass: "tls", StatusCode: 503,
+		Method: "GET", Path: "/", DNSMs: 1, TCPConnectMs: 2, TLSMs: 3,
+		TTFBMs: 4, TotalMs: 5, CertDaysToExpiry: &days,
+		CertSubject: "a.example", CertIssuer: "Test CA",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		`"site_id":"frisco"`, `"fail_class":"tls"`, `"status_code":503`,
+		`"method":"GET"`, `"path":"/"`, `"dns_ms":1`, `"tcp_connect_ms":2`,
+		`"tls_ms":3`, `"ttfb_ms":4`, `"total_ms":5`,
+		`"cert_days_to_expiry":12.5`, `"cert_subject":"a.example"`, `"cert_issuer":"Test CA"`,
+	} {
+		if !strings.Contains(string(full), key) {
+			t.Errorf("wire event missing %s: %s", key, full)
+		}
+	}
+	bare, err := json.Marshal(ProbeEvent{
+		Kind: "stamp", Prober: "p1", Target: "10.0.0.1", OK: true,
+		RTTms: 1.2, LossPct: 0, TS: "2026-07-09T09:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"site_id", "fail_class", "status_code", "cert_days_to_expiry", "method"} {
+		if strings.Contains(string(bare), key) {
+			t.Errorf("bare event must omit %s: %s", key, bare)
+		}
 	}
 }
 
