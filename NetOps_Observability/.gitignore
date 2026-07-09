@@ -23,6 +23,8 @@ scripts/.stack-watchdog.state
 scripts/stack-watchdog.log
 scripts/docker-hygiene.log
 scripts/rca-canary.log
+scripts/ch-query-budget-check.log
+scripts/ch-cold-export.log
 
 # Editor / OS
 .idea/
