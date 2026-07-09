@@ -2637,6 +2637,54 @@ NMS_TEMPLATES: list[dict] = [
 BUILTIN_TEMPLATES.extend(NMS_TEMPLATES)
 
 
+# ── external SaaS / application-experience (synthetic Digital-Experience lane) ──
+# Keyed on the semantic synthetic_* kinds emitted by synthetic_normalize.py from
+# collectors/synthetics.go. A synthetic failure alone satisfies the one required
+# clause (coverage 1.0) but is single-modality → SUSPECTED; an independent
+# passive-flow collapse or an LB/app 5xx supplies the 2nd modality → CONFIRMED.
+# This is EXTERNAL Digital-Experience correlation, not APM (no traces/spans/RUM).
+APP_EXPERIENCE_TEMPLATES: list[dict] = [
+    {
+        "id": "sig.ent.app.saas-experience-degraded",
+        "title": "SaaS / application experience degraded (external synthetic)",
+        "domain": "ent.app",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "demo_priority": "p0",
+        "requires": [
+            {"kind": "synthetic_http_fail|synthetic_http_5xx|synthetic_http_4xx|"
+                     "synthetic_http_latency_high|synthetic_tls_fail|synthetic_dns_fail|"
+                     "synthetic_tcp_connect_fail|synthetic_timeout|synthetic_icmp_loss|"
+                     "synthetic_tcp_probe_fail"},
+            {"kind": "flow_volume_anomaly|lb_5xx|"
+                     "lb_target_unhealthy|app_error_rate_high", "optional": True},
+            {"kind": "synthetic_cert_expired|synthetic_cert_expiring", "optional": True},
+        ],
+        "required_modalities": ["active_probe"],
+        "discriminators": [
+            # A coincident local link-down means the app symptom is collateral of a
+            # network fault — defer to it rather than blaming the application.
+            {"absent": {"kind": "link_state_change"}, "within_s": 300,
+             "else_prefer": "sig.ent.access.local-link-fault"},
+        ],
+        "direction_expect": "service -> application -> users",
+        "verdict": {
+            "owner": "app_team", "layer": "L7 (application experience)",
+            "first_steps": [
+                "Confirm the synthetic failure reason (DNS / TCP / TLS / HTTP status) and the vantage site",
+                "Check whether real user traffic to the app collapsed at the same time (flow)",
+                "Check the app / load-balancer for 5xx or failing health checks",
+            ],
+        },
+        "operator_phrase": "External synthetic checks to the application are failing from at least one vantage; the reason (DNS/TCP/TLS/HTTP) is classified.",
+        "manager_phrase": "Users may be unable to reach this application; we are correlating whether it is the app, the network path, or the provider.",
+        "blast_radius": "Users of the affected SaaS/application at the reporting site(s)",
+        "false_positives": ("single-vantage local issue", "planned provider maintenance", "client-side DNS/proxy problem"),
+    },
+]
+BUILTIN_TEMPLATES.extend(APP_EXPERIENCE_TEMPLATES)
+
+
 def builtin_catalog() -> Catalog:
     """The validated built-in set. Import-time safe: validation errors here
     are a build break, not a runtime surprise (guarded by test)."""

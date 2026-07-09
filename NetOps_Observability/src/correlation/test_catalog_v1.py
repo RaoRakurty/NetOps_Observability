@@ -26,7 +26,7 @@ def _v1_templates():
 
 def test_v1_taxonomy_is_closed():
     cat = builtin_catalog()
-    assert len(_v1_templates()) == 111  # waves 1-3 + 23 SP/DC + 3 NMS controller-intel (P4b)
+    assert len(_v1_templates()) == 112  # waves 1-3 + 23 SP/DC + 3 NMS controller-intel (P4b) + 1 saas-experience-degraded
     for t in cat.templates:
         assert set(t.seams) <= ALLOWED_SEAMS, t.id
         assert t.deployment_scope in ALLOWED_SCOPES, t.id

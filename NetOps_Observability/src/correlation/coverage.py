@@ -40,7 +40,7 @@ KNOWN_PENDING: frozenset[str] = frozenset({
     "cloud_gw_anomaly", "cloud_health_event", "dns_failure_rate", "dns_latency_high",
     "if_crc", "if_discards", "if_errors", "if_util_high", "lb_5xx",
     "optical_power_low", "path_change", "probe_latency_departure", "qos_drops",
-    "synthetic_http_fail", "tunnel_degraded", "tunnel_down", "tunnel_flap",
+    "tunnel_degraded", "tunnel_down", "tunnel_flap",  # synthetic_http_fail now EMITTED (synthetic_normalize.py)
     # v1 NOC catalog (owner failure-signature spec 2026-07-02, midnight-noc-
     # questions.md) — the catalog deliberately leads Layer-2 ingestion; these
     # attach as their collectors land (#73 build order; change-timeline kinds

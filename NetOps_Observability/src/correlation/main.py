@@ -61,6 +61,7 @@ from producers import (
     trap_control_signal,
 )
 from replay import replay_object
+from synthetic_normalize import synthetic_app_signal
 from signals import (
     DeadLetter,
     EntityType,
@@ -1119,6 +1120,20 @@ async def handle_probe(ev: dict) -> None:
         log.info("probe signal %s: %s sev=%s value=%.1f scope=%s auth=%s",
                  sig.kind, sig.entity_id, sig.severity.value, sig.value,
                  sig.attrs.get("probe_scope"), sig.attrs.get("probe_authority"))
+
+    # Semantic application-experience lane (external Digital-Experience, NOT APM):
+    # an HTTP/TCP/ICMP synthetic FAILURE also emits a semantic app-experience
+    # signal (synthetic_http_fail / synthetic_tls_fail / …) the sig.ent.app.*
+    # templates match. Additive — the generic probe signals above are unchanged.
+    # The normalizer already stamps a trusted customer-path authority/scope, so we
+    # do NOT re-run classify_probe (which would re-derive from the raw probe kind).
+    app_sig = synthetic_app_signal(ev, tenant, now)
+    if app_sig is not None:
+        await ch.insert("netops.corr_signals", [app_sig.to_ch_row()])
+        buffer_signal(app_sig)
+        log.info("synthetic app-experience signal %s: %s reason=%s app=%s",
+                 app_sig.kind, app_sig.entity_id, app_sig.attrs.get("reason"),
+                 app_sig.attrs.get("app_name"))
 
 
 async def handle_snmptrap(ev: dict) -> None:

@@ -118,6 +118,13 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "flow_volume_anomaly",
     # cloud lane (#81 P3G — handle_cloud emits these; consumed by the cloud signatures)
     "cloud_change", "cloud_audit", "cloud_flow_log", "cloud_health",
+    # synthetic application-experience lane (synthetic_normalize.py, from
+    # collectors/synthetics.go via netops.probes) — external Digital-Experience,
+    # NOT APM: an HTTP/TCP/ICMP synthetic outcome → a semantic app-experience kind.
+    "synthetic_http_fail", "synthetic_http_5xx", "synthetic_http_4xx",
+    "synthetic_http_latency_high", "synthetic_tls_fail", "synthetic_dns_fail",
+    "synthetic_tcp_connect_fail", "synthetic_timeout", "synthetic_icmp_loss",
+    "synthetic_tcp_probe_fail", "synthetic_cert_expired", "synthetic_cert_expiring",
 })
 
 
