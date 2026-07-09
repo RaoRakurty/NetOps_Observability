@@ -209,7 +209,11 @@ def synthetic_app_signal(
 
     # Correlation tokens (grounding join keys). Bare `host`/`app` tokens mirror the
     # containment rung used elsewhere so a flow/identity sharing them attaches.
-    tokens: list[str] = [host, f"host:{host}", f"target:{target}", f"tenant:{tenant}"]
+    # NO tenant token: tokens are the engine's CO-LOCATION keys and the window is
+    # single-tenant by construction (run_window raises on mixed tenants) — a
+    # tenant-wide token would over-ground every signal in the tenant into ONE
+    # object (cross-APP merge, caught by test_lb_normalize.py test E).
+    tokens: list[str] = [host, f"host:{host}", f"target:{target}"]
     if app_name:
         tokens += [app_name, f"app:{app_name}", f"saas:{app_name}"]
     if site:

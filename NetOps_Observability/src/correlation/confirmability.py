@@ -77,6 +77,13 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "bgp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "device_resource_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "cloud_health": ModalityClass.DEVICE_TELEMETRY,
+    # app-edge lane (#98 P5 — LB/proxy/ingress reporting its own counters;
+    # attrs.lane="app_gateway", independent of probes and flows in the gate)
+    "lb_5xx": ModalityClass.DEVICE_TELEMETRY,
+    "lb_target_unhealthy": ModalityClass.DEVICE_TELEMETRY,
+    "app_error_rate_high": ModalityClass.DEVICE_TELEMETRY,
+    "app_latency_high": ModalityClass.DEVICE_TELEMETRY,
+    "lb_4xx_high": ModalityClass.DEVICE_TELEMETRY,
 }
 
 # Kinds whose PRODUCTION signals can ground on an application/service entity
@@ -89,7 +96,13 @@ KIND_MODALITY: dict[str, ModalityClass] = {
 # not count toward app confirmation.
 APP_GROUNDABLE_KINDS: frozenset[str] = frozenset(
     k for k in KIND_MODALITY if k.startswith("synthetic_")
-) | frozenset({"flow_volume_anomaly"})
+) | frozenset({
+    "flow_volume_anomaly",
+    # app-edge lane (#98 P5): lb_normalize grounds on the app/service entity
+    # with app:<slug> tokens by construction.
+    "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high",
+    "lb_4xx_high",
+})
 
 # App-impact domains whose objects ground on app/service entities, so a second
 # modality only helps them if its producer can reach that entity.
@@ -99,6 +112,18 @@ APP_DOMAINS: frozenset[str] = frozenset({"ent.app"})
 # cannot reach confirmed today and are ALLOWED to ship in that state, each with
 # an owner and a target resolution. Anything not listed fails CI.
 DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
+    "sig.ent.cloud.region-degradation": {
+        "reason": "became MATCHABLE via the #98 P5 lb_5xx lane, but its "
+                  "required control_plane modality has no producer path among "
+                  "its referenced kinds (cloud_gw_anomaly collection-pending; "
+                  "cloud_health_event is a declared normalization gap — the "
+                  "phenomenon flows as cloud_health) → verdict caps at suspected",
+        "owner": "correlix",
+        "date_added": "2026-07-09",
+        "target_resolution": "resolve the cloud_health_event vocabulary mismatch "
+                             "(NORMALIZATION_PENDING #81) or add a control-plane "
+                             "witness kind to the template",
+    },
     "sig.ent.fabric.spine-leaf-path-degradation": {
         "reason": "demands device_telemetry + active_probe, but its telemetry "
                   "witnesses (if_errors/if_crc) are a NORMALIZATION gap — the "

@@ -109,7 +109,11 @@ which names the affected app.
   entity with `attribution_source`/`attribution_confidence` — synthetic +
   app-attributed flow now CONFIRMS. Unattributed flows stay interface-grounded
   (never faked). Still future: DNS/SNI flow enrichment, five-tuple fusion joins.
-- **LB / app 5xx collector coverage:** `lb_5xx` / `app_error_rate_high` arrive via
-  cloud logs today; an on-prem LB/app metrics collector would broaden confirmation.
+- ~~**LB / app 5xx collector coverage**~~ — **done (#98 Phase 5,
+  `docs/lb-proxy-ingress-telemetry-contract.md`).** The `netops.app.edge` lane
+  normalizes vendor-neutral LB/proxy/ingress events into the canonical kinds
+  (`lb_5xx`/`lb_target_unhealthy`/`app_error_rate_high`/`app_latency_high`;
+  `lb_4xx_high` intentionally signature-blind) as an independent app-edge
+  witness class. Still future: on-prem vendor log adapters (F5/NGINX/Envoy).
 - **SaaS provider status-page ingestion:** not present; a candidate corroborating
   modality (provider-reported degradation) for a future phase.

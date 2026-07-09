@@ -61,7 +61,10 @@ def test_known_ground_truths():
     saas = ROWS["sig.ent.app.saas-experience-degraded"]
     assert saas["status"] == "confirmable_now"
     assert saas["max_possible_verdict"] == "confirmed"
-    assert sorted(saas["app_groundable_classes"]) == ["active_probe", "passive_flow"]
+    # three independent app-groundable witness classes since Phase 5:
+    # synthetics (probe), app-attributed flow, and the LB/app-edge lane.
+    assert sorted(saas["app_groundable_classes"]) == [
+        "active_probe", "device_telemetry", "passive_flow"]
 
     # spine-leaf demands device_telemetry whose witnesses (if_errors/if_crc)
     # are a normalization gap → verdict capped at suspected.

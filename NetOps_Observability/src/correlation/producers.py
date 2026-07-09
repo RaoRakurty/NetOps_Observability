@@ -125,6 +125,12 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "synthetic_http_latency_high", "synthetic_tls_fail", "synthetic_dns_fail",
     "synthetic_tcp_connect_fail", "synthetic_timeout", "synthetic_icmp_loss",
     "synthetic_tcp_probe_fail", "synthetic_cert_expired", "synthetic_cert_expiring",
+    # app-edge lane (#98 P5 — lb_normalize.py, netops.app.edge): LB/proxy/ingress
+    # telemetry in the CANONICAL vocabulary the app signatures already consume.
+    # lb_4xx_high is INTENTIONAL_BLIND (auth/config/client indicator, never
+    # outage-confirming).
+    "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high",
+    "lb_4xx_high",
 })
 
 

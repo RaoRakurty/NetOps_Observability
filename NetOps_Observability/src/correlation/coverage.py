@@ -50,6 +50,13 @@ INTENTIONAL_BLIND: dict[str, dict] = {
         "reason": "generic fallback for an unscoped ADJCHANGE",
         "owner": "correlix", "date_added": "2026-06-20",
     },
+    "lb_4xx_high": {
+        "reason": "app-edge 4xx spike is an auth/config/client-side indicator "
+                  "(#98 P5) — deliberately consumed by NO outage signature so "
+                  "it can never help confirm a provider outage; surfaces via "
+                  "search/enrichment only",
+        "owner": "correlix", "date_added": "2026-07-09",
+    },
 }
 INTENTIONAL_BLIND_KINDS: frozenset[str] = frozenset(INTENTIONAL_BLIND)
 
@@ -191,23 +198,26 @@ COLLECTION_PENDING: dict[str, dict] = {
     **_group("v0-theoretical template; Layer-2 collection pending (#73)",
              "#73", "2026-06-20", [
         "app_large_transfer_fail", "bgp_path_change", "cloud_gw_anomaly",
-        "dns_failure_rate", "if_crc", "lb_5xx", "optical_power_low",
+        "dns_failure_rate", "if_crc", "optical_power_low",
         "path_change", "qos_drops",
     ]),
     # v1 NOC catalog (owner failure-signature spec 2026-07-02, midnight-noc-
     # questions.md) — the catalog deliberately leads Layer-2 ingestion; these
     # attach as their collectors land (#73 build order; change-timeline kinds
     # like config_change/deploy_event are build-order-① of the capability map).
+    # lb_5xx / lb_target_unhealthy / app_error_rate_high / app_latency_high left
+    # these ledgers 2026-07-09: the #98 P5 app-edge lane (lb_normalize.py,
+    # netops.app.edge) emits them in the canonical vocabulary.
     **_group("v1 NOC catalog leads ingestion; collector pending (#73 build order)",
              "#73", "2026-07-02", [
-        "app_conn_fail", "app_error_rate_high", "app_latency_high", "arp_fail",
+        "app_conn_fail", "arp_fail",
         "client_onboarding_fail", "cloud_flow_reject", "config_change",
         "deploy_event", "dhcp_fail", "dhcp_relay_fail", "dhcp_scope_util_high",
         "dns_answer_mismatch", "dns_failover_event", "ecmp_member_loss",
         "evpn_route_missing", "flow_drop_at_nat", "fw_ha_state_change",
         "fw_policy_mismatch", "fw_session_drop", "fw_sync_fail",
         "k8s_endpoints_empty", "k8s_event", "k8s_pod_not_ready",
-        "lb_target_unhealthy", "mac_table_missing", "nat_alloc_fail",
+        "mac_table_missing", "nat_alloc_fail",
         "nat_table_high", "nat_translation_change", "policy_diff_block",
         "route_advertisement_change", "route_count_drop", "route_missing_nexthop",
         "route_prefix_missing", "route_table_blackhole",

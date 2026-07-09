@@ -205,7 +205,7 @@ services:
       - >-
         for t in netops.applogs netops.syslog netops.flows netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
-        netops.controller_events; do
+        netops.controller_events netops.app.edge; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions 1 --replication-factor 1 || exit 1; done

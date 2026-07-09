@@ -1,0 +1,56 @@
+{
+  "name": "Synthetic 503 to an internal customer portal + the SAME app's LB reporting 503/backend-unavailable — two independent app-edge witnesses on one app object: CONFIRMED",
+  "tenant": "acme",
+  "env": {
+    "CORR_SAAS_HOST_MAP": "portal.acme.example=customer_portal"
+  },
+  "events": [
+    {
+      "lane": "probe",
+      "event": {
+        "kind": "http",
+        "prober": "syn-frisco",
+        "target": "https://portal.acme.example/login",
+        "ok": false,
+        "rtt_ms": 3210.4,
+        "loss_pct": 100,
+        "ts": "2026-07-09T09:00:00.000000Z",
+        "site_id": "frisco",
+        "status_code": 503,
+        "method": "GET",
+        "path": "/login",
+        "total_ms": 3210.4
+      }
+    },
+    {
+      "lane": "app_edge",
+      "event": {
+        "source": "lb",
+        "vendor": "generic",
+        "product": "reverse_proxy",
+        "tenant_id": "acme",
+        "ts": "2026-07-09T09:00:30Z",
+        "app_name": "customer_portal",
+        "service_name": "portal_frontend",
+        "host": "portal.acme.example",
+        "path": "/login",
+        "status_code": 503,
+        "request_count": 1200,
+        "error_count": 486,
+        "error_rate": 0.405,
+        "latency_ms": 3200,
+        "lb_name": "edge-lb-01",
+        "backend_pool": "portal_pool",
+        "reason": "backend_unavailable",
+        "raw_event_id": "lb-evt-7731"
+      }
+    }
+  ],
+  "expect": {
+    "lb_kind": "lb_5xx",
+    "lb_reason": "backend_unavailable",
+    "app": "customer_portal",
+    "top": "sig.ent.app.saas-experience-degraded",
+    "confirmed": true
+  }
+}

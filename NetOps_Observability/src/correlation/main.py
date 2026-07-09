@@ -62,6 +62,7 @@ from producers import (
 )
 from replay import replay_object
 from flow_app_attribution import AppIdentityIndex, resolve_flow_app
+from lb_normalize import normalize_lb_event
 from synthetic_normalize import synthetic_app_signal
 from signals import (
     DeadLetter,
@@ -89,7 +90,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge"]
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -205,6 +206,9 @@ CONTROLLER_EVENTS_RECEIVED = 0  # consumed from netops.controller_events (#95 NM
 CONTROLLER_EVENTS_SIGNALS = 0   # source=controller signals written to corr_signals + buffered
 CONTROLLER_EVENTS_DROPPED = 0   # dropped: no tenant/kind identity (default-closed)
 APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
+APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/ingress lane)
+APP_EDGE_SIGNALS = 0          # canonical app-edge signals written + buffered
+APP_EDGE_DROPPED = 0          # dropped: no tenant (default-closed) / unclassifiable
 
 # Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
 # stamp beyond this, or a stamp older than the correlation window, is dropped
@@ -904,6 +908,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_app_identity(event)
     elif topic == "netops.controller_events":
         await handle_controller_event(event)
+    elif topic == "netops.app.edge":
+        await handle_app_edge(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -1274,6 +1280,38 @@ async def handle_app_identity(ev: dict) -> None:
              sig.attrs.get("band", ""), sig.attrs.get("state", ""))
 
 
+async def handle_app_edge(ev: dict) -> None:
+    """LB / proxy / ingress telemetry (netops.app.edge, #98 P5) → one canonical
+    app-edge signal (lb_5xx / lb_target_unhealthy / app_error_rate_high /
+    app_latency_high / lb_4xx_high) via the vendor-neutral contract
+    (lb_normalize.py, docs/lb-proxy-ingress-telemetry-contract.md).
+
+    Tenancy is EXPLICIT and default-closed, same policy as app identity: an
+    app-edge event carries its own tenant_id (there is no device to infer it
+    from); an untenanted event is DROPPED, never guessed (§3a). A healthy /
+    unclassifiable / ungroundable event emits nothing (anti-noise)."""
+    global APP_EDGE_RECEIVED, APP_EDGE_SIGNALS, APP_EDGE_DROPPED
+    APP_EDGE_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        APP_EDGE_DROPPED += 1
+        log.warning("app-edge event dropped: no tenant_id (app=%s host=%s)",
+                    ev.get("app_name"), ev.get("host"))
+        return
+    sig = normalize_lb_event(ev, tenant, datetime.now(timezone.utc))
+    if sig is None:
+        APP_EDGE_DROPPED += 1
+        return
+    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    APP_EDGE_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("app-edge signal %s: %s reason=%s lb=%s",
+             sig.kind, sig.entity_id, sig.attrs.get("reason"),
+             sig.observer.observer_id)
+
+
 async def handle_syslog(ev: dict) -> None:
     # Control-plane extraction first (#67 build ⑦): adjacency / link-state
     # events become control_plane signals on the spine regardless of burst
@@ -1521,6 +1559,9 @@ async def health() -> dict:
             "app_identity_received": APP_ID_RECEIVED,
             "app_identity_signals": APP_ID_SIGNALS,
             "app_identity_dropped": APP_ID_DROPPED,
+            "app_edge_received": APP_EDGE_RECEIVED,
+            "app_edge_signals": APP_EDGE_SIGNALS,
+            "app_edge_dropped": APP_EDGE_DROPPED,
             # #95 NMS controller lane: proves netops.controller_events is consumed.
             "controller_events_received": CONTROLLER_EVENTS_RECEIVED,
             "controller_events_signals": CONTROLLER_EVENTS_SIGNALS,

@@ -170,6 +170,11 @@ def replay_fixture_through_engine(name: str, monkeypatch=None):
             signals.extend(normalize_flow_records(
                 item["records"], tenant, T0, item.get("detected"),
                 item.get("identities")))
+        elif lane == "app_edge":
+            from lb_normalize import normalize_lb_event
+            sig = normalize_lb_event(item["event"], tenant, T0)
+            if sig is not None:
+                signals.append(sig)
         else:
             raise ValueError(f"unknown golden-wire lane {lane!r} in {name}")
     cat = builtin_catalog()
