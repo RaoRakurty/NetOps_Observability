@@ -32,18 +32,41 @@ when its NEWEST row passes the horizon, so retention lags by up to a month —
 that lag is your export safety margin. **Run the dry-run after changing any
 knob** and before enabling a shorter profile on a long-lived deployment.
 
-## Retrieving cold history
+## Retrieving cold history — WITHOUT disturbing hot production
+
+**Never restore into the live `netops.*` tables.** Restored rows are older
+than the retention horizon by definition, so the hot TTL re-drops them, and
+the insert + analyst queries would compete with Command Center's read
+budgets. `scripts/ch-cold-restore.sh` restores into the isolated
+`netops_restore` side database (schema cloned from live, TTL removed) —
+query it freely, `DROP TABLE` when done. Tenant granularity is native: cold
+files are one-(tenant, month)-per-file because the partitions are tenant-led.
+
+### The four scenarios (all validated live 2026-07-09)
 
 ```bash
-# inspect without touching the stack
-clickhouse local -q "SELECT count() FROM file('data/clickhouse-cold/corr_signals_archive/*.parquet', Parquet)"
-# restore a month into hot CH (replay/audit of an aged object)
-docker compose exec -T clickhouse clickhouse-client -q \
-  "INSERT INTO netops.corr_signals_archive SELECT * FROM file('/cold/corr_signals_archive/<partition>.parquet', Parquet)"
-# (mount data/clickhouse-cold into the container as /cold first, read-only)
+# 1. Single-tenant restore (customer audit/contract request):
+scripts/ch-cold-restore.sh --table corr_objects --tenant acme
+scripts/ch-cold-restore.sh --table corr_signals_archive --tenant acme
+
+# 2. Single-month restore (incident-era investigation):
+scripts/ch-cold-restore.sh --table corr_signals_archive --month 202606
+
+# 3. Calibration-only (no cluster involvement at ALL — preferred):
+clickhouse local -q "SELECT ... FROM file('data/clickhouse-cold/corr_signals_archive/*.parquet', Parquet) WHERE tenant_id='acme'"
+# DuckDB/pandas/Spark read the same files; restore into netops_restore only
+# if the calibration job needs SQL against the cluster.
+
+# 4. Replay from cold archive (aged object, offline RCA re-run):
+scripts/ch-cold-restore.sh --table corr_signals_archive --tenant <t> --month <YYYYMM>
+scripts/ch-cold-restore.sh --table corr_objects          --tenant <t> --month <YYYYMM>
+# then run replay tooling against netops_restore.* — slices are keyed by
+# archived_for/archived_version exactly as in the hot archive.
 ```
-Parquet is engine-neutral: DuckDB/pandas/Spark read it directly for
-calibration (#67 P4) and model evaluation — no live ClickHouse needed.
+
+Notes: UUID columns travel as strings in Parquet (CH 24.8 limitation) and are
+parsed back into UUID columns on restore — verified round-trip. Restores run
+as ordinary background work; hot tables, TTLs, and read budgets are untouched.
 
 ## Calibration contract (#67 P4)
 

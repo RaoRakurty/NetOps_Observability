@@ -349,6 +349,23 @@ func LoadRules(path string) ([]Rule, error) {
 	return parseRulesYAML(string(b))
 }
 
+// yamlRuleKeys are the keys the parser understands; a folded-expr continuation
+// ends at the first line that is one of these (or a dedent).
+var yamlRuleKeys = []string{"- alert:", "alert:", "expr:", "for:", "labels:", "annotations:", "severity:", "summary:"}
+
+func isYAMLRuleKey(trim string) bool {
+	for _, k := range yamlRuleKeys {
+		if strings.HasPrefix(trim, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func indentOf(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " \t"))
+}
+
 func parseRulesYAML(s string) ([]Rule, error) {
 	var rules []Rule
 	var cur *Rule
@@ -359,6 +376,14 @@ func parseRulesYAML(s string) ([]Rule, error) {
 		}
 	}
 
+	// Folded/literal expr blocks (`expr: >` / `expr: |`): promtool-valid and
+	// common for long PromQL. #101 fix: the line parser used to keep the bare
+	// fold marker as the expression (Expr == ">") and silently drop the actual
+	// query — the rule then errored on every evaluation tick. Continuation
+	// lines (more indented, not a known key) are joined with spaces.
+	exprCont := false
+	exprIndent := 0
+
 	for _, raw := range strings.Split(s, "\n") {
 		line := raw
 		if i := strings.Index(line, "#"); i >= 0 {
@@ -368,6 +393,13 @@ func parseRulesYAML(s string) ([]Rule, error) {
 		if trim == "" {
 			continue
 		}
+		if exprCont {
+			if cur != nil && indentOf(line) > exprIndent && !isYAMLRuleKey(trim) {
+				cur.Expr = strings.TrimSpace(cur.Expr + " " + trim)
+				continue
+			}
+			exprCont = false
+		}
 		switch {
 		case strings.HasPrefix(trim, "- alert:"):
 			flush()
@@ -375,7 +407,15 @@ func parseRulesYAML(s string) ([]Rule, error) {
 		case cur != nil && strings.HasPrefix(trim, "alert:"):
 			cur.Name = strings.TrimSpace(strings.TrimPrefix(trim, "alert:"))
 		case cur != nil && strings.HasPrefix(trim, "expr:"):
-			cur.Expr = strings.TrimSpace(strings.TrimPrefix(trim, "expr:"))
+			v := strings.TrimSpace(strings.TrimPrefix(trim, "expr:"))
+			switch v {
+			case ">", "|", ">-", "|-", "":
+				cur.Expr = ""
+				exprCont = true
+				exprIndent = indentOf(line)
+			default:
+				cur.Expr = v
+			}
 		case cur != nil && strings.HasPrefix(trim, "for:"):
 			if d, err := time.ParseDuration(strings.TrimSpace(strings.TrimPrefix(trim, "for:"))); err == nil {
 				cur.For = d

@@ -219,7 +219,8 @@ def validate_scaffold(root: Path) -> None:
 
 def write_env(env_path: Path, port: int, *, force: bool,
               profiles: str = DEFAULT_PROFILES,
-              broker_urls: str | None = None) -> dict[str, str]:
+              broker_urls: str | None = None,
+              retention_profile: str = "production") -> dict[str, str]:
     if env_path.exists() and not force:
         info(f".env already exists at {env_path} — keeping existing secrets")
         env = _parse_env(env_path)
@@ -238,6 +239,12 @@ def write_env(env_path: Path, port: int, *, force: bool,
         if "CORRELIX_UID" not in env:
             additions.append(f"CORRELIX_UID={os.getuid()}")
             additions.append(f"CORRELIX_GID={os.getgid()}")
+        # Migration (#101): pre-retention .env gets the correlation retention
+        # profile so upgraded installs get bounded correlation history too.
+        if "CORR_RETENTION_PROFILE" not in env:
+            additions.append(f"CORR_RETENTION_PROFILE={retention_profile}")
+        if "CORR_CHAOS_FIXTURES" not in env:
+            additions.append("CORR_CHAOS_FIXTURES=")
         if additions:
             with env_path.open("a") as f:
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
@@ -458,6 +465,22 @@ COPILOT_MODEL=
 
 # Correlation/AI Python service log level: info|debug|warning
 CORRELATION_LOG_LEVEL=info
+
+# ---- Correlation data retention (#101) ----------------------------------
+# Hot-ClickHouse retention profile for correlation history, applied by the
+# API on every start: lab (90/45/60 days) | demo (30/14/30) |
+# production (180/90/90) | extended (730/365/365) — history/archive/closed.
+# Per-knob overrides: CORR_RETENTION_HISTORY_DAYS / _ARCHIVE_DAYS /
+# _CLOSED_DAYS (0 = keep forever). Cold Parquet export must lead the TTL
+# horizon: cron scripts/ch-cold-export.sh monthly (see
+# docs/runbooks/correlation-retention-cold-archive.md).
+CORR_RETENTION_PROFILE={retention_profile}
+
+# Named intentional chaos/storm sources ("name=match,..."), e.g. a lab
+# target kept unreachable on purpose. Tagged objects are badged in Command
+# Center and skipped by auto-ticketing. Leave empty in production unless a
+# drill is officially scheduled.
+CORR_CHAOS_FIXTURES=
 
 # Device-side ingestion ports (host-side, mapped into the syslog-ng /
 # goflow2 containers). Use standard ports (514, 2055, 4739, 6343) on
@@ -871,6 +894,10 @@ def main() -> None:
     ap.add_argument("--profiles", default=DEFAULT_PROFILES, metavar="CSV",
                     help=f"Compose profiles to activate (default: {DEFAULT_PROFILES}). "
                          "Customer bundle installs use 'embedded-bus,prober' (add-ons enable more).")
+    ap.add_argument("--retention-profile", default="production",
+                    choices=["lab", "demo", "production", "extended"],
+                    help="correlation history retention profile written to .env "
+                         "(#101: hot TTLs + cold Parquet export; default: production)")
     ap.add_argument("--broker-urls", default=None, metavar="HOST:PORT[,HOST:PORT...]",
                     help="ADVANCED: use an external Kafka-compatible broker instead of the "
                          "embedded one. Disables the embedded-bus profile and points every "
@@ -911,7 +938,8 @@ def main() -> None:
 
     step("generating environment")
     secrets_map = write_env(env_path, args.port, force=args.reset_env,
-                            profiles=args.profiles, broker_urls=args.broker_urls)
+                            profiles=args.profiles, broker_urls=args.broker_urls,
+                            retention_profile=args.retention_profile)
 
     step("preparing data directories")
     ensure_data_dirs(root)
