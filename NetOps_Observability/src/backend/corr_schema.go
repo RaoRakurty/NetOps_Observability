@@ -93,6 +93,18 @@ SETTINGS index_granularity = 8192`,
 		`ALTER TABLE netops.corr_signals_archive
     ADD COLUMN IF NOT EXISTS archived_version UInt32 DEFAULT 0 AFTER archived_for`,
 
+		// Read-path performance (2026-07-09 incident): every per-object read
+		// (sweeper loadCorrSlice, replay slice, cloud app-rca) filters the archive
+		// by archived_for, which is NOT in the sort key (tenant_id, ts, signal_id)
+		// — each lookup full-scanned the table. At 27.8M rows with the 60s
+		// ticketing sweeper that meant ~8 full scans/minute: ClickHouse pinned,
+		// UI queries timed out (502s). The bloom-filter skip index prunes an
+		// archived_for equality lookup to the object's own granules. New parts
+		// index on write; existing parts need a one-time MATERIALIZE INDEX
+		// (applied operationally — safe to re-run, see docs/UPGRADE.md).
+		`ALTER TABLE netops.corr_signals_archive
+    ADD INDEX IF NOT EXISTS idx_archived_for archived_for TYPE bloom_filter(0.01) GRANULARITY 4`,
+
 		// Cloud App Observability as an evidence producer (#81 P3G): cloud signals
 		// flow as corr_signals into the SAME engine. Additive enum widening — source
 		// gains 'cloud'=9, entity_type gains 'app'=8/'cloud_resource'=9. MODIFY COLUMN

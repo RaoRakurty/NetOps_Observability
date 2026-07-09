@@ -110,22 +110,28 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := intQuery(r, "limit", 100, 1, 500)
 	since := durationQuery(r, "since", 24*time.Hour)
-	conds := []string{
-		"created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND",
-	}
+	// The created_at bound prunes the base-table scan BEFORE the latest-version
+	// fold; state/tier apply AFTER it (they describe the latest version, and
+	// pushing them into the base scan would surface a stale version whose state
+	// happens to match). Equivalent to filtering corr_objects_latest: versions
+	// are append-only in time, so the max-created_at row in the window IS the
+	// object's latest version, and an object whose latest version predates the
+	// window has no in-window rows at all.
+	sinceCond := "created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"
+	latestConds := []string{"1"}
 	if st := strings.TrimSpace(r.URL.Query().Get("state")); st != "" {
 		if !isAlphaToken(st) {
 			writeError(w, http.StatusBadRequest, errors.New("invalid state"))
 			return
 		}
-		conds = append(conds, "state = '"+st+"'")
+		latestConds = append(latestConds, "state = '"+st+"'")
 	}
 	if tier := strings.TrimSpace(r.URL.Query().Get("tier")); tier != "" {
 		if !isAlphaToken(tier) {
 			writeError(w, http.StatusBadRequest, errors.New("invalid tier"))
 			return
 		}
-		conds = append(conds, "verdict_tier = '"+tier+"'")
+		latestConds = append(latestConds, "verdict_tier = '"+tier+"'")
 	}
 	// Filter in an inner query: aliasing toString(created_at) AS created_at in
 	// the same SELECT would shadow the column in WHERE (String vs DateTime →
@@ -134,8 +140,24 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	// corr_edges, and the top hypothesis's verdict coverage (planes / owner /
 	// low-authority / debug-excluded) from the embedded hypotheses JSON. All
 	// read-only and derived from what the engine already persisted.
+	//
+	// Bounded read (2026-07-09 incident): the edges aggregation is scoped to the
+	// picked objects — the previous shape GROUP BY'd the ENTIRE corr_edges table
+	// (771k rows, ~1.5 GiB hash of groupUniqArray strings) to decorate ≤limit
+	// rows, and concurrent Command Center polls pinned ClickHouse.
 	const hp = "o.hypotheses,'ranking','hypotheses',1,'verdict'"
 	sql := `
+WITH picked AS (
+     SELECT * FROM (
+          SELECT * FROM netops.corr_objects
+           WHERE ` + sinceCond + `
+           ORDER BY tenant_id, correlation_id, version DESC
+           LIMIT 1 BY tenant_id, correlation_id
+     )
+      WHERE ` + strings.Join(latestConds, " AND ") + `
+      ORDER BY created_at DESC
+      LIMIT ` + intToString(limit) + `
+)
 SELECT toString(o.correlation_id)  AS correlation_id,
        o.version                    AS version,
        o.state                      AS state,
@@ -158,16 +180,12 @@ SELECT toString(o.correlation_id)  AS correlation_id,
        JSONExtractString(` + hp + `,'owner')                                          AS owner,
        length(JSONExtract(` + hp + `,'excluded_debug_probes','Array(String)')) > 0    AS debug_excluded,
        length(JSONExtract(` + hp + `,'low_authority_probe_scopes','Array(String)')) > 0 AS low_authority
-  FROM (
-       SELECT * FROM netops.corr_objects_latest
-        WHERE ` + strings.Join(conds, " AND ") + `
-        ORDER BY created_at DESC
-        LIMIT ` + intToString(limit) + `
-  ) AS o
+  FROM picked AS o
   LEFT JOIN (
        SELECT correlation_id, version, count() AS edge_count,
               arrayStringConcat(arraySort(groupUniqArray(grounding_kind)), '+') AS grounding
          FROM netops.corr_edges
+        WHERE (correlation_id, version) IN (SELECT correlation_id, version FROM picked)
         GROUP BY correlation_id, version
   ) AS e ON e.correlation_id = o.correlation_id AND e.version = o.version
  ORDER BY o.created_at DESC
@@ -395,9 +413,19 @@ SELECT version,
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
 	}
-	archiveVer := "0"
+	// Numeric, not toString(): a function wrapped around the column defeats
+	// granule pruning and forces evaluating every row the archived_for index
+	// let through (2026-07-09 read-path incident).
+	archiveVer := 0
 	if len(avRows) > 0 && avRows[0]["av"] != nil {
-		archiveVer = fmt.Sprintf("%v", avRows[0]["av"])
+		switch v := avRows[0]["av"].(type) {
+		case float64:
+			archiveVer = int(v)
+		case string:
+			if n, err := strconv.Atoi(v); err == nil {
+				archiveVer = n
+			}
+		}
 	}
 
 	// 2) Full window slice (attached or not), ordered by event time = the cascade.
@@ -416,7 +444,7 @@ SELECT toString(signal_id)  AS signal_id,
        JSONExtractString(attrs, 'probe_authority')    AS probe_authority,
        JSONExtractString(attrs, 'classification_source') AS classification_source
   FROM netops.corr_signals_archive
- WHERE archived_for = '` + id + `' AND toString(archived_version) = '` + archiveVer + `'
+ WHERE archived_for = '` + id + `' AND archived_version = ` + intToString(archiveVer) + `
    AND ts >= '` + ws + `' AND ts <= '` + we + `'
  ORDER BY ts ASC, signal_id ASC
  FORMAT JSON`

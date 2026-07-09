@@ -121,7 +121,17 @@ func (s *server) handleCloudAppRca(w http.ResponseWriter, r *http.Request) {
 	// only — the latest object version can outrun the archived version (close events
 	// bump version without re-archiving), so a version-precise join would miss rows;
 	// "any non-cloud observer ever grounded" is the honest cross-plane signal.
+	// Bounded read (2026-07-09 incident): the archive is prefiltered to the picked
+	// objects' ids — joining the raw table put ALL archive rows on the join's
+	// build side (27.8M rows hashed per call). The archived_for skip index makes
+	// the IN-prefilter a granule-pruned lookup.
 	sql := `
+WITH picked AS (
+     SELECT * FROM netops.corr_objects_latest
+      WHERE has(JSONExtract(affected,'apps','Array(String)'), '` + app + `')
+      ORDER BY created_at DESC
+      LIMIT 10
+)
 SELECT toString(o.correlation_id)            AS correlation_id,
        any(o.verdict_tier)                   AS verdict_tier,
        any(o.top_confidence)                 AS confidence,
@@ -133,13 +143,11 @@ SELECT toString(o.correlation_id)            AS correlation_id,
        any(o.affected)                       AS affected,
        arraySort(groupUniqArray(a.source))   AS sources,
        countIf(a.source != 'cloud') > 0      AS cross_plane
-  FROM (
-       SELECT * FROM netops.corr_objects_latest
-        WHERE has(JSONExtract(affected,'apps','Array(String)'), '` + app + `')
-        ORDER BY created_at DESC
-        LIMIT 10
-  ) AS o
-  INNER JOIN netops.corr_signals_archive AS a
+  FROM picked AS o
+  INNER JOIN (
+       SELECT archived_for, source FROM netops.corr_signals_archive
+        WHERE archived_for IN (SELECT correlation_id FROM picked)
+  ) AS a
        ON a.archived_for = o.correlation_id
  GROUP BY o.correlation_id
  ORDER BY created_at DESC

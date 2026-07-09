@@ -119,6 +119,24 @@ sudo systemctl start netops
 
 `update.sh` itself doesn't touch the systemd unit; it talks directly to `docker compose`. The unit just wraps `compose up/down` for boot-time orchestration.
 
+## One-time data migrations
+
+### 2026-07-09 — correlation archive skip index
+
+The API's boot self-heal adds a `bloom_filter` skip index on
+`corr_signals_archive.archived_for` (per-object reads used to full-scan the
+archive). New parts are indexed on write automatically; a deployment that
+already has archive rows should materialize the index over the existing parts
+once (safe to re-run, takes seconds even at tens of millions of rows):
+
+```bash
+docker compose exec clickhouse clickhouse-client -q \
+  "ALTER TABLE netops.corr_signals_archive MATERIALIZE INDEX idx_archived_for"
+```
+
+Skipping this is not fatal — only reads over pre-upgrade parts stay slow until
+their next natural merge.
+
 ## Quick sanity checks after every upgrade
 
 ```bash
