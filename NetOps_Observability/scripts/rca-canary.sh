@@ -9,7 +9,17 @@
 #   2. a CONFIRMED sig.ent.app.saas-experience-degraded object forms in
 #      netops.corr_objects within OBJECT_BUDGET_S (two independent modality
 #      classes on one app entity — the full verified path:
-#      bus → consumer → normalizer → grounding → signature → verdict).
+#      bus → consumer → normalizer → grounding → signature → verdict), and
+#   3. autoticketing DELIVERS a ticket for that object within TICKET_BUDGET_S
+#      (sweeper → outbox → worker → ITSM connector → the bundled mock
+#      ServiceNow). One-time setup (2026-07-09, PG-persisted): the canary
+#      tenant's connection points at the mock —
+#        PUT /api/notify/itsm?tenant=t-rca-canary
+#            {"servicenow":{"enabled":true,"instance_url":"http://mock-servicenow:8090",
+#             "user":"correlix","password":"correlix-mock-secret","min_severity":"info"}}
+#      A missing/disabled connection FAILS the canary — config drift on the
+#      ticketing path is exactly what this leg guards. Set TICKET_BUDGET_S=0
+#      to skip (e.g. when running without the mock-snow compose profile).
 #
 # Unit tests prove the code path; THIS proves the deployed pipeline. A lab or
 # ingest outage that silences telemetry fails the canary at the RCA level —
@@ -29,6 +39,7 @@ APP="rca_canary_app"
 RUN_ID="canary-$(date +%s)-$$"
 SIGNAL_BUDGET_S="${SIGNAL_BUDGET_S:-90}"
 OBJECT_BUDGET_S="${OBJECT_BUDGET_S:-240}"
+TICKET_BUDGET_S="${TICKET_BUDGET_S:-240}"   # 0 = skip the autoticketing leg
 QUIET="${1:-}"
 [ -f "$DIR/stack-watchdog.env" ] && . "$DIR/stack-watchdog.env"
 
@@ -75,17 +86,49 @@ done
 log "both semantic signals landed"
 
 # 4) confirmed app-impact object?
+#    Damping-aware (#100): signals injected mid-window JOIN the already-open
+#    canary object, and the engine deliberately does NOT re-persist an
+#    unchanged-material object until its heartbeat (CORR_VERSION_HEARTBEAT_S,
+#    900s) — so the freshest persisted row can be up to ~15 min old while the
+#    incident is alive and healthy. Accept a confirmed persist within 20 min
+#    (heartbeat + injection cadence guarantees one in steady state); a broken
+#    engine still fails within one canary cadence.
 deadline=$(( $(date +%s) + OBJECT_BUDGET_S ))
 while :; do
-    tier=$(ch "SELECT max(verdict_tier) FROM netops.corr_objects
+    tier=$(ch "SELECT argMax(verdict_tier, created_at) FROM netops.corr_objects
                WHERE tenant_id='$TENANT'
                  AND top_hypothesis='sig.ent.app.saas-experience-degraded'
-                 AND window_end > now() - INTERVAL 10 MINUTE
+                 AND created_at > now() - INTERVAL 20 MINUTE
                SETTINGS tenant_scope='__all__'" || echo "")
     [ "$tier" = "confirmed" ] && break
-    [ "$(date +%s)" -ge "$deadline" ] && fail "no CONFIRMED saas-experience object after ${OBJECT_BUDGET_S}s (tier=$tier) — grounding/signature/verdict path broken"
+    [ "$(date +%s)" -ge "$deadline" ] && fail "no CONFIRMED saas-experience object after ${OBJECT_BUDGET_S}s (latest tier='${tier:-none persisted in 20m}') — grounding/signature/verdict path broken"
     sleep 10
 done
 
-log "OK: $RUN_ID confirmed end-to-end (bus → signals → confirmed RCA object)"
+log "confirmed RCA object formed"
+
+# 5) autoticketing leg (#78 loop): the confirmed object must produce a DELIVERED
+#    ticket — sweeper (60s tick) → ticket_outbox → worker → ITSM connector → mock.
+#    Asserts the outbox row reaches status='sent' (the worker got an HTTP 2xx
+#    from the ITSM endpoint), not merely that a create was enqueued.
+if [ "$TICKET_BUDGET_S" -gt 0 ] 2>/dev/null; then
+    cid=$(ch "SELECT toString(argMax(correlation_id, created_at)) FROM netops.corr_objects
+              WHERE tenant_id='$TENANT'
+                AND top_hypothesis='sig.ent.app.saas-experience-degraded'
+                AND created_at > now() - INTERVAL 20 MINUTE
+              SETTINGS tenant_scope='__all__'")
+    [ -n "$cid" ] || fail "confirmed object has no correlation_id (unexpected)"
+    deadline=$(( $(date +%s) + TICKET_BUDGET_S ))
+    while :; do
+        st=$(dc exec -T postgres psql -U netops -d netops -tA \
+             -c "SELECT status FROM ticket_outbox WHERE tenant_id='$TENANT'
+                  AND corr_object_id='$cid' ORDER BY updated_at DESC LIMIT 1" 2>/dev/null || echo "")
+        [ "$st" = "sent" ] && break
+        [ "$(date +%s)" -ge "$deadline" ] && fail "ticket not delivered after ${TICKET_BUDGET_S}s (outbox status='${st:-none}') — sweeper/outbox/worker/ITSM-connection path broken"
+        sleep 10
+    done
+    log "ticket delivered for $cid (autoticketing loop closed)"
+fi
+
+log "OK: $RUN_ID confirmed end-to-end (bus → signals → confirmed RCA object → ticket)"
 exit 0
