@@ -81,15 +81,22 @@ type notifyConfigStore struct {
 	srv  *server
 }
 
-func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
-	s := &notifyConfigStore{path: path, srv: srv}
-	s.cfg = notifyConfig{
+// defaultNotifyConfig is the shipped channel posture: push-class channels
+// (Twilio/ntfy/PagerDuty) gate at critical, chatter-class (email/Slack) at
+// warning. The #101 first-customer gate asserts ntfy's critical default.
+func defaultNotifyConfig() notifyConfig {
+	return notifyConfig{
 		SMTP:      smtpConfig{Port: 587, Security: "starttls", MinSeverity: "warning"},
 		Twilio:    twilioConfig{MinSeverity: "critical"},
 		Ntfy:      ntfyConfig{Server: "https://ntfy.sh", MinSeverity: "critical"},
 		Slack:     slackConfig{MinSeverity: "warning"},
 		PagerDuty: pagerDutyConfig{MinSeverity: "critical"},
 	}
+}
+
+func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
+	s := &notifyConfigStore{path: path, srv: srv}
+	s.cfg = defaultNotifyConfig()
 	if b, err := kvLoad(path); err == nil {
 		_ = json.Unmarshal(b, &s.cfg)
 		if dec, derr := mapNotify(s.cfg, openFn(s.vault())); derr != nil {
@@ -119,6 +126,27 @@ func (s *notifyConfigStore) seedFromEnv() {
 	if os.Getenv("FEATURE_PAGERDUTY_NOTIFICATIONS") == "true" {
 		s.cfg.PagerDuty.Enabled = true
 		s.cfg.PagerDuty.RoutingKey = os.Getenv("PAGERDUTY_KEY")
+	}
+	// #101 first-customer gate: critical alerts must LEAVE the app — ntfy is
+	// the recommended push channel, so appliance installs can arrive with it
+	// already wired from .env (then UI-editable like Slack/PagerDuty). The
+	// topic is deployment config, never hardcoded. min_severity keeps its
+	// critical default. The watchdog topic is refused: watchdog independence
+	// is intentional (it must be able to report the stack's own death).
+	if os.Getenv("FEATURE_NTFY_NOTIFICATIONS") == "true" {
+		topic := os.Getenv("NTFY_ALERT_TOPIC")
+		if wd := os.Getenv("WATCHDOG_NTFY_TOPIC"); wd != "" && topic == wd {
+			logError("notify.config", "NTFY_ALERT_TOPIC equals the watchdog topic — refusing to seed (product alerting must stay independent of the watchdog)", nil)
+			topic = ""
+		}
+		if topic != "" {
+			s.cfg.Ntfy.Enabled = true
+			s.cfg.Ntfy.Topic = topic
+			if v := os.Getenv("NTFY_ALERT_SERVER"); v != "" {
+				s.cfg.Ntfy.Server = v
+			}
+			s.cfg.Ntfy.Token = os.Getenv("NTFY_ALERT_TOKEN")
+		}
 	}
 }
 
@@ -427,6 +455,15 @@ func (s *server) handleNtfyConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if !validSeverity(in.MinSeverity) {
 			writeError(w, http.StatusBadRequest, errors.New("invalid min_severity"))
+			return
+		}
+		// #101: the external stack watchdog's topic is off-limits for product
+		// alerting — it must stay able to report the stack's own death, so the
+		// two must never share a channel. Enforced when the deployment exports
+		// WATCHDOG_NTFY_TOPIC; the first-customer gate script also checks
+		// host-side against the watchdog's own env file.
+		if wd := os.Getenv("WATCHDOG_NTFY_TOPIC"); wd != "" && in.Topic == wd {
+			writeError(w, http.StatusBadRequest, errors.New("this topic is reserved for the stack watchdog — use a dedicated topic for platform alerts (watchdog independence)"))
 			return
 		}
 		s.notifyCfg.mu.Lock()

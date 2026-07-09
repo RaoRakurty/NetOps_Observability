@@ -20,6 +20,13 @@ release-gate-live: release-gate
 	scripts/ch-query-budget-check.sh
 	scripts/ch-retention-dry-run.sh
 
+# #101 first-customer acceptance: everything release-gate-live checks PLUS the
+# external critical-alert delivery gate (in-app-only alerting fails). Run with
+# SEND=1 to deliver a real test push (required once before go-live). Auth via
+# CORRELIX_API_TOKEN or CORRELIX_ADMIN_USER/PASSWORD.
+first-customer-check: release-gate-live
+	scripts/verify-critical-alert-channel.sh $(if $(SEND),--send,)
+
 # RCA auto-ticketing (#78) — pure unit + mock-ServiceNow tests (no live stack).
 # The mock is httptest-backed (ticketing_servicenow_test.go); SSRF_ALLOW_PRIVATE
 # is set by the tests themselves. Integration/E2E (P3/P5) add their own targets.

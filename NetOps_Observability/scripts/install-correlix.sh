@@ -378,6 +378,12 @@ cmd_install() {
   fi
   [ "$LAB" = 1 ] && say "${DIM}(lab mode: developer profiles; internal use only)${RST}"
   args+=(--profiles "$profiles")
+  # #101: correlation history retention profile (hot TTLs + cold export
+  # cadence). Appliance default is production (180/90/90 days); override via
+  # CORR_RETENTION_PROFILE=lab|demo|production|extended before running.
+  if [ -n "${CORR_RETENTION_PROFILE:-}" ]; then
+    args+=(--retention-profile "$CORR_RETENTION_PROFILE")
+  fi
 
   say ""
   if ! python3 "$ROOT/scripts/install.py" "${args[@]}"; then

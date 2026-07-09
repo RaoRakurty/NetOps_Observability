@@ -482,6 +482,19 @@ CORR_RETENTION_PROFILE={retention_profile}
 # drill is officially scheduled.
 CORR_CHAOS_FIXTURES=
 
+# ---- Critical alert push (#101 first-customer gate) ----------------------
+# Critical alerts MUST leave the app before go-live — in-app visibility alone
+# fails acceptance (docs/runbooks/first-customer-acceptance.md §4). Set a
+# DEDICATED ntfy topic here (or configure any channel in Admin →
+# Notifications). NEVER reuse the external watchdog's topic — set
+# WATCHDOG_NTFY_TOPIC so the platform can refuse it. Verify with
+# scripts/verify-critical-alert-channel.sh --send.
+FEATURE_NTFY_NOTIFICATIONS=false
+NTFY_ALERT_TOPIC=
+NTFY_ALERT_SERVER=
+NTFY_ALERT_TOKEN=
+WATCHDOG_NTFY_TOPIC=
+
 # Device-side ingestion ports (host-side, mapped into the syslog-ng /
 # goflow2 containers). Use standard ports (514, 2055, 4739, 6343) on
 # Linux with rootful Docker; on rootless or Docker Desktop use non-

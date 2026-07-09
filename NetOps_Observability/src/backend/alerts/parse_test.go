@@ -61,3 +61,67 @@ func TestParseRulesEmpty(t *testing.T) {
 		t.Fatalf("empty input: rules=%v err=%v", rules, err)
 	}
 }
+
+// ---- #101: folded/literal YAML scalars in expr -------------------------------
+// The first-customer alert-routing audit found `expr: >` parsed as the literal
+// query ">" — the rule loaded, then errored on every evaluation tick, silently.
+// Every scalar style promtool accepts must yield the same final query string.
+
+func TestParseRulesYAMLScalarStyles(t *testing.T) {
+	const want = `increase(corr_versions{outcome="persisted"}[30m]) > 60 and increase(corr_versions{outcome="damped"}[30m]) == 0`
+	yaml := `
+groups:
+  - name: g
+    rules:
+      - alert: Inline
+        expr: increase(corr_versions{outcome="persisted"}[30m]) > 60 and increase(corr_versions{outcome="damped"}[30m]) == 0
+        labels: { severity: warning }
+        annotations:
+          summary: "s"
+      - alert: Folded
+        expr: >
+          increase(corr_versions{outcome="persisted"}[30m]) > 60
+          and increase(corr_versions{outcome="damped"}[30m]) == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "s"
+      - alert: Literal
+        expr: |
+          increase(corr_versions{outcome="persisted"}[30m]) > 60
+          and increase(corr_versions{outcome="damped"}[30m]) == 0
+        labels: { severity: critical }
+      - alert: FoldedStrip
+        expr: >-
+          increase(corr_versions{outcome="persisted"}[30m]) > 60
+          and increase(corr_versions{outcome="damped"}[30m]) == 0
+        labels: { severity: warning }
+      - alert: After
+        expr: up == 0
+        labels: { severity: critical }
+`
+	rules, err := parseRulesYAML(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	byName := map[string]Rule{}
+	for _, r := range rules {
+		byName[r.Name] = r
+	}
+	for _, name := range []string{"Inline", "Folded", "Literal", "FoldedStrip"} {
+		if got := byName[name].Expr; got != want {
+			t.Errorf("%s: expr = %q, want %q", name, got, want)
+		}
+	}
+	// The continuation must END at the next key: Folded's `for:` still parses,
+	// and the rule AFTER a folded block is intact.
+	if byName["Folded"].For.Minutes() != 15 {
+		t.Errorf("Folded: for = %v, want 15m (continuation swallowed the key?)", byName["Folded"].For)
+	}
+	if byName["After"].Expr != "up == 0" {
+		t.Errorf("After: expr = %q (folded block leaked past its rule)", byName["After"].Expr)
+	}
+	if byName["After"].Labels["severity"] != "critical" {
+		t.Errorf("After: severity lost")
+	}
+}

@@ -752,6 +752,16 @@ services:
       CORR_CURRENT_RECONCILE_INTERVAL: ${CORR_CURRENT_RECONCILE_INTERVAL:-1h}
       # #101 workload fairness profiles (ch_workload.go; "off" = kill-switch).
       CH_WORKLOAD_PROFILES: ${CH_WORKLOAD_PROFILES:-}
+      # #101 first-customer alert-delivery gate: seed the ntfy critical-push
+      # channel from .env on first run (then admin-UI-editable). Critical
+      # alerts must LEAVE the app — in-app visibility alone fails acceptance.
+      # WATCHDOG_NTFY_TOPIC (optional) lets the API REFUSE the watchdog's
+      # topic for product alerts (watchdog independence is intentional).
+      FEATURE_NTFY_NOTIFICATIONS: ${FEATURE_NTFY_NOTIFICATIONS:-}
+      NTFY_ALERT_TOPIC: ${NTFY_ALERT_TOPIC:-}
+      NTFY_ALERT_SERVER: ${NTFY_ALERT_SERVER:-}
+      NTFY_ALERT_TOKEN: ${NTFY_ALERT_TOKEN:-}
+      WATCHDOG_NTFY_TOPIC: ${WATCHDOG_NTFY_TOPIC:-}
       CORRELATION_URL: "http://correlation:8000"
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.

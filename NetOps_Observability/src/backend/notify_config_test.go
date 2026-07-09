@@ -54,3 +54,52 @@ func TestSeedFromEnv(t *testing.T) {
 		t.Fatalf("pagerduty not seeded from env: %+v", s.cfg.PagerDuty)
 	}
 }
+
+// ---- #101 first-customer alert-delivery gate --------------------------------
+
+func TestSeedNtfyFromEnv(t *testing.T) {
+	t.Setenv("FEATURE_NTFY_NOTIFICATIONS", "true")
+	t.Setenv("NTFY_ALERT_TOPIC", "correlix-critical-seed")
+	t.Setenv("NTFY_ALERT_TOKEN", "tok")
+	s := &notifyConfigStore{}
+	s.seedFromEnv()
+	if !s.cfg.Ntfy.Enabled || s.cfg.Ntfy.Topic != "correlix-critical-seed" || s.cfg.Ntfy.Token != "tok" {
+		t.Fatalf("ntfy not seeded from env: %+v", s.cfg.Ntfy)
+	}
+}
+
+func TestSeedNtfyRefusesWatchdogTopic(t *testing.T) {
+	// Watchdog independence is intentional: the external watchdog must be able
+	// to report the stack's own death, so product alerting may never share its
+	// topic. Seeding with the watchdog topic must be refused, not honored.
+	t.Setenv("FEATURE_NTFY_NOTIFICATIONS", "true")
+	t.Setenv("NTFY_ALERT_TOPIC", "wd-topic")
+	t.Setenv("WATCHDOG_NTFY_TOPIC", "wd-topic")
+	s := &notifyConfigStore{}
+	s.seedFromEnv()
+	if s.cfg.Ntfy.Enabled || s.cfg.Ntfy.Topic != "" {
+		t.Fatalf("watchdog topic must not seed the product channel: %+v", s.cfg.Ntfy)
+	}
+}
+
+func TestSeedNtfyRequiresTopic(t *testing.T) {
+	t.Setenv("FEATURE_NTFY_NOTIFICATIONS", "true")
+	t.Setenv("NTFY_ALERT_TOPIC", "")
+	s := &notifyConfigStore{}
+	s.seedFromEnv()
+	if s.cfg.Ntfy.Enabled {
+		t.Fatal("ntfy must not enable without a topic")
+	}
+}
+
+func TestNtfyChannelDefaultsToCriticalGate(t *testing.T) {
+	// The recommended critical-push channel must default to min_severity
+	// critical (phone pushes for criticals only) and keep its dispatcher name.
+	c := defaultNotifyConfig().Ntfy
+	if c.MinSeverity != "critical" {
+		t.Fatalf("ntfy default min_severity = %q, want critical", c.MinSeverity)
+	}
+	if n := buildNtfyChannel(ntfyConfig{Topic: "x", MinSeverity: "critical"}).Name(); n != "ntfy" {
+		t.Fatalf("ntfy channel name = %q, want ntfy", n)
+	}
+}

@@ -35,20 +35,36 @@ covers the data-reliability contract.)
       `hot_ui` + `background`; a Command Center poll in `system.query_log`
       shows `Settings['max_memory_usage'] = 1073741824`.
 
-## 4. Alerts exist AND route somewhere a human sees
+## 4. Alerts exist AND leave the app (HARD GATE — automated)
 
-- [ ] The four contract alerts parse and load (CI:
-      `go test ./alerts/ -run TestShippedRulesFileParses`):
-      `CHQueryMemoryKilled`, `CorrVersionChurnUndamped`,
-      `CorrCurrentProjectionFailing`, `CorrTenantWriteAmpOverBudget`.
+**In-app alert visibility is not sufficient for customer operations. Critical
+alerts must leave the app through an external notification channel before
+first customer.** A projection failure at 02:00 must reach a phone/pager.
+
+- [ ] Run the gate: `scripts/verify-critical-alert-channel.sh --send`
+      (or `make first-customer-check SEND=1`). It FAILS unless:
+      an external channel is enabled and fully configured; its min_severity
+      admits criticals; the ntfy topic is NOT the watchdog's; the contract
+      alerts are shipped; and a live test alert delivers.
+- [ ] The delivered test alert was SEEN on the subscribed device (subscribe
+      the on-call phone/desktop to the dedicated topic first — delivery to
+      the server is not receipt).
+- [ ] **Dedicated channel/topic**: product/platform alerting uses its OWN
+      topic. The external stack-watchdog stays on its separate topic —
+      watchdog independence is intentional (it must be able to report the
+      stack's own death). Export `WATCHDOG_NTFY_TOPIC` in `.env` so the API
+      refuses it server-side.
+      Recommended setup: Admin → Notifications → ntfy, new dedicated topic,
+      min severity critical — or seed at install via
+      `FEATURE_NTFY_NOTIFICATIONS=true` + `NTFY_ALERT_TOPIC=...` in `.env`.
+- [ ] The contract alerts parse to their real queries (CI:
+      `go test ./alerts/ -run 'TestShippedRulesFileParses|TestParseRulesYAMLScalarStyles'`):
+      `CHQueryMemoryKilled`, `CHFailedQueriesRising`,
+      `CorrVersionChurnUndamped`, `CorrCurrentProjectionFailing`,
+      `CorrTenantWriteAmpOverBudget`.
 - [ ] Metric inputs are scraped: query VictoriaMetrics for
       `corr_current_projection_write_failures_total` and
       `ClickHouseProfileEvents_QueryMemoryLimitExceeded` (1+ series each).
-- [ ] **A push channel is enabled** (Admin → Notifications: ntfy/Slack/
-      PagerDuty, min severity critical) and its test button delivered.
-      In-app-only alerting is NOT acceptance-complete — a projection failure
-      at 02:00 must reach a phone. Keep the external stack-watchdog on its
-      OWN topic (it must be able to report the stack's death).
 
 ## 5. Chaos fixture policy is explicit
 
@@ -64,6 +80,8 @@ covers the data-reliability contract.)
 - [ ] `make release-gate-live` green against the running stack (adds live
       budgets + retention preview). Re-run after ANY install/deploy/packaging
       change, not just code changes.
+- [ ] `make first-customer-check SEND=1` green — the single command that
+      chains release-gate-live + the §4 alert-delivery gate.
 
 ## 7. Projection reliability is demonstrably healthy
 
