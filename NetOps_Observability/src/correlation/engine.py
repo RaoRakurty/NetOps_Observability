@@ -614,6 +614,30 @@ class ObjectSnapshot:
         }, separators=(",", ":"), sort_keys=True)
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
+    def material_hash(self) -> str:
+        """Damping detector (#100 write-side): the operator-meaningful identity of
+        a snapshot. A sustained incident refreshes its window every cycle — new
+        signal INSTANCES of the same evidence — which legitimately moves
+        content_hash (the replay pin) but changes nothing an operator acts on;
+        persisting a version per cycle grew corr_objects unboundedly under storms.
+        This hash collapses instances to evidence KINDS per entity, edges to their
+        structure (weights drift with timing), and confidence to its customer
+        bucket (confidence_label), so decay drift alone never re-versions. The
+        persistence gate in main.engine_cycle only writes a new version when THIS
+        moves, on a heartbeat, or on a lifecycle transition."""
+        r = self.ranking
+        blob = json.dumps({
+            "nodes": [n.key for n in self.nodes],
+            "evidence": sorted({f"{n.key}|{s.kind}" for n in self.nodes for s in n.signals}),
+            "edges": sorted([e.from_node, e.to_node, e.grounding.kind, e.direction_basis]
+                            for e in self.edges),
+            "ranking": [[h.template_id, h.confidence_label(), h.contradicted]
+                        for h in r.hypotheses],
+            "verdict": [r.top_hypothesis, r.verdict_tier.value],
+            "engine": self.engine_ver,
+        }, separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
     def top_confidence(self) -> float:
         r = self.ranking
         if r.top_hypothesis == "undetermined" or not r.hypotheses:

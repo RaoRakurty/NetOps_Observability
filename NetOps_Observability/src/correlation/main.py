@@ -229,6 +229,16 @@ METRIC_MAX_AGE_S = 3600.0
 CORR_ENGINE_ENABLED = os.environ.get("CORR_ENGINE_ENABLED", "true").lower() != "false"
 CORR_ENGINE_INTERVAL_S = float(os.environ.get("CORR_ENGINE_INTERVAL_S", "30"))
 CORR_QUIESCE_S = float(os.environ.get("CORR_QUIESCE_S", "900"))
+# #100 write-side damping: a persisting incident whose window merely refreshes
+# (new instances of the SAME evidence) re-persisted a full snapshot + archive
+# slice every cycle — 2 versions/min/object for as long as a storm lasted. A new
+# version is now written only when the snapshot's material_hash moves (evidence
+# kinds / entities / verdict / structure) or this heartbeat elapses (bounds how
+# stale signal_count/window_end may look while an incident persists unchanged).
+# 0 disables damping (legacy: persist on every content_hash change).
+CORR_VERSION_HEARTBEAT_S = float(os.environ.get("CORR_VERSION_HEARTBEAT_S", "900"))
+VERSIONS_PERSISTED = 0   # object versions written to ClickHouse (monotonic)
+VERSIONS_DAMPED = 0      # persists suppressed by the material-hash gate (monotonic)
 # §8 degradation. Topology is stale when the Go exporter stopped refreshing the
 # seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
 CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
@@ -562,7 +572,7 @@ def _topology_stale(now: datetime) -> bool:
 async def engine_cycle() -> None:
     """One evaluation: prune window, partition by tenant, run the pure core,
     persist version increments, close quiesced objects."""
-    global LAST_GAP_HINTS
+    global LAST_GAP_HINTS, VERSIONS_PERSISTED, VERSIONS_DAMPED
     if ch is None:
         return
     now = datetime.now(timezone.utc)
@@ -618,15 +628,31 @@ async def engine_cycle() -> None:
             chash = snap.content_hash()
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {
-                    "version": 1, "hash": chash, "last_seen": now, "snapshot": snap,
+                    "version": 1, "hash": chash, "material": snap.material_hash(),
+                    "last_seen": now, "last_persist": now, "snapshot": snap,
                 }
                 await _persist_snapshot(snap, 1, "open", window)
+                VERSIONS_PERSISTED += 1
             elif reg["hash"] != chash:
-                reg["version"] += 1
+                # #100 damping: content moved (it always does while an incident
+                # persists — instance ids rotate through the window), but only a
+                # MATERIAL move, an elapsed heartbeat, or damping-off warrants a
+                # persisted version. The in-memory registry still tracks the
+                # freshest snapshot so merge/close always persist current truth.
+                mhash = snap.material_hash()
+                elapsed = (now - reg.get("last_persist", now)).total_seconds()
+                if (mhash != reg.get("material") or CORR_VERSION_HEARTBEAT_S <= 0
+                        or elapsed >= CORR_VERSION_HEARTBEAT_S):
+                    reg["version"] += 1
+                    reg["last_persist"] = now
+                    await _persist_snapshot(snap, reg["version"], "open", window)
+                    VERSIONS_PERSISTED += 1
+                else:
+                    VERSIONS_DAMPED += 1
                 reg["hash"] = chash
+                reg["material"] = mhash
                 reg["last_seen"] = now
                 reg["snapshot"] = snap
-                await _persist_snapshot(snap, reg["version"], "open", window)
             else:
                 reg["last_seen"] = now
 
@@ -643,6 +669,7 @@ async def engine_cycle() -> None:
         if reg is None:
             continue
         reg["version"] += 1
+        VERSIONS_PERSISTED += 1
         await _persist_snapshot(reg["snapshot"], reg["version"], "merged", [], merged_into=survivor_cid)
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
@@ -656,6 +683,7 @@ async def engine_cycle() -> None:
             continue
         if (now - reg["last_seen"]).total_seconds() >= CORR_QUIESCE_S:
             reg["version"] += 1
+            VERSIONS_PERSISTED += 1
             await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
             del OPEN_OBJECTS[cid]
     LAST_GAP_HINTS = gap_hints
@@ -1541,6 +1569,11 @@ async def metrics_exposition():
         f"corr_window_signals {eng['window_signals']}",
         "# TYPE corr_open_objects gauge",
         f"corr_open_objects {eng['open_objects']}",
+        # #100 damping: persisted vs suppressed object versions. A damped:persisted
+        # ratio collapsing to 0 under a storm means the material gate stopped working.
+        "# TYPE corr_versions counter",
+        f'corr_versions{{outcome="persisted"}} {eng["versions_persisted"]}',
+        f'corr_versions{{outcome="damped"}} {eng["versions_damped"]}',
     ]
     return PlainTextResponse("\n".join(lines) + "\n")
 
@@ -1555,6 +1588,8 @@ async def health() -> dict:
             "deadletter_count": DEADLETTER_COUNT,
             "engine_enabled": CORR_ENGINE_ENABLED,
             "open_objects": len(OPEN_OBJECTS),
+            "versions_persisted": VERSIONS_PERSISTED,
+            "versions_damped": VERSIONS_DAMPED,
             "window_signals": len(WINDOW_BUFFER),
             "seam_inventory": len(seam_inventory()),
             "topology_gap_hints": LAST_GAP_HINTS,

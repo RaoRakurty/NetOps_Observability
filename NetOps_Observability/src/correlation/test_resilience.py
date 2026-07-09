@@ -123,3 +123,82 @@ def test_low_authority_probe_still_buffers():
     low.attrs["probe_authority"] = "low"
     main.buffer_signal(low)
     assert len(main.WINDOW_BUFFER) == 1
+
+
+# ── #100 write-side version damping under a sustained storm ───────────────────
+# A dead target keeps the same incident alive for hours; every cycle the window
+# refreshes with NEW instances of the SAME evidence. Persisting a version per
+# cycle grew corr_objects without bound (the 2026-07-09 read-path incident's
+# write side). The engine_cycle persistence gate must write only on material
+# change, heartbeat, or lifecycle transition.
+
+import asyncio
+
+
+class _StubCH:
+    """Records inserts; stands in for the ClickHouse client in engine_cycle."""
+
+    def __init__(self):
+        self.rows: dict = {}
+
+    async def insert(self, table: str, rows: list) -> None:
+        self.rows.setdefault(table, []).extend(rows)
+
+
+def _storm_sig(kind: str, entity_id: str, *, offset_s: float, now: datetime) -> Signal:
+    return Signal(
+        tenant_id="t1", ts=now + timedelta(seconds=offset_s), source=Source.METRIC,
+        kind=kind, observer=Observer(observer_id="dev1", observer_type=ObserverType.DEVICE),
+        modality_class=ModalityClass.DEVICE_TELEMETRY, entity_type=EntityType.DEVICE,
+        entity_id=entity_id, severity=Severity.CRIT,
+        native_id=f"storm|{kind}|{entity_id}|{offset_s}",
+        attrs={"onset_uncertainty_s": 5.0},
+    )
+
+
+def test_version_damping_suppresses_instance_refresh_persists(monkeypatch):
+    stub = _StubCH()
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "OPEN_OBJECTS", {})
+    monkeypatch.setattr(main, "CORR_VERSION_HEARTBEAT_S", 900.0)
+    now = datetime.now(timezone.utc)
+
+    # cycle 1: two CRIT signals on one device → an open object, v1 persisted
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-60, now=now))
+    main.buffer_signal(_storm_sig("device_resource_anomaly", "core-1", offset_s=-55, now=now))
+    asyncio.run(main.engine_cycle())
+    assert len(stub.rows.get("netops.corr_objects", [])) == 1, "first sighting persists v1"
+
+    # cycle 2: NEW instances of the SAME evidence (storm refresh) → damped, no write
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-30, now=now))
+    main.buffer_signal(_storm_sig("device_resource_anomaly", "core-1", offset_s=-25, now=now))
+    damped_before = main.VERSIONS_DAMPED
+    asyncio.run(main.engine_cycle())
+    assert len(stub.rows["netops.corr_objects"]) == 1, \
+        "an instance refresh of unchanged evidence must NOT persist a new version"
+    assert main.VERSIONS_DAMPED == damped_before + 1, "the damped persist is counted"
+
+    # heartbeat elapsed → the same unchanged-material object re-persists ONCE
+    (reg,) = main.OPEN_OBJECTS.values()
+    reg["last_persist"] = now - timedelta(seconds=1000)
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-10, now=now))
+    asyncio.run(main.engine_cycle())
+    assert len(stub.rows["netops.corr_objects"]) == 2, "heartbeat bounds UI staleness"
+    assert stub.rows["netops.corr_objects"][-1]["version"] == 2
+
+
+def test_version_damping_off_restores_legacy_per_change_persistence(monkeypatch):
+    """CORR_VERSION_HEARTBEAT_S=0 must restore the pre-#100 behavior exactly:
+    every content_hash change persists."""
+    stub = _StubCH()
+    monkeypatch.setattr(main, "ch", stub)
+    monkeypatch.setattr(main, "OPEN_OBJECTS", {})
+    monkeypatch.setattr(main, "CORR_VERSION_HEARTBEAT_S", 0.0)
+    now = datetime.now(timezone.utc)
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-60, now=now))
+    main.buffer_signal(_storm_sig("device_resource_anomaly", "core-1", offset_s=-55, now=now))
+    asyncio.run(main.engine_cycle())
+    main.buffer_signal(_storm_sig("link_state_change", "core-1", offset_s=-30, now=now))
+    asyncio.run(main.engine_cycle())
+    assert len(stub.rows["netops.corr_objects"]) == 2, \
+        "damping disabled ⇒ every content change persists (legacy)"

@@ -378,6 +378,49 @@ def test_evidence_change_forces_new_version_unchanged_does_not_churn():
     assert reduced.content_hash() != full.content_hash(), "changed evidence ⇒ new version"
 
 
+# ── #100 write-side damping: material vs instance-refresh change detection ────
+# A sustained incident refreshes its window every cycle with new INSTANCES of the
+# same evidence; content_hash (the replay pin) legitimately moves, but nothing an
+# operator acts on changed. material_hash is the persistence gate: stable across
+# instance refresh, moving on any operator-meaningful change.
+
+
+def _refreshed_window() -> list:
+    """golden_window plus later instances of the SAME evidence kinds on the SAME
+    entities — the storm shape: window slides, instance ids rotate. The original
+    signals stay in the window, so the earliest node (hence correlation_id) holds."""
+    dup = [
+        sig("if_util_high", EntityType.INTERFACE, "dallas-edge:Gi0/1",
+            observer="dallas-edge", unc_s=15, offset_s=30),
+        sig("probe_loss", EntityType.SEGMENT, "dallas-edge->equinix-pop", offset_s=88,
+            observer="probe-agent-dallas", modality=ModalityClass.ACTIVE_PROBE, unc_s=5),
+        sig("qos_drops", EntityType.INTERFACE, "dallas-edge:Gi0/1", offset_s=105,
+            observer="dallas-edge", severity=Severity.WARN, unc_s=15),
+    ]
+    return golden_window() + dup
+
+
+def test_material_hash_stable_across_instance_refresh():
+    cat = builtin_catalog()
+    base = run_window(golden_window(), cat, (DALLAS_SEAM,))[0]
+    refreshed = run_window(_refreshed_window(), cat, (DALLAS_SEAM,))[0]
+    assert refreshed.correlation_id == base.correlation_id, "same incident identity"
+    assert refreshed.content_hash() != base.content_hash(), \
+        "new instances must still move the replay pin"
+    assert refreshed.material_hash() == base.material_hash(), \
+        "instance refresh of the same evidence must NOT re-version (damping)"
+
+
+def test_material_hash_moves_on_material_change():
+    cat = builtin_catalog()
+    base = run_window(golden_window(), cat, (DALLAS_SEAM,))[0]
+    # Dropping a corroborating evidence KIND is operator-meaningful.
+    reduced = run_window([s for s in golden_window() if s.kind != "qos_drops"],
+                         cat, (DALLAS_SEAM,))[0]
+    assert reduced.material_hash() != base.material_hash(), \
+        "an evidence-kind change must persist a new version"
+
+
 # ── C1: object merge — de-split cross-cycle identity drift (§4.4) ──────────────
 def _obj(devs, cid, start_min, end_min):
     """A real ObjectSnapshot whose entity set is `devs` and window is
