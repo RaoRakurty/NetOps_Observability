@@ -79,6 +79,17 @@ which names the affected app.
   probe+flow=confirmed, app-agnostic resolution.
 - `fixtures/saas-experience-{salesforce,teams,probe-only}-*.json` — CI-gated
   scenarios across apps and both verdict tiers.
+- **Golden-wire** (`fixtures/golden_wire/`, `test_golden_wire.py`): raw
+  collector-shaped events (exact ProbeEvent wire JSON, raw goflow2 records)
+  replayed through the production normalizers and engine — see
+  `docs/golden-wire-fixtures-and-confirmability.md`. Confirmed vs suspected on
+  real wire input: a raw 503 to Teams alone → **suspected**; the same synthetic
+  plus an *app-grounded* independent witness → **confirmed**. Today's honest
+  finding (asserted, not hidden): production flow anomalies ground on the
+  exporting interface with no app token, so synthetic + interface-flow does
+  **not** confirm — closing that is the Phase 4 per-app attribution work.
+- **Confirmability audit** (`confirmability.py`): per-signature max-possible
+  verdict + status; p0 gate with structured exceptions.
 
 ## Known gaps / follow-ups
 

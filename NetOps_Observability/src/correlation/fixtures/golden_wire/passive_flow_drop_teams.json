@@ -1,0 +1,40 @@
+{
+  "name": "Teams synthetic failure + raw goflow2-shaped flow records — documents the Phase 4 gap: production flow anomalies ground on the exporting INTERFACE (no app token), so they cannot co-ground with the app object yet",
+  "tenant": "acme",
+  "events": [
+    {
+      "lane": "probe",
+      "event": {
+        "kind": "http",
+        "prober": "syn-frisco",
+        "target": "https://teams.microsoft.com",
+        "ok": false,
+        "rtt_ms": 0,
+        "loss_pct": 100,
+        "ts": "2026-07-09T09:00:00.000000Z",
+        "site_id": "frisco",
+        "fail_class": "tls",
+        "method": "GET",
+        "path": "/"
+      }
+    },
+    {
+      "lane": "flow",
+      "records": [
+        {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 42000, "sampling_rate": 50,
+         "src_addr": "10.40.17.55", "dst_addr": "52.113.194.132", "dst_port": 443, "proto": "TCP"},
+        {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 9500, "sampling_rate": 50,
+         "src_addr": "10.40.17.62", "dst_addr": "52.113.194.132", "dst_port": 443, "proto": "TCP"}
+      ],
+      "detected": {"deviation": 4.0}
+    }
+  ],
+  "expect": {
+    "flow_entity_type": "interface",
+    "flow_entity_id": "10.40.17.1:if3",
+    "flow_has_app_token": false,
+    "co_grounds_with_app_object": false,
+    "confirmed": false,
+    "gap": "per-app flow attribution (Phase 4) — flow evidence exists but cannot reach the app entity"
+  }
+}

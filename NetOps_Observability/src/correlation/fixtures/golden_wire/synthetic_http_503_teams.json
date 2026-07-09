@@ -1,0 +1,38 @@
+{
+  "name": "Raw synthetic HTTPS 503 to Teams — exact collectors/probe_events.go wire shape; probe-only must NOT confirm",
+  "tenant": "acme",
+  "events": [
+    {
+      "lane": "probe",
+      "event": {
+        "kind": "http",
+        "prober": "syn-frisco",
+        "target": "https://teams.microsoft.com",
+        "ok": false,
+        "rtt_ms": 842.1,
+        "loss_pct": 100,
+        "ts": "2026-07-09T09:00:00.000000Z",
+        "site_id": "frisco",
+        "status_code": 503,
+        "method": "GET",
+        "path": "/",
+        "dns_ms": 11.2,
+        "tcp_connect_ms": 34.8,
+        "tls_ms": 51.3,
+        "ttfb_ms": 700.4,
+        "total_ms": 842.1,
+        "cert_days_to_expiry": 143.5,
+        "cert_subject": "teams.microsoft.com",
+        "cert_issuer": "Microsoft Azure TLS Issuing CA 05"
+      }
+    }
+  ],
+  "expect": {
+    "semantic_kind": "synthetic_http_5xx",
+    "reason": "http_5xx",
+    "raw_kind": "http",
+    "app": "microsoft_teams",
+    "top": "sig.ent.app.saas-experience-degraded",
+    "confirmed": false
+  }
+}

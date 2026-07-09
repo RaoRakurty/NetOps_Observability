@@ -32,3 +32,4 @@ scripts/stack-watchdog.log
 # Lab-local compose overrides (site config — never product defaults)
 deployment/docker/docker-compose.override.yml
 dist/
+src/correlation/build/

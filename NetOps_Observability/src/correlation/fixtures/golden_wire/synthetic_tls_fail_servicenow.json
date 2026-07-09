@@ -1,0 +1,35 @@
+{
+  "name": "Raw synthetic TLS failure to a customer ServiceNow instance — app identity via the customer-defined host map (CORR_SAAS_HOST_MAP), not code",
+  "tenant": "acme",
+  "env": {
+    "CORR_SAAS_HOST_MAP": "acme.service-now.com=servicenow"
+  },
+  "events": [
+    {
+      "lane": "probe",
+      "event": {
+        "kind": "http",
+        "prober": "syn-frisco",
+        "target": "https://acme.service-now.com",
+        "ok": false,
+        "rtt_ms": 0,
+        "loss_pct": 100,
+        "ts": "2026-07-09T09:00:00.000000Z",
+        "site_id": "frisco",
+        "fail_class": "tls",
+        "method": "GET",
+        "path": "/",
+        "dns_ms": 9.1,
+        "tcp_connect_ms": 28.7
+      }
+    }
+  ],
+  "expect": {
+    "semantic_kind": "synthetic_tls_fail",
+    "reason": "tls_handshake_failure",
+    "raw_kind": "http",
+    "app": "servicenow",
+    "top": "sig.ent.app.saas-experience-degraded",
+    "confirmed": false
+  }
+}

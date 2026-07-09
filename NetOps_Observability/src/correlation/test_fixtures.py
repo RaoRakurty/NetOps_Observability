@@ -78,7 +78,9 @@ def signal_from_fixture(spec: dict, idx: int) -> Signal:
 
 
 def fixture_files() -> list[Path]:
-    files = sorted(FIXTURE_DIR.rglob("*.json"))
+    # Top level only: fixtures/golden_wire/ holds RAW collector-shaped events
+    # with their own driver (test_golden_wire.py), not Signal-level fixtures.
+    files = sorted(FIXTURE_DIR.glob("*.json"))
     assert files, f"no fixtures under {FIXTURE_DIR} — the catalog CI gate is empty"
     return files
 

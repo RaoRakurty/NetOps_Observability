@@ -1,0 +1,35 @@
+{
+  "name": "Raw synthetic timeout to an internal app — customer-defined mapping, proves the lane is not SaaS-only",
+  "tenant": "acme",
+  "env": {
+    "CORR_SAAS_HOST_MAP": "orders.acme.internal=acme_orders"
+  },
+  "events": [
+    {
+      "lane": "probe",
+      "event": {
+        "kind": "http",
+        "prober": "syn-dc1",
+        "target": "https://orders.acme.internal/health",
+        "ok": false,
+        "rtt_ms": 0,
+        "loss_pct": 100,
+        "ts": "2026-07-09T09:00:00.000000Z",
+        "site_id": "dc1",
+        "fail_class": "timeout",
+        "method": "GET",
+        "path": "/health",
+        "dns_ms": 2.4,
+        "tcp_connect_ms": 5.1
+      }
+    }
+  ],
+  "expect": {
+    "semantic_kind": "synthetic_timeout",
+    "reason": "http_timeout",
+    "raw_kind": "http",
+    "app": "acme_orders",
+    "top": "sig.ent.app.saas-experience-degraded",
+    "confirmed": false
+  }
+}
