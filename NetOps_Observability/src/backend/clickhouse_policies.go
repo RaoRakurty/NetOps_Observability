@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -56,46 +58,80 @@ func ensureCHRowPolicies() {
 	// (corr_schema.go). Same converge-on-boot contract as everything above.
 	stmts = append(stmts, corrSchemaDDL()...)
 	go func() {
+		var errs []string
 		for attempt := 0; attempt < 10; attempt++ {
-			if chExecAll(base, stmts) {
+			errs = chExecAll(base, stmts)
+			if len(errs) == 0 {
 				log.Printf("clickhouse: tenant row policies ensured (#20 Phase 2)")
 				return
 			}
 			time.Sleep(6 * time.Second)
 		}
+		// Name every failing statement (2026-07-09 outage: this warning used to
+		// be generic while a stale enum ALTER silently blocked the rest of the
+		// converge list on every boot — undiagnosable from the log alone).
 		log.Printf("clickhouse: WARNING — could not ensure tenant row policies after retries; telemetry isolation relies on the app layer until ClickHouse is reachable")
+		for _, e := range errs {
+			log.Printf("clickhouse: converge failure: %s", e)
+		}
 	}()
 }
 
-func chExecAll(base string, stmts []string) bool {
+// chExecAll runs every statement and returns a description of each failure.
+// It deliberately does NOT stop at the first error: every statement is
+// independently idempotent, and aborting early lets one permanently-failing
+// statement block every statement after it (2026-07-09: a stale enum ALTER
+// kept corr_current from ever being created). Dependent statements (e.g. the
+// corr_current backfill after its CREATE) just fail the same attempt and
+// converge on a later one.
+func chExecAll(base string, stmts []string) []string {
+	var errs []string
 	for _, s := range stmts {
-		if !chExec(base, s) {
-			return false
+		if msg := chExecErr(base, s); msg != "" {
+			errs = append(errs, msg)
 		}
 	}
-	return true
+	return errs
 }
 
 // chExec runs one DDL statement against ClickHouse over HTTP. Passes
 // tenant_scope=__all__ so the statement is never itself filtered by a policy.
 func chExec(base, sql string) bool {
+	return chExecErr(base, sql) == ""
+}
+
+// chExecErr is chExec returning a diagnosable failure description ("" = ok):
+// the head of the statement plus ClickHouse's own error line, so a converge
+// failure names its cause in the log instead of a bare false.
+func chExecErr(base, sql string) string {
+	head := sql
+	if len(head) > 80 {
+		head = head[:80] + "…"
+	}
+	head = strings.Join(strings.Fields(head), " ")
 	u, err := url.Parse(base)
 	if err != nil {
-		return false
+		return "bad CLICKHOUSE_URL: " + err.Error()
 	}
 	q := u.Query()
 	q.Set("tenant_scope", "__all__")
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
 	if err != nil {
-		return false
+		return head + ": " + err.Error()
 	}
 	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
 	req.Header.Set("Content-Type", "text/plain")
 	resp, err := backendHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
-		return false
+		return head + ": " + err.Error()
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		// Body read best-effort: the status line alone still identifies the
+		// failing statement; ClickHouse puts the DB::Exception in the body.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return head + ": HTTP " + resp.Status + ": " + strings.Join(strings.Fields(string(body)), " ")
+	}
+	return ""
 }

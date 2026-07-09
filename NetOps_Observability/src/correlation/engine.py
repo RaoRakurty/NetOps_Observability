@@ -628,10 +628,14 @@ class ObjectSnapshot:
         r = self.ranking
         blob = json.dumps({
             "nodes": [n.key for n in self.nodes],
-            "evidence": sorted({f"{n.key}|{s.kind}" for n in self.nodes for s in n.signals}),
+            # Evidence kind AND severity per entity: a WARN→CRIT escalation of
+            # the same evidence is operator-meaningful and must re-version.
+            "evidence": sorted({f"{n.key}|{s.kind}|{s.severity.value}"
+                                for n in self.nodes for s in n.signals}),
             "edges": sorted([e.from_node, e.to_node, e.grounding.kind, e.direction_basis]
                             for e in self.edges),
-            "ranking": [[h.template_id, h.confidence_label(), h.contradicted]
+            # Owner is who the RCA routes to — an owner change re-versions.
+            "ranking": [[h.template_id, h.confidence_label(), h.contradicted, h.owner]
                         for h in r.hypotheses],
             "verdict": [r.top_hypothesis, r.verdict_tier.value],
             "engine": self.engine_ver,

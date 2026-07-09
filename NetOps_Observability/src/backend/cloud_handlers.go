@@ -125,9 +125,14 @@ func (s *server) handleCloudAppRca(w http.ResponseWriter, r *http.Request) {
 	// objects' ids — joining the raw table put ALL archive rows on the join's
 	// build side (27.8M rows hashed per call). The archived_for skip index makes
 	// the IN-prefilter a granule-pruned lookup.
+	// #100 hardening: pick from the corr_current HOT projection with NAMED
+	// narrow columns (never SELECT * — column pruning through a view is an
+	// optimizer behavior, not a contract; one added reference re-widens it).
 	sql := `
 WITH picked AS (
-     SELECT * FROM netops.corr_objects_latest
+     SELECT correlation_id, version, state, verdict_tier, top_confidence,
+            top_hypothesis, signal_count, window_start, created_at, affected
+       FROM netops.corr_current FINAL
       WHERE has(JSONExtract(affected,'apps','Array(String)'), '` + app + `')
       ORDER BY created_at DESC
       LIMIT 10

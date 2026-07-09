@@ -32,16 +32,18 @@ func corrSchemaDDL() []string {
     ts             DateTime64(3),
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
-                         'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9),
+                         'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
+                         'app_identity'=10,'controller'=11),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
-                         'flow_exporter'=4,'platform'=5),
+                         'flow_exporter'=4,'platform'=5,'controller'=6),
     observer_location     LowCardinality(String) DEFAULT '',
     observer_trust_domain LowCardinality(String) DEFAULT '',
     collection_path       LowCardinality(String) DEFAULT 'direct',
     modality_class Enum8('active_probe'=1,'passive_flow'=2,
-                         'control_plane'=3,'device_telemetry'=4),
+                         'control_plane'=3,'device_telemetry'=4,
+                         'management_plane'=5),
     source_clock_quality LowCardinality(String) DEFAULT 'unknown',
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
                          'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9),
@@ -112,10 +114,24 @@ SETTINGS index_granularity = 8192`,
 		// self-heal for live tables (both signals + archive share signalColumns).
 		// #81 P5: source gains 'app_identity'=10 — fused application identity as an
 		// enrichment evidence producer on the SAME spine (additive Enum8 value-add).
-		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10)`,
+		// NMS P6: source gains 'controller'=11, observer_type gains 'controller'=6
+		// (controller-intelligence signal class).
+		//
+		// HARD RULE (2026-07-09 outage): these ALTERs must always list the FULL
+		// enum — the superset of every value any deployment has ever had, kept
+		// identical to init.sql (TestCorrSignalEnumsConsistent enforces it).
+		// ClickHouse refuses an enum ALTER on a key column that drops a value, so
+		// a stale (subset) ALTER fails on EVERY boot against a live table that
+		// already learned the newer value — and stalls the converge list behind it
+		// (this is how corr_current failed to be created on 2026-07-09).
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11)`,
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN observer_type Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,'flow_exporter'=4,'platform'=5,'controller'=6)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9)`,
-		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10)`,
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN modality_class Enum8('active_probe'=1,'passive_flow'=2,'control_plane'=3,'device_telemetry'=4,'management_plane'=5)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN observer_type Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,'flow_exporter'=4,'platform'=5,'controller'=6)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN modality_class Enum8('active_probe'=1,'passive_flow'=2,'control_plane'=3,'device_telemetry'=4,'management_plane'=5)`,
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_objects
 (
@@ -168,6 +184,89 @@ SELECT * FROM netops.corr_objects
 ORDER BY tenant_id, correlation_id, version DESC
 LIMIT 1 BY tenant_id, correlation_id`,
 
+		// #100 hardening: current-state projection for HOT reads. corr_objects is
+		// the append-only history (replay/audit/Inspector); corr_current holds ONE
+		// narrow row per live object so Command Center list pages read O(active
+		// objects), not O(history). By design it carries NO wide blob columns
+		// (hypotheses/layer_coverage/app_impact) — wide columns are fetched keyed
+		// from corr_objects for the picked page only. Maintained by app-level
+		// dual-write from the engine's _persist_snapshot (NOT a materialized view
+		// — row policies break MV inserts, see freeze invariant above), so it
+		// inherits the #100 damping: a storm writes at the damped rate here too.
+		// ReplacingMergeTree keyed on created_at: the latest WRITE wins, which
+		// also self-heals the engine-restart version reset (in-memory versions
+		// restart at 1; a version-keyed fold would resurrect the stale pre-restart
+		// row). Partitioned by tenant ONLY: the dedup key (tenant, correlation_id)
+		// must never span partitions or FINAL cannot collapse it.
+		`CREATE TABLE IF NOT EXISTS netops.corr_current
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    correlation_id   UUID,
+    version          UInt32,
+    state            Enum8('open'=1,'closed'=2,'merged'=3),
+    window_start     DateTime64(3),
+    window_end       DateTime64(3),
+    top_hypothesis   String,
+    top_confidence   Float32,
+    verdict_tier     Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
+    evidence_missing String DEFAULT '[]',
+    affected         String DEFAULT '[]',
+    signal_count     UInt32,
+    node_count       UInt16,
+    engine_version   LowCardinality(String) DEFAULT '',
+    catalog_version  LowCardinality(String) DEFAULT '',
+    merged_into      Nullable(UUID),
+    created_at       DateTime64(3) DEFAULT now64(3),
+    owner            LowCardinality(String) DEFAULT '',
+    plane_count      UInt8 DEFAULT 0,
+    debug_excluded   UInt8 DEFAULT 0,
+    low_authority    UInt8 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY (tenant_id)
+ORDER BY (tenant_id, correlation_id)`,
+
+		// Triage badges as NARROW projection columns (#100 completion): the list
+		// page's owner / plane-count / debug-excluded / low-authority badges used
+		// to be JSONExtract'd from the ~5.7KB hypotheses blob per poll — reading
+		// ~1.3 GiB of blob granules per page even with a keyed fetch (measured:
+		// 130 MiB / 1.35 GiB read per query, over the 100 MiB endpoint budget).
+		// The engine now derives them once at persist time; the hot list path
+		// never touches the blob column at all. ADD COLUMN converges deployments
+		// whose corr_current predates the badges.
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS catalog_version LowCardinality(String) DEFAULT '' AFTER engine_version`,
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS owner LowCardinality(String) DEFAULT '' AFTER created_at`,
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS plane_count UInt8 DEFAULT 0 AFTER owner`,
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS debug_excluded UInt8 DEFAULT 0 AFTER plane_count`,
+		`ALTER TABLE netops.corr_current ADD COLUMN IF NOT EXISTS low_authority UInt8 DEFAULT 0 AFTER debug_excluded`,
+
+		// One-time backfill from history (idempotent: the NOT IN makes a re-run a
+		// no-op). Sanctioned #100 shape: the FOLD picks narrow keys only; the wide
+		// hypotheses badge-extracts run ONLY in the outer read, keyed by the folded
+		// (tenant, id, version) set — no blob ever crosses a sort. Runs at
+		// tenant_scope=__all__ (chExec) so every tenant's objects seed.
+		`INSERT INTO netops.corr_current
+    (tenant_id, correlation_id, version, state, window_start, window_end,
+     top_hypothesis, top_confidence, verdict_tier, evidence_missing, affected,
+     signal_count, node_count, engine_version, catalog_version, merged_into,
+     created_at, owner, plane_count, debug_excluded, low_authority)
+SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.window_end,
+       o.top_hypothesis, o.top_confidence, o.verdict_tier, o.evidence_missing, o.affected,
+       o.signal_count, o.node_count, o.engine_version, o.catalog_version, o.merged_into,
+       o.created_at,
+       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner'),
+       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','modality_coverage','Array(String)'))),
+       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','excluded_debug_probes','Array(String)')) > 0),
+       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','low_authority_probe_scopes','Array(String)')) > 0)
+  FROM netops.corr_objects AS o
+ WHERE (o.tenant_id, o.correlation_id, o.version) IN (
+       SELECT tenant_id, correlation_id, version
+         FROM netops.corr_objects
+        WHERE (tenant_id, correlation_id) NOT IN
+              (SELECT tenant_id, correlation_id FROM netops.corr_current)
+        ORDER BY tenant_id, correlation_id, version DESC
+        LIMIT 1 BY tenant_id, correlation_id)`,
+
 		`CREATE TABLE IF NOT EXISTS netops.corr_edges
 (
     tenant_id       LowCardinality(String) DEFAULT '',
@@ -217,5 +316,12 @@ ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)`,
 		chRowPolicyDDL("corr_objects"),
 		chRowPolicyDDL("corr_edges"),
 		chRowPolicyDDL("corr_evidence"),
+		// STRICT policy (2026-07-02 model, matching init.sql's corr policies): NO
+		// untagged-shared clause — correlation intel is platform-only when
+		// untagged. The generic chRowPolicyDDL is the loose telemetry variant and
+		// would leak platform-global objects into every tenant's Command Center.
+		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_current ON netops.corr_current
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL`,
 	}
 }

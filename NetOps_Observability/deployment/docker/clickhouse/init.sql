@@ -308,6 +308,46 @@ SELECT * FROM netops.corr_objects
 ORDER BY tenant_id, correlation_id, version DESC
 LIMIT 1 BY tenant_id, correlation_id;
 
+-- #100 hardening: HOT current-state projection — one NARROW row per object so
+-- Command Center list pages read O(active objects), not O(history). NO wide
+-- blob columns (hypotheses/layer_coverage/app_impact) by design; those are
+-- fetched keyed from corr_objects for the picked page only. Maintained by
+-- app-level dual-write from the correlation engine (NOT a materialized view —
+-- row policies break MV inserts). ReplacingMergeTree keyed on created_at:
+-- latest WRITE wins (self-heals the engine-restart version reset). Partitioned
+-- by tenant ONLY — the dedup key (tenant, correlation_id) may not span
+-- partitions or FINAL cannot collapse re-persists.
+CREATE TABLE IF NOT EXISTS netops.corr_current
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    correlation_id   UUID,
+    version          UInt32,
+    state            Enum8('open'=1,'closed'=2,'merged'=3),
+    window_start     DateTime64(3),
+    window_end       DateTime64(3),
+    top_hypothesis   String,
+    top_confidence   Float32,
+    verdict_tier     Enum8('undetermined'=0,'suspected'=1,'confirmed'=2),
+    evidence_missing String DEFAULT '[]',
+    affected         String DEFAULT '[]',
+    signal_count     UInt32,
+    node_count       UInt16,
+    engine_version   LowCardinality(String) DEFAULT '',
+    catalog_version  LowCardinality(String) DEFAULT '',
+    merged_into      Nullable(UUID),
+    created_at       DateTime64(3) DEFAULT now64(3),
+    -- Triage badges, derived by the engine at persist time from the top
+    -- hypothesis verdict — so the hot list path never JSONExtracts the wide
+    -- hypotheses blob (that read alone was ~1.3 GiB/page at storm size).
+    owner            LowCardinality(String) DEFAULT '',
+    plane_count      UInt8 DEFAULT 0,
+    debug_excluded   UInt8 DEFAULT 0,
+    low_authority    UInt8 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY (tenant_id)
+ORDER BY (tenant_id, correlation_id);
+
 -- 2.3 Graph edges. The owner's grounded-edges hard constraint is enforced by the
 -- CHECK constraint, not by non-Nullability alone: ClickHouse silently coerces an
 -- inserted NULL to the column default ('') via input_format_null_as_default, so
@@ -481,5 +521,11 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_edges ON netops.corr_edges
 -- device names/hypotheses and has NO app-layer device narrowing on its read
 -- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_evidence ON netops.corr_evidence
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+-- STRICT (2026-07-02): no untagged-shared clause — correlation intel carries
+-- device names/hypotheses and has NO app-layer device narrowing on its read
+-- paths, so untagged rows are PLATFORM-ONLY (strict tenancy model).
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_current ON netops.corr_current
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;

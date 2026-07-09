@@ -33,14 +33,16 @@ import (
 // principal (chTenantScope); chRowsScope is the request-free form background jobs
 // (the auto-ticketing sweeper, #78 P3) use with an explicit scope.
 func (s *server) chRows(r *http.Request, sql string) ([]map[string]any, error) {
-	return s.chRowsScope(r.Context(), chTenantScope(r), sql)
+	return s.chRowsScope(r.Context(), chTenantScope(r), sql, "api:"+r.URL.Path)
 }
 
 // chRowsScope runs one ClickHouse query at an explicit tenant_scope ("__all__"
 // for cross-tenant background jobs, a tenant id for one tenant, "__none__" to
 // see nothing). The row policies enforce isolation server-side regardless of the
-// caller's SQL — same defense-in-depth as chRows.
-func (s *server) chRowsScope(ctx context.Context, scope, sql string) ([]map[string]any, error) {
+// caller's SQL — same defense-in-depth as chRows. The optional trailing comment
+// stamps system.query_log.log_comment for per-caller read-budget attribution
+// (#100); callers that pass nothing are tagged as generic background work.
+func (s *server) chRowsScope(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
 	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
 	u, err := url.Parse(base)
 	if err != nil {
@@ -48,6 +50,11 @@ func (s *server) chRowsScope(ctx context.Context, scope, sql string) ([]map[stri
 	}
 	q := u.Query()
 	q.Set("tenant_scope", scope)
+	tag := "worker:generic"
+	if len(comment) > 0 && comment[0] != "" {
+		tag = comment[0]
+	}
+	q.Set("log_comment", tag)
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
 	if err != nil {
@@ -133,74 +140,83 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 		}
 		latestConds = append(latestConds, "verdict_tier = '"+tier+"'")
 	}
-	// Filter in an inner query: aliasing toString(created_at) AS created_at in
-	// the same SELECT would shadow the column in WHERE (String vs DateTime →
-	// NO_COMMON_TYPE).
 	// Triage enrichment (left-table badges): edge count + grounding kinds from
-	// corr_edges, and the top hypothesis's verdict coverage (planes / owner /
-	// low-authority / debug-excluded) from the embedded hypotheses JSON. All
-	// read-only and derived from what the engine already persisted.
-	//
-	// Bounded read (2026-07-09 incident): the edges aggregation is scoped to the
-	// picked objects — the previous shape GROUP BY'd the ENTIRE corr_edges table
-	// (771k rows, ~1.5 GiB hash of groupUniqArray strings) to decorate ≤limit
-	// rows, and concurrent Command Center polls pinned ClickHouse.
-	//
-	// Narrow fold (2026-07-09 incident, part 2): the latest-version fold must sort
-	// ONLY key columns. `SELECT *` here pulled the ~5.7KB hypotheses blob through
-	// the ORDER BY over every in-window version row (2.6 GiB per query at 237k
-	// rows → the memory OvercommitTracker killed queries server-wide). Wide
-	// columns are fetched afterwards, keyed by the ≤limit picked (id, version)
-	// pairs, so the sort stays a few MB no matter how large the storm backlog is.
-	const hp = "o.hypotheses,'ranking','hypotheses',1,'verdict'"
-	sql := `
+	// corr_edges; the top hypothesis's verdict coverage (planes / owner /
+	// low-authority / debug-excluded) comes from the projection's narrow badge
+	// columns, written by the engine at persist time. All read-only.
+	proxyClickHouse(w, r, correlationsListSQL(sinceCond, latestConds, limit))
+}
+
+// correlationsListSQL builds the Command Center correlation list query. Pure so
+// bounded_io_test.go can assert its shape stays within the #100 budget rules.
+//
+// Bounded read (2026-07-09 incident): the edges aggregation is scoped to the
+// picked objects — the previous shape GROUP BY'd the ENTIRE corr_edges table
+// (771k rows, ~1.5 GiB hash of groupUniqArray strings) to decorate ≤limit
+// rows, and concurrent Command Center polls pinned ClickHouse.
+//
+// Narrow pick (#100 hardening): the whole page is served from the corr_current
+// HOT projection — one narrow row per object, O(active objects) not O(history),
+// triage badges included as narrow columns so the ~5.7KB hypotheses blob is
+// NEVER read here (JSONExtract'ing it keyed still dragged ~1.3 GiB of blob
+// granules per page at storm size — measured over the 100 MiB endpoint
+// budget). The only history touch is app_impact, a tiny (~84B avg) column
+// fetched keyed by the picked (id, version) pairs. FINAL is cheap by
+// construction (the projection holds only current state); ANY LEFT JOIN
+// guards the app_impact fetch against duplicate (id, version) history rows
+// (engine restarts reset the in-memory version counter, so v1 can exist twice).
+func correlationsListSQL(sinceCond string, latestConds []string, limit int) string {
+	return `
 WITH picked AS (
-     SELECT correlation_id, version, created_at FROM (
-          SELECT tenant_id, correlation_id, version, created_at, state, verdict_tier
-            FROM netops.corr_objects
-           WHERE ` + sinceCond + `
-           ORDER BY tenant_id, correlation_id, version DESC
-           LIMIT 1 BY tenant_id, correlation_id
-     )
-      WHERE ` + strings.Join(latestConds, " AND ") + `
+     SELECT correlation_id, version, created_at
+       FROM netops.corr_current FINAL
+      WHERE ` + sinceCond + `
+        AND ` + strings.Join(latestConds, " AND ") + `
       ORDER BY created_at DESC
       LIMIT ` + intToString(limit) + `
 )
-SELECT toString(o.correlation_id)  AS correlation_id,
-       o.version                    AS version,
-       o.state                      AS state,
-       toString(o.window_start)     AS window_start,
-       toString(o.window_end)       AS window_end,
-       o.top_hypothesis             AS top_hypothesis,
-       o.top_confidence             AS top_confidence,
-       o.verdict_tier               AS verdict_tier,
-       o.evidence_missing           AS evidence_missing,
-       o.affected                   AS affected,
-       o.app_impact                 AS app_impact,
-       o.signal_count               AS signal_count,
-       o.node_count                 AS node_count,
-       o.engine_version             AS engine_version,
-       o.catalog_version            AS catalog_version,
-       toString(o.created_at)       AS created_at,
+SELECT toString(c.correlation_id)  AS correlation_id,
+       c.version                    AS version,
+       c.state                      AS state,
+       toString(c.window_start)     AS window_start,
+       toString(c.window_end)       AS window_end,
+       c.top_hypothesis             AS top_hypothesis,
+       c.top_confidence             AS top_confidence,
+       c.verdict_tier               AS verdict_tier,
+       c.evidence_missing           AS evidence_missing,
+       c.affected                   AS affected,
+       coalesce(a.app_impact, '{}') AS app_impact,
+       c.signal_count               AS signal_count,
+       c.node_count                 AS node_count,
+       c.engine_version             AS engine_version,
+       c.catalog_version            AS catalog_version,
+       toString(c.created_at)       AS created_at,
        coalesce(e.edge_count, 0)    AS edge_count,
        coalesce(e.grounding, 'none') AS grounding,
-       length(JSONExtract(` + hp + `,'modality_coverage','Array(String)'))           AS plane_count,
-       JSONExtractString(` + hp + `,'owner')                                          AS owner,
-       length(JSONExtract(` + hp + `,'excluded_debug_probes','Array(String)')) > 0    AS debug_excluded,
-       length(JSONExtract(` + hp + `,'low_authority_probe_scopes','Array(String)')) > 0 AS low_authority
-  FROM netops.corr_objects AS o
+       c.plane_count                AS plane_count,
+       c.owner                      AS owner,
+       c.debug_excluded > 0         AS debug_excluded,
+       c.low_authority > 0          AS low_authority
+  FROM netops.corr_current AS c FINAL
   LEFT JOIN (
        SELECT correlation_id, version, count() AS edge_count,
               arrayStringConcat(arraySort(groupUniqArray(grounding_kind)), '+') AS grounding
          FROM netops.corr_edges
         WHERE (correlation_id, version) IN (SELECT correlation_id, version FROM picked)
         GROUP BY correlation_id, version
-  ) AS e ON e.correlation_id = o.correlation_id AND e.version = o.version
- WHERE o.` + sinceCond + `
-   AND (o.correlation_id, o.version) IN (SELECT correlation_id, version FROM picked)
- ORDER BY o.created_at DESC
+  ) AS e ON e.correlation_id = c.correlation_id AND e.version = c.version
+  ANY LEFT JOIN (
+       SELECT correlation_id, version, app_impact
+         FROM netops.corr_objects
+        WHERE ` + sinceCond + `
+          AND (correlation_id, version) IN (SELECT correlation_id, version FROM picked)
+  ) AS a ON a.correlation_id = c.correlation_id AND a.version = c.version
+ WHERE (c.correlation_id, c.version) IN (SELECT correlation_id, version FROM picked)
+ ORDER BY c.created_at DESC
  FORMAT JSON`
-	proxyClickHouse(w, r, sql)
+	// NOTE: ORDER BY must qualify c.created_at — the SELECT aliases
+	// toString(c.created_at) AS created_at, and a bare created_at would hit
+	// the String alias, ordering lexically instead of temporally.
 }
 
 // handleCorrelationStats serves GET /api/correlations/stats — the cheap CH
@@ -230,7 +246,7 @@ SELECT countIf(state='open')                                          AS open,
        countIf(created_at >= now() - INTERVAL ` + win + ` SECOND AND verdict_tier='confirmed') AS confirmed_window,
        uniqExactIf(top_hypothesis, top_hypothesis != 'undetermined'
                    AND created_at >= now() - INTERVAL ` + win + ` SECOND)                       AS signatures_seen
-  FROM netops.corr_objects_latest
+  FROM netops.corr_current FINAL
  FORMAT JSON`
 	rows, err := s.chRows(r, sql)
 	if err != nil {

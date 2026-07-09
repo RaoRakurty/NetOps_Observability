@@ -526,10 +526,53 @@ def _prune_buffer(now: datetime) -> None:
         WINDOW_BUFFER.popleft()
 
 
+# Column subset of to_object_row that feeds the HOT current-state projection
+# (netops.corr_current, #100 hardening). Deliberately NO wide blobs — the
+# projection exists so Command Center list reads never touch hypotheses/
+# layer_coverage/app_impact except keyed by a picked page.
+CORR_CURRENT_FIELDS = (
+    "tenant_id", "correlation_id", "version", "state", "window_start",
+    "window_end", "top_hypothesis", "top_confidence", "verdict_tier",
+    "evidence_missing", "affected", "signal_count", "node_count",
+    "engine_version", "catalog_version", "merged_into",
+)
+
+
+def _current_badges(hypotheses_blob: str) -> dict:
+    """Narrow triage-badge columns for corr_current, derived from the SAME
+    hypotheses JSON the history row persists — semantically identical to the
+    read-time JSONExtracts they replace, computed once per (damped) persist so
+    the hot list path never reads the ~5.7KB blob column (#100 completion:
+    that read alone was ~1.3 GiB of blob granules per page at storm size)."""
+    try:
+        ranked = json.loads(hypotheses_blob).get("ranking", {}).get("hypotheses") or [{}]
+        verdict = ranked[0].get("verdict") or {}
+    except (ValueError, AttributeError, IndexError, TypeError):
+        verdict = {}
+    return {
+        "owner": str(verdict.get("owner") or ""),
+        "plane_count": len(verdict.get("modality_coverage") or []),
+        "debug_excluded": 1 if verdict.get("excluded_debug_probes") else 0,
+        "low_authority": 1 if verdict.get("low_authority_probe_scopes") else 0,
+    }
+
+
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: list[Signal], merged_into: str = "") -> None:
     assert ch is not None
-    await ch.insert("netops.corr_objects", [snap.to_object_row(version, state, merged_into)])
+    obj_row = snap.to_object_row(version, state, merged_into)
+    await ch.insert("netops.corr_objects", [obj_row])
+    # Dual-write the narrow current-state row (app-level, NOT an MV — row
+    # policies break MV inserts). ReplacingMergeTree(created_at) keeps the
+    # latest write per (tenant, correlation_id). Projection failure must never
+    # block the history write (truth); it self-heals on the next persist.
+    try:
+        current_row = {k: obj_row[k] for k in CORR_CURRENT_FIELDS if k in obj_row}
+        current_row.update(_current_badges(obj_row.get("hypotheses", "")))
+        await ch.insert("netops.corr_current", [current_row])
+    except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
+        log.warning("corr_current projection write failed for %s v%d: %s",
+                    snap.correlation_id[:8], version, exc)
     edge_rows = snap.to_edge_rows(version)
     if edge_rows:
         await ch.insert("netops.corr_edges", edge_rows)

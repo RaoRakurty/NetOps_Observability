@@ -715,6 +715,43 @@ groups:
 
   # ----------------------------------------------------------------------------
   # Correlation-engine ingest health (#99 R6) — silent ingestion failures page.
+  # ----------------------------------------------------------------------------
+  # #100 ClickHouse bounded-IO guardrails (2026-07-09 incident). CH counters come
+  # from ClickHouse's native prometheus exporter (:9363, vmscrape job
+  # 'clickhouse'); corr_versions from the correlation /metrics exposition.
+  # ----------------------------------------------------------------------------
+  - name: noc-ch-bounded-io
+    interval: 60s
+    rules:
+      - alert: CHQueryMemoryKilled
+        # The 2 GiB per-query cap (query-spill.xml) fired — some query regressed
+        # toward the incident shape (wide blob through a fold / whole-table
+        # decorate). One kill = investigate; run scripts/ch-query-budget-check.sh
+        # to attribute it by log_comment (api:<endpoint> / worker:*).
+        expr: increase(ClickHouseProfileEvents_QueryMemoryLimitExceeded[10m]) > 0
+        labels: { severity: critical, layer: clickhouse }
+        annotations:
+          summary: "ClickHouse memory-killed {{ $value }} quer(ies) in 10m — a read regressed toward the #100 incident shape; attribute via ch-query-budget-check.sh"
+
+      - alert: CHFailedQueriesRising
+        expr: increase(ClickHouseProfileEvents_FailedQuery[15m]) > 25
+        for: 10m
+        labels: { severity: warning, layer: clickhouse }
+        annotations:
+          summary: "ClickHouse failing {{ $value }} queries/15m — check system.query_log exceptions (read paths or ingest)"
+
+      - alert: CorrVersionChurnUndamped
+        # Sustained persists with ZERO damping means the material-hash gate
+        # stopped suppressing storm churn (regression or heartbeat misconfig) —
+        # corr_objects growth is heading back to the pre-#100 30x rate.
+        expr: >
+          increase(corr_versions{outcome="persisted"}[30m]) > 60
+          and increase(corr_versions{outcome="damped"}[30m]) == 0
+        for: 15m
+        labels: { severity: warning, layer: correlation }
+        annotations:
+          summary: "Correlation persisting {{ $value }} versions/30m with ZERO damped writes — the #100 write damper is not suppressing storm churn"
+
   # Counters come from the correlation /metrics exposition (vmscrape job
   # 'correlation'); they are monotonic per process, so increase()/rate() are safe
   # across restarts.

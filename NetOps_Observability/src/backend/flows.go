@@ -612,6 +612,11 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	}
 	q := u.Query()
 	q.Set("tenant_scope", chTenantScope(r))
+	// #100 hardening: stamp the issuing endpoint into system.query_log.log_comment
+	// so per-endpoint read budgets are enforceable operationally (see
+	// scripts/ch-query-budget-check.sh) instead of reverse-engineered from
+	// normalized query hashes during an incident.
+	q.Set("log_comment", "api:"+r.URL.Path)
 	u.RawQuery = q.Encode()
 	user := envOr("CLICKHOUSE_USER", "netops")
 	pass := envOr("CLICKHOUSE_PASSWORD", "")

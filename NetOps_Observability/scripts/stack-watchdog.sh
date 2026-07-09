@@ -97,6 +97,21 @@ if [ -n "$disk_pct" ] && [ "$disk_pct" -ge "${DISK_WARN_PCT:-85}" ]; then
     problems+=("disk ${disk_pct}% (warn ${DISK_WARN_PCT:-85}%; OpenSearch flood-stage read-only at 95%)")
 fi
 
+# Docker-hygiene cron health (#100 contributing noise): the weekly prune cron
+# silently failed for days (lost exec bit → 'Permission denied' in its log) and
+# the resulting debris drove the disk warning DURING the incident, muddying
+# diagnosis. Fail loudly instead: the hygiene log must exist, be fresher than
+# ~8 days (weekly cron + slack), and its last run must not be an error.
+hyg_log="$(dirname "${BASH_SOURCE[0]}")/docker-hygiene.log"
+if [ -f "$hyg_log" ]; then
+  hyg_age_days=$(( ($(date +%s) - $(stat -c %Y "$hyg_log" 2>/dev/null || echo 0)) / 86400 ))
+  if [ "$hyg_age_days" -gt "${HYGIENE_MAX_AGE_DAYS:-8}" ]; then
+    problems+=("docker-hygiene cron stale: log ${hyg_age_days}d old (weekly cron dead? check crontab + exec bit)")
+  elif tail -3 "$hyg_log" 2>/dev/null | grep -qiE 'permission denied|not found|cannot'; then
+    problems+=("docker-hygiene cron failing: $(tail -1 "$hyg_log" | cut -c1-80)")
+  fi
+fi
+
 # Ingestion liveness — a pipeline that stops silently is invisible until someone
 # looks at an empty dashboard. Container logs (applogs) flow continuously, so
 # zero docs in the recent window means the log bus stalled (disk block, dead

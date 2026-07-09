@@ -57,9 +57,11 @@ func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f rel
 	// Qualify with a table alias so WHERE references the real DateTime64 column, not
 	// the toString() SELECT alias of the same name (which would be String → type
 	// mismatch — the same gotcha handleCorrelations documents).
-	// Extract owner server-side (JSONExtractString) instead of pulling the whole
-	// hypotheses blob per object — at 5000 objects the blobs would blow past chRows'
-	// 8 MB read cap and truncate the JSON.
+	// Reads the corr_current hot projection (#100): owner is a narrow engine-derived
+	// column there, so this path never touches the hypotheses blob. The previous
+	// shape — JSONExtractString(hypotheses) through corr_objects_latest — dragged
+	// the ~5.7KB blob through the view's LIMIT 1 BY fold and memory-killed at
+	// storm size.
 	sql := `
 SELECT toString(o.correlation_id) AS correlation_id,
        toString(o.window_start)   AS window_start,
@@ -70,8 +72,8 @@ SELECT toString(o.correlation_id) AS correlation_id,
        o.evidence_missing         AS evidence_missing,
        o.affected                 AS affected,
        o.state                    AS state,
-       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner') AS owner
-  FROM netops.corr_objects_latest AS o
+       o.owner                    AS owner
+  FROM netops.corr_current AS o FINAL
  WHERE o.window_start >= now() - INTERVAL ` + intToString(sinceSeconds) + ` SECOND
  ORDER BY o.window_start ASC
  LIMIT 5000

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -37,6 +39,14 @@ func TestCorrSchemaIdempotent(t *testing.T) {
 		if strings.Contains(s, "CREATE OR REPLACE") {
 			continue
 		}
+		// The corr_current backfill INSERT is idempotent by construction: its
+		// NOT IN predicate makes any re-run a no-op (#100 hardening).
+		if strings.Contains(s, "INSERT INTO netops.corr_current") {
+			if !strings.Contains(s, "NOT IN") {
+				t.Errorf("corr_current backfill must be idempotent via NOT IN: %.80s", s)
+			}
+			continue
+		}
 		if !strings.Contains(s, "IF NOT EXISTS") {
 			t.Errorf("statement not idempotent (missing IF NOT EXISTS): %.80s", s)
 		}
@@ -61,10 +71,37 @@ func TestCorrSchemaTenantPartitioned(t *testing.T) {
 
 func TestCorrSchemaRowPoliciesCoverAllTables(t *testing.T) {
 	all := strings.Join(corrSchemaDDL(), "\n")
-	for _, table := range []string{"corr_signals", "corr_signals_archive", "corr_objects", "corr_edges", "corr_evidence"} {
+	for _, table := range []string{"corr_signals", "corr_signals_archive", "corr_objects", "corr_edges", "corr_evidence", "corr_current"} {
 		if !strings.Contains(all, "tenant_iso_"+table) {
 			t.Errorf("missing row policy for %s", table)
 		}
+	}
+}
+
+// #100 hardening freeze: corr_current is the HOT current-state projection.
+// Its whole reason to exist is bounded reads — one narrow row per object.
+func TestCorrCurrentIsNarrowAndReplacing(t *testing.T) {
+	s := corrStmt(t, "corr_current")
+	// Wide blob columns are BANNED here: a list page must never be able to drag
+	// them through a scan. They live in corr_objects and are fetched keyed.
+	for _, banned := range []string{"hypotheses", "layer_coverage", "app_impact"} {
+		if strings.Contains(s, banned) {
+			t.Errorf("corr_current: wide column %q is banned from the hot projection", banned)
+		}
+	}
+	// Latest WRITE wins (created_at), not highest version: in-memory versions
+	// reset to 1 on an engine restart, and a version-keyed fold would resurrect
+	// the stale pre-restart row.
+	if !strings.Contains(s, "ReplacingMergeTree(created_at)") {
+		t.Error("corr_current: must be ReplacingMergeTree keyed on created_at")
+	}
+	// The dedup key (tenant_id, correlation_id) must never span partitions or
+	// FINAL cannot collapse re-persists of the same object — tenant-only.
+	if !strings.Contains(s, "PARTITION BY (tenant_id)") {
+		t.Error("corr_current: must be partitioned by tenant_id ONLY (dedup key may not span partitions)")
+	}
+	if !strings.Contains(s, "ORDER BY (tenant_id, correlation_id)") {
+		t.Error("corr_current: ORDER BY must be (tenant_id, correlation_id)")
 	}
 }
 
@@ -166,6 +203,40 @@ func TestCorrEdgesGroundedByConstruction(t *testing.T) {
 	}
 	if !strings.Contains(s, "CONSTRAINT grounding_ref_nonempty CHECK grounding_ref != ''") {
 		t.Error("corr_edges: CHECK grounding_ref != '' missing — non-Nullable alone does not reject NULL inserts")
+	}
+}
+
+// TestCorrSignalEnumsConsistent — 2026-07-09 outage guard. Every Enum8
+// definition for a signal-spine column must be IDENTICAL everywhere it appears:
+// the Go CREATEs, the Go converge ALTERs, and init.sql's fresh-install blocks.
+// When a new signal class lands in one place only, live tables drift ahead of
+// the code's ALTER; ClickHouse then refuses the (now value-dropping) ALTER on a
+// key column on every boot, and the converge list stalls behind it — this is
+// exactly how corr_current failed to be created ('controller'=11 existed live
+// and in init.sql, but not in the corrSchemaDDL ALTER).
+func TestCorrSignalEnumsConsistent(t *testing.T) {
+	initSQL, err := os.ReadFile("../../deployment/docker/clickhouse/init.sql")
+	if err != nil {
+		t.Fatalf("read init.sql: %v", err)
+	}
+	goDDL := strings.Join(corrSchemaDDL(), "\n")
+	norm := regexp.MustCompile(`\s+`)
+	for _, col := range []string{"source", "observer_type", "entity_type", "modality_class"} {
+		// Multi-line bodies are fine: enum bodies contain no ')'.
+		re := regexp.MustCompile(col + `\s+Enum8\(([^)]*)\)`)
+		defs := map[string][]string{}
+		for src, text := range map[string]string{"corr_schema.go": goDDL, "init.sql": string(initSQL)} {
+			for _, m := range re.FindAllStringSubmatch(text, -1) {
+				body := norm.ReplaceAllString(m[1], "")
+				defs[body] = append(defs[body], src)
+			}
+		}
+		if len(defs) == 0 {
+			t.Errorf("%s: no Enum8 definition found in either source", col)
+		}
+		if len(defs) > 1 {
+			t.Errorf("%s: enum definitions diverge across corr_schema.go/init.sql (stale converge ALTER breaks every boot): %v", col, defs)
+		}
 	}
 }
 

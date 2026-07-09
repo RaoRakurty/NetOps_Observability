@@ -61,6 +61,7 @@ func chWorkerQuery(ctx context.Context, sql string) ([]map[string]any, error) {
 	}
 	q := u.Query()
 	q.Set("tenant_scope", "__all__")
+	q.Set("log_comment", "worker:cross-tenant") // #100 read-budget attribution
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(sql))
 	if err != nil {
