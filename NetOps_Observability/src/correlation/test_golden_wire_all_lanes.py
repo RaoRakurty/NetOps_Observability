@@ -6,7 +6,7 @@ hold: correct semantic kind, entity grounding, modality class, and tenancy —
 so a raw-boundary regression in ANY lane breaks CI, not just the three lanes
 (#98) that had golden coverage before.
 """
-from golden_wire import load_fixture, replay_fixture_through_engine
+from golden_wire import replay_fixture_through_engine
 from producers import EMITTED_KINDS
 from signals import EntityType, ModalityClass
 

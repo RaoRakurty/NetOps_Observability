@@ -16,7 +16,6 @@ from catalog import builtin_catalog
 from coverage import (
     COLLECTION_PENDING,
     INTENTIONAL_BLIND,
-    INTENTIONAL_BLIND_KINDS,
     KNOWN_PENDING,
     NORMALIZATION_PENDING,
     _NORM_FIELDS,

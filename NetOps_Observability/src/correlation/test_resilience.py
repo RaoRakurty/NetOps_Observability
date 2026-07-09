@@ -2,6 +2,7 @@
 working memory must stay bounded and correct under a signal flood and at-least-once
 Kafka redelivery — no unbounded growth, no silently-dropped fresh signals."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -131,8 +132,6 @@ def test_low_authority_probe_still_buffers():
 # cycle grew corr_objects without bound (the 2026-07-09 read-path incident's
 # write side). The engine_cycle persistence gate must write only on material
 # change, heartbeat, or lifecycle transition.
-
-import asyncio
 
 
 class _StubCH:
