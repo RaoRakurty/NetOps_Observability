@@ -291,7 +291,6 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
      over the base gradient; an inset top highlight reads as a light edge. */
   background:
     linear-gradient(180deg, var(--rail-sheen) 0%, transparent 16%),
-    linear-gradient(125deg, rgba(255,255,255,0.05) 0%, transparent 32%),
     radial-gradient(120% 55% at 50% -8%, var(--rail-glass) 0%, transparent 62%),
     linear-gradient(180deg, var(--rail-bg) 0%, var(--rail-bg-2) 100%);
   border-right: 1px solid var(--rail-border);
@@ -353,28 +352,102 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* ===== Icon-only rail (Dynatrace/ThousandEyes-style) =====
-   Colourful per-section icons (always lit, not just on hover/active); the label
-   "appears on hover" via the existing flyout (section name + children) + a native
-   title tooltip. Narrow 64px rail; everything centers. Scoped to .shell-v2 so
-   these win the cascade over the labelled-rail defaults above. */
-.shell.shell-v2 { --sidebar-w: 64px; }
+/* ===== Icon-only rail — a slim pane of smoked glass =====
+   Colourful per-section icons (always lit); the label "appears on hover" via
+   the existing flyout + a native title tooltip. 52px pane; everything centers.
+   The signature is ONE luminous vertical light seam where the glass meets the
+   canvas, and active items that glow like backlit keys. Every effect derives
+   from the --rail-* tokens (+ color-mix), so the chrome presets and signature
+   themes restyle it without per-theme rules. Scoped to .shell-v2 so these win
+   the cascade over the labelled-rail defaults above. */
+.shell.shell-v2 { --sidebar-w: 52px; }
 .shell-v2 .rail-icon { color: var(--mod, var(--rail-accent)); width: 22px; }
 /* bolder stroke so the colourful glyphs read crisply at rail size */
 .shell-v2 .rail-icon svg, .shell-v2 .rail-brand-mark svg, .shell-v2 .rail-util-icon svg { stroke-width: 2; }
-.shell-v2 .rail-item { justify-content: center; padding: 8px 0; gap: 0; min-height: 38px; border-radius: var(--r-2); margin: 0 7px; width: auto; }
-.shell-v2 .rail-item:hover { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 20%, transparent); }
-.shell-v2 .rail-item.active { background: color-mix(in srgb, var(--mod, var(--rail-accent)) 16%, transparent); }
+/* The light seam — brightest at the head, dissolving down the pane. Sits on
+   the rail's right edge (over the structural hairline border). */
+.shell-v2 .rail::after {
+  content: ""; position: absolute; top: 0; bottom: 0; right: -1px; width: 1px;
+  pointer-events: none;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--rail-accent) 55%, transparent) 14%,
+    color-mix(in srgb, var(--rail-accent) 14%, transparent) 52%,
+    transparent 96%);
+}
+/* One diagonal reflection streak across the glass (kept faint on purpose). */
+.shell-v2 .rail::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(115deg, transparent 6%, var(--rail-sheen) 18%, transparent 30%);
+}
+/* Backlit keys: 36px squircles, luminous ring + soft glow when active. */
+.shell-v2 .rail-item {
+  justify-content: center; padding: 0; gap: 0;
+  width: 36px; min-height: 36px; margin: 0 auto; border-radius: 10px;
+  transition: background 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+.shell-v2 .rail-item:hover {
+  background: color-mix(in srgb, var(--mod, var(--rail-accent)) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mod, var(--rail-accent)) 28%, transparent);
+}
+.shell-v2 .rail-item.active {
+  background: color-mix(in srgb, var(--mod, var(--rail-accent)) 16%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--mod, var(--rail-accent)) 42%, transparent),
+    0 0 14px color-mix(in srgb, var(--mod, var(--rail-accent)) 28%, transparent);
+}
+/* The luminous pill IS the active indicator — retire the legacy left bar. */
+.shell-v2 .rail-item.active::before { display: none; }
 .shell-v2 .rail-label, .shell-v2 .rail-group-label, .shell-v2 .rail-brand-name,
 .shell-v2 .rail-account-id, .shell-v2 .rail-util-icon span { display: none; }
 .shell-v2 .rail-main { padding: var(--sp-1) 0; }
 .shell-v2 .rail-group { align-items: center; }
-.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 2px 0 var(--sp-2); }
+/* Zone dividers become short centered fades — etched marks in the glass, not
+   full-width rules (those read as frames and widen the pane visually). */
+.shell-v2 .rail-group + .rail-group,
+.shell-v2 .rail-foot-zone + .rail-foot-zone { border-top: 0; position: relative; }
+.shell-v2 .rail-group + .rail-group { margin-top: 7px; padding-top: 7px; }
+.shell-v2 .rail-group + .rail-group::before,
+.shell-v2 .rail-foot-zone + .rail-foot-zone::before {
+  content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 22px; height: 1px;
+  background: linear-gradient(90deg, transparent,
+    color-mix(in srgb, var(--rail-fg) 30%, transparent), transparent);
+}
+.shell-v2 .rail-util { border-top: 0; position: relative; }
+.shell-v2 .rail-util::before {
+  content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 22px; height: 1px;
+  background: linear-gradient(90deg, transparent,
+    color-mix(in srgb, var(--rail-fg) 30%, transparent), transparent);
+}
+/* Brand head — quiet halo behind the glyph; same etched-fade divider. */
+.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 2px 0 var(--sp-2); border-bottom: 0; position: relative; }
+.shell-v2 .rail-brand::after {
+  content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 22px; height: 1px;
+  background: linear-gradient(90deg, transparent,
+    color-mix(in srgb, var(--rail-fg) 30%, transparent), transparent);
+}
+.shell-v2 .rail-brand-mark { position: relative; }
+.shell-v2 .rail-brand-mark::before {
+  content: ""; position: absolute; inset: -9px; border-radius: 50%;
+  background: radial-gradient(circle, var(--rail-glass), transparent 70%);
+  pointer-events: none;
+}
 .shell-v2 .rail-util { padding: var(--sp-1) 0; align-items: center; }
 .shell-v2 .rail-util-row { justify-content: center; }
 .shell-v2 .rail-util-icon { flex-direction: column; }
 .shell-v2 .rail-account, .shell-v2 .rail-foot-zone { align-items: center; }
 .shell-v2 .rail-account-btn { justify-content: center; gap: 0; padding: 6px 0; }
+.shell-v2 .rail-account-btn .avatar {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--rail-accent) 45%, transparent),
+    0 0 10px color-mix(in srgb, var(--rail-accent) 20%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell-v2 .rail-item { transition: none; }
+}
 
 /* Utility cluster at the foot — Support · Help · Account (replaces top-right). */
 .rail-util {
@@ -2944,6 +3017,25 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .login-scene-toggle button.on { background: rgba(148, 183, 255, 0.18); color: var(--fg); }
 .login-scene-toggle button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
 
+/* Topbar appearance knob — the login pill's twin, sized for the chrome bar
+   and coloured from the rail tokens so it sits on the glass in every theme. */
+.mode-toggle {
+  display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
+  background: color-mix(in srgb, var(--rail-bg) 55%, transparent);
+  border: 1px solid var(--rail-border);
+}
+.mode-toggle button {
+  border: 0; background: transparent; color: var(--rail-fg-muted); cursor: pointer;
+  font-family: "Space Grotesk", var(--font-sans, sans-serif);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px; transition: color .12s ease, background .12s ease;
+}
+.mode-toggle button.on {
+  background: color-mix(in srgb, var(--rail-accent) 22%, transparent);
+  color: var(--rail-fg);
+}
+.mode-toggle button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+
 /* --- Light version — the calm white scene, selectable via the toggle. The
    sign-in box stays transparent glass here too (no return to opaque white). */
 .login-scene.login-light {
@@ -4543,6 +4635,30 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 
 /* The embedded docs portal fills the rest of the panel. */
 .help-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--panel-solid); }
+
+/* Scope badge — states the acting principal's reach (platform · Global vs one
+   tenant). Token-styled pill; the global variant carries the accent ring. */
+.scope-badge {
+  display: inline-flex; align-items: center; margin-left: var(--sp-2);
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--fg-muted); background: var(--surface-2);
+  border: 1px solid var(--border); white-space: nowrap;
+}
+.scope-badge-global {
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent-bright) 35%, transparent);
+}
+.menu-head .scope-badge { display: inline-flex; margin: 4px 0 0; }
+/* Administration pages: acting-scope strip pinned at the top-right. */
+.admin-scope-strip { display: flex; justify-content: flex-end; margin: 0 0 var(--sp-2); }
+
+/* Support placeholder modal (portal not live yet) — plain stack, token-styled. */
+.support-placeholder { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 400px; }
+.support-placeholder p { margin: 0; color: var(--fg-muted); }
+.support-placeholder p:first-child { color: inherit; }
+.support-placeholder .dash-btn { align-self: flex-start; }
 
 @media (max-width: 720px) {
   .help-panel { width: calc(100vw - var(--sidebar-w, 64px)); }

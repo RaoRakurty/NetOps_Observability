@@ -40,7 +40,7 @@ const KIND_LABEL: Record<Cmd["kind"], string> = {
 
 export default function CommandPalette({ nav }: { nav: NavSection[] }) {
   const { navigate, setQuery, setCopilotOpen } = useShell();
-  const { theme, setTheme, density, setDensity } = usePrefs();
+  const { appearance, setAppearance, density, setDensity } = usePrefs();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -112,9 +112,9 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
       {
         id: "act:theme",
         kind: "action",
-        title: `Switch to ${theme === "dark" ? "light" : "dark"} theme`,
+        title: `Switch to ${appearance === "dark" ? "light" : "dark"} theme`,
         sub: "Appearance",
-        run: () => setTheme(theme === "dark" ? "light" : "dark"),
+        run: () => setAppearance(appearance === "dark" ? "light" : "dark"),
       },
       {
         id: "act:density",
@@ -136,7 +136,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
     ];
     return [...navCmds, ...actions];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme, density, nav]);
+  }, [appearance, density, nav]);
 
   // Combine: filtered static commands + live search results.
   const cmds = useMemo<Cmd[]>(() => {

@@ -247,32 +247,6 @@ export const NAV: NavSection[] = [
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
     ],
   },
-  // Explain (L3) — the access-reasoning layer: who can reach what, and WHY.
-  {
-    id: "explain",
-    label: "Explain",
-    icon: "key", // access-reasoning layer (Access Explorer) — a key reads as "access", not another chart
-    children: [
-      { id: "access", label: "Access Explorer", render: () => <AccessExplorer /> },
-    ],
-  },
-  // Stack — the platform's OWN infra plumbing + raw-backend tools, grouped into
-  // one section instead of being scattered in Administration. Platform-owner only
-  // (tenant admins manage their tenant, never the stack); the backend enforces it
-  // independently (/api/stack/health 403, nginx auth_request on /search, etc.).
-  {
-    id: "stack",
-    label: "Stack",
-    icon: "stack",
-    platformOnly: true,
-    children: [
-      { id: "health", label: "Stack Health", render: () => <StackHealth /> },
-      { id: "grafana", label: "Self-Monitoring", requiresGrafana: true, render: () => <GrafanaTab /> },
-      { id: "opensearch", label: "OpenSearch", render: () => <SearchDashboardsTab /> },
-      // Developer — power-user, API-first tooling.
-      { id: "graphql", label: "GraphQL Explorer", group: "Developer", render: () => <GraphQLExplorer /> },
-    ],
-  },
   {
     id: "copilot",
     label: AI_NAME,
@@ -286,7 +260,7 @@ export const NAV: NavSection[] = [
   {
     id: "admin",
     label: "Administration",
-    icon: "settings",
+    icon: "sliders",
     footer: true,
     children: [
       { id: "settings", label: "Settings", render: () => <Settings /> },
@@ -303,8 +277,19 @@ export const NAV: NavSection[] = [
       // Security — authentication providers, live sessions and the audit trail,
       // grouped at the same level as Data Collection.
       { id: "auth", label: "Authentication", group: "Security", render: () => <AuthenticationAdmin /> },
+      // Access Explorer — the access-reasoning layer (who can reach what, and
+      // WHY). Lives beside Authentication (was its own "Explain" rail section).
+      { id: "access", label: "Access Explorer", group: "Security", render: () => <AccessExplorer /> },
       { id: "sessions", label: "Sessions", group: "Security", platformOnly: true, render: () => <SessionsAdmin /> },
       { id: "audit", label: "Audit Log", group: "Security", render: () => <AuditLog /> },
+      // Stack — the platform's OWN infra plumbing + raw-backend tools (was its
+      // own rail section). Platform-owner only, leaf-stamped since the section
+      // flag is gone; the backend enforces it independently (/api/stack/health
+      // 403, nginx auth_request on /search, etc.).
+      { id: "health", label: "Stack Health", group: "Stack", platformOnly: true, render: () => <StackHealth /> },
+      { id: "grafana", label: "Self-Monitoring", group: "Stack", platformOnly: true, requiresGrafana: true, render: () => <GrafanaTab /> },
+      { id: "opensearch", label: "OpenSearch", group: "Stack", platformOnly: true, render: () => <SearchDashboardsTab /> },
+      { id: "graphql", label: "GraphQL Explorer", group: "Stack", platformOnly: true, render: () => <GraphQLExplorer /> },
       {
         id: "api", label: "API Access", render: () => <ApiAccessAdmin />,
         subItems: [
@@ -344,9 +329,23 @@ export function filteredNav(platformAdmin: boolean, grafanaEnabled = true): NavS
 // Parse "#/section/leaf" into the section + active leaf, with fallbacks. The nav
 // defaults to the full tree; pass a filtered tree to keep hidden routes
 // unreachable via the hash (they fall back to the first visible entry).
-export function resolveRoute(hash: string, nav: NavSection[] = NAV): Resolved {
+// Legacy route aliases — the Explain + Stack rail sections were dissolved into
+// Administration (2026-07-10); bookmarks/deep links to the old sections must
+// keep landing on the moved pages instead of silently falling back to home.
+// Leaf ids were preserved in the move, so old section → admin is enough.
+const LEGACY_SECTION_ALIAS: Record<string, string> = { explain: "admin", stack: "admin" };
+function canonicalPath(hash: string): [string, string | undefined] {
   const path = hash.replace(/^#\/?/, "").split("?")[0]; // drop ?query (deep-link params)
   const [sectionId, leafId] = path.split("/");
+  const aliased = LEGACY_SECTION_ALIAS[sectionId];
+  // Old bare "#/explain" had a single leaf; map it to its moved page explicitly.
+  if (aliased && sectionId === "explain" && !leafId) return [aliased, "access"];
+  if (aliased && sectionId === "stack" && !leafId) return [aliased, "health"];
+  return [aliased ?? sectionId, leafId];
+}
+
+export function resolveRoute(hash: string, nav: NavSection[] = NAV): Resolved {
+  const [sectionId, leafId] = canonicalPath(hash);
   const section = nav.find((s) => s.id === sectionId) ?? nav[0];
   if (!section.children) return { section };
   const leaf = section.children.find((l) => l.id === leafId) ?? section.children[0];
@@ -359,8 +358,9 @@ export function resolveRoute(hash: string, nav: NavSection[] = NAV): Resolved {
 // configured default landing only when it's valid for this user; otherwise the app
 // keeps its built-in home. (resolveRoute never reports "not found", so we compare.)
 export function landingResolves(hash: string, nav: NavSection[] = NAV): boolean {
-  const path = hash.replace(/^#\/?/, "").split("?")[0];
-  const [sectionId, leafId] = path.split("/");
+  // Compare against the CANONICAL path so a landing saved before the Explain/
+  // Stack → Administration move keeps validating (it resolves to the moved leaf).
+  const [sectionId, leafId] = canonicalPath(hash);
   if (!sectionId) return false;
   const r = resolveRoute(hash, nav);
   if (r.section.id !== sectionId) return false;

@@ -4,7 +4,7 @@
 // home rather than trap the user.
 
 import { describe, it, expect } from "vitest";
-import { landingResolves, filteredNav } from "./nav";
+import { landingResolves, filteredNav, resolveRoute } from "./nav";
 
 describe("landingResolves", () => {
   const nav = filteredNav(true); // platform admin sees the full tree
@@ -34,5 +34,54 @@ describe("landingResolves", () => {
     // user — proving the gate respects the principal's filtered nav.
     const adminOnly = "#/incident/overview"; // exists for both — sanity it still works
     expect(landingResolves(adminOnly, tenantNav)).toBe(true);
+  });
+});
+
+// The Explain + Stack rail sections were dissolved into Administration
+// (2026-07-10). Old bookmarks/deep links + saved landings must keep resolving
+// to the moved pages, and the platform-only Stack pages must stay invisible to
+// tenant-scoped users after losing their section-level gate.
+describe("Explain/Stack → Administration move", () => {
+  const adminNav = filteredNav(true);
+
+  it("aliases legacy explain/stack routes to the moved admin leaves", () => {
+    expect(resolveRoute("#/explain/access", adminNav)).toMatchObject({
+      section: { id: "admin" },
+      leaf: { id: "access" },
+    });
+    for (const leaf of ["health", "grafana", "opensearch", "graphql"]) {
+      expect(resolveRoute(`#/stack/${leaf}`, adminNav)).toMatchObject({
+        section: { id: "admin" },
+        leaf: { id: leaf },
+      });
+    }
+    // Bare legacy section hashes land on their old first page, not admin's.
+    expect(resolveRoute("#/explain", adminNav).leaf?.id).toBe("access");
+    expect(resolveRoute("#/stack", adminNav).leaf?.id).toBe("health");
+  });
+
+  it("keeps a saved legacy landing valid instead of falling back home", () => {
+    expect(landingResolves("#/stack/health", adminNav)).toBe(true);
+    expect(landingResolves("#/explain/access", adminNav)).toBe(true);
+  });
+
+  it("hides every Stack page from tenant-scoped users (isolation gate)", () => {
+    const tenantNav = filteredNav(false);
+    const admin = tenantNav.find((s) => s.id === "admin");
+    expect(admin).toBeDefined();
+    const ids = (admin?.children ?? []).map((l) => l.id);
+    for (const gated of ["health", "grafana", "opensearch", "graphql"]) {
+      expect(ids).not.toContain(gated);
+    }
+    // And the legacy deep link must NOT resolve onto a gated page for them —
+    // resolveRoute falls back to admin's first visible leaf instead.
+    expect(resolveRoute("#/stack/health", tenantNav).leaf?.id).not.toBe("health");
+    // Access Explorer is per-tenant (not platform-only) — still reachable.
+    expect(ids).toContain("access");
+  });
+
+  it("dropped the old top-level sections entirely", () => {
+    expect(adminNav.find((s) => s.id === "explain")).toBeUndefined();
+    expect(adminNav.find((s) => s.id === "stack")).toBeUndefined();
   });
 });

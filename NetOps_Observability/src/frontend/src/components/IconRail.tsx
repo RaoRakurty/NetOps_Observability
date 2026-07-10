@@ -6,8 +6,8 @@ import { BRAND } from "../brand";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
-import MfaCard from "./MfaCard";
 import AppearanceControls from "./AppearanceControls";
+import ScopeBadge from "./ScopeBadge";
 
 // Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
 // only tints the active indicator + the flyout header; severity colours stay
@@ -26,8 +26,6 @@ const MOD_HUE: Record<string, string> = {
   metrics: "#0EA5E9", // Metrics — vivid sky
   flows: "#14B8A6", // Flows — vivid teal
   logs: "#EAB308", // Logs — vivid amber/gold
-  explain: "#D946EF", // Explain (access reasoning) — vivid fuchsia
-  stack: "#64748B", // Stack — slate (utility)
   copilot: "#8B5CF6", // Iris AI — violet (kept)
   admin: "#94A3B8", // Admin — slate (utility)
 };
@@ -44,10 +42,10 @@ const GROUPS: { label: string; ids: string[] }[] = [
   { label: "Infrastructure", ids: ["infrastructure", "security"] },
   { label: "Data", ids: ["metrics", "flows", "logs"] },
 ];
-// Governance/admin zone anchored at the foot: Explain + Stack +
-// Administration kept together, above a thin-line-separated Support/Help zone,
-// then the account. Excluded from the top groups.
-const FOOT_ADMIN_IDS = ["explain", "stack", "admin"];
+// Governance zone anchored at the foot: Administration alone (Explain + Stack
+// dissolved into it, 2026-07-10), above a thin-line-separated Support/Help
+// zone, then the account. Excluded from the top groups.
+const FOOT_ADMIN_IDS = ["admin"];
 
 type Props = {
   nav: NavSection[];
@@ -74,7 +72,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
   const { navigate, setCopilotOpen, copilotOpen, setHelpOpen } = useShell();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
-  const [mfaOpen, setMfaOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const openTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
   const acctCloseTimer = useRef<number | undefined>(undefined);
@@ -190,7 +188,7 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
 
         <div className="rail-foot-zone">
           <div className="rail-util-row">
-            <button className="rail-util-icon" type="button" title="Support" aria-label="Support">
+            <button className="rail-util-icon" type="button" title="Support" aria-label="Support" onClick={() => setSupportOpen(true)}>
               <Icon name="support" size={16} />
               <span>Support</span>
             </button>
@@ -225,10 +223,10 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
               <div className="menu-head">
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
+                <ScopeBadge user={user} />
               </div>
               <AppearanceControls />
               <button onClick={() => { setAcctOpen(false); navigate("admin/settings"); }}>Settings</button>
-              <button onClick={() => { setAcctOpen(false); setMfaOpen(true); }}>Two-factor authentication</button>
               {onChangePassword && (
                 <button onClick={() => { setAcctOpen(false); onChangePassword(); }}>Change password</button>
               )}
@@ -251,9 +249,24 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           onClose={() => setOpen(null)}
         />
       )}
-      {mfaOpen && (
-        <Modal title="Two-factor authentication" subtitle={user.username} onClose={() => setMfaOpen(false)}>
-          <MfaCard />
+      {supportOpen && (
+        <Modal title="Support" onClose={() => setSupportOpen(false)}>
+          {/* Placeholder — the support portal isn't live yet. Keep it honest
+              and give the operator somewhere useful to go meanwhile. */}
+          <div className="support-placeholder">
+            <p><strong>The support portal is coming soon.</strong></p>
+            <p>
+              Until it opens, the documentation covers setup, operations and
+              troubleshooting for every part of the platform.
+            </p>
+            <button
+              className="dash-btn"
+              type="button"
+              onClick={() => { setSupportOpen(false); setHelpOpen(true); }}
+            >
+              Open documentation
+            </button>
+          </div>
         </Modal>
       )}
     </aside>

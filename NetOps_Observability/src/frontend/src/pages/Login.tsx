@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, AuthMethods, takeSessionEndMessage } from "../services/api";
+import { readAppearance, setAppearancePref } from "../theme/prefs";
 import { BRAND, BRAND_TAGLINE } from "../brand";
 import Icon from "../components/Icon";
 import ChangePasswordCard from "../components/ChangePasswordCard";
@@ -26,17 +27,22 @@ function EyeWordmark() {
 // Shared cinematic scene: brand stage on the left, glass form card on the
 // right. All three login views (sign-in, MFA, change password) render inside
 // it so the whole pre-auth experience is one continuous space. Two versions
-// exist — the deep-space "Dark" scene and the calm white "Light" scene — and
-// the visitor's pick persists across visits.
+// exist — the deep-space "Dark" scene and the calm white "Light" scene.
+// The pick IS the app appearance (owner, 2026-07-10): both this pill and the
+// topbar knob read/write the shared theme pref, so signing in lands in the
+// look you chose here and vice versa. The old scene-only key remains as a
+// first-visit fallback, then converges onto the theme pref.
 const SCENE_KEY = "netops.login.scene";
 type Scene = "dark" | "light";
 
 function LoginScene({ children }: { children: React.ReactNode }) {
-  const [scene, setScene] = useState<Scene>(
-    () => (localStorage.getItem(SCENE_KEY) === "light" ? "light" : "dark"),
-  );
+  const [scene, setScene] = useState<Scene>(() => {
+    if (localStorage.getItem("netops.theme")) return readAppearance();
+    return localStorage.getItem(SCENE_KEY) === "light" ? "light" : "dark";
+  });
   const pick = (s: Scene) => {
-    localStorage.setItem(SCENE_KEY, s);
+    localStorage.setItem(SCENE_KEY, s); // legacy readers
+    setAppearancePref(s); // single source of truth — the app theme
     setScene(s);
   };
   return (

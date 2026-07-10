@@ -8,6 +8,7 @@ import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
 import SubNav from "./components/SubNav";
+import ScopeBadge from "./components/ScopeBadge";
 import OpsisDrawer from "./components/OpsisDrawer";
 import HelpDrawer from "./components/HelpDrawer";
 import CommandPalette from "./components/CommandPalette";
@@ -204,7 +205,16 @@ export default function App() {
             </div>
             <SubNav section={section} activeLeaf={leaf?.id} />
           </div>
-          <div className="page">{view}</div>
+          <div className="page">
+            {/* Administration acts on config — always state the acting scope
+                (rendered in-page: shell-v2 hides the main-head strip). */}
+            {section.id === "admin" && (
+              <div className="admin-scope-strip">
+                <ScopeBadge user={user} />
+              </div>
+            )}
+            {view}
+          </div>
         </main>
         <OpsisDrawer />
         <HelpDrawer />

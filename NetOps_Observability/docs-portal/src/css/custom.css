@@ -81,10 +81,21 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 /* ──────────────────────────────  Navbar  ─────────────────────────────────── */
 .navbar {
   background: color-mix(in srgb, var(--ifm-background-surface-color) 82%, transparent);
-  backdrop-filter: saturate(150%) blur(14px);
-  -webkit-backdrop-filter: saturate(150%) blur(14px);
   border-bottom: 1px solid var(--cx-border);
   box-shadow: none;
+}
+/* Frosted glass lives on a ::before overlay, NOT on .navbar itself: a
+   backdrop-filter there makes .navbar a containing block + stacking context,
+   which traps the mobile hamburger menu (.navbar-sidebar — a fixed-position
+   CHILD of .navbar) inside the 3.75rem bar so it never shows. The in-app Help
+   drawer frames the docs at mobile width, so the hamburger is its primary nav. */
+.navbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  backdrop-filter: saturate(150%) blur(14px);
+  -webkit-backdrop-filter: saturate(150%) blur(14px);
 }
 .navbar__title {
   font-weight: 700;

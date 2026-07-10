@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
 import { useShell } from "../context/shell";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
+import { usePrefs } from "../theme/prefs";
 import Icon from "./Icon";
-import { Modal } from "./ui";
-import MfaCard from "./MfaCard";
 import ScopeSelector from "./ScopeSelector";
 import AppearanceControls from "./AppearanceControls";
+import ScopeBadge from "./ScopeBadge";
 
 type Props = {
   health: Health | null;
@@ -40,11 +40,11 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // so it behaves like a true global search, not just a log query.
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
+  const { appearance, setAppearance } = usePrefs();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [mfaOpen, setMfaOpen] = useState(false);
   const [results, setResults] = useState<GlobalResult[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -198,6 +198,27 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
           <option value="__add">＋ Add preset…</option>
         </select>
 
+        {/* Appearance knob — mirrors the login page's Dark/Light pill; both
+            read/write the same preference so the two screens stay in sync. */}
+        <div className="mode-toggle" role="group" aria-label="Appearance">
+          <button
+            type="button"
+            className={appearance === "dark" ? "on" : ""}
+            aria-pressed={appearance === "dark"}
+            onClick={() => setAppearance("dark")}
+          >
+            Dark
+          </button>
+          <button
+            type="button"
+            className={appearance === "light" ? "on" : ""}
+            aria-pressed={appearance === "light"}
+            onClick={() => setAppearance("light")}
+          >
+            Light
+          </button>
+        </div>
+
         <button
           className="help-btn"
           type="button"
@@ -225,10 +246,10 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
               <div className="menu-head">
                 {user.username}
                 <span style={{ color: "var(--muted)" }}> · {user.role}</span>
+                <ScopeBadge user={user} />
               </div>
               <AppearanceControls />
               <button onClick={() => { setMenuOpen(false); navigate("admin/settings"); }}>Settings</button>
-              <button onClick={() => { setMenuOpen(false); setMfaOpen(true); }}>Two-factor authentication</button>
               {onChangePassword && (
                 <button onClick={() => { setMenuOpen(false); onChangePassword(); }}>Change password</button>
               )}
@@ -238,11 +259,6 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
         </div>
         )}
       </div>
-      {mfaOpen && (
-        <Modal title="Two-factor authentication" subtitle={user.username} onClose={() => setMfaOpen(false)}>
-          <MfaCard />
-        </Modal>
-      )}
     </header>
   );
 }

@@ -30,15 +30,31 @@ export const CHROME_PRESETS: { id: Chrome; label: string; swatch: string }[] = [
   { id: "graphite", label: "Graphite", swatch: "#23262d" },
   { id: "white", label: "White", swatch: "#ffffff" },
 ];
-const CHROME_IDS = CHROME_PRESETS.map((c) => c.id);
 
 const THEME_KEY = "netops.theme";
 const DENSITY_KEY = "netops.density";
 const CHROME_KEY = "netops.chrome";
 
+// The user-facing appearance model is BINARY (owner, 2026-07-10): one
+// Dark/Light knob in the topbar + the login-page pill, both reading/writing
+// netops.theme. Dark = the Indigo Causal signature identity; Light = the
+// light canvas. The full Theme union + its CSS token blocks stay intact —
+// this is a picker-surface simplification, not a token removal.
+export type Appearance = "dark" | "light";
+export const appearanceOf = (t: Theme): Appearance =>
+  t === "light" || t === "white" ? "light" : "dark";
+export const themeForAppearance = (a: Appearance): Theme =>
+  a === "dark" ? "indigo" : "light";
+
 function readTheme(): Theme {
   const v = localStorage.getItem(THEME_KEY) as Theme | null;
-  return v && THEME_IDS.includes(v) ? v : "indigo"; // Indigo Causal is the default identity
+  if (!v || !THEME_IDS.includes(v)) return "indigo"; // Indigo Causal is the default identity
+  // Binary-knob migration: a value saved by the retired 6-way picker
+  // collapses onto the nearest knob position (dark/graphite/oled → indigo,
+  // white → light) and is written back so the migration runs once.
+  const migrated = themeForAppearance(appearanceOf(v));
+  if (migrated !== v) localStorage.setItem(THEME_KEY, migrated);
+  return migrated;
 }
 
 function readDensity(): Density {
@@ -47,9 +63,26 @@ function readDensity(): Density {
 }
 
 function readChrome(): Chrome {
+  // The Accent picker is retired (2026-07-10) — every install converges on
+  // the default navy chrome. The preset CSS blocks remain for the future;
+  // stored picks migrate so nobody is stranded on a preset with no UI.
   const v = localStorage.getItem(CHROME_KEY);
-  if (v === "mist") return "white"; // migrate the removed Mist preset
-  return v && CHROME_IDS.includes(v as Chrome) ? (v as Chrome) : "navy";
+  if (v && v !== "navy") localStorage.setItem(CHROME_KEY, "navy");
+  return "navy";
+}
+
+// readAppearance / setAppearancePref — the binary knob outside React (the
+// pre-auth login page pins its own ramps and doesn't mount usePrefs). Writes
+// go through the same key + <html> attribute + event as the hook setters, so
+// login pill, topbar knob and ⌘K stay one preference.
+export function readAppearance(): Appearance {
+  return appearanceOf(readTheme());
+}
+export function setAppearancePref(a: Appearance) {
+  const t = themeForAppearance(a);
+  localStorage.setItem(THEME_KEY, t);
+  document.documentElement.setAttribute("data-theme", t);
+  window.dispatchEvent(new Event("netops-prefs"));
 }
 
 // applyPrefs reflects the stored prefs onto <html>. Called once at boot (before
@@ -97,5 +130,9 @@ export function usePrefs() {
     window.dispatchEvent(new Event("netops-prefs"));
   };
 
-  return { theme, setTheme, density, setDensity, chrome, setChrome };
+  // appearance is the binary view of theme the knob binds to.
+  const appearance = appearanceOf(theme);
+  const setAppearance = (a: Appearance) => setTheme(themeForAppearance(a));
+
+  return { theme, setTheme, density, setDensity, chrome, setChrome, appearance, setAppearance };
 }

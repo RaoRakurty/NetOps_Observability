@@ -110,6 +110,21 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="m3 17 9 5 9-5" />
     </>
   ),
+  // Administration — horizontal control sliders (the "controls" mark; the
+  // vertical-sliders glyph above stays as `settings` for its other usages).
+  sliders: (
+    <>
+      <line x1="21" y1="5" x2="14" y2="5" />
+      <line x1="10" y1="5" x2="3" y2="5" />
+      <line x1="21" y1="12" x2="12" y2="12" />
+      <line x1="8" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="19" x2="16" y2="19" />
+      <line x1="12" y1="19" x2="3" y2="19" />
+      <line x1="14" y1="3" x2="14" y2="7" />
+      <line x1="8" y1="10" x2="8" y2="14" />
+      <line x1="16" y1="17" x2="16" y2="21" />
+    </>
+  ),
   logo: <path d="M2 12h4l3 8 4-16 3 8h6" />,
   // Monitoring — a gauge/speedometer (active health watching).
   monitoring: (
