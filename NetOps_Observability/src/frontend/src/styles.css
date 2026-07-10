@@ -186,6 +186,10 @@
 
   /* — type families (spec §7) — */
   --font-ui:   "Inter", "Geist", -apple-system, system-ui, sans-serif;
+  /* Body face token. Many rules reach for var(--font-sans, …) — it MUST be
+     defined or they silently fall back to the OS font and the type drifts
+     out of sync with the shell face (.shell-v2 re-points it at Manrope). */
+  --font-sans: "Inter", "Geist", -apple-system, system-ui, sans-serif;
   /* IBM Plex Mono IS bundled (main.tsx) — JetBrains Mono was not, so the token
      fell back to OS mono everywhere. Use the bundled elegant mono app-wide. */
   --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -305,6 +309,10 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
      fixed children escape over the content. */
   position: relative; z-index: 50;
 }
+/* Nav chrome buttons carry text (labels, flyout leaves, menu entries) but
+   buttons do NOT inherit font-family — without this they render in the
+   browser's default UI font and drift out of sync with the shell face. */
+.rail button, .nav-flyout button, .menu-pop button { font-family: inherit; }
 .rail-main { display: flex; flex-direction: column; gap: 1px; padding: var(--sp-1) 8px; flex: 1; overflow-y: auto; overflow-x: visible; }
 
 /* Segregated nav groups — a small uppercase label + a thin hairline divider
@@ -360,7 +368,14 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    from the --rail-* tokens (+ color-mix), so the chrome presets and signature
    themes restyle it without per-theme rules. Scoped to .shell-v2 so these win
    the cascade over the labelled-rail defaults above. */
-.shell.shell-v2 { --sidebar-w: 52px; }
+.shell.shell-v2 {
+  --sidebar-w: 52px;
+  /* ONE etched-divider spec for every zone break in the pane (head, groups,
+     foot) — a faint centered 22px fade, near-invisible by design. All zone
+     rules consume this so the marks stay identical and symmetric. */
+  --rail-etch: linear-gradient(90deg, transparent,
+    color-mix(in srgb, var(--rail-fg) 20%, transparent), transparent);
+}
 .shell-v2 .rail-icon { color: var(--mod, var(--rail-accent)); width: 22px; }
 /* bolder stroke so the colourful glyphs read crisply at rail size */
 .shell-v2 .rail-icon svg, .shell-v2 .rail-brand-mark svg, .shell-v2 .rail-util-icon svg { stroke-width: 2; }
@@ -403,31 +418,31 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .shell-v2 .rail-main { padding: var(--sp-1) 0; }
 .shell-v2 .rail-group { align-items: center; }
 /* Zone dividers become short centered fades — etched marks in the glass, not
-   full-width rules (those read as frames and widen the pane visually). */
+   full-width rules (those read as frames and widen the pane visually). Every
+   divider gets the SAME 7px breathing room above and below so the rhythm is
+   symmetric from head to foot. */
 .shell-v2 .rail-group + .rail-group,
-.shell-v2 .rail-foot-zone + .rail-foot-zone { border-top: 0; position: relative; }
-.shell-v2 .rail-group + .rail-group { margin-top: 7px; padding-top: 7px; }
+.shell-v2 .rail-foot-zone + .rail-foot-zone { border-top: 0; position: relative; margin-top: 7px; padding-top: 7px; }
 .shell-v2 .rail-group + .rail-group::before,
 .shell-v2 .rail-foot-zone + .rail-foot-zone::before {
   content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
-  width: 22px; height: 1px;
-  background: linear-gradient(90deg, transparent,
-    color-mix(in srgb, var(--rail-fg) 30%, transparent), transparent);
+  width: 22px; height: 1px; background: var(--rail-etch);
 }
-.shell-v2 .rail-util { border-top: 0; position: relative; }
+/* rail-main ends with 4px padding; 3px margin makes the util divider sit 7px
+   below the last key — matching the 7px of padding beneath it. */
+.shell-v2 .rail-util {
+  border-top: 0; position: relative; align-items: center;
+  margin-top: 3px; padding: 7px 0 var(--sp-1);
+}
 .shell-v2 .rail-util::before {
   content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
-  width: 22px; height: 1px;
-  background: linear-gradient(90deg, transparent,
-    color-mix(in srgb, var(--rail-fg) 30%, transparent), transparent);
+  width: 22px; height: 1px; background: var(--rail-etch);
 }
 /* Brand head — quiet halo behind the glyph; same etched-fade divider. */
 .shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 2px 0 var(--sp-2); border-bottom: 0; position: relative; }
 .shell-v2 .rail-brand::after {
   content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
-  width: 22px; height: 1px;
-  background: linear-gradient(90deg, transparent,
-    color-mix(in srgb, var(--rail-fg) 30%, transparent), transparent);
+  width: 22px; height: 1px; background: var(--rail-etch);
 }
 .shell-v2 .rail-brand-mark { position: relative; }
 .shell-v2 .rail-brand-mark::before {
@@ -435,10 +450,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: radial-gradient(circle, var(--rail-glass), transparent 70%);
   pointer-events: none;
 }
-.shell-v2 .rail-util { padding: var(--sp-1) 0; align-items: center; }
-.shell-v2 .rail-util-row { justify-content: center; }
-.shell-v2 .rail-util-icon { flex-direction: column; }
-.shell-v2 .rail-account, .shell-v2 .rail-foot-zone { align-items: center; }
+/* Foot cluster in the 52px pane: everything stacks as centered 36px keys —
+   the v1 side-by-side Support/Help row is 68px wide and would overflow the
+   pane, shoving Help onto the right light seam. Zones pin to the pane width
+   so their etched dividers center on the glass, never on an icon. */
+.shell-v2 .rail-account, .shell-v2 .rail-foot-zone { align-items: center; width: 100%; padding: 0; }
+.shell-v2 .rail-util-row { flex-direction: column; align-items: center; gap: 1px; padding: 0; width: 100%; }
+.shell-v2 .rail-util-icon { flex: none; justify-content: center; gap: 0; width: 36px; min-height: 30px; padding: 0; border-radius: 10px; }
 .shell-v2 .rail-account-btn { justify-content: center; gap: 0; padding: 6px 0; }
 .shell-v2 .rail-account-btn .avatar {
   box-shadow:
@@ -492,7 +510,8 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    small sizes; the slightly negative tracking tightens it without crowding. */
 .shell-v2 {
   --topbar-h: 60px;
-  font-family: "Manrope Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Manrope Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: -0.006em;
 }
 /* Top bar — same dark tone as the vertical rail (interim, per request), with a
