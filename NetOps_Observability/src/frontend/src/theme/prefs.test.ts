@@ -75,9 +75,19 @@ describe("setAppearancePref (login pill / topbar knob shared write path)", () =>
   });
 });
 
-describe("retired Accent (chrome) picker migration", () => {
-  it("converges any stored chrome preset onto navy", () => {
-    localStorage.setItem("netops.chrome", "white");
+describe("chrome follows the appearance knob (Accent picker retired)", () => {
+  it("Light mode carries the glossy white chrome, Dark the navy glass", () => {
+    localStorage.setItem("netops.theme", "light");
+    applyPrefs();
+    expect(document.documentElement.getAttribute("data-chrome")).toBe("white");
+    setAppearancePref("dark");
+    expect(document.documentElement.getAttribute("data-chrome")).toBe("navy");
+    expect(localStorage.getItem("netops.chrome")).toBe("navy");
+  });
+
+  it("overrides any stored legacy chrome pick with the derived value", () => {
+    localStorage.setItem("netops.theme", "indigo");
+    localStorage.setItem("netops.chrome", "graphite");
     applyPrefs();
     expect(document.documentElement.getAttribute("data-chrome")).toBe("navy");
     expect(localStorage.getItem("netops.chrome")).toBe("navy");

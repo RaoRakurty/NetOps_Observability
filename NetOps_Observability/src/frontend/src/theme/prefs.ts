@@ -45,6 +45,10 @@ export const appearanceOf = (t: Theme): Appearance =>
   t === "light" || t === "white" ? "light" : "dark";
 export const themeForAppearance = (a: Appearance): Theme =>
   a === "dark" ? "indigo" : "light";
+// Chrome follows the knob (owner, 2026-07-10): Light mode = the glossy white
+// glass rail/topbar, Dark = the navy glass. Not a separate preference anymore.
+export const chromeForAppearance = (a: Appearance): Chrome =>
+  a === "light" ? "white" : "navy";
 
 function readTheme(): Theme {
   const v = localStorage.getItem(THEME_KEY) as Theme | null;
@@ -63,12 +67,13 @@ function readDensity(): Density {
 }
 
 function readChrome(): Chrome {
-  // The Accent picker is retired (2026-07-10) — every install converges on
-  // the default navy chrome. The preset CSS blocks remain for the future;
-  // stored picks migrate so nobody is stranded on a preset with no UI.
-  const v = localStorage.getItem(CHROME_KEY);
-  if (v && v !== "navy") localStorage.setItem(CHROME_KEY, "navy");
-  return "navy";
+  // The Accent picker is retired (2026-07-10) — chrome is DERIVED from the
+  // appearance knob (light → white glass, dark → navy). The preset CSS blocks
+  // remain; any stored legacy pick converges so nobody is stranded on a
+  // preset with no UI.
+  const derived = chromeForAppearance(appearanceOf(readTheme()));
+  if (localStorage.getItem(CHROME_KEY) !== derived) localStorage.setItem(CHROME_KEY, derived);
+  return derived;
 }
 
 // readAppearance / setAppearancePref — the binary knob outside React (the
@@ -81,7 +86,9 @@ export function readAppearance(): Appearance {
 export function setAppearancePref(a: Appearance) {
   const t = themeForAppearance(a);
   localStorage.setItem(THEME_KEY, t);
+  localStorage.setItem(CHROME_KEY, chromeForAppearance(a));
   document.documentElement.setAttribute("data-theme", t);
+  document.documentElement.setAttribute("data-chrome", chromeForAppearance(a));
   window.dispatchEvent(new Event("netops-prefs"));
 }
 
@@ -112,9 +119,13 @@ export function usePrefs() {
   }, []);
 
   const setTheme = (t: Theme) => {
+    const c = chromeForAppearance(appearanceOf(t));
     localStorage.setItem(THEME_KEY, t);
+    localStorage.setItem(CHROME_KEY, c);
     document.documentElement.setAttribute("data-theme", t);
+    document.documentElement.setAttribute("data-chrome", c);
     setThemeState(t);
+    setChromeState(c);
     window.dispatchEvent(new Event("netops-prefs"));
   };
   const setDensity = (d: Density) => {
@@ -123,16 +134,10 @@ export function usePrefs() {
     setDensityState(d);
     window.dispatchEvent(new Event("netops-prefs"));
   };
-  const setChrome = (c: Chrome) => {
-    localStorage.setItem(CHROME_KEY, c);
-    document.documentElement.setAttribute("data-chrome", c);
-    setChromeState(c);
-    window.dispatchEvent(new Event("netops-prefs"));
-  };
-
-  // appearance is the binary view of theme the knob binds to.
+  // appearance is the binary view of theme the knob binds to; chrome is
+  // read-only here (derived — see chromeForAppearance).
   const appearance = appearanceOf(theme);
   const setAppearance = (a: Appearance) => setTheme(themeForAppearance(a));
 
-  return { theme, setTheme, density, setDensity, chrome, setChrome, appearance, setAppearance };
+  return { theme, setTheme, density, setDensity, chrome, appearance, setAppearance };
 }

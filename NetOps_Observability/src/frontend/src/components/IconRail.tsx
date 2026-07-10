@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { AuthUser } from "../services/api";
@@ -249,26 +250,32 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           onClose={() => setOpen(null)}
         />
       )}
-      {supportOpen && (
-        <Modal title="Support" onClose={() => setSupportOpen(false)}>
-          {/* Placeholder — the support portal isn't live yet. Keep it honest
-              and give the operator somewhere useful to go meanwhile. */}
-          <div className="support-placeholder">
-            <p><strong>The support portal is coming soon.</strong></p>
-            <p>
-              Until it opens, the documentation covers setup, operations and
-              troubleshooting for every part of the platform.
-            </p>
-            <button
-              className="dash-btn"
-              type="button"
-              onClick={() => { setSupportOpen(false); setHelpOpen(true); }}
-            >
-              Open documentation
-            </button>
-          </div>
-        </Modal>
-      )}
+      {/* PORTALED to <body>: the rail's backdrop-filter makes it the containing
+          block for fixed descendants, so an inline modal's full-screen scrim
+          would be squeezed into the 52px rail column (the same trap the docs
+          navbar hamburger fell into — see styles.css .rail comment). */}
+      {supportOpen &&
+        createPortal(
+          <Modal title="Support" onClose={() => setSupportOpen(false)}>
+            {/* Placeholder — the support portal isn't live yet. Keep it honest
+                and give the operator somewhere useful to go meanwhile. */}
+            <div className="support-placeholder">
+              <p><strong>The support portal is coming soon.</strong></p>
+              <p>
+                Until it opens, the documentation covers setup, operations and
+                troubleshooting for every part of the platform.
+              </p>
+              <button
+                className="dash-btn"
+                type="button"
+                onClick={() => { setSupportOpen(false); setHelpOpen(true); }}
+              >
+                Open documentation
+              </button>
+            </div>
+          </Modal>,
+          document.body,
+        )}
     </aside>
   );
 }
