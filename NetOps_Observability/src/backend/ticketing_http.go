@@ -142,6 +142,26 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Only ONE policy may be enabled per (tenant, external system): the sweeper
+	// resolves a single governing policy, so a second enabled one would silently
+	// shadow the first (live incident 2026-07-10: a leftover permissive validation
+	// policy kept flooding a real PDI while a stricter policy appeared active).
+	// Refuse loudly instead, naming the conflict.
+	if in.Enabled {
+		existing, err := s.ticketing.ListPolicies(r.Context(), tenant, false)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		for _, p := range existing {
+			if p.Enabled && p.ID != in.ID && p.ExternalSystem == in.ExternalSystem {
+				writeError(w, http.StatusConflict, fmt.Errorf(
+					"policy %q is already enabled for %s — only one enabled policy per system; disable it first",
+					orDefault(p.Name, p.ID), in.ExternalSystem))
+				return
+			}
+		}
+	}
 	if err := s.ticketing.PutPolicy(r.Context(), in); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -262,32 +282,46 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	if !ok {
 		return
 	}
-	tenant, _ := principalTenant(claims)
+	tenant, cross := principalTenant(claims)
 	if tenant == "" {
 		writeError(w, http.StatusBadRequest, errors.New("select a tenant to ticket (no tenant in scope)"))
 		return
 	}
-	// Scope the read to the caller's tenant: a non-owner only reaches its own
-	// object; an owner viewing a tenant reaches that tenant's. Cross-tenant id → 404.
-	payload, policy, status, err := s.buildTicketPayloadForObject(r.Context(), tenant, id)
+	// Read scope mirrors the sweeper: a cross-tenant principal loads the slice at
+	// "__all__" — the CH row policy is STRICT (tenant_id = scope, no untagged
+	// allowance), so scoping a platform owner to the literal "global" would never
+	// match the platform's own objects (tenant_id=""). A tenant-scoped caller
+	// stays confined to its tenant, so a cross-tenant id 404s at the read.
+	scope := tenant
+	if cross {
+		scope = "__all__"
+	}
+	payload, policy, owner, status, err := s.buildTicketPayloadForObject(r.Context(), scope, id)
 	if err != nil {
 		writeError(w, status, err)
+		return
+	}
+	// The object's OWNING tenant (from its row, ""→global) keys the policy, link,
+	// and outbox — same authority the sweeper uses. Default-closed: if the row
+	// policy ever lets a foreign row through, a tenant-scoped caller still 404s.
+	if !cross && owner != canonicalCorrTenant(tenant) {
+		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
 		return
 	}
 	system := orDefault(policy.ExternalSystem, "servicenow")
 	if action == "update" {
 		// Sync only makes sense for an existing open ticket.
-		link, found, _ := s.ticketing.GetLink(r.Context(), tenant, false, id, system)
+		link, found, _ := s.ticketing.GetLink(r.Context(), owner, false, id, system)
 		if !found || !link.openTicket() {
 			writeError(w, http.StatusConflict, errors.New("no open ticket to sync for this object"))
 			return
 		}
-		if err := enqueueTicketUpdate(r.Context(), s.ticketing, tenant, system, payload); err != nil {
+		if err := enqueueTicketUpdate(r.Context(), s.ticketing, owner, system, payload); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
 	} else {
-		if err := enqueueTicketCreate(r.Context(), s.ticketing, tenant, system, payload); err != nil {
+		if err := enqueueTicketCreate(r.Context(), s.ticketing, owner, system, payload); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
@@ -298,20 +332,23 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 
 // buildTicketPayloadForObject loads one correlation object's latest slice at the
 // given tenant scope and assembles the ticket payload from the SAME RCA view the
-// UI renders (no second brain). Returns the resolving policy too (for system +
-// defaults). status is an HTTP status for the caller to surface on error.
-func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketPayload, incidentPolicy, int, error) {
+// UI renders (no second brain). Returns the resolving policy and the object's
+// OWNING tenant (row tenant_id canonicalized ""→global) — the policy is resolved
+// under the owner, never the read scope (which may be "__all__" for a
+// cross-tenant caller). status is an HTTP status for the caller to surface on error.
+func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketPayload, incidentPolicy, string, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(ctx, scope, id, 0)
 	if err != nil {
-		return ticketPayload{}, incidentPolicy{}, status, err
+		return ticketPayload{}, incidentPolicy{}, "", status, err
 	}
+	owner := canonicalCorrTenant(asString(meta["tenant_id"]))
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
 	view := buildRcaPathView(id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
-	policy := (&ticketSweeper{store: s.ticketing}).resolvePolicy(ctx, scope)
+	policy := (&ticketSweeper{store: s.ticketing}).resolvePolicy(ctx, owner)
 	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", ""))
-	return payload, policy, http.StatusOK, nil
+	return payload, policy, owner, http.StatusOK, nil
 }
 
 // ── outbox + audit observability — /api/tickets/{outbox,audit} ────────────────

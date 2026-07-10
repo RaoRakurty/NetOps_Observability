@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -160,6 +163,144 @@ func TestTicketsOutboxAPI_TenantIsolation(t *testing.T) {
 	_ = json.Unmarshal(body, &out)
 	if len(out.Outbox) != 1 || out.Outbox[0].TenantID != a.tenantID {
 		t.Fatalf("A outbox leaked across tenants: %+v", out.Outbox)
+	}
+}
+
+// corrCHStub emulates ClickHouse with the STRICT tenant_iso row policy on the
+// corr tables (visible iff tenant_id = tenant_scope OR scope = '__all__'). It
+// serves one platform-owned object (tenant_id "") under strictID. Under laxID it
+// deliberately mis-emulates a LAX policy that leaks the platform row to ANY named
+// scope — exercising the handler's default-closed owner guard (defense in depth
+// if the DB policy ever drifts).
+const (
+	tktStrictCorrID = "11111111-2222-4333-8444-555555555555"
+	tktLaxCorrID    = "99999999-8888-4777-8666-555555555555"
+)
+
+func corrCHStub(t *testing.T) *httptest.Server {
+	t.Helper()
+	ch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sqlB, _ := io.ReadAll(r.Body)
+		sql := string(sqlB)
+		scope := r.URL.Query().Get("tenant_scope")
+		data := []map[string]any{}
+		switch {
+		case strings.Contains(sql, "FROM netops.corr_objects"):
+			visible := scope == "__all__" || strings.Contains(sql, tktLaxCorrID)
+			if visible {
+				data = append(data, map[string]any{
+					"version": 3, "tenant_id": "",
+					"window_start": "2026-07-10 20:00:00", "window_end": "2026-07-10 20:10:00",
+					"trigger_signal": "sig-1", "verdict_tier": "suspected",
+					"top_hypothesis": "test hypothesis", "top_confidence": 0.9,
+					"evidence_missing": "", "hypotheses": "[]", "affected": "[]",
+					"layer_coverage": "{}", "app_impact": "{}",
+				})
+			}
+		case strings.Contains(sql, "max(archived_version)"):
+			data = append(data, map[string]any{"av": 0})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	t.Cleanup(ch.Close)
+	return ch
+}
+
+// TestManualTicketCreate_CrossTenantAdminReachesPlatformObject is the regression
+// for the 2026-07-10 live bug: the platform owner's manual "Create ticket"
+// (POST /api/correlations/{id}/ticket) scoped the CH read to the literal tenant
+// "global", but platform objects are stored tenant_id="" and the strict row
+// policy has no untagged allowance — so every platform object 404'd even though
+// the sweeper (which reads at "__all__") ticketed them fine.
+func TestManualTicketCreate_CrossTenantAdminReachesPlatformObject(t *testing.T) {
+	ch := corrCHStub(t)
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, s, fix := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket", admin, map[string]any{})
+	if st != 202 {
+		t.Fatalf("platform owner manual create = %d %s, want 202 (the live bug 404'd here)", st, body)
+	}
+	// The enqueued action is stamped with the object's OWNING tenant (""→global),
+	// mirroring the sweeper — never the raw read scope.
+	items, err := s.ticketing.ListOutbox(context.Background(), "", true)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("outbox after manual create: items=%d err=%v, want exactly 1", len(items), err)
+	}
+	if items[0].TenantID != TenantGlobal || items[0].CorrObjectID != tktStrictCorrID {
+		t.Fatalf("outbox item stamped tenant=%q corr=%q, want %q/%q",
+			items[0].TenantID, items[0].CorrObjectID, TenantGlobal, tktStrictCorrID)
+	}
+
+	// A tenant-scoped admin must NOT reach the platform object: the strict scope
+	// hides the row → 404, never a ticket on someone else's incident (§3a).
+	st, body = do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket", fix["A"].token, map[string]any{})
+	if st != 404 {
+		t.Fatalf("tenant-scoped manual create on platform object = %d %s, want 404", st, body)
+	}
+}
+
+// TestManualTicketCreate_OwnerGuardDefaultClosed proves the handler refuses to
+// ticket a foreign object even if the DB row policy leaks it (lax stub): the
+// object's row tenant ("" → global) ≠ the caller's tenant → 404, no enqueue.
+func TestManualTicketCreate_OwnerGuardDefaultClosed(t *testing.T) {
+	ch := corrCHStub(t)
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, s, fix := setupTicketingTenants(t)
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktLaxCorrID+"/ticket", fix["A"].token, map[string]any{})
+	if st != 404 {
+		t.Fatalf("owner guard: tenant A ticketing a leaked platform object = %d %s, want 404", st, body)
+	}
+	if items, _ := s.ticketing.ListOutbox(context.Background(), "", true); len(items) != 0 {
+		t.Fatalf("owner guard must not enqueue; outbox has %d items", len(items))
+	}
+}
+
+// TestIncidentPolicyAPI_SingleEnabledPerSystem guards the 2026-07-10 PDI-flood
+// footgun: two enabled policies for one tenant+system silently shadow each other
+// (resolvePolicy takes the first enabled), so enabling a second must 409 and the
+// conflict must clear once the first is disabled. Per-tenant: B is unaffected.
+func TestIncidentPolicyAPI_SingleEnabledPerSystem(t *testing.T) {
+	srv, _, fix := setupTicketingTenants(t)
+	a, b := fix["A"], fix["B"]
+
+	st, body := do(t, srv, "POST", "/api/incident-policies", a.token, map[string]any{
+		"id": "pol-1", "name": "first", "enabled": true, "min_verdict": "confirmed",
+	})
+	if st != 200 {
+		t.Fatalf("A first enabled policy: %d %s", st, body)
+	}
+	st, body = do(t, srv, "POST", "/api/incident-policies", a.token, map[string]any{
+		"id": "pol-2", "name": "second", "enabled": true, "min_verdict": "suspected",
+	})
+	if st != 409 || !strings.Contains(string(body), "first") {
+		t.Fatalf("A second enabled policy = %d %s, want 409 naming the conflicting policy", st, body)
+	}
+	// A disabled second policy coexists fine.
+	if st, body = do(t, srv, "POST", "/api/incident-policies", a.token, map[string]any{
+		"id": "pol-2", "name": "second", "enabled": false, "min_verdict": "suspected",
+	}); st != 200 {
+		t.Fatalf("A second DISABLED policy: %d %s", st, body)
+	}
+	// Disabling the first clears the conflict for the second.
+	if st, body = do(t, srv, "PUT", "/api/incident-policies/pol-1", a.token, map[string]any{
+		"name": "first", "enabled": false, "min_verdict": "confirmed",
+	}); st != 200 {
+		t.Fatalf("A disable first: %d %s", st, body)
+	}
+	if st, body = do(t, srv, "PUT", "/api/incident-policies/pol-2", a.token, map[string]any{
+		"name": "second", "enabled": true, "min_verdict": "suspected",
+	}); st != 200 {
+		t.Fatalf("A enable second after disabling first: %d %s", st, body)
+	}
+	// The rule is per-tenant: B enabling its own policy never conflicts with A's.
+	if st, body = do(t, srv, "POST", "/api/incident-policies", b.token, map[string]any{
+		"name": "B policy", "enabled": true, "min_verdict": "confirmed",
+	}); st != 200 {
+		t.Fatalf("B enabled policy: %d %s", st, body)
 	}
 }
 

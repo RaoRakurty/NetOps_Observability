@@ -78,9 +78,15 @@ ok "ServiceNow connection live (configured=true)"
 # internal allowed, no customer-facing requirement) but keeps min_verdict=suspected
 # so undetermined objects are still (correctly) held.
 say "Installing permissive validation policy ($POLICY_ID)"
-curl -fsS -m 10 -X POST "$BASE_URL/api/incident-policies" "${AUTH[@]}" \
+# Only one policy may be enabled per (tenant, system): the API 409s if another
+# enabled policy exists. Surface that message instead of a bare curl failure —
+# the operator must disable the conflicting policy deliberately, not have a
+# validation script shadow it.
+POLICY_RESP="$(curl -sS -m 10 -w '\n%{http_code}' -X POST "$BASE_URL/api/incident-policies" "${AUTH[@]}" \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$POLICY_ID\",\"name\":\"E2E validation (permissive)\",\"external_system\":\"servicenow\",\"enabled\":true,\"min_verdict\":\"suspected\",\"require_customer_facing\":false,\"allow_probe_only\":true,\"allow_internal_monitoring\":true,\"suspected_requires_critical\":false,\"default_impact\":2,\"default_urgency\":2}" >/dev/null
+  -d "{\"id\":\"$POLICY_ID\",\"name\":\"E2E validation (permissive)\",\"external_system\":\"servicenow\",\"enabled\":true,\"min_verdict\":\"suspected\",\"require_customer_facing\":false,\"allow_probe_only\":true,\"allow_internal_monitoring\":true,\"suspected_requires_critical\":false,\"default_impact\":2,\"default_urgency\":2}")"
+POLICY_STATUS="${POLICY_RESP##*$'\n'}"
+[ "$POLICY_STATUS" = "200" ] || die "policy install failed (HTTP $POLICY_STATUS): ${POLICY_RESP%$'\n'*}"
 ok "policy installed"
 
 # ── 3. wait for the sweeper (≤60s) + worker (≤15s) to file an incident ─────────
