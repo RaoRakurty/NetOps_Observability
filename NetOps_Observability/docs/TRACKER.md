@@ -62,6 +62,25 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 
 ---
 
+## 🌙 Owner UI/UX punch-list #2 (queued 2026-07-10, live-fired) — ✅ ALL SHIPPED `737437b`
+
+| # | Item | Status |
+|---|------|--------|
+| U2-1 | Rail: narrower + glassy/futuristic | ✅ 52px smoked-glass pane, light seam, backlit keys (token-driven) |
+| U2-2 | Remove the eye from the browser tab | ✅ pulse-glyph favicon (svg+png); login eye-hero kept |
+| U2-3 | Access Explorer → Administration (Security, beside Authentication) | ✅ + legacy-route aliases + tests |
+| U2-4 | Stack → Administration (whole section, platform-only group) | ✅ + tenant-isolation test |
+| U2-5 | Administration icon alternatives | ✅ horizontal-sliders glyph (owner-picked) |
+| U2-6 | Help-drawer hamburger menu invisible | ✅ root-caused: backdrop-filter containing-block trap on docs `.navbar`; blur → `::before` |
+| U2-7 | Support: clickable coming-soon placeholder | ✅ modal + docs handoff |
+| U2-8 | Theme/Accent pickers out; Dark/Light knob + login sync | ✅ binary knob (Dark=Indigo), one pref `netops.theme`, migration + prefs tests |
+| U2-9 | Remove broken Two-factor item from account menu | ✅ (MFA stays via login flow + admin Reset MFA) |
+| U2-10 | Admin area states acting scope (platform vs tenant) | ✅ ScopeBadge (names via /api/scopes, no raw ids) |
+
+> Also: **tenant URL strategy** research + recommendation documented for owner
+> review — `docs/design/research/tenant-url-strategy.md` (`a7dfc05`). Proposal
+> only; owner decides (relates to #20 ingest isolation / SaaS onboarding).
+
 ## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
 
 Owner queued these late on 2026-06-28→29 with "keep working, don't wait for
