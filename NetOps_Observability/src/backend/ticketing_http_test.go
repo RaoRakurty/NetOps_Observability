@@ -162,3 +162,29 @@ func TestTicketsOutboxAPI_TenantIsolation(t *testing.T) {
 		t.Fatalf("A outbox leaked across tenants: %+v", out.Outbox)
 	}
 }
+
+// TestTicketStatusView_URLNotDoubled guards the incident deep-link against the
+// live-PDI bug (2026-07-10): links written before the InstanceURL fix stored the
+// FULL nav_to.do incident URL, and the view appended the nav path a second time.
+// Both row shapes must yield ONE clean deep-link.
+func TestTicketStatusView_URLNotDoubled(t *testing.T) {
+	const inst = "https://dev000000.service-now.com"
+	const sys = "abc123"
+	want := inst + "/nav_to.do?uri=incident.do?sys_id=" + sys
+
+	for name, stored := range map[string]string{
+		"bare-instance": inst,
+		"legacy-full-deep-link": inst + "/nav_to.do?uri=incident.do?sys_id=" + sys,
+	} {
+		v := ticketStatusView(ticketLink{
+			ExternalSystem: "servicenow", TicketNumber: "INC0010001",
+			SysID: sys, InstanceURL: stored, Status: "open",
+		}, true)
+		if got := v["url"]; got != want {
+			t.Fatalf("%s: url = %v, want %s", name, got, want)
+		}
+		if got := v["instance_url"]; got != inst {
+			t.Fatalf("%s: instance_url = %v, want %s", name, got, inst)
+		}
+	}
+}

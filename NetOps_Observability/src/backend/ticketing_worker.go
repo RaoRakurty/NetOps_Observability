@@ -193,7 +193,9 @@ func (w *ticketWorker) upsertLink(ctx context.Context, it ticketOutboxItem, cfg 
 		TenantID:        it.TenantID,
 		CorrObjectID:    it.CorrObjectID,
 		ExternalSystem:  it.ExternalSystem,
-		InstanceURL:     ref.URL,
+		// The BARE instance URL (not ref.URL, the full incident deep-link) —
+		// ticketStatusView appends the nav_to.do path itself.
+		InstanceURL:     cfg.InstanceURL,
 		TicketNumber:    ref.Number,
 		SysID:           ref.SysID,
 		DedupeKey:       dedupeKey(it.TenantID, it.CorrObjectID, it.ExternalSystem),

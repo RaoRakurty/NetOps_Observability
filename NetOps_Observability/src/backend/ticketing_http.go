@@ -365,17 +365,24 @@ func ticketStatusView(l ticketLink, found bool) map[string]any {
 	if !found {
 		return map[string]any{"state": "not_created"}
 	}
+	// Links written before the InstanceURL fix stored the FULL incident URL
+	// (…/nav_to.do?…) instead of the bare instance; strip the path so the
+	// deep-link below isn't doubled (found live against a real PDI, 2026-07-10).
+	base := l.InstanceURL
+	if i := strings.Index(base, "/nav_to.do"); i >= 0 {
+		base = base[:i]
+	}
 	out := map[string]any{
 		"state":          orDefault(l.Status, "pending"),
 		"system":         l.ExternalSystem,
 		"ticket_number":  l.TicketNumber,
 		"sys_id":         l.SysID,
-		"instance_url":   l.InstanceURL,
+		"instance_url":   base,
 		"last_verdict":   l.LastVerdict,
 		"last_synced_at": l.LastSyncedAt,
 	}
-	if l.SysID != "" && l.InstanceURL != "" {
-		out["url"] = strings.TrimRight(l.InstanceURL, "/") + "/nav_to.do?uri=incident.do?sys_id=" + l.SysID
+	if l.SysID != "" && base != "" {
+		out["url"] = strings.TrimRight(base, "/") + "/nav_to.do?uri=incident.do?sys_id=" + l.SysID
 	}
 	return out
 }
