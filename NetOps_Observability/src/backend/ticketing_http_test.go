@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -167,17 +169,28 @@ func TestTicketsOutboxAPI_TenantIsolation(t *testing.T) {
 }
 
 // corrCHStub emulates ClickHouse with the STRICT tenant_iso row policy on the
-// corr tables (visible iff tenant_id = tenant_scope OR scope = '__all__'). It
-// serves one platform-owned object (tenant_id "") under strictID. Under laxID it
-// deliberately mis-emulates a LAX policy that leaks the platform row to ANY named
-// scope — exercising the handler's default-closed owner guard (defense in depth
-// if the DB policy ever drifts).
+// corr tables (a row is visible iff tenant_id = tenant_scope OR scope =
+// '__all__'). rows maps correlation_id → its stored row shape; rows marked lax
+// deliberately mis-emulate a LAX policy that leaks the row to ANY named scope,
+// exercising the handler's default-closed owner guard (defense in depth if the
+// DB policy ever drifts). The map may be filled in AFTER the stub starts (the
+// fixture mints tenant ids) as long as it is not mutated concurrently with
+// requests.
 const (
 	tktStrictCorrID = "11111111-2222-4333-8444-555555555555"
 	tktLaxCorrID    = "99999999-8888-4777-8666-555555555555"
+	tktTenantCorrID = "22222222-3333-4444-8555-666666666666"
+	tktMergedCorrID = "33333333-4444-4555-8666-777777777777"
+	tktCanonCorrID  = "44444444-5555-4666-8777-888888888888"
 )
 
-func corrCHStub(t *testing.T) *httptest.Server {
+type stubCorrRow struct {
+	tenant string // stored tenant_id ("" = platform-owned)
+	merged string // non-empty → state=merged, merged_into=this id
+	lax    bool   // mis-emulated policy: visible to every scope
+}
+
+func corrCHStub(t *testing.T, rows map[string]stubCorrRow) *httptest.Server {
 	t.Helper()
 	ch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sqlB, _ := io.ReadAll(r.Body)
@@ -186,16 +199,24 @@ func corrCHStub(t *testing.T) *httptest.Server {
 		data := []map[string]any{}
 		switch {
 		case strings.Contains(sql, "FROM netops.corr_objects"):
-			visible := scope == "__all__" || strings.Contains(sql, tktLaxCorrID)
-			if visible {
-				data = append(data, map[string]any{
-					"version": 3, "tenant_id": "",
-					"window_start": "2026-07-10 20:00:00", "window_end": "2026-07-10 20:10:00",
-					"trigger_signal": "sig-1", "verdict_tier": "suspected",
-					"top_hypothesis": "test hypothesis", "top_confidence": 0.9,
-					"evidence_missing": "", "hypotheses": "[]", "affected": "[]",
-					"layer_coverage": "{}", "app_impact": "{}",
-				})
+			for id, row := range rows {
+				if !strings.Contains(sql, id) {
+					continue
+				}
+				if row.lax || scope == "__all__" || scope == row.tenant {
+					state, mergedInto := "open", ""
+					if row.merged != "" {
+						state, mergedInto = "merged", row.merged
+					}
+					data = append(data, map[string]any{
+						"version": 3, "tenant_id": row.tenant, "state": state, "merged_into": mergedInto,
+						"window_start": "2026-07-10 20:00:00", "window_end": "2026-07-10 20:10:00",
+						"trigger_signal": "sig-1", "verdict_tier": "suspected",
+						"top_hypothesis": "test hypothesis", "top_confidence": 0.9,
+						"evidence_missing": "", "hypotheses": "[]", "affected": "[]",
+						"layer_coverage": "{}", "app_impact": "{}",
+					})
+				}
 			}
 		case strings.Contains(sql, "max(archived_version)"):
 			data = append(data, map[string]any{"av": 0})
@@ -214,7 +235,7 @@ func corrCHStub(t *testing.T) *httptest.Server {
 // policy has no untagged allowance — so every platform object 404'd even though
 // the sweeper (which reads at "__all__") ticketed them fine.
 func TestManualTicketCreate_CrossTenantAdminReachesPlatformObject(t *testing.T) {
-	ch := corrCHStub(t)
+	ch := corrCHStub(t, map[string]stubCorrRow{tktStrictCorrID: {tenant: ""}})
 	t.Setenv("CLICKHOUSE_URL", ch.URL)
 	srv, s, fix := setupTicketingTenants(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
@@ -246,7 +267,7 @@ func TestManualTicketCreate_CrossTenantAdminReachesPlatformObject(t *testing.T) 
 // ticket a foreign object even if the DB row policy leaks it (lax stub): the
 // object's row tenant ("" → global) ≠ the caller's tenant → 404, no enqueue.
 func TestManualTicketCreate_OwnerGuardDefaultClosed(t *testing.T) {
-	ch := corrCHStub(t)
+	ch := corrCHStub(t, map[string]stubCorrRow{tktLaxCorrID: {tenant: "", lax: true}})
 	t.Setenv("CLICKHOUSE_URL", ch.URL)
 	srv, s, fix := setupTicketingTenants(t)
 
@@ -256,6 +277,156 @@ func TestManualTicketCreate_OwnerGuardDefaultClosed(t *testing.T) {
 	}
 	if items, _ := s.ticketing.ListOutbox(context.Background(), "", true); len(items) != 0 {
 		t.Fatalf("owner guard must not enqueue; outbox has %d items", len(items))
+	}
+}
+
+// TestManualTicketCreate_TenantObjectOwnerStamped covers the tenant-owned leg of
+// the manual path: the platform owner may ticket a TENANT's object, and the
+// action must be stamped with the OBJECT's tenant (its policy, its connection,
+// its outbox) — never the caller's "global". A manual create by the owning
+// tenant races into the SAME idempotency key, so two clicks file one action; a
+// third tenant still 404s.
+func TestManualTicketCreate_TenantObjectOwnerStamped(t *testing.T) {
+	rows := map[string]stubCorrRow{}
+	ch := corrCHStub(t, rows)
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, s, fix := setupTicketingTenants(t)
+	a, b := fix["A"], fix["B"]
+	rows[tktTenantCorrID] = stubCorrRow{tenant: a.tenantID}
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", admin, map[string]any{})
+	if st != 202 {
+		t.Fatalf("platform owner create on tenant object = %d %s, want 202", st, body)
+	}
+	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", a.token, map[string]any{}); st != 202 {
+		t.Fatalf("owning tenant create on own object = %d %s, want 202", st, body)
+	}
+	items, err := s.ticketing.ListOutbox(context.Background(), "", true)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("outbox = %d items err=%v, want exactly 1 (same idempotency key)", len(items), err)
+	}
+	if items[0].TenantID != a.tenantID {
+		t.Fatalf("outbox stamped tenant %q, want the OBJECT's tenant %q", items[0].TenantID, a.tenantID)
+	}
+	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", b.token, map[string]any{}); st != 404 {
+		t.Fatalf("foreign tenant create = %d %s, want 404", st, body)
+	}
+}
+
+// TestManualTicketSync_OwnerKeyedUpdate covers the sync (update) leg through the
+// owner-keyed path: an open link stored under the object's owning tenant is
+// found, the update enqueues under that tenant, and an object with no open
+// ticket refuses with 409.
+func TestManualTicketSync_OwnerKeyedUpdate(t *testing.T) {
+	ch := corrCHStub(t, map[string]stubCorrRow{
+		tktStrictCorrID: {tenant: ""},
+		tktTenantCorrID: {tenant: ""},
+	})
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, s, _ := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	if err := s.ticketing.PutLink(context.Background(), ticketLink{
+		TenantID: TenantGlobal, CorrObjectID: tktStrictCorrID, ExternalSystem: "servicenow",
+		Status: "open", TicketNumber: "INC0000042", SysID: "sysabc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket/sync", admin, map[string]any{})
+	if st != 202 {
+		t.Fatalf("manual sync with open link = %d %s, want 202", st, body)
+	}
+	items, _ := s.ticketing.ListOutbox(context.Background(), "", true)
+	if len(items) != 1 || items[0].Action != "update" || items[0].TenantID != TenantGlobal {
+		t.Fatalf("outbox after sync = %+v, want one update stamped %q", items, TenantGlobal)
+	}
+	// No open ticket → 409, nothing enqueued.
+	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket/sync", admin, map[string]any{}); st != 409 {
+		t.Fatalf("manual sync without a link = %d %s, want 409", st, body)
+	}
+}
+
+// TestManualTicketCreate_MergedObject409 pins the merged-object contract: acting
+// on a superseded object refuses with 409 carrying the canonical id (never a
+// misleading 404, never a duplicate ticket on a dead object).
+func TestManualTicketCreate_MergedObject409(t *testing.T) {
+	ch := corrCHStub(t, map[string]stubCorrRow{
+		tktMergedCorrID: {tenant: "", merged: tktCanonCorrID},
+	})
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, s, _ := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktMergedCorrID+"/ticket", admin, map[string]any{})
+	if st != 409 || !strings.Contains(string(body), tktCanonCorrID) {
+		t.Fatalf("create on merged object = %d %s, want 409 carrying canonical id %s", st, body, tktCanonCorrID)
+	}
+	if items, _ := s.ticketing.ListOutbox(context.Background(), "", true); len(items) != 0 {
+		t.Fatalf("merged object must not enqueue; outbox has %d items", len(items))
+	}
+}
+
+// TestResolvePolicy_FailsClosedOnMultipleEnabled pins the runtime invariant:
+// one enabled policy → it governs; a violated invariant (two enabled, seeded
+// past the store guard as legacy data would be) NEVER picks a winner by row
+// order — ticketing holds (fail closed).
+func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
+	store := newMemTicketingStore()
+	sw := &ticketSweeper{store: store}
+	ctx := context.Background()
+
+	if err := store.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t-x", Name: "strict",
+		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sw.resolvePolicy(ctx, "t-x"); got.ID != "p1" {
+		t.Fatalf("one enabled policy: resolved %q, want p1", got.ID)
+	}
+	// Seed a second ENABLED policy directly (legacy/drifted data — PutPolicy and
+	// the pg unique index both refuse this shape now).
+	store.mu.Lock()
+	store.policies[memKey("t-x", "p2")] = incidentPolicy{ID: "p2", TenantID: "t-x", Name: "permissive",
+		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
+	store.mu.Unlock()
+	got := sw.resolvePolicy(ctx, "t-x")
+	if got.Enabled {
+		t.Fatalf("two enabled policies must fail CLOSED (Enabled=false hold), resolved %+v", got)
+	}
+}
+
+// TestPutPolicy_ConcurrentEnableSingleWinner proves the store-level invariant
+// closes the check-then-write race the HTTP pre-check cannot: of two concurrent
+// enables for one tenant+system, exactly one wins and the loser gets
+// errPolicyConflict.
+func TestPutPolicy_ConcurrentEnableSingleWinner(t *testing.T) {
+	store := newMemTicketingStore()
+	ctx := context.Background()
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, id := range []string{"c1", "c2"} {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			errs <- store.PutPolicy(ctx, incidentPolicy{ID: id, TenantID: "t-race",
+				ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"})
+		}(id)
+	}
+	wg.Wait()
+	close(errs)
+	conflicts, oks := 0, 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			oks++
+		case errors.Is(err, errPolicyConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if oks != 1 || conflicts != 1 {
+		t.Fatalf("concurrent enables: %d ok / %d conflict, want exactly 1/1", oks, conflicts)
 	}
 }
 

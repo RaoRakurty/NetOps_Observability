@@ -155,6 +155,7 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 		}
 		for _, p := range existing {
 			if p.Enabled && p.ID != in.ID && p.ExternalSystem == in.ExternalSystem {
+				s.tktPolicyConflicts.Add(1)
 				writeError(w, http.StatusConflict, fmt.Errorf(
 					"policy %q is already enabled for %s — only one enabled policy per system; disable it first",
 					orDefault(p.Name, p.ID), in.ExternalSystem))
@@ -163,6 +164,14 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 		}
 	}
 	if err := s.ticketing.PutPolicy(r.Context(), in); err != nil {
+		// The store enforces the one-enabled invariant transactionally (partial
+		// unique index / in-store lock) — the pre-check above is only the friendly
+		// message; a racing enable that slips past it still lands here as 409.
+		if errors.Is(err, errPolicyConflict) {
+			s.tktPolicyConflicts.Add(1)
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -239,7 +248,19 @@ func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request
 		WindowStart:       time.Unix(0, 0).UTC(),
 		WindowEnd:         time.Unix(int64(in.PersistenceSeconds), 0).UTC(),
 	}
-	writeJSON(w, http.StatusOK, evalTicketDecision(facts, policy, nil, time.Now().UTC()))
+	// Name the EXACT policy evaluated (id + last-modified as its version): a
+	// simulator verdict is only trustworthy if the operator can tell which
+	// configuration produced it (2026-07-10: a shadowed policy made the active
+	// configuration ambiguous). Additive keys — create/reason stay top-level.
+	dec := evalTicketDecision(facts, policy, nil, time.Now().UTC())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"create":            dec.Create,
+		"reason":            dec.Reason,
+		"policy_id":         policy.ID,
+		"policy_name":       policy.Name,
+		"policy_enabled":    policy.Enabled,
+		"policy_updated_at": policy.UpdatedAt,
+	})
 }
 
 // ── per-correlation tickets — routed from handleCorrelationByID ───────────────
@@ -296,7 +317,7 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	if cross {
 		scope = "__all__"
 	}
-	payload, policy, owner, status, err := s.buildTicketPayloadForObject(r.Context(), scope, id)
+	payload, policy, owner, mergedInto, status, err := s.buildTicketPayloadForObject(r.Context(), scope, id)
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -306,6 +327,19 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	// policy ever lets a foreign row through, a tenant-scoped caller still 404s.
 	if !cross && owner != canonicalCorrTenant(tenant) {
 		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
+		return
+	}
+	// A merged object is superseded: ticketing it would double-file the incident
+	// (the sweeper only ever tickets the surviving object). Refuse with the
+	// canonical id — an explicit contract, never a misleading 404. Checked after
+	// the ownership guard so the redirect never leaks across tenants.
+	if mergedInto != "" {
+		s.tktMergedRedirects.Add(1)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":                    "this correlation object was merged — act on the surviving object instead",
+			"requested_correlation_id": id,
+			"canonical_correlation_id": mergedInto,
+		})
 		return
 	}
 	system := orDefault(policy.ExternalSystem, "servicenow")
@@ -336,19 +370,26 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 // OWNING tenant (row tenant_id canonicalized ""→global) — the policy is resolved
 // under the owner, never the read scope (which may be "__all__" for a
 // cross-tenant caller). status is an HTTP status for the caller to surface on error.
-func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketPayload, incidentPolicy, string, int, error) {
+// mergedInto is non-empty when the object was merged into another correlation —
+// the caller decides how to surface that (only AFTER its ownership guard, so a
+// leaked foreign row never discloses another tenant's canonical id).
+func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketPayload, incidentPolicy, string, string, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(ctx, scope, id, 0)
 	if err != nil {
-		return ticketPayload{}, incidentPolicy{}, "", status, err
+		return ticketPayload{}, incidentPolicy{}, "", "", status, err
 	}
 	owner := canonicalCorrTenant(asString(meta["tenant_id"]))
+	mergedInto := ""
+	if asString(meta["state"]) == "merged" {
+		mergedInto = asString(meta["merged_into"])
+	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
 	view := buildRcaPathView(id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
-	policy := (&ticketSweeper{store: s.ticketing}).resolvePolicy(ctx, owner)
+	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner)
 	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", ""))
-	return payload, policy, owner, http.StatusOK, nil
+	return payload, policy, owner, mergedInto, http.StatusOK, nil
 }
 
 // ── outbox + audit observability — /api/tickets/{outbox,audit} ────────────────

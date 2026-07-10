@@ -236,10 +236,35 @@ func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant string) incid
 	if err != nil || len(policies) == 0 {
 		return defaultIncidentPolicy(tenant)
 	}
+	var enabled []incidentPolicy
 	for _, p := range policies {
 		if p.Enabled {
-			return p
+			enabled = append(enabled, p)
 		}
 	}
-	return policies[0]
+	switch len(enabled) {
+	case 1:
+		return enabled[0]
+	case 0:
+		// Explicitly configured but all disabled = the tenant opted OUT.
+		return policies[0]
+	}
+	// >1 enabled should be impossible (partial unique index + write-path 409) —
+	// if legacy data or drift ever violates it, FAIL CLOSED: hold all ticketing
+	// for the tenant and say so loudly, never silently pick a winner by row
+	// order (live incident 2026-07-10: a shadowed permissive policy flooded a
+	// real PDI at ~7 tickets/min while a confirmed-only policy appeared active).
+	ids := make([]string, len(enabled))
+	for i, p := range enabled {
+		ids[i] = p.ID
+	}
+	logWarn("ticketing", "INVARIANT VIOLATION: multiple enabled incident policies — ticketing held (fail closed)",
+		map[string]any{"tenant": tenant, "policy_ids": strings.Join(ids, ","), "system": orDefault(enabled[0].ExternalSystem, "servicenow")})
+	if sw.srv != nil {
+		sw.srv.tktPolicyMultiEnabled.Add(1)
+	}
+	held := defaultIncidentPolicy(tenant)
+	held.Enabled = false
+	held.Name = "HELD: conflicting enabled policies"
+	return held
 }

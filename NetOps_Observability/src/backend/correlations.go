@@ -402,7 +402,8 @@ func (s *server) loadCorrSlice(ctx context.Context, scope, id string, version in
 	}
 	// 1) Object meta: version + window bounds + verdict + missing evidence + trigger.
 	metaSQL := `
-SELECT version, tenant_id,
+SELECT version, tenant_id, state,
+       coalesce(toString(merged_into), '') AS merged_into,
        toString(window_start)   AS window_start,
        toString(window_end)     AS window_end,
        toString(trigger_signal) AS trigger_signal,

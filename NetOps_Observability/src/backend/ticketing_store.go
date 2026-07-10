@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,10 +21,20 @@ import (
 // tenant_iso FORCE-RLS policy via withTenant. A non-cross caller can never see,
 // fetch, write, or delete another tenant's policies, links, outbox, or audit.
 
+// errPolicyConflict is returned by PutPolicy when saving an ENABLED policy
+// while another policy is already enabled for the same (tenant, external
+// system). The HTTP layer pre-checks and 409s with the conflicting policy's
+// name; this store-level invariant closes the check-then-write race (and any
+// non-API write path). In Postgres it is enforced transactionally by the
+// incident_policies_one_enabled partial unique index (migration 0021).
+var errPolicyConflict = errors.New("another policy is already enabled for this tenant and external system")
+
 type ticketingStore interface {
 	// incident policies
 	ListPolicies(ctx context.Context, tenant string, cross bool) ([]incidentPolicy, error)
 	GetPolicy(ctx context.Context, tenant string, cross bool, id string) (incidentPolicy, bool, error)
+	// PutPolicy upserts one policy; returns errPolicyConflict when enabling it
+	// would violate the one-enabled-per-(tenant, external_system) invariant.
 	PutPolicy(ctx context.Context, p incidentPolicy) error
 	DeletePolicy(ctx context.Context, tenant string, cross bool, id string) (bool, error)
 
@@ -165,6 +177,17 @@ func (m *memTicketingStore) GetPolicy(_ context.Context, tenant string, cross bo
 func (m *memTicketingStore) PutPolicy(_ context.Context, p incidentPolicy) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Same invariant the pg backend enforces via the incident_policies_one_enabled
+	// partial unique index: at most one enabled policy per (tenant, system).
+	// Checked under the store lock, so concurrent enables cannot both pass.
+	if p.Enabled {
+		for _, ex := range m.policies {
+			if ex.Enabled && ex.ID != p.ID && ex.TenantID == p.TenantID &&
+				orDefault(ex.ExternalSystem, "servicenow") == orDefault(p.ExternalSystem, "servicenow") {
+				return errPolicyConflict
+			}
+		}
+	}
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = time.Now().UTC()
 	}
@@ -400,6 +423,11 @@ ON CONFLICT (tenant_id, id) DO UPDATE SET
 			orDefault(p.MinVerdict, "suspected"), p.RequireCustomerFacing, p.AllowProbeOnly,
 			p.AllowInternalMonitoring, p.SuspectedRequiresCritical, p.RequirePersistenceSeconds,
 			p.SuppressFlappingSeconds, p.AssignmentGroup, p.DefaultImpact, p.DefaultUrgency, filters)
+		// 23505 on incident_policies_one_enabled = the one-enabled invariant
+		// (migration 0021) — surface the typed conflict, not a raw driver error.
+		if err != nil && strings.Contains(err.Error(), "incident_policies_one_enabled") {
+			return errPolicyConflict
+		}
 		return err
 	})
 }

@@ -84,6 +84,12 @@ type server struct {
 	incidents           incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics          *incidentMetrics
 	ticketing           ticketingStore           // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	// ticketing invariant/contract counters (exposed on /metrics): enable attempts
+	// rejected by the one-enabled-policy rule, fail-closed holds on a violated
+	// invariant, and manual actions redirected off a merged object.
+	tktPolicyConflicts    atomic.Int64
+	tktPolicyMultiEnabled atomic.Int64
+	tktMergedRedirects    atomic.Int64
 	seams               *pgSeamStore             // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services            *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
 	topology            topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
@@ -1247,6 +1253,15 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	if s.tlsSrv != nil {
 		s.tlsSrv.writeTLSMetrics(w)
 	}
+	fmt.Fprintf(w, "# HELP netops_ticketing_policy_conflicts_total Policy enables rejected because another policy is enabled for the tenant+system.\n")
+	fmt.Fprintf(w, "# TYPE netops_ticketing_policy_conflicts_total counter\n")
+	fmt.Fprintf(w, "netops_ticketing_policy_conflicts_total %d\n", s.tktPolicyConflicts.Load())
+	fmt.Fprintf(w, "# HELP netops_ticketing_policy_multi_enabled_total Fail-closed holds because multiple enabled policies were found for one tenant+system (invariant violation).\n")
+	fmt.Fprintf(w, "# TYPE netops_ticketing_policy_multi_enabled_total counter\n")
+	fmt.Fprintf(w, "netops_ticketing_policy_multi_enabled_total %d\n", s.tktPolicyMultiEnabled.Load())
+	fmt.Fprintf(w, "# HELP netops_ticketing_merged_redirects_total Manual ticket actions refused with the canonical id because the object was merged.\n")
+	fmt.Fprintf(w, "# TYPE netops_ticketing_merged_redirects_total counter\n")
+	fmt.Fprintf(w, "netops_ticketing_merged_redirects_total %d\n", s.tktMergedRedirects.Load())
 }
 
 // ---- helpers ----------------------------------------------------------------

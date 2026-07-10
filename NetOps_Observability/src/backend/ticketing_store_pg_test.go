@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -99,5 +100,87 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 	if _, found, _ := st.GetLink(ctx, "globex", false, "obj-a", "servicenow"); found {
 		t.Fatalf("RLS leak: globex fetched acme's ticket link")
+	}
+}
+
+// TestPgTicketingStore_SingleEnabledPolicyInvariant proves the one-enabled-
+// policy-per-(tenant, system) invariant end to end against REAL Postgres:
+// (1) live writes — the incident_policies_one_enabled partial unique index
+// (migration 0021) rejects a second enable transactionally, surfaced as
+// errPolicyConflict; (2) the migration body itself — replayed against seeded
+// duplicate enabled policies (the representative pre-0021 data shape) it must
+// deterministically keep only the most recently updated one, under FORCE RLS
+// (the SET LOCAL '*' inside the file is what makes the dedupe UPDATE see rows).
+func TestPgTicketingStore_SingleEnabledPolicyInvariant(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres ticketing-store test")
+	}
+	ctx := context.Background()
+	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+	defer ps.db.close()
+	st := &pgTicketingStore{db: ps.db}
+
+	// ── live invariant: index rejects the second enable as errPolicyConflict ──
+	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "acme", Name: "strict",
+		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
+		t.Fatalf("first enabled policy: %v", err)
+	}
+	err = st.PutPolicy(ctx, incidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
+		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"})
+	if !errors.Is(err, errPolicyConflict) {
+		t.Fatalf("second enabled policy: err = %v, want errPolicyConflict", err)
+	}
+	// Disabled coexists; another tenant is independent.
+	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
+		ExternalSystem: "servicenow", Enabled: false, MinVerdict: "suspected"}); err != nil {
+		t.Fatalf("second DISABLED policy: %v", err)
+	}
+	if err := st.PutPolicy(ctx, incidentPolicy{ID: "q1", TenantID: "globex", Name: "own",
+		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
+		t.Fatalf("other tenant enabled policy: %v", err)
+	}
+
+	// ── migration replay against representative duplicate data ──
+	body, err := migrationsFS.ReadFile("migrations/0021_incident_policy_single_enabled.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	tx, err := ps.db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // never leave the seeded shape behind
+	for _, stmt := range []string{
+		`SET LOCAL app.tenant_id = '*'`,
+		`DROP INDEX incident_policies_one_enabled`,
+		`UPDATE incident_policies SET enabled = true, updated_at = now() - interval '1 hour' WHERE tenant_id = 'acme'`,
+		`UPDATE incident_policies SET updated_at = now() WHERE tenant_id = 'acme' AND id = 'p2'`,
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatalf("replay migration 0021 on duplicate data: %v", err)
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM incident_policies WHERE tenant_id = 'acme' AND enabled`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var enabled []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		enabled = append(enabled, id)
+	}
+	if len(enabled) != 1 || enabled[0] != "p2" {
+		t.Fatalf("after dedupe, enabled = %v, want exactly [p2] (most recently updated wins)", enabled)
 	}
 }
