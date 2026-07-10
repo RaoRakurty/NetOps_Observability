@@ -369,48 +369,34 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    themes restyle it without per-theme rules. Scoped to .shell-v2 so these win
    the cascade over the labelled-rail defaults above. */
 .shell.shell-v2 {
-  --sidebar-w: 52px;
+  --sidebar-w: 44px;
   /* ONE etched-divider spec for every zone break in the pane (head, groups,
      foot) — a faint centered 22px fade, near-invisible by design. All zone
      rules consume this so the marks stay identical and symmetric. */
   --rail-etch: linear-gradient(90deg, transparent,
     color-mix(in srgb, var(--rail-fg) 13%, transparent), transparent);
-  /* The pane's edge hairline hue — a pale, elegant purple. Its own token
-     (not --rail-accent) so it stays lavender in every theme; Light's
-     rail-accent is slate and would grey the edge. */
-  --rail-edge: #B4A5F5;
 }
-/* Hairline edge: the base rail stacks THREE 1px effects on its right edge
-   (dark inset shadow + border + the seam 1px outside) which reads as a thick
-   rule. Fold them into ONE faint line: the seam overlays the border, the
-   softened border is the only structure, the dark inner shadow goes. */
+/* Edge: ONE crisp neutral hairline. The base rail stacks three 1px effects
+   (dark inset shadow + border + light seam) which read as a thick rule; v2
+   keeps only the border, softened. The colourful glyphs are the pane's
+   identity — its chrome stays silent. */
 .shell-v2 .rail {
-  border-right-color: color-mix(in srgb, var(--rail-edge) 28%, transparent);
+  border-right-color: color-mix(in srgb, var(--rail-border) 70%, transparent);
   box-shadow: inset 0 1px 0 var(--rail-sheen);
 }
 .shell-v2 .rail-icon { color: var(--mod, var(--rail-accent)); width: 22px; }
 /* bolder stroke so the colourful glyphs read crisply at rail size */
 .shell-v2 .rail-icon svg, .shell-v2 .rail-brand-mark svg, .shell-v2 .rail-util-icon svg { stroke-width: 2; }
-/* The light seam — brightest at the head, dissolving down the pane. Sits on
-   the rail's right edge (over the structural hairline border). */
-.shell-v2 .rail::after {
-  content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 1px;
-  pointer-events: none;
-  background: linear-gradient(180deg,
-    transparent 0%,
-    color-mix(in srgb, var(--rail-edge) 48%, transparent) 14%,
-    color-mix(in srgb, var(--rail-edge) 14%, transparent) 52%,
-    transparent 96%);
-}
 /* One diagonal reflection streak across the glass (kept faint on purpose). */
 .shell-v2 .rail::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(115deg, transparent 6%, var(--rail-sheen) 18%, transparent 30%);
 }
-/* Backlit keys: 36px squircles, luminous ring + soft glow when active. */
+/* Backlit keys: 34px squircles, luminous ring + soft glow when active
+   (5px breathing room each side of the 44px pane). */
 .shell-v2 .rail-item {
   justify-content: center; padding: 0; gap: 0;
-  width: 36px; min-height: 36px; margin: 0 auto; border-radius: 10px;
+  width: 34px; min-height: 34px; margin: 0 auto; border-radius: 9px;
   transition: background 120ms ease, box-shadow 120ms ease, color 120ms ease;
 }
 .shell-v2 .rail-item:hover {
@@ -421,7 +407,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   background: color-mix(in srgb, var(--mod, var(--rail-accent)) 16%, transparent);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--mod, var(--rail-accent)) 42%, transparent),
-    0 0 14px color-mix(in srgb, var(--mod, var(--rail-accent)) 28%, transparent);
+    0 0 9px color-mix(in srgb, var(--mod, var(--rail-accent)) 26%, transparent);
 }
 /* The luminous pill IS the active indicator — retire the legacy left bar. */
 .shell-v2 .rail-item.active::before { display: none; }
@@ -468,7 +454,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    so their etched dividers center on the glass, never on an icon. */
 .shell-v2 .rail-account, .shell-v2 .rail-foot-zone { align-items: center; width: 100%; padding: 0; }
 .shell-v2 .rail-util-row { flex-direction: column; align-items: center; gap: 1px; padding: 0; width: 100%; }
-.shell-v2 .rail-util-icon { flex: none; justify-content: center; gap: 0; width: 36px; min-height: 30px; padding: 0; border-radius: 10px; }
+.shell-v2 .rail-util-icon { flex: none; justify-content: center; gap: 0; width: 34px; min-height: 30px; padding: 0; border-radius: 9px; }
 .shell-v2 .rail-account-btn { justify-content: center; gap: 0; padding: 6px 0; }
 .shell-v2 .rail-account-btn .avatar {
   box-shadow:
@@ -650,6 +636,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 @keyframes flyin { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .nav-flyout { animation: none; } }
+/* In the glass-pane shell the flyout is an EXTENSION of the rail, not a card
+   floating beside it: flush left edge, square left corners, no left border —
+   the panel appears to slide out from under the pane. */
+.shell-v2 .nav-flyout,
+.shell-v2 .rail-account .rail-account-pop {
+  border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0;
+}
 /* Flyout hierarchy — dense + EVEN: only the section title + group labels use the
    display face; every navigable leaf/sub-item shares ONE legible body font + a
    stepped left-indent (10 → 18 → 32px) so the tier reads at a glance. */
