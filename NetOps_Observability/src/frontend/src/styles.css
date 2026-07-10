@@ -374,7 +374,15 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
      foot) — a faint centered 22px fade, near-invisible by design. All zone
      rules consume this so the marks stay identical and symmetric. */
   --rail-etch: linear-gradient(90deg, transparent,
-    color-mix(in srgb, var(--rail-fg) 20%, transparent), transparent);
+    color-mix(in srgb, var(--rail-fg) 13%, transparent), transparent);
+}
+/* Hairline edge: the base rail stacks THREE 1px effects on its right edge
+   (dark inset shadow + border + the seam 1px outside) which reads as a thick
+   rule. Fold them into ONE faint line: the seam overlays the border, the
+   softened border is the only structure, the dark inner shadow goes. */
+.shell-v2 .rail {
+  border-right-color: color-mix(in srgb, var(--rail-border) 55%, transparent);
+  box-shadow: inset 0 1px 0 var(--rail-sheen);
 }
 .shell-v2 .rail-icon { color: var(--mod, var(--rail-accent)); width: 22px; }
 /* bolder stroke so the colourful glyphs read crisply at rail size */
@@ -382,12 +390,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 /* The light seam — brightest at the head, dissolving down the pane. Sits on
    the rail's right edge (over the structural hairline border). */
 .shell-v2 .rail::after {
-  content: ""; position: absolute; top: 0; bottom: 0; right: -1px; width: 1px;
+  content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 1px;
   pointer-events: none;
   background: linear-gradient(180deg,
     transparent 0%,
-    color-mix(in srgb, var(--rail-accent) 55%, transparent) 14%,
-    color-mix(in srgb, var(--rail-accent) 14%, transparent) 52%,
+    color-mix(in srgb, var(--rail-accent) 28%, transparent) 14%,
+    color-mix(in srgb, var(--rail-accent) 8%, transparent) 52%,
     transparent 96%);
 }
 /* One diagonal reflection streak across the glass (kept faint on purpose). */
@@ -501,7 +509,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    later in the file), whose downward `top:100%` would otherwise push this menu
    off the bottom of the viewport since the account button sits at the foot. */
 .rail-account .rail-account-pop {
-  position: fixed; left: calc(var(--sidebar-w) + 4px); right: auto;
+  position: fixed; left: var(--sidebar-w); right: auto;
   top: auto; bottom: 10px; min-width: 248px; z-index: 80;
 }
 
@@ -628,7 +636,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 
 /* Flyout overlay */
 .nav-flyout {
-  position: fixed; left: calc(var(--sidebar-w) + 4px); z-index: 70;
+  /* Dock flush against the rail's right edge — a floated gap reads as a
+     detached panel instead of the hovered section's own menu. */
+  position: fixed; left: var(--sidebar-w); z-index: 70;
   min-width: 224px; max-height: 74vh; overflow-y: auto;
   background: var(--rail-bg-2); border: 1px solid var(--rail-border);
   border-radius: var(--r-3); box-shadow: var(--shadow-pop); padding: 6px;
