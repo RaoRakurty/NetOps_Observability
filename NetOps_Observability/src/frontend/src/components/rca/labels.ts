@@ -16,14 +16,17 @@ import type { Tone } from "./rcaCase";
 // so they read on a WHITE card and on dark slate alike — no neon (which only
 // works on dark) and no pale (which only works on dark).
 export const C = {
-  // severity — mid-tone, theme-neutral (legible on white AND dark)
-  crit: "#E11D48",        // critical / contradicts / malformed
+  // severity — mid-tone, theme-neutral (legible on white AND dark).
+  // 2026-07: crit + discriminates lifted one step lighter (600→500) so the
+  // CONFIRMED red and the evidence violet read vivid, not heavy, on the light
+  // canvas; still ≥3:1 on white for the short bold chip text they colour.
+  crit: "#F43F5E",        // critical / contradicts / malformed (matches --crit)
   warn: "#D97706",        // warning / caution / needed-to-confirm / control-plane / seam
   caution: "#B45309",     // softer burnt-amber for inline warnings (calm caution, not alarm; AA on white)
   ok: "#16A34A",          // healthy / linked / supports
   info: "#2563EB",        // info / device-telemetry / present-not-linked
   flow: "#0D9488",        // flows (teal)
-  discriminates: "#7C3AED", // discriminating evidence (violet)
+  discriminates: "#8B5CF6", // discriminating evidence (violet)
   // text/surfaces — defer to theme tokens so they adapt light↔dark
   fg: "var(--fg)",        // primary text (theme-aware)
   muted: "#6B7280",       // secondary text — mid gray, readable on white + dark

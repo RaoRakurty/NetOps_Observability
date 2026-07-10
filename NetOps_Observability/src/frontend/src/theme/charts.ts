@@ -3,16 +3,21 @@
 // enough to feel alive on white, still AA-legible), in the spirit of
 // the reference platform / Grafana. Ordered so adjacent series stay maximally distinct.
 
+// 2026-07: the darker slots (indigo/violet/red/pink/sky/orange — the old
+// Tailwind 500/600 steps) lifted one step lighter (~25% brightness) so dense
+// bar boards read airy instead of heavy; hues that were already light
+// (amber/gold, cyan, emerald, teal) stay put. Validated (lightness band,
+// chroma floor, CVD adjacent-pair separation) on the light canvas.
 export const CHART_PALETTE = [
-  "#4f46e5", // indigo (brand)
+  "#818cf8", // indigo (brand)
   "#06b6d4", // cyan
   "#f59e0b", // amber
-  "#ec4899", // pink
+  "#f472b6", // pink
   "#10b981", // emerald
-  "#8b5cf6", // violet
-  "#ef4444", // red
-  "#0ea5e9", // sky
-  "#f97316", // orange
+  "#a78bfa", // violet
+  "#f87171", // red
+  "#38bdf8", // sky
+  "#fb923c", // orange
   "#14b8a6", // teal
 ];
 
@@ -23,14 +28,14 @@ export const CHART_PALETTE = [
 // stable hash into the palette so any unmatched metric still gets a distinct,
 // consistent colour rather than the brand indigo every time.
 const METRIC_HUES: [RegExp, string][] = [
-  [/error|discard|drop|fail|deny|reject|crit/i, "#ef4444"], // red
-  [/loss|miss/i, "#ec4899"],                                // pink
+  [/error|discard|drop|fail|deny|reject|crit/i, "#f87171"], // red
+  [/loss|miss/i, "#f472b6"],                                // pink
   [/latency|rtt|delay|jitter|response/i, "#f59e0b"],        // amber
   [/traffic|throughput|bandwidth|bits|bps|octet|byte|\btx\b|\brx\b/i, "#06b6d4"], // cyan
-  [/packet|pps|flow|session|conn/i, "#0ea5e9"],             // sky
-  [/cpu|load|util/i, "#8b5cf6"],                            // violet
-  [/mem|heap|buffer/i, "#4f46e5"],                          // indigo
-  [/temp|fan|power|env|heat/i, "#f97316"],                  // orange
+  [/packet|pps|flow|session|conn/i, "#38bdf8"],             // sky
+  [/cpu|load|util/i, "#a78bfa"],                            // violet
+  [/mem|heap|buffer/i, "#818cf8"],                          // indigo
+  [/temp|fan|power|env|heat/i, "#fb923c"],                  // orange
   [/up\b|avail|health|online|reach|ok\b/i, "#10b981"],      // emerald
   [/disk|storage|queue|depth/i, "#14b8a6"],                 // teal
 ];

@@ -10,7 +10,7 @@ const STATE_META: Record<string, { label: string; color: string }> = {
   healthy: { label: "Healthy", color: "#16A34A" },
   watch: { label: "Watch", color: "#D97706" },
   degraded: { label: "Degraded", color: "#EA580C" },
-  severe: { label: "Severe", color: "#E11D48" },
+  severe: { label: "Severe", color: "#F43F5E" },
 };
 const CONF_LABEL: Record<string, string> = {
   low: "Low", medium_low: "Medium-low", medium: "Medium", high: "High",

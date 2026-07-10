@@ -35,10 +35,10 @@
   --glass-scrim: rgba(17, 24, 39, 0.22);            /* gentle, non-grey dim */
 
   /* Severity scale — solid hue + translucent fill, used by Logs/Alerts. */
-  --sev-critical: #e11d48;  --sev-critical-bg: rgba(225, 29, 72, 0.10);
-  --sev-error:    #ea580c;  --sev-error-bg:    rgba(234, 88, 12, 0.10);
+  --sev-critical: #f43f5e;  --sev-critical-bg: rgba(244, 63, 94, 0.10);
+  --sev-error:    #f97316;  --sev-error-bg:    rgba(249, 115, 22, 0.10);
   --sev-warning:  #d97706;  --sev-warning-bg:  rgba(217, 119, 6, 0.12);
-  --sev-notice:   #7c3aed;  --sev-notice-bg:   rgba(124, 58, 237, 0.10);
+  --sev-notice:   #8b5cf6;  --sev-notice-bg:   rgba(139, 92, 246, 0.10);
   --sev-info:     #2563eb;  --sev-info-bg:     rgba(37, 99, 235, 0.10);
   --sev-debug:    #64748b;  --sev-debug-bg:    rgba(100, 116, 139, 0.12);
   --sev-ok:       #059669;  --sev-ok-bg:       rgba(5, 150, 105, 0.10);
@@ -1604,7 +1604,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border-radius: 6px; padding: 2px 8px;
 }
 .op-fact b { font-family: var(--font-mono, monospace); font-size: 13px; color: var(--fg); }
-.op-fact.verdict-confirmed { color: var(--bad); border-color: var(--bad); }
+/* Confirmed verdict wears a 25%-softened severity red — alarming enough to
+   read as confirmed, without the heavy full-strength alarm hue. */
+.op-fact.verdict-confirmed { color: color-mix(in srgb, var(--bad) 75%, #fff); border-color: color-mix(in srgb, var(--bad) 60%, transparent); }
 .op-fact.verdict-suspected { color: var(--warn); border-color: var(--warn); }
 .op-kv { font-size: 12.5px; line-height: 1.5; }
 .op-kv-k { color: var(--muted); margin-right: 4px; }

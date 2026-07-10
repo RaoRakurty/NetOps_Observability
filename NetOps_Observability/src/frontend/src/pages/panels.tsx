@@ -666,7 +666,7 @@ function StackPerformance() {
 // the network-wide health %s are computed from the metric plane with a spark.
 
 type Band = "good" | "warn" | "bad" | "accent";
-const BAND_HEX: Record<Band, string> = { good: "#10b981", warn: "#f59e0b", bad: "#f43f5e", accent: "#4f46e5" };
+const BAND_HEX: Record<Band, string> = { good: "#10b981", warn: "#f59e0b", bad: "#f43f5e", accent: "#818cf8" };
 
 type KpiSpec = {
   key: string;
