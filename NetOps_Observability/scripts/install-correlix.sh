@@ -384,6 +384,22 @@ cmd_install() {
   if [ -n "${CORR_RETENTION_PROFILE:-}" ]; then
     args+=(--retention-profile "$CORR_RETENTION_PROFILE")
   fi
+  # #102: host/workload-derived resource sizing (scripts/resource_planner.py).
+  # Fresh customer installs size to the detected host by default; drop a
+  # correlix-sizing.yaml next to this script to declare workload inputs
+  # (devices, flows/s, EPS, retention, users, tenants). The planner REFUSES
+  # with a sizing report when the workload cannot safely fit — that is the
+  # feature, not a bug. Opt out with CORRELIX_NO_SIZING=1 (lab-tier defaults).
+  if [ "${CORRELIX_NO_SIZING:-0}" != 1 ]; then
+    args+=(--plan-resources)
+    if [ -f "$HERE/correlix-sizing.yaml" ]; then
+      args+=(--sizing-file "$HERE/correlix-sizing.yaml")
+      say "Resource sizing: detected host + correlix-sizing.yaml workload inputs."
+    else
+      say "Resource sizing: detected host resources (auto profile)."
+      say "${DIM}(declare your workload in correlix-sizing.yaml for workload-aware sizing — see docs/RESOURCE_SIZING.md)${RST}"
+    fi
+  fi
 
   say ""
   if ! python3 "$ROOT/scripts/install.py" "${args[@]}"; then
