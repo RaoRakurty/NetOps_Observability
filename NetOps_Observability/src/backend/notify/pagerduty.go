@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"netops/backend/models"
@@ -31,9 +32,32 @@ func NewPagerDuty(routingKey string) *PagerDuty {
 
 func (p *PagerDuty) Name() string { return "pagerduty" }
 
+// pdSeverity maps platform severities onto the Events API v2 enum
+// (critical | error | warning | info) — anything else is rejected with a 400.
+func pdSeverity(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical", "crit":
+		return "critical"
+	case "error", "err", "major":
+		return "error"
+	case "warning", "warn", "minor", "high":
+		return "warning"
+	case "info", "notice", "":
+		return "info"
+	}
+	return "warning"
+}
+
 func (p *PagerDuty) Send(a models.Alert) error {
 	if p.routingKey == "" {
 		return errors.New("pagerduty routing key not configured")
+	}
+	// Events v2 rejects the whole event (400) on an empty source or a severity
+	// outside its enum — normalize both here so every caller (alert engine,
+	// channel test, future paths) sends a valid event.
+	source := a.DeviceID
+	if source == "" {
+		source = "correlix"
 	}
 	payload := map[string]any{
 		"routing_key":  p.routingKey,
@@ -41,8 +65,8 @@ func (p *PagerDuty) Send(a models.Alert) error {
 		"dedup_key":    a.ID,
 		"payload": map[string]any{
 			"summary":  a.Summary,
-			"severity": a.Severity,
-			"source":   a.DeviceID,
+			"severity": pdSeverity(a.Severity),
+			"source":   source,
 			"custom_details": map[string]any{
 				"rule":   a.Rule,
 				"labels": a.Labels,

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ticketing_http_test.go — cross-tenant isolation through the REAL router + auth
@@ -185,9 +186,11 @@ const (
 )
 
 type stubCorrRow struct {
-	tenant string // stored tenant_id ("" = platform-owned)
-	merged string // non-empty → state=merged, merged_into=this id
-	lax    bool   // mis-emulated policy: visible to every scope
+	tenant   string // stored tenant_id ("" = platform-owned)
+	merged   string // non-empty → state=merged, merged_into=this id
+	lax      bool   // mis-emulated policy: visible to every scope
+	verdict  string // "" → suspected
+	affected string // "" → "[]" (no affected entities)
 }
 
 func corrCHStub(t *testing.T, rows map[string]stubCorrRow) *httptest.Server {
@@ -211,9 +214,9 @@ func corrCHStub(t *testing.T, rows map[string]stubCorrRow) *httptest.Server {
 					data = append(data, map[string]any{
 						"version": 3, "tenant_id": row.tenant, "state": state, "merged_into": mergedInto,
 						"window_start": "2026-07-10 20:00:00", "window_end": "2026-07-10 20:10:00",
-						"trigger_signal": "sig-1", "verdict_tier": "suspected",
+						"trigger_signal": "sig-1", "verdict_tier": orDefault(row.verdict, "suspected"),
 						"top_hypothesis": "test hypothesis", "top_confidence": 0.9,
-						"evidence_missing": "", "hypotheses": "[]", "affected": "[]",
+						"evidence_missing": "", "hypotheses": "[]", "affected": orDefault(row.affected, "[]"),
 						"layer_coverage": "{}", "app_impact": "{}",
 					})
 				}
@@ -653,5 +656,51 @@ func TestTicketStatusRead_AgreesAcrossPaths(t *testing.T) {
 	_ = json.Unmarshal(body, &out)
 	if out.Status["state"] != "not_created" {
 		t.Fatalf("tenant sees %v, want not_created (no cross-tenant ticket leak)", out.Status)
+	}
+}
+
+// TestTicketing_NoConnectionGates pins the dead-letter-flood fix (2026-07-11:
+// 1,372 DLQ rows for one unconnected tenant): a tenant with NO ticketing
+// connection gets an honest manual 409 (never a 202 that dead-letters) and the
+// sweeper skips it entirely; configuring the connection unblocks both paths
+// with no backlog loss (the create idempotency key is stable).
+func TestTicketing_NoConnectionGates(t *testing.T) {
+	ch := corrCHStub(t, map[string]stubCorrRow{
+		tktStrictCorrID: {tenant: "", verdict: "confirmed", affected: `{"devices":["leaf1"]}`},
+	})
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, s, _ := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+	ctx := context.Background()
+
+	// Wire an ITSM config store with NO connections.
+	s.itsmCfg = &itsmConfigStore{cfgs: map[string]itsmConfig{}, live: map[string]*itsmLive{}}
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket", admin, map[string]any{})
+	if st != 409 || !strings.Contains(string(body), "connection") {
+		t.Fatalf("manual create without a connection = %d %s, want honest 409", st, body)
+	}
+	sw := newTicketSweeper(s, s.ticketing)
+	if sw.evaluate(ctx, sweepCandidate{id: tktStrictCorrID, tenant: TenantGlobal}, time.Now().UTC()) {
+		t.Fatal("sweeper must skip a tenant with no ticketing connection")
+	}
+	if items, _ := s.ticketing.ListOutbox(ctx, "", true); len(items) != 0 {
+		t.Fatalf("nothing may enqueue without a connection; outbox has %d items", len(items))
+	}
+
+	// Configure the platform connection → both paths unblock.
+	s.itsmCfg.mu.Lock()
+	s.itsmCfg.cfgs[""] = itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://test.example"}}
+	s.itsmCfg.mu.Unlock()
+
+	if st, body = do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket", admin, map[string]any{}); st != 202 {
+		t.Fatalf("manual create with a connection = %d %s, want 202", st, body)
+	}
+	if !sw.evaluate(ctx, sweepCandidate{id: tktStrictCorrID, tenant: TenantGlobal}, time.Now().UTC()) {
+		t.Fatal("sweeper must enqueue once the connection exists")
+	}
+	items, _ := s.ticketing.ListOutbox(ctx, "", true)
+	if len(items) != 1 {
+		t.Fatalf("manual+sweeper collapse to ONE create via the idempotency key; outbox has %d", len(items))
 	}
 }

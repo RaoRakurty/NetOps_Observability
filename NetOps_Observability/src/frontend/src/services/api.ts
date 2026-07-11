@@ -450,6 +450,12 @@ export type IncidentPolicy = {
   assignment_group?: string;
   default_impact: number;  // 1..4
   default_urgency: number; // 1..4
+  // Per-verdict priority mapping — 0 = automatic (confirmed+critical → 1/1,
+  // confirmed → urgency 1, suspected uses the defaults above).
+  impact_confirmed_critical?: number;
+  urgency_confirmed_critical?: number;
+  impact_confirmed?: number;
+  urgency_confirmed?: number;
 };
 export type IncidentPolicyTestFacts = {
   verdict: string;

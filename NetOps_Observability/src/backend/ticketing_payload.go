@@ -136,10 +136,9 @@ func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incident
 		MissingEvidence:   view.MissingEvidenceSummary,
 		ImpactedApps:      facts.ImpactedApps,
 		RCAURL:            rcaDeepLink(rcaBaseURL, view.CorrObjectID),
-		Impact:            escalatedImpact(policy.DefaultImpact, view.Verdict, facts.PeakSeverity),
-		Urgency:           escalatedUrgency(policy.DefaultUrgency, view.Verdict, facts.PeakSeverity),
 		AssignmentGroup:   policy.AssignmentGroup,
 	}
+	p.Impact, p.Urgency = ticketImpactUrgency(policy, view.Verdict, facts.PeakSeverity)
 	p.EvidenceUsed = evidenceUsedLines(view.EvidenceSummary)
 	if p.Title == "" {
 		// Defensive: never ship a blank short description.
@@ -158,10 +157,11 @@ func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incident
 
 // ── helpers (pure) ───────────────────────────────────────────────────────────
 
-// escalatedImpact / escalatedUrgency derive the ServiceNow impact/urgency from
-// the RCA verdict + peak severity, using the policy's configured defaults as
-// the BASELINE — escalation only ever makes a ticket MORE severe (numerically
-// lower), never demotes what the operator configured. ServiceNow computes
+// ticketImpactUrgency derives the ServiceNow impact/urgency from the RCA
+// verdict + peak severity. The policy's per-verdict mapping wins when set
+// (the customer decides, including demoting); an unset (0) slot falls back to
+// the built-in escalation, which uses the policy defaults as the BASELINE and
+// only ever makes a ticket MORE severe (numerically lower). ServiceNow computes
 // Priority from its Impact×Urgency matrix, so with the 2/2 defaults:
 //
 //	confirmed + critical → 1/1 → P1 Critical
@@ -170,20 +170,26 @@ func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incident
 //
 // A confirmed root cause filing at the same P3 as a tentative suspicion was the
 // 2026-07-11 operator complaint — the verdict was never consulted.
-func escalatedImpact(base int, verdict, peakSeverity string) int {
-	if verdict == "confirmed" && peakSeverity == "crit" {
-		return moreSevere(base, 1)
-	}
-	return base
-}
-
-func escalatedUrgency(base int, verdict, _ string) int {
+func ticketImpactUrgency(p incidentPolicy, verdict, peakSeverity string) (int, int) {
 	if verdict != "confirmed" {
-		return base
+		return p.DefaultImpact, p.DefaultUrgency
+	}
+	if peakSeverity == "crit" {
+		return orInt(p.ImpactConfirmedCritical, moreSevere(p.DefaultImpact, 1)),
+			orInt(p.UrgencyConfirmedCritical, moreSevere(p.DefaultUrgency, 1))
 	}
 	// A confirmed root cause is always urgent — the RCA engine has already done
 	// the triage a human would do before raising urgency.
-	return moreSevere(base, 1)
+	return orInt(p.ImpactConfirmed, p.DefaultImpact),
+		orInt(p.UrgencyConfirmed, moreSevere(p.DefaultUrgency, 1))
+}
+
+// orInt returns v when set (>0), else the fallback.
+func orInt(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	return fallback
 }
 
 // moreSevere picks the more severe of two ServiceNow impact/urgency values

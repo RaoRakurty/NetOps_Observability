@@ -30,7 +30,14 @@ type incidentPolicy struct {
 	AssignmentGroup           string         `json:"assignment_group"`
 	DefaultImpact             int            `json:"default_impact"`
 	DefaultUrgency            int            `json:"default_urgency"`
-	Filters                   map[string]any `json:"filters,omitempty"`
+	// Per-verdict ServiceNow priority mapping (0 = automatic escalation:
+	// confirmed+critical → 1/1 = P1, confirmed → urgency 1 = P2, suspected uses
+	// the defaults above). Explicit values win outright — the customer decides.
+	ImpactConfirmedCritical  int            `json:"impact_confirmed_critical,omitempty"`
+	UrgencyConfirmedCritical int            `json:"urgency_confirmed_critical,omitempty"`
+	ImpactConfirmed          int            `json:"impact_confirmed,omitempty"`
+	UrgencyConfirmed         int            `json:"urgency_confirmed,omitempty"`
+	Filters                  map[string]any `json:"filters,omitempty"`
 	CreatedAt                 time.Time      `json:"created_at"`
 	UpdatedAt                 time.Time      `json:"updated_at"`
 }

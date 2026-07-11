@@ -178,6 +178,17 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 	policy := sw.resolvePolicy(ctx, c.tenant)
 	system := orDefault(policy.ExternalSystem, "servicenow")
 
+	// A tenant with no ticketing connection can never send — enqueuing anyway
+	// just manufactures dead letters (live 2026-07-11: 1,372 DLQ rows for one
+	// unconnected tenant at ~1/min). Skip; once a connection is configured the
+	// object re-enqueues naturally on the next sweep (its create idempotency
+	// key is stable and no link exists yet).
+	if sw.srv != nil && sw.srv.itsmCfg != nil {
+		if _, ok := sw.srv.itsmCfg.ticketSystemConfig(c.tenant, system); !ok {
+			return false
+		}
+	}
+
 	link, found, err := sw.store.GetLink(ctx, c.tenant, false, c.id, system)
 	if err != nil {
 		logWarn("ticketing", "sweep link lookup failed",

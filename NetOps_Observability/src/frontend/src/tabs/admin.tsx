@@ -3674,6 +3674,23 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
           info="After a ticket resolves, suppress re-opening within this window. 0 = off." />
       </div>
 
+      {/* Per-verdict ticket priority mapping — the ITSM derives Priority from Impact x Urgency. */}
+      <h4 style={{ margin: "var(--sp-3) 0 var(--sp-1)" }}>Ticket priority mapping</h4>
+      <p className="mini-meta" style={{ margin: "0 0 var(--sp-2)" }}>
+        The ticketing system derives Priority from Impact x Urgency. 0 = automatic: a confirmed critical fault files at
+        1 / 1 (highest priority), a confirmed fault raises Urgency to High, and a suspected fault uses the defaults above.
+      </p>
+      <div className="form-grid">
+        <LabeledInput label="Impact — confirmed critical" type="number" value={String(p.impact_confirmed_critical ?? 0)}
+          onChange={(v) => set("impact_confirmed_critical", Number(v) || 0)} info="0 = automatic (1)." />
+        <LabeledInput label="Urgency — confirmed critical" type="number" value={String(p.urgency_confirmed_critical ?? 0)}
+          onChange={(v) => set("urgency_confirmed_critical", Number(v) || 0)} info="0 = automatic (1)." />
+        <LabeledInput label="Impact — confirmed" type="number" value={String(p.impact_confirmed ?? 0)}
+          onChange={(v) => set("impact_confirmed", Number(v) || 0)} info="0 = automatic (the default impact above)." />
+        <LabeledInput label="Urgency — confirmed" type="number" value={String(p.urgency_confirmed ?? 0)}
+          onChange={(v) => set("urgency_confirmed", Number(v) || 0)} info="0 = automatic (High)." />
+      </div>
+
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}>
         <PolicyCheck label="Enabled" info="When off, this policy never opens tickets (a tenant opt-out)." checked={p.enabled} onChange={(v) => set("enabled", v)} />
         <PolicyCheck label="Require customer-facing" info="Only ticket objects with a meaningful affected device/path/app." checked={p.require_customer_facing} onChange={(v) => set("require_customer_facing", v)} />

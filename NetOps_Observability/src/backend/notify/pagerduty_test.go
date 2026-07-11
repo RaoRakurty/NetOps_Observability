@@ -50,3 +50,43 @@ func TestPagerDutySendUnconfigured(t *testing.T) {
 		t.Fatal("expected error when routing key is empty")
 	}
 }
+
+// TestPagerDutySendNormalizesPayload pins the Events v2 validity rules that a
+// live 400 exposed (2026-07-11): source must never be empty (test alerts have
+// no DeviceID) and severity must land in the v2 enum (critical|error|warning|
+// info) — "notice"/"warn"/"crit" style platform values are mapped, never sent raw.
+func TestPagerDutySendNormalizesPayload(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"success"}`))
+	}))
+	defer srv.Close()
+	orig := pagerDutyEventsV2URL
+	pagerDutyEventsV2URL = srv.URL
+	defer func() { pagerDutyEventsV2URL = orig }()
+
+	p := NewPagerDuty("rk")
+	// No DeviceID (the channel-test shape) + a non-enum severity.
+	if err := p.Send(models.Alert{ID: "t1", Severity: "notice", Summary: "test"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	payload, _ := body["payload"].(map[string]any)
+	if payload["source"] == "" || payload["source"] == nil {
+		t.Fatalf("source must never be empty, got %v", payload["source"])
+	}
+	if payload["severity"] != "info" {
+		t.Fatalf("severity notice must map to info, got %v", payload["severity"])
+	}
+
+	for in, want := range map[string]string{
+		"critical": "critical", "crit": "critical", "error": "error",
+		"warn": "warning", "high": "warning", "notice": "info", "": "info", "weird": "warning",
+	} {
+		if got := pdSeverity(in); got != want {
+			t.Fatalf("pdSeverity(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

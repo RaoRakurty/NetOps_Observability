@@ -141,3 +141,26 @@ func TestTicketSeverityMapping(t *testing.T) {
 		t.Fatalf("suspected under a 1/1 policy = %d/%d, must keep 1/1", p.Impact, p.Urgency)
 	}
 }
+
+// TestTicketSeverityMapping_CustomerOverrides pins the per-policy priority
+// mapping (owner request 2026-07-11): explicit per-verdict impact/urgency wins
+// outright — including DEMOTING below the automatic escalation — and 0 keeps
+// the automatic behavior per slot.
+func TestTicketSeverityMapping_CustomerOverrides(t *testing.T) {
+	pol := defaultIncidentPolicy("t_a") // defaults 2/2
+	pol.ImpactConfirmedCritical, pol.UrgencyConfirmedCritical = 2, 2 // customer demotes P1→P3
+	pol.ImpactConfirmed = 3                                          // partial: urgency stays automatic (1)
+
+	i, u := ticketImpactUrgency(pol, "confirmed", "crit")
+	if i != 2 || u != 2 {
+		t.Fatalf("customer-demoted confirmed+crit = %d/%d, want 2/2", i, u)
+	}
+	i, u = ticketImpactUrgency(pol, "confirmed", "high")
+	if i != 3 || u != 1 {
+		t.Fatalf("confirmed with partial override = %d/%d, want 3/1 (explicit impact, automatic urgency)", i, u)
+	}
+	i, u = ticketImpactUrgency(pol, "suspected", "crit")
+	if i != 2 || u != 2 {
+		t.Fatalf("suspected always uses policy defaults = %d/%d, want 2/2", i, u)
+	}
+}

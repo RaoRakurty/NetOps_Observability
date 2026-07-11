@@ -200,6 +200,11 @@ func validateIncidentPolicy(p incidentPolicy) error {
 	if p.DefaultImpact < 0 || p.DefaultImpact > 4 || p.DefaultUrgency < 0 || p.DefaultUrgency > 4 {
 		return errors.New("default impact/urgency out of range [0, 4]")
 	}
+	for _, v := range []int{p.ImpactConfirmedCritical, p.UrgencyConfirmedCritical, p.ImpactConfirmed, p.UrgencyConfirmed} {
+		if v < 0 || v > 4 {
+			return errors.New("priority mapping impact/urgency out of range [0, 4] (0 = automatic)")
+		}
+	}
 	if len(p.AssignmentGroup) > 120 {
 		return errors.New("assignment_group too long (max 120)")
 	}
@@ -368,6 +373,15 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 		return
 	}
 	system := orDefault(policy.ExternalSystem, "servicenow")
+	// Honest refusal beats a 202 that dead-letters: an operator's manual create
+	// on a tenant with no ticketing connection can never reach ServiceNow.
+	if s.itsmCfg != nil {
+		if _, connOK := s.itsmCfg.ticketSystemConfig(owner, system); !connOK {
+			writeError(w, http.StatusConflict,
+				errors.New("no ticketing connection configured for this tenant — set up the ServiceNow connection under Incident Response → Integrations first"))
+			return
+		}
+	}
 	if action == "update" {
 		// Sync only makes sense for an existing open ticket.
 		link, found, _ := s.ticketing.GetLink(r.Context(), owner, false, id, system)

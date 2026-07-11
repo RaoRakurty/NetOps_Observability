@@ -142,7 +142,10 @@ func (a *serviceNowAdapter) HealthCheck(ctx context.Context, cfg ticketSystemCon
 func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error) {
 	body := snowIncidentFields(cfg, p)
 	body["work_notes"] = snowWorkNote("Correlix opened this incident from RCA correlation object "+p.CorrObjectID, p)
-	raw, _, err := a.do(ctx, cfg, http.MethodPost, "/api/now/table/incident", body)
+	// sysparm_input_display_value=true: reference fields (assignment_group,
+	// category) arrive as display NAMES, not sys_ids — without this ServiceNow
+	// silently drops them and the incident lands unassigned/uncategorized.
+	raw, _, err := a.do(ctx, cfg, http.MethodPost, "/api/now/table/incident?sysparm_input_display_value=true", body)
 	if err != nil {
 		return ticketRef{}, err
 	}
@@ -155,7 +158,8 @@ func (a *serviceNowAdapter) UpdateIncident(ctx context.Context, cfg ticketSystem
 	}
 	body := snowIncidentFields(cfg, p)
 	body["work_notes"] = snowWorkNote("RCA verdict updated", p)
-	_, _, err := a.do(ctx, cfg, http.MethodPatch, "/api/now/table/incident/"+url.PathEscape(ref.SysID), body)
+	_, _, err := a.do(ctx, cfg, http.MethodPatch,
+		"/api/now/table/incident/"+url.PathEscape(ref.SysID)+"?sysparm_input_display_value=true", body)
 	return err
 }
 
