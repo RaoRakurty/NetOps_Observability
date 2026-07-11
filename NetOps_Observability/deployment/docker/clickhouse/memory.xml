@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!--
+  #102 resource sizing: assert server-wide memory behavior instead of riding
+  stock-image defaults. CH 24.8 reads the cgroup-v2 limit; the ratio below
+  bounds the server at CH_MEM_RATIO x cgroup memory (vendor-recommended 0.9 —
+  headroom for allocator overhead and untracked native memory). The values
+  come from the resource plan (scripts/resource_planner.py) via the compose
+  environment; compose supplies defaults equal to today's behavior, so an
+  unset plan changes nothing.
+
+  max_server_memory_usage stays 0 (= "use the ratio"): one knob, no conflict.
+-->
+<clickhouse>
+    <max_server_memory_usage>0</max_server_memory_usage>
+    <max_server_memory_usage_to_ram_ratio from_env="CH_MEM_RATIO"/>
+    <max_concurrent_queries from_env="CH_MAX_CONCURRENT_QUERIES"/>
+</clickhouse>

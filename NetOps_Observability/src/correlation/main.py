@@ -427,7 +427,10 @@ CATALOG = builtin_catalog()
 
 # Evidence window: every canonical Signal written to the spine also lands here
 # (bounded by event-time age, pruned each cycle — §9 queues bounded).
-WINDOW_BUFFER: Deque[Signal] = deque(maxlen=50_000)
+# #102: bound from the resource plan (CORR_WINDOW_BUFFER, floor 50k = the
+# audited constant) so the window scales with the container's memory budget.
+WINDOW_BUFFER: Deque[Signal] = deque(
+    maxlen=max(50_000, int(os.environ.get("CORR_WINDOW_BUFFER", "50000"))))
 # Kafka delivery is at-least-once (auto-commit ~5s): a consumer restart
 # re-delivers recent messages, and a duplicated signal_id in the window
 # inflates snapshots and churns versions (found by basic testing — stored

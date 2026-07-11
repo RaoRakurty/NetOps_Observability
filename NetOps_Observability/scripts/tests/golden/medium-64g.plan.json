@@ -43,7 +43,7 @@
     "PG_SHARED_BUFFERS": "356MB",
     "PG_WORK_MEM": "7MB",
     "PROBER_GOMEMLIMIT": "403MiB",
-    "REDIS_MAXMEMORY": "96m",
+    "REDIS_MAXMEMORY": "96mb",
     "VICTORIA_MEM_ALLOWED_PERCENT": "60"
   },
   "limits_bytes": {

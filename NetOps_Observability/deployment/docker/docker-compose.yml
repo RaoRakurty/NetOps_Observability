@@ -60,6 +60,20 @@ services:
       POSTGRES_USER: ${DB_USER:?DB_USER required}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required}
       POSTGRES_DB: ${DB_NAME:-netops}
+    # #102: server tuning owned by the resource plan; every default equals the
+    # stock image value, so an unset plan changes nothing.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
     volumes:
       - ../../data/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -83,7 +97,7 @@ services:
     # (noeviction default — this is app STATE, never silently evict) instead of
     # the kernel killing it. Measured use is ~8 MiB; 96mb is 12× headroom.
     mem_limit: ${REDIS_MEM_LIMIT:-128m}
-    command: ["valkey-server", "--save", "60", "1", "--maxmemory", "96mb"]
+    command: ["valkey-server", "--save", "60", "1", "--maxmemory", "${REDIS_MAXMEMORY:-96mb}"]
     volumes:
       - ../../data/redis:/data
     healthcheck:
@@ -177,7 +191,7 @@ services:
       KAFKA_LOG_RETENTION_BYTES: ${BUS_RETENTION_BYTES:-536870912}
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
       # JVM heap bounded BELOW the cgroup cap so the kernel never OOM-kills it.
-      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
+      KAFKA_HEAP_OPTS: "-Xmx${KAFKA_HEAP:-512m} -Xms${KAFKA_HEAP_MIN:-256m}"
     volumes:
       - ../../data/kafka:/var/lib/kafka/data
     healthcheck:
@@ -295,6 +309,8 @@ services:
     mem_limit: ${GOFLOW2_MEM_LIMIT:-512m}
     cpus: ${GOFLOW2_CPU_LIMIT:-1}
     logging: *deflog
+    environment:
+      GOMEMLIMIT: ${GOFLOW2_GOMEMLIMIT:-460MiB}   # #102
     command:
       - "-listen"
       - "netflow://:2055,sflow://:6343,netflow://:4739"
@@ -460,6 +476,9 @@ services:
       # 30s, Prometheus scrape 30s), so this only drops duplicates, never
       # signal. Standard VM pairing with the scrape interval (#96).
       - "--dedup.minScrapeInterval=${VICTORIA_DEDUP:-30s}"
+      # #102: assert the cache budget (VM default 60% of cgroup) explicitly so
+      # the resource plan owns it; container limit remains the hard backstop.
+      - "--memory.allowedPercent=${VICTORIA_MEM_ALLOWED_PERCENT:-60}"
       # VM scrapes the stack's self-metrics itself (Prometheus removed, #97
       # footprint pass). suppressScrapeErrors: optional add-on targets
       # (cadvisor/node/grafana) are silent no-ops while their add-on is off.
@@ -603,7 +622,8 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
-    # CH auto-sizes its server memory to the cgroup limit, so mem_limit is enough.
+    # Server memory = CH_MEM_RATIO x the cgroup limit, ASSERTED in
+    # clickhouse/memory.xml (#102) — no longer riding the stock-image default.
     # Re-tuned 2560m→4g (host had ~8.7Gi headroom): high-fps flow ingest (lab
     # traffic generator, ~16M rows/h) made Top-talkers/Fanout GROUP BYs exceed
     # the old cap (MEMORY_LIMIT_EXCEEDED → empty panels).
@@ -614,6 +634,14 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      # #102: internal limits owned by the resource plan; defaults preserve
+      # today's exact values (stock ratio 0.9 / 1g hot_ui / 2g bg / 1.5g spill
+      # / stock 100 concurrent).
+      CH_MEM_RATIO: ${CH_MEM_RATIO:-0.9}
+      CH_HOT_UI_MEM: ${CH_HOT_UI_MEM:-1073741824}
+      CH_BG_MEM: ${CH_BG_MEM:-2147483648}
+      CH_SPILL_BYTES: ${CH_SPILL_BYTES:-1610612736}
+      CH_MAX_CONCURRENT_QUERIES: ${CH_MAX_CONCURRENT_QUERIES:-100}
     volumes:
       - ../../data/clickhouse:/var/lib/clickhouse
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -622,6 +650,8 @@ services:
       - ./clickhouse/custom-settings.xml:/etc/clickhouse-server/config.d/custom-settings.xml:ro
       # Native Prometheus endpoint on :9363 for stack self-monitoring.
       - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      # #102: assert server-memory ratio + concurrency from the resource plan.
+      - ./clickhouse/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
       # #96a: disable heavyweight system.* introspection logs + TTL the kept ones
       # (measured 5.8 GiB of self-logging vs 0.45 GiB of data without this).
       - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
@@ -664,6 +694,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       POSTGRES_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-netops}"
       LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
+      CORR_WINDOW_BUFFER: ${CORR_WINDOW_BUFFER:-50000}   # #102
       # #20: device→tenant map (exported by api) to stamp tenant_id on findings.
       TENANT_ENRICHMENT_FILE: /data/enrichment/device_tenant.csv
       # Active-measurement vantage trust (default empty=conservative). Declaring a
@@ -723,6 +754,9 @@ services:
     mem_limit: ${API_MEM_LIMIT:-512m}
     cpus: ${API_CPU_LIMIT:-2}
     environment:
+      # #102: GC target 90% of the cgroup limit — without this the Go runtime
+      # sizes its heap against HOST RAM and the kernel OOM-kills the container.
+      GOMEMLIMIT: ${API_GOMEMLIMIT:-460MiB}
       LISTEN_ADDR: ":8080"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -1092,6 +1126,7 @@ services:
     cap_drop: [ALL]
     cap_add: [NET_RAW]
     environment:
+      GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
       PROBER_ONLY: "true"
       REDIS_HOST: redis
       REDIS_PORT: "6379"

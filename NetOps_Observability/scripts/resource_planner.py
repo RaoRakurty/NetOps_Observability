@@ -462,7 +462,9 @@ def derive_internal(limits, w):
         env["KAFKA_HEAP"] = fmt_bytes(min(int(k * C("kafka_heap_ratio")), C("kafka_heap_cap")))
     r = limits.get("redis")
     if r:
-        env["REDIS_MAXMEMORY"] = fmt_bytes(int(r * C("valkey_maxmemory_ratio")))
+        # Valkey/Redis units: "mb" is binary (1024^2), bare "m" is DECIMAL —
+        # docker-style fmt_bytes would silently shrink the value ~4.8%.
+        env["REDIS_MAXMEMORY"] = "%dmb" % (int(r * C("valkey_maxmemory_ratio")) // MIB)
     v = limits.get("victoria")
     if v:
         env["VICTORIA_MEM_ALLOWED_PERCENT"] = str(int(C("victoria_allowed_percent")))
