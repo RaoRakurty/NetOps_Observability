@@ -60,11 +60,49 @@ func TestPlatformScopeFilter_RejectsCustomerAlerts(t *testing.T) {
 		t.Fatalf("platform alerts blocked: sent=%d want=%d", len(rec.sent), len(platform))
 	}
 
-	// resolutions always pass (closing is never noise), even label-less
-	if err := f.SendResolve(models.Alert{ID: "1"}); err != nil {
+	// E1: resolutions bypass SEVERITY, never SCOPE. Customer / untyped
+	// resolutions are rejected; platform-scoped ones pass.
+	if err := f.SendResolve(models.Alert{ID: "1", Rule: "InterfaceDown",
+		Labels: map[string]string{"device": "leaf1"}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.resolved) != 1 {
-		t.Fatal("resolve suppressed by platform filter")
+	if err := f.SendResolve(models.Alert{ID: "2"}); err != nil { // untyped
+		t.Fatal(err)
+	}
+	if len(rec.resolved) != 0 {
+		t.Fatalf("customer/untyped resolution crossed into the platform lane: %v", rec.resolved)
+	}
+	if err := f.SendResolve(models.Alert{ID: "5", Rule: "ContainerDown",
+		Labels: map[string]string{"layer": "stack"}}); err != nil {
+		t.Fatal(err)
+	}
+	// spoofed/garbage scope metadata stays default-closed
+	if err := f.SendResolve(models.Alert{ID: "9",
+		Labels: map[string]string{"layer": "STACK; drop"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.resolved) != 1 || rec.resolved[0].ID != "5" {
+		t.Fatalf("scope validation on resolve wrong: %v", rec.resolved)
+	}
+}
+
+// E5: deployment identity namespaces dedup keys — staging can never resolve
+// production's incident; regions never collide; unset = legacy keys.
+func TestPagerDuty_DeploymentIdentityDedup(t *testing.T) {
+	base := NewPagerDuty("rk")
+	prodUS := base.WithDeploymentIdentity("production", "us-central")
+	prodEU := base.WithDeploymentIdentity("production", "eu-west")
+	stg := base.WithDeploymentIdentity("staging", "us-central")
+
+	if got := base.dedupFor("alert-1"); got != "alert-1" {
+		t.Fatalf("legacy key changed: %q", got)
+	}
+	keys := map[string]bool{
+		prodUS.dedupFor("alert-1"): true,
+		prodEU.dedupFor("alert-1"): true,
+		stg.dedupFor("alert-1"):    true,
+	}
+	if len(keys) != 3 {
+		t.Fatalf("env/region identities collide: %v", keys)
 	}
 }

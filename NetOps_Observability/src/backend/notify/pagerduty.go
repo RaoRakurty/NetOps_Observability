@@ -18,9 +18,31 @@ import (
 var pagerDutyEventsV2URL = "https://events.pagerduty.com/v2/enqueue"
 
 // PagerDuty fires events via the Events API v2.
+// Platform deployment identity (#103-H E5) comes from TRUSTED deployment
+// configuration (PLATFORM_ENV / PLATFORM_REGION env, set by the installer) —
+// never from alert/customer data. When set, it namespaces the global
+// channel's dedup keys and source so staging can never open/resolve a
+// production incident and one region cannot resolve another's. Unset =
+// legacy single-deployment keys (backward compatible).
 type PagerDuty struct {
 	routingKey string
 	client     *http.Client
+	env    string
+	region string
+}
+
+// WithDeploymentIdentity returns a copy namespaced to env/region.
+func (p *PagerDuty) WithDeploymentIdentity(env, region string) *PagerDuty {
+	cp := *p
+	cp.env, cp.region = env, region
+	return &cp
+}
+
+func (p *PagerDuty) dedupFor(id string) string {
+	if p.env == "" && p.region == "" {
+		return id
+	}
+	return p.env + ":" + p.region + ":" + id
 }
 
 func NewPagerDuty(routingKey string) *PagerDuty {
@@ -62,7 +84,7 @@ func (p *PagerDuty) Send(a models.Alert) error {
 	payload := map[string]any{
 		"routing_key":  p.routingKey,
 		"event_action": "trigger",
-		"dedup_key":    a.ID,
+		"dedup_key":    p.dedupFor(a.ID),
 		"payload": map[string]any{
 			"summary":  a.Summary,
 			"severity": pdSeverity(a.Severity),
@@ -91,7 +113,7 @@ func (p *PagerDuty) SendResolve(a models.Alert) error {
 	buf, _ := json.Marshal(map[string]any{
 		"routing_key":  p.routingKey,
 		"event_action": "resolve",
-		"dedup_key":    a.ID,
+		"dedup_key":    p.dedupFor(a.ID),
 	})
 	return p.post(buf)
 }

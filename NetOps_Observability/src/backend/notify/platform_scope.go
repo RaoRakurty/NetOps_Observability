@@ -1,6 +1,17 @@
 package notify
 
-import "netops/backend/models"
+import (
+	"expvar"
+
+	"netops/backend/models"
+)
+
+// Observability (#103-H E1): default-closed rejections are counted, never
+// silent. Package-level expvars surface on /debug/vars // /metrics bridge.
+var (
+	platformScopeRejectedTotal        = expvar.NewInt("platform_scope_rejection_total")
+	platformScopeResolveRejectedTotal = expvar.NewInt("platform_scope_resolve_rejection_total")
+)
 
 // platform_scope.go — the #103 platform self-health lane guard.
 //
@@ -38,17 +49,35 @@ func NewPlatformScopeFilter(next Channel) *PlatformScopeFilter {
 func (f *PlatformScopeFilter) Name() string { return f.next.Name() }
 
 func (f *PlatformScopeFilter) Send(a models.Alert) error {
-	if !PlatformLayers[a.Labels["layer"]] {
+	if !platformScoped(a) {
+		platformScopeRejectedTotal.Add(1)
 		return nil // customer-network alert: RCA policy lane territory
 	}
 	return f.next.Send(a)
 }
 
-// SendResolve forwards resolutions un-filtered so a previously opened platform
-// incident always closes even if labels drift.
+// SendResolve (#103-H E1): a resolution may bypass the SEVERITY threshold
+// (SeverityGate already forwards resolves un-gated) but it must NEVER bypass
+// platform-SCOPE validation — a customer alert's resolution has no business
+// reaching the operator's global destination, and an untyped resolution is
+// treated as customer traffic (default-closed). An in-scope resolution for an
+// incident that was never opened is a harmless no-op at the destination
+// (Events v2 ignores unknown dedup keys) — allowed, since suppressing a close
+// is never safe while forwarding one always is.
 func (f *PlatformScopeFilter) SendResolve(a models.Alert) error {
+	if !platformScoped(a) {
+		platformScopeResolveRejectedTotal.Add(1)
+		return nil
+	}
 	if rs, ok := f.next.(ResolveSender); ok {
 		return rs.SendResolve(a)
 	}
 	return nil
+}
+
+// platformScoped is the ONE typed allowlist check both directions share.
+// The layer label is stamped by rules.yaml (server-controlled), never by
+// device/customer data; anything absent or unknown is customer traffic.
+func platformScoped(a models.Alert) bool {
+	return PlatformLayers[a.Labels["layer"]]
 }

@@ -120,11 +120,40 @@ func (w *ticketWorker) process(ctx context.Context, it ticketOutboxItem, now tim
 }
 
 // dispatch performs the external action and updates the link/audit on success.
+// #103-H E6: the ticket link's lifecycle_state is the ordering authority —
+// stale or duplicate operations become AUDITED no-op successes, never
+// external calls and never infinite retries. The state machine:
+//   (none) -> open -> updated* -> resolved   (reopen only via a NEW create
+//   decision from the sweeper after the flap-suppression window, never by a
+//   stale queued row from the previous life.)
 func (w *ticketWorker) dispatch(ctx context.Context, adapter ticketAdapter, cfg ticketSystemConfig, it ticketOutboxItem, now time.Time) error {
+	link, linkFound, lerr := w.store.GetLink(ctx, it.TenantID, false, it.CorrObjectID, it.ExternalSystem)
+	if lerr != nil {
+		return lerr // transient store trouble: retry
+	}
 	switch it.Action {
 	case "create":
+		if linkFound {
+			switch link.Status {
+			case "open", "updated":
+				// Duplicate OPEN (sweeper replay / crash-after-success):
+				// the incident already exists — one identity, no second call.
+				w.audit(ctx, it, "create", "noop_duplicate", link.Status, link.Status)
+				return nil
+			case "resolved":
+				// Stale OPEN arriving after a RESOLVE: automatic reopening is
+				// policy territory (flap suppression), not a queue accident.
+				w.audit(ctx, it, "create", "noop_stale_after_resolve", "resolved", "resolved")
+				return nil
+			}
+		}
 		return w.doCreate(ctx, adapter, cfg, it, now)
 	case "update":
+		if linkFound && link.Status == "resolved" {
+			// An old UPDATE must never reopen/repage a resolved incident.
+			w.audit(ctx, it, "update", "noop_stale_after_resolve", "resolved", "resolved")
+			return nil
+		}
 		return w.doUpdate(ctx, adapter, cfg, it, now)
 	case "add_work_note":
 		ref, err := w.linkRef(ctx, it)
@@ -137,6 +166,11 @@ func (w *ticketWorker) dispatch(ctx context.Context, adapter ticketAdapter, cfg 
 		w.audit(ctx, it, "add_work_note", "ok", "", "")
 		return nil
 	case "resolve":
+		if linkFound && link.Status == "resolved" {
+			// Repeated RESOLVE: downstream is already closed — no-op.
+			w.audit(ctx, it, "resolve", "noop_duplicate", "resolved", "resolved")
+			return nil
+		}
 		ref, err := w.linkRef(ctx, it)
 		if err != nil {
 			return err

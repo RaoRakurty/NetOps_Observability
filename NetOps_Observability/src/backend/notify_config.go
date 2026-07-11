@@ -267,7 +267,13 @@ func buildSlackChannel(c slackConfig) notify.Channel {
 }
 
 func buildPagerDutyChannel(c pagerDutyConfig) notify.Channel {
-	ch := notify.NewSeverityGate(notify.NewPagerDuty(c.RoutingKey), c.MinSeverity)
+	pd := notify.NewPagerDuty(c.RoutingKey)
+	// #103-H E5: deployment identity from TRUSTED config only (installer env),
+	// never from event data. Unset = legacy single-deployment behavior.
+	if env, region := os.Getenv("PLATFORM_ENV"), os.Getenv("PLATFORM_REGION"); env != "" || region != "" {
+		pd = pd.WithDeploymentIdentity(env, region)
+	}
+	ch := notify.NewSeverityGate(pd, c.MinSeverity)
 	if strings.ToLower(strings.TrimSpace(c.Scope)) == "all" {
 		return ch // legacy raw-alert paging — explicit opt-back only
 	}
