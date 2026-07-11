@@ -34,7 +34,10 @@ groups:
           summary: "{{ $labels.instance }} down >5m"
 
       - alert: DeviceUnreachable
-        expr: collector_target_up == 0
+        # netconf is an opportunistic capability probe (it tries every device's
+        # :830 by design) — a device without NETCONF is not "unreachable".
+        # Authoritative reachability comes from the polling collectors.
+        expr: collector_target_up{collector!="netconf"} == 0
         for: 2m
         labels:
           severity: critical
@@ -158,7 +161,10 @@ groups:
     interval: 30s
     rules:
       - alert: HighCPU
-        expr: device_cpu_percent > 85
+        # avg without(index): device-level CPU, not per-core. Containerized NOS
+        # (cEOS) exposes the HOST's cores via HOST-RESOURCES, so a single busy
+        # host core would otherwise fire on every cEOS device at once.
+        expr: avg without (index) (device_cpu_percent) > 85
         for: 10m
         labels:
           severity: warning
@@ -166,7 +172,7 @@ groups:
           summary: "{{ $labels.device }} ({{ $labels.vendor }}) CPU {{ $value }}%"
 
       - alert: CriticalCPU
-        expr: device_cpu_percent > 95
+        expr: avg without (index) (device_cpu_percent) > 95
         for: 5m
         labels:
           severity: critical
@@ -492,7 +498,7 @@ groups:
           summary: "{{ $labels.device }} storage{{ $labels.index }} projected full <24h"
 
       - alert: CPUBaselineRising
-        expr: delta(avg_over_time(device_cpu_percent[1h])[12h:1h]) > 15
+        expr: delta(avg_over_time((avg without (index) (device_cpu_percent))[1h:5m])[12h:1h]) > 15
         for: 1h
         labels:
           severity: info
@@ -655,7 +661,12 @@ groups:
     rules:
       - alert: ContainerDown
         # cAdvisor stops reporting a container that has died/been removed.
-        expr: absent(container_last_seen{name=~"netops-.+"}) or (time() - container_last_seen{name=~"netops-.+"} > 120)
+        # No absent() arm: cadvisor going blind (e.g. docker's containerd image
+        # store, unsupported by cadvisor's docker handler as of v0.52.1) is not
+        # "every container is down" — that false-fired platform-wide. The
+        # external stack-watchdog cron is the authoritative container-down
+        # sentinel either way; this rule is the in-platform per-container view.
+        expr: time() - container_last_seen{name=~"netops-.+"} > 120
         for: 2m
         labels: { severity: critical, layer: stack }
         annotations:

@@ -488,13 +488,21 @@ services:
   # resource-exhaustion / restart-loop alerts work without per-service
   # instrumentation. Read-only host mounts. `self-monitoring` add-on.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1@sha256:524779a2661c9ea1b4b87d47fedfc56c3aed182511fcdac031f345a1fd229461
+    # v0.52.1: v0.49 could not see containers once the docker daemon switched to
+    # the containerd image store (storage driver "overlayfs") — every
+    # container_* series vanished and ContainerDown false-fired via absent().
+    image: gcr.io/cadvisor/cadvisor:v0.52.1@sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435
     profiles: ["self-monitoring"]
     mem_limit: ${CADVISOR_MEM_LIMIT:-256m}
     cpus: ${CADVISOR_CPU_LIMIT:-1}
     # 30s housekeeping halves cadvisor's steady sampling cost; container-level
     # trends/alerts don't need 15s resolution (#96d).
-    command: ["--housekeeping_interval=30s", "--docker_only=true", "--store_container_labels=false"]
+    # enable_metrics without `disk`: the per-container rw-layer (layerdb) lookup
+    # behind disk-usage stats doesn't exist under docker's containerd image
+    # store and made the docker handler fail per-container. cpu/memory/network/
+    # oom/restart cover every container-level alert; host disk is node-exporter's.
+    command: ["--housekeeping_interval=30s", "--docker_only=true", "--store_container_labels=false",
+              "--enable_metrics=cpu,memory,network,oom_event"]
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
