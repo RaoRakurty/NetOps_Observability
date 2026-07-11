@@ -186,7 +186,20 @@ pass (`b2cab2b` + lab-side fixes). **No chaos/failover simulation was running**
   kills (query_log clean) — the ~30-min cadence matches #101 background jobs.
   `CLICKHOUSE_MEM_LIMIT=5g` in `.env` (host has headroom). If it still fires,
   the alert premise needs rework (total-tracker vs query-tracker).
-- Result: 40 active alerts → single digits; ntfy 429 rate-limit storm ended.
+- Result: 40 active alerts → **0 criticals** (verified sustained); ntfy 429
+  rate-limit storm ended.
+- Follow-ups applied same evening (owner: "apply the fixes"): **wan-r2 golden
+  refreshed** from live running-config (192.168.99.1 peer captured, 0 stale
+  lines); **.120 disk 94%→80%** (docker builder prune 17.4 GB; the 9
+  StorageUtilHigh warnings — cEOS mirrors the HOST's filesystems — age out
+  below the 85% threshold). CHQueryMemoryKilled re-keyed to
+  `ClickHouseErrorMetric_MEMORY_LIMIT_EXCEEDED` (`a55c3fb`) — the ProfileEvents
+  counter ticks on non-fatal overcommit probes with zero failed queries.
+- 👤 Still owner's: PD bulk-resolve of the pre-existing incident pile (platform
+  holds only an Events v2 routing key — no REST token to enumerate/resolve);
+  optional: delete `vrnetlab/juniper_vjunos-router:25.4R1.12-patience` on .120
+  (7.7 GB, duplicate experimental build; the canonical 25.4R1.12 is kept for a
+  possible wan-r1 revival — deletion of custom-built images left to you).
 
 ## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
 
