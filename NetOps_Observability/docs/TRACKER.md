@@ -127,6 +127,15 @@ classes; audit confirmed the prior fixes and closed the residual gaps:
   cross-scan makes detail's ticket_status correct for global objects; pinned
   by test instead of churn. Contract doc: `docs/design/rca-ticketing.md`.
 
+Follow-up slice (same day, `f57de6c`, owner live-review of real tickets):
+per-policy **ticket priority mapping** (migration 0022; confirmed-critical /
+confirmed impact+urgency slots, 0 = automatic P1/P2 escalation, explicit wins
+incl. demote) + **no-connection gates** (sweeper skips unconnected tenants —
+stopped a 1,372-row DLQ flood; manual create → honest 409) + ServiceNow
+`sysparm_input_display_value=true` (assignment-group/category names resolve)
++ **PagerDuty channel repaired** (Events v2 400: empty source + non-enum
+severity — normalized; platform test now sends; routing key configured live).
+
 ## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
 
 Owner queued these late on 2026-06-28→29 with "keep working, don't wait for
