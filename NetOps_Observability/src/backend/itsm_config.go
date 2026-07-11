@@ -60,6 +60,14 @@ type pagerDutyRCAConfig struct {
 	RoutingKey string `json:"routing_key,omitempty"`
 }
 
+// slackRCAConfig is the per-tenant Slack destination for RCA auto-ticketing
+// (#103-E): the tenant's OWN incoming-webhook URL (a bearer secret —
+// write-only). Distinct from the platform-global Slack notification channel.
+type slackRCAConfig struct {
+	Enabled    bool   `json:"enabled"`
+	WebhookURL string `json:"webhook_url,omitempty"`
+}
+
 type jiraConfig struct {
 	Enabled           bool   `json:"enabled"`
 	BaseURL           string `json:"base_url"`
@@ -76,6 +84,7 @@ type itsmConfig struct {
 	ServiceNow serviceNowConfig   `json:"servicenow"`
 	Jira       jiraConfig         `json:"jira"`
 	PagerDuty  pagerDutyRCAConfig `json:"pagerduty"`
+	Slack      slackRCAConfig     `json:"slack"`
 }
 
 // itsmLive holds a tenant's built connectors (nil when disabled/unconfigured).
@@ -203,6 +212,11 @@ func (s *itsmConfigStore) set(tenant string, in itsmConfig) error {
 	} else if in.PagerDuty.RoutingKey == "" {
 		in.PagerDuty.RoutingKey = prev.PagerDuty.RoutingKey
 	}
+	if in.Slack == (slackRCAConfig{}) {
+		in.Slack = prev.Slack
+	} else if in.Slack.WebhookURL == "" {
+		in.Slack.WebhookURL = prev.Slack.WebhookURL
+	}
 
 	if err := validateITSM(in); err != nil {
 		return err
@@ -311,6 +325,21 @@ func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSyste
 			Password:        sn.Password,
 			AssignmentGroup: sn.AssignmentGroup,
 		}, true
+	case "slack":
+		sl := cfg.Slack
+		if !sl.Enabled || sl.WebhookURL == "" {
+			return ticketSystemConfig{}, false
+		}
+		// InstanceURL is the NON-SECRET origin only — it is persisted onto
+		// ticket links and surfaced by the UI; the webhook URL (the secret)
+		// travels solely in the write-only APIToken field.
+		return ticketSystemConfig{
+			System:      "slack",
+			TenantID:    tenant,
+			InstanceURL: slackHooksOrigin,
+			AuthType:    "webhook",
+			APIToken:    sl.WebhookURL,
+		}, true
 	case "pagerduty":
 		pd := cfg.PagerDuty
 		if !pd.Enabled || pd.RoutingKey == "" {
@@ -351,6 +380,28 @@ func (s *itsmConfigStore) setPagerDutyRCA(tenant string, in pagerDutyRCAConfig) 
 	return nil
 }
 
+// setSlackRCA mirrors setPagerDutyRCA for the Slack RCA destination.
+func (s *itsmConfigStore) setSlackRCA(tenant string, in slackRCAConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tenant = itsmKey(tenant)
+	cfg := s.cfgs[tenant]
+	if in.WebhookURL == "" {
+		in.WebhookURL = cfg.Slack.WebhookURL
+	}
+	if in.Enabled {
+		if strings.TrimSpace(in.WebhookURL) == "" {
+			return errors.New("Slack (RCA): webhook URL is required when enabled")
+		}
+		if err := validateOutboundURL(in.WebhookURL); err != nil {
+			return fmt.Errorf("Slack (RCA): %w", err)
+		}
+	}
+	cfg.Slack = in
+	s.cfgs[tenant] = cfg
+	return s.persist()
+}
+
 // public returns one tenant's redacted config for the admin UI — secrets become
 // has_* flags; configured reflects whether that tenant's live connector is up.
 func (s *itsmConfigStore) public(tenant string) map[string]any {
@@ -378,6 +429,11 @@ func (s *itsmConfigStore) public(tenant string) map[string]any {
 			"enabled":         cfg.PagerDuty.Enabled,
 			"has_routing_key": cfg.PagerDuty.RoutingKey != "",
 			"configured":      cfg.PagerDuty.Enabled && cfg.PagerDuty.RoutingKey != "",
+		},
+		"slack": map[string]any{
+			"enabled":     cfg.Slack.Enabled,
+			"has_webhook": cfg.Slack.WebhookURL != "",
+			"configured":  cfg.Slack.Enabled && cfg.Slack.WebhookURL != "",
 		},
 		"jira": map[string]any{
 			"enabled":            jr.Enabled,
@@ -433,6 +489,14 @@ func validateITSM(c itsmConfig) error {
 	}
 	if c.PagerDuty.Enabled && strings.TrimSpace(c.PagerDuty.RoutingKey) == "" {
 		return errors.New("PagerDuty (RCA): routing key is required when enabled")
+	}
+	if c.Slack.Enabled {
+		if strings.TrimSpace(c.Slack.WebhookURL) == "" {
+			return errors.New("Slack (RCA): webhook URL is required when enabled")
+		}
+		if err := validateOutboundURL(c.Slack.WebhookURL); err != nil {
+			return fmt.Errorf("Slack (RCA): %w", err)
+		}
 	}
 	if c.Jira.Enabled {
 		if c.Jira.BaseURL == "" {
@@ -497,6 +561,41 @@ func (s *server) handleITSMPagerDutyRCA(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	logInfo("itsm", "pagerduty RCA destination updated", map[string]any{"tenant": key, "enabled": in.Enabled, "actor": claims.Sub})
+	writeJSON(w, http.StatusOK, s.itsmCfg.public(key))
+}
+
+// handleITSMSlackRCA serves PUT /api/itsm/slack-rca — the explicit mutation
+// path for a tenant's Slack RCA destination (#103-E). Webhook is write-only.
+func (s *server) handleITSMSlackRCA(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	key := itsmKey(tenant)
+	if cross {
+		if q := strings.TrimSpace(r.URL.Query().Get("tenant")); q != "" {
+			key = itsmKey(q)
+		}
+	}
+	if s.itsmCfg == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("ITSM config store unavailable"))
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("PUT only"))
+		return
+	}
+	var in slackRCAConfig
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.itsmCfg.setSlackRCA(key, in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	logInfo("itsm", "slack RCA destination updated", map[string]any{"tenant": key, "enabled": in.Enabled, "actor": claims.Sub})
 	writeJSON(w, http.StatusOK, s.itsmCfg.public(key))
 }
 

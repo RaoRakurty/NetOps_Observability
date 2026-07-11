@@ -311,3 +311,132 @@ func TestPDPolicy_GatesBlockPaging(t *testing.T) {
 		t.Fatal("disabled policy must not page")
 	}
 }
+
+// ── #103-E Slack RCA destination ─────────────────────────────────────────────
+
+type fakeSlackHook struct {
+	mu     sync.Mutex
+	srv    *httptest.Server
+	bodies []map[string]any
+	status int
+}
+
+func newFakeSlackHook() *fakeSlackHook {
+	f := &fakeSlackHook{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		f.mu.Lock()
+		f.bodies = append(f.bodies, b)
+		f.mu.Unlock()
+		if f.status != 0 {
+			w.WriteHeader(f.status)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	return f
+}
+
+func (f *fakeSlackHook) cfg(tenant string) ticketSystemConfig {
+	return ticketSystemConfig{System: "slack", TenantID: tenant,
+		InstanceURL: slackHooksOrigin, AuthType: "webhook", APIToken: f.srv.URL + "/WH-" + tenant}
+}
+
+func TestSlackTicketAdapter_LifecycleAndSecrets(t *testing.T) {
+	f := newFakeSlackHook()
+	defer f.srv.Close()
+	a := &slackTicketAdapter{httpClient: f.srv.Client()}
+	ctx := context.Background()
+	cfg := f.cfg("t_a")
+
+	ref, err := a.CreateIncident(ctx, cfg, pdPayload("33333333-3333-4333-8333-333333333333"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if ref.SysID == "" || strings.Contains(ref.SysID, f.srv.URL) {
+		t.Fatalf("ref must be the dedupe identity, never the webhook: %q", ref.SysID)
+	}
+	if err := a.UpdateIncident(ctx, cfg, ref, pdPayload("33333333-3333-4333-8333-333333333333")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ResolveIncident(ctx, cfg, ref, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	n := len(f.bodies)
+	first := f.bodies[0]
+	last := f.bodies[n-1]
+	f.mu.Unlock()
+	if n != 3 {
+		t.Fatalf("posts = %d, want 3 (opened/updated/resolved)", n)
+	}
+	if !strings.Contains(asString(first["text"]), "Opened") {
+		t.Fatalf("first message not an open: %v", first["text"])
+	}
+	if !strings.Contains(asString(last["text"]), "Resolved") {
+		t.Fatalf("last message not a resolve: %v", last["text"])
+	}
+
+	// error classification + secret-free errors
+	f.status = 404 // Slack's no_service
+	_, err = a.CreateIncident(ctx, cfg, pdPayload("33333333-3333-4333-8333-333333333333"))
+	var perm permanentDeliveryError
+	if !errors.As(err, &perm) || strings.Contains(err.Error(), f.srv.URL) {
+		t.Fatalf("404 → %v (must be permanent, secret-free)", err)
+	}
+}
+
+// The secret webhook must never be persisted onto the ticket link: the link's
+// InstanceURL comes from cfg.InstanceURL, which for Slack is the bare origin.
+func TestSlackLink_NeverStoresWebhookSecret(t *testing.T) {
+	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
+	f := newFakeSlackHook()
+	defer f.srv.Close()
+	store := newMemTicketingStore()
+	ctx := context.Background()
+	resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
+		if system != "slack" {
+			return ticketSystemConfig{}, false, nil
+		}
+		return f.cfg(tenant), true, nil
+	}
+	w := newTicketWorker(store, resolve)
+	w.adapters["slack"] = &slackTicketAdapter{httpClient: f.srv.Client()}
+	if err := enqueueTicketCreate(ctx, store, "t_a", "slack",
+		pdPayload("44444444-4444-4444-8444-444444444444")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	link, found, err := store.GetLink(ctx, "t_a", false, "44444444-4444-4444-8444-444444444444", "slack")
+	if err != nil || !found {
+		t.Fatalf("link missing: %v", err)
+	}
+	if strings.Contains(link.InstanceURL, "WH-") || strings.Contains(link.InstanceURL, f.srv.URL) {
+		t.Fatalf("SECURITY: webhook secret persisted on link: %q", link.InstanceURL)
+	}
+	if link.InstanceURL != slackHooksOrigin {
+		t.Fatalf("link instance url = %q, want bare origin", link.InstanceURL)
+	}
+}
+
+// Triple-enable: SN + PD + Slack policies all active per system, no HELD.
+func TestResolvePolicyState_TripleSystem(t *testing.T) {
+	ctx := context.Background()
+	store := newMemTicketingStore()
+	sw := &ticketSweeper{store: store}
+	for i, sys := range []string{"servicenow", "pagerduty", "slack"} {
+		p := incidentPolicy{ID: sys[:2] + "1", TenantID: "t_tri", Name: sys, Enabled: true,
+			ExternalSystem: sys, MinVerdict: "confirmed"}
+		if err := store.PutPolicy(ctx, p); err != nil {
+			t.Fatalf("put %d %s: %v", i, sys, err)
+		}
+	}
+	for _, sys := range []string{"servicenow", "pagerduty", "slack"} {
+		if res := sw.resolvePolicyState(ctx, "t_tri", sys); res.state != policyStateActive {
+			t.Fatalf("%s not active under triple-enable: %+v", sys, res)
+		}
+	}
+}

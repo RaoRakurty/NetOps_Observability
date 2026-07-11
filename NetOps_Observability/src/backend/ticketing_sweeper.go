@@ -258,7 +258,7 @@ func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentP
 // system resolves its OWN governing policy (the one-enabled invariant is per
 // (tenant, external_system)); ServiceNow keeps its default-on MVP fallback,
 // every other system is strictly opt-in (no policy -> no delivery).
-var ticketSystems = []string{"servicenow", "pagerduty"}
+var ticketSystems = []string{"servicenow", "pagerduty", "slack"}
 
 type policyResolution struct {
 	policy incidentPolicy

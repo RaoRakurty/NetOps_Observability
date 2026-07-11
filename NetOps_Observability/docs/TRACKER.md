@@ -129,6 +129,12 @@ lifecycle identity, retry classes, per-system resolution/conflict/opt-in,
 two-tenant isolation (same corr id → different keys; keys never cross;
 quarantine), gates, platform-lane rejection; full backend suite green.
 
+**#103-E Slack tenant lane SHIPPED same night:** slackTicketAdapter (tenant
+webhook, opened/updated/resolved per root cause, webhook secret NEVER on the
+link — dedicated test), PUT /api/itsm/slack-rca, triple-enable SN+PD+Slack
+per-system resolution, UI card + policy option, docs (slack.md §6 +
+**integrations/architecture.md two-lane mermaid diagram**). Deployed live.
+
 **Remaining in #103:** UX-1 notified-via column · UX-2 human display IDs ·
 inbound PD V3 webhooks (ack-sync; needs public ingress — deferred, documented)
 · Jira into the policy engine · legacy alert→ITSM lane decision (below) ·

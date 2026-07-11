@@ -3661,8 +3661,8 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <LabeledInput label="Policy name" required value={p.name} onChange={(v) => set("name", v)}
           placeholder="e.g. Customer-impacting outages" info="A label for this policy; shown in the list and audit." />
         <LabeledSelect label="External system" value={p.external_system} onChange={(v) => set("external_system", v)}
-          options={["servicenow", "pagerduty"]}
-          info="Where this policy delivers: ServiceNow opens ITSM incidents; PagerDuty pages the on-call (Events API v2). One enabled policy per system — a tenant can run both." />
+          options={["servicenow", "pagerduty", "slack"]}
+          info="Where this policy delivers: ServiceNow opens ITSM incidents; PagerDuty pages the on-call; Slack posts to the tenant's channel. One enabled policy per system — a tenant can run any combination." />
         <LabeledSelect label="Minimum verdict" value={p.min_verdict} onChange={(v) => set("min_verdict", v)}
           options={["suspected", "confirmed"]} info="The lowest RCA verdict that may open a ticket." />
         {p.external_system === "servicenow" && (
@@ -3682,6 +3682,12 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
           Pages are deduplicated per root cause: one PagerDuty incident per correlated incident, updated in place and
           auto-resolved on recovery. Urgency above maps to page severity (1 = critical). Connect the routing key under
           PagerDuty paging connection on this page. Raw alerts never page directly.
+        </p>
+      )}
+      {p.external_system === "slack" && (
+        <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
+          One rich message per root-cause lifecycle transition (opened / materially updated / resolved) in this tenant's
+          own channel — never per raw alert. Connect the webhook under Slack channel connection on this page.
         </p>
       )}
       {p.external_system === "servicenow" && (<>
@@ -3810,6 +3816,44 @@ function PagerDutyPagingConnection() {
   );
 }
 
+function SlackChannelConnection() {
+  const [cfg, setCfg] = useState<ItsmConfig | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [url, setUrl] = useState("");
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.slack?.enabled); }).catch((e) => setErr((e as Error).message));
+  }, []);
+  const save = async () => {
+    setErr(""); setMsg("");
+    try {
+      const out = await api.saveItsmSlackRCA({ enabled, ...(url.trim() ? { webhook_url: url.trim() } : {}) });
+      setCfg(out); setUrl(""); setMsg("Saved.");
+    } catch (e) { setErr((e as Error).message); }
+  };
+  const hasHook = !!cfg?.slack?.has_webhook;
+  return (
+    <div className="cc-panel" style={{ padding: "var(--sp-3)", marginBottom: "var(--sp-3)" }}>
+      <h4 style={{ margin: 0 }}>Slack channel connection</h4>
+      <p className="mini-meta" style={{ margin: "var(--sp-1) 0 var(--sp-2)" }}>
+        This tenant's own incoming-webhook URL — used ONLY by Slack incident policies below (one message per
+        correlated root cause lifecycle, never per raw alert).
+      </p>
+      <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
+        <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
+        <input className="app-input" type="password" style={{ minWidth: 280 }} value={url}
+          placeholder={hasHook ? "webhook set — leave blank to keep" : "https://hooks.slack.com/services/…"}
+          onChange={(e) => setUrl(e.target.value)} autoComplete="new-password" />
+        <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
+        {hasHook && <span className="mini-meta">webhook stored (write-only)</span>}
+        {msg && <span className="mini-meta">{msg}</span>}
+      </div>
+      <ErrLine msg={err} />
+    </div>
+  );
+}
+
 export function IncidentPoliciesAdmin() {
   const { user } = useAuth();
   const [policies, setPolicies] = useState<IncidentPolicy[] | null>(null);
@@ -3860,6 +3904,7 @@ export function IncidentPoliciesAdmin() {
         undetermined are held). PagerDuty paging is strictly opt-in: no PagerDuty policy, no pages.
       </p>
       <PagerDutyPagingConnection />
+      <SlackChannelConnection />
       <ErrLine msg={err} />
       {conflictSystems.size > 0 && (
         <ErrLine msg={"More than one policy is enabled — auto-ticketing is HELD for this tenant until exactly one policy is enabled. Disable the extra policies below."} />

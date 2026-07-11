@@ -148,3 +148,14 @@ scope → 200 returned immediately (processing is async, never blocks Slack's
   rotate the Client Secret if it was ever shared.
 - Slack posts contain operational data (alert titles, device names). Point
   the webhook at a **private channel** if the workspace has guests.
+
+
+## 6. Tenant-scoped RCA lane (#103-E — customer channels)
+
+Tier 1/2 above are the PLATFORM channel (operator workspace). For a CUSTOMER
+tenant's own channel: Administration → RCA Auto-Ticketing → **Slack channel
+connection** (tenant's own incoming webhook, write-only; API
+PUT /api/itsm/slack-rca) + a policy with External system = slack. One rich
+message per root-cause lifecycle transition (opened / materially updated /
+resolved) — never per raw alert; update noise is bounded by the payload-hash
+gate. Strictly opt-in per tenant. Architecture: integrations/architecture.md.

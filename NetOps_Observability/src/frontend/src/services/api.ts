@@ -1933,6 +1933,8 @@ export const api = {
   itsmConfig: () => request<ItsmConfig>("/api/notify/itsm"),
   saveItsmPagerDutyRCA: (c: { enabled: boolean; routing_key?: string }) =>
     request<ItsmConfig>("/api/itsm/pagerduty-rca", { method: "PUT", body: JSON.stringify(c) }),
+  saveItsmSlackRCA: (c: { enabled: boolean; webhook_url?: string }) =>
+    request<ItsmConfig>("/api/itsm/slack-rca", { method: "PUT", body: JSON.stringify(c) }),
   saveItsmConfig: (c: ItsmConfigInput) =>
     request<ItsmConfig>("/api/notify/itsm", { method: "PUT", body: JSON.stringify(c) }),
 
@@ -2633,7 +2635,8 @@ export type NmsStateRow = {
 };
 
 export type ItsmPagerDutyRCA = { enabled: boolean; has_routing_key?: boolean; configured?: boolean };
-export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig; pagerduty?: ItsmPagerDutyRCA };
+export type ItsmSlackRCA = { enabled: boolean; has_webhook?: boolean; configured?: boolean };
+export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig; pagerduty?: ItsmPagerDutyRCA; slack?: ItsmSlackRCA };
 export type ItsmConfigInput = {
   servicenow: Omit<ItsmServiceNowConfig, "has_password" | "configured">;
   jira: Omit<ItsmJiraConfig, "has_token" | "configured">;

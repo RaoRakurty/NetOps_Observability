@@ -39,7 +39,7 @@ type ticketWorker struct {
 func newTicketWorker(store ticketingStore, resolve ticketConnResolver) *ticketWorker {
 	return &ticketWorker{
 		store:       store,
-		adapters: map[string]ticketAdapter{"servicenow": newServiceNowAdapter(), "pagerduty": newPagerDutyTicketAdapter()},
+		adapters: map[string]ticketAdapter{"servicenow": newServiceNowAdapter(), "pagerduty": newPagerDutyTicketAdapter(), "slack": newSlackTicketAdapter()},
 		resolveConn: resolve,
 		workerID:    "ticket-" + randID()[:8],
 		batch:       16,

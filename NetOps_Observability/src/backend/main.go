@@ -990,6 +990,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/itsm/servicenow", s.handleITSMServiceNow)
 	mux.HandleFunc("/api/itsm/pagerduty-rca", s.handleITSMPagerDutyRCA) // #103 tenant PD paging destination
+	mux.HandleFunc("/api/itsm/slack-rca", s.handleITSMSlackRCA)         // #103-E tenant Slack RCA destination
 	mux.HandleFunc("/api/itsm/jira", s.handleITSMJira)
 	// Integration platform (#43): admin config + UNAUTHENTICATED inbound webhook
 	// (the more specific /webhook/ prefix wins over /api/integrations/ in the mux).
