@@ -561,7 +561,8 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
             % (fmt_human(total(floors)), fmt_human(budget)))
 
     limits = dict(desires)
-    if relaxed and total(limits) > budget:
+    if relaxed and total(floors) > budget:
+        # caps already oversubscribe: keep floors, don't stack workload terms
         limits = dict(floors)
     elif total(limits) > budget:
         # trim only the elastic portion, proportionally
@@ -576,14 +577,17 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
                 if total(limits) <= budget:
                     break
                 limits[k] = max(floors[k], limits[k] - (total(limits) - budget))
-        # honesty threshold: refuse if any scalable engine lost too much
-        for k in elastic:
-            wanted = desires[k] - floors[k]
-            got = limits[k] - floors[k]
-            if wanted > 0 and got / wanted < C("elastic_trim_floor"):
-                raise SizingError(_refusal_message(
-                    host, allocatable, total(desires), desires, w,
-                    storage_estimate(w), host["disk_free_bytes"]))
+        # honesty threshold: refuse if any scalable engine lost too much.
+        # Relaxed (evaluation) profiles keep the best-effort trim instead —
+        # a proportional partial allocation beats zeroing the workload terms.
+        if not relaxed:
+            for k in elastic:
+                wanted = desires[k] - floors[k]
+                got = limits[k] - floors[k]
+                if wanted > 0 and got / wanted < C("elastic_trim_floor"):
+                    raise SizingError(_refusal_message(
+                        host, allocatable, total(desires), desires, w,
+                        storage_estimate(w), host["disk_free_bytes"]))
         warnings.append("workload-derived allocations were trimmed %s to fit the "
                         "budget; consider a larger host for full headroom"
                         % fmt_human(total(desires) - total(limits)))
