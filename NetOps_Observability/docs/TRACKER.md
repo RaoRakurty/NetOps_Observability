@@ -81,6 +81,26 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 > review — `docs/design/research/tenant-url-strategy.md` (`a7dfc05`). Proposal
 > only; owner decides (relates to #20 ingest isolation / SaaS onboarding).
 
+### Follow-ups after `737437b` (2026-07-10 late session) — ✅ SHIPPED + LIVE
+
+- **Rail refinement series** (owner live-feedback iterations on U2-1):
+  `623757b` → `2bdd3b1` → `e874189` → `e15da76` → `dfbfe72`. Final state: 44px
+  rail, purple retired, one crisp neutral hairline, flyout reads as a rail
+  extension; Light knob carries white glass chrome; Support modal escapes the
+  rail.
+- **Ticketing bug-fix + hardening trio** (found while demoing the ticket flow):
+  - `7afc8c8` ServiceNow deep-link no longer doubled for legacy ticket links.
+  - `7a6cac9` manual ticket create reaches platform objects + one enabled
+    policy per (tenant, external system).
+  - `e468b25` defense-in-depth: migration **0021** partial unique index
+    `incident_policies_one_enabled` (closes the check-then-write race at the
+    DB), `errPolicyConflict` → 409, `resolvePolicy` fails CLOSED on multi-
+    enabled legacy data (loud log + counter), manual create/sync on a MERGED
+    object → 409 with `canonical_correlation_id` (after ownership guard),
+    simulator names the exact policy evaluated, 3 new `/metrics` counters.
+  - Verified live 2026-07-11: migration 0021 applied (index present in PG),
+    api image rebuilt + recreated from this code.
+
 ## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
 
 Owner queued these late on 2026-06-28→29 with "keep working, don't wait for
