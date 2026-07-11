@@ -136,6 +136,58 @@ stopped a 1,372-row DLQ flood; manual create → honest 409) + ServiceNow
 + **PagerDuty channel repaired** (Events v2 400: empty source + non-enum
 severity — normalized; platform test now sends; routing key configured live).
 
+### Alert-quality + lab normalization (2026-07-11 PM/EVE) — ✅ SHIPPED + LIVE-VERIFIED
+
+Earlier PM (`0f9c876`, `9c35b9a`, same session as the ticketing slice):
+- **Alert resolution propagation** — PagerDuty incidents auto-close when alerts
+  clear (ResolveSender/DispatchResolve, same dedup key, gate pass-through;
+  engine dispatches a resolve when an alert leaves the active set). Pre-existing
+  open PD incidents need one manual bulk-resolve (resolution only fires on
+  future clears).
+- **Zero-speed link-utilization guard** — `(device_if_speed*1e6 > 0)` filter;
+  cleared 20 chronic +Inf false-positive SATURATED pages.
+
+Evening: owner reported continuous criticals every ~5 min → full root-cause
+pass (`b2cab2b` + lab-side fixes). **No chaos/failover simulation was running**
+(user+root cron, tmux, ps all clean on both hosts) — five independent faults:
+1. **CriticalCPU ×5 (all cEOS)** — cEOS exposes the LAB HOST's per-core CPU
+   (HOST-RESOURCES); two c8000v QEMU VMs peg ~2 host cores → phantom 100% on
+   every cEOS at once. Fix: `avg without (index)` on all CPU rules (device-
+   level, not per-core).
+2. **BGPSessionDown ×2 + InterfaceDown ×2** — stale wan-r1 remnants (node
+   deleted 2026-06-10): spine1 ebgp-dci neighbor 192.168.100.2 + eth-1/10(.0),
+   wan-r2 neighbor 192.168.100.5. Removed on devices (commit save / wr mem)
+   AND in goldens (`configs/{spine1,wan-r2}.cfg`, `.bak-20260711-alertstorm`
+   backups). ⚠️ wan-r2 golden noted stale vs live in other ways (lacks the
+   working 192.168.99.1 peer) — owner heads-up.
+3. **dmz-fw DeviceUnreachable** — FG's golden `dmz-fw.cfg` carries SNMP
+   *disabled*, so every reboot/config-push kills SNMP (that's the recurrence
+   mechanism). Restored live (sysinfo enable + community `fortinet-public`) +
+   patched golden; added host entry 10.70.245.122/32 (collector source is the
+   stack host, outside the /24 the community allowed — verified FG answers
+   in-subnet via raw SNMP).
+4. **ContainerDown + cadvisor dark** — stack-host docker moved to the
+   containerd image store (~Jul 3); cadvisor's docker handler can't enumerate
+   containers under it (verified through v0.52.1 — layerdb lookup fails).
+   Bumped cadvisor v0.49.1→v0.52.1 pinned, dropped the rule's `absent()` arm
+   (cadvisor-blind ≠ all-containers-down; stack-watchdog cron is the
+   authoritative sentinel). **Owner decision: live with dark per-container
+   self-metrics until upstream cadvisor supports the containerd store** (the
+   restart-loop/OOM container rules are blind too; revisit on cadvisor
+   releases, or a deliberate overlay2 revert window).
+5. **cdp/bgpls CollectorAllTargetsUnreachable** — CDP polls v2c against a
+   v3-only fabric (0/10 forever); no BGP-LS speaker configured on leaf1.
+   Disabled both in `.env` (runtime; re-enable needs creds/peer work).
+   Also: **DeviceUnreachable now excludes the netconf collector** — it probes
+   every device's :830 by design (capability probe), so a NETCONF-less device
+   (FortiGate) paged critical forever.
+- **CHQueryMemoryKilled follow-on**: firing on *server-total* ceiling
+  transients (spikes to 4.19 GiB vs 3.6 GiB effective at 4g), not per-query
+  kills (query_log clean) — the ~30-min cadence matches #101 background jobs.
+  `CLICKHOUSE_MEM_LIMIT=5g` in `.env` (host has headroom). If it still fires,
+  the alert premise needs rework (total-tracker vs query-tracker).
+- Result: 40 active alerts → single digits; ntfy 429 rate-limit storm ended.
+
 ## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
 
 Owner queued these late on 2026-06-28→29 with "keep working, don't wait for
