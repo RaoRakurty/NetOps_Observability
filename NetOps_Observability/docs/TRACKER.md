@@ -74,11 +74,24 @@ Outcome C (canonical planner extending install.py/install-correlix.sh).
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| P1 | `scripts/resource_planner.py` + 26-scenario tests + goldens | 🟡 |
-| P2 | install.py `--plan-resources/--replan/--rollback-plan` managed .env block | ⏳ |
-| P3 | Internal-limit plumbing (GOMEMLIMIT, KAFKA_HEAP, REDIS_MAXMEMORY, PG conf, VM allowedPercent, CH memory.xml + env caps, CORR_WINDOW_BUFFER) | ⏳ |
-| P4 | Customer-bundle integration (refuse-to-fit UX) | ⏳ |
-| P5 | Alerts (HostOOMKillerFired, CH pressure, CHQueryMemoryKilled rename w/ dep review) + RESOURCE_SIZING.md + examples | ⏳ |
+| P1 | `scripts/resource_planner.py` + 26-scenario tests + goldens | ✅ `73b8432` (27 tests green; demo=relaxed evaluation mode matching shipped 8GB-eval overcommit) |
+| P2 | install.py `--plan-resources/--replan/--rollback-plan` managed .env block | ✅ `ad6722d` |
+| P3 | Internal-limit plumbing (GOMEMLIMIT, KAFKA_HEAP, REDIS_MAXMEMORY, PG conf, VM allowedPercent, CH memory.xml + env caps, CORR_WINDOW_BUFFER) | ✅ `49ca1de` — **LIVE on lab**: CH ratio 0.9 asserted (system.server_settings), GOMEMLIMIT in api env, PG 256MB/5MB/100, valkey 96MiB exact (caught Redis decimal-`m` unit trap), VM flag explicit; compose defaults == pre-#102 values (unset plan = today) |
+| P4 | Customer-bundle integration (refuse-to-fit UX) | ✅ `30ce1e3` — bundle installs size to detected host by default (`CORRELIX_NO_SIZING=1` opt-out); e2e: 64g/16cpu/4TB + 15k flows/s sizing file → CH 16.2g, OS heap 50%, invariants hold |
+| P5 | Alerts + rename + docs | ✅ `3bd05e9` + docs commit — CHQueryMemoryKilled→**CHMemoryLimitExceeded** (dep review: rules/test/verify-script/runbooks/incident-doc; no dashboards or name-routing), **HostOOMKillerFired** (closes uncovered platform-failure class), **CHMemoryPressureSustained** (self-contained: MemoryTracking vs CH's own CGroupMemoryTotal×ratio), `docs/RESOURCE_SIZING.md`, `correlix-sizing.example.yaml`, DEPLOY_LINUX profile table |
+
+**Verdict on the 5g question (owner's framing):** it was a correct *tactical*
+container-memory change whose internal effect rode an unasserted vendor
+default — now replaced: the plan generates the container limit AND asserts
+the internal ratio/caps from it. Legacy `CLICKHOUSE_MEM_LIMIT=5g` in the lab
+.env is detected + honored as a pinned override with a deprecation warning.
+
+**Remaining (deliberate, tracked):** benchmark calibration program (design
+§10) to upgrade conservative-provisional coefficients (incl. M1: prove the CH
+transient attribution); Vector buffer/batch sizing after outage benchmark
+B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
+tenant-quota governance is a SEPARATE lane (design §9); default-on
+--plan-resources for dev installs next release (bundle is default-on now).
 
 ## 🌙 Owner UI/UX punch-list #2 (queued 2026-07-10, live-fired) — ✅ ALL SHIPPED `737437b`
 

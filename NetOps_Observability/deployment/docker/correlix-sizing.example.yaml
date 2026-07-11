@@ -1,0 +1,19 @@
+# Example workload declaration for the Correlix resource planner (#102).
+# Copy to correlix-sizing.yaml next to install-correlix.sh (bundle installs)
+# or pass via: python3 scripts/install.py --replan --sizing-file <path>.
+# Every value optional — missing inputs fall back to the named profile.
+# Docs: docs/RESOURCE_SIZING.md
+profile: custom
+workload:
+  devices: 500
+  interfaces: 20000
+  flows:
+    records_per_second: 15000
+    retention_days: 30
+  logs:
+    events_per_second: 3000
+    retention_days: 14
+  users:
+    concurrent_users: 20
+    concurrent_analytical_queries: 8
+  tenants: 10

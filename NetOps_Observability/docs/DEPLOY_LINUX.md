@@ -5,14 +5,22 @@ Estimated time: 30 minutes from a clean Ubuntu 22.04 / Debian 12 VM.
 
 ## Sizing
 
-| Devices monitored | CPU      | RAM   | Disk        |
-|-------------------|----------|-------|-------------|
-| < 50              | 4 vCPU   | 8 GB  | 100 GB SSD  |
-| 50–500            | 8 vCPU   | 16 GB | 250 GB SSD  |
-| 500–5000          | 16 vCPU  | 32 GB | 1 TB SSD    |
+Correlix sizes itself to the host and workload at install time (#102) — see
+**[RESOURCE_SIZING.md](RESOURCE_SIZING.md)**. Provision hardware from this
+guide, declare your workload in `correlix-sizing.yaml`, and the installer
+generates every container and internal limit (no hand-editing JVM heaps).
 
-OpenSearch is the heaviest single service — bump its JVM heap in
-`docker-compose.yml` (`OPENSEARCH_JAVA_OPTS`) when devices grow.
+| Profile | Typical workload bound | CPU | RAM | Disk (default retention) |
+|---------|------------------------|-----|-----|--------------------------|
+| demo    | <50 devices, ~1k flows/s (evaluation) | 4 vCPU | 8–16 GB | 100 GB SSD |
+| small   | ≤200 devices, ≤5k flows/s | 8 vCPU | 32 GB | ~1.5 TB SSD |
+| medium  | ≤1000 devices, ≤20k flows/s | 16 vCPU | 64 GB | ~4 TB NVMe |
+| large   | ≤5000 devices, ≤60k flows/s | 32 vCPU | 128 GB | ~12 TB NVMe |
+
+Flow retention dominates disk — 30 days at 20k flows/s is terabytes, and the
+planner refuses installs whose retention cannot fit (reduce retention days or
+grow the disk). Allocations are generated estimates, not guarantees, until
+the calibration program lands (design doc §10).
 
 ## 1. Install Docker + Compose v2
 
