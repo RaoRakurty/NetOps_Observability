@@ -253,14 +253,32 @@ func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request
 	// configuration produced it (2026-07-10: a shadowed policy made the active
 	// configuration ambiguous). Additive keys — create/reason stay top-level.
 	dec := evalTicketDecision(facts, policy, nil, time.Now().UTC())
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"create":            dec.Create,
 		"reason":            dec.Reason,
 		"policy_id":         policy.ID,
 		"policy_name":       policy.Name,
 		"policy_enabled":    policy.Enabled,
 		"policy_updated_at": policy.UpdatedAt,
-	})
+	}
+	// Differential guard: the simulator happily evaluates ANY saved policy, but
+	// the runtime resolves ONE governing policy per tenant — tell the operator
+	// when the dry-run's policy is not what the sweeper would actually apply
+	// (the exact ambiguity behind the 2026-07-10 shadowed-policy flood).
+	res := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicyState(r.Context(), policy.TenantID)
+	switch {
+	case res.state == policyStateActive && res.policy.ID == policy.ID:
+		out["runtime_state"] = "active"
+	case res.state == policyStateHeld:
+		out["runtime_state"] = "held"
+	case res.state == policyStateOptedOut:
+		out["runtime_state"] = "opted_out"
+	default:
+		out["runtime_state"] = "shadowed"
+		out["runtime_policy_id"] = res.policy.ID
+		out["runtime_policy_name"] = res.policy.Name
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ── per-correlation tickets — routed from handleCorrelationByID ───────────────
@@ -332,13 +350,20 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	// A merged object is superseded: ticketing it would double-file the incident
 	// (the sweeper only ever tickets the surviving object). Refuse with the
 	// canonical id — an explicit contract, never a misleading 404. Checked after
-	// the ownership guard so the redirect never leaks across tenants.
+	// the ownership guard so the redirect never leaks across tenants. The chain
+	// is followed to the TERMINAL survivor (A→B→C answers C, not B) so the
+	// operator's retry lands on a live object in one hop.
 	if mergedInto != "" {
+		canonical, depth := s.resolveMergeChain(r.Context(), scope, owner, id, mergedInto)
 		s.tktMergedRedirects.Add(1)
+		logInfo("ticketing", "manual ticket on merged object refused — canonical redirect",
+			map[string]any{"requested_correlation_id": id, "canonical_correlation_id": canonical,
+				"merge_depth": depth, "tenant": owner, "ticket_path": "manual", "action": action})
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":                    "this correlation object was merged — act on the surviving object instead",
 			"requested_correlation_id": id,
-			"canonical_correlation_id": mergedInto,
+			"canonical_correlation_id": canonical,
+			"merge_depth":              depth,
 		})
 		return
 	}
@@ -390,6 +415,56 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id stri
 	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner)
 	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", ""))
 	return payload, policy, owner, mergedInto, http.StatusOK, nil
+}
+
+// resolveMergeChain follows merged_into pointers from `first` to the terminal
+// surviving correlation object. Bounded (≤ maxMergeDepth hops) and cycle-safe;
+// it never follows a pointer across the owning tenant boundary — a hop that
+// resolves to a foreign-owned row stops the walk at the last same-owner id
+// (the first pointer itself came from the caller-authorized row, so returning
+// it discloses nothing new). Best-effort: an unreadable hop terminates the walk
+// at the last known id rather than failing the caller's 409. Returns the most
+// canonical id reached plus the number of hops it represents (1 = direct).
+func (s *server) resolveMergeChain(ctx context.Context, scope, owner, requested, first string) (string, int) {
+	const maxMergeDepth = 5
+	// The requested id is seeded too: a cycle back to it (A→B→A) must stop the
+	// walk rather than "canonicalize" to the very object the caller started from.
+	seen := map[string]bool{requested: true, first: true}
+	cur, depth := first, 1
+	for depth < maxMergeDepth {
+		if !isUUIDToken(cur) {
+			return cur, depth
+		}
+		sql := `SELECT tenant_id, state, coalesce(toString(merged_into), '') AS merged_into
+  FROM netops.corr_objects
+ WHERE correlation_id = '` + cur + `'
+ ORDER BY version DESC
+ LIMIT 1
+ FORMAT JSON`
+		rows, err := s.chRowsScope(ctx, scope, sql)
+		if err != nil || len(rows) == 0 {
+			return cur, depth
+		}
+		if canonicalCorrTenant(asString(rows[0]["tenant_id"])) != owner {
+			// Merge pointer crossed a tenant boundary — an engine invariant
+			// violation. Stop at the last same-owner id, never disclose further.
+			logWarn("ticketing", "INVARIANT VIOLATION: merge chain crossed tenant boundary — walk stopped",
+				map[string]any{"correlation_id": cur, "tenant": owner, "merge_depth": depth})
+			return cur, depth
+		}
+		next := asString(rows[0]["merged_into"])
+		if asString(rows[0]["state"]) != "merged" || next == "" {
+			return cur, depth // terminal survivor
+		}
+		if seen[next] {
+			logWarn("ticketing", "INVARIANT VIOLATION: merge chain cycle — walk stopped",
+				map[string]any{"correlation_id": next, "tenant": owner, "merge_depth": depth})
+			return cur, depth
+		}
+		seen[next] = true
+		cur, depth = next, depth+1
+	}
+	return cur, depth
 }
 
 // ── outbox + audit observability — /api/tickets/{outbox,audit} ────────────────

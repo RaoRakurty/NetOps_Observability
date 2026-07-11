@@ -136,8 +136,8 @@ func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incident
 		MissingEvidence:   view.MissingEvidenceSummary,
 		ImpactedApps:      facts.ImpactedApps,
 		RCAURL:            rcaDeepLink(rcaBaseURL, view.CorrObjectID),
-		Impact:            policy.DefaultImpact,
-		Urgency:           policy.DefaultUrgency,
+		Impact:            escalatedImpact(policy.DefaultImpact, view.Verdict, facts.PeakSeverity),
+		Urgency:           escalatedUrgency(policy.DefaultUrgency, view.Verdict, facts.PeakSeverity),
 		AssignmentGroup:   policy.AssignmentGroup,
 	}
 	p.EvidenceUsed = evidenceUsedLines(view.EvidenceSummary)
@@ -157,6 +157,46 @@ func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incident
 }
 
 // ── helpers (pure) ───────────────────────────────────────────────────────────
+
+// escalatedImpact / escalatedUrgency derive the ServiceNow impact/urgency from
+// the RCA verdict + peak severity, using the policy's configured defaults as
+// the BASELINE — escalation only ever makes a ticket MORE severe (numerically
+// lower), never demotes what the operator configured. ServiceNow computes
+// Priority from its Impact×Urgency matrix, so with the 2/2 defaults:
+//
+//	confirmed + critical → 1/1 → P1 Critical
+//	confirmed (other)    → 2/1 → P2 High
+//	suspected            → policy defaults (2/2 → P3 Moderate)
+//
+// A confirmed root cause filing at the same P3 as a tentative suspicion was the
+// 2026-07-11 operator complaint — the verdict was never consulted.
+func escalatedImpact(base int, verdict, peakSeverity string) int {
+	if verdict == "confirmed" && peakSeverity == "crit" {
+		return moreSevere(base, 1)
+	}
+	return base
+}
+
+func escalatedUrgency(base int, verdict, _ string) int {
+	if verdict != "confirmed" {
+		return base
+	}
+	// A confirmed root cause is always urgent — the RCA engine has already done
+	// the triage a human would do before raising urgency.
+	return moreSevere(base, 1)
+}
+
+// moreSevere picks the more severe of two ServiceNow impact/urgency values
+// (lower = more severe; 0 means "unset" and never wins).
+func moreSevere(a, b int) int {
+	if a <= 0 {
+		return b
+	}
+	if b <= 0 || a <= b {
+		return a
+	}
+	return b
+}
 
 // attachedTicketSignals mirrors buildRcaPathView's attached filter: signals the
 // engine attached, excluding *_clear recoveries.

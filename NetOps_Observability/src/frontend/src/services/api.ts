@@ -460,7 +460,19 @@ export type IncidentPolicyTestFacts = {
   has_affected_entity?: boolean;
   persistence_seconds?: number;
 };
-export type TicketPolicyDecision = { create: boolean; reason: string };
+export type TicketPolicyDecision = {
+  create: boolean;
+  reason: string;
+  // Which exact saved policy produced this dry-run verdict…
+  policy_id?: string;
+  policy_name?: string;
+  policy_enabled?: boolean;
+  policy_updated_at?: string;
+  // …and whether that policy is what the runtime would ACTUALLY apply.
+  runtime_state?: "active" | "shadowed" | "held" | "opted_out";
+  runtime_policy_id?: string;
+  runtime_policy_name?: string;
+};
 
 // RCA path overlay (#77) — UI-ready path + annotations for a correlation object
 // (GET /api/correlations/{id}/rca-path-view; backend rca_path_view.go).

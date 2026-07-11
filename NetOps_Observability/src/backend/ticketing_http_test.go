@@ -500,3 +500,158 @@ func TestTicketStatusView_URLNotDoubled(t *testing.T) {
 		}
 	}
 }
+
+// TestManualTicketCreate_MergedChainResolvesToTerminal extends the merged-object
+// contract to CHAINS: when A→B→C, the 409 must carry the TERMINAL survivor C
+// (not the intermediate B) so the operator's retry lands on a live object in
+// one hop, with merge_depth reporting the hops.
+func TestManualTicketCreate_MergedChainResolvesToTerminal(t *testing.T) {
+	const tktChainEndID = "55555555-6666-4777-8888-999999999999"
+	ch := corrCHStub(t, map[string]stubCorrRow{
+		tktMergedCorrID: {tenant: "", merged: tktCanonCorrID},
+		tktCanonCorrID:  {tenant: "", merged: tktChainEndID},
+		tktChainEndID:   {tenant: ""},
+	})
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, _, _ := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktMergedCorrID+"/ticket", admin, map[string]any{})
+	if st != 409 {
+		t.Fatalf("create on chain head = %d %s, want 409", st, body)
+	}
+	var out struct {
+		Canonical string `json:"canonical_correlation_id"`
+		Depth     int    `json:"merge_depth"`
+	}
+	_ = json.Unmarshal(body, &out)
+	if out.Canonical != tktChainEndID || out.Depth != 2 {
+		t.Fatalf("chain resolution = %q depth %d, want terminal %s depth 2", out.Canonical, out.Depth, tktChainEndID)
+	}
+}
+
+// TestManualTicketCreate_MergedChainCycleBounded proves a cyclic merge chain
+// (A→B→A — an engine invariant violation) terminates: bounded walk, 409 with
+// the last sane id, never a hang or a canonical id equal to the requested one.
+func TestManualTicketCreate_MergedChainCycleBounded(t *testing.T) {
+	ch := corrCHStub(t, map[string]stubCorrRow{
+		tktMergedCorrID: {tenant: "", merged: tktCanonCorrID},
+		tktCanonCorrID:  {tenant: "", merged: tktMergedCorrID},
+	})
+	t.Setenv("CLICKHOUSE_URL", ch.URL)
+	srv, _, _ := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, body := do(t, srv, "POST", "/api/correlations/"+tktMergedCorrID+"/ticket", admin, map[string]any{})
+	if st != 409 {
+		t.Fatalf("create on cyclic chain = %d %s, want 409", st, body)
+	}
+	var out struct {
+		Canonical string `json:"canonical_correlation_id"`
+	}
+	_ = json.Unmarshal(body, &out)
+	if out.Canonical != tktCanonCorrID {
+		t.Fatalf("cycle must stop at the last non-repeating id %s, got %q", tktCanonCorrID, out.Canonical)
+	}
+}
+
+// TestSimulator_ReportsRuntimeState is the differential guard between the
+// simulator and the runtime: the dry-run names whether the evaluated policy is
+// the one the sweeper would ACTUALLY apply (active), shadowed by another,
+// held by a conflict, or moot because the tenant opted out.
+func TestSimulator_ReportsRuntimeState(t *testing.T) {
+	srv, s, fix := setupTicketingTenants(t)
+	a, b := fix["A"], fix["B"]
+
+	type simOut struct {
+		RuntimeState      string `json:"runtime_state"`
+		RuntimePolicyID   string `json:"runtime_policy_id"`
+		RuntimePolicyName string `json:"runtime_policy_name"`
+	}
+	simulate := func(token, id string) simOut {
+		t.Helper()
+		st, body := do(t, srv, "POST", "/api/incident-policies/"+id+"/test", token,
+			map[string]any{"verdict": "confirmed", "peak_severity": "crit", "has_affected_entity": true})
+		if st != 200 {
+			t.Fatalf("simulate %s: %d %s", id, st, body)
+		}
+		var out simOut
+		_ = json.Unmarshal(body, &out)
+		return out
+	}
+
+	// One enabled policy → it is the runtime-active policy.
+	if st, body := do(t, srv, "POST", "/api/incident-policies", a.token, map[string]any{
+		"id": "act-1", "name": "governing", "enabled": true, "min_verdict": "confirmed"}); st != 200 {
+		t.Fatalf("create act-1: %d %s", st, body)
+	}
+	if out := simulate(a.token, "act-1"); out.RuntimeState != "active" {
+		t.Fatalf("enabled policy runtime_state = %q, want active", out.RuntimeState)
+	}
+
+	// A disabled second policy simulates fine but is SHADOWED by the active one.
+	if st, body := do(t, srv, "POST", "/api/incident-policies", a.token, map[string]any{
+		"id": "shd-1", "name": "candidate", "enabled": false, "min_verdict": "suspected"}); st != 200 {
+		t.Fatalf("create shd-1: %d %s", st, body)
+	}
+	if out := simulate(a.token, "shd-1"); out.RuntimeState != "shadowed" || out.RuntimePolicyID != "act-1" {
+		t.Fatalf("shadowed sim = %+v, want shadowed by act-1", out)
+	}
+
+	// Legacy multi-enabled drift (seeded past the store guard) → held.
+	mem := s.ticketing.(*memTicketingStore)
+	mem.mu.Lock()
+	mem.policies[memKey(a.tenantID, "drift")] = incidentPolicy{ID: "drift", TenantID: a.tenantID,
+		Name: "drifted", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
+	mem.mu.Unlock()
+	if out := simulate(a.token, "act-1"); out.RuntimeState != "held" {
+		t.Fatalf("multi-enabled sim runtime_state = %q, want held", out.RuntimeState)
+	}
+
+	// A tenant whose only policy is disabled has opted out.
+	if st, body := do(t, srv, "POST", "/api/incident-policies", b.token, map[string]any{
+		"id": "off-1", "name": "opt-out", "enabled": false, "min_verdict": "confirmed"}); st != 200 {
+		t.Fatalf("create off-1: %d %s", st, body)
+	}
+	if out := simulate(b.token, "off-1"); out.RuntimeState != "opted_out" {
+		t.Fatalf("opted-out sim runtime_state = %q, want opted_out", out.RuntimeState)
+	}
+}
+
+// TestTicketStatusRead_AgreesAcrossPaths is the list/detail vs manual-path
+// agreement check (hypothesis-C differential): the ticket link of a PLATFORM
+// (global) object — stored under the canonical "global" key by sweeper and
+// manual path alike — is visible to the platform owner through the read
+// endpoint, and invisible to a tenant-scoped caller (no cross-tenant leak).
+func TestTicketStatusRead_AgreesAcrossPaths(t *testing.T) {
+	srv, s, fix := setupTicketingTenants(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	if err := s.ticketing.PutLink(context.Background(), ticketLink{
+		TenantID: TenantGlobal, CorrObjectID: tktStrictCorrID, ExternalSystem: "servicenow",
+		Status: "open", TicketNumber: "INC0000077", SysID: "sys77",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Status map[string]any `json:"status"`
+	}
+	st, body := do(t, srv, "GET", "/api/correlations/"+tktStrictCorrID+"/tickets", admin, nil)
+	if st != 200 {
+		t.Fatalf("owner reads global ticket status: %d %s", st, body)
+	}
+	_ = json.Unmarshal(body, &out)
+	if out.Status["state"] != "open" || out.Status["ticket_number"] != "INC0000077" {
+		t.Fatalf("owner sees %v, want the open global ticket (the manual path filed it under 'global')", out.Status)
+	}
+	// Tenant-scoped caller: the same read must NOT reveal the platform ticket.
+	st, body = do(t, srv, "GET", "/api/correlations/"+tktStrictCorrID+"/tickets", fix["A"].token, nil)
+	if st != 200 {
+		t.Fatalf("tenant read: %d %s", st, body)
+	}
+	out.Status = nil
+	_ = json.Unmarshal(body, &out)
+	if out.Status["state"] != "not_created" {
+		t.Fatalf("tenant sees %v, want not_created (no cross-tenant ticket leak)", out.Status)
+	}
+}

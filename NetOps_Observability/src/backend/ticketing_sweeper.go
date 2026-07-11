@@ -145,8 +145,14 @@ SELECT toString(correlation_id) AS correlation_id,
 // Without this, a GLOBAL object (tenant_id="") never matched a configured global
 // policy (stored under "global") and the sweeper silently fell back to the default
 // policy — i.e. a platform-tenant policy could never take effect.
+// Case/whitespace-normalized via normTenant first — the app layer is already
+// case-insensitive on tenant keys (principalTenant lowercases, every store key
+// goes through normTenant), so canonicalizing here closes the one seam where a
+// raw row value could bypass that. It never collapses two distinct real tenant
+// ids (opaque lowercase t_… ids), only ""↔global representations.
 func canonicalCorrTenant(t string) string {
-	if strings.TrimSpace(t) == "" {
+	t = normTenant(t)
+	if t == "" {
 		return TenantGlobal
 	}
 	return t
@@ -227,14 +233,35 @@ func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentP
 	return sweepAction{}
 }
 
+// policyResolution is resolvePolicyState's outcome: the governing policy plus
+// HOW it came to govern, so callers (simulator, future observability) can tell
+// an active configured policy from a fallback, an opt-out, or a held conflict.
+type policyResolution struct {
+	policy incidentPolicy
+	state  string // policyStateDefault | policyStateActive | policyStateOptedOut | policyStateHeld
+}
+
+const (
+	policyStateDefault  = "default"   // tenant has no policy; safe MVP default governs
+	policyStateActive   = "active"    // exactly one enabled configured policy governs
+	policyStateOptedOut = "opted_out" // policies exist but all are disabled — tenant opted out
+	policyStateHeld     = "held"      // invariant violated (multiple enabled) — ticketing held
+)
+
 // resolvePolicy returns the incident policy that governs a tenant: a configured
 // enabled policy wins; an explicitly configured (but disabled) policy is honored
 // so a tenant can opt OUT; only a tenant with NO policy at all falls back to the
 // default-on MVP policy.
 func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant string) incidentPolicy {
+	return sw.resolvePolicyState(ctx, tenant).policy
+}
+
+// resolvePolicyState is the single policy-selection brain (sweeper, manual
+// path, and simulator all resolve through here — never a "first row wins").
+func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant string) policyResolution {
 	policies, err := sw.store.ListPolicies(ctx, tenant, false)
 	if err != nil || len(policies) == 0 {
-		return defaultIncidentPolicy(tenant)
+		return policyResolution{policy: defaultIncidentPolicy(tenant), state: policyStateDefault}
 	}
 	var enabled []incidentPolicy
 	for _, p := range policies {
@@ -244,10 +271,10 @@ func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant string) incid
 	}
 	switch len(enabled) {
 	case 1:
-		return enabled[0]
+		return policyResolution{policy: enabled[0], state: policyStateActive}
 	case 0:
 		// Explicitly configured but all disabled = the tenant opted OUT.
-		return policies[0]
+		return policyResolution{policy: policies[0], state: policyStateOptedOut}
 	}
 	// >1 enabled should be impossible (partial unique index + write-path 409) —
 	// if legacy data or drift ever violates it, FAIL CLOSED: hold all ticketing
@@ -266,5 +293,5 @@ func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant string) incid
 	held := defaultIncidentPolicy(tenant)
 	held.Enabled = false
 	held.Name = "HELD: conflicting enabled policies"
-	return held
+	return policyResolution{policy: held, state: policyStateHeld}
 }

@@ -171,6 +171,37 @@ GET `/api/correlations/{id}/tickets`, POST `.../ticket`, POST `.../ticket/sync`,
 GET `/api/tickets/outbox`, GET `/api/tickets/audit`. Add `ticket_status` to
 `GET /api/correlations/{id}`.
 
+### Contract details (2026-07-11)
+
+- **One enabled policy per (tenant, external system).** Enforced three-deep:
+  partial unique index `incident_policies_one_enabled` (migration 0021), store
+  layer (`errPolicyConflict`), HTTP 409 naming the conflicting policy. Runtime
+  (`resolvePolicyState`) resolves default | active | opted_out | held — a
+  multi-enabled violation FAILS CLOSED (ticketing held), never first-row-wins.
+- **Simulator** (`POST /api/incident-policies/{id}/test`) returns `create`,
+  `reason`, plus the exact policy evaluated (`policy_id/name/enabled/updated_at`)
+  and `runtime_state`: `active` (this policy governs), `shadowed`
+  (+`runtime_policy_id/name`), `held`, or `opted_out`. The simulator never
+  reserves idempotency or enqueues.
+- **Merged objects:** manual create/sync on a merged correlation returns **409**
+  with `requested_correlation_id`, `canonical_correlation_id` (the TERMINAL
+  survivor — merge chains followed ≤5 hops, cycle-safe, never across a tenant
+  boundary) and `merge_depth`. Checked after the ownership guard, so the
+  redirect never leaks a foreign object. Sweeper skips merged objects entirely.
+- **ServiceNow field mapping:** `category=network` always; impact/urgency start
+  at the policy's `default_impact/urgency` and escalate by verdict+severity
+  (confirmed+critical → 1/1 = P1; confirmed → urgency 1 = P2; suspected keeps
+  defaults = P3 with the 2/2 defaults). Escalation never demotes a stricter
+  configured default; ServiceNow derives Priority from its Impact×Urgency matrix.
+- **Idempotency:** outbox key `system:create:tenant:corr_id` (no hash — one
+  create per object ever) / `system:update:tenant:corr_id:payload_hash`;
+  `UNIQUE(idempotency_key)` + `ON CONFLICT DO NOTHING` collapse manual/sweeper
+  races; the link PK `(tenant, corr_object, system)` is the live-ticket anchor.
+- **Tenant canonicalization:** object rows may carry `""` (platform); the ONE
+  equivalence rule is `canonicalCorrTenant` (`""`→`global`, case/space
+  normalized); `itsmKey` maps `global`→`""` for the env-seeded platform
+  connector. Distinct real tenants never collapse (tested).
+
 ## RBAC
 
 `integrations.read/write · tickets.read/create/sync · incident_policies.read/write`.

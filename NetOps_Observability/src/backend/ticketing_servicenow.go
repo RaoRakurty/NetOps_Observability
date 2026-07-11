@@ -377,6 +377,10 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any 
 	f := map[string]any{
 		"short_description":     truncate("["+pid+"] "+p.Title, 160),
 		"description":           snowDescription(p),
+		// Every Correlix RCA ticket is a network fault — without this ServiceNow
+		// files the incident under its default category (Inquiry/Help), which
+		// misroutes it away from network queues (operator report 2026-07-11).
+		"category":              "network",
 		"correlation_id":        p.CorrObjectID,
 		"correlation_display":   "Correlix RCA",
 		"u_correlix_problem_id": pid,

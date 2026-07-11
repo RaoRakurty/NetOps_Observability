@@ -101,6 +101,32 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
   - Verified live 2026-07-11: migration 0021 applied (index present in PG),
     api image rebuilt + recreated from this code.
 
+### Ticketing review closure (2026-07-11) — principal-engineer audit slice
+
+Owner ran a full distributed-systems review spec over the two 2026-07-10 bug
+classes; audit confirmed the prior fixes and closed the residual gaps:
+
+- **Simulator differential guard**: `/test` now returns `runtime_state`
+  (`active|shadowed|held|opted_out` + `runtime_policy_id/name`) via the shared
+  `resolvePolicyState` brain — a dry-run on a shadowed policy says so; UI shows
+  the evaluated policy + a warning when it is not the live one.
+- **Merge chains**: manual create/sync 409 now resolves the TERMINAL survivor
+  (≤5 hops, cycle-safe, tenant-bounded) + `merge_depth`; structured log added.
+- **Canonicalization hardened**: `canonicalCorrTenant` normalizes case/space
+  (one equivalence rule; round-trip + no-collapse test).
+- **ServiceNow mapping (owner report)**: `category=network` always; verdict/
+  severity escalation — confirmed+crit → P1 (1/1), confirmed → P2 (urgency 1),
+  suspected keeps policy defaults; never demotes stricter configured defaults.
+- **UI safeguards**: policy list badges honest (`Active` / `Conflict — ticketing
+  held` + banner); Active stat turns red on conflict.
+- Tests: merge-chain terminal + cycle-bounded, simulator runtime-state (4
+  states), read-path agreement (global link visible to owner / never to a
+  tenant), policy order-independence property (20 shuffled seeds),
+  canonical round-trip, severity mapping, snow category.
+- Ruled out (hypothesis C): list/detail vs manual divergence — `GetLink`
+  cross-scan makes detail's ticket_status correct for global objects; pinned
+  by test instead of churn. Contract doc: `docs/design/rca-ticketing.md`.
+
 ## 🌙 Owner UI/UX punch-list (queued 2026-06-29 — overnight autonomous pass)
 
 Owner queued these late on 2026-06-28→29 with "keep working, don't wait for

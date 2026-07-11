@@ -109,3 +109,35 @@ func TestBuildTicketPayload_DefensiveTitleWhenBlank(t *testing.T) {
 		t.Fatalf("defensive title = %q", p.Title)
 	}
 }
+
+// TestTicketSeverityMapping pins the verdict/severity → ServiceNow impact/urgency
+// escalation (operator report 2026-07-11: a CONFIRMED critical fault filed at the
+// same P3 Moderate as everything else because only the policy defaults were sent).
+// Policy defaults are the baseline; escalation only ever raises severity.
+func TestTicketSeverityMapping(t *testing.T) {
+	pol := defaultIncidentPolicy("t_a") // impact 2 / urgency 2
+	cases := []struct {
+		name, verdict, sev      string
+		wantImpact, wantUrgency int
+	}{
+		{"confirmed critical → P1", "confirmed", "crit", 1, 1},
+		{"confirmed non-critical → P2", "confirmed", "high", 2, 1},
+		{"suspected keeps policy defaults", "suspected", "crit", 2, 2},
+		{"undetermined keeps policy defaults", "undetermined", "warn", 2, 2},
+	}
+	for _, c := range cases {
+		facts := corrTicketFacts{PeakSeverity: c.sev}
+		p := buildTicketPayload(rcaPathView{Verdict: c.verdict, Title: "x"}, facts, pol, "")
+		if p.Impact != c.wantImpact || p.Urgency != c.wantUrgency {
+			t.Fatalf("%s: impact/urgency = %d/%d, want %d/%d", c.name, p.Impact, p.Urgency, c.wantImpact, c.wantUrgency)
+		}
+	}
+
+	// Escalation never DEMOTES an operator's stricter configuration.
+	strict := defaultIncidentPolicy("t_a")
+	strict.DefaultImpact, strict.DefaultUrgency = 1, 1
+	p := buildTicketPayload(rcaPathView{Verdict: "suspected", Title: "x"}, corrTicketFacts{PeakSeverity: "warn"}, strict, "")
+	if p.Impact != 1 || p.Urgency != 1 {
+		t.Fatalf("suspected under a 1/1 policy = %d/%d, must keep 1/1", p.Impact, p.Urgency)
+	}
+}

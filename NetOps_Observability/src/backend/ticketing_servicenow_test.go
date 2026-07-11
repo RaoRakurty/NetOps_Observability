@@ -266,3 +266,13 @@ func TestServiceNowAdapter_ErrorNeverLeaksSecret(t *testing.T) {
 		t.Fatalf("error leaked the secret: %v", err)
 	}
 }
+
+// TestSnowIncidentCategory pins the incident category: every Correlix RCA ticket
+// is a network fault — leaving category unset misrouted incidents to ServiceNow's
+// default queue (operator report 2026-07-11).
+func TestSnowIncidentCategory(t *testing.T) {
+	f := snowIncidentFields(ticketSystemConfig{}, samplePayload("936cc7fe-0000-0000-0000-0000000000aa"))
+	if f["category"] != "network" {
+		t.Fatalf("category = %v, want network", f["category"])
+	}
+}

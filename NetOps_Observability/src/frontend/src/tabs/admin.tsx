@@ -3709,10 +3709,34 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
           <button className="btn" onClick={simulate} disabled={!p.id} title={p.id ? "" : "Save the policy first"}>Simulate</button>
         </div>
         {decision && (
-          <p style={{ marginTop: "var(--sp-2)" }}>
-            <span className={`badge ${decision.create ? "good" : "warn"}`}>{decision.create ? "Would open a ticket" : "Held"}</span>{" "}
-            <span className="mini-meta">{decision.reason}</span>
-          </p>
+          <div style={{ marginTop: "var(--sp-2)" }}>
+            <p style={{ margin: 0 }}>
+              <span className={`badge ${decision.create ? "good" : "warn"}`}>{decision.create ? "Would open a ticket" : "Held"}</span>{" "}
+              <span className="mini-meta">{decision.reason}</span>
+            </p>
+            {decision.policy_name && (
+              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0" }}>
+                Evaluated policy: <b>{decision.policy_name}</b>
+                {decision.policy_updated_at ? ` · saved ${new Date(decision.policy_updated_at).toLocaleString()}` : ""}
+              </p>
+            )}
+            {decision.runtime_state === "shadowed" && (
+              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0", color: "var(--warn, #b45309)" }}>
+                Not the live policy — “{decision.runtime_policy_name || "another policy"}” currently governs auto-ticketing
+                for this tenant, so this dry-run does not reflect live behavior.
+              </p>
+            )}
+            {decision.runtime_state === "held" && (
+              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0", color: "var(--bad, #b91c1c)" }}>
+                Auto-ticketing is HELD for this tenant — more than one policy is enabled. Disable all but one to resume.
+              </p>
+            )}
+            {decision.runtime_state === "opted_out" && (
+              <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0" }}>
+                Auto-ticketing is switched off for this tenant — no policy is enabled, so no ticket would open automatically.
+              </p>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -3725,6 +3749,18 @@ export function IncidentPoliciesAdmin() {
   const [sel, setSel] = useState<IncidentPolicy | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [canWrite, setCanWrite] = useState(false);
+
+  // At most ONE policy may be enabled per ticketing system — the backend holds
+  // all auto-ticketing when legacy data violates that, so surface it loudly.
+  const conflictSystems = new Set(
+    Object.entries(
+      (policies ?? []).filter((p) => p.enabled).reduce<Record<string, number>>((acc, p) => {
+        const sys = p.external_system || "servicenow";
+        acc[sys] = (acc[sys] ?? 0) + 1;
+        return acc;
+      }, {}),
+    ).filter(([, n]) => n > 1).map(([sys]) => sys),
+  );
 
   const load = useCallback(() => {
     setErr(null);
@@ -3756,11 +3792,14 @@ export function IncidentPoliciesAdmin() {
         (customer-facing confirmed faults open an incident; internal / probe-only / undetermined are held).
       </p>
       <ErrLine msg={err} />
+      {conflictSystems.size > 0 && (
+        <ErrLine msg={"More than one policy is enabled — auto-ticketing is HELD for this tenant until exactly one policy is enabled. Disable the extra policies below."} />
+      )}
 
       <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
         <StatStrip>
           <Stat label="Policies" value={policies?.length ?? "—"} />
-          <Stat label="Enabled" value={policies ? policies.filter((p) => p.enabled).length : "—"} tone="good" />
+          <Stat label="Active" value={policies ? policies.filter((p) => p.enabled).length : "—"} tone={conflictSystems.size > 0 ? "bad" : "good"} />
         </StatStrip>
         {canWrite && <button className="btn primary" onClick={() => setSel(blankPolicy())}>+ New policy</button>}
       </div>
@@ -3780,7 +3819,11 @@ export function IncidentPoliciesAdmin() {
             {policies.map((p) => (
               <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => setSel(p)}>
                 <td><b>{p.name || "(unnamed)"}</b></td>
-                <td><span className={`badge ${p.enabled ? "good" : ""}`}>{p.enabled ? "Enabled" : "Disabled"}</span></td>
+                <td>
+                  {p.enabled && conflictSystems.has(p.external_system || "servicenow")
+                    ? <span className="badge bad">Conflict — ticketing held</span>
+                    : <span className={`badge ${p.enabled ? "good" : ""}`}>{p.enabled ? "Active" : "Disabled"}</span>}
+                </td>
                 <td className="mini-meta">{policyGates(p).join(" · ")}</td>
                 <td className="mini-meta">{p.assignment_group || "—"}</td>
                 <td style={{ textAlign: "right" }}><button className="btn" onClick={(e) => { e.stopPropagation(); setSel(p); }}>{canWrite ? "Edit" : "View"}</button></td>

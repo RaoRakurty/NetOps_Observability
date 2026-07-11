@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -169,5 +170,64 @@ func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	bOut, _ := st.ListOutbox(ctx, "t_b", false)
 	if len(bOut) != 1 || bOut[0].TenantID != "t_b" {
 		t.Fatalf("tenant B outbox leaked across tenants: %+v", bOut)
+	}
+}
+
+// TestCanonicalCorrTenant_RoundTrip pins the ONE platform/global equivalence
+// rule across the three normalizers that must cancel out along the ticketing
+// path (object row → canonicalCorrTenant → store keys via normTenant →
+// connector via itsmKey). Every platform representation converges on "global",
+// the connector key round-trips to the env-seeded "" slot, and two distinct
+// real tenants NEVER collapse (the §3a security bound on canonicalization).
+func TestCanonicalCorrTenant_RoundTrip(t *testing.T) {
+	for in, want := range map[string]string{
+		"": TenantGlobal, "  ": TenantGlobal, "global": TenantGlobal,
+		"GLOBAL": TenantGlobal, " Global ": TenantGlobal,
+		"t_acme": "t_acme", "T_ACME": "t_acme",
+	} {
+		if got := canonicalCorrTenant(in); got != want {
+			t.Fatalf("canonicalCorrTenant(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Connector lookup: the canonical global tenant resolves to the env-seeded
+	// platform connector slot (""), a real tenant to its own slot.
+	if got := itsmKey(canonicalCorrTenant("")); got != "" {
+		t.Fatalf("itsmKey(canonical global) = %q, want \"\" (platform connector)", got)
+	}
+	if got := itsmKey(canonicalCorrTenant("t_acme")); got != "t_acme" {
+		t.Fatalf("itsmKey(canonical tenant) = %q, want t_acme", got)
+	}
+	// Distinct tenants never collapse.
+	if canonicalCorrTenant("t_a") == canonicalCorrTenant("t_b") {
+		t.Fatal("canonicalization collapsed two distinct tenants")
+	}
+}
+
+// TestResolvePolicy_OrderIndependent is the property test for the 2026-07-10
+// bug class: policy selection must NEVER depend on insertion order, map
+// iteration, or row order. Across shuffled insertion orders (and Go's already
+// randomized map iteration in the mem store), the single enabled policy always
+// wins and the resolution state is stable.
+func TestResolvePolicy_OrderIndependent(t *testing.T) {
+	ids := []string{"p1", "p2", "p3", "p4", "p5", "p6"}
+	for seed := 0; seed < 20; seed++ {
+		rng := rand.New(rand.NewSource(int64(seed)))
+		order := append([]string(nil), ids...)
+		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+		winner := ids[seed%len(ids)]
+
+		store := newMemTicketingStore()
+		for _, id := range order {
+			if err := store.PutPolicy(context.Background(), incidentPolicy{
+				ID: id, TenantID: "t_prop", Name: id, ExternalSystem: "servicenow",
+				Enabled: id == winner, MinVerdict: "confirmed",
+			}); err != nil {
+				t.Fatalf("seed %d: put %s: %v", seed, id, err)
+			}
+		}
+		res := (&ticketSweeper{store: store}).resolvePolicyState(context.Background(), "t_prop")
+		if res.state != policyStateActive || res.policy.ID != winner {
+			t.Fatalf("seed %d (order %v): resolved %q/%s, want %q/active", seed, order, res.policy.ID, res.state, winner)
+		}
 	}
 }
