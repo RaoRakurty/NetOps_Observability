@@ -54,6 +54,7 @@ func TestNormalizeJiraServiceNow(t *testing.T) {
 }
 
 func TestITSMApplyAndPublic(t *testing.T) {
+	t.Setenv("FEATURE_LEGACY_ALERT_ITSM", "true") // legacy lane coverage: deprecated path stays tested
 	st, srv := newTestITSMStore(t)
 
 	// Enable ServiceNow for the global tenant → live connector resolvable.
@@ -93,6 +94,7 @@ func TestITSMApplyAndPublic(t *testing.T) {
 // TestITSMPerTenantIsolation proves a tenant's connector resolves ONLY for that
 // tenant — never another tenant, and never the global connector (and vice versa).
 func TestITSMPerTenantIsolation(t *testing.T) {
+	t.Setenv("FEATURE_LEGACY_ALERT_ITSM", "true") // legacy lane coverage: deprecated path stays tested
 	st, srv := newTestITSMStore(t)
 
 	// Acme configures its own ServiceNow; Globex configures its own Jira.
@@ -131,6 +133,7 @@ func TestITSMPerTenantIsolation(t *testing.T) {
 // TestITSMLegacyMigration proves a pre-per-tenant single-object config file is
 // migrated under the global "" key on load.
 func TestITSMLegacyMigration(t *testing.T) {
+	t.Setenv("FEATURE_LEGACY_ALERT_ITSM", "true") // legacy lane coverage: deprecated path stays tested
 	_, srv := newTestITSMStore(t)
 	path := filepath.Join(t.TempDir(), "legacy.json")
 	// Legacy format: a bare itsmConfig object (no version envelope).

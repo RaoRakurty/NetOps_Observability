@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -263,6 +264,16 @@ func itsmStateFile(system, tenant string) string {
 func (s *itsmConfigStore) apply(tenant string, cfg itsmConfig) {
 	tenant = itsmKey(tenant)
 	live := &itsmLive{}
+	// #103 lane rule: the LEGACY raw-incident→ITSM projection (severity-gated,
+	// fingerprint-dedup, one ticket per Incident record) violates "customer
+	// destinations receive only policy-qualified root-cause incidents" and
+	// double-filed against the RCA lane into the same instance. DEPRECATED:
+	// dormant unless explicitly re-enabled (emergency escape hatch only).
+	// The config store itself stays — the RCA ticketing lane reads it.
+	if os.Getenv("FEATURE_LEGACY_ALERT_ITSM") != "true" {
+		s.live[tenant] = live // no live connectors: legacy lane fully dormant
+		return
+	}
 	if cfg.ServiceNow.Enabled && cfg.ServiceNow.InstanceURL != "" {
 		live.sn = notify.NewServiceNow(cfg.ServiceNow.InstanceURL, cfg.ServiceNow.User, cfg.ServiceNow.Password).
 			WithThreshold(cfg.ServiceNow.MinSeverity).
@@ -409,9 +420,12 @@ func (s *itsmConfigStore) public(tenant string) map[string]any {
 	defer s.mu.RUnlock()
 	tenant = itsmKey(tenant)
 	cfg := s.cfgs[tenant]
-	live := s.live[tenant]
-	snLive := live != nil && live.sn != nil
-	jrLive := live != nil && live.jira != nil
+	// "configured" = the connection is usable by its CURRENT consumer. The
+	// legacy live connectors are flag-dormant (#103), so config-level truth
+	// (enabled + identity present) is the honest signal — it is exactly what
+	// the RCA ticketing lane resolves against.
+	snLive := cfg.ServiceNow.Enabled && cfg.ServiceNow.InstanceURL != ""
+	jrLive := cfg.Jira.Enabled && cfg.Jira.BaseURL != ""
 	sn := cfg.ServiceNow
 	jr := cfg.Jira
 	return map[string]any{

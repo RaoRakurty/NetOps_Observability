@@ -144,10 +144,18 @@ multi-connection identity (beyond one-connection-per-system), (b) explicit
 REOPEN semantics, (c) complete metrics classification set, (d) live-PG
 concurrency (SKIP LOCKED) testing.
 
+**Legacy lane REMOVED (owner decision, 2026-07-11 night):** raw-incident→ITSM
+projection (ServiceNow+Jira legacy connectors + auto EnqueueIncidentSync)
+gated behind FEATURE_LEGACY_ALERT_ITSM (default OFF; emergency escape hatch
+only); manual legacy sync returns an explicit deprecation error; 32 stale
+phantom tickets (INC-LABTEST, June-3 dummy era) archived to
+data/api/servicenow_tickets.json.stale-20260711; public "configured" flag now
+reports config-level truth (what the RCA lane resolves against). Double-filing
+risk into the PDI: CLOSED.
+
 **Remaining in #103:** UX-1 notified-via column · UX-2 human display IDs ·
 inbound PD V3 webhooks (ack-sync; needs public ingress — deferred, documented)
-· Jira into the policy engine · legacy alert→ITSM lane decision (below) ·
-stale phantom-ticket purge · pgstore SKIP-LOCKED e2e on live PG (unit-level
+· Jira into the policy engine · pgstore SKIP-LOCKED e2e on live PG (unit-level
 covered; mem+pg store parity tests exist for SN path).
 
 Owner question: *"if the same customer wants auto-ticketing to Slack, PagerDuty,

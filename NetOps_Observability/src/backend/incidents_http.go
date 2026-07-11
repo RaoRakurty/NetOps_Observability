@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +57,7 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 		// Auto-policy: critical incidents promote to an ITSM ticket (dedup by the
 		// incident itself; the sync worker is idempotent). Skipped if no ITSM is
 		// configured so we don't enqueue jobs that only dead-letter.
-		if autoTicketEligible(inc.Severity) && s.reportPipeline != nil && s.itsmConfiguredFor(inc.TenantID) {
+		if legacyAlertITSMEnabled() && autoTicketEligible(inc.Severity) && s.reportPipeline != nil && s.itsmConfiguredFor(inc.TenantID) {
 			if _, err := s.reportPipeline.EnqueueIncidentSync(ctx, inc.TenantID, inc.ID); err != nil {
 				logError("incidents", "auto-enqueue sync", map[string]any{"incident_id": inc.ID, "error": err.Error()})
 			}
@@ -66,6 +67,10 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 		logInfo("incidents", "incident deduplicated", fields)
 	}
 }
+
+// legacyAlertITSMEnabled gates the DEPRECATED raw-incident→ITSM projection
+// (#103 lane rule): default OFF — the RCA policy lane owns customer filing.
+func legacyAlertITSMEnabled() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" }
 
 // notifyIncidentSlackActions posts an interactive Slack message (Acknowledge /
 // Resolve / Escalate buttons that carry the incident id) for a newly created
@@ -259,6 +264,9 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if err == nil && s.reportPipeline == nil {
 			err = errIncidentsUnavailable
+		}
+		if err == nil && !legacyAlertITSMEnabled() {
+			err = errors.New("legacy incident→ITSM sync is deprecated (#103): tickets file via RCA auto-ticketing policies")
 		}
 		if err == nil {
 			_, err = s.reportPipeline.EnqueueIncidentSync(r.Context(), inc.TenantID, inc.ID)
