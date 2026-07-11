@@ -86,6 +86,22 @@ default — now replaced: the plan generates the container limit AND asserts
 the internal ratio/caps from it. Legacy `CLICKHOUSE_MEM_LIMIT=5g` in the lab
 .env is detected + honored as a pinned override with a deprecation warning.
 
+**Production-signoff review (2026-07-11 late, owner-directed):** 10 concerns
+validated with live runtime evidence —
+`docs/design/resource-sizing-production-signoff-audit.md` (`1768f0a`).
+Confirmed correct: KAFKA_HEAP→real Apache Kafka JVM (Redpanda absent; dead
+correlation fallback fixed), OpenSearch live heap 50%/Xms==Xmx, CH ratio on
+cgroup-visible memory (policy + CH_MEM_RATIO override documented), planner-
+derived concurrency, PG budget model, detection sentinel handling, Valkey
+compat naming, **Level 3 confirmed**. Fixed: rollback backup-path bug
+(.env.env.plan.bak split-brain — live A→B→rollback now byte-identical across
+all 3 artifacts, idempotent) + container-OOM sentinel in stack-watchdog
+(cadvisor-dark gap closed via RestartCount/OOMKilled + ntfy) + PG
+oversubscription warning. Tests 30 green. OOM alert hierarchy: pressure=
+CHMemoryPressureSustained/HostMemoryLow · app failure=CHMemoryLimitExceeded ·
+container OOM=watchdog push (+dark ContainerOOMKilled rule for when cadvisor
+returns) · host OOM=HostOOMKillerFired.
+
 **Remaining (deliberate, tracked):** benchmark calibration program (design
 §10) to upgrade conservative-provisional coefficients (incl. M1: prove the CH
 transient attribution); Vector buffer/batch sizing after outage benchmark
