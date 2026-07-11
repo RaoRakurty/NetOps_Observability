@@ -109,7 +109,31 @@ B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
 
-## #103 — Notification/ticketing framework revalidation (owner task 2026-07-11 eve) — ⏳ QUEUED
+## #103 — Notification/ticketing framework revalidation (owner task 2026-07-11 eve) — 🟡 CORE SHIPPED (PD policy lane LIVE)
+
+**SHIPPED `f2c2609` + UI/docs (2026-07-11 late):** PagerDuty is a tenant-scoped
+RCA incident-policy destination — the #78 framework needed NO migration
+(external_system was already on every table/index/key). Per-(tenant,system)
+policy resolution (SN+PD dual-enable legal; PD strictly OPT-IN), Events v2
+adapter with stable dedup identity `correlix:<tenant>:<corr-uuid>:pagerduty`
+(storm = 1 incident; trigger/update/resolve one identity), per-tenant routing
+key (write-only, blank-preserve, PUT /api/itsm/pagerduty-rca), worker tenant
+assertion (mismatch = SECURITY quarantine, no external call), typed retry
+classification (429 Retry-After honored; 400/401/403 dead-letter),
+**platform self-health lane**: global PD key now pages ONLY layer∈{stack,
+host,clickhouse,platform} (customer raw alerts default-closed rejected;
+scope:"all" = deprecated opt-back), UI (policy system dropdown + PD paging
+connection card + system-aware ticket card), docs/integrations/pagerduty.md
+rewritten with runbook. Tests: fake local Events API (never real PD) —
+lifecycle identity, retry classes, per-system resolution/conflict/opt-in,
+two-tenant isolation (same corr id → different keys; keys never cross;
+quarantine), gates, platform-lane rejection; full backend suite green.
+
+**Remaining in #103:** UX-1 notified-via column · UX-2 human display IDs ·
+inbound PD V3 webhooks (ack-sync; needs public ingress — deferred, documented)
+· Jira into the policy engine · legacy alert→ITSM lane decision (below) ·
+stale phantom-ticket purge · pgstore SKIP-LOCKED e2e on live PG (unit-level
+covered; mem+pg store parity tests exist for SN path).
 
 Owner question: *"if the same customer wants auto-ticketing to Slack, PagerDuty,
 ServiceNow AND Jira — how does our system work? Have we designed this

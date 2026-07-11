@@ -1931,6 +1931,8 @@ export const api = {
   itsmServiceNow: () => request<ServiceNowStatus>("/api/itsm/servicenow"),
   itsmJira: () => request<JiraStatus>("/api/itsm/jira"),
   itsmConfig: () => request<ItsmConfig>("/api/notify/itsm"),
+  saveItsmPagerDutyRCA: (c: { enabled: boolean; routing_key?: string }) =>
+    request<ItsmConfig>("/api/itsm/pagerduty-rca", { method: "PUT", body: JSON.stringify(c) }),
   saveItsmConfig: (c: ItsmConfigInput) =>
     request<ItsmConfig>("/api/notify/itsm", { method: "PUT", body: JSON.stringify(c) }),
 
@@ -2630,7 +2632,8 @@ export type NmsStateRow = {
   siteId: string;
 };
 
-export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig };
+export type ItsmPagerDutyRCA = { enabled: boolean; has_routing_key?: boolean; configured?: boolean };
+export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig; pagerduty?: ItsmPagerDutyRCA };
 export type ItsmConfigInput = {
   servicenow: Omit<ItsmServiceNowConfig, "has_password" | "configured">;
   jira: Omit<ItsmJiraConfig, "has_token" | "configured">;

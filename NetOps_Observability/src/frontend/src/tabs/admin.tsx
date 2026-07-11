@@ -3661,11 +3661,14 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <LabeledInput label="Policy name" required value={p.name} onChange={(v) => set("name", v)}
           placeholder="e.g. Customer-impacting outages" info="A label for this policy; shown in the list and audit." />
         <LabeledSelect label="External system" value={p.external_system} onChange={(v) => set("external_system", v)}
-          options={["servicenow"]} info="The ticketing system tickets open in. ServiceNow today." />
+          options={["servicenow", "pagerduty"]}
+          info="Where this policy delivers: ServiceNow opens ITSM incidents; PagerDuty pages the on-call (Events API v2). One enabled policy per system — a tenant can run both." />
         <LabeledSelect label="Minimum verdict" value={p.min_verdict} onChange={(v) => set("min_verdict", v)}
           options={["suspected", "confirmed"]} info="The lowest RCA verdict that may open a ticket." />
-        <LabeledInput label="Assignment group" value={p.assignment_group ?? ""} onChange={(v) => set("assignment_group", v)}
-          placeholder="(optional) ServiceNow group" info="Routes the incident to a ServiceNow assignment group." />
+        {p.external_system === "servicenow" && (
+          <LabeledInput label="Assignment group" value={p.assignment_group ?? ""} onChange={(v) => set("assignment_group", v)}
+            placeholder="(optional) ServiceNow group" info="Routes the incident to a ServiceNow assignment group." />
+        )}
         <LabeledInput label="Default impact (1–4)" type="number" value={String(p.default_impact)} onChange={(v) => set("default_impact", Number(v) || 0)} />
         <LabeledInput label="Default urgency (1–4)" type="number" value={String(p.default_urgency)} onChange={(v) => set("default_urgency", Number(v) || 0)} />
         <LabeledInput label="Min persistence (seconds)" type="number" value={String(p.require_persistence_seconds)} onChange={(v) => set("require_persistence_seconds", Number(v) || 0)}
@@ -3674,6 +3677,14 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
           info="After a ticket resolves, suppress re-opening within this window. 0 = off." />
       </div>
 
+      {p.external_system === "pagerduty" && (
+        <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
+          Pages are deduplicated per root cause: one PagerDuty incident per correlated incident, updated in place and
+          auto-resolved on recovery. Urgency above maps to page severity (1 = critical). Connect the routing key under
+          PagerDuty paging connection on this page. Raw alerts never page directly.
+        </p>
+      )}
+      {p.external_system === "servicenow" && (<>
       {/* Per-verdict ticket priority mapping — the ITSM derives Priority from Impact x Urgency. */}
       <h4 style={{ margin: "var(--sp-3) 0 var(--sp-1)" }}>Ticket priority mapping</h4>
       <p className="mini-meta" style={{ margin: "0 0 var(--sp-2)" }}>
@@ -3690,6 +3701,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <LabeledInput label="Urgency — confirmed" type="number" value={String(p.urgency_confirmed ?? 0)}
           onChange={(v) => set("urgency_confirmed", Number(v) || 0)} info="0 = automatic (High)." />
       </div>
+      </>)}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}>
         <PolicyCheck label="Enabled" info="When off, this policy never opens tickets (a tenant opt-out)." checked={p.enabled} onChange={(v) => set("enabled", v)} />
@@ -3760,6 +3772,44 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
   );
 }
 
+function PagerDutyPagingConnection() {
+  const [cfg, setCfg] = useState<ItsmConfig | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [key, setKey] = useState("");
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.itsmConfig().then((c) => { setCfg(c); setEnabled(!!c.pagerduty?.enabled); }).catch((e) => setErr((e as Error).message));
+  }, []);
+  const save = async () => {
+    setErr(""); setMsg("");
+    try {
+      const out = await api.saveItsmPagerDutyRCA({ enabled, ...(key.trim() ? { routing_key: key.trim() } : {}) });
+      setCfg(out); setKey(""); setMsg("Saved.");
+    } catch (e) { setErr((e as Error).message); }
+  };
+  const hasKey = !!cfg?.pagerduty?.has_routing_key;
+  return (
+    <div className="cc-panel" style={{ padding: "var(--sp-3)", marginBottom: "var(--sp-3)" }}>
+      <h4 style={{ margin: 0 }}>PagerDuty paging connection</h4>
+      <p className="mini-meta" style={{ margin: "var(--sp-1) 0 var(--sp-2)" }}>
+        This tenant's own Events API v2 routing key — used ONLY by PagerDuty incident policies below
+        (one page per correlated root cause, auto-resolved on recovery). Raw alerts never page directly.
+      </p>
+      <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
+        <label className="scope-chip"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled</label>
+        <input className="app-input" type="password" style={{ minWidth: 280 }} value={key}
+          placeholder={hasKey ? "routing key set — leave blank to keep" : "Events API v2 integration key"}
+          onChange={(e) => setKey(e.target.value)} autoComplete="new-password" />
+        <button className="btn btn-primary" onClick={() => { void save(); }}>Save</button>
+        {hasKey && <span className="mini-meta">key stored (write-only)</span>}
+        {msg && <span className="mini-meta">{msg}</span>}
+      </div>
+      <ErrLine msg={err} />
+    </div>
+  );
+}
+
 export function IncidentPoliciesAdmin() {
   const { user } = useAuth();
   const [policies, setPolicies] = useState<IncidentPolicy[] | null>(null);
@@ -3803,11 +3853,13 @@ export function IncidentPoliciesAdmin() {
           <PolicyEditor policy={sel} canWrite={canWrite} inModal onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
         </Modal>
       )}
-      <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket — one ticket per root cause, never per raw alert." />
+      <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket or pages PagerDuty — one ticket/page per root cause, never per raw alert." />
       <p className="mini-meta" style={{ marginTop: "calc(-1 * var(--sp-2))" }}>
-        Configure the ServiceNow connection in <b>Incident Response → Integrations</b>. A tenant with no policy uses a safe default
-        (customer-facing confirmed faults open an incident; internal / probe-only / undetermined are held).
+        Configure the ServiceNow connection in <b>Incident Response → Integrations</b>; the PagerDuty routing key below. A tenant
+        with no policy uses a safe ServiceNow default (customer-facing confirmed faults open an incident; internal / probe-only /
+        undetermined are held). PagerDuty paging is strictly opt-in: no PagerDuty policy, no pages.
       </p>
+      <PagerDutyPagingConnection />
       <ErrLine msg={err} />
       {conflictSystems.size > 0 && (
         <ErrLine msg={"More than one policy is enabled — auto-ticketing is HELD for this tenant until exactly one policy is enabled. Disable the extra policies below."} />

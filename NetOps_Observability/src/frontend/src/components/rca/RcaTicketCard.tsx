@@ -78,7 +78,7 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
             ? <a className="rw-value mono" href={st.url} target="_blank" rel="noreferrer" style={{ color: "var(--rw-blue)" }}>{st.ticket_number} ↗</a>
             : <span className="rw-value mono">{st.ticket_number}</span>
         )}
-        {created && st.system && <span className="rw-note" style={{ margin: 0 }}>in {st.system === "servicenow" ? "ServiceNow" : st.system}</span>}
+        {created && st.system && <span className="rw-note" style={{ margin: 0 }}>in {st.system === "servicenow" ? "ServiceNow" : st.system === "pagerduty" ? "PagerDuty" : st.system}</span>}
       </div>
 
       {created ? (

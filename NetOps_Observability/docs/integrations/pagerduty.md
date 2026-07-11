@@ -70,13 +70,57 @@ var only seeds it on first boot — the UI/API value is authoritative.
 | Too many pages | Raise `min_severity` to `critical`, and remember alert-quality work belongs in `rules.yaml`, not in gating everything out at the channel. |
 | TLS error on test (lab only) | Versa egress interception — host CA bundle mount in the compose override handles it; restart api if the override was just added. |
 
-## 5. Current limits & roadmap
+## 5. RCA policy lane (#103 — customer paging, SHIPPED)
 
-Today PD is a **platform-global channel driven by raw alerts** with a
-severity gate — deliberately simple and engine-independent. The planned
-evolution (tracker: PD incident-policy lane) brings it to parity with the
-ServiceNow RCA ticketing control plane: per-tenant routing keys, verdict/
-severity policy gates on *correlated RCA objects* rather than raw alerts, PD
-urgency mapping, and simulator coverage — while keeping a thin policy-free
-lane for platform self-health so pages still fire if the correlation engine
-itself is down.
+Customer-network paging is **policy-driven off correlated RCA objects** —
+raw customer alerts never page directly. One PagerDuty incident per root
+cause, updated in place, auto-resolved on recovery.
+
+### Setup (per tenant)
+
+1. **Connect the tenant's routing key**: Administration → RCA Auto-Ticketing →
+   **PagerDuty paging connection** — paste the tenant's own Events API v2
+   integration key (write-only; API: `PUT /api/itsm/pagerduty-rca`).
+2. **Create a PagerDuty incident policy**: same pane → New policy → External
+   system = `pagerduty`. Verdict/severity gates work exactly like ServiceNow
+   policies; `Default urgency` maps to page severity (1 = critical page).
+   One enabled policy per (tenant, system) — a tenant can run ServiceNow AND
+   PagerDuty policies side by side. **Paging is opt-in**: no PagerDuty
+   policy → no pages, ever.
+3. **Simulator**: the policy Test button dry-runs against a real correlation
+   and reports `runtime_state` for the PagerDuty lane specifically.
+
+### Lifecycle & identity
+
+- Dedup identity: `correlix:<tenant-id>:<correlation-uuid>:pagerduty` —
+  immutable IDs only; renames/severity changes never fork a new incident.
+  A 57-alert storm inside one correlation = ONE PagerDuty incident.
+- create → `trigger`; RCA updates → `trigger` same key (payload refresh);
+  RCA resolve → `resolve` same key. Policy-exit (severity/verdict drops)
+  follows ServiceNow semantics: the page stays open until the RCA object
+  resolves. Work notes stay in the Correlix audit trail (Events v2 has none).
+- Delivery: transactional outbox + SKIP-LOCKED worker, backoff + jitter,
+  429 honors Retry-After, 400/401/403 dead-letter (permanent), tenant-match
+  asserted before every external call (mismatch = quarantined, never sent).
+
+## 6. Platform self-health lane (the global key's ONLY job)
+
+The **platform-global** routing key (§1–2 above) now pages exclusively for
+Correlix stack health — the failures where the correlation engine itself may
+be down: allowlisted `layer` classes `stack` (containers/restarts), `host`
+(memory/disk/OOM-killer), `clickhouse`, `platform` (core service/scrape
+reachability). Customer alerts (devices, interfaces, BGP, paths, flows)
+are default-closed rejected from this lane — they page via tenant policies.
+Resolutions always pass. Legacy behavior (`scope: "all"`) remains an
+explicit, deprecated opt-back on `/api/notify/pagerduty`.
+
+## 7. Runbook
+
+| Situation | Action |
+|---|---|
+| Routing key revoked (401/403 dead-letters) | Rotate the key in PD, re-enter in the paging connection card; dead-letters stay for audit — re-enqueue happens on the next RCA change. |
+| Delivery backlog | `GET /api/tickets/outbox` (status retrying/dead_letter + last_error); worker metrics on /metrics. |
+| Duplicate PD incidents suspected | Compare `dedup_key` on both PD incidents — identical keys CANNOT duplicate (Events v2); different keys = different correlations (check merge chain). |
+| Page didn't fire | Policy simulator (runtime_state names the governing policy), then connection card (`has_routing_key`), then outbox. |
+| Stuck-open PD incident | Check the RCA object state — resolve propagates on RCA resolution; manual resolve in PD is safe (dedup key remains valid for future). |
+| Platform-health verification | `layer` label present on the alert? Only stack/host/clickhouse/platform page globally. |
