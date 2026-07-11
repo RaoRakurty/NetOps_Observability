@@ -19,6 +19,11 @@
 >
 > Full inbound (poll/webhook) state-sync remains the build plan below.
 
+> **Operator setup guides (step-by-step):**
+> [ServiceNow](integrations/servicenow.md) ·
+> [PagerDuty](integrations/pagerduty.md) ·
+> [Slack](integrations/slack.md)
+
 Turn NetOps alerts and correlated incidents into tickets in the customer's
 system of record — **ServiceNow** and **Jira** — with bi-directional sync. This
 builds directly on the backend's existing **notifier framework**
