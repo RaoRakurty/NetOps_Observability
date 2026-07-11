@@ -51,7 +51,7 @@ func TestShippedRulesFileParses(t *testing.T) {
 	// carry a real query (CorrVersionChurnUndamped is the folded-scalar one
 	// that was silently broken until the #101 parser fix).
 	for name, mustContain := range map[string]string{
-		"CHQueryMemoryKilled":          "QueryMemoryLimitExceeded",
+		"CHMemoryLimitExceeded":        "ClickHouseErrorMetric_MEMORY_LIMIT_EXCEEDED",
 		"CorrVersionChurnUndamped":     "increase(corr_versions",
 		"CorrCurrentProjectionFailing": "corr_current_projection_write_failures_total",
 		"CorrTenantWriteAmpOverBudget": "corr_tenant_writes_window",

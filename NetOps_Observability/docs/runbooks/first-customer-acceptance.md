@@ -59,7 +59,7 @@ first customer.** A projection failure at 02:00 must reach a phone/pager.
       `FEATURE_NTFY_NOTIFICATIONS=true` + `NTFY_ALERT_TOPIC=...` in `.env`.
 - [ ] The contract alerts parse to their real queries (CI:
       `go test ./alerts/ -run 'TestShippedRulesFileParses|TestParseRulesYAMLScalarStyles'`):
-      `CHQueryMemoryKilled`, `CHFailedQueriesRising`,
+      `CHMemoryLimitExceeded`, `CHFailedQueriesRising`,
       `CorrVersionChurnUndamped`, `CorrCurrentProjectionFailing`,
       `CorrTenantWriteAmpOverBudget`.
 - [ ] Metric inputs are scraped: query VictoriaMetrics for

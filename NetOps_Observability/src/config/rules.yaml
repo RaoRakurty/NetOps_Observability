@@ -710,6 +710,17 @@ groups:
         annotations:
           summary: "Host memory available {{ $value | humanizePercentage }} — OOM-killer risk"
 
+      - alert: HostOOMKillerFired
+        # #102: the kernel actually reaped a process — a platform FAILURE, not
+        # pressure. HostMemoryLow is the pre-OOM proxy; this is the event.
+        # Runbook: dmesg -T | grep -i oom; identify the victim cgroup, compare
+        # its resource-plan limit vs usage, then --replan or grow the host.
+        expr: increase(node_vmstat_oom_kill[10m]) > 0
+        for: 0m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Host OOM-killer fired ({{ $value }} kill(s)/10m) — a process was reaped"
+
       - alert: HostDiskLow
         expr: node_filesystem_avail_bytes{mountpoint="/host"} / node_filesystem_size_bytes{mountpoint="/host"} < 0.10
         for: 5m
@@ -734,7 +745,10 @@ groups:
   - name: noc-ch-bounded-io
     interval: 60s
     rules:
-      - alert: CHQueryMemoryKilled
+      - alert: CHMemoryLimitExceeded
+        # (renamed from CHQueryMemoryKilled 2026-07-11 #102: the error metric
+        # counts every thrown MEMORY_LIMIT_EXCEEDED — query OR background — so
+        # the old name overclaimed a query kill. Attribution = runbook step.)
         # A MEMORY_LIMIT_EXCEEDED exception was actually thrown — a query died
         # against the per-query cap (query-spill.xml) or the server total. One
         # kill = investigate; run scripts/ch-query-budget-check.sh to attribute
@@ -746,7 +760,21 @@ groups:
         expr: increase(ClickHouseErrorMetric_MEMORY_LIMIT_EXCEEDED[10m]) > 0
         labels: { severity: critical, layer: clickhouse }
         annotations:
-          summary: "ClickHouse memory-killed {{ $value }} quer(ies) in 10m — a read regressed toward the #100 incident shape; attribute via ch-query-budget-check.sh"
+          summary: "ClickHouse threw MEMORY_LIMIT_EXCEEDED {{ $value }}x in 10m — attribute (query vs background) via ch-query-budget-check.sh + system.query_log"
+
+      - alert: CHMemoryPressureSustained
+        # #102 capacity PRESSURE (vs the failure above): tracked server memory
+        # sustained above 85% of the plan-asserted ceiling (CH_MEM_RATIO x
+        # cgroup). Fires BEFORE queries start dying — the 2026-07-11 incident
+        # shape. Runbook: check merges/mutations + query mix, then --replan.
+        # Self-contained from CH's own scrape: CGroupMemoryTotal is the cgroup
+        # limit CH detected (live-verified = the container mem_limit), x0.9 =
+        # the asserted server ceiling. No cadvisor, no constants.
+        expr: ClickHouseMetrics_MemoryTracking / (ClickHouseAsyncMetrics_CGroupMemoryTotal * 0.9) > 0.85
+        for: 10m
+        labels: { severity: warning, layer: clickhouse }
+        annotations:
+          summary: "ClickHouse tracked memory sustained >85% of its plan ceiling — investigate before queries die"
 
       - alert: CHFailedQueriesRising
         expr: increase(ClickHouseProfileEvents_FailedQuery[15m]) > 25

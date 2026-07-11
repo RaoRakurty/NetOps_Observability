@@ -146,7 +146,7 @@ A lane = anything that turns raw telemetry into correlation signals
   per endpoint by `scripts/ch-query-budget-check.sh` (cron-able, exits 1 on
   breach; MEM_BUDGET_MB / P95_BUDGET_MS / WINDOW_MIN env-tunable).
 - **Alerts (`src/config/rules.yaml`, group `noc-ch-bounded-io`):**
-  `CHQueryMemoryKilled` (critical — the cap fired), `CHFailedQueriesRising`,
+  `CHMemoryLimitExceeded` (critical — a memory-limit exception was thrown; named CHQueryMemoryKilled at the time), `CHFailedQueriesRising`,
   `CorrVersionChurnUndamped` (persists with zero damped = damper regressed).
   Existing: `noc-corr-ingest` flatlines, watchdog disk warnings.
 - **Watchdog:** now also fails loudly when the docker-hygiene cron is stale

@@ -17,7 +17,7 @@
 #       WATCHDOG_NTFY_TOPIC is exported)
 #   G4  the critical contract alerts are present in the shipped rules file
 #       (parse-depth is guarded by TestShippedRulesFileParses in CI):
-#       CHQueryMemoryKilled, CHFailedQueriesRising, CorrVersionChurnUndamped,
+#       CHMemoryLimitExceeded, CHFailedQueriesRising, CorrVersionChurnUndamped,
 #       CorrCurrentProjectionFailing, CorrTenantWriteAmpOverBudget
 #   G5  delivery: with --send, POSTs the enabled channel's /test endpoint and
 #       requires success (a REAL push lands). Without --send it is a dry-run:
@@ -116,7 +116,7 @@ fi
 
 # ---- G4: critical contract alerts shipped -------------------------------------
 if [ -r "$RULES_FILE" ]; then
-    for rule in CHQueryMemoryKilled CHFailedQueriesRising CorrVersionChurnUndamped \
+    for rule in CHMemoryLimitExceeded CHFailedQueriesRising CorrVersionChurnUndamped \
                 CorrCurrentProjectionFailing CorrTenantWriteAmpOverBudget; do
         grep -q "alert: $rule" "$RULES_FILE" || fail "contract alert $rule missing from $RULES_FILE"
     done

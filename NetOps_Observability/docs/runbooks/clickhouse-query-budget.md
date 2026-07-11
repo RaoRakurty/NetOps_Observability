@@ -1,7 +1,7 @@
 # Runbook — Command Center 502s / ClickHouse memory pressure
 
 **Symptoms:** Command Center intermittently 502s (`clickhouse:8123 context
-deadline exceeded`), UI-wide lag, watchdog flapping, `CHQueryMemoryKilled`
+deadline exceeded`), UI-wide lag, watchdog flapping, `CHMemoryLimitExceeded`
 alert firing. This is the 2026-07-09 incident shape
 (`docs/incidents/correlix-clickhouse-bounded-io.md`).
 
