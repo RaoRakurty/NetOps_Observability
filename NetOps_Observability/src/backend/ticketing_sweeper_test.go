@@ -89,7 +89,7 @@ func TestSweeperResolvePolicy(t *testing.T) {
 	sw := &ticketSweeper{store: st}
 
 	// No configured policy → default-on MVP policy, stamped with the tenant.
-	p := sw.resolvePolicy(ctx, "t_a")
+	p := sw.resolvePolicy(ctx, "t_a", "servicenow")
 	if p.ID != "default" || !p.Enabled || p.TenantID != "t_a" {
 		t.Fatalf("no policy should fall back to default-on for the tenant, got %+v", p)
 	}
@@ -97,12 +97,12 @@ func TestSweeperResolvePolicy(t *testing.T) {
 	// Tenant A configures a (disabled) policy → it is honored, NOT overridden by
 	// the default — a tenant can opt OUT.
 	_ = st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t_a", ExternalSystem: "servicenow", Enabled: false})
-	if p := sw.resolvePolicy(ctx, "t_a"); p.Enabled {
+	if p := sw.resolvePolicy(ctx, "t_a", "servicenow"); p.Enabled {
 		t.Fatalf("an explicit disabled policy must be honored, got enabled=%v", p.Enabled)
 	}
 
 	// Tenant B's resolution is independent of A's configuration.
-	if p := sw.resolvePolicy(ctx, "t_b"); p.ID != "default" || !p.Enabled {
+	if p := sw.resolvePolicy(ctx, "t_b", "servicenow"); p.ID != "default" || !p.Enabled {
 		t.Fatalf("tenant B must resolve its own default, got %+v", p)
 	}
 }
@@ -135,10 +135,10 @@ func TestSweeperCanonicalizesGlobalTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Raw "" misses it (the bug); the canonicalized tenant resolves it (the fix).
-	if p := sw.resolvePolicy(ctx, ""); p.ID == "g1" {
+	if p := sw.resolvePolicy(ctx, "", "servicenow"); p.ID == "g1" {
 		t.Fatal("precondition: raw \"\" must NOT match the global policy (else the bug never existed)")
 	}
-	if p := sw.resolvePolicy(ctx, canonicalCorrTenant("")); p.ID != "g1" {
+	if p := sw.resolvePolicy(ctx, canonicalCorrTenant(""), "servicenow"); p.ID != "g1" {
 		t.Fatalf("global object must resolve the configured global policy, got id=%q (default fallback?)", p.ID)
 	}
 }
@@ -225,7 +225,7 @@ func TestResolvePolicy_OrderIndependent(t *testing.T) {
 				t.Fatalf("seed %d: put %s: %v", seed, id, err)
 			}
 		}
-		res := (&ticketSweeper{store: store}).resolvePolicyState(context.Background(), "t_prop")
+		res := (&ticketSweeper{store: store}).resolvePolicyState(context.Background(), "t_prop", "servicenow")
 		if res.state != policyStateActive || res.policy.ID != winner {
 			t.Fatalf("seed %d (order %v): resolved %q/%s, want %q/active", seed, order, res.policy.ID, res.state, winner)
 		}

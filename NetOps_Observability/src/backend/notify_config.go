@@ -64,6 +64,11 @@ type pagerDutyConfig struct {
 	Enabled     bool   `json:"enabled"`
 	RoutingKey  string `json:"routing_key,omitempty"` // write-only (Events API v2 integration key)
 	MinSeverity string `json:"min_severity"`          // default: critical (on-call escalation)
+	// Scope (#103): "platform" (default) = this global key pages ONLY Correlix
+	// self-health alerts (layer allowlist); customer-network paging goes through
+	// the per-tenant RCA incident-policy lane. "all" = legacy raw-alert behavior
+	// (explicit opt-back, documented as deprecated).
+	Scope string `json:"scope,omitempty"`
 }
 
 type notifyConfig struct {
@@ -262,7 +267,11 @@ func buildSlackChannel(c slackConfig) notify.Channel {
 }
 
 func buildPagerDutyChannel(c pagerDutyConfig) notify.Channel {
-	return notify.NewSeverityGate(notify.NewPagerDuty(c.RoutingKey), c.MinSeverity)
+	ch := notify.NewSeverityGate(notify.NewPagerDuty(c.RoutingKey), c.MinSeverity)
+	if strings.ToLower(strings.TrimSpace(c.Scope)) == "all" {
+		return ch // legacy raw-alert paging — explicit opt-back only
+	}
+	return notify.NewPlatformScopeFilter(ch)
 }
 
 func validSeverity(s string) bool {
@@ -594,13 +603,18 @@ type publicPagerDuty struct {
 	Enabled     bool   `json:"enabled"`
 	RoutingSet  bool   `json:"routing_set"`
 	MinSeverity string `json:"min_severity"`
+	Scope       string `json:"scope"`
 }
 
 func (s *notifyConfigStore) publicPagerDuty() publicPagerDuty {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c := s.cfg.PagerDuty
-	return publicPagerDuty{c.Enabled, c.RoutingKey != "", c.MinSeverity}
+	scope := strings.ToLower(strings.TrimSpace(c.Scope))
+	if scope != "all" {
+		scope = "platform"
+	}
+	return publicPagerDuty{c.Enabled, c.RoutingKey != "", c.MinSeverity, scope}
 }
 
 func (s *server) handlePagerDutyConfig(w http.ResponseWriter, r *http.Request) {

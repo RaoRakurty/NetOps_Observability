@@ -383,7 +383,7 @@ func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := sw.resolvePolicy(ctx, "t-x"); got.ID != "p1" {
+	if got := sw.resolvePolicy(ctx, "t-x", "servicenow"); got.ID != "p1" {
 		t.Fatalf("one enabled policy: resolved %q, want p1", got.ID)
 	}
 	// Seed a second ENABLED policy directly (legacy/drifted data — PutPolicy and
@@ -392,7 +392,7 @@ func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
 	store.policies[memKey("t-x", "p2")] = incidentPolicy{ID: "p2", TenantID: "t-x", Name: "permissive",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
 	store.mu.Unlock()
-	got := sw.resolvePolicy(ctx, "t-x")
+	got := sw.resolvePolicy(ctx, "t-x", "servicenow")
 	if got.Enabled {
 		t.Fatalf("two enabled policies must fail CLOSED (Enabled=false hold), resolved %+v", got)
 	}

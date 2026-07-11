@@ -175,49 +175,56 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 	view := buildRcaPathView(c.id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
 
-	policy := sw.resolvePolicy(ctx, c.tenant)
-	system := orDefault(policy.ExternalSystem, "servicenow")
+	// #103: every destination system evaluates ITS OWN policy independently —
+	// a ServiceNow ticket and a PagerDuty page for the same RCA object are
+	// separate policy decisions, separate links, separate outbox rows.
+	acted := false
+	for _, system := range ticketSystems {
+		policy := sw.resolvePolicy(ctx, c.tenant, system)
+		if !policy.Enabled {
+			continue // opted out / held / opt-in system without a policy
+		}
 
-	// A tenant with no ticketing connection can never send — enqueuing anyway
-	// just manufactures dead letters (live 2026-07-11: 1,372 DLQ rows for one
-	// unconnected tenant at ~1/min). Skip; once a connection is configured the
-	// object re-enqueues naturally on the next sweep (its create idempotency
-	// key is stable and no link exists yet).
-	if sw.srv != nil && sw.srv.itsmCfg != nil {
-		if _, ok := sw.srv.itsmCfg.ticketSystemConfig(c.tenant, system); !ok {
-			return false
+		// A tenant with no connection for THIS system can never send — enqueuing
+		// anyway just manufactures dead letters (live 2026-07-11: 1,372 DLQ rows
+		// for one unconnected tenant at ~1/min). Skip; once connected the object
+		// re-enqueues naturally on the next sweep.
+		if sw.srv != nil && sw.srv.itsmCfg != nil {
+			if _, ok := sw.srv.itsmCfg.ticketSystemConfig(c.tenant, system); !ok {
+				continue
+			}
+		}
+
+		link, found, err := sw.store.GetLink(ctx, c.tenant, false, c.id, system)
+		if err != nil {
+			logWarn("ticketing", "sweep link lookup failed",
+				map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
+			continue
+		}
+		var lp *ticketLink
+		if found {
+			lp = &link
+		}
+
+		act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now)
+		switch act.kind {
+		case "create":
+			if err := enqueueTicketCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+				logWarn("ticketing", "sweep enqueue create failed",
+					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
+				continue
+			}
+			acted = true
+		case "update":
+			if err := enqueueTicketUpdate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+				logWarn("ticketing", "sweep enqueue update failed",
+					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
+				continue
+			}
+			acted = true
 		}
 	}
-
-	link, found, err := sw.store.GetLink(ctx, c.tenant, false, c.id, system)
-	if err != nil {
-		logWarn("ticketing", "sweep link lookup failed",
-			map[string]any{"corr_object_id": c.id, "error": err.Error()})
-		return false
-	}
-	var lp *ticketLink
-	if found {
-		lp = &link
-	}
-
-	act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now)
-	switch act.kind {
-	case "create":
-		if err := enqueueTicketCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
-			logWarn("ticketing", "sweep enqueue create failed",
-				map[string]any{"corr_object_id": c.id, "error": err.Error()})
-			return false
-		}
-		return true
-	case "update":
-		if err := enqueueTicketUpdate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
-			logWarn("ticketing", "sweep enqueue update failed",
-				map[string]any{"corr_object_id": c.id, "error": err.Error()})
-			return false
-		}
-		return true
-	}
-	return false
+	return acted
 }
 
 // sweepAction is the pure outcome of evaluating one object: enqueue nothing, a
@@ -247,6 +254,12 @@ func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentP
 // policyResolution is resolvePolicyState's outcome: the governing policy plus
 // HOW it came to govern, so callers (simulator, future observability) can tell
 // an active configured policy from a fallback, an opt-out, or a held conflict.
+// ticketSystems are the destinations the RCA policy engine can drive. Each
+// system resolves its OWN governing policy (the one-enabled invariant is per
+// (tenant, external_system)); ServiceNow keeps its default-on MVP fallback,
+// every other system is strictly opt-in (no policy -> no delivery).
+var ticketSystems = []string{"servicenow", "pagerduty"}
+
 type policyResolution struct {
 	policy incidentPolicy
 	state  string // policyStateDefault | policyStateActive | policyStateOptedOut | policyStateHeld
@@ -263,16 +276,32 @@ const (
 // enabled policy wins; an explicitly configured (but disabled) policy is honored
 // so a tenant can opt OUT; only a tenant with NO policy at all falls back to the
 // default-on MVP policy.
-func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant string) incidentPolicy {
-	return sw.resolvePolicyState(ctx, tenant).policy
+func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant, system string) incidentPolicy {
+	return sw.resolvePolicyState(ctx, tenant, system).policy
 }
 
 // resolvePolicyState is the single policy-selection brain (sweeper, manual
 // path, and simulator all resolve through here — never a "first row wins").
-func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant string) policyResolution {
-	policies, err := sw.store.ListPolicies(ctx, tenant, false)
+func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant, system string) policyResolution {
+	system = orDefault(system, "servicenow")
+	all, err := sw.store.ListPolicies(ctx, tenant, false)
+	var policies []incidentPolicy
+	for _, p := range all {
+		if orDefault(p.ExternalSystem, "servicenow") == system {
+			policies = append(policies, p)
+		}
+	}
 	if err != nil || len(policies) == 0 {
-		return policyResolution{policy: defaultIncidentPolicy(tenant), state: policyStateDefault}
+		if system == "servicenow" {
+			// ServiceNow keeps the historical default-on MVP policy.
+			return policyResolution{policy: defaultIncidentPolicy(tenant), state: policyStateDefault}
+		}
+		// Paging (and any future system) is OPT-IN: no policy, no delivery.
+		off := defaultIncidentPolicy(tenant)
+		off.Enabled = false
+		off.ExternalSystem = system
+		off.Name = "no " + system + " policy (opt-in)"
+		return policyResolution{policy: off, state: policyStateOptedOut}
 	}
 	var enabled []incidentPolicy
 	for _, p := range policies {

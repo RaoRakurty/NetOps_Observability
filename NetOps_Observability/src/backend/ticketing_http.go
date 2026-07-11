@@ -182,8 +182,8 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 
 // validateIncidentPolicy bounds the operator-supplied policy (zero-trust input).
 func validateIncidentPolicy(p incidentPolicy) error {
-	if p.ExternalSystem != "servicenow" {
-		return errors.New("external_system must be servicenow")
+	if p.ExternalSystem != "servicenow" && p.ExternalSystem != "pagerduty" {
+		return errors.New("external_system must be servicenow or pagerduty")
 	}
 	if p.MinVerdict != "suspected" && p.MinVerdict != "confirmed" {
 		return errors.New("min_verdict must be suspected or confirmed")
@@ -270,7 +270,7 @@ func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request
 	// the runtime resolves ONE governing policy per tenant — tell the operator
 	// when the dry-run's policy is not what the sweeper would actually apply
 	// (the exact ambiguity behind the 2026-07-10 shadowed-policy flood).
-	res := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicyState(r.Context(), policy.TenantID)
+	res := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicyState(r.Context(), policy.TenantID, policy.ExternalSystem)
 	switch {
 	case res.state == policyStateActive && res.policy.ID == policy.ID:
 		out["runtime_state"] = "active"
@@ -304,10 +304,15 @@ func (s *server) handleCorrelationTickets(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
+		var pdView map[string]any
+		if pdLink, pdFound, pdErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, "pagerduty"); pdErr == nil && pdFound {
+			pdView = ticketStatusView(pdLink, true)
+		}
 		audit, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status": ticketStatusView(link, found),
-			"audit":  audit,
+			"status":    ticketStatusView(link, found),
+			"pagerduty": pdView,
+			"audit":     audit,
 		})
 	case sub == "ticket" && r.Method == http.MethodPost:
 		s.manualTicketAction(w, r, id, "create")
@@ -426,7 +431,7 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id stri
 	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
 	view := buildRcaPathView(id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
-	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner)
+	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner, "servicenow")
 	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", ""))
 	return payload, policy, owner, mergedInto, http.StatusOK, nil
 }
@@ -548,7 +553,7 @@ func ticketStatusView(l ticketLink, found bool) map[string]any {
 		"last_verdict":   l.LastVerdict,
 		"last_synced_at": l.LastSyncedAt,
 	}
-	if l.SysID != "" && base != "" {
+	if l.SysID != "" && base != "" && orDefault(l.ExternalSystem, "servicenow") == "servicenow" {
 		out["url"] = strings.TrimRight(base, "/") + "/nav_to.do?uri=incident.do?sys_id=" + l.SysID
 	}
 	return out
@@ -569,6 +574,13 @@ func (s *server) ticketStatusForObject(r *http.Request, id string) map[string]an
 	link, found, err := s.ticketing.GetLink(r.Context(), tenant, cross, id, "servicenow")
 	if err != nil {
 		return map[string]any{"state": "not_created"}
+	}
+	if !found {
+		// No ITSM ticket — surface the paging link so the card isn't blind
+		// when a tenant runs PagerDuty-only.
+		if pd, pdFound, pdErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, "pagerduty"); pdErr == nil && pdFound {
+			return ticketStatusView(pd, true)
+		}
 	}
 	return ticketStatusView(link, found)
 }

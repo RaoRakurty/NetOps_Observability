@@ -30,6 +30,7 @@ groups:
         for: 5m
         labels:
           severity: critical
+          layer: platform
         annotations:
           summary: "{{ $labels.instance }} down >5m"
 

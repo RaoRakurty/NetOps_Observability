@@ -989,6 +989,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Self-describing API + ITSM connector status.
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/itsm/servicenow", s.handleITSMServiceNow)
+	mux.HandleFunc("/api/itsm/pagerduty-rca", s.handleITSMPagerDutyRCA) // #103 tenant PD paging destination
 	mux.HandleFunc("/api/itsm/jira", s.handleITSMJira)
 	// Integration platform (#43): admin config + UNAUTHENTICATED inbound webhook
 	// (the more specific /webhook/ prefix wins over /api/integrations/ in the mux).

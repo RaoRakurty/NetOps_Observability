@@ -11,8 +11,10 @@ func testWorker(t *testing.T, m *mockServiceNow) (*ticketWorker, ticketingStore)
 	t.Helper()
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	store := newMemTicketingStore()
-	resolve := func(_ context.Context, _, _ string) (ticketSystemConfig, bool, error) {
-		return m.cfg(), true, nil
+	resolve := func(_ context.Context, tenant, _ string) (ticketSystemConfig, bool, error) {
+		c := m.cfg()
+		c.TenantID = tenant // mirror production: the resolver stamps tenant identity
+		return c, true, nil
 	}
 	w := newTicketWorker(store, resolve)
 	w.adapters["servicenow"] = m.adapter() // inject the mock-backed adapter

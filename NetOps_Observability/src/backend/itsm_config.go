@@ -51,6 +51,15 @@ type serviceNowConfig struct {
 	AssignmentGroup string `json:"assignment_group"`
 }
 
+// pagerDutyRCAConfig is the per-tenant PagerDuty destination for RCA
+// auto-ticketing (#103) — the CUSTOMER paging lane. RoutingKey is the tenant's
+// own Events API v2 integration key (write-only). Distinct from the
+// platform-global notify channel, which serves platform self-health only.
+type pagerDutyRCAConfig struct {
+	Enabled    bool   `json:"enabled"`
+	RoutingKey string `json:"routing_key,omitempty"`
+}
+
 type jiraConfig struct {
 	Enabled           bool   `json:"enabled"`
 	BaseURL           string `json:"base_url"`
@@ -64,8 +73,9 @@ type jiraConfig struct {
 
 // itsmConfig is ONE tenant's ITSM connector settings.
 type itsmConfig struct {
-	ServiceNow serviceNowConfig `json:"servicenow"`
-	Jira       jiraConfig       `json:"jira"`
+	ServiceNow serviceNowConfig   `json:"servicenow"`
+	Jira       jiraConfig         `json:"jira"`
+	PagerDuty  pagerDutyRCAConfig `json:"pagerduty"`
 }
 
 // itsmLive holds a tenant's built connectors (nil when disabled/unconfigured).
@@ -185,6 +195,14 @@ func (s *itsmConfigStore) set(tenant string, in itsmConfig) error {
 	if in.Jira.APIToken == "" {
 		in.Jira.APIToken = prev.Jira.APIToken
 	}
+	if in.PagerDuty == (pagerDutyRCAConfig{}) {
+		// The combined ITSM PUT predates the PD lane — an omitted pagerduty
+		// block must never silently disable RCA paging. The dedicated
+		// /api/itsm/pagerduty-rca endpoint is the explicit mutation path.
+		in.PagerDuty = prev.PagerDuty
+	} else if in.PagerDuty.RoutingKey == "" {
+		in.PagerDuty.RoutingKey = prev.PagerDuty.RoutingKey
+	}
 
 	if err := validateITSM(in); err != nil {
 		return err
@@ -272,27 +290,65 @@ func (s *itsmConfigStore) jiraFor(tenant string) *notify.Jira {
 // has no enabled, configured connection — a transient hold, not a failure. Only
 // ServiceNow is wired today; other systems return ok=false.
 func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSystemConfig, bool) {
-	if system != "" && system != "servicenow" {
-		return ticketSystemConfig{}, false
-	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	cfg, ok := s.cfgs[itsmKey(tenant)]
 	if !ok {
 		return ticketSystemConfig{}, false
 	}
-	sn := cfg.ServiceNow
-	if !sn.Enabled || sn.InstanceURL == "" {
-		return ticketSystemConfig{}, false
+	switch orDefault(system, "servicenow") {
+	case "servicenow":
+		sn := cfg.ServiceNow
+		if !sn.Enabled || sn.InstanceURL == "" {
+			return ticketSystemConfig{}, false
+		}
+		return ticketSystemConfig{
+			System:          "servicenow",
+			TenantID:        tenant,
+			InstanceURL:     sn.InstanceURL,
+			AuthType:        "basic",
+			User:            sn.User,
+			Password:        sn.Password,
+			AssignmentGroup: sn.AssignmentGroup,
+		}, true
+	case "pagerduty":
+		pd := cfg.PagerDuty
+		if !pd.Enabled || pd.RoutingKey == "" {
+			return ticketSystemConfig{}, false
+		}
+		// InstanceURL doubles as the Events API base so tests can inject a
+		// fake server; the worker's "connected" check requires it non-empty.
+		return ticketSystemConfig{
+			System:      "pagerduty",
+			TenantID:    tenant,
+			InstanceURL: pdDefaultEventsBase,
+			AuthType:    "routing_key",
+			APIToken:    pd.RoutingKey,
+		}, true
 	}
-	return ticketSystemConfig{
-		System:          "servicenow",
-		InstanceURL:     sn.InstanceURL,
-		AuthType:        "basic",
-		User:            sn.User,
-		Password:        sn.Password,
-		AssignmentGroup: sn.AssignmentGroup,
-	}, true
+	return ticketSystemConfig{}, false
+}
+
+// setPagerDutyRCA mutates ONLY the tenant's PagerDuty RCA-paging destination
+// (#103). Blank routing key on update preserves the stored one (write-only);
+// disable works explicitly here (the combined PUT cannot express it).
+func (s *itsmConfigStore) setPagerDutyRCA(tenant string, in pagerDutyRCAConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tenant = itsmKey(tenant)
+	cfg := s.cfgs[tenant]
+	if in.RoutingKey == "" {
+		in.RoutingKey = cfg.PagerDuty.RoutingKey
+	}
+	if in.Enabled && strings.TrimSpace(in.RoutingKey) == "" {
+		return errors.New("PagerDuty (RCA): routing key is required when enabled")
+	}
+	cfg.PagerDuty = in
+	s.cfgs[tenant] = cfg
+	if err := s.persist(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // public returns one tenant's redacted config for the admin UI — secrets become
@@ -317,6 +373,11 @@ func (s *itsmConfigStore) public(tenant string) map[string]any {
 			"min_severity":     sn.MinSeverity,
 			"assignment_group": sn.AssignmentGroup,
 			"configured":       snLive,
+		},
+		"pagerduty": map[string]any{
+			"enabled":         cfg.PagerDuty.Enabled,
+			"has_routing_key": cfg.PagerDuty.RoutingKey != "",
+			"configured":      cfg.PagerDuty.Enabled && cfg.PagerDuty.RoutingKey != "",
 		},
 		"jira": map[string]any{
 			"enabled":            jr.Enabled,
@@ -370,6 +431,9 @@ func validateITSM(c itsmConfig) error {
 			return fmt.Errorf("ServiceNow: %w", err)
 		}
 	}
+	if c.PagerDuty.Enabled && strings.TrimSpace(c.PagerDuty.RoutingKey) == "" {
+		return errors.New("PagerDuty (RCA): routing key is required when enabled")
+	}
 	if c.Jira.Enabled {
 		if c.Jira.BaseURL == "" {
 			return errors.New("Jira: base URL is required when enabled")
@@ -398,6 +462,42 @@ func validateOutboundURL(raw string) error {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 	return safehttp.ValidateURL(u.Hostname())
+}
+
+// handleITSMPagerDutyRCA serves PUT /api/itsm/pagerduty-rca — the explicit
+// mutation path for a tenant's PagerDuty RCA-paging destination (#103).
+// Tenant-scoped exactly like handleITSMConfig; routing key is write-only.
+func (s *server) handleITSMPagerDutyRCA(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	key := itsmKey(tenant)
+	if cross {
+		if q := strings.TrimSpace(r.URL.Query().Get("tenant")); q != "" {
+			key = itsmKey(q)
+		}
+	}
+	if s.itsmCfg == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("ITSM config store unavailable"))
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("PUT only"))
+		return
+	}
+	var in pagerDutyRCAConfig
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.itsmCfg.setPagerDutyRCA(key, in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	logInfo("itsm", "pagerduty RCA destination updated", map[string]any{"tenant": key, "enabled": in.Enabled, "actor": claims.Sub})
+	writeJSON(w, http.StatusOK, s.itsmCfg.public(key))
 }
 
 // handleITSMConfig serves GET/PUT /api/notify/itsm, scoped to the caller's tenant.

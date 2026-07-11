@@ -74,7 +74,8 @@ const (
 // ticketSystemConfig is the connection for one external system. Secrets
 // (Password/APIToken) are write-only and never serialized back out.
 type ticketSystemConfig struct {
-	System          string `json:"system"` // servicenow
+	System          string `json:"system"` // servicenow | pagerduty
+	TenantID        string `json:"-"`      // stamped by the resolver; identity for the worker's tenant assertion + PD dedup key
 	InstanceURL     string `json:"instance_url"`
 	AuthType        string `json:"auth_type"` // basic | token
 	User            string `json:"user"`

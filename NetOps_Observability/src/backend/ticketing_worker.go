@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,7 +39,7 @@ type ticketWorker struct {
 func newTicketWorker(store ticketingStore, resolve ticketConnResolver) *ticketWorker {
 	return &ticketWorker{
 		store:       store,
-		adapters:    map[string]ticketAdapter{"servicenow": newServiceNowAdapter()},
+		adapters: map[string]ticketAdapter{"servicenow": newServiceNowAdapter(), "pagerduty": newPagerDutyTicketAdapter()},
 		resolveConn: resolve,
 		workerID:    "ticket-" + randID()[:8],
 		batch:       16,
@@ -94,8 +95,25 @@ func (w *ticketWorker) process(ctx context.Context, it ticketOutboxItem, now tim
 		return
 	}
 
+	// #103 defensive tenant assertion: the resolved connection must belong to
+	// the outbox item's tenant — on ANY mismatch, never call the provider.
+	if canonicalCorrTenant(cfg.TenantID) != canonicalCorrTenant(it.TenantID) {
+		w.deadLetter(ctx, it, "SECURITY: connection tenant mismatch (delivery quarantined)")
+		logWarn("ticketing", "SECURITY: outbox/connection tenant mismatch — delivery refused",
+			map[string]any{"outbox_id": it.ID, "system": it.ExternalSystem})
+		return
+	}
 	if err := w.dispatch(ctx, adapter, cfg, it, now); err != nil {
-		w.retryLater(ctx, it, now, err.Error())
+		var perm permanentDeliveryError
+		var rl rateLimitedError
+		switch {
+		case errors.As(err, &perm):
+			w.deadLetter(ctx, it, err.Error())
+		case errors.As(err, &rl):
+			w.retryAfter(ctx, it, now, rl.After, err.Error())
+		default:
+			w.retryLater(ctx, it, now, err.Error())
+		}
 		return
 	}
 	w.succeed(ctx, it)
@@ -363,4 +381,41 @@ func payloadHashRaw(m map[string]any) string {
 	b, _ := json.Marshal(m)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+// ── #103 delivery-error classification ──────────────────────────────────────
+
+// permanentDeliveryError marks a provider rejection that retries cannot fix
+// (payload 400, revoked credential 401/403) — dead-letter, don't burn retries.
+type permanentDeliveryError struct{ Err error }
+
+func (e permanentDeliveryError) Error() string { return e.Err.Error() }
+func (e permanentDeliveryError) Unwrap() error { return e.Err }
+
+// rateLimitedError carries the provider's Retry-After so the outbox honors it
+// instead of the default backoff curve.
+type rateLimitedError struct{ After time.Duration }
+
+func (e rateLimitedError) Error() string {
+	return fmt.Sprintf("rate limited; retry after %s", e.After)
+}
+
+// retryAfter schedules the item's next attempt at an explicit provider-given
+// delay (429 Retry-After), still counting toward max_retries.
+func (w *ticketWorker) retryAfter(ctx context.Context, it ticketOutboxItem, now time.Time, after time.Duration, msg string) {
+	it.RetryCount++
+	it.LastError = truncate(msg, 480)
+	max := it.MaxRetries
+	if max == 0 {
+		max = w.maxRetries
+	}
+	if it.RetryCount >= max {
+		it.Status = "dead_letter"
+		_ = w.store.FinishOutbox(ctx, it)
+		w.audit(ctx, it, it.Action, "dead_letter", "", "")
+		return
+	}
+	it.Status = "retrying"
+	it.NextRetryAt = now.Add(after)
+	_ = w.store.FinishOutbox(ctx, it)
 }
