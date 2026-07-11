@@ -135,6 +135,15 @@ link — dedicated test), PUT /api/itsm/slack-rca, triple-enable SN+PD+Slack
 per-system resolution, UI card + policy option, docs (slack.md §6 +
 **integrations/architecture.md two-lane mermaid diagram**). Deployed live.
 
+**✅ #103-H MVP ACCEPTED by owner (2026-07-11 late):** customer RCA lane and
+platform self-health lane separated for ALL lifecycle operations (opens,
+updates, retries, replays, resolutions); tenant assertions, stable root-cause
+identity, lifecycle ordering, and trusted deployment namespacing enforced in
+code with targeted tests. Non-blocking follow-ups per acceptance: (a)
+multi-connection identity (beyond one-connection-per-system), (b) explicit
+REOPEN semantics, (c) complete metrics classification set, (d) live-PG
+concurrency (SKIP LOCKED) testing.
+
 **Remaining in #103:** UX-1 notified-via column · UX-2 human display IDs ·
 inbound PD V3 webhooks (ack-sync; needs public ingress — deferred, documented)
 · Jira into the policy engine · legacy alert→ITSM lane decision (below) ·
