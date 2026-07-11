@@ -74,7 +74,30 @@ func (p *PagerDuty) Send(a models.Alert) error {
 		},
 	}
 	buf, _ := json.Marshal(payload)
-	resp, err := p.client.Post(pagerDutyEventsV2URL, "application/json", bytes.NewReader(buf))
+	return p.post(buf)
+}
+
+// SendResolve closes the PagerDuty incident opened for this alert: Events v2
+// resolves by (routing_key, dedup_key) — no payload needed. Without this,
+// cleared alerts left their incidents open forever (57 stale incidents piled
+// up in the first hours the channel was live, 2026-07-11).
+func (p *PagerDuty) SendResolve(a models.Alert) error {
+	if p.routingKey == "" {
+		return errors.New("pagerduty routing key not configured")
+	}
+	if a.ID == "" {
+		return nil // no dedup key → nothing to resolve
+	}
+	buf, _ := json.Marshal(map[string]any{
+		"routing_key":  p.routingKey,
+		"event_action": "resolve",
+		"dedup_key":    a.ID,
+	})
+	return p.post(buf)
+}
+
+func (p *PagerDuty) post(body []byte) error {
+	resp, err := p.client.Post(pagerDutyEventsV2URL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

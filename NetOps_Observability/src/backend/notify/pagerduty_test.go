@@ -90,3 +90,37 @@ func TestPagerDutySendNormalizesPayload(t *testing.T) {
 		}
 	}
 }
+
+// TestPagerDutySendResolve pins the resolution event: same dedup key, action
+// resolve, no payload required — this is what closes the PD incident when the
+// alert clears (2026-07-11: without it incidents accumulated forever).
+func TestPagerDutySendResolve(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"success"}`))
+	}))
+	defer srv.Close()
+	orig := pagerDutyEventsV2URL
+	pagerDutyEventsV2URL = srv.URL
+	defer func() { pagerDutyEventsV2URL = orig }()
+
+	p := NewPagerDuty("rk")
+	if err := p.SendResolve(models.Alert{ID: "a1"}); err != nil {
+		t.Fatalf("SendResolve: %v", err)
+	}
+	if body["event_action"] != "resolve" || body["dedup_key"] != "a1" || body["routing_key"] != "rk" {
+		t.Fatalf("unexpected resolve envelope: %+v", body)
+	}
+	// A severity gate must pass resolves through to the wrapped channel.
+	body = nil
+	gated := NewSeverityGate(p, "critical")
+	if err := gated.SendResolve(models.Alert{ID: "a2", Severity: "info"}); err != nil {
+		t.Fatalf("gated SendResolve: %v", err)
+	}
+	if body["dedup_key"] != "a2" {
+		t.Fatalf("severity gate swallowed the resolve: %+v", body)
+	}
+}

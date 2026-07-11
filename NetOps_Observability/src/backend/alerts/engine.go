@@ -251,6 +251,17 @@ func (e *Engine) evaluateAll() {
 			e.OnFire(a)
 		}
 	}
+	// Resolution leg: an alert that WAS active and no longer fires has cleared —
+	// tell resolution-capable channels (PagerDuty closes the incident it opened
+	// under the same dedup key). Resolution is tick-grained like everything else.
+	for id, a := range prev {
+		if _, still := next[id]; still {
+			continue
+		}
+		if e.notifier != nil {
+			e.notifier.DispatchResolve(a)
+		}
+	}
 }
 
 // mergeLabels overlays metric labels onto the rule's labels (severity, etc.),

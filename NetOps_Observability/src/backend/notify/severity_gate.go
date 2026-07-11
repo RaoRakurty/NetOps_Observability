@@ -30,6 +30,17 @@ func (g *SeverityGate) Send(a models.Alert) error {
 	return g.inner.Send(a)
 }
 
+// SendResolve forwards a resolution when the wrapped channel supports it.
+// Resolutions are NOT severity-gated: if the trigger passed the gate, its
+// resolution must too (the same rank passes anyway); if it never triggered,
+// the destination treats the resolve as a harmless no-op.
+func (g *SeverityGate) SendResolve(a models.Alert) error {
+	if rs, ok := g.inner.(ResolveSender); ok {
+		return rs.SendResolve(a)
+	}
+	return nil
+}
+
 // SeverityAtLeast reports whether sev meets or exceeds min (e.g. "warning"). An
 // empty/unknown min admits everything. Exposes the same ranking the gate uses so
 // non-Channel paths (e.g. incident action posts) can apply the same threshold.

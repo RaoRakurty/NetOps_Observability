@@ -18,6 +18,13 @@ type Channel interface {
 	Send(a models.Alert) error
 }
 
+// ResolveSender is an optional Channel extension for destinations with
+// resolution semantics (e.g. PagerDuty closes the incident it opened for the
+// same dedup key). Channels without it simply never learn about resolutions.
+type ResolveSender interface {
+	SendResolve(a models.Alert) error
+}
+
 // Dispatcher holds the registered channels and forwards alerts to each.
 type Dispatcher struct {
 	mu       sync.RWMutex
@@ -81,6 +88,30 @@ func (d *Dispatcher) Dispatch(a models.Alert) {
 				log.Printf("notify %s: %v", c.Name(), err)
 			}
 		}(c)
+	}
+}
+
+// DispatchResolve tells every resolution-capable channel that an alert
+// cleared, so destinations like PagerDuty close the incident they opened
+// (same dedup key) instead of accumulating stale open incidents forever.
+// Channels without ResolveSender are skipped; errors are logged, never block.
+func (d *Dispatcher) DispatchResolve(a models.Alert) {
+	d.mu.RLock()
+	channels := make([]Channel, len(d.channels))
+	copy(channels, d.channels)
+	d.mu.RUnlock()
+
+	for _, c := range channels {
+		rs, ok := c.(ResolveSender)
+		if !ok {
+			continue
+		}
+		name := c.Name()
+		go func(rs ResolveSender) {
+			if err := rs.SendResolve(a); err != nil {
+				log.Printf("notify %s resolve: %v", name, err)
+			}
+		}(rs)
 	}
 }
 

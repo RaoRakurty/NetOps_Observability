@@ -2,8 +2,12 @@ package alerts
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
+
+	"netops/backend/models"
+	"netops/backend/notify"
 )
 
 // fakeClock advances manually so `for` gating can be tested across ticks.
@@ -158,5 +162,76 @@ func TestRuleJSONForSeconds(t *testing.T) {
 		if err := json.Unmarshal([]byte(bad), &r); err == nil {
 			t.Errorf("unmarshal %s: expected error, got For=%v", bad, r.For)
 		}
+	}
+}
+
+// fakeResolveChannel records triggers + resolves so the engine's resolution
+// leg (fire → clear → DispatchResolve) is observable through a real Dispatcher.
+type fakeResolveChannel struct {
+	mu       sync.Mutex
+	sent     []string
+	resolved []string
+}
+
+func (f *fakeResolveChannel) Name() string { return "fake" }
+func (f *fakeResolveChannel) Send(a models.Alert) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, a.ID)
+	return nil
+}
+func (f *fakeResolveChannel) SendResolve(a models.Alert) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolved = append(f.resolved, a.ID)
+	return nil
+}
+
+// TestEngineDispatchesResolutions pins the resolution leg (2026-07-11: without
+// it, PagerDuty incidents for cleared alerts stayed open forever and piled up):
+// an alert that fires notifies once; when its series stops matching, the SAME
+// alert id is resolved exactly once, and a steady alert resolves nothing.
+func TestEngineDispatchesResolutions(t *testing.T) {
+	firing := true
+	ch := &fakeResolveChannel{}
+	d := notify.NewDispatcher()
+	d.Register(ch)
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	e := NewEngine("", d)
+	e.evalFn = func(Rule) ([]Sample, error) {
+		if !firing {
+			return nil, nil
+		}
+		return []Sample{{Labels: map[string]string{"device": "leaf1"}, Value: 99}}, nil
+	}
+	e.now = clock.now
+	e.AddRule(Rule{Name: "LinkDown", Expr: "x > 0", Severity: "critical"})
+
+	waitFor := func(want func() bool) {
+		t.Helper()
+		for i := 0; i < 100; i++ {
+			ch.mu.Lock()
+			ok := want()
+			ch.mu.Unlock()
+			if ok {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("dispatcher goroutines did not deliver in time (sent=%v resolved=%v)", ch.sent, ch.resolved)
+	}
+
+	e.evaluateAll() // fires
+	waitFor(func() bool { return len(ch.sent) == 1 })
+	e.evaluateAll() // steady — no re-send, no resolve
+	clock.advance(30 * time.Second)
+
+	firing = false
+	e.evaluateAll() // cleared → resolve dispatched with the same id
+	waitFor(func() bool { return len(ch.resolved) == 1 })
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if len(ch.sent) != 1 || ch.resolved[0] != ch.sent[0] {
+		t.Fatalf("resolve must target the fired alert exactly once: sent=%v resolved=%v", ch.sent, ch.resolved)
 	}
 }
