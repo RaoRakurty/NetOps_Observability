@@ -9,6 +9,12 @@ Inspector. Contract/details: `docs/design/rca-ticketing.md`.
 Everything is **per-tenant**: each tenant connects its OWN ServiceNow
 instance and owns its OWN policies (strict isolation, FORCE RLS).
 
+> **Validation status:** exercised end-to-end against a **real ServiceNow PDI**
+> (developer instance, 2026-07-10/11 owner validation — priority mapping,
+> display-value reference fields, and the create/update loop verified against
+> genuine ServiceNow behavior) in addition to the bundled mock (§5), which
+> remains the offline/e2e test path.
+
 ## 0. Prerequisites
 
 - `FEATURE_RCA_TICKETING=true` on the stack (default in current bundles).

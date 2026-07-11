@@ -109,6 +109,45 @@ B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
 
+## #103 — Notification/ticketing framework revalidation (owner task 2026-07-11 eve) — ⏳ QUEUED
+
+Owner question: *"if the same customer wants auto-ticketing to Slack, PagerDuty,
+ServiceNow AND Jira — how does our system work? Have we designed this
+efficiently?"* Assessment delivered (see session notes / #103 review to come);
+headline findings to validate + fix:
+
+- **Fragmented config surfaces (3)**: platform-global notify channels
+  (slack/pd/email/…), legacy platform-global alert→ITSM (servicenow/jira,
+  `/api/notify/itsm`), per-tenant RCA ticketing policies (#78, ServiceNow-only —
+  `ticketSystemConfig` hard-returns ok=false for other systems).
+- **⚠️ Double-filing risk (verify first)**: the legacy alert→ServiceNow channel
+  is enabled at min_severity=info AND points at the same real PDI as RCA
+  ticketing — two independent ticket streams (fingerprint-dedup vs
+  correlation-id-dedup) into one instance. Decide the authoritative path (RCA
+  policies) and default the legacy lane off / platform-self-health-only.
+- **Stale legacy ITSM state**: 32 phantom "open" tickets frozen since 2026-06-03
+  (INC-LABTEST-001 / dummy sys_ids, incl. deleted wan-r1) in the legacy
+  channel's open-ticket store — purge + guard against dummy-era residue.
+- **Destination asymmetry**: Jira = legacy channel only; PD = raw-alert channel
+  only; Slack = channel + incident cards. Direction: extend the #78 policy
+  engine to multi-destination (per-tenant policies for snow/jira/pd/slack,
+  shared decision + correlation-id dedup root, per-destination adapters) and
+  keep thin policy-free raw-alert lanes for platform self-health.
+- **UX-1 (owner, 2026-07-11):** Operational Incidents "Ticket" column doesn't
+  reflect Slack delivery — owner expects to see where an incident was notified
+  (Slack) alongside ITSM tickets. Likely needs a "notified via" indicator
+  (Slack is a notification, not a ticket — design the column semantics, don't
+  just stuff Slack into Ticket).
+- **UX-2 (owner, 2026-07-11):** incident identifiers in notifications are raw
+  hex (`8591a323df59f393`) — add a human-relatable per-tenant display id
+  (e.g. `INC-000123`-style sequence) carried in Slack/PD/ticket payloads;
+  internal id stays canonical.
+- Validation baseline established today: Slack (real workspace, critical alert
+  + incident card delivered), PagerDuty (real service, trigger+auto-resolve),
+  ServiceNow (real PDI dev430276 — owner-validated 2026-07-10/11). **Standing
+  owner directive: all integrations documented + validated against REAL
+  applications; owner supplies real-app credentials/details.**
+
 ## 🌙 Owner UI/UX punch-list #2 (queued 2026-07-10, live-fired) — ✅ ALL SHIPPED `737437b`
 
 | # | Item | Status |
