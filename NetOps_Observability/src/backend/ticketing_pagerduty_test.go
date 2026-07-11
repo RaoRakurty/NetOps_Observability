@@ -440,3 +440,52 @@ func TestResolvePolicyState_TripleSystem(t *testing.T) {
 		}
 	}
 }
+
+// ── Global-tenant (single-org customer) parity (#103, owner requirement) ────
+// A deployment that doesn't use tenants runs everything as the global tenant:
+// its connections live under the "" config key, its correlation objects carry
+// tenant_id "" (canonicalized to "global"), and EVERY destination must
+// resolve exactly as it does for a real tenant. Pins the itsmKey collapse for
+// servicenow, pagerduty, and slack + global policy resolution end to end.
+func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
+	store := &itsmConfigStore{
+		cfgs: map[string]itsmConfig{
+			"": { // platform-owner / single-org config key
+				ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.example.service-now.com", User: "u", Password: "p"},
+				PagerDuty:  pagerDutyRCAConfig{Enabled: true, RoutingKey: "RK-global"},
+				Slack:      slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/T/G/x"},
+			},
+		},
+		live: map[string]*itsmLive{},
+	}
+	// The sweeper hands us the CANONICAL tenant ("global"), never "".
+	canon := canonicalCorrTenant("")
+	if canon != TenantGlobal {
+		t.Fatalf("canonicalCorrTenant(\"\") = %q, want %q", canon, TenantGlobal)
+	}
+	for _, sys := range []string{"servicenow", "pagerduty", "slack"} {
+		cfg, ok := store.ticketSystemConfig(canon, sys)
+		if !ok {
+			t.Fatalf("global tenant cannot resolve %s connection — single-org deployments broken", sys)
+		}
+		// Worker tenant assertion must hold for the canonical/global pair.
+		if canonicalCorrTenant(cfg.TenantID) != canon {
+			t.Fatalf("%s: cfg tenant %q fails the worker assertion vs %q", sys, cfg.TenantID, canon)
+		}
+	}
+	// Policies stored under the canonical global tenant resolve per system.
+	ctx := context.Background()
+	tstore := newMemTicketingStore()
+	sw := &ticketSweeper{store: tstore}
+	if err := tstore.PutPolicy(ctx, incidentPolicy{ID: "gpd", TenantID: canon, Name: "g-pd",
+		Enabled: true, ExternalSystem: "pagerduty", MinVerdict: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	if res := sw.resolvePolicyState(ctx, canon, "pagerduty"); res.state != policyStateActive || res.policy.ID != "gpd" {
+		t.Fatalf("global pagerduty policy not resolving: %+v", res)
+	}
+	// Dedup identity for the global tenant is stable and tenant-qualified.
+	if k := pdTicketDedupKey(canon, "55555555-5555-4555-8555-555555555555"); !strings.Contains(k, ":global:") {
+		t.Fatalf("global dedup key missing canonical tenant: %q", k)
+	}
+}
