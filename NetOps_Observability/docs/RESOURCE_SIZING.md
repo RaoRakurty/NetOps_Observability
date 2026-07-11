@@ -69,8 +69,10 @@ existing install) writes:
   `*_CPU_LIMIT` and internal var the compose file reads;
 - `resource-plan.json` (machine-readable, deterministic) and
   `resource-plan.txt` (the human explanation) beside it;
-- a backup of the previous `.env` (`.env.plan.bak`) —
-  `install.py --rollback-plan` restores it.
+- `.plan.bak` backups of the previous `.env` AND the previous
+  `resource-plan.{json,txt}` — `install.py --rollback-plan` restores all of
+  them (managed artifacts only; it does not restart services — run
+  `docker compose up -d` after).
 
 Apply with `cd deployment/docker && docker compose up -d`.
 
@@ -85,12 +87,21 @@ Apply with `cd deployment/docker && docker compose up -d`.
 | Kafka | heap (`KAFKA_HEAP`) | min(6 GiB, 50%) — the rest is page cache on purpose |
 | VictoriaMetrics | `-memory.allowedPercent` | 60 (cache budget; container limit is the backstop) |
 | PostgreSQL | shared_buffers / effective_cache_size / work_mem / maintenance_work_mem / max_connections | pgtune-family: 25% / 75% / (mem−SB)/(3×conns) / mem÷16 / 100 |
-| Valkey | `--maxmemory` (`REDIS_MAXMEMORY`) | 75%, `noeviction` (app state — never silently evict). Redis units: value emitted as binary `mb`. |
+| Valkey | `--maxmemory` (`REDIS_MAXMEMORY`) | 75%, `noeviction` (app state — never silently evict). Redis units: value emitted as binary `mb`. `REDIS_MAXMEMORY` is the backward-compatible configuration name for the deployed Valkey service (service name `redis` likewise) — deliberate, do not rename. |
 | Go services (api, prober, goflow2) | `GOMEMLIMIT` | 90% (soft GC target; GOMAXPROCS is cgroup-native in Go ≥1.25) |
 | correlation | `CORR_WINDOW_BUFFER` | EPS-scaled, floor 50k |
 
 Compose `:-` defaults equal the pre-#102 lab constants, so an install without
 a plan behaves exactly as before.
+
+The ClickHouse 0.9 ratio is a **policy, not a universal truth**: vendor-
+recommended, lab-validated (one observed graze with zero query kills),
+pending M1 calibration. Override per deployment via `CH_MEM_RATIO` in `.env`
+(emergency-override precedence) or `overrides:` in the sizing file.
+Concurrency (`max_concurrent_queries`) is planner-derived
+(30 + 10 x analytical concurrency, floor 50); memory safety under full
+concurrency is enforced by rejection/spill (per-query caps + server ceiling),
+not by the concurrency count itself.
 
 ## Precedence
 

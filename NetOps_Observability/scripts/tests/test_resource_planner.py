@@ -284,6 +284,47 @@ class TestScenarios(unittest.TestCase, Invariants):
         self.assertEqual(rp.fmt_bytes(1536 * MIB), "1536m")
         self.assertEqual(rp.parse_size(rp.fmt_bytes(768 * MIB)), 768 * MIB)
 
+    # signoff: canonical backup map — both replan and rollback must use it
+    def test_signoff_backup_paths(self):
+        m = rp.plan_backup_paths("/x/deployment/docker/.env")
+        self.assertEqual(m["/x/deployment/docker/.env"],
+                         "/x/deployment/docker/.env.plan.bak")
+        self.assertIn("/x/deployment/docker/resource-plan.json", m)
+        self.assertTrue(all(v.endswith(".plan.bak") for v in m.values()))
+
+    # signoff: cgroup v1 numeric sentinel + malformed file are neutralized
+    def test_signoff_cgroup_sentinel_malformed(self):
+        with tempfile.TemporaryDirectory() as d:
+            v1 = os.path.join(d, "memory.limit_in_bytes")
+            with open(v1, "w") as f:
+                f.write("9223372036854771712\n")   # v1 "unlimited" sentinel
+            got = rp.detect_host(cpu_override=2, disk_override="100g",
+                                 cgroup_paths=(v1,))
+            with open("/proc/meminfo") as f:
+                host_kb = int([l for l in f if l.startswith("MemTotal")][0].split()[1])
+            self.assertEqual(got["memory_bytes"], host_kb * 1024)  # sentinel > host -> host wins
+            with open(v1, "w") as f:
+                f.write("garbage\n")
+            got = rp.detect_host(cpu_override=2, disk_override="100g",
+                                 cgroup_paths=(v1,))
+            self.assertGreater(got["memory_bytes"], 0)  # malformed ignored
+            tiny = os.path.join(d, "memory.max")
+            with open(tiny, "w") as f:
+                f.write(str(2 * GIB) + "\n")
+            got = rp.detect_host(cpu_override=2, disk_override="100g",
+                                 cgroup_paths=(tiny,))
+            self.assertEqual(got["memory_bytes"], 2 * GIB)  # tiny limit honored
+
+    # signoff: pinned PG values that oversubscribe the container warn loudly
+    def test_signoff_pg_budget_warning(self):
+        plan = rp.compute_plan(host(64, 16, 4000), "small",
+                               legacy={"PG_WORK_MEM": "256MB"})
+        self.assertTrue(any("oversubscribe" in w and "postgres" in w
+                            for w in plan["warnings"]))
+        clean = rp.compute_plan(host(64, 16, 4000), "small")
+        self.assertFalse(any("postgres internal settings" in w
+                             for w in clean["warnings"]))
+
     # sizing-file parser (YAML subset + JSON)
     def test_sizing_file_parser(self):
         yml = """

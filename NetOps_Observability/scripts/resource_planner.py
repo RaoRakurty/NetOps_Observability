@@ -667,6 +667,27 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
             warnings.append("legacy override %s=%s preserved (generated "
                             "recommendation differed)" % (var, legacy[var]))
 
+    # #102-signoff: pinned/override PG values can silently oversubscribe the
+    # postgres container. Generation identity is SB + 3*conns*wm == limit;
+    # maintenance is occasional, so 10% slack before flagging.
+    pgl = limits.get("postgres")
+    if pgl and "PG_SHARED_BUFFERS" in internal:
+        try:
+            _sb = parse_size(internal["PG_SHARED_BUFFERS"])
+            _wm = parse_size(internal["PG_WORK_MEM"])
+            _conns = max(1, int(internal.get("PG_MAX_CONNECTIONS", "100")) // 2)
+            _maint = parse_size(internal.get("PG_MAINTENANCE_WORK_MEM", "64MB"))
+            if _sb + 3 * _conns * _wm + _maint > pgl * 1.10:
+                warnings.append(
+                    "postgres internal settings (shared_buffers %s + %d ops x "
+                    "work_mem %s x3 + maintenance %s) oversubscribe its %s "
+                    "container limit — lower the pinned values or raise "
+                    "postgres memory" % (fmt_human(_sb), _conns,
+                                         fmt_human(_wm), fmt_human(_maint),
+                                         fmt_human(pgl)))
+        except (ValueError, KeyError):
+            pass
+
     provisional = sorted({k for k, c in COEFFICIENTS.items()
                           if c["cls"] in ("conservative-provisional",
                                           "unknown-measurement-required")})
@@ -778,6 +799,19 @@ def plan_txt(plan):
 # --------------------------------------------------------------------------
 # .env managed-block IO + legacy detection
 # --------------------------------------------------------------------------
+
+def plan_backup_paths(env_path):
+    """Canonical artifact->backup map for replan/rollback. BOTH sides of the
+    backup/restore MUST use this (a Path.with_suffix misfire on the hidden
+    '.env' filename once split the write path from the read path)."""
+    env_path = os.path.abspath(str(env_path))
+    d = os.path.dirname(env_path)
+    m = {env_path: env_path + ".plan.bak"}
+    for n in ("resource-plan.json", "resource-plan.txt"):
+        p = os.path.join(d, n)
+        m[p] = p + ".plan.bak"
+    return m
+
 
 def read_env_overrides(env_text):
     """Vars matching LEGACY_VARS set OUTSIDE the managed block."""

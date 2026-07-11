@@ -242,11 +242,12 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: "Path | None") 
     except rp.SizingError as e:
         fail(f"resource plan refused:\n{e}")
         return
-    backup = env_path.with_suffix(".env.plan.bak") if env_path.suffix != ".env" \
-        else Path(str(env_path) + ".plan.bak")
-    if env_text:
-        backup.write_text(env_text)
-        backup.chmod(0o600)
+    # Canonical backup map (shared with --rollback-plan) — covers .env AND the
+    # generated plan artifacts, so rollback restores everything managed.
+    for src, bak in rp.plan_backup_paths(env_path).items():
+        if os.path.exists(src):
+            Path(bak).write_text(Path(src).read_text())
+            os.chmod(bak, 0o600)
     env_path.write_text(rp.splice_env(env_text, rp.env_block(plan)))
     env_path.chmod(0o600)
     for name, text in (("resource-plan.json",
@@ -1002,12 +1003,20 @@ def main() -> None:
 
     # Standalone resource-plan operations (#102) — no install steps.
     if args.rollback_plan:
-        backup = Path(str(env_path) + ".plan.bak")
-        if not backup.exists():
-            fail(f"no plan backup found at {backup}")
-        env_path.write_text(backup.read_text())
-        env_path.chmod(0o600)
-        ok(f"restored {env_path} from {backup} — run 'docker compose up -d' to apply")
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import resource_planner as rp
+        paths = rp.plan_backup_paths(env_path)
+        env_bak = paths[str(env_path.resolve())]
+        if not os.path.exists(env_bak):
+            fail(f"no plan backup found at {env_bak}")
+        restored = []
+        for src, bak in paths.items():
+            if os.path.exists(bak):
+                Path(src).write_text(Path(bak).read_text())
+                os.chmod(src, 0o600)
+                restored.append(os.path.basename(src))
+        ok(f"restored {', '.join(restored)} from .plan.bak backups — "
+           "run 'docker compose up -d' to apply")
         return
     if args.replan:
         if not env_path.exists():

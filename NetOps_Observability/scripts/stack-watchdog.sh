@@ -76,6 +76,41 @@ for svc in $EXPECTED_SERVICES; do
   fi
 done
 
+# Container OOM / restart detection (#102 signoff): cadvisor's per-container
+# metrics are dark under docker's containerd image store, so the in-platform
+# ContainerOOMKilled alert cannot fire — THIS is the container-OOM sentinel.
+# Any OOM-kill under restart:unless-stopped shows up as a RestartCount bump;
+# OOMKilled=true is captured directly for containers sitting dead. One push
+# per new event (count-delta keyed), distinct from the up/down state machine.
+RESTART_STATE="${WATCHDOG_RESTARTS:-$SCRIPT_DIR/.stack-watchdog.restarts}"
+touch "$RESTART_STATE" 2>/dev/null || true
+oom_events=()
+new_restart_state=""
+for svc in $EXPECTED_SERVICES; do
+  cid=$(docker ps -aq \
+    --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$svc" 2>/dev/null | head -1)
+  [ -n "$cid" ] || continue
+  read -r rcount oomed exitcode <<<"$(docker inspect -f '{{.RestartCount}} {{.State.OOMKilled}} {{.State.ExitCode}}' "$cid" 2>/dev/null)"
+  [ -n "${rcount:-}" ] || continue
+  prev=$(awk -v s="$svc" '$1==s{print $2}' "$RESTART_STATE" 2>/dev/null)
+  new_restart_state+="$svc ${rcount}"$'\n'
+  if [ -n "$prev" ] && [ "$rcount" -gt "$prev" ] 2>/dev/null; then
+    if [ "$oomed" = "true" ] || [ "${exitcode:-0}" = "137" ]; then
+      oom_events+=("$svc: OOM-KILLED by its cgroup limit (restarts $prev->$rcount) — compare its resource-plan limit vs usage, then --replan")
+    else
+      oom_events+=("$svc: restarted (${prev}->${rcount}, exit ${exitcode:-?}) — check 'docker logs' / dmesg for OOM")
+    fi
+  elif [ "$oomed" = "true" ] && [ -z "$prev" ]; then
+    oom_events+=("$svc: sitting OOM-killed (exit ${exitcode:-?})")
+  fi
+done
+printf '%s' "$new_restart_state" > "$RESTART_STATE" 2>/dev/null || true
+if [ "${#oom_events[@]}" -gt 0 ]; then
+  push "🔥 NetOps container OOM/restart on $(hostname)" "fire" "high" \
+    "$(printf '%s\n' "${oom_events[@]}")"
+fi
+
 # End-to-end probe: the dashboard must answer through nginx.
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$APP_URL" 2>/dev/null)
 case "$code" in

@@ -2,7 +2,7 @@
 
 A FastAPI service that:
 
-  * Consumes the netops.syslog, netops.flows, netops.metrics Redpanda
+  * Consumes the netops.syslog, netops.flows, netops.metrics Kafka
     topics (Kafka-compatible).
   * Runs lightweight stream processing — rolling z-score anomaly
     detection over per-device metric series, severity-weighted event
@@ -85,7 +85,7 @@ from signals import (
 # ---------------------------------------------------------------------------
 
 LOG_LEVEL        = os.environ.get("LOG_LEVEL", "info").upper()
-KAFKA_BOOTSTRAP  = os.environ.get("KAFKA_BOOTSTRAP", "redpanda:9092")
+KAFKA_BOOTSTRAP  = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
