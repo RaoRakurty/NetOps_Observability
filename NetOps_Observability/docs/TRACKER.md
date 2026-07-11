@@ -62,6 +62,24 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 
 ---
 
+## #102 — Dynamic per-customer resource sizing (owner spec 2026-07-11) — 🟡 IN PROGRESS
+
+Owner directive: no universal hard-coded limits (the `CLICKHOUSE_MEM_LIMIT=5g`
+class of constants); sizing must derive host → reserves → Correlix budget →
+workload profile → per-component container limits → internal limits. Full
+audit (3 agents) + prior-art research + **approved design v2**:
+`docs/design/resource-sizing-design.md`. Verdict: current = Level 1
+(operator-configurable statics, no capacity calculation); target Level 3;
+Outcome C (canonical planner extending install.py/install-correlix.sh).
+
+| Phase | Deliverable | Status |
+|---|---|---|
+| P1 | `scripts/resource_planner.py` + 26-scenario tests + goldens | 🟡 |
+| P2 | install.py `--plan-resources/--replan/--rollback-plan` managed .env block | ⏳ |
+| P3 | Internal-limit plumbing (GOMEMLIMIT, KAFKA_HEAP, REDIS_MAXMEMORY, PG conf, VM allowedPercent, CH memory.xml + env caps, CORR_WINDOW_BUFFER) | ⏳ |
+| P4 | Customer-bundle integration (refuse-to-fit UX) | ⏳ |
+| P5 | Alerts (HostOOMKillerFired, CH pressure, CHQueryMemoryKilled rename w/ dep review) + RESOURCE_SIZING.md + examples | ⏳ |
+
 ## 🌙 Owner UI/UX punch-list #2 (queued 2026-07-10, live-fired) — ✅ ALL SHIPPED `737437b`
 
 | # | Item | Status |
