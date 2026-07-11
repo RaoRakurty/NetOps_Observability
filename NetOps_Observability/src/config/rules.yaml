@@ -735,11 +735,15 @@ groups:
     interval: 60s
     rules:
       - alert: CHQueryMemoryKilled
-        # The 2 GiB per-query cap (query-spill.xml) fired — some query regressed
-        # toward the incident shape (wide blob through a fold / whole-table
-        # decorate). One kill = investigate; run scripts/ch-query-budget-check.sh
-        # to attribute it by log_comment (api:<endpoint> / worker:*).
-        expr: increase(ClickHouseProfileEvents_QueryMemoryLimitExceeded[10m]) > 0
+        # A MEMORY_LIMIT_EXCEEDED exception was actually thrown — a query died
+        # against the per-query cap (query-spill.xml) or the server total. One
+        # kill = investigate; run scripts/ch-query-budget-check.sh to attribute
+        # it by log_comment (api:<endpoint> / worker:*).
+        # NOT ProfileEvents_QueryMemoryLimitExceeded: that counter also ticks on
+        # non-fatal internal allocation denials (overcommit probes) with zero
+        # failed queries — it false-fired critical while query_log and
+        # system.errors were clean.
+        expr: increase(ClickHouseErrorMetric_MEMORY_LIMIT_EXCEEDED[10m]) > 0
         labels: { severity: critical, layer: clickhouse }
         annotations:
           summary: "ClickHouse memory-killed {{ $value }} quer(ies) in 10m — a read regressed toward the #100 incident shape; attribute via ch-query-budget-check.sh"
