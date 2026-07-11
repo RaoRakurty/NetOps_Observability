@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 import re
 import secrets
@@ -214,6 +215,49 @@ def validate_scaffold(root: Path) -> None:
             warn(f"missing: {m}")
         fail("scaffold is incomplete — refusing to install. See warnings above.")
     ok(f"scaffold ok ({len(REQUIRED_PATHS)} required paths present)")
+
+# ---- resource plan (#102) ---------------------------------------------------
+
+def run_resource_plan(env_path: Path, profile: str, sizing_file: "Path | None") -> None:
+    """Compute + splice the managed resource block. Sole sizing entry point."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import resource_planner as rp
+
+    doc = {}
+    if sizing_file:
+        doc = rp.parse_sizing_file(sizing_file.read_text())
+    if profile == "auto":
+        profile = doc.get("profile") or None
+    host = rp.detect_host(data_path=str(env_path.parent))
+    if profile is None:
+        gib = host["memory_bytes"] / (1 << 30)
+        profile = ("demo" if gib < 24 else "small" if gib < 48 else
+                   "medium" if gib < 96 else "large")
+        info(f"auto-selected profile '{profile}' for {gib:.0f} GiB host")
+    env_text = env_path.read_text() if env_path.exists() else ""
+    legacy = rp.read_env_overrides(env_text)
+    workload = rp.normalize_workload(doc) if doc else {}
+    try:
+        plan = rp.compute_plan(host, profile, workload, doc.get("overrides", {}), legacy)
+    except rp.SizingError as e:
+        fail(f"resource plan refused:\n{e}")
+        return
+    backup = env_path.with_suffix(".env.plan.bak") if env_path.suffix != ".env" \
+        else Path(str(env_path) + ".plan.bak")
+    if env_text:
+        backup.write_text(env_text)
+        backup.chmod(0o600)
+    env_path.write_text(rp.splice_env(env_text, rp.env_block(plan)))
+    env_path.chmod(0o600)
+    for name, text in (("resource-plan.json",
+                        json.dumps(plan, indent=2, sort_keys=True) + "\n"),
+                       ("resource-plan.txt", rp.plan_txt(plan))):
+        (env_path.parent / name).write_text(text)
+    for w in plan["warnings"]:
+        warn(w)
+    ok(f"resource plan written (profile {plan['profile']}) — "
+       f"{env_path.parent / 'resource-plan.txt'}")
+
 
 # ---- .env generation --------------------------------------------------------
 
@@ -911,6 +955,19 @@ def main() -> None:
                     choices=["lab", "demo", "production", "extended"],
                     help="correlation history retention profile written to .env "
                          "(#101: hot TTLs + cold Parquet export; default: production)")
+    ap.add_argument("--plan-resources", nargs="?", const="auto", default=None,
+                    metavar="PROFILE",
+                    help="Generate host/workload-derived resource limits into a "
+                         "managed .env block via scripts/resource_planner.py (#102). "
+                         "PROFILE = demo|small|medium|large|custom; 'auto' (bare "
+                         "flag) picks by detected host RAM. Opt-in this release.")
+    ap.add_argument("--sizing-file", type=Path, default=None, metavar="YAML",
+                    help="correlix-sizing.yaml workload inputs for --plan-resources.")
+    ap.add_argument("--replan", action="store_true",
+                    help="Only regenerate the resource-plan block in the existing "
+                         ".env, then exit (run 'docker compose up -d' to apply).")
+    ap.add_argument("--rollback-plan", action="store_true",
+                    help="Restore .env from the pre-replan backup, then exit.")
     ap.add_argument("--broker-urls", default=None, metavar="HOST:PORT[,HOST:PORT...]",
                     help="ADVANCED: use an external Kafka-compatible broker instead of the "
                          "embedded one. Disables the embedded-bus profile and points every "
@@ -943,6 +1000,22 @@ def main() -> None:
     compose_dir = root / "deployment" / "docker"
     env_path = compose_dir / ".env"
 
+    # Standalone resource-plan operations (#102) — no install steps.
+    if args.rollback_plan:
+        backup = Path(str(env_path) + ".plan.bak")
+        if not backup.exists():
+            fail(f"no plan backup found at {backup}")
+        env_path.write_text(backup.read_text())
+        env_path.chmod(0o600)
+        ok(f"restored {env_path} from {backup} — run 'docker compose up -d' to apply")
+        return
+    if args.replan:
+        if not env_path.exists():
+            fail(".env not found — run a full install first")
+        run_resource_plan(env_path, args.plan_resources or "auto", args.sizing_file)
+        info("replan complete — apply with: cd deployment/docker && docker compose up -d")
+        return
+
     step("checking prerequisites")
     check_docker()
 
@@ -953,6 +1026,10 @@ def main() -> None:
     secrets_map = write_env(env_path, args.port, force=args.reset_env,
                             profiles=args.profiles, broker_urls=args.broker_urls,
                             retention_profile=args.retention_profile)
+
+    if args.plan_resources:
+        step("planning resources (#102)")
+        run_resource_plan(env_path, args.plan_resources, args.sizing_file)
 
     step("preparing data directories")
     ensure_data_dirs(root)

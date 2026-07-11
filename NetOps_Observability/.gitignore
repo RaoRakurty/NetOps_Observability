@@ -37,3 +37,6 @@ scripts/ch-cold-export.log
 deployment/docker/docker-compose.override.yml
 dist/
 src/correlation/build/
+deployment/docker/resource-plan.json
+deployment/docker/resource-plan.txt
+deployment/docker/.env.plan.bak
