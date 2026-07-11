@@ -198,7 +198,7 @@ groups:
           summary: "{{ $labels.device }} memory >90% (Cisco byte counters)"
 
       - alert: LinkInboundUtilHigh
-        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.80
+        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.80
         for: 10m
         labels:
           severity: warning
@@ -206,7 +206,7 @@ groups:
           summary: "{{ $labels.device }} if{{ $labels.index }} inbound >80% of link"
 
       - alert: LinkInboundUtilCritical
-        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.95
+        expr: rate(device_if_in_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.95
         for: 5m
         labels:
           severity: critical
@@ -214,7 +214,7 @@ groups:
           summary: "{{ $labels.device }} if{{ $labels.index }} inbound SATURATED (>95%)"
 
       - alert: LinkOutboundUtilHigh
-        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.80
+        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.80
         for: 10m
         labels:
           severity: warning
@@ -222,7 +222,7 @@ groups:
           summary: "{{ $labels.device }} if{{ $labels.index }} outbound >80% of link"
 
       - alert: LinkOutboundUtilCritical
-        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6) > 0.95
+        expr: rate(device_if_out_octets[5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.95
         for: 5m
         labels:
           severity: critical
@@ -468,7 +468,7 @@ groups:
           summary: "{{ $labels.device }} if{{ $labels.index }} traffic collapsed while up (z<-3)"
 
       - alert: SustainedLinkGrowth
-        expr: avg_over_time(rate(device_if_in_octets[5m])[1h:5m]) * 8 / (device_if_speed * 1e6) > 0.70
+        expr: avg_over_time(rate(device_if_in_octets[5m])[1h:5m]) * 8 / (device_if_speed * 1e6 > 0) > 0.70
         for: 1h
         labels:
           severity: info
