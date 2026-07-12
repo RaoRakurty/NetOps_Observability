@@ -30,6 +30,10 @@ STATE_PATH = os.path.join(OUT_DIR, ".poller-state.json")
 TRAIL_PREFIXES = ("Modify", "Create", "Delete", "Revoke", "Authorize", "Stop",
                   "Start", "Terminate", "Reboot", "Replace", "Attach", "Detach",
                   "Disassociate", "Associate", "Put", "Update")
+# Agent/telemetry chatter that matches a prefix but carries no fault meaning —
+# SSM heartbeats alone would drown the control-plane lane (observed 2026-07-12).
+TRAIL_EXCLUDE = {"UpdateInstanceInformation", "PutInventory", "UpdateInstanceAssociationStatus",
+                 "PutMetricData", "CreateLogStream", "PutLogEvents"}
 
 
 def load_state() -> dict:
@@ -118,7 +122,7 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
     resp = ct.lookup_events(StartTime=start_dt, MaxResults=50)
     for e in resp.get("Events", []):
         name = e.get("EventName", "")
-        if not name.startswith(TRAIL_PREFIXES):
+        if not name.startswith(TRAIL_PREFIXES) or name in TRAIL_EXCLUDE:
             continue
         ts = e["EventTime"].timestamp()
         newest = max(newest, ts)

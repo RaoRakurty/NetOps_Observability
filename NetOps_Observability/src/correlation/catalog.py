@@ -339,6 +339,46 @@ BUILTIN_TEMPLATES: list[dict] = [
         },
     },
     {
+        # Cloud-hosted app whose own dependency broke (DB/cache/queue down, config
+        # denies the dependency port). The failure is INSIDE the cloud: the tunnel
+        # and the boundary are fine, the app itself cannot serve. Without this,
+        # such faults grounded onto 'private-connectivity-down' (the only cloud
+        # signature the lane satisfied) — correct objects, misleading label; a NOC
+        # would go chase the tunnel. Discriminator: no tunnel/route change in the
+        # window, and the boundary is NOT rejecting (or rejects only the app's
+        # own dependency port, not the app's ingress).
+        "id": "sig.ent.cloud.app-dependency-down",
+        "title": "Cloud application dependency down (database / cache / queue / policy)",
+        "domain": "ent.cloud",
+        "requires": [
+            # the impact: the app is unhealthy / its journey fails.
+            {"kind": "cloud_health"},
+            # optional corroboration: a boundary REJECT on the dependency port
+            # (an SG/NSG denial shows up here as a rejected flow).
+            {"kind": "cloud_flow_log", "optional": True},
+            {"kind": "probe_loss|probe_rtt_anomaly", "optional": True},
+        ],
+        # a cloud-only picture is one vantage → stays suspected until an
+        # independent observer (probe inside the VPC/VNet, or the underlay) agrees.
+        "required_modalities": ["device_telemetry"],
+        # Look-alike killer: if the private link itself changed state (DX/VPN) in
+        # the window, this is a CONNECTIVITY fault, not an app-dependency fault.
+        "discriminators": [
+            {"absent": {"kind": "cloud_change", "entity_type": "cloud_resource"}, "within_s": 600,
+             "else_prefer": "sig.ent.cloud.private-connectivity-down"},
+        ],
+        "direction_expect": "dependency -> service",
+        "verdict": {
+            "owner": "app_team", "layer": "L7 (application dependency)",
+            "first_steps": [
+                "Check the app's data-tier dependencies (database, cache, queue) — process up, port listening",
+                "Check for a recent security-group / NSG / firewall change on the dependency port",
+                "Confirm the private tunnel is UP (if it is, this is NOT a connectivity fault)",
+                "Check the app's readiness endpoint and its dependency spans for the failing hop",
+            ],
+        },
+    },
+    {
         # #81 — hybrid private-connectivity outage: Direct Connect / IPSec tunnel
         # between on-prem and the cloud goes down → BGP drops, routes withdraw,
         # the cloud app is unreachable FROM corporate (often still fine from the
