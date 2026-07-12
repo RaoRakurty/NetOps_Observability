@@ -328,9 +328,10 @@ describe("dying path (collapsed drop-point ladder)", () => {
       ],
       boundaries: [{ name: "LAN", from: 0, to: 1 }, { name: "SD-WAN", from: 2, to: 2 }],
       evidence_branches: [
-        { attach_index: 2, class: "observed", note: "destination never responded in this run (partial) — the measured path terminates at this node",
+        { attach_index: 2, class: "observed", note: "destination never responded in this run — the measured path terminates at this node",
           evidence: ev("br-t", "traceroute_icmp") },
-        { attach_index: 2, class: "inferred", note: "seam sm-aws known from this path's last complete observation — the current run dies at its near endpoint; the crossing itself is not asserted",
+        { attach_index: 2, class: "inferred", entity_ref: "sm-aws",
+          note: "this path is known to cross an ownership boundary at this node (from its last complete measurement) — the crossing itself was not observed in this run",
           evidence: ev("pv-prior", "prior_complete_observation", "candidate") },
       ],
     },
@@ -359,6 +360,8 @@ describe("dying path (collapsed drop-point ladder)", () => {
 
     const branches = path.evidence_branches.filter((b) => b.attach_index === 2);
     expect(branches.some((b) => (b.summary ?? "").includes("destination never responded"))).toBe(true);
-    expect(branches.some((b) => (b.summary ?? "").includes("last complete observation"))).toBe(true);
+    expect(branches.some((b) => (b.summary ?? "").includes("last complete measurement"))).toBe(true);
+    // Operator surface: no raw seam token in prose.
+    expect(branches.some((b) => (b.summary ?? "").includes("sm-"))).toBe(false);
   });
 });

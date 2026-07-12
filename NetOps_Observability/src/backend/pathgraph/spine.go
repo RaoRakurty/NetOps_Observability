@@ -238,17 +238,21 @@ func BuildSpine(in SpineInput) Spine {
 			if run.count > 1 {
 				out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
 					Type: EdgeEvidenceMissing, Index: idx, Class: ClassObserved,
-					Note: fmt.Sprintf("TTL %d–%d were all answered by %s — packets did not progress past this node",
+					Note: fmt.Sprintf("every probe from hop %d to %d was answered by %s — packets did not progress past this node",
 						h.HopIndex, run.lastTTL, label(h.ObservedAddress, h.ResolvedEntityRef)),
 					Evidence: n.Evidence,
 				})
 			}
 		} else {
 			// §2.4/§8: an honest absence IS an edge. The unknown segment is recorded,
-			// not bridged.
-			note := fmt.Sprintf("hop %d did not respond (%s) — segment unknown, not bridged", h.HopIndex, h.State)
+			// not bridged. Operator wording — no raw state token in the note.
+			verb := "did not respond"
+			if h.State == HopFiltered {
+				verb = "was filtered"
+			}
+			note := fmt.Sprintf("hop %d %s — segment unknown, not bridged", h.HopIndex, verb)
 			if run.count > 1 {
-				note = fmt.Sprintf("hops %d–%d did not respond (%s) — segment unknown, not bridged", h.HopIndex, run.lastTTL, h.State)
+				note = fmt.Sprintf("hops %d–%d %s — segment unknown, not bridged", h.HopIndex, run.lastTTL, verb)
 			}
 			out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
 				Type: EdgeEvidenceMissing, Index: idx, Class: ClassObserved,
@@ -296,9 +300,12 @@ func BuildSpine(in SpineInput) Spine {
 				if n.Transformation == "" {
 					n.Transformation = nonNoneTransform(in.SeamHint.Transformation)
 				}
+				// Operator wording: no raw seam token in the note (Debug View reads
+				// the machine-readable seam_id / entity_ref); no engine-speak.
 				out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
 					Type: EdgeEvidenceSupports, Index: n.Index, Class: ClassInferred,
-					Note: "seam " + in.SeamHint.SeamID + " known from this path's last complete observation — the current run dies at its near endpoint; the crossing itself is not asserted",
+					EntityRef: in.SeamHint.SeamID,
+					Note:      "this path is known to cross an ownership boundary at this node (from its last complete measurement) — the crossing itself was not observed in this run",
 					Evidence: Evidence{
 						Ref: in.SeamHint.EvidenceRef, Method: "prior_complete_observation",
 						Confidence: ConfCandidate, ObservedAt: ts(in.SeamHint.ObservedAt),
@@ -308,7 +315,7 @@ func BuildSpine(in SpineInput) Spine {
 			}
 			out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
 				Type: EdgeEvidenceMissing, Index: n.Index, Class: ClassObserved,
-				Note:     "destination never responded in this run (" + obs.Status + ") — the measured path terminates at this node",
+				Note:     "destination never responded in this run — the measured path terminates at this node",
 				Evidence: n.Evidence,
 			})
 		}

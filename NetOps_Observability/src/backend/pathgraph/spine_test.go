@@ -335,12 +335,20 @@ func TestDyingPathCollapsesTerminalLadder(t *testing.T) {
 			continue
 		}
 		switch {
-		case b.Type == EdgeEvidenceMissing && contains(b.Note, "TTL 2–30"):
+		case b.Type == EdgeEvidenceMissing && contains(b.Note, "hop 2 to 30"):
 			ladderNote = true
 		case b.Type == EdgeEvidenceMissing && contains(b.Note, "destination never responded"):
 			terminalNote = true
 		case b.Type == EdgeEvidenceSupports && b.Class == ClassInferred &&
-			contains(b.Note, "last complete observation") && b.Evidence.Ref == "pv-prior-complete":
+			contains(b.Note, "last complete measurement") && b.Evidence.Ref == "pv-prior-complete":
+			// Operator wording: the note must NOT leak the raw seam token — Debug
+			// View reads it from the machine field (EntityRef).
+			if contains(b.Note, "sm-") {
+				t.Fatalf("seam token leaked into operator note: %q", b.Note)
+			}
+			if b.EntityRef != "sm-f36b592d4e76" {
+				t.Fatalf("hint must carry the seam id machine-readably, got %q", b.EntityRef)
+			}
 			hintNote = true
 		}
 	}
