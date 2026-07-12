@@ -1,18 +1,33 @@
-import { CorrTimeline, CorrSignal, Seam, ProbePath } from "../../services/api";
+import { CorrTimeline, CorrSignal, Seam } from "../../services/api";
 import { C, entityLabel, kindLabel, seamOwnerLabel, visibilityLabel, seamOwnerColor, isInternalEntity } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
+import {
+  readServicePath, isPathFocused, transformationLabel, spineKindLabel, hopStateLabel,
+  type ServicePath, type SpineNode, type SpineKind, type SpineEvidence,
+} from "./servicePath";
 
-// topoGraph.ts — the ONE shared model+layout builder for the RCA Network-Path
-// topology. Both renderers consume it: the on-screen React Flow canvas
-// (RcaTopology.tsx) and the print-ready PDF (rcaExport.ts). It emits
-// renderer-agnostic nodes (with x/y positions + a data bag) and edges (from/to +
-// state + label), so the two surfaces draw the SAME graph (same nodes, edges,
-// layout) from a single code path — no more divergence from two builders.
+// topoGraph.ts — the ONE shared model+layout builder for the RCA path topology.
+// Both renderers consume it: the on-screen React Flow canvas (RcaTopology.tsx) and
+// the print-ready PDF (rcaExport.ts). It emits renderer-agnostic nodes (with x/y +
+// a data bag), edges and boundary bands, so the two surfaces draw the SAME graph.
 //
-// OVERLAY MODEL (unchanged): the path STRUCTURE comes from data — a live
-// traceroute when one matches the destination (true hop order, both icmp+tcp),
-// else the correlation object's own entities — and RCA ANNOTATES where it's
-// broken / suspected / possible. We never invent a hop order we can't prove.
+// ═══ THE CONTRACT (docs/design/service-path-graph-contract.md §7) ═══════════════
+// THE BACKEND, NOT REACT, DETERMINES HOP ORDER. When the RCA object carries a
+// service path, this file is a DUMB LAYOUT of the backend's ordered spine:
+//   · walk `index` left→right — no reordering, no degree math, no star fallback;
+//   · group hops into LAN / SD-WAN / CARRIER / CLOUD boundary bands from
+//     `boundaries[]` (computed server-side);
+//   · preserve `missing`/`filtered` hops as explicit UNKNOWN segments;
+//   · mark NAT / proxy / load-balancer / tunnel transformations;
+//   · attach metrics/logs/flows/alerts/traces as evidence branches OFF the spine;
+//   · render NO edge that cannot state its evidence (§5).
+// A path-focused object with NO spine renders an honest empty state — we never
+// invent a path (that empty state is decided by the caller from `mode: "empty"`).
+//
+// Network-only objects (device / interface / routing evidence, no path) keep the
+// CONTEXT view: the affected device area and its ownership boundary. That view is
+// placed from SEVERITY and the object's own declared relations — never from node
+// degree, and it is never used for a path-focused object.
 
 export type FaultStatus = "broken" | "suspected" | "possible";
 export type EdgeState = "healthy" | "degraded" | "suspected_down" | "confirmed_down" | "unknown";
@@ -27,9 +42,8 @@ export function statusForVerdict(tier: string): FaultStatus {
   return tier === "confirmed" ? "broken" : tier === "suspected" ? "suspected" : "possible";
 }
 
-// renderer-agnostic node — data bag mirrors the on-screen TopoNode (RcaTopology):
-// { kind, tone, label, sub, badge, chips[], via, pulse, mono, size, hasIn, hasOut,
-//   hasBottom }. x/y are absolute canvas positions.
+// renderer-agnostic node — data bag mirrors the on-screen TopoNode (RcaTopology).
+// x/y are absolute canvas positions.
 export interface TopoGraphNodeData {
   kind: ShapeKind;
   tone: string;
@@ -44,24 +58,46 @@ export interface TopoGraphNodeData {
   hasOut?: boolean;
   hasBottom?: boolean;
   size?: number;
+  // ── contract fields (surfaced on hover/inspect; §5/§7) ──
+  hopIndex?: number;
+  boundary?: string;
+  entityRef?: string;
+  address?: string;
+  hopState?: string;          // responding | missing | filtered
+  transformation?: string;    // operator label ("NAT", "Tunnel start", …)
+  evidence?: SpineEvidence;   // ref · method · confidence · observed_at · data_class
+  branchOf?: number;          // set on evidence-branch nodes: the hop they annotate
+  title?: string;             // native tooltip line
 }
 export interface TopoGraphNode { id: string; x: number; y: number; data: TopoGraphNodeData; }
 // fromHandle = the source-side handle id (e.g. "b" for the bottom branch handle);
 // undefined → the default right-side source. state drives edge colour/dashing.
-export interface TopoGraphEdge { from: string; to: string; state: EdgeState; label?: string; fromHandle?: string; }
-export interface TopoGraph { nodes: TopoGraphNode[]; edges: TopoGraphEdge[]; internal: boolean; }
-
-function splitPath(id: string): { src: string; dst: string } | null {
-  if (!id.includes("->")) return null;
-  const [src, dst] = id.split("->");
-  return { src: (src || "").trim(), dst: (dst || "").trim() };
+export interface TopoGraphEdge {
+  from: string; to: string; state: EdgeState; label?: string; fromHandle?: string;
+  // Contract §5 — EVERY displayed edge exposes its evidence. An edge that cannot
+  // state its evidence never gets built (see layoutSpine / readServicePath).
+  evidence?: SpineEvidence;
+  type?: string;              // PATH_HAS_HOP | CROSSES_SEAM | EVIDENCE_SUPPORTS | …
+  transformation?: string;
+  seamId?: string;
+  title?: string;
 }
-
-// Base device an entity sits on: interface "dev:Gi0/1" → "dev"; device → itself.
-function baseDevice(entityType: string, entityId: string): string {
-  if (entityType === "interface") return entityId.split(":")[0];
-  if (entityType === "path") return entityId;
-  return entityId.split(":")[0];
+// A boundary band (LAN / SD-WAN / CARRIER / CLOUD) drawn BEHIND the flat spine.
+// Geometry is computed here so the canvas and the PDF band identically.
+export interface TopoGraphBand {
+  name: string; color: string;
+  from: number; to: number;        // spine indexes
+  fromId: string; toId: string;    // the node ids at each end
+  x: number; y: number; width: number; height: number;
+}
+export type TopoMode = "spine" | "context" | "internal" | "empty";
+export interface TopoGraph {
+  nodes: TopoGraphNode[];
+  edges: TopoGraphEdge[];
+  internal: boolean;
+  mode: TopoMode;
+  bands: TopoGraphBand[];
+  path?: ServicePath;   // the backend spine this layout came from (mode === "spine")
 }
 
 function brokenElement(s: CorrSignal): string {
@@ -78,9 +114,7 @@ function parseAttrs(s?: string): Record<string, any> {
 
 // What kind of evidence a signal is, for the fault's "what's broken" chips. The
 // physical/control-plane cause (link down, BGP/routing) outranks device-resource
-// (CPU/mem) — which is usually a SYMPTOM or co-occurrence, not the cause. The end-
-// to-end path leads with the real cause and drops resource noise when a stronger
-// signal is present, so a BGP flap reads as link/BGP, not "high CPU".
+// (CPU/mem) — which is usually a SYMPTOM or co-occurrence, not the cause.
 function elementRank(kind: string): number {
   if (/link_state|interface|carrier|los|fcs/i.test(kind)) return 5;
   if (/bgp|adjacency|peer|ospf|isis|ldp|route/i.test(kind)) return 4;
@@ -97,61 +131,206 @@ function faultEls(d?: { els: RankedEl[] }): string[] {
 
 const SEV_RANK: Record<string, number> = { crit: 4, high: 3, warn: 2, info: 1 };
 
-const COL = 200;
-const COL_HOP = 168;
-const TRACE_LOSS_HI = 2;
+const COL = 200;          // context-mode column pitch
+const COL_SPINE = 200;    // spine hop pitch — x is a PURE FUNCTION of hop_index
+const NODE_W = 124;       // TopoNode width (shape centred in it)
+const BAND_PAD = 26;
+const BAND_Y = -86;
+const BAND_H = 246;
+const BAND_INSET = 11;    // nesting step for overlapping boundary bands
+const BRANCH_Y = 176;     // evidence branches hang BELOW the spine (never in it)
+const BRANCH_ROW_H = 118;
+const BRANCH_PITCH = 152;
 
-// destination kind: cloud/internet/transit → cloud; an IP/host → target bullseye.
-function destKind(dst: string): ShapeKind {
-  if (/cloud|internet|inet|aws|azure|gcp|tgw|transit|saas/i.test(dst)) return "cloud";
-  return "target";
+// ═══ SPINE LAYOUT ══════════════════════════════════════════════════════════════
+
+// hop kind → device shape. A hop that did not respond is ALWAYS the blind
+// "unknown" shape regardless of its declared kind.
+const SPINE_SHAPE: Record<SpineKind, ShapeKind> = {
+  client: "server",
+  lan_gateway: "router",
+  wan_edge: "gateway",
+  nva: "firewall",
+  cloud_edge: "gateway",
+  app_endpoint: "server",
+  service_endpoint: "server",
+  application: "cloud",
+  transit: "router",
+  unknown: "unknown",
+};
+function hopShape(n: SpineNode): ShapeKind {
+  if (n.state !== "responding") return "unknown";
+  return SPINE_SHAPE[n.kind] ?? "unknown";
 }
 
-function matchTraces(dst: string | undefined, paths?: ProbePath[]): ProbePath[] {
-  if (!dst || !paths?.length) return [];
-  const d = dst.trim();
-  const withHops = paths.filter((p) => (p.hops?.length ?? 0) > 0);
-  let m = withHops.filter((p) => p.dst === d);
-  if (m.length === 0) m = withHops.filter((p) => p.dst && (p.dst.includes(d) || d.includes(p.dst)));
-  const byMethod = new Map<string, ProbePath>();
-  for (const p of m) {
-    const k = (p.method || "icmp").toLowerCase();
-    if (!byMethod.has(k)) byMethod.set(k, p);
+// boundary name → owner tint. Reuses the ONE seam colour source (labels.ts) so a
+// band, a seam node and the seam graph all say "whose domain" in the same hue.
+export function boundaryOwner(name: string): string {
+  const n = (name || "").toLowerCase();
+  if (/lan|enterprise|campus|branch|internal/.test(n)) return "enterprise";
+  if (/sd-?wan|overlay|fabric/.test(n)) return "sdwan_controller";
+  if (/carrier|mpls|middle-?mile|transit/.test(n)) return "carrier";
+  if (/isp|internet|dia/.test(n)) return "isp";
+  if (/cloud|aws|azure|gcp|vpc|vnet/.test(n)) return "cloud";
+  if (/colo|dc|data ?cent/.test(n)) return "colo";
+  return "unknown";
+}
+export function boundaryColor(name: string): string {
+  return seamOwnerColor(boundaryOwner(name));
+}
+
+const BRANCH_TONE: Record<string, string> = {
+  metrics: C.info, logs: C.warn, flows: C.flow, alerts: C.crit, traces: C.discriminates,
+};
+
+const evidenceTitle = (e?: SpineEvidence): string | undefined =>
+  e ? `evidence ${e.ref} · ${e.method} · ${e.confidence}${e.observed_at ? ` · ${e.observed_at}` : ""}${e.data_class !== "live" ? ` · ${e.data_class}` : ""}` : undefined;
+
+// layoutSpine — the DUMB, deterministic layout of the backend-ordered spine.
+// x = f(hop_index) only. It reorders nothing, infers nothing, and drops nothing:
+// an unknown hop keeps its slot, and an edge without evidence is simply absent
+// (readServicePath already refused it).
+export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
+  const nodes: TopoGraphNode[] = [];
+  const edges: TopoGraphEdge[] = [];
+  const bands: TopoGraphBand[] = [];
+  const meta = STATUS_META[statusForVerdict(verdictTier)];
+  const byIndex = new Map<number, SpineNode>();
+  const id = (index: number) => `h${index}`;
+
+  const branchesByHop = new Map<number, number>();
+  for (const b of path.evidence_branches) branchesByHop.set(b.attach_index, (branchesByHop.get(b.attach_index) ?? 0) + 1);
+
+  // ── the spine itself: ONE node per hop, positioned by its index ──
+  for (const n of path.spine) {
+    byIndex.set(n.index, n);
+    const blind = n.state !== "responding";
+    const faulted = !!n.fault;
+    const fmeta = n.fault ? STATUS_META[n.fault] : meta;
+    const transform = transformationLabel(n.transformation);
+    const tone = blind ? C.faint
+      : faulted ? fmeta.color
+      : n.kind === "client" || n.kind === "application" || n.kind === "app_endpoint" || n.kind === "service_endpoint" ? C.info
+      : C.flow;
+    const sub = [
+      spineKindLabel(n.kind),
+      n.address && n.address !== n.label ? n.address : "",
+      blind ? hopStateLabel(n.state) : "",
+      typeof n.rtt_ms === "number" ? `${n.rtt_ms.toFixed(n.rtt_ms < 10 ? 2 : 1)} ms` : "",
+    ].filter(Boolean).join(" · ");
+    nodes.push({
+      id: id(n.index), x: n.index * COL_SPINE, y: 0,
+      data: {
+        kind: hopShape(n), tone, pulse: faulted,
+        label: blind && !n.address ? "Unknown hop" : n.label,
+        mono: !!n.address && n.address === n.label,
+        sub: sub || undefined,
+        badge: faulted ? `${fmeta.sym} ${fmeta.word}` : undefined,
+        chips: transform ? [transform] : undefined,
+        hasIn: n.index !== path.spine[0]?.index,
+        hasOut: true,
+        hasBottom: (branchesByHop.get(n.index) ?? 0) > 0,
+        hopIndex: n.index,
+        boundary: n.boundary,
+        entityRef: n.entity_ref,
+        address: n.address,
+        hopState: n.state,
+        transformation: transform || undefined,
+        evidence: n.evidence,
+        title: evidenceTitle(n.evidence),
+      },
+    });
   }
-  return [...byMethod.values()];
-}
 
-function groupBySignature(traces: ProbePath[]): { methods: string[]; trace: ProbePath }[] {
-  const groups = new Map<string, { methods: string[]; trace: ProbePath }>();
-  for (const t of traces) {
-    const sig = (t.hops ?? []).map((h) => h.ip).join(">");
-    const g = groups.get(sig);
-    const method = (t.method || "icmp").toLowerCase();
-    if (g) g.methods.push(method);
-    else groups.set(sig, { methods: [method], trace: t });
+  // ── segments: ONLY the backend's declared, evidenced edges (§5) ──
+  for (const e of path.edges) {
+    const a = byIndex.get(e.from), b = byIndex.get(e.to);
+    if (!a || !b) continue;
+    const blind = a.state !== "responding" || b.state !== "responding";
+    const state: EdgeState = e.state ?? (blind ? "unknown" : "healthy");
+    const transform = transformationLabel(e.transformation);
+    edges.push({
+      from: id(e.from), to: id(e.to), state,
+      label: transform || undefined,
+      evidence: e.evidence,
+      type: e.type,
+      transformation: transform || undefined,
+      seamId: e.seam_id,
+      title: evidenceTitle(e.evidence),
+    });
   }
-  return [...groups.values()];
+
+  // ── boundary bands: LAN / SD-WAN / CARRIER / CLOUD, behind the flat spine ──
+  // Boundaries legitimately OVERLAP (the contract's own §7 example has SD-WAN 2→2
+  // inside CARRIER 2→3: a hop can sit on the overlay AND the carrier underneath).
+  // Overlapping bands are nested into lanes so both stay readable — the grouping
+  // itself is the backend's, we only draw it.
+  const placed: { from: number; to: number; lane: number }[] = [];
+  for (const b of path.boundaries) {
+    const from = Math.min(b.from, b.to), to = Math.max(b.from, b.to);
+    let lane = 0;
+    while (placed.some((p) => p.lane === lane && p.from <= to && from <= p.to)) lane++;
+    placed.push({ from, to, lane });
+    bands.push({
+      name: b.name, color: boundaryColor(b.name),
+      from, to, fromId: id(from), toId: id(to),
+      x: from * COL_SPINE - BAND_PAD + lane * BAND_INSET,
+      y: BAND_Y + lane * BAND_INSET,
+      width: (to - from) * COL_SPINE + NODE_W + BAND_PAD * 2 - lane * BAND_INSET * 2,
+      height: BAND_H - lane * BAND_INSET * 2,
+    });
+  }
+
+  // ── evidence branches: metrics / logs / flows / alerts / traces hang BELOW the
+  // hop they annotate. They never change a spine node's x/y (contract §7).
+  const branchSeen = new Map<number, number>();
+  for (const br of path.evidence_branches) {
+    const hop = byIndex.get(br.attach_index);
+    if (!hop) continue;
+    const total = branchesByHop.get(br.attach_index) ?? 1;
+    const seq = branchSeen.get(br.attach_index) ?? 0;
+    branchSeen.set(br.attach_index, seq + 1);
+    const col = seq % 2, row = Math.floor(seq / 2);
+    const bid = `ev${br.attach_index}_${seq}`;
+    const tone = BRANCH_TONE[br.class] ?? C.muted;
+    nodes.push({
+      id: bid,
+      x: hop.index * COL_SPINE + (total > 1 ? (col - 0.5) * BRANCH_PITCH : 0),
+      y: BRANCH_Y + row * BRANCH_ROW_H,
+      data: {
+        kind: "evidence", tone, label: br.label,
+        sub: [br.summary, typeof br.count === "number" ? `${br.count}` : ""].filter(Boolean).join(" · ") || undefined,
+        hasIn: true, hasOut: false,
+        branchOf: br.attach_index,
+        evidence: br.evidence,
+        title: evidenceTitle(br.evidence),
+      },
+    });
+    edges.push({
+      from: id(br.attach_index), to: bid, fromHandle: "b", state: "unknown",
+      evidence: br.evidence, type: "EVIDENCE_SUPPORTS", title: evidenceTitle(br.evidence),
+    });
+  }
+
+  return { nodes, edges, bands, internal: false, mode: "spine", path };
 }
 
-export const methodTag = (methods: string[]): string =>
-  methods.map((m) => (m === "auto" ? "ICMP→TCP" : m.toUpperCase())).join(" · ");
+// ═══ CONTEXT MODEL (network-only objects — no service path) ═════════════════════
 
-// computeModel — the evidence-derived model (formerly RcaTopology's first
-// useMemo). Returns the ends/loss/stamp/devices/locus/seam/peer/traces + the #76
-// internal flag. Kept VERBATIM from the on-screen component. Exported so the
-// on-screen component can drive its legend / STAMP toggle / empty-states from the
-// same model the graph is built from (single source of truth).
-export function computeTopoModel(timeline: CorrTimeline, seams: Record<string, Seam>, probePaths?: ProbePath[]) {
-  return computeModel(timeline, seams, false, probePaths);
+// computeTopoModel — the evidence-derived model behind the on-screen overlays
+// (legend, STAMP toggle, empty states). Exported so the component and the canvas
+// are driven by ONE source of truth.
+export function computeTopoModel(timeline: CorrTimeline, seams: Record<string, Seam>) {
+  return computeModel(timeline, seams);
 }
-function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>, showStamp: boolean, probePaths?: ProbePath[]) {
+function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>) {
   const sigs = timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
-  const pathSig = sigs.find((s) => s.entity_type === "path" && s.is_trigger)
-    ?? sigs.find((s) => s.entity_type === "path");
-  const ends = pathSig ? splitPath(pathSig.entity_id) : null;
+  const path = readServicePath(timeline);
+  const pathFocused = isPathFocused(timeline);
 
-  const pathId = pathSig?.entity_id;
-  const pathSigs = pathId ? sigs.filter((s) => s.entity_type === "path" && s.entity_id === pathId) : [];
+  // Path METRICS (loss / RTT / jitter) are evidence, not structure — they label
+  // the measurement, they never place a hop.
+  const pathSigs = sigs.filter((s) => s.entity_type === "path");
   const lossPct = (() => {
     const s = pathSigs.find((x) => /loss/.test(x.kind));
     if (!s) return NaN;
@@ -167,8 +346,6 @@ function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>, showS
     const s = pathSigs.find((x) => /jitter/.test(x.kind) || /jitter/.test(x.metric_name));
     return s ? Number(s.value) : NaN;
   })();
-  // label = a real metric only (loss %). No "latency rise"/"degraded" filler on
-  // the arrow — the edge COLOUR already conveys degraded; text stays meaningful.
   const lossTxt = isFinite(lossPct) && lossPct > 0 ? `${lossPct < 10 ? lossPct.toFixed(1) : Math.round(lossPct)}% loss` : "";
   const measuredDegraded = (isFinite(lossPct) && lossPct > 0) || pathSigs.some((x) => /rtt|latency/.test(x.kind));
   const stampParts: string[] = [];
@@ -178,11 +355,14 @@ function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>, showS
   const stampTxt = stampParts.join("  ·  ");
   const hasStamp = stampParts.length > 0;
 
+  // Affected DEVICE AREA — devices and interfaces only. An app / cloud resource is
+  // NOT bucketed onto a pseudo-device (that collapse is what produced the old
+  // single-node star); those entities belong on the backend's spine.
   type Dev = { dev: string; els: RankedEl[]; worst: number };
   const devs = new Map<string, Dev>();
   for (const s of sigs) {
-    if (s.entity_type === "path") continue;
-    const dev = baseDevice(s.entity_type, s.entity_id);
+    if (s.entity_type !== "device" && s.entity_type !== "interface") continue;
+    const dev = s.entity_type === "interface" ? s.entity_id.split(":")[0] : s.entity_id;
     if (!dev) continue;
     const d = devs.get(dev) ?? { dev, els: [], worst: 0 };
     const label = brokenElement(s);
@@ -190,29 +370,24 @@ function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>, showS
     d.worst = Math.max(d.worst, SEV_RANK[s.severity] ?? 1);
     devs.set(dev, d);
   }
+  // DECISION #76 — platform services / monitoring agents are how we OBSERVE, not
+  // the customer network. Drop them from the view.
+  for (const k of [...devs.keys()]) if (isInternalEntity(k)) devs.delete(k);
 
-  const shareCount = new Map<string, number>();
-  for (const e of timeline.edges ?? []) {
-    if (e.grounding_kind === "topo" && e.grounding_ref.startsWith("shared:")) {
-      const x = e.grounding_ref.slice(7);
-      shareCount.set(x, (shareCount.get(x) ?? 0) + 1);
-    }
-  }
-  let locusDev = [...shareCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  if (!locusDev) locusDev = [...devs.values()].sort((a, b) => b.worst - a.worst)[0]?.dev;
-  if (!locusDev && ends) locusDev = ends.dst;
+  // Fault locus = the WORST-SEVERITY affected device. Deliberately NOT the
+  // highest-degree node: node-degree layout is forbidden (contract §7).
+  const locusDev = [...devs.values()].sort((a, b) => b.worst - a.worst || a.dev.localeCompare(b.dev))[0]?.dev;
 
-  // CONTROL-PLANE PEER (the "total path" when there is no probe): a BGP/peer
-  // signal names the far end (attrs.peer, or entity_id "device:peer"). That peer
-  // IS the other end of the path segment — so a BGP flap draws device → peer,
-  // not a lone node.
+  // Routing far end — used ONLY when the device itself DECLARED its neighbour
+  // (attrs.peer / attrs.neighbor). We no longer guess a peer out of an entity id.
   const peer = (() => {
     for (const s of sigs) {
       if (!/bgp|peer|adjacency|neighbor|ldp|ospf|isis/i.test(s.kind)) continue;
       const a = parseAttrs(s.attrs);
-      let p = (a.peer || a.neighbor || "") as string;
-      if (!p && s.entity_id.includes(":")) p = s.entity_id.split(":").slice(1).join(":");
-      if (p) return { peer: p, rel: /bgp/i.test(s.kind) ? "BGP session" : "Peering", state: (a.state || "") as string };
+      const p = String(a.peer || a.neighbor || "").trim();
+      if (p && !isInternalEntity(p)) {
+        return { peer: p, rel: /bgp/i.test(s.kind) ? "BGP session" : "Peering", state: String(a.state || "") };
+      }
     }
     return undefined;
   })();
@@ -220,126 +395,53 @@ function computeModel(timeline: CorrTimeline, seams: Record<string, Seam>, showS
   const seamEdge = (timeline.edges ?? []).find((e) => e.grounding_kind === "seam");
   const seam = seamEdge ? seams[seamEdge.grounding_ref] : undefined;
 
-  const tracedRows = groupBySignature(matchTraces(ends?.dst, probePaths));
+  // Platform self-monitoring object (every attached entity is our own infra) →
+  // never dressed up as a customer path.
+  const entities = sigs.map((s) => s.entity_id).filter(Boolean);
+  const internal = !path && entities.length > 0 && entities.every(isInternalEntity);
 
-  // DECISION #76 — platform services (api/clickhouse/netbox=Inventory service…)
-  // and monitoring agents (prober/stamp/reflector) are how we OBSERVE, not the
-  // customer network. Drop them from the path; keep only real network entities
-  // (hosts/routers/switches/firewalls/WAN/ISP/cloud/IP endpoints). If NOTHING
-  // customer-facing remains, it's a platform self-monitoring object → render an
-  // "Internal monitoring path" note instead of a fake customer path.
-  for (const k of [...devs.keys()]) if (isInternalEntity(k)) devs.delete(k);
-  const cleanEnds = ends ? {
-    src: isInternalEntity(ends.src) ? "" : ends.src,
-    dst: isInternalEntity(ends.dst) ? "" : ends.dst,
-  } : null;
-  const cleanPeer = peer && !isInternalEntity(peer.peer) ? peer : undefined;
-  if (locusDev && isInternalEntity(locusDev)) locusDev = "";
-  const networkCount = devs.size + (cleanEnds?.src ? 1 : 0) + (cleanEnds?.dst ? 1 : 0) + (cleanPeer ? 1 : 0);
-  const internal = networkCount === 0;
-
-  // showStamp affects the on-canvas metric labels (loss-only vs full STAMP line).
-  void showStamp;
-  return { ends: cleanEnds, lossTxt, measuredDegraded, stampTxt, hasStamp, devs, locusDev, seam, peer: cleanPeer, tracedRows, internal, hasPath: !!ends };
+  return { path, pathFocused, lossTxt, measuredDegraded, stampTxt, hasStamp, devs, locusDev, seam, peer, internal };
 }
 
-// buildTopoGraph — PURE: evidence → positioned nodes + edges. Both renderers
-// consume this; the on-screen graph maps nodes→React-Flow and edges→its `link`
-// builder, and the PDF lays out the same nodes/edges. The construction logic
-// (traced + contextual modes, locus, seam, peer, traced hops, colours, positions)
-// is moved VERBATIM from RcaTopology's second useMemo.
+// buildTopoGraph — PURE: RCA object → positioned nodes + edges + bands. Both
+// renderers consume this, so screen and PDF cannot diverge.
+//   spine  → the backend's ordered service path (the ONLY path layout)
+//   context→ network-only object: the affected device area + its boundary
+//   empty  → path-focused but NO spine: the caller says so. We invent nothing.
 export function buildTopoGraph(
   timeline: CorrTimeline,
   seams: Record<string, Seam>,
   view: "operator" | "debug",
   showStamp: boolean,
-  probePaths?: ProbePath[],
-  deviceByIp?: Record<string, string>,
 ): TopoGraph {
-  const model = computeModel(timeline, seams, showStamp, probePaths);
+  const model = computeModel(timeline, seams);
   const nodes: TopoGraphNode[] = [];
   const edges: TopoGraphEdge[] = [];
 
-  if (model.internal) return { nodes, edges, internal: true };
+  // 1) THE BACKEND'S SPINE WINS. Screen and PDF both get it for free.
+  if (model.path) return layoutSpine(model.path, timeline.verdict_tier);
+
+  if (model.internal) return { nodes, edges, bands: [], internal: true, mode: "internal" };
+
+  // 2) A path-focused object with no spine is an HONEST BLANK — not a star.
+  if (model.pathFocused) return { nodes, edges, bands: [], internal: false, mode: "empty" };
 
   const meta = STATUS_META[statusForVerdict(timeline.verdict_tier)];
-  const { ends, lossTxt, measuredDegraded, stampTxt, devs, locusDev, seam, peer, tracedRows } = model;
-  const measuredLabel = showStamp && stampTxt ? stampTxt : lossTxt;
-  const hopName = (ip: string): string | undefined => (ip ? deviceByIp?.[ip] : undefined);
+  const { measuredDegraded, devs, locusDev, seam, peer } = model;
+  void showStamp;
 
-  const locus = locusDev ? (devs.get(locusDev) ?? { dev: locusDev, els: [], worst: 0 }) : undefined;
-  const targetIsLocus = !!(ends && locus && ends.dst === locus.dev);
+  const locus = locusDev ? devs.get(locusDev) : undefined;
+  if (!locus && !seam && !peer) return { nodes, edges, bands: [], internal: false, mode: "empty" };
 
-  // verdict → the state of the segment that carries the fault.
   const faultEdgeState: EdgeState = statusForVerdict(timeline.verdict_tier) === "broken" ? "confirmed_down" : "suspected_down";
-  const node = (n: { id: string; data: TopoGraphNodeData; x: number; y: number }) =>
-    nodes.push({ id: n.id, x: n.x, y: n.y, data: n.data });
+  const node = (n: TopoGraphNode) => nodes.push(n);
   const link = (from: string, to: string, o: { state?: EdgeState; label?: string; fromHandle?: string } = {}) => {
-    const state: EdgeState = o.state ?? "healthy";
-    edges.push({ from, to, state, label: o.label, fromHandle: o.fromHandle });
+    edges.push({ from, to, state: o.state ?? "healthy", label: o.label, fromHandle: o.fromHandle });
   };
 
-  // ===== TRACED MODE: real hop chain(s) from live traceroute ================
-  if (tracedRows.length > 0 && ends) {
-    const ROW_H = 168;
-    const centerY = ((tracedRows.length - 1) * ROW_H) / 2;
-    // observer shown only when it's a real customer vantage (a platform/agent
-    // source was dropped by the #76 filter → start at the first hop).
-    const hasObserver = !!ends.src;
-    if (hasObserver) {
-      node({ id: "src", x: 0, y: centerY, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
-    }
-
-    tracedRows.forEach((row, r) => {
-      const yBase = r * ROW_H;
-      const hops = [...(row.trace.hops ?? [])].sort((a, b) => a.ttl - b.ttl);
-      if (hops.length === 0) return;
-      const tag = methodTag(row.methods);
-      let faultIdx = hops.findIndex((h) => h.ip && locusDev && (h.ip === locusDev || hopName(h.ip) === locusDev));
-      if (faultIdx < 0) faultIdx = hops.length - 1;
-      let prev = hasObserver ? "src" : "";
-      hops.forEach((h, i) => {
-        const id = `r${r}h${i}`;
-        const isLast = i === hops.length - 1;
-        const lossHi = Number(h.loss_pct) > TRACE_LOSS_HI;
-        const rtt = Number(h.rtt_ms);
-        const ip = h.ip && h.ip !== "" ? h.ip : "*";
-        // hostname preference: rDNS host (from the trace) → inventory name → IP.
-        const name = h.host || hopName(ip);
-        const isFault = i === faultIdx;
-        const metric = showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms${lossHi ? ` · ${Math.round(Number(h.loss_pct))}% loss` : ""}`
-          : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-        const kind: ShapeKind = isLast ? destKind(ip) : isFault ? kindForRole(name ?? ip) : "router";
-        node({
-          id, x: (i + 1) * COL_HOP, y: yBase,
-          data: {
-            kind, tone: isFault ? meta.color : isLast ? C.info : C.flow, pulse: isFault,
-            label: name ?? ip, mono: !name,
-            sub: [isLast ? "destination" : `hop ${h.ttl}`, name ? ip : "", metric].filter(Boolean).join(" · ") || undefined,
-            badge: isFault ? `${meta.sym} ${meta.word}` : undefined,
-            chips: isFault ? faultEls(locus).slice(0, 3) : undefined,
-            via: h.via,
-          },
-        });
-        const firstLabel = [tag, measuredLabel].filter(Boolean).join(" · ");
-        const segLabel = i === 0 ? firstLabel
-          : showStamp && isFinite(rtt) ? `${rtt.toFixed(rtt < 10 ? 2 : 1)} ms`
-          : lossHi ? `${Math.round(Number(h.loss_pct))}% loss` : undefined;
-        if (prev) link(prev, id, { state: isFault ? faultEdgeState : lossHi ? "degraded" : "healthy", label: segLabel });
-        prev = id;
-      });
-    });
-    return { nodes, edges, internal: false };
-  }
-
-  // ===== CONTEXTUAL MODE: placement from RCA evidence =======================
+  // ===== CONTEXT MODE: the affected device area (network-only object) ==========
   let col = 0;
   let prev: string | null = null;
-
-  if (ends?.src) {
-    node({ id: "src", x: col * COL, y: 0, data: { kind: "vantage", tone: C.info, label: entityLabel(ends.src), sub: "observed from here", hasIn: false } });
-    prev = "src"; col++;
-  }
 
   if (seam) {
     const vis = seam.visibility ?? "";
@@ -348,48 +450,46 @@ export function buildTopoGraph(
       kind: "gateway", tone: ownerColor,
       label: view === "debug" ? (seam.seam_id || "boundary") : (seam.display_name || "Provider boundary"),
       sub: `${view === "debug" ? (seam.control_plane_owner ?? "?") : seamOwnerLabel(seam.control_plane_owner)}${vis ? " · " + (view === "debug" ? vis : visibilityLabel(seam.visibility)) : ""}`,
+      hasIn: false,
     } });
-    if (prev) link(prev, "seam", { state: measuredDegraded ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
     prev = "seam"; col++;
   }
 
   if (locus) {
     node({ id: "fault", x: col * COL, y: 0, data: {
       kind: kindForRole(locus.dev), tone: meta.color, pulse: true, size: 62,
-      label: entityLabel(locus.dev), badge: `${meta.sym} ${meta.word}${targetIsLocus ? " · dest" : ""}`,
-      chips: faultEls(locus).slice(0, 4), hasBottom: true,
+      label: entityLabel(locus.dev), badge: `${meta.sym} ${meta.word}`,
+      chips: faultEls(locus).slice(0, 4), hasBottom: true, hasIn: !!prev,
     } });
-    if (prev) link(prev, "fault", { state: measuredDegraded ? "degraded" : "healthy", label: prev === "src" ? measuredLabel : undefined });
+    if (prev) link(prev, "fault", { state: measuredDegraded ? "degraded" : "healthy" });
     prev = "fault"; col++;
 
-    // co-affected devices branch below the locus
+    // Also-affected devices sit BELOW the locus as context (never on the primary
+    // axis, and never used to imply a path).
     const others = [...devs.values()].filter((d) => d.dev !== locus.dev);
     others.slice(0, 4).forEach((d, i) => {
       const aid = `aff${i}`;
       node({ id: aid, x: (col - 1) * COL + (i - (others.length - 1) / 2) * 140, y: 150, data: {
-        kind: kindForRole(d.dev), tone: C.warn, label: entityLabel(d.dev), sub: faultEls(d)[0] || "also affected", hasIn: true, hasOut: false,
+        kind: kindForRole(d.dev), tone: C.warn, label: entityLabel(d.dev),
+        sub: faultEls(d)[0] || "also affected", hasIn: true, hasOut: false,
       } });
       link("fault", aid, { fromHandle: "b", state: "unknown" });
     });
   }
 
-  // CONTROL-PLANE PEER: the far end of a BGP/peering session = the rest of the
-  // path (fixes "lone WAN-R2" — a flap is device → peer, the total segment).
-  if (peer && !ends?.dst) {
+  // The far end of a routing session the device itself declared — the segment the
+  // adjacency change is about (a flap is device → peer, not a lone node).
+  if (peer) {
     const down = /down|idle|active|flap/i.test(peer.state);
     node({ id: "peer", x: col * COL, y: 0, data: {
-      kind: "router", tone: down ? meta.color : C.info, label: peer.peer, mono: true, sub: `${peer.rel.toLowerCase()} peer`, hasOut: false,
+      kind: "router", tone: down ? meta.color : C.info, label: peer.peer, mono: true,
+      sub: `${peer.rel.toLowerCase()} peer`, hasOut: false, hasIn: !!prev,
     } });
-    // Label the edge by the EVENT, not the current session state: this object
-    // exists because the adjacency CHANGED, so "BGP session up" would read as
-    // misleadingly healthy. Edge carries the verdict tone (suspected = amber),
-    // never a healthy green, but stays unbroken unless the overlay is down.
-    if (prev) link(prev, "peer", { state: down ? faultEdgeState : (timeline.verdict_tier === "confirmed" ? "healthy" : "degraded"), label: /bgp/i.test(peer.rel) ? "BGP neighbor changed" : `${peer.rel} changed` });
-    prev = "peer"; col++;
-  } else if (ends?.dst && ends.dst !== locusDev) {
-    node({ id: "dst", x: col * COL, y: 0, data: { kind: destKind(ends.dst), tone: C.info, label: entityLabel(ends.dst), sub: "destination", hasOut: false } });
-    if (prev) link(prev, "dst", {});
+    if (prev) link(prev, "peer", {
+      state: down ? faultEdgeState : (timeline.verdict_tier === "confirmed" ? "healthy" : "degraded"),
+      label: /bgp/i.test(peer.rel) ? "BGP neighbor changed" : `${peer.rel} changed`,
+    });
   }
 
-  return { nodes, edges, internal: false };
+  return { nodes, edges, bands: [], internal: false, mode: nodes.length ? "context" : "empty" };
 }

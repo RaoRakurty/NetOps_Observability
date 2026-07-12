@@ -1,11 +1,14 @@
 package collectors
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -86,12 +89,19 @@ func resolveHostnames(ctx context.Context, hops []Hop) {
 // diverge (ICMP-blocking firewalls, protocol-specific ECMP hashing), so each
 // (dst, method) is stored and surfaced separately.
 type PathResult struct {
-	Dst     string    `json:"dst"`
-	Method  string    `json:"method"` // "icmp" | "tcp"
-	Hops    []Hop     `json:"hops"`
-	Reached bool      `json:"reached"`
-	Changed bool      `json:"changed"` // path differs from the previous trace
-	TS      time.Time `json:"ts"`
+	Dst    string `json:"dst"`
+	Method string `json:"method"` // "icmp" | "tcp"
+	// VantageID is WHO measured this path (PROBER_ID). The path contract's identity
+	// includes the vantage (docs/design/service-path-graph-contract.md §2.2): two
+	// probers measuring the same destination produce two DISTINCT paths that may
+	// legitimately disagree. Before this field existed, multiple probers published
+	// into one shared key and silently CLOBBERED each other — a LAN vantage and a
+	// WAN prober overwrote one another and neither could be attributed.
+	VantageID string    `json:"vantage_id,omitempty"`
+	Hops      []Hop     `json:"hops"`
+	Reached   bool      `json:"reached"`
+	Changed   bool      `json:"changed"` // path differs from the previous trace
+	TS        time.Time `json:"ts"`
 }
 
 // ── shared path store (collector writes, API reads) ───────────────────────────
@@ -106,44 +116,126 @@ type pathRegistry struct {
 // the HTTP layer without threading a reference through the pool.
 var Paths = &pathRegistry{m: make(map[string]PathResult)}
 
-// pathKey indexes a stored trace by destination AND method so icmp and tcp
-// traces to the same dst coexist instead of overwriting each other. Legacy/empty
-// method normalizes to "icmp" (the historical default).
+// pathKey indexes a stored trace by VANTAGE, destination AND method, so (a) icmp and
+// tcp traces to the same dst coexist, and (b) two probers measuring the same
+// destination from different places coexist instead of overwriting each other. That
+// second property is the contract's §2.2 path identity (the vantage is part of it) —
+// and its absence was a real bug: a LAN vantage and the WAN prober clobbered each
+// other's paths. Legacy/empty method normalizes to "icmp" (the historical default);
+// an empty vantage normalizes to this process's PROBER_ID.
 func pathKey(dst, method string) string {
+	return pathKeyFor(ProberID(), dst, method)
+}
+
+func pathKeyFor(vantage, dst, method string) string {
 	if method == "" {
 		method = "icmp"
 	}
-	return dst + "|" + method
+	if vantage == "" {
+		vantage = ProberID()
+	}
+	return vantage + "|" + dst + "|" + method
 }
 
 func (r *pathRegistry) set(p PathResult) {
+	if p.VantageID == "" {
+		p.VantageID = ProberID() // attribute every path to the prober that measured it
+	}
 	r.mu.Lock()
-	r.m[pathKey(p.Dst, p.Method)] = p
+	r.m[pathKeyFor(p.VantageID, p.Dst, p.Method)] = p
 	r.mu.Unlock()
 	r.persist()
 }
 
-// persist publishes the full path set so a prober sidecar can share topology
-// with the API process (ADR 0001 — workers communicate via Redis). Primary:
-// Redis (TTL'd, self-expiring). Fallback: PROBE_PATHS_FILE on a shared volume.
-// No-op when neither is configured (collector runs in-process with the API).
+// persist publishes this prober's path set so the API can read it (ADR 0001 —
+// workers communicate via the key-value store). Primary: a VANTAGE-SCOPED,
+// TTL'd key (netops:probe:paths:<prober-id>) plus membership in the vantage set,
+// so N probers coexist instead of overwriting one shared key. Fallback:
+// PROBE_PATHS_FILE on a shared volume (also vantage-suffixed). No-op when neither
+// is configured (collector runs in-process with the API).
+//
+// The legacy single key is STILL written, so an API image that predates this change
+// keeps working during a rolling upgrade. Readers prefer the per-vantage keys.
 func (r *pathRegistry) persist() {
 	data, err := json.Marshal(r.All())
 	if err != nil {
 		return
 	}
+	vantage := ProberID()
+	// A prober that cannot reach the key-value store (a vantage deployed inside a
+	// customer LAN — the only place the CLIENT end of the path can be measured) pushes
+	// its traces to the API over authenticated HTTP instead. Configured, never assumed.
+	pushProbePaths(data)
 	if RedisAddr() != "" {
 		// Background persistence with the dialer's own 3s timeout — the
 		// registry has no request context to inherit.
-		_ = redisSetEX(context.Background(), probePathsKey, string(data), 300)
+		ctx := context.Background()
+		_ = redisSetEX(ctx, probePathsKeyFor(vantage), string(data), probePathsTTL)
+		_ = redisRegisterVantage(ctx, vantage)
+		_ = redisSetEX(ctx, probePathsKey, string(data), probePathsTTL) // legacy compat
 		return
 	}
 	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {
-		tmp := path + ".tmp"
-		if os.WriteFile(tmp, data, 0o644) == nil { // #nosec G306 -- non-secret topology
-			_ = os.Rename(tmp, path)
+		writeAtomic(path, data)                            // legacy compat
+		writeAtomic(path+"."+safeFileToken(vantage), data) // vantage-scoped
+	}
+}
+
+// pushProbePaths POSTs this prober's path set to the API when PROBE_PATHS_PUSH_URL
+// is configured (PROBE_PATHS_PUSH_TOKEN authenticates it). Best-effort and bounded:
+// a failed push is dropped, never retried into a backlog, and never blocks the
+// measurement loop — the next trace publishes the current state anyway.
+func pushProbePaths(data []byte) {
+	url := os.Getenv("PROBE_PATHS_PUSH_URL")
+	token := os.Getenv("PROBE_PATHS_PUSH_TOKEN")
+	if url == "" || token == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		log.Printf("traceroute: path push failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("traceroute: path push rejected: %s", resp.Status)
+	}
+}
+
+// writeAtomic writes data to path via a temp file + rename.
+func writeAtomic(path string, data []byte) {
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, data, 0o644) == nil { // #nosec G306 -- non-secret topology
+		_ = os.Rename(tmp, path)
+	}
+}
+
+// safeFileToken bounds a vantage id used in a FILENAME (never a path traversal).
+func safeFileToken(v string) string {
+	out := make([]rune, 0, len(v))
+	for _, c := range v {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+			out = append(out, c)
+		default:
+			out = append(out, '_')
 		}
 	}
+	if len(out) == 0 {
+		return "prober"
+	}
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return string(out)
 }
 
 func (r *pathRegistry) get(dst, method string) (PathResult, bool) {

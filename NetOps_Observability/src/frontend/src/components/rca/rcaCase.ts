@@ -2,6 +2,7 @@ import { CorrTimeline, CorrObject, Seam } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import type { TopoGraph } from "./topoGraph";
+import { readServicePath } from "./servicePath";
 
 // rcaCase.ts — the data contract for the RCA workspace + the adapter that maps a
 // real correlation object/timeline into it. The workspace component is pure
@@ -502,7 +503,12 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       // 3) fallback: affected devices with no path/peer — at least plot the nodes
       if (tNodes.length === 0) for (const d of (aff.devices ?? []).slice(0, 6)) addNode(d, { kind: confirmed ? "bad" : "warn", meta: "affected device", tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "AFFECTED" : "SUSPECTED" } });
     } catch { /* affected not JSON */ }
-    if (tNodes.length > 0) topology = { nodes: tNodes.slice(0, 8), edges: tEdges };
+    // A service-path object is rendered from the BACKEND's ordered spine (the
+    // shared `topoGraph`, which the PDF prefers) — never from this legacy
+    // "a -> b"-string chain, which cannot express cloud objects, hop order,
+    // boundaries or evidence. When a spine exists, this fallback is suppressed so
+    // the report and the screen provably draw the SAME graph (contract §7).
+    if (tNodes.length > 0 && !readServicePath(timeline)) topology = { nodes: tNodes.slice(0, 8), edges: tEdges };
   }
 
   const subtitle = confirmed ? "Independent evidence across multiple planes"

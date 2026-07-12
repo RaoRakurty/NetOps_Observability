@@ -39,4 +39,7 @@ dist/
 src/correlation/build/
 deployment/docker/resource-plan.json
 deployment/docker/resource-plan.txt
+deployment/docker/resource-plan.*.plan.bak
+# runtime output of the lab cloud-ingest poller (VPC flow logs etc.)
+deployment/docker/cloud-logs/
 deployment/docker/.env.plan.bak

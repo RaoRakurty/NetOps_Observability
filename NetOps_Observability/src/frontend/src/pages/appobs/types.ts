@@ -1,11 +1,14 @@
-// App Observability — typed model (#81 P3F UI).
+// App Observability — typed model (#81 P3F/P3H UI).
 //
-// These types are the CONTRACT the future cloud endpoints will return; the UI is
-// built against them with typed mock data today and wires cleanly later. No fake
-// backend calls are made — see mock.ts. Endpoints (future):
+// These types are the CONTRACT the cloud endpoints return. Every one of them is
+// now fed by a LIVE, tenant-scoped endpoint — there is no sample data behind this
+// page any more (the old mock.ts is deleted; a tab with no ingested source renders
+// an honest empty state instead of rows).
 //   GET /api/cloud/apps · /api/cloud/resources · /api/cloud/identity-map
-//   GET /api/cloud/attribution/coverage · /api/cloud/health · /api/cloud/changes
-//   GET /api/cloud/evidence · GET /api/flows/apps?include_cloud=true
+//   GET /api/cloud/attribution/coverage · /api/cloud/ingestion
+//   GET /api/cloud/health · /api/cloud/changes · /api/cloud/evidence · /api/cloud/app-rca
+// Not ingested yet (rendered as explicit gaps, never faked): per-app cloud flow /
+// LB traffic, traces, and the app→underlay seam correlation.
 
 export type Confidence = "confirmed" | "strong" | "suspected" | "weak" | "unknown";
 export type Health = "healthy" | "degraded" | "down" | "unknown";

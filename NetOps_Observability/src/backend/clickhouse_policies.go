@@ -61,6 +61,11 @@ func ensureCHRowPolicies() {
 	// history tables (corr_retention.go). Metadata-only ALTERs; expiry happens
 	// as background part drops. Cold Parquet export runs ahead of the horizon.
 	stmts = append(stmts, corrRetentionDDL(corrRetentionConfig())...)
+	// Service Path Graph (frozen contract v1) — the immutable observation/hop
+	// streams + their STRICT tenant row policies (path_schema.go). Same
+	// converge-on-boot contract; init.sql carries the identical DDL for fresh
+	// installs.
+	stmts = append(stmts, pathSchemaDDL()...)
 	go func() {
 		var errs []string
 		for attempt := 0; attempt < 10; attempt++ {

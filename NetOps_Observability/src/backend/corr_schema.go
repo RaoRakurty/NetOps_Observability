@@ -330,6 +330,66 @@ ORDER BY (tenant_id, window_start)
 TTL toDateTime(window_start) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
+		// ── Service Path Graph §5 typed edges (contract v1) ──────────────────────
+		//
+		// corr_edges CANNOT express them: its grounding_kind is a frozen
+		// Enum8('seam'=1,'topo'=2) and the engine deliberately did NOT overload
+		// grounding_ref to smuggle a type through it. So the typed edge gets its own
+		// table, written by the engine behind CORR_EDGES_V2=true
+		// (snap.to_typed_edge_rows → CORR_PATH_EDGES_TABLE). corr_edges stays exactly
+		// as it is — no migration of live history, no dual meaning for one column.
+		//
+		// Column types mirror src/correlation/path_graph.py :: Relation.to_dict():
+		//   - observed_at is a STRING, not a DateTime: the engine writes "" for an
+		//     identity-derived relation (rank 1 has no observation time), and an empty
+		//     DateTime would silently become 1970 — a lie with a timestamp on it.
+		//   - method/edge_type/evidence_class are LowCardinality(String), NOT Enum8:
+		//     the 2026-07-09 outage was an enum ALTER on a key column stalling the
+		//     whole converge list. The vocabulary is documented, not enforced by a
+		//     type that cannot be widened safely.
+		//   - authoritative/stale are Bool so the invariant "rank 6/7 ⇒ NOT
+		//     authoritative" is queryable directly (the release gate asserts it).
+		// ROLLBACK: migrations/rollback/0023_service_path_graph.down.sql.
+		`CREATE TABLE IF NOT EXISTS netops.corr_path_edges
+(
+    tenant_id          LowCardinality(String) DEFAULT '',
+    correlation_id     UUID,
+    version            UInt32,
+    from_node          String,
+    to_node            String,
+    grounding_kind     LowCardinality(String) DEFAULT '',
+    grounding_ref      String DEFAULT '',
+    edge_type          LowCardinality(String) DEFAULT '',   -- §5: PATH_HAS_HOP | CROSSES_SEAM | …
+    method             LowCardinality(String) DEFAULT '',   -- §3: resource_identity … shared_token
+    rank               UInt8 DEFAULT 7,
+    evidence_class     LowCardinality(String) DEFAULT '',   -- observed | inferred | candidate
+    confidence         LowCardinality(String) DEFAULT '',   -- authoritative | strong | candidate | unknown
+    authoritative      Bool DEFAULT false,                  -- ranks 1–5, observed, fresh, evidenced
+    evidence_ref       String DEFAULT '',                   -- MANDATORY (§5); '' never emitted by the engine
+    observation_method LowCardinality(String) DEFAULT '',
+    observed_at        String DEFAULT '',                   -- ISO-8601; '' = identity-derived
+    data_class         LowCardinality(String) DEFAULT 'live',
+    ref                String DEFAULT '',
+    seam_id            LowCardinality(String) DEFAULT '',
+    transformation     LowCardinality(String) DEFAULT 'none',
+    stale              Bool DEFAULT false,
+    unknown_hops       Array(UInt16),
+    supporting_refs    Array(String),
+    contract_version   UInt16 DEFAULT 1,
+    created_at         DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(created_at))
+ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
+TTL toDateTime(created_at) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
+
+		// STRICT policy (the corr_current model): an untagged path edge is
+		// platform-only, never shared into every tenant's view.
+		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_path_edges ON netops.corr_path_edges
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL`,
+
 		chRowPolicyDDL("corr_signals"),
 		chRowPolicyDDL("corr_signals_archive"),
 		chRowPolicyDDL("corr_objects"),

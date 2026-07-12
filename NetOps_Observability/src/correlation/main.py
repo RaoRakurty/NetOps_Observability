@@ -42,6 +42,7 @@ from pydantic import BaseModel
 from catalog import builtin_catalog
 from directed_topology import DirectedTopology
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
+from path_graph import PathGraphView
 from entity_resolver import EntityResolver
 from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
@@ -409,6 +410,20 @@ SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/
 # input for the §4.2 "L2/L3 adjacent device" rung (G1). Absent file = no adjacency
 # (gate falls back to seam/containment, identical to before — honest, never relaxed).
 TOPO_LINKS_FILE = os.environ.get("TOPO_LINKS_FILE", "/data/enrichment/topology_links.json")
+# Service Path Graph (docs/design/service-path-graph-contract.md §2/§7): the EXPLICIT
+# relationship inventory — endpoints (address↔entity bindings with a network context
+# and a validity window), immutable path observations with ORDERED hops, application→
+# endpoint bindings, NAT sessions and (inferred) cloud routes — exported by the Go API
+# the same way seams.json is. This is what replaces token overlap as the basis of edge
+# admission (§3). Absent file = empty view: the engine still grounds on identity /
+# seam / adjacency, and token overlap still forms a CANDIDATE (never authoritative)
+# edge — honest degradation, never a relaxed gate.
+PATH_GRAPH_FILE = os.environ.get("PATH_GRAPH_FILE", "/data/enrichment/path_graph.json")
+# corr_edges v2 (typed edges + evidence columns) is a ClickHouse migration owned by the
+# backend. Until it lands the typed rows are computed and embedded in the snapshot
+# (hypotheses.grounding_context.path_graph) but not written to their own table.
+CORR_EDGES_V2 = os.environ.get("CORR_EDGES_V2", "false").lower() == "true"
+CORR_PATH_EDGES_TABLE = os.environ.get("CORR_PATH_EDGES_TABLE", "netops.corr_path_edges")
 # C7.1 EntityResolver inputs (IP→device, interface IP→ifName, (device,ifIndex)→ifName)
 # exported by the Go API. The keystone the directed-topology direction sources
 # (C7.3–C7.5) + G2 canonicalizer resolve raw IPs/ifIndexes through. Absent → resolver
@@ -446,6 +461,8 @@ LAST_GAP_HINTS = 0
 
 _seam_cache: tuple[SeamView, ...] = ()
 _seam_mtime: float = -1.0
+_path_graph_cache: PathGraphView = PathGraphView()
+_path_graph_mtime: float = -1.0
 _adj_cache: dict[str, list[dict]] = {}
 _adj_mtime: float = -1.0
 
@@ -631,6 +648,29 @@ def seam_inventory() -> tuple[SeamView, ...]:
     return _seam_cache
 
 
+def path_graph_inventory() -> PathGraphView:
+    """The Service Path Graph view for the grounding gate (contract §2), exported by
+    the Go API. mtime-cached like seam_inventory(); absent/unreadable file = the last
+    good view (never a silently emptied one mid-incident). Tenant scoping happens in
+    run_window(), which calls PathGraphView.for_tenant() before ANY lookup — a path
+    object with no tenant_id is reachable by nobody (fail-closed: unlike seams, there
+    are no platform-scoped path relationships)."""
+    global _path_graph_cache, _path_graph_mtime
+    try:
+        mt = os.path.getmtime(PATH_GRAPH_FILE)
+    except OSError:
+        return _path_graph_cache
+    if mt != _path_graph_mtime:
+        _path_graph_mtime = mt
+        try:
+            with open(PATH_GRAPH_FILE) as f:
+                raw = json.load(f)
+            _path_graph_cache = PathGraphView.from_dict(raw if isinstance(raw, dict) else {})
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            log.warning("path graph unreadable (%s); keeping previous view", exc)
+    return _path_graph_cache
+
+
 def buffer_signal(sig: Signal) -> None:
     # Decision #76 + verdicts.py Decision #1: a debug_only / platform-self-check probe
     # (e.g. prober->nginx, api->netbox) stays SEARCHABLE — it's already in corr_signals —
@@ -740,6 +780,15 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     edge_rows = snap.to_edge_rows(version)
     if edge_rows:
         await ch.insert("netops.corr_edges", edge_rows)
+        # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
+        # evidence_class, evidence_ref, observation_method, confidence, observed_at,
+        # data_class). corr_edges' frozen Enum8 grounding_kind cannot express these and
+        # grounding_ref is NOT overloaded to smuggle them — they go to their own table
+        # once the backend migration lands (CORR_EDGES_V2). Until then they are still
+        # emitted: embedded in the snapshot's grounding context (replay-safe) and served
+        # from there.
+        if CORR_EDGES_V2:
+            await ch.insert(CORR_PATH_EDGES_TABLE, snap.to_typed_edge_rows(version))
     ev_rows = snap.to_evidence_rows(version)
     if ev_rows:
         await ch.insert("netops.corr_evidence", ev_rows)
@@ -824,7 +873,8 @@ async def engine_cycle() -> None:
         directed = DirectedTopology(sources=tuple(sources)) if sources else None
         try:
             snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
-                                   topology_stale=topo_stale, storm_mode=storm, directed=directed)
+                                   topology_stale=topo_stale, storm_mode=storm, directed=directed,
+                                   paths=path_graph_inventory())
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue

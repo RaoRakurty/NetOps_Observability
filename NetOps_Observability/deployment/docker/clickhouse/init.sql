@@ -428,6 +428,131 @@ ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
 ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id);
 
+-- ---------------------------------------------------------------------------
+-- Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md)
+--
+-- MIRRORED IN src/backend/{corr_schema.go,path_schema.go} — the API converges these
+-- same statements on every boot (ensureCHRowPolicies), so a fresh install and an
+-- upgraded one end in the same state. KEEP THEM IN LOCKSTEP: drift breaks the stack.
+--
+--   path_observations / path_hops — IMMUTABLE measurement streams (§2.3/§2.4). One
+--       new observation per run, forever: route-change history IS the feature. The
+--       registries they reference (Endpoint, PathDefinition) have mutable validity
+--       windows and live in Postgres under FORCE-RLS (migration 0023).
+--   corr_path_edges — the §5 TYPED edges the correlation engine emits behind
+--       CORR_EDGES_V2. corr_edges could not express them (its grounding_kind is a
+--       frozen Enum8('seam','topo')) and the engine refused to overload grounding_ref.
+--
+-- Row policies are STRICT (the corr_current model): an untagged row is platform-only,
+-- never shared into every tenant's view — a path is not "global" telemetry.
+-- ROLLBACK: src/backend/migrations/rollback/0023_service_path_graph.down.sql
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.path_observations
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    observation_id   String,
+    path_id          String,
+    observed_at      DateTime64(3),
+    method           LowCardinality(String),   -- traceroute_icmp|traceroute_tcp|stamp|transaction|flow_stitch
+    vantage_id       LowCardinality(String),
+    status           LowCardinality(String),   -- complete|partial|failed
+    hop_count        UInt16,
+    src_address      String DEFAULT '',
+    dst_address      String DEFAULT '',
+    protocol         LowCardinality(String) DEFAULT '',
+    dst_port         UInt16 DEFAULT 0,
+    direction        LowCardinality(String) DEFAULT 'forward',
+    network_context  LowCardinality(String) DEFAULT '',
+    data_class       LowCardinality(String) DEFAULT 'live',   -- live|synthetic|replay|lab
+    environment      LowCardinality(String) DEFAULT 'prod',
+    scenario_id      LowCardinality(String) DEFAULT '',
+    run_id           String DEFAULT '',
+    producer_id      LowCardinality(String) DEFAULT '',
+    provenance_id    String DEFAULT '',
+    contract_version UInt16 DEFAULT 1,
+    ingest_ts        DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMM(observed_at))
+ORDER BY (tenant_id, path_id, observed_at, observation_id)
+TTL toDateTime(observed_at) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.path_hops
+(
+    tenant_id           LowCardinality(String) DEFAULT '',
+    observation_id      String,
+    hop_index           UInt16,
+    state               LowCardinality(String),          -- responding|missing|filtered
+    observed_address    String DEFAULT '',               -- '' when state != responding (the hop is PRESERVED)
+    resolved_entity_ref String DEFAULT '',
+    resolution_method   LowCardinality(String) DEFAULT 'unresolved',
+    confidence          LowCardinality(String) DEFAULT 'unknown',
+    kind                LowCardinality(String) DEFAULT 'unknown',
+    network_context     LowCardinality(String) DEFAULT '',
+    seam_id             LowCardinality(String) DEFAULT '',
+    rtt_ms              Float32 DEFAULT 0,
+    loss_pct            Float32 DEFAULT 0,
+    transformation      LowCardinality(String) DEFAULT 'none',
+    candidate_ref       String DEFAULT '',               -- rank-7 lead ONLY; never an edge (§3)
+    evidence_ref        String DEFAULT '',
+    observed_at         DateTime64(3),
+    data_class          LowCardinality(String) DEFAULT 'live',
+    ingest_ts           DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMM(observed_at))
+ORDER BY (tenant_id, observation_id, hop_index)
+TTL toDateTime(observed_at) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.corr_path_edges
+(
+    tenant_id          LowCardinality(String) DEFAULT '',
+    correlation_id     UUID,
+    version            UInt32,
+    from_node          String,
+    to_node            String,
+    grounding_kind     LowCardinality(String) DEFAULT '',
+    grounding_ref      String DEFAULT '',
+    edge_type          LowCardinality(String) DEFAULT '',   -- PATH_HAS_HOP | CROSSES_SEAM | …
+    method             LowCardinality(String) DEFAULT '',   -- resource_identity … shared_token
+    rank               UInt8 DEFAULT 7,
+    evidence_class     LowCardinality(String) DEFAULT '',   -- observed | inferred | candidate
+    confidence         LowCardinality(String) DEFAULT '',
+    authoritative      Bool DEFAULT false,
+    evidence_ref       String DEFAULT '',                   -- MANDATORY (§5)
+    observation_method LowCardinality(String) DEFAULT '',
+    observed_at        String DEFAULT '',                   -- ISO-8601; '' = identity-derived
+    data_class         LowCardinality(String) DEFAULT 'live',
+    ref                String DEFAULT '',
+    seam_id            LowCardinality(String) DEFAULT '',
+    transformation     LowCardinality(String) DEFAULT 'none',
+    stale              Bool DEFAULT false,
+    unknown_hops       Array(UInt16),
+    supporting_refs    Array(String),
+    contract_version   UInt16 DEFAULT 1,
+    created_at         DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMM(created_at))
+ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
+TTL toDateTime(created_at) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_observations ON netops.path_observations
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_hops ON netops.path_hops
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_path_edges ON netops.corr_path_edges
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
 -- 2.4 Application Identity Fusion (#81) — high-volume, vendor-NEUTRAL.
 -- app_observations: one upstream identity opinion with full provenance (the ORIGINAL
 -- vendor values are preserved; the raw log stays in OpenSearch — only a ref+hash here).

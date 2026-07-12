@@ -9,10 +9,28 @@
       "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0448c046139420a7f",
       "resource_type": "ec2:instance",
       "resource_name": "correlix-app-host-01",
-      "private_ips": ["10.60.10.10"],
-      "tags": {"app": "store", "env": "lab", "owner": "correlix", "project": "correlix-faultlab"},
+      "private_ips": [
+        "10.60.10.10"
+      ],
+      "public_ips": [],
+      "network_interface_ids": [
+        "eni-01830be2f44b23cb2"
+      ],
+      "tags": {
+        "auto_stop": "true",
+        "project": "correlix-faultlab",
+        "environment": "lab",
+        "managed_by": "terraform",
+        "app_id": "shared",
+        "Name": "correlix-app-host-01",
+        "cloud": "aws",
+        "owner": "rao",
+        "ttl_hours": "0"
+      },
+      "owner": "rao",
+      "env": "lab",
       "source": "cloud_api",
-      "confidence": "confirmed"
+      "confidence": "strong"
     },
     {
       "region": "us-west-2",
@@ -21,40 +39,57 @@
       "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-025bac7de4e6be0a6",
       "resource_type": "ec2:instance",
       "resource_name": "correlix-data-host-01",
-      "private_ips": ["10.60.30.10"],
-      "tags": {"app": "store", "env": "lab", "owner": "correlix", "project": "correlix-faultlab"},
+      "private_ips": [
+        "10.60.30.10"
+      ],
+      "public_ips": [],
+      "network_interface_ids": [
+        "eni-0223af39e47ec924a"
+      ],
+      "tags": {
+        "app_id": "shared",
+        "ttl_hours": "0",
+        "project": "correlix-faultlab",
+        "Name": "correlix-data-host-01",
+        "cloud": "aws",
+        "owner": "rao",
+        "auto_stop": "true",
+        "managed_by": "terraform",
+        "environment": "lab"
+      },
+      "owner": "rao",
+      "env": "lab",
       "source": "cloud_api",
-      "confidence": "confirmed"
-    },
-    {
-      "region": "us-west-2",
-      "resource_id": "compose:aws:report",
-      "resource_type": "compose:stack",
-      "resource_name": "report-processor",
-      "private_ips": ["10.60.10.10"],
-      "tags": {"app": "report", "env": "lab", "owner": "correlix"},
-      "source": "cloud_api",
-      "confidence": "confirmed"
-    },
-    {
-      "region": "us-west-2",
-      "resource_id": "compose:aws:booking",
-      "resource_type": "compose:stack",
-      "resource_name": "booking-microservices",
-      "private_ips": ["10.60.10.10"],
-      "tags": {"app": "booking", "env": "lab", "owner": "correlix"},
-      "source": "cloud_api",
-      "confidence": "confirmed"
+      "confidence": "strong"
     },
     {
       "region": "us-west-2",
       "zone": "us-west-2a",
-      "resource_id": "i-0bcbe41dc4d0e7ec8",
+      "resource_id": "i-0e8acbf8493d037f9",
+      "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0e8acbf8493d037f9",
       "resource_type": "ec2:instance",
       "resource_name": "correlix-vpn-nat-01",
-      "private_ips": ["10.60.1.10"],
-      "public_ips": ["100.21.102.86"],
-      "tags": {"project": "correlix-faultlab", "env": "lab"},
+      "private_ips": [
+        "10.60.1.10"
+      ],
+      "public_ips": [
+        "100.21.102.86"
+      ],
+      "network_interface_ids": [
+        "eni-007542c1d61f44947"
+      ],
+      "tags": {
+        "environment": "lab",
+        "managed_by": "terraform",
+        "project": "correlix-faultlab",
+        "ttl_hours": "0",
+        "Name": "correlix-vpn-nat-01",
+        "auto_stop": "false",
+        "owner": "rao",
+        "cloud": "aws"
+      },
+      "owner": "rao",
+      "env": "lab",
       "source": "cloud_api",
       "confidence": "strong"
     }

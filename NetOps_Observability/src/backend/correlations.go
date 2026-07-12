@@ -43,6 +43,14 @@ func (s *server) chRows(r *http.Request, sql string) ([]map[string]any, error) {
 // stamps system.query_log.log_comment for per-caller read-budget attribution
 // (#100); callers that pass nothing are tagged as generic background work.
 func (s *server) chRowsScope(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
+	return chSelect(ctx, scope, sql, comment...)
+}
+
+// chSelect is the request-free, server-free form of the same tenant-scoped read —
+// the one stores (which hold no *server) use. chRowsScope delegates to it, so there
+// is exactly ONE ClickHouse read path carrying tenant_scope, log_comment and the
+// #101 workload profile.
+func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
 	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
 	u, err := url.Parse(base)
 	if err != nil {
@@ -387,6 +395,12 @@ func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request
 		"evidence":         evRows,
 		"edges":            edgeRows,
 		"counts":           counts,
+		// Service Path Graph (frozen contract §7): the ORDERED spine for this object,
+		// computed SERVER-SIDE. The renderer lays this out; it never derives hop order
+		// from entity_id strings or node degree again. nil/spine_available=false is an
+		// honest "no measured path for this object" — the UI says so, it does not
+		// invent a star.
+		"path": s.rcaPathBlock(r.Context(), r, id),
 	})
 }
 

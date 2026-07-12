@@ -83,6 +83,11 @@ func proberSite() string {
 // proberID identifies this vantage point as an observer (PROBER_ID, falling
 // back to the container hostname). Evidence independence (§4.5) buckets by
 // this id, so two collectors on the same compose stack must not share one.
+// ProberID is the exported form of proberID: the vantage identity (PROBER_ID) that
+// every published path is attributed to. Exported because the path contract's §2.2
+// identity includes the vantage, so the API and the path registry both need it.
+func ProberID() string { return proberID() }
+
 func proberID() string {
 	if v := os.Getenv("PROBER_ID"); v != "" {
 		return v

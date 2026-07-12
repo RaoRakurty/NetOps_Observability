@@ -8,9 +8,13 @@ import { useId } from "react";
 // Every shape draws in a 0 0 100 100 viewBox so it scales to any size. Fill is a
 // faint wash of the tone; stroke is the tone; a CSS drop-shadow gives the glow.
 
+// "unknown" is the BLIND hop — a path hop that did not respond or was filtered
+// (contract §2.4: unknown hops are preserved, never dropped, never bridged).
+// "evidence" is an off-spine evidence branch (metrics/logs/flows/alerts/traces),
+// deliberately NOT a device shape so it never reads as part of the path.
 export type ShapeKind =
   | "core" | "router" | "switch" | "firewall" | "gateway" | "access"
-  | "cloud" | "server" | "vantage" | "target";
+  | "cloud" | "server" | "vantage" | "target" | "unknown" | "evidence";
 
 // Role/label → shape. Unknown roles fall back to a switch (the commonest access
 // device). Cloud/internet/transit destinations get the cloud.
@@ -31,6 +35,7 @@ export function kindForRole(role: string): ShapeKind {
 const GLYPH: Record<ShapeKind, string> = {
   core: "◇", router: "⇄", switch: "▤", firewall: "⛨", gateway: "⬢",
   access: "▤", cloud: "☁", server: "▦", vantage: "◎", target: "◉",
+  unknown: "?", evidence: "◫",
 };
 
 function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
@@ -79,6 +84,13 @@ function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
           <circle cx="50" cy="50" r="10" fill={stroke} />
         </>
       );
+    case "unknown":
+      // blind hop — DASHED outline: we know a hop is here, we don't know what it is.
+      // The dash is the honesty signal (an unresolved hop never looks like a device).
+      return <circle cx="50" cy="50" r="40" fill={fill} stroke={stroke} strokeWidth={4} strokeDasharray="9 7" strokeLinecap="round" />;
+    case "evidence":
+      // off-spine evidence branch — a note card, not a device.
+      return <rect x="14" y="20" width="72" height="60" rx="9" fill={fill} stroke={stroke} strokeWidth={4} strokeDasharray="0" />;
   }
 }
 

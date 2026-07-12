@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -17,7 +18,30 @@ import (
 // backend is stdlib-only by design, and we need just two commands, so a full
 // Redis driver is unwarranted — this speaks RESP over a short-lived TCP conn.
 
-const probePathsKey = "netops:probe:paths"
+const (
+	// probePathsKey is the LEGACY single publish key. Every prober used to SET its
+	// whole registry here, so N probers silently CLOBBERED each other and no path
+	// carried an attribution. It is still written (rolling-upgrade compatibility)
+	// but readers prefer the per-vantage keys below.
+	probePathsKey = "netops:probe:paths"
+	// probePathsPrefix + <vantage> is the per-vantage publish key: one prober, one
+	// key. The path contract's identity includes the vantage (§2.2), so two probers
+	// measuring the same destination are two DISTINCT paths that may disagree.
+	probePathsPrefix = "netops:probe:paths:"
+	// probeVantagesKey is the SET of vantages that have published recently. It is
+	// how a reader enumerates them without a keyspace scan (no KEYS in prod).
+	probeVantagesKey = "netops:probe:vantages"
+	// probePathsTTL self-expires a dead prober's paths (seconds).
+	probePathsTTL = 300
+)
+
+// probePathsKeyFor is the publish key for one vantage.
+func probePathsKeyFor(vantage string) string {
+	if vantage == "" {
+		vantage = ProberID()
+	}
+	return probePathsPrefix + vantage
+}
 
 // RedisAddr returns host:port from REDIS_HOST/REDIS_PORT, or "" if unset — in
 // which case callers fall back to file / in-process sharing.
@@ -131,6 +155,11 @@ func redisSetEX(ctx context.Context, key, val string, ttlSec int) error {
 
 // FetchProbePaths reads the shared traceroute topology JSON published by the
 // prober. Returns ("", nil) when the key is absent.
+//
+// DEPRECATED for multi-vantage use: it reads the single legacy key, which every
+// prober overwrites. Use FetchProbePathsAll, which merges the per-vantage keys and
+// preserves attribution. Kept for the single-prober fallback and for callers that
+// only want an opaque blob.
 func FetchProbePaths(ctx context.Context) (string, error) {
 	c, err := redisDial(ctx)
 	if err != nil {
@@ -138,6 +167,138 @@ func FetchProbePaths(ctx context.Context) (string, error) {
 	}
 	defer c.Close()
 	return redisCmd(c, "GET", probePathsKey)
+}
+
+// redisRegisterVantage records that this prober has published, so readers can
+// enumerate vantages without scanning the keyspace. The set is refreshed with a TTL
+// well beyond the per-key TTL: a vantage that stops publishing simply has no paths
+// to read (its key expires), and eventually drops out of the set too.
+func redisRegisterVantage(ctx context.Context, vantage string) error {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if _, err := redisCmd(c, "SADD", probeVantagesKey, vantage); err != nil {
+		return err
+	}
+	_, err = redisCmd(c, "EXPIRE", probeVantagesKey, strconv.Itoa(probePathsTTL*12))
+	return err
+}
+
+// redisMembers reads a SET (RESP multi-bulk). The tiny client only spoke single
+// replies; enumerating vantages needs an array, so this parses one — still stdlib,
+// still ~20 lines, and it keeps us off KEYS/SCAN in production.
+func redisMembers(c net.Conn, key string) ([]string, error) {
+	if _, err := c.Write(encodeRESP("SMEMBERS", key)); err != nil {
+		return nil, err
+	}
+	r := bufio.NewReader(c)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	if len(line) == 0 || line[0] != '*' {
+		if len(line) > 0 && line[0] == '-' {
+			return nil, fmt.Errorf("redis: %s", trimCRLF(line[1:]))
+		}
+		return nil, nil // not an array (empty/unknown) → no members
+	}
+	n, err := strconv.Atoi(trimCRLF(line[1:]))
+	if err != nil || n <= 0 {
+		return nil, nil
+	}
+	if n > 1024 {
+		n = 1024 // bounded (§9): a corrupted count never allocates unbounded
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		hdr, err := r.ReadString('\n')
+		if err != nil {
+			return out, err
+		}
+		if len(hdr) == 0 || hdr[0] != '$' {
+			continue
+		}
+		ln, err := strconv.Atoi(trimCRLF(hdr[1:]))
+		if err != nil || ln < 0 {
+			continue
+		}
+		buf := make([]byte, ln+2)
+		if _, err := readFull(r, buf); err != nil {
+			return out, err
+		}
+		out = append(out, string(buf[:ln]))
+	}
+	return out, nil
+}
+
+// FetchProbePathsAll merges the traceroute paths published by EVERY vantage, each
+// path attributed to the prober that measured it. This is the multi-vantage read:
+// the LAN vantage's client-anchored trace and the WAN prober's edge-anchored trace
+// are BOTH returned, as distinct paths (contract §2.2/§8), instead of whichever one
+// wrote last.
+//
+// Falls back to the legacy single key when no vantage has registered (a
+// pre-upgrade prober, or a single in-process collector).
+func FetchProbePathsAll(ctx context.Context) ([]PathResult, error) {
+	c, err := redisDial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	vantages, err := redisMembers(c, probeVantagesKey)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]PathResult{}
+	add := func(raw, vantage string) {
+		if raw == "" {
+			return
+		}
+		var paths []PathResult
+		if json.Unmarshal([]byte(raw), &paths) != nil {
+			return
+		}
+		for _, p := range paths {
+			if p.VantageID == "" {
+				p.VantageID = vantage // a pre-upgrade prober published without attribution
+			}
+			k := pathKeyFor(p.VantageID, p.Dst, p.Method)
+			if prev, ok := seen[k]; ok && prev.TS.After(p.TS) {
+				continue // keep the newest measurement of the same path
+			}
+			seen[k] = p
+		}
+	}
+	for _, v := range vantages {
+		raw, err := redisCmd(c, "GET", probePathsKeyFor(v))
+		if err != nil {
+			continue // a dead vantage's key has expired — not an error
+		}
+		add(raw, v)
+	}
+	if len(seen) == 0 {
+		raw, err := redisCmd(c, "GET", probePathsKey) // legacy single key
+		if err != nil {
+			return nil, err
+		}
+		add(raw, "")
+	}
+	out := make([]PathResult, 0, len(seen))
+	for _, p := range seen {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].VantageID != out[j].VantageID {
+			return out[i].VantageID < out[j].VantageID
+		}
+		if out[i].Dst != out[j].Dst {
+			return out[i].Dst < out[j].Dst
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out, nil
 }
 
 // FetchTopologyLinks reads + merges the neighbour records published by every

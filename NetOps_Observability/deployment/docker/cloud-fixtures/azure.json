@@ -8,39 +8,38 @@
       "resource_arn_or_uri": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/correlix-faultlab/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01",
       "resource_type": "compute:virtualMachine",
       "resource_name": "correlix-app-host-01",
-      "private_ips": ["10.61.10.10"],
-      "tags": {"app": "store", "env": "lab", "owner": "correlix", "project": "correlix-faultlab"},
+      "private_ips": [
+        "10.61.10.10"
+      ],
+      "public_ips": [],
+      "tags": {
+        "app_id": "shared",
+        "auto_stop": "true",
+        "ttl_hours": "0"
+      },
+      "owner": "",
+      "env": "",
       "source": "cloud_api",
-      "confidence": "confirmed"
-    },
-    {
-      "region": "westus2",
-      "resource_id": "compose:azure:report",
-      "resource_type": "compose:stack",
-      "resource_name": "report-processor",
-      "private_ips": ["10.61.10.10"],
-      "tags": {"app": "report", "env": "lab", "owner": "correlix"},
-      "source": "cloud_api",
-      "confidence": "confirmed"
-    },
-    {
-      "region": "westus2",
-      "resource_id": "compose:azure:booking",
-      "resource_type": "compose:stack",
-      "resource_name": "booking-microservices",
-      "private_ips": ["10.61.10.10"],
-      "tags": {"app": "booking", "env": "lab", "owner": "correlix"},
-      "source": "cloud_api",
-      "confidence": "confirmed"
+      "confidence": "strong"
     },
     {
       "region": "westus2",
       "resource_id": "correlix-vpn-nat-01",
+      "resource_arn_or_uri": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/correlix-faultlab/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
       "resource_type": "compute:virtualMachine",
       "resource_name": "correlix-vpn-nat-01",
-      "private_ips": ["10.61.2.10"],
-      "public_ips": ["20.9.199.16"],
-      "tags": {"project": "correlix-faultlab", "env": "lab"},
+      "private_ips": [
+        "10.61.2.10"
+      ],
+      "public_ips": [
+        "20.9.199.16"
+      ],
+      "tags": {
+        "auto_stop": "false",
+        "ttl_hours": "0"
+      },
+      "owner": "",
+      "env": "",
       "source": "cloud_api",
       "confidence": "strong"
     }

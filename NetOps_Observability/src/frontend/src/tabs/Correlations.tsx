@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath, TicketLinkRow, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrTimeline, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -446,8 +446,6 @@ export function CorrelationDetail({ id }: { id: string }) {
   const [obj, setObj] = useState<CorrObject | null>(null);
   const [timeline, setTimeline] = useState<CorrTimeline | null>(null);
   const [seams, setSeams] = useState<Record<string, Seam>>({});
-  const [probePaths, setProbePaths] = useState<ProbePath[]>([]);
-  const [deviceByIp, setDeviceByIp] = useState<Record<string, string>>({});
   const [replay, setReplay] = useState<CorrReplay | null>(null);
   const [replaying, setReplaying] = useState(false);
   const [err, setErr] = useState("");
@@ -466,16 +464,9 @@ export function CorrelationDetail({ id }: { id: string }) {
     api.seams("active")
       .then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } })
       .catch(() => { /* seam inventory optional */ });
-    // Live traceroute / STAMP paths — fuse real hop order into the Network-Path
-    // topology when a trace matches the RCA path's destination (else contextual).
-    api.probePaths()
-      .then((p) => { if (alive) setProbePaths(p ?? []); })
-      .catch(() => { /* no traces → topology stays contextual */ });
-    // Tenant-scoped device inventory → name traced hops by their mgmt address.
-    // RLS limits this to the caller's own devices (no cross-tenant naming leak).
-    api.devices()
-      .then((ds) => { if (alive) { const m: Record<string, string> = {}; (ds ?? []).forEach((d) => { if (d.address) m[d.address.trim()] = d.name; }); setDeviceByIp(m); } })
-      .catch(() => { /* no inventory → hops stay as IPs */ });
+    // NOTE: hop order comes from the BACKEND's service-path spine (contract §7).
+    // The UI no longer joins traceroutes or device inventory client-side to guess
+    // a path — that inference now lives server-side, with evidence per hop.
     return () => { alive = false; };
   }, [id]);
 
@@ -502,10 +493,10 @@ export function CorrelationDetail({ id }: { id: string }) {
   const rcaCase = useMemo(() => {
     if (!timeline || !obj) return null;
     const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps);
-    const graph = buildTopoGraph(timeline, seams, view, false, probePaths, deviceByIp);
+    const graph = buildTopoGraph(timeline, seams, view, false);
     if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
     return c;
-  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, probePaths, deviceByIp]);
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view]);
 
   if (err) return <div className="empty">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty">Loading…</div>;
@@ -554,8 +545,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       exportDisabled={!timeline}
       debugExtra={replayPanel}
       topologySlot={
-        <RcaTopology timeline={timeline} seams={seams} view={view}
-          probePaths={probePaths} deviceByIp={deviceByIp} height={300} />
+        <RcaTopology timeline={timeline} seams={seams} view={view} height={300} />
       }
       aiSlot={obj.correlation_id ? <RcaAskAi correlationId={obj.correlation_id} /> : null}
       timeImpactSlot={obj.correlation_id ? <RcaTimeImpact correlationId={obj.correlation_id} /> : null}

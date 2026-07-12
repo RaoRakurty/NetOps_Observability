@@ -2067,6 +2067,43 @@ export const api = {
   // #81 P3G — the REAL engine-formed cloud RCA object(s) for an app (corr_objects),
   // tenant-scoped. Empty data[] when the app has no active RCA (unknown stays first-class).
   cloudAppRca: (app: string) => request<ClickHouseResponse<CloudAppRcaRow>>(`/api/cloud/app-rca?app=${encodeURIComponent(app)}`),
+  // #81 P3H — the REAL cloud health / change / evidence surfaces (corr_signals +
+  // the cloud correlation objects), tenant-scoped and bounded to a 24h window.
+  // Empty lists when nothing landed — the UI shows its honest empty state.
+  cloudHealth: (app?: string, limit?: number) =>
+    request<{ signals: CloudHealthSignalRow[]; count: number; window_hours: number }>(`/api/cloud/health${cloudQS(app, limit)}`),
+  cloudChanges: (app?: string, limit?: number) =>
+    request<{ changes: CloudChangeRow[]; count: number; window_hours: number }>(`/api/cloud/changes${cloudQS(app, limit)}`),
+  cloudEvidence: (app?: string, limit?: number) =>
+    request<{ objects: CloudRcaObjectRow[]; evidence: CloudEvidenceRow[]; count: number; window_hours: number }>(`/api/cloud/evidence${cloudQS(app, limit)}`),
+};
+
+// shared query string for the cloud signal surfaces (optional app + limit).
+function cloudQS(app?: string, limit?: number): string {
+  const p = new URLSearchParams();
+  if (app) p.set("app", app);
+  if (limit) p.set("limit", String(limit));
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
+// Rows the backend already shapes for the UI tables (src/backend/cloud_signals.go).
+export type CloudHealthSignalRow = {
+  time: string; app: string; resource: string; signal: string; state: string;
+  metric: string; current: string; baseline: string; severity: string; source: string;
+};
+export type CloudChangeRow = {
+  time: string; app: string; resource: string; change_type: string; actor: string;
+  source: string; confidence: string; related_symptoms: string[];
+};
+export type CloudEvidenceRow = {
+  time: string; category: string; signal_type: string; app: string; resource: string;
+  source: string; confidence: string; reason: string; used_in_verdict: boolean;
+  rca_group: string; evidence_ref: string;
+};
+export type CloudRcaObjectRow = {
+  correlation_id: string; verdict_tier: string; confidence: number; top_hypothesis: string;
+  signal_count: number; state: string; window_start: string; apps: string[];
 };
 
 export type CloudAppRcaRow = {

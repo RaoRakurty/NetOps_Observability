@@ -887,6 +887,19 @@ services:
       WAN_ECHO_TARGETS: ${WAN_ECHO_TARGETS:-}
       WAN_ECHO_TCP_PORT: ${WAN_ECHO_TCP_PORT:-443}
       WAN_ECHO_INTERVAL: ${WAN_ECHO_INTERVAL:-30s}
+      # Service Path Graph (docs/design/service-path-graph-contract.md): prober
+      # traceroutes → immutable PathObservations/PathHops resolved through the §3
+      # ranked resolver, exported to /data/enrichment/path_graph.json for the
+      # correlation engine's edge-admission gate, served at /api/rca/{id}/path.
+      # DORMANT unless FEATURE_PATH_GRAPH=true. PATH_GRAPH_TENANT must be a real
+      # tenant (the engine drops empty-tenant objects, fail-closed). The address
+      # maps use "=" as the separator (IPv6-safe): vantage=addr / cidr=name.
+      FEATURE_PATH_GRAPH: ${FEATURE_PATH_GRAPH:-false}
+      PATH_GRAPH_TENANT: ${PATH_GRAPH_TENANT:-}
+      PATH_GRAPH_DATA_CLASS: ${PATH_GRAPH_DATA_CLASS:-live}
+      PATH_GRAPH_ENVIRONMENT: ${PATH_GRAPH_ENVIRONMENT:-prod}
+      PATH_GRAPH_VANTAGE_ADDRESSES: ${PATH_GRAPH_VANTAGE_ADDRESSES:-}
+      PATH_GRAPH_LOCAL_CONTEXTS: ${PATH_GRAPH_LOCAL_CONTEXTS:-}
       # Probe-event bus lane (#67 build ⑦): each STAMP/synthetics observation is
       # POSTed to Vector → netops.probes → correlation engine (active_probe
       # evidence). PROBER_ID is the observer identity for independence analysis.
@@ -1125,6 +1138,15 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     cap_add: [NET_RAW]
+    # Raw sockets REQUIRE this to be the root user: cap_add grants NET_RAW to the
+    # container's bounding set, but a non-root process starts with empty effective
+    # capabilities and the static binary carries no file caps (a setcap build stage
+    # would break the offline-build mandate, and Linux ping sockets — the
+    # unprivileged fallback — never surface intermediate TTL-exceeded hops, so
+    # they cannot power a traceroute). Root here is confined by the cap_drop ALL +
+    # single-capability + no-new-privileges envelope above; the prober holds no
+    # secrets and mounts nothing.
+    user: "0:0"
     environment:
       GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
       PROBER_ONLY: "true"

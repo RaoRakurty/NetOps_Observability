@@ -21,7 +21,14 @@ from datetime import datetime, timedelta, timezone
 
 from catalog import builtin_catalog
 from cloud_producers import cloud_signal
-from engine import SeamView, run_window
+from engine import (
+    SeamView,
+    TopologyAdjacency,
+    build_nodes,
+    resolve_grounding,
+    run_window,
+)
+from path_graph import EdgeType, ResolutionMethod
 from signals import (
     EntityType,
     ModalityClass,
@@ -31,6 +38,8 @@ from signals import (
     Signal,
     Source,
 )
+from test_path_graph import lab_path_view
+from test_path_graph import lab_signals as _lab_signals
 
 T0 = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -109,6 +118,78 @@ def test_cloud_symptom_plus_underlay_grounds_across_seam():
     # signature lands; the grounding + independence are proven here).
     observers = {s.observer.observer_id for n in snap.nodes for s in n.signals}
     assert observers == {"cloud:123:us-east-1", "vantage-agent-1"}, observers
+
+
+# ── the crux: cloud app ↔ on-prem network, with NO shared token ───────────────
+# Service Path Graph contract §10. The OLD gate could never form this edge: the app
+# node's tokens are application NAMES, the network node's are device names — they do
+# not intersect, so cloud RCA was a 2-node silo. The NEW gate resolves the app to its
+# endpoint (rank 4, the app's own deployment binding), the endpoint to a path hop
+# (rank 2/3, cloud NIC inventory), and the on-prem interface to another hop of the
+# SAME observed path — an explicit, time-bounded, tenant-scoped relationship chain.
+
+
+def test_cloud_app_and_onprem_network_ground_with_no_shared_token():
+    app, wan = _lab_signals()
+    nodes = build_nodes((app, wan))
+    a = next(n for n in nodes if n.entity_type is EntityType.APP)
+    w = next(n for n in nodes if n.entity_type is EntityType.INTERFACE)
+
+    # (1) THE PREMISE: not one token in common — the old gate is structurally unable
+    #     to relate these two, with or without seams.
+    assert not (a.tokens() & w.tokens()), a.tokens() & w.tokens()
+    assert resolve_grounding(a, w, (), TopologyAdjacency()) is None
+
+    # (2) With the explicit path objects, they ground into ONE object…
+    snaps = run_window([app, wan], builtin_catalog(), (), paths=lab_path_view())
+    objs = [s for s in snaps if len(s.nodes) == 2]
+    assert objs, f"app + wan-edge must ground into ONE object, got {[len(s.nodes) for s in snaps]}"
+    snap = objs[0]
+    assert len(snap.edges) == 1
+    e = snap.edges[0]
+    rel = e.grounding.relation
+
+    # (3) …via an EXPLICIT TYPED edge that states its evidence (§5).
+    assert rel is not None
+    assert rel.edge_type == EdgeType.CROSSES_SEAM.value, rel.edge_type
+    assert rel.method == ResolutionMethod.APP_ENDPOINT_BINDING.value  # rank 4, observed
+    assert rel.rank == 4 and rel.evidence_class == "observed"
+    assert rel.authoritative and e.grounding.authoritative
+    assert rel.evidence_ref and rel.observation_method == "traceroute_icmp"
+    assert rel.observed_at and rel.data_class == "live"
+    assert rel.seam_id == "sm-aws-dx"
+    # the relationship did NOT come from a token: no token is shared, and the
+    # relation's evidence is a path observation, not a name.
+    assert rel.ref == "obs-a-1" and not rel.evidence_ref.startswith("token:")
+
+    # (4) the unknown hop is PRESERVED, never bridged (§8).
+    assert rel.unknown_hops == (5,)
+    assert any("hop 5" in m for m in snap.ranking.evidence_missing), snap.ranking.evidence_missing
+
+    # (5) the object is no longer a single-plane silo: two planes, two observers.
+    assert {n.entity_type for n in snap.nodes} == {EntityType.APP, EntityType.INTERFACE}
+    observers = {s.observer.observer_id for n in snap.nodes for s in n.signals}
+    assert observers == {"cloud:123:us-east-1", "snmp-poller"}
+
+
+def test_cloud_rca_renders_the_ordered_spine():
+    """§7/§10: the backend hands the renderer an ORDERED spine — the UI never
+    computes hop order. The acceptance spine, in order, with the unknown hop kept."""
+    app, wan = _lab_signals()
+    snap = [s for s in run_window([app, wan], builtin_catalog(), (), paths=lab_path_view())
+            if len(s.nodes) == 2][0]
+    spine = snap.path_spine()
+    assert [e["address"] for e in spine["spine"]] == [
+        "172.40.40.92", "172.40.40.1", "10.70.245.122", "10.60.1.10", "",
+        "10.60.10.10", ""]
+    assert [e["label"] for e in spine["spine"]][-1] == "store-api"
+    assert [e["state"] for e in spine["spine"]][4] == "missing"       # preserved
+    assert spine["spine"][-1]["kind"] == "service"
+    assert [b["name"] for b in spine["boundaries"]] == ["LAN", "SD-WAN", "CLOUD",
+                                                        "UNKNOWN", "CLOUD"]
+    assert any(e["type"] == "EVIDENCE_MISSING" for e in spine["edges"])
+    assert all(e["evidence"]["ref"] for e in spine["edges"])          # §5
+    assert spine["edges"][-1]["type"] == "SERVICE_EXPOSED_BY_ENDPOINT"
 
 
 def test_cloud_change_then_app_orders_by_onset():

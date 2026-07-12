@@ -10,9 +10,11 @@
 import { api } from "../../services/api";
 import type {
   CloudAppRow, CloudResourceRow, CloudCoverageReport, CloudConfidence, CloudSource,
+  CloudHealthSignalRow, CloudChangeRow, CloudEvidenceRow, CloudRcaObjectRow,
 } from "../../services/api";
 import type {
   App, CloudResource, Coverage, UnknownContributor, Provider, Confidence, AttrSource, AppRca,
+  HealthSignal, ChangeEvent, EvidenceRow, EvidenceCategory, Health,
 } from "./types";
 
 // Sentinel for a numeric metric the platform does not measure yet (P3B–D).
@@ -184,5 +186,103 @@ export async function loadCoverage(): Promise<CoverageBundle> {
   return {
     coverage: toCoverage(r.coverage),
     unknowns: (r.top_unknown ?? []).map(toUnknown),
+  };
+}
+
+// ── Health / Change / Evidence (#81 P3H — LIVE cloud telemetry) ───────────────
+// These used to render sample rows. They now render ONLY signals that actually
+// landed from a connected AWS / Azure account (corr_signals, source=cloud). The
+// backend already shapes each row for the table (src/backend/cloud_signals.go);
+// this layer only re-keys to the view types and defends the enums. When nothing
+// landed, the list is empty and the tab shows its honest empty state — never a
+// fabricated app, resource or event.
+
+function health(h: string | undefined): Health {
+  switch (h) {
+    case "healthy": case "degraded": case "down": case "unknown": return h;
+    default: return "unknown";
+  }
+}
+function severity(s: string | undefined): HealthSignal["severity"] {
+  return s === "critical" || s === "warning" ? s : "info";
+}
+const CHANGE_TYPES: ChangeEvent["changeType"][] = [
+  "deploy", "config_change", "security_policy_change", "route_change",
+  "scale_change", "iam_change", "dns_change", "cert_change", "unknown",
+];
+function changeType(t: string | undefined): ChangeEvent["changeType"] {
+  const hit = CHANGE_TYPES.find((c) => c === t);
+  return hit ?? "unknown";
+}
+// The engine records only two evidence roles today: a signal it GROUNDED into an
+// object (supporting) and its own declared gaps (missing). Anything else would be
+// a category we invented — it degrades to "supporting" rather than being claimed.
+function evidenceCategory(c: string | undefined): EvidenceCategory {
+  return c === "missing" ? "missing" : "supporting";
+}
+
+function toHealthSignal(r: CloudHealthSignalRow): HealthSignal {
+  return {
+    time: r.time, app: r.app, resource: r.resource, signal: r.signal,
+    state: health(r.state), metric: r.metric, current: r.current,
+    baseline: r.baseline, severity: severity(r.severity), source: r.source,
+  };
+}
+
+function toChangeEvent(r: CloudChangeRow): ChangeEvent {
+  return {
+    time: r.time, app: r.app, resource: r.resource, changeType: changeType(r.change_type),
+    actor: r.actor, source: r.source, confidence: conf(r.confidence),
+    relatedSymptoms: r.related_symptoms ?? [],
+  };
+}
+
+function toEvidenceRow(r: CloudEvidenceRow): EvidenceRow {
+  return {
+    time: r.time, category: evidenceCategory(r.category), signalType: r.signal_type,
+    app: r.app, resource: r.resource, source: r.source, confidence: conf(r.confidence),
+    reason: r.reason, usedInVerdict: !!r.used_in_verdict,
+    rcaGroup: r.rca_group, evidenceRef: r.evidence_ref,
+  };
+}
+
+// A cloud correlation object the engine actually formed (the Overview "Active
+// cloud RCA" table + the evidence ledger's grouping).
+export interface CloudRcaObject {
+  correlationId: string;
+  verdictTier: string;
+  confidence: number;
+  topHypothesis: string;
+  signalCount: number;
+  state: string;
+  windowStart: string;
+  apps: string[];
+}
+function toRcaObject(r: CloudRcaObjectRow): CloudRcaObject {
+  return {
+    correlationId: r.correlation_id, verdictTier: r.verdict_tier || "undetermined",
+    confidence: typeof r.confidence === "number" ? r.confidence : 0,
+    topHypothesis: r.top_hypothesis || "—", signalCount: r.signal_count ?? 0,
+    state: r.state || "open", windowStart: r.window_start, apps: r.apps ?? [],
+  };
+}
+
+export async function loadHealthSignals(app?: string): Promise<HealthSignal[]> {
+  const r = await api.cloudHealth(app);
+  return (r.signals ?? []).map(toHealthSignal);
+}
+
+export async function loadChangeEvents(app?: string): Promise<ChangeEvent[]> {
+  const r = await api.cloudChanges(app);
+  return (r.changes ?? []).map(toChangeEvent);
+}
+
+export type EvidenceBundle = { objects: CloudRcaObject[]; rows: EvidenceRow[] };
+
+export async function loadEvidence(app?: string): Promise<EvidenceBundle> {
+  const r = await api.cloudEvidence(app);
+  return {
+    objects: (r.objects ?? []).map(toRcaObject),
+    rows: (r.evidence ?? []).map(toEvidenceRow),
   };
 }

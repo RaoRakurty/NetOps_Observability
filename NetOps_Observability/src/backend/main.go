@@ -103,6 +103,15 @@ type server struct {
 	appOverrides        appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
 	cloud               cloudStore               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
 	cloudApp            *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
+	// Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md):
+	// the ordered LAN→SD-WAN→carrier/cloud→application RCA spine. pathGraph is the
+	// storage (PG registries + CH observation/hop streams, or in-memory on the file
+	// backend); pathFacts and corrPath are the DI seams for the §3 fact base and the
+	// correlation→path linkage (nil = the real inventories / ClickHouse).
+	pathGraph           pathGraphStore
+	pathFacts           pathFactSource
+	corrPath            corrPathRef
+	remotePaths         *remotePathStore // remote-vantage traceroute pushes (POST /api/probe/paths)
 	integrations        *integrationStore        // integration-platform persistence (nil on file backend)
 	providers           *integration.Registry    // inbound provider translators (registry)
 	nms                 *nmsRuntime              // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
@@ -499,6 +508,8 @@ func newServer() *server {
 	srv.appOverrides = newAppCatalogStore()                 // Application Identification operator-defined overrides (#81 P1c)
 	srv.cloud = newCloudStore()                             // Cloud App Observability inventory (#81 P3A)
 	srv.cloudApp = newCloudAppResolver(srv.cloud)           // Cloud identity-map → appid bridge (#81 P3F+1)
+	srv.pathGraph = newPathGraphStore()                     // Service Path Graph storage (contract v1); ingester starts in main()
+	srv.remotePaths = newRemotePathStore()                  // remote-vantage path pushes (the LAN vantage's transport)
 	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
 	}
@@ -602,6 +613,15 @@ func main() {
 	// Cloud App Observability inventory (#81 P3A): load fixtures into the store.
 	// No-op unless CLOUD_FIXTURES_DIR set (real per-tenant SDK connectors come later).
 	srv.startCloudInventory(ctx)
+	// Service Path Graph ingest (contract v1): the prober's traceroutes → immutable
+	// PathObservations + ordered PathHops, each hop resolved through the §3 ranked
+	// resolver. Opt-in (FEATURE_PATH_GRAPH=true), dormant by default.
+	srv.startPathGraphIngest(ctx)
+	// …and export the resulting path graph to the shared enrichment volume
+	// (/data/enrichment/path_graph.json), which is what the correlation engine's
+	// NEW ranked edge-admission gate reads instead of token overlap. Same mechanism
+	// as seams.json; no-op without TENANT_ENRICHMENT_DIR.
+	srv.startPathGraphEnrichment(ctx)
 	// Cloud identity-map → appid bridge (#81 P3F+1): index the cloud inventory's
 	// (private-IP/ENI/resource → app) mappings into the shared resolver so flows/logs
 	// to cloud resources name their app. Runs after the fixture load above.
@@ -926,6 +946,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats)                       // exact path wins over the prefix below
 	mux.HandleFunc("/api/correlations/undetermined-frequency", s.handleUndeterminedFrequency) // #80 signature-governance: ranked recurring undetermined gap-shapes
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
+	// Service Path Graph (frozen contract §7): GET /api/rca/{correlation_id}/path —
+	// the ORDERED spine. The backend decides hop order; the UI never computes it.
+	mux.HandleFunc("/api/rca/", s.handleRcaPath)
 	mux.HandleFunc("/api/events/feed", s.handleEventsFeed)
 	mux.HandleFunc("/api/paths/health", s.handlePathsHealth)
 	mux.HandleFunc("/api/reliability/rollups", s.handleReliabilityRollups)                    // RCA Time Intelligence reliability rollups (#84)
@@ -950,6 +973,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/attribution/coverage", s.handleCloudCoverage)
 	mux.HandleFunc("/api/cloud/ingestion", s.handleCloudIngestion)
 	mux.HandleFunc("/api/cloud/app-rca", s.handleCloudAppRca)
+	mux.HandleFunc("/api/cloud/health", s.handleCloudHealth)
+	mux.HandleFunc("/api/cloud/changes", s.handleCloudChanges)
+	mux.HandleFunc("/api/cloud/evidence", s.handleCloudEvidence)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)

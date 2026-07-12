@@ -59,6 +59,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
 	"/api/correlations/stats":                  "scoped",
 	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
+	"/api/rca/":                                "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's
 	// own incidents: chRows injects chTenantScope, ClickHouse row policies enforce it
 	// (TestChTenantScope). A tenant never sees another tenant's MTTI/MTBF/offenders.
@@ -192,6 +193,13 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/identity-map":         "scoped",
 	"/api/cloud/attribution/coverage": "scoped",
 	"/api/cloud/app-rca":              "scoped",
+	// #81 P3H cloud telemetry reads — every query carries the caller's tenant_scope,
+	// which the corr_signals / corr_signals_archive / corr_objects FORCE row policies
+	// enforce in ClickHouse (see cloud_signals.go, cloud_ingestion.go).
+	"/api/cloud/ingestion": "scoped",
+	"/api/cloud/health":    "scoped",
+	"/api/cloud/changes":   "scoped",
+	"/api/cloud/evidence":  "scoped",
 
 	// ── identity/admin, scoped to caller's tenant/org by the handler ──
 	"/api/audit":             "adminScoped",

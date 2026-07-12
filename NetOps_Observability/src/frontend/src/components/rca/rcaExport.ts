@@ -58,6 +58,10 @@ function shapeInner(kind: ShapeKind, fill: string, stroke: string): string {
     case "cloud": return `<path d="M28 74 C16 74 12 58 24 54 C20 38 44 30 52 42 C58 30 82 34 80 52 C92 54 90 74 76 74 Z" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
     case "vantage": return `<circle cx="50" cy="50" r="42" fill="none" stroke="${stroke}" stroke-width="2" opacity="0.4"/><circle cx="50" cy="50" r="28" fill="none" stroke="${stroke}" stroke-width="2.5" opacity="0.7"/><circle cx="50" cy="50" r="13" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
     case "target": return `<circle cx="50" cy="50" r="42" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/><circle cx="50" cy="50" r="26" fill="none" stroke="${stroke}" stroke-width="3" opacity="0.7"/><circle cx="50" cy="50" r="10" fill="${stroke}"/>`;
+    // blind hop (no response / filtered) — dashed outline, never a solid device
+    case "unknown": return `<circle cx="50" cy="50" r="40" fill="${fill}" stroke="${stroke}" stroke-width="4" stroke-dasharray="9 7" stroke-linecap="round"/>`;
+    // off-spine evidence branch (metrics/logs/flows/alerts/traces) — a note, not a device
+    case "evidence": return `<rect x="14" y="20" width="72" height="60" rx="9" fill="${fill}" stroke="${stroke}" stroke-width="4"/>`;
     default: return `<circle cx="50" cy="50" r="42" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
   }
 }
@@ -187,6 +191,24 @@ function topoGraphSvg(g: TopoGraph): string {
   const markers = ["good", "warn", "bad", "faint"].map((st) =>
     `<marker id="ahg-${st}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${st === "faint" ? "#b7c0d0" : EDGE[st]}"/></marker>`).join("");
   let parts = "";
+
+  // BOUNDARY BANDS (LAN / SD-WAN / CARRIER / CLOUD) — drawn FIRST so they sit
+  // behind the spine, exactly like the on-screen band layer. Grouping is decided
+  // server-side (contract §7 `boundaries[]`); the report only draws it.
+  const laid: { from: number; to: number; lane: number }[] = [];
+  for (const b of g.bands ?? []) {
+    const a = byId.get(b.fromId), z = byId.get(b.toId);
+    if (!a || !z) continue;
+    // boundaries may overlap (SD-WAN inside CARRIER) — nest them, same as on screen
+    let lane = 0;
+    while (laid.some((p) => p.lane === lane && p.from <= b.to && b.from <= p.to)) lane++;
+    laid.push({ from: b.from, to: b.to, lane });
+    const inset = lane * 5;
+    const x0 = cx(a) - NW / 2 - 4 + inset, x1 = cx(z) + NW / 2 + 4 - inset;
+    const by = PADTOP - 8 + inset, bh = ICON + 62 - inset * 2;
+    parts += `<rect x="${x0}" y="${by}" width="${Math.max(24, x1 - x0)}" height="${bh}" rx="10" fill="${b.color}12" stroke="${b.color}66" stroke-dasharray="5 4"/>`;
+    parts += `<text x="${x0 + 8}" y="${by + 11}" font-size="8" font-weight="800" letter-spacing="0.6" fill="${b.color}">${esc(b.name.toUpperCase())}</text>`;
+  }
 
   // edges — straight connector trimmed to each icon's EDGE along the true edge
   // direction (not just horizontally), so arrowheads never overlap the device

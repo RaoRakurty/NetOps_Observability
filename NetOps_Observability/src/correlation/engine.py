@@ -21,17 +21,39 @@ import hashlib
 import json
 import math
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from catalog import Catalog
 from directed_topology import Oracle, RecordingOracle
 from directed_topology import Verdict as _Verdict
 from layers import CausalLayer, layer_of, osi_label
+from path_graph import (
+    CONTRACT_VERSION,
+    DataClass,
+    EvidenceClass,
+    PathGraphView,
+    PathIndex,
+    Relation,
+    ResolutionMethod,
+    is_live,
+    resource_identity_relation,
+    seam_relation,
+    shared_token_relation,
+    spine_of,
+    topology_link_relation,
+    worst_data_class,
+)
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
+from verdicts import Verdict as GateVerdict
+from verdicts import VerdictTier
 
-ENGINE_SEMVER = "2.2.0"  # 2.2.0: C7.3 live directed-topology vote #2 (NetFlow) + adjacency/orientation embedding
+ENGINE_SEMVER = "3.0.0"  # 3.0.0: Service Path Graph v1 — token overlap DEMOTED to rank-7
+# candidate; edge admission is the ranked, evidence-bearing, tenant-scoped relationship
+# gate (contract §3). Major bump: the meaning of an edge changed (an edge now carries a
+# rank + an evidence block, and only ranks 1–5 may be authoritative).
+# 2.2.0: C7.3 live directed-topology vote #2 (NetFlow) + adjacency/orientation embedding
 # 2.1.0: C4 per-kind causal-layer direction prior (§4.3 vote #3)
 
 # Default onset uncertainty when a signal does not carry one (episodes stamp
@@ -49,6 +71,8 @@ class EngineConfig:
     w_topo_seam: float = 0.8              # grounding via a seam instance
     w_topo_containment: float = 0.9       # grounding via same-device containment
     w_topo_adjacency: float = 0.65        # grounding via L2/L3 adjacency (§4.2 ladder)
+    w_topo_path: float = 0.9              # OBSERVED explicit path relation (contract §3 ranks 1–5)
+    w_topo_inferred: float = 0.5          # INFERRED control-plane relation (§3 rank 6, supporting)
     w_topo_stale_cap: float = 0.4         # §8: cap w_topo when the topology view is stale
     reinforce_cross_modality: float = 1.25
     direction_conf: float = 0.8           # claimed only on 2-of-3 agreement
@@ -160,6 +184,46 @@ class Node:
             toks.update(p for p in self.entity_id.split("->") if p and p not in observers)
         return frozenset(toks)
 
+    def identity_refs(self) -> frozenset[str]:
+        """The node's STRUCTURAL identity — the refs an explicit relationship may be
+        looked up by (contract §3): its entity id, the device part of a device-scoped
+        id, the endpoints of a segment id, and the typed form `entity_type:entity_id`
+        (how cloud/path inventory names a resource).
+
+        Deliberately EXCLUDES free-text `entity_tokens` and `site`: those are the
+        rank-7 coincidence surface and may never resolve an endpoint, a hop or a seam
+        membership. `tokens()` (below) keeps them — but only as candidates."""
+        refs = {self.entity_id, f"{self.entity_type.value}:{self.entity_id}"}
+        observers = {s.observer.observer_id for s in self.signals if s.observer.observer_id}
+        dp = self.device_part()
+        if dp:
+            refs.add(dp)
+        if "->" in self.entity_id:
+            # the left side of a probe path is the VANTAGE (== observer), not a subject.
+            refs.update(p for p in self.entity_id.split("->") if p and p not in observers)
+        return frozenset(r for r in refs if r)
+
+    def declared_path_ids(self) -> frozenset[str]:
+        """§6 rule 5 — a signal that declares its own path_id may only join through
+        THAT path: a TCP:443 path and an ICMP path to the same destination are
+        different objects and must be allowed to disagree (§8)."""
+        return frozenset(s.path_id for s in self.signals if s.path_id)
+
+    def window(self) -> tuple[datetime, datetime]:
+        """The node's activity interval [onset … last signal] — the time range every
+        join is checked against (§6 rule 2)."""
+        return (self.onset, self.signals[-1].ts)
+
+    def data_class(self) -> str:
+        """§1 — the least-live data_class among this node's signals. Absent ⇒ live
+        (every pre-contract producer is a live producer); an explicit synthetic/lab/
+        replay stamp propagates and blocks confirmation."""
+        return worst_data_class([
+            str(s.attrs.get("data_class", DataClass.LIVE.value))
+            if isinstance(s.attrs, dict) else DataClass.LIVE.value
+            for s in self.signals
+        ])
+
     def device_part(self) -> str | None:
         """The single device this node sits on, for L2/L3 adjacency grounding:
         'leaf1:Ethernet1' → 'leaf1'; a bare device id → itself; a path/segment
@@ -208,13 +272,54 @@ def build_nodes(window: tuple[Signal, ...]) -> tuple[Node, ...]:
     return tuple(nodes)
 
 
+# The resolution methods that come FROM a path observation (as opposed to identity,
+# seam inventory or an LLDP link) — i.e. the ones whose `ref` is an observation_id.
+_PATH_OBSERVATION_METHODS = frozenset({
+    ResolutionMethod.ENDPOINT_BINDING.value,
+    ResolutionMethod.HOP_INVENTORY.value,
+    ResolutionMethod.APP_ENDPOINT_BINDING.value,
+    ResolutionMethod.FLOW_NAT_STITCH.value,
+})
+
+
+def RANK_OBSERVED_PATH(method: str) -> bool:  # noqa: N802 — reads as a predicate
+    return method in _PATH_OBSERVATION_METHODS
+
+
 # ── stage [4]: the grounding gate ─────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class Grounding:
+    """Why an edge exists. `kind`/`ref` are the FROZEN corr_edges columns
+    (Enum8('seam','topo') + a non-empty ref); `relation` is the contract's explicit,
+    ranked, evidence-bearing relationship (§3/§5) — the thing that actually decides
+    whether this edge may be treated as authoritative. It is carried in memory, in
+    the snapshot blob and in the typed edge row; it does NOT overload grounding_ref
+    (the corr_edges migration that gives it its own columns is stated in the report)."""
+
     kind: str   # 'seam' | 'topo'  (CH grounding_kind enum; adjacency rides 'topo')
-    ref: str    # seam_id | 'shared:<token>' (containment) | 'adj:<a>--<b>' (adjacency)
+    ref: str    # seam_id | 'shared:<token>' (containment) | 'adj:<a>--<b>' | 'path:<obs>'
+    relation: Relation | None = None
+
+    @property
+    def authoritative(self) -> bool:
+        """No relation ⇒ NOT authoritative (fail-closed). Rank 6 (inferred) and
+        rank 7 (candidate) are never authoritative — §3."""
+        return self.relation is not None and self.relation.authoritative
+
+    @property
+    def rank(self) -> int:
+        return self.relation.rank if self.relation else 7
+
+    @property
+    def evidence_class(self) -> str:
+        return (self.relation.evidence_class if self.relation
+                else EvidenceClass.CANDIDATE.value)
+
+    @property
+    def data_class(self) -> str:
+        return self.relation.data_class if self.relation else DataClass.LIVE.value
 
 
 @dataclass(frozen=True)
@@ -244,28 +349,81 @@ class TopologyAdjacency:
 def resolve_grounding(
     a: Node, b: Node, seams: tuple[SeamView, ...],
     adjacency: TopologyAdjacency = TopologyAdjacency(),
+    paths: PathIndex | None = None,
 ) -> Grounding | None:
-    """HARD constraint (owner, e4f2236): admit ONLY seam or explicit topology
-    grounding. Returns None for everything else — the caller counts a
-    topology-gap hint and NEVER builds the edge. Deterministic: seams scanned in
-    seam_id order; then same-device containment; then L2/L3 adjacency. First wins."""
+    """The RANKED relationship gate (contract §3) — this REPLACES token-overlap
+    admission.
+
+    OLD (forbidden): first shared token wins → Grounding('topo', 'shared:<tok>'),
+    treated as fully authoritative. Any single coincidental string admitted an edge,
+    and a cloud APP node (application-name tokens) could never intersect a network
+    node (addresses/device names) — so no cloud↔network edge could ever form.
+
+    NEW: the strongest EXPLICIT relationship wins, in rank order:
+
+      rank 1  same resource identity (device containment)              observed
+      rank 2  seam membership by structural identity / endpoint binding observed
+      rank 3  path-hop inventory resolution · L2/L3 topology link       observed
+      rank 4  application → endpoint binding                           observed
+      rank 5  flow / NAT session stitch                                observed
+      rank 6  cloud route / BGP / SD-WAN policy relation               INFERRED
+      rank 7  shared token / name similarity                           CANDIDATE
+
+    Ranks 1–5 may be authoritative. Rank 6 supports but never asserts that traffic
+    took the path and never confirms alone. Rank 7 is KEPT (so an object still
+    forms) but DEMOTED and LABELLED — `Grounding.authoritative` is False and the
+    verdict gate in run_window() refuses to confirm on it.
+
+    Every relation states its evidence (§5); one that cannot is not returned.
+    Deterministic: paths by observation id, seams by seam_id, tokens by min()."""
+    # ranks 1–5 (explicit path/endpoint/service/NAT relationships) ─────────────
+    if paths is not None:
+        rel = paths.relate(
+            a.identity_refs(), b.identity_refs(), a.window(), b.window(),
+            a.declared_path_ids(), b.declared_path_ids(),
+        )
+        if rel is not None and rel.rank <= 5:
+            return Grounding("topo", f"path:{rel.ref}", rel)
+    # rank 2 — seam membership. STRUCTURAL identity only (entity id / device part /
+    # segment endpoint): matching a seam endpoint against a free-text token is a name
+    # coincidence, not a membership, and is demoted to rank 7 below.
+    ia, ib = a.identity_refs(), b.identity_refs()
     ta, tb = a.tokens(), b.tokens()
+    token_seam: SeamView | None = None
     for seam in sorted(seams, key=lambda s: s.seam_id):
         ev = seam.endpoint_values() | {seam.seam_id}
-        if (ta & ev) and (tb & ev):
-            return Grounding("seam", seam.seam_id)
-    # Explicit containment: an interface/path on the same device as the peer
-    # entity is a modeled topology relation, not a bare co-occurrence.
-    shared = ta & tb
-    if shared:
-        return Grounding("topo", "shared:" + min(sorted(shared)))
-    # L2/L3 adjacency: two DIFFERENT devices joined by a known link (LLDP/CDP/BGP-LS)
-    # are a modeled topology relation — this is what lets a fabric link-flap or an
-    # IGP adjacency fault correlate across the two ends (§4.2 'L2/L3 adjacent device').
+        if (ia & ev) and (ib & ev):
+            return Grounding("seam", seam.seam_id, seam_relation(seam.seam_id, True))
+        if token_seam is None and (ta & ev) and (tb & ev):
+            token_seam = seam
+    # rank 1 — resource identity: an interface/path on the SAME device as the peer
+    # (the shared ref is a structural identity of both, not a declared label).
+    shared_ident = ia & ib
+    if shared_ident:
+        ref = min(sorted(shared_ident))
+        return Grounding("topo", "shared:" + ref, resource_identity_relation(ref))
+    # rank 3 — L2/L3 adjacency: two DIFFERENT devices joined by an inventoried link
+    # (LLDP/CDP/BGP-LS), observed by the devices themselves.
     da, db = a.device_part(), b.device_part()
     if da and db and adjacency.adjacent(da, db):
         lo, hi = sorted((da, db))
-        return Grounding("topo", f"adj:{lo}--{hi}")
+        return Grounding("topo", f"adj:{lo}--{hi}", topology_link_relation(lo, hi))
+    # rank 6 — INFERRED (cloud route / policy). Supporting only.
+    if paths is not None:
+        rel = paths.relate(ia, ib, a.window(), b.window(),
+                           a.declared_path_ids(), b.declared_path_ids())
+        if rel is not None:
+            return Grounding("topo", f"route:{rel.ref}", rel)
+    # rank 7 — CANDIDATE ONLY. A shared token (or a seam matched only by a token) is
+    # a coincidence detector: no validity window, no direction, no NAT, no tenancy.
+    # It still forms an edge (an object is not lost) but it is never authoritative.
+    if token_seam is not None:
+        return Grounding("seam", token_seam.seam_id,
+                         seam_relation(token_seam.seam_id, False))
+    shared = ta & tb
+    if shared:
+        tok = min(sorted(shared))
+        return Grounding("topo", "shared:" + tok, shared_token_relation(tok))
     return None
 
 
@@ -300,6 +458,32 @@ class Edge:
             "direction_conf": round(self.direction_conf, 4),
             "direction_basis": self.direction_basis,
         }
+
+    def to_typed_row(self, tenant_id: str, correlation_id: str, version: int) -> dict:
+        """The contract §5 edge: an explicit type + the evidence block every edge
+        MUST carry (evidence_ref, observation_method, confidence, observed_at,
+        data_class). Written to the corr_edges v2 columns (migration stated in the
+        report); until they exist this is the in-memory/API shape and is embedded in
+        the snapshot's grounding context. An edge that cannot state its evidence is
+        never produced — Relation enforces that at construction."""
+        rel = self.grounding.relation
+        row = {
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "version": version,
+            "from_node": self.from_node,
+            "to_node": self.to_node,
+            "grounding_kind": self.grounding.kind,
+            "grounding_ref": self.grounding.ref,
+            "contract_version": CONTRACT_VERSION,
+        }
+        row.update(rel.to_dict() if rel else {
+            "edge_type": "", "method": ResolutionMethod.SHARED_TOKEN.value, "rank": 7,
+            "evidence_class": EvidenceClass.CANDIDATE.value, "confidence": "unknown",
+            "authoritative": False, "evidence_ref": "", "observation_method": "",
+            "observed_at": "", "data_class": DataClass.LIVE.value,
+        })
+        return row
 
 
 # OSI-flavored layer prior over entity types: lower layers cause higher ones.
@@ -358,6 +542,7 @@ def build_edges(
     adjacency: TopologyAdjacency = TopologyAdjacency(),
     topology_stale: bool = False,
     directed: Oracle | None = None,
+    paths: PathIndex | None = None,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
     deterministic node order; the earlier-onset node is always from_node."""
@@ -368,7 +553,7 @@ def build_edges(
             a, b = nodes[i], nodes[j]
             if b.onset < a.onset or (b.onset == a.onset and b.key < a.key):
                 a, b = b, a
-            grounding = resolve_grounding(a, b, seams, adjacency)
+            grounding = resolve_grounding(a, b, seams, adjacency, paths)
             if grounding is None:
                 gap_hints += 1
                 continue
@@ -384,7 +569,13 @@ def build_edges(
             a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
             gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
             w_t = math.exp(-gap / cfg.tau_s)
-            if grounding.kind == "seam":
+            if grounding.ref.startswith("path:"):
+                # An OBSERVED path relation (ranks 1–5): measured, evidence-bearing.
+                w_topo = cfg.w_topo_path
+            elif grounding.ref.startswith("route:"):
+                # INFERRED (§4): a control-plane relation may support, never assert.
+                w_topo = cfg.w_topo_inferred
+            elif grounding.kind == "seam":
                 w_topo = cfg.w_topo_seam
             elif grounding.ref.startswith("adj:"):
                 w_topo = cfg.w_topo_adjacency
@@ -445,6 +636,20 @@ class ObjectSnapshot:
     # the app_impact() PROJECTION; deliberately NOT in content_hash, so an object
     # with no matched identity is byte-identical to pre-P5 and replays unchanged.
     identity_signals: tuple[Signal, ...] = ()
+    # ── Service Path Graph contract (v1) ─────────────────────────────────────
+    # §1 provenance of the OBJECT itself: the least-live data_class of everything
+    # that contributed (signals + the relations its edges were built on) plus the
+    # scenario/run it belongs to. `data_class != live` can NEVER be confirmed —
+    # enforced in run_window(), not by convention.
+    data_class: str = DataClass.LIVE.value
+    environment: str = "prod"
+    scenario_id: str = ""
+    run_id: str = ""
+    # The path objects this object grounded against — embedded (like seams) so the
+    # snapshot replays deterministically against the SAME observations, never live
+    # state. Empty for objects that used no path relation → blob byte-identical to
+    # pre-contract (no version churn on existing objects).
+    paths: PathGraphView = field(default_factory=PathGraphView)
 
     def signal_count(self) -> int:
         return sum(len(n.signals) for n in self.nodes)
@@ -573,6 +778,65 @@ class ObjectSnapshot:
     def layer_coverage_blob(self) -> str:
         return json.dumps(self.layer_coverage(), separators=(",", ":"), sort_keys=True)
 
+    # ── Service Path Graph contract projections ──────────────────────────────
+
+    def path_relations(self) -> tuple[Relation, ...]:
+        """The explicit relations (§3) this object's edges were admitted on."""
+        return tuple(e.grounding.relation for e in self.edges
+                     if e.grounding.relation is not None)
+
+    def used_observation_ids(self) -> tuple[str, ...]:
+        return tuple(sorted({
+            r.ref for r in self.path_relations()
+            if RANK_OBSERVED_PATH(r.method) and r.ref
+        }))
+
+    def has_authoritative_edge(self) -> bool:
+        """§3: at least one edge admitted on an OBSERVED rank-1..5 relationship."""
+        return any(e.grounding.authoritative for e in self.edges)
+
+    def provenance(self) -> dict:
+        """§1 — the object's own provenance. `provenance_id` is deterministic
+        (uuid5 over correlation_id + content hash), so the same evidence always
+        yields the same evidence handle: replay-safe, never random."""
+        producers = sorted({s.observer.observer_id for n in self.nodes for s in n.signals})
+        return {
+            "tenant_id": self.tenant_id,
+            "data_class": self.data_class,
+            "environment": self.environment,
+            "scenario_id": self.scenario_id,
+            "run_id": self.run_id,
+            "producer_id": f"correlation-engine/{self.engine_ver}",
+            "observed_by": producers,
+            "provenance_id": str(uuid.uuid5(
+                SIGNAL_NS, f"prov|{self.correlation_id}|{self.content_hash()}")),
+            "contract_version": CONTRACT_VERSION,
+        }
+
+    def path_spine(self) -> dict:
+        """§7 — the ORDERED spine for the RCA API/renderer, computed SERVER-side from
+        the observation this object grounded on (hop order is data, not layout).
+        Missing/filtered hops are preserved as explicit unknown segments. Returns {}
+        when the object has no path observation — the UI then says so, and must never
+        invent a spine (renderer contract §7)."""
+        used = set(self.used_observation_ids())
+        obs = [o for o in self.paths.observations if o.observation_id in used]
+        if not obs:
+            return {}
+        newest = max(obs, key=lambda o: (o.observed_at, o.observation_id))
+        out = spine_of(newest, self.paths)
+        out["correlation_id"] = self.correlation_id
+        out["tenant_id"] = self.tenant_id
+        return out
+
+    def path_spine_blob(self) -> str:
+        return json.dumps(self.path_spine(), separators=(",", ":"), sort_keys=True)
+
+    def to_typed_edge_rows(self, version: int) -> list[dict]:
+        """§5 typed edges with their evidence blocks (corr_edges v2 / API shape)."""
+        return [e.to_typed_row(self.tenant_id, self.correlation_id, version)
+                for e in self.edges]
+
     def hypotheses_blob(self) -> str:
         """The corr_objects.hypotheses JSON: the ranking PLUS the grounding
         context — replay rehydrates seams from here, never from live state."""
@@ -597,6 +861,32 @@ class ObjectSnapshot:
         # adjacency-grounded fabric edge replay against the same links.
         if self.adjacency_pairs:
             ctx["adjacency"] = [list(p) for p in self.adjacency_pairs]
+        # Service Path Graph (v1): embed the explicit relations this object's edges
+        # were admitted on + the path objects they came from — ONLY when a path
+        # relation was actually used, so every pre-contract object's blob (hence
+        # content_hash + replay pin) stays byte-identical and never churns a version.
+        rels = self.path_relations()
+        if any(RANK_OBSERVED_PATH(r.method) for r in rels):
+            used = set(self.used_observation_ids())
+            ctx["path_graph"] = {
+                "contract_version": CONTRACT_VERSION,
+                "relations": [r.to_dict() for r in rels],
+                "observations": [o.to_dict() for o in sorted(
+                    self.paths.observations, key=lambda o: o.observation_id)
+                    if o.observation_id in used],
+                "endpoints": [e.to_dict() for e in sorted(
+                    self.paths.endpoints, key=lambda e: e.endpoint_id)],
+                "service_bindings": [b.to_dict() for b in sorted(
+                    self.paths.service_bindings,
+                    key=lambda b: (b.service_ref, b.endpoint_ref))],
+            }
+        # §1 provenance is declared ONLY when it is not the default live/prod object —
+        # same reason: a live object's blob is unchanged by the contract.
+        if not is_live(self.data_class) or self.scenario_id or self.run_id:
+            ctx["provenance"] = {
+                "data_class": self.data_class, "environment": self.environment,
+                "scenario_id": self.scenario_id, "run_id": self.run_id,
+            }
         return json.dumps({
             "ranking": self.ranking.to_dict(),
             "grounding_context": ctx,
@@ -768,6 +1058,25 @@ def _components(nodes: tuple[Node, ...], edges: tuple[Edge, ...]) -> list[tuple[
     return [tuple(sorted(g, key=lambda n: n.key)) for _, g in sorted(groups.items())]
 
 
+def _cap_verdict(ranking: RankingResult, reason: str) -> RankingResult:
+    """Downgrade a CONFIRMED outcome to SUSPECTED with a machine-readable reason —
+    on the object AND on every hypothesis (so confidence_label() can never say
+    'confirmed' while the object says 'suspected'). Never upgrades anything."""
+    if ranking.verdict_tier is not VerdictTier.CONFIRMED:
+        return ranking
+    hyps = tuple(
+        replace(h, verdict_gate=GateVerdict(
+            tier=VerdictTier.SUSPECTED, coverage=h.verdict_gate.coverage,
+            reasons=h.verdict_gate.reasons + (reason,)))
+        if h.verdict_gate.tier is VerdictTier.CONFIRMED else h
+        for h in ranking.hypotheses
+    )
+    return replace(
+        ranking, verdict_tier=VerdictTier.SUSPECTED, hypotheses=hyps,
+        evidence_missing=tuple(dict.fromkeys(ranking.evidence_missing + (reason,))),
+    )
+
+
 def run_window(
     window: tuple[Signal, ...] | list[Signal],
     catalog: Catalog,
@@ -777,12 +1086,18 @@ def run_window(
     topology_stale: bool = False,
     storm_mode: bool = False,
     directed: Oracle | None = None,
+    paths: PathGraphView | None = None,
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
     topology_stale caps grounding weight (§8) AND is declared on the snapshot;
     storm_mode is declared only (the window is already maxlen-bounded). Both are
     embedded in the snapshot so replay rehydrates them — degradation is never silent.
+
+    `paths` is the Service Path Graph view (contract §2): endpoints, immutable path
+    observations with ORDERED hops, application→endpoint bindings, NAT sessions and
+    (inferred) cloud routes. It is scoped to this window's tenant HERE, before any
+    lookup — §6 rule 1 / §9: cross-tenant resolution is structurally impossible.
     """
     cfg = cfg or EngineConfig()
     sigs = tuple(sorted(window, key=lambda s: (s.ts, str(s.signal_id))))
@@ -803,7 +1118,11 @@ def run_window(
     # Wrap the direction oracle so we capture exactly the orientations the edges were
     # built on — embedded per snapshot for deterministic replay (C7), like seams.
     rec = RecordingOracle(directed) if directed is not None else None
-    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec)
+    # §6 rule 1 / §9 — the ONLY door to the path objects, tenant-scoped at construction.
+    view = (paths or PathGraphView()).for_tenant(tenant)
+    path_index = PathIndex(view, tenant) if not view.is_empty() else None
+    edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec,
+                                   path_index)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
     topo_ver = seams_hash(seams)
     eng_ver = engine_version(cfg)
@@ -816,6 +1135,39 @@ def run_window(
             continue  # singleton below the open floor: episode, not an object
         comp_sigs = tuple(s for n in comp for s in n.signals)
         ranking = rank(catalog, comp_sigs)
+        # ── contract gates on the verdict (never on the edge's existence) ─────
+        # §1: synthetic/replay/lab evidence may support, contradict or illustrate —
+        # it can NEVER produce a customer-confirmed verdict.
+        comp_dc = worst_data_class(
+            [n.data_class() for n in comp]
+            + [e.grounding.data_class for e in comp_edges])
+        if not is_live(comp_dc):
+            ranking = _cap_verdict(
+                ranking,
+                f"data_class={comp_dc}: non-live evidence can support but never "
+                f"confirm a customer verdict (contract §1)")
+        # §3/§4: an object whose graph rests only on rank-6 (inferred: cloud route,
+        # BGP, SD-WAN policy) or rank-7 (candidate: shared token / name similarity)
+        # relations has no OBSERVED relationship holding it together — it may be
+        # suspected, never confirmed. A cloud route says traffic COULD go that way;
+        # only an observation says it DID.
+        if comp_edges and not any(e.grounding.authoritative for e in comp_edges):
+            worst = min((e.grounding.rank for e in comp_edges), default=7)
+            cls = ("inferred (control-plane) relationships" if worst == 6
+                   else "candidate (shared-token / name-similarity) relationships")
+            ranking = _cap_verdict(
+                ranking,
+                f"no authoritative edge: this object is held together only by {cls} — "
+                f"an observed path/endpoint/flow relationship is required to confirm "
+                f"(contract §3/§4)")
+        # §8: an unknown hop is a FACT — it is preserved and declared, never bridged.
+        unknown_hops = sorted({h for e in comp_edges if e.grounding.relation
+                               for h in e.grounding.relation.unknown_hops})
+        if unknown_hops:
+            ranking = replace(ranking, evidence_missing=tuple(dict.fromkeys(
+                ranking.evidence_missing + tuple(
+                    f"path hop {h} did not respond — unknown segment preserved, not bridged"
+                    for h in unknown_hops))))
         first = min(comp, key=lambda n: (n.onset, n.key))
         onset_ms = int(first.onset.timestamp() * 1000)
         cid = str(uuid.uuid5(SIGNAL_NS, f"corrobj|{tenant}|{first.key}|{onset_ms}"))
@@ -852,8 +1204,21 @@ def run_window(
             orientations=orientations,
             adjacency_pairs=adjacency_pairs,
             identity_signals=_identities_for(comp, identity_sigs),
+            data_class=comp_dc,
+            environment=_first_attr(comp_sigs, "environment", "prod"),
+            scenario_id=_first_attr(comp_sigs, "scenario_id", ""),
+            run_id=_first_attr(comp_sigs, "run_id", ""),
+            paths=view,
         ))
     return snapshots
+
+
+def _first_attr(sigs: tuple[Signal, ...], key: str, default: str) -> str:
+    """§1 provenance carried by the evidence (deterministic: first by (ts, id))."""
+    for s in sorted(sigs, key=lambda s: (s.ts, str(s.signal_id))):
+        if isinstance(s.attrs, dict) and s.attrs.get(key):
+            return str(s.attrs[key])
+    return default
 
 
 # ── Object merge — de-split a cross-cycle identity drift (§4.4) ────────────────

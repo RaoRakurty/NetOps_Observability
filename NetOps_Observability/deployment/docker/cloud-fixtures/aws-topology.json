@@ -1,0 +1,171 @@
+{
+  "provider": "aws",
+  "account_id": "945714973156",
+  "region": "us-west-2",
+  "vpcs": [
+    {
+      "id": "vpc-04bea9c06ff23abd9",
+      "cidr": "10.60.0.0/16"
+    },
+    {
+      "id": "vpc-067f878070db7c05a",
+      "cidr": "172.31.0.0/16"
+    }
+  ],
+  "subnets": [
+    {
+      "id": "subnet-0651f2da157e5b5d3",
+      "cidr": "10.60.30.0/24",
+      "name": "correlix-data-a"
+    },
+    {
+      "id": "subnet-0dc195a7472b46f17",
+      "cidr": "172.31.48.0/20",
+      "name": "subnet-0dc195a7472b46f17"
+    },
+    {
+      "id": "subnet-0f10f603845b9c617",
+      "cidr": "172.31.32.0/20",
+      "name": "subnet-0f10f603845b9c617"
+    },
+    {
+      "id": "subnet-0dacf6578cc3c4f09",
+      "cidr": "172.31.0.0/20",
+      "name": "subnet-0dacf6578cc3c4f09"
+    },
+    {
+      "id": "subnet-043e7c67c239c83be",
+      "cidr": "172.31.16.0/20",
+      "name": "subnet-043e7c67c239c83be"
+    },
+    {
+      "id": "subnet-0f546d11625f4baa3",
+      "cidr": "10.60.1.0/27",
+      "name": "correlix-public-a"
+    },
+    {
+      "id": "subnet-01f8d07890ee79e9c",
+      "cidr": "10.60.10.0/24",
+      "name": "correlix-app-a"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "i-0448c046139420a7f",
+      "kind": "instance",
+      "name": "correlix-app-host-01",
+      "subnet_id": "subnet-01f8d07890ee79e9c",
+      "private_ip": "10.60.10.10",
+      "app": ""
+    },
+    {
+      "id": "i-025bac7de4e6be0a6",
+      "kind": "instance",
+      "name": "correlix-data-host-01",
+      "subnet_id": "subnet-0651f2da157e5b5d3",
+      "private_ip": "10.60.30.10",
+      "app": ""
+    },
+    {
+      "id": "i-0e8acbf8493d037f9",
+      "kind": "instance",
+      "name": "correlix-vpn-nat-01",
+      "subnet_id": "subnet-0f546d11625f4baa3",
+      "private_ip": "10.60.1.10",
+      "app": ""
+    },
+    {
+      "id": "igw-015c28717e1ac8cfd",
+      "kind": "internet_gateway",
+      "name": "igw-015c28717e1ac8cfd"
+    },
+    {
+      "id": "igw-0f9a0365a92d4b32f",
+      "kind": "internet_gateway",
+      "name": "correlix-igw"
+    }
+  ],
+  "edges": [
+    {
+      "from_subnet": "subnet-01f8d07890ee79e9c",
+      "from_subnet_name": "correlix-app-a",
+      "to": "i-0e8acbf8493d037f9",
+      "to_kind": "nva",
+      "destination": "172.40.40.0/24",
+      "via_route_table": "rtb-01f9ab54f8c0360f5",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "subnet-01f8d07890ee79e9c",
+      "from_subnet_name": "correlix-app-a",
+      "to": "i-0e8acbf8493d037f9",
+      "to_kind": "nva",
+      "destination": "10.70.245.0/24",
+      "via_route_table": "rtb-01f9ab54f8c0360f5",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "subnet-01f8d07890ee79e9c",
+      "from_subnet_name": "correlix-app-a",
+      "to": "i-0e8acbf8493d037f9",
+      "to_kind": "nva",
+      "destination": "0.0.0.0/0",
+      "via_route_table": "rtb-01f9ab54f8c0360f5",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "subnet-01f8d07890ee79e9c",
+      "from_subnet_name": "correlix-app-a",
+      "to": "vpce-07461b8e31b854def",
+      "to_kind": "vpc_endpoint",
+      "destination": "pl-68a54001",
+      "via_route_table": "rtb-01f9ab54f8c0360f5",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "subnet-0651f2da157e5b5d3",
+      "from_subnet_name": "correlix-data-a",
+      "to": "i-0e8acbf8493d037f9",
+      "to_kind": "nva",
+      "destination": "172.40.40.0/24",
+      "via_route_table": "rtb-03ecac0109ef1ff9f",
+      "route_table_name": "correlix-rt-data"
+    },
+    {
+      "from_subnet": "subnet-0651f2da157e5b5d3",
+      "from_subnet_name": "correlix-data-a",
+      "to": "i-0e8acbf8493d037f9",
+      "to_kind": "nva",
+      "destination": "10.70.245.0/24",
+      "via_route_table": "rtb-03ecac0109ef1ff9f",
+      "route_table_name": "correlix-rt-data"
+    },
+    {
+      "from_subnet": "subnet-0651f2da157e5b5d3",
+      "from_subnet_name": "correlix-data-a",
+      "to": "i-0e8acbf8493d037f9",
+      "to_kind": "nva",
+      "destination": "0.0.0.0/0",
+      "via_route_table": "rtb-03ecac0109ef1ff9f",
+      "route_table_name": "correlix-rt-data"
+    },
+    {
+      "from_subnet": "subnet-0651f2da157e5b5d3",
+      "from_subnet_name": "correlix-data-a",
+      "to": "vpce-07461b8e31b854def",
+      "to_kind": "vpc_endpoint",
+      "destination": "pl-68a54001",
+      "via_route_table": "rtb-03ecac0109ef1ff9f",
+      "route_table_name": "correlix-rt-data"
+    },
+    {
+      "from_subnet": "subnet-0f546d11625f4baa3",
+      "from_subnet_name": "correlix-public-a",
+      "to": "igw-0f9a0365a92d4b32f",
+      "to_kind": "internet_gateway",
+      "destination": "0.0.0.0/0",
+      "via_route_table": "rtb-05391ce2410c6dd94",
+      "route_table_name": "correlix-rt-public"
+    }
+  ]
+}

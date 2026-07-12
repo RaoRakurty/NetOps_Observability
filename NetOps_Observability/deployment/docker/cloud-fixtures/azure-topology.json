@@ -1,0 +1,100 @@
+{
+  "provider": "azure",
+  "account_id": "8d0f8a4e-c36e-4265-821f-d6df48123c24",
+  "region": "westus2",
+  "vpcs": [
+    {
+      "id": "correlix-vnet",
+      "cidr": "10.61.0.0/16"
+    }
+  ],
+  "subnets": [
+    {
+      "id": "data-a",
+      "cidr": "10.61.30.0/24",
+      "name": "data-a"
+    },
+    {
+      "id": "nva",
+      "cidr": "10.61.2.0/27",
+      "name": "nva"
+    },
+    {
+      "id": "app-a",
+      "cidr": "10.61.10.0/24",
+      "name": "app-a"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "correlix-app-host-01",
+      "kind": "instance",
+      "name": "correlix-app-host-01",
+      "private_ip": "10.61.10.10",
+      "app": ""
+    },
+    {
+      "id": "correlix-vpn-nat-01",
+      "kind": "instance",
+      "name": "correlix-vpn-nat-01",
+      "private_ip": "10.61.2.10",
+      "app": ""
+    }
+  ],
+  "edges": [
+    {
+      "from_subnet": "app-a",
+      "from_subnet_name": "app-a",
+      "to": "10.61.2.10",
+      "to_kind": "nva",
+      "destination": "0.0.0.0/0",
+      "via_route_table": "correlix-rt-app",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "app-a",
+      "from_subnet_name": "app-a",
+      "to": "10.61.2.10",
+      "to_kind": "nva",
+      "destination": "10.70.245.0/24",
+      "via_route_table": "correlix-rt-app",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "app-a",
+      "from_subnet_name": "app-a",
+      "to": "10.61.2.10",
+      "to_kind": "nva",
+      "destination": "172.40.40.0/24",
+      "via_route_table": "correlix-rt-app",
+      "route_table_name": "correlix-rt-app"
+    },
+    {
+      "from_subnet": "data-a",
+      "from_subnet_name": "data-a",
+      "to": "10.61.2.10",
+      "to_kind": "nva",
+      "destination": "0.0.0.0/0",
+      "via_route_table": "correlix-rt-data",
+      "route_table_name": "correlix-rt-data"
+    },
+    {
+      "from_subnet": "data-a",
+      "from_subnet_name": "data-a",
+      "to": "10.61.2.10",
+      "to_kind": "nva",
+      "destination": "10.70.245.0/24",
+      "via_route_table": "correlix-rt-data",
+      "route_table_name": "correlix-rt-data"
+    },
+    {
+      "from_subnet": "data-a",
+      "from_subnet_name": "data-a",
+      "to": "10.61.2.10",
+      "to_kind": "nva",
+      "destination": "172.40.40.0/24",
+      "via_route_table": "correlix-rt-data",
+      "route_table_name": "correlix-rt-data"
+    }
+  ]
+}
