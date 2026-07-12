@@ -116,6 +116,12 @@ func writeEnrichmentCSV(dir string, rows []enrichmentRow) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	// os.CreateTemp creates 0600, but this file IS the shared cross-service plane:
+	// the Vector aggregator and the correlation engine (different uids) must read
+	// it. 0600 left them with PermissionError → silently empty tenant maps.
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
 	return os.Rename(tmpName, filepath.Join(dir, enrichmentFileName))
 }
 

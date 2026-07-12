@@ -97,4 +97,13 @@ func TestWriteEnrichmentCSV_RoundTrip(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected only the final file, got %d entries: %v", len(entries), entries)
 	}
+	// The file is read by OTHER uids (Vector, correlation) — os.CreateTemp's 0600
+	// must not survive the rename, or their tenant maps go silently empty.
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("enrichment csv must be world-readable (0644), got %o", perm)
+	}
 }

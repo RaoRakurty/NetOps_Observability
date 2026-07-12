@@ -124,7 +124,7 @@ def tenant_for(device: str) -> str:
     except OSError:
         return _tenant_map.get(device, "")
     if mt != _tenant_mtime:
-        _tenant_mtime = mt
+        _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
         fresh: Dict[str, str] = {}
         try:
             with open(TENANT_ENRICHMENT_FILE, newline="") as f:
@@ -134,8 +134,11 @@ def tenant_for(device: str) -> str:
                     if len(row) >= 2 and row[0]:
                         fresh[row[0]] = row[1]
             _tenant_map = fresh
-        except OSError:
-            pass
+        except OSError as exc:
+            # An unreadable map means every signal falls back to untagged
+            # (platform-only). Fail-closed but NOT silent — this exact failure
+            # (0600 perms across uids) once disabled tenancy stamping unnoticed.
+            log.warning("tenant enrichment file unreadable, tenant map stale/empty: %s", exc)
     return _tenant_map.get(device, "")
 
 logging.basicConfig(
