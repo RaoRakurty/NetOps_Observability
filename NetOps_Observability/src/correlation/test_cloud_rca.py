@@ -204,3 +204,61 @@ def test_cloud_change_then_app_orders_by_onset():
     snap = snaps[0]
     assert len(snap.edges) == 1  # grounded via shared "billing" token
     assert snap.ranking.verdict_tier.value != "confirmed"
+
+
+# ── IPsec tunnel down ↔ apps behind the tunnel (owner-requested signature) ─────
+# The gap the C5 tunnel-kill drill exposed: a raw IPsec death (IKE/DPD/SA), with no
+# cloud config change, could not ground onto private-connectivity-down (which
+# REQUIRES a cloud_change). The new sig.ent.cloud.ipsec-tunnel-down grounds on the
+# VPN gateway's own tunnel-state control-plane signal + an independent probe, so the
+# outage is attributed to the tunnel and confirmable — the gateway observer is
+# independent of the cloud API.
+
+def _ipsec_down_plus_probe():
+    # The enterprise VPN gateway reports the AWS tunnel (seam) down — DPD teardown,
+    # no cloud change. Entity = the seam; tokens carry the CIDR + an app behind it.
+    tun = cloud_signal(
+        "acme", T0, "ipsec_tunnel_status",
+        resource_id="sm-aws-vpn", region="us-west-2", gateway_id="lab-vpn-edge",
+        severity=Severity.CRIT, entity_tokens=("10.60.0.0/16", "store-api"),
+        attrs={"state": "down", "reason": "dpd_timeout"},
+    )
+    # An independent customer-path probe can't reach the app behind the tunnel.
+    probe = Signal(
+        tenant_id="acme", ts=T0 + timedelta(seconds=20), source=Source.PROBE,
+        kind="probe_loss",
+        observer=Observer(observer_id="lan-vantage-1", observer_type=ObserverType.VANTAGE_AGENT),
+        modality_class=ModalityClass.ACTIVE_PROBE, entity_type=EntityType.SEGMENT,
+        entity_id="lan-vantage-1->store-api", severity=Severity.CRIT, native_id="p|ipsec",
+        entity_tokens=("store-api", "10.60.0.0/16"),
+    )
+    return tun, probe
+
+
+def test_ipsec_tunnel_down_grounds_across_seam_with_two_observers():
+    tun, probe = _ipsec_down_plus_probe()
+    seam = SeamView(
+        seam_id="sm-aws-vpn", tenant_id="acme", seam_type="VPN",
+        endpoints=(("app", "store-api"), ("remote", "10.60.0.0/16")),
+        visibility="partial", control_plane_owner="enterprise",
+    )
+    snaps = run_window([tun, probe], builtin_catalog(), (seam,))
+    objs = [s for s in snaps if s.nodes]
+    assert objs, "IPsec-down + probe must ground into an object"
+    # TWO INDEPENDENT observers: the IPsec gateway (control plane) + the LAN vantage
+    # (active probe). This independence is what lifts an IPsec outage off the
+    # cloud-only 'suspected' ceiling.
+    observers = {s.observer.observer_id for snap in objs for n in snap.nodes for s in n.signals}
+    assert "ipsec:lab-vpn-edge" in observers, observers
+    assert "lan-vantage-1" in observers, observers
+    assert observers != {"ipsec:lab-vpn-edge"}, "probe observer must be independent, not merged"
+
+
+def test_ipsec_tunnel_status_is_control_plane_and_independent():
+    tun, _ = _ipsec_down_plus_probe()
+    assert tun.modality_class is ModalityClass.CONTROL_PLANE
+    assert tun.observer.observer_id == "ipsec:lab-vpn-edge"
+    assert tun.observer.observer_type is ObserverType.CONTROLLER
+    assert tun.observer.trust_domain == "enterprise"
+    # It must NOT collapse into the cloud-API observer namespace.
+    assert not tun.observer.observer_id.startswith("cloud:")

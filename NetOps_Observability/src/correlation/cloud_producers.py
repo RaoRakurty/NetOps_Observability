@@ -48,6 +48,15 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     "cloud_change":           (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_audit":            (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "security_policy_change": (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    # IPsec / IKE tunnel status from the ENTERPRISE VPN gateway (strongSwan/charon
+    # or a cloud VPN gateway's own telemetry). CONTROL_PLANE, but observed by the
+    # gateway itself — a CONTROLLER observer that is INDEPENDENT of the cloud API
+    # (different observer_id, see cloud_observer). That independence is the point:
+    # a tunnel-down seen by the gateway control plane AND app impact seen by an
+    # active probe are two observers, so an IPsec outage can reach a CONFIRMED
+    # verdict instead of the cloud-only "suspected" ceiling. Entity is the seam
+    # (the tunnel), tokens carry the CIDRs/apps behind it.
+    "ipsec_tunnel_status":    (ModalityClass.CONTROL_PLANE,    ObserverType.CONTROLLER, EntityType.CLOUD_RESOURCE),
 }
 
 
@@ -60,6 +69,24 @@ def cloud_observer(account: str, region: str, obs_type: ObserverType) -> Observe
         location=region,
         trust_domain="cloud_tenant",
         collection_path="via_cloud_api",
+        clock_quality="unknown",
+    )
+
+
+def ipsec_gateway_observer(gateway_id: str, location: str) -> Observer:
+    """The ENTERPRISE VPN gateway reporting its own IKE/IPsec state. Deliberately a
+    DIFFERENT observer_id namespace than cloud_observer (`ipsec:<gw>` vs
+    `cloud:<acct>:<region>`) and a different trust domain, so the independence gate
+    counts it as a second, independent witness alongside cloud-API health/flow —
+    which is what lets an IPsec outage confirm instead of staying 'suspected'.
+    Collected directly at the gateway (not via the cloud API), so fate-sharing
+    analysis does not collapse it into the cloud plane."""
+    return Observer(
+        observer_id=f"ipsec:{gateway_id or 'unknown'}",
+        observer_type=ObserverType.CONTROLLER,
+        location=location,
+        trust_domain="enterprise",
+        collection_path="direct",
         clock_quality="unknown",
     )
 
@@ -80,10 +107,15 @@ def cloud_signal(
     deviation: float = 0.0,
     entity_tokens: tuple[str, ...] = (),
     attrs: dict | None = None,
+    gateway_id: str = "",
 ) -> Signal:
     """Build one canonical cloud Signal. entity is the app (app-centric kinds) or
     the cloud resource. entity_tokens carry app+resource so the engine can ground
-    a cloud signal to an app/resource node. Deterministic id via native_id."""
+    a cloud signal to an app/resource node. Deterministic id via native_id.
+
+    gateway_id (IPsec kinds only): the reporting VPN gateway, which selects the
+    independent ipsec:<gw> observer instead of the shared cloud:<acct>:<region> one.
+    """
     if kind not in CLOUD_KINDS:
         raise ValueError(f"unknown cloud signal kind: {kind!r}")
     modality, obs_type, default_entity = CLOUD_KINDS[kind]
@@ -109,12 +141,17 @@ def cloud_signal(
     if resource_id:
         merged_attrs["resource_id"] = resource_id
 
+    observer = (
+        ipsec_gateway_observer(gateway_id or entity_id, region)
+        if kind == "ipsec_tunnel_status"
+        else cloud_observer(account, region, obs_type)
+    )
     return Signal(
         tenant_id=tenant_id,
         ts=ts,
         source=Source.CLOUD,
         kind=kind,
-        observer=cloud_observer(account, region, obs_type),
+        observer=observer,
         modality_class=modality,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -198,6 +235,7 @@ def cloud_signal_from_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signa
             deviation=_coerce_float(ev.get("deviation")),
             entity_tokens=tokens,
             attrs=attrs,
+            gateway_id=str(ev.get("gateway_id") or ""),
         )
     except ValueError as exc:  # cloud_signal's own guards → dead-letter, not a crash
         raise DeadLetter(str(exc)) from exc

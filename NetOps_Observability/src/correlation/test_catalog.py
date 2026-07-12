@@ -12,7 +12,7 @@ from verdicts import VerdictTier
 
 def test_builtin_catalog_validates():
     cat = builtin_catalog()
-    assert len(cat.enabled_templates()) == 85  # +3 NMS controller-intel (P4b); +1 saas-experience-degraded; +1 cloud app-dependency-down
+    assert len(cat.enabled_templates()) == 86  # +3 NMS controller-intel (P4b); +1 saas-experience-degraded; +1 cloud app-dependency-down; +1 cloud ipsec-tunnel-down
     assert all(t.id.startswith("sig.ent.") for t in cat.templates)
 
 

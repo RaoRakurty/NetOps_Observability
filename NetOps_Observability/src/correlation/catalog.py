@@ -413,6 +413,55 @@ BUILTIN_TEMPLATES: list[dict] = [
         },
     },
     {
+        # A site-to-site IPsec tunnel DIED at the IKE/ESP layer — phase-1/2 failure,
+        # DPD teardown, rekey/lifetime mismatch, SA drop, or the charon/gateway
+        # process crashing — with NO cloud control-plane change to explain it. The
+        # apps behind that tunnel go unreachable. This is DISTINCT from
+        # private-connectivity-down (which is a DX/route CONFIG change, and requires
+        # a cloud_change): here the root is the tunnel's own control plane, reported
+        # by the enterprise VPN gateway itself. Because that gateway observer is
+        # INDEPENDENT of the cloud API (ipsec:<gw> vs cloud:<acct>:<region>), the
+        # tunnel-down control-plane evidence + an independent active probe are TWO
+        # observers, so this can reach a CONFIRMED verdict — the whole reason the
+        # owner asked for an IPsec↔app signature.
+        "id": "sig.ent.cloud.ipsec-tunnel-down",
+        "title": "IPsec tunnel down (IKE / DPD / SA) — apps behind the tunnel unreachable",
+        "domain": "ent.cloud",
+        "requires": [
+            # the root: the VPN gateway reports the tunnel/IKE_SA down (state=down|
+            # dpd_timeout|ike_failed|rekey_failed). Entity is the seam (the tunnel).
+            {"kind": "ipsec_tunnel_status", "entity_type": "cloud_resource"},
+            # the impact: an independent customer-path probe can't reach the apps,
+            # or the apps' own health went dark behind the tunnel.
+            {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|cloud_health"},
+            # optional corroboration: the flow lane sees the app's traffic vanish.
+            {"kind": "cloud_flow_log", "optional": True},
+        ],
+        # control_plane = the IPsec-gateway tunnel state; active_probe = the
+        # independent customer-path witness. Two observers → confirmable (vs the
+        # cloud-only 'suspected' ceiling).
+        "required_modalities": ["control_plane", "active_probe"],
+        "discriminators": [
+            # A cloud config CHANGE (route/DX/VPN-attribute edit) must NOT be in the
+            # window: if one IS, the outage is a deliberate change, not an infra
+            # tunnel death → this template is contradicted and private-connectivity-
+            # down is scored as the competitor instead.
+            {"absent": {"kind": "cloud_change|cloud_audit"},
+             "else_prefer": "sig.ent.cloud.private-connectivity-down"},
+        ],
+        "direction_expect": "cloud-seam -> service",
+        "verdict": {
+            "owner": "netops", "layer": "L3 (IPsec tunnel — IKE/ESP)",
+            "first_steps": [
+                "Check the tunnel's IKE_SA on the VPN gateway (phase-1 down, AUTH failed, or peer not responding)",
+                "Check DPD: did dead-peer-detection tear the SA? Is the peer answering INFORMATIONALs?",
+                "Check rekey/lifetime: a phase-2 lifetime or PFS mismatch drops the SA on the clock (periodic outage)",
+                "Confirm the charon/gateway process is running and the ESP SPIs match both ends (one-way SA)",
+                "If a redundant tunnel exists, confirm BGP/route failover moved traffic to it",
+            ],
+        },
+    },
+    {
         "id": "sig.ent.wan-edge.tunnel-mtu-blackhole",
         "title": "Tunnel MTU blackhole",
         "domain": "ent.wan-edge",

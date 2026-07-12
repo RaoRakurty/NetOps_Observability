@@ -118,6 +118,9 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "flow_volume_anomaly",
     # cloud lane (#81 P3G — handle_cloud emits these; consumed by the cloud signatures)
     "cloud_change", "cloud_audit", "cloud_flow_log", "cloud_health",
+    # IPsec/IKE tunnel state from the enterprise VPN gateway (cloud_signal_from_event
+    # kind=ipsec_tunnel_status; observer ipsec:<gw>, independent of the cloud API).
+    "ipsec_tunnel_status",
     # synthetic application-experience lane (synthetic_normalize.py, from
     # collectors/synthetics.go via netops.probes) — external Digital-Experience,
     # NOT APM: an HTTP/TCP/ICMP synthetic outcome → a semantic app-experience kind.

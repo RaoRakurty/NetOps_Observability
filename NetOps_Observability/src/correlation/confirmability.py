@@ -72,6 +72,9 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "lldp_neighbor_change": ModalityClass.CONTROL_PLANE,
     "cloud_change": ModalityClass.CONTROL_PLANE,
     "cloud_audit": ModalityClass.CONTROL_PLANE,
+    # IPsec/IKE tunnel state from the enterprise VPN gateway — control plane, but
+    # an observer independent of the cloud API (ipsec:<gw>), so it corroborates.
+    "ipsec_tunnel_status": ModalityClass.CONTROL_PLANE,
     # device-telemetry lane (metric episodes; cloud health)
     "if_metric_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "bgp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
