@@ -59,7 +59,7 @@ describe("signatureNocTitle — scenario library", () => {
     expect(signatureNocTitle("sig.sp.core.mpls-lsp-down")).toBe("MPLS LSP down"); // mapped
     expect(signatureNocTitle("sig.sp.core.mpls-anything")).toBe("MPLS / VPN path change"); // fallback
     expect(signatureNocTitle("sig.x.y.bgp-thing")).toBe("Routing adjacency change");
-    expect(signatureNocTitle("sig.x.y.unrelated")).toBe("Network change observed");
+    expect(signatureNocTitle("sig.x.y.unrelated")).toBe("Anomaly observed — cause undetermined");
   });
 
   it("titles never overclaim a verdict (no Confirmed/Down-as-certainty wording)", () => {

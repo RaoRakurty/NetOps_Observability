@@ -116,6 +116,18 @@ const SIG_NOC_TITLE: Record<string, string> = {
   "sig.ent.access.qos-drops": "QoS drops on access",
   // ── Application (network attribution) ──
   "sig.ent.app.degradation-network-clear": "Application degradation (network clear)",
+  // ── Application / SaaS experience lane — each cause names ITS suspect; none
+  // of these may ever read as a generic "network change" (owner 2026-07-12) ──
+  "sig.ent.app.saas-experience-degraded": "SaaS / application experience degraded",
+  "sig.ent.app.lb-target-health-failure": "Load-balancer target health failure",
+  "sig.ent.app.tls-cert-expired": "TLS certificate expired",
+  "sig.ent.app.dns-failover-wrong-target": "DNS failover to a wrong target",
+  // ── Cloud private-path lane ──
+  "sig.ent.cloud.ipsec-tunnel-down": "IPsec tunnel down — cloud private path",
+  "sig.ent.cloud.app-dependency-down": "Cloud application dependency down",
+  "sig.ent.cloud.private-connectivity-down": "Cloud private connectivity down",
+  "sig.ent.cloud.route-table-blackhole": "Cloud route-table blackhole",
+  "sig.ent.cloud.sg-nacl-block": "Cloud security-group / NACL block",
   // ── Service-provider core · DC fabric · security ──
   "sig.sp.core.mpls-lsp-down": "MPLS LSP down",
   "sig.dc.fabric.uplink-fault": "Fabric uplink fault",
@@ -159,6 +171,12 @@ export function friendlyIncidentId(id: string): string {
 
 export function signatureNocTitle(id: string): string {
   if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
+  // app/SaaS BEFORE every network rung: an application-domain signature must
+  // never be mislabelled as a network change (owner directive 2026-07-12).
+  // Mirrors ai_labels.go signatureNocTitle — keep both sides in sync.
+  if (/\.app\.|saas|experience/.test(id)) return "Application / service experience change";
+  if (/k8s|kubernetes|mesh/.test(id)) return "Cloud workload networking change";
+  if (/cert|tls/.test(id)) return "TLS / certificate issue";
   if (/cloud/.test(id)) return "Cloud service-path change";
   if (/sdwan|overlay|tunnel|ipsec/.test(id)) return "SD-WAN / tunnel change";
   if (/dns/.test(id)) return "DNS resolution impairment";
@@ -166,9 +184,11 @@ export function signatureNocTitle(id: string): string {
   if (/dia|middle-mile|internet|provider|congestion|wan/.test(id)) return "WAN / provider path change";
   if (/bgp|ospf|isis|routing/.test(id)) return "Routing adjacency change";
   if (/link|access|uplink/.test(id)) return "Link state change";
-  if (/fw|firewall|policy|security/.test(id)) return "Security policy change";
+  if (/nat|fw|firewall|policy|security|waf|proxy/.test(id)) return "Security / policy change";
   if (/device|resource|cpu|mem|hardware|fabric/.test(id)) return "Device health change";
-  return "Network change observed";
+  // honest last resort: an unmapped signature is an anomaly with an
+  // undetermined cause — never assert "network change" without evidence.
+  return "Anomaly observed — cause undetermined";
 }
 
 // signal kind → (humanized label, modality, expected source).

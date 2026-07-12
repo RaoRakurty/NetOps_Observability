@@ -1599,6 +1599,29 @@ export const api = {
     request<RcaPathView>(`/api/correlations/${encodeURIComponent(id)}/rca-path-view`),
   correlationReplay: (id: string) =>
     request<CorrReplay>(`/api/correlations/${encodeURIComponent(id)}/replay`),
+  // Canonical server-side RCA report (owner directive 2026-07-12). PDF via the
+  // backend's controlled renderer (no browser print chrome); when the PDF
+  // sidecar is off, falls back to the server-rendered HTML in a new tab.
+  // Returns which format was delivered.
+  downloadRcaReport: async (id: string, displayId: string): Promise<"pdf" | "html"> => {
+    const token = getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const scope = getActiveScope();
+    if (scope) headers["X-Acting-Tenant"] = scope;
+    const base = `/api/correlations/${encodeURIComponent(id)}/rca-report`;
+    const pdf = await fetch(`${base}?format=pdf`, { headers });
+    if (pdf.ok) {
+      await downloadResponse(pdf, `incident-report-${displayId || id.slice(0, 8)}.pdf`);
+      return "pdf";
+    }
+    const html = await fetch(`${base}?format=html`, { headers });
+    if (!html.ok) throw new Error(`report render failed (${html.status})`);
+    const blob = await html.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return "html";
+  },
   // Full window signal slice (attached + concurrent-unattached) for the RCA timeline.
   correlationTimeline: (id: string) =>
     request<CorrTimeline>(`/api/correlations/${encodeURIComponent(id)}/timeline`),

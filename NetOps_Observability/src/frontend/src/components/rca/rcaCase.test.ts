@@ -26,11 +26,12 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
     expect(c.title).not.toMatch(/^Possible/);
   });
 
-  it("status pills say NOT CONFIRMED · Low · Under review", () => {
+  it("status pills say NOT CONFIRMED · Low · Incident Active / Analysis Suspected", () => {
     const texts = c.pills.map((p) => p.text);
     expect(texts).toContain("NOT CONFIRMED");
     expect(texts).toContain("Confidence: Low");
-    expect(texts).toContain("RCA state: Under review");
+    expect(texts).toContain("Incident: Active");
+    expect(texts).toContain("Analysis: Suspected");
     expect(texts).not.toContain("✓ CONFIRMED");
   });
 
@@ -40,7 +41,9 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
   });
 
   it("impact reports no confirmed customer impact + resolves device/peer", () => {
-    expect(c.impact[0]).toMatchObject({ k: "Impact", v: "No confirmed customer impact" });
+    // telemetry-qualified (owner 2026-07-12): a routing-only window has no
+    // impact telemetry, so impact is NOT OBSERVABLE — never a bare "no impact".
+    expect(c.impact[0]).toMatchObject({ k: "Impact", v: "Impact not observable — no impact telemetry in this window" });
     expect(c.impact.find((r) => r.k === "Affected device")?.v).toBe("wan-r2");
     expect(c.impact.find((r) => r.k === "Affected peer")?.v).toBe("192.168.100.5");
     expect(c.impact.find((r) => r.k === "Scope type")?.v).toBe("Routing adjacency");
@@ -67,7 +70,7 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
     expect(routing?.variant).toBe("main");
     const device = c.evidence.find((e) => e.title === "Device health");
     expect(device?.variant).toBe("missing");
-    expect(device?.pill.text).toBe("Not observed");
+    expect(device?.pill.text).toBe("No data");
   });
 
   it("timeline shows ALL standard lanes (empty ones included)", () => {
@@ -177,7 +180,7 @@ describe("buildRcaCase — ≥2 independent-stream confirmation guard", () => {
   });
   it("does not OPEN an incident on a single stream", () => {
     expect(c.decision.text).not.toMatch(/^OPEN INCIDENT/);
-    expect(c.impact[0].v).toBe("No confirmed customer impact");
+    expect(c.impact[0].v).toMatch(/^(No customer impact confirmed within available telemetry coverage|Impact not observable)/);
   });
 });
 

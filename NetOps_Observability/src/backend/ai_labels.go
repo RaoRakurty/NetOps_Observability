@@ -122,6 +122,18 @@ var sigNocTitle = map[string]string{
 	"sig.ent.dc.fabric-link-down":            "Fabric link down — data center",
 	"sig.ent.sdwan.tunnel-flap":              "SD-WAN tunnel flapping",
 	"sig.ent.sdwan.brownout":                 "SD-WAN path brownout",
+	// Application / SaaS experience lane — each cause names ITS suspect; none of
+	// these may ever read as a generic "network change" (owner directive 2026-07-12).
+	"sig.ent.app.saas-experience-degraded":  "SaaS / application experience degraded",
+	"sig.ent.app.lb-target-health-failure":  "Load-balancer target health failure",
+	"sig.ent.app.tls-cert-expired":          "TLS certificate expired",
+	"sig.ent.app.dns-failover-wrong-target": "DNS failover to a wrong target",
+	// Cloud private-path lane
+	"sig.ent.cloud.ipsec-tunnel-down":         "IPsec tunnel down — cloud private path",
+	"sig.ent.cloud.app-dependency-down":       "Cloud application dependency down",
+	"sig.ent.cloud.private-connectivity-down": "Cloud private connectivity down",
+	"sig.ent.cloud.route-table-blackhole":     "Cloud route-table blackhole",
+	"sig.ent.cloud.sg-nacl-block":            "Cloud security-group / NACL block",
 }
 
 // signatureNocTitle humanizes a signature id (server mirror of the UI). Returns
@@ -146,6 +158,14 @@ func signatureNocTitle(id string) string {
 		return false
 	}
 	switch {
+	// app/SaaS BEFORE every network rung: an application-domain signature must
+	// never be mislabelled as a network change (owner directive 2026-07-12).
+	case contains(".app.", "saas", "experience"):
+		return "Application / service experience change"
+	case contains("k8s", "kubernetes", "mesh"):
+		return "Cloud workload networking change"
+	case contains("cert", "tls"):
+		return "TLS / certificate issue"
 	case contains("cloud"):
 		return "Cloud service-path change"
 	case contains("sdwan", "overlay", "tunnel", "ipsec"):
@@ -160,11 +180,13 @@ func signatureNocTitle(id string) string {
 		return "Routing adjacency change"
 	case contains("link", "access", "uplink"):
 		return "Link state change"
-	case contains("fw", "firewall", "policy", "security"):
-		return "Security policy change"
+	case contains("nat", "fw", "firewall", "policy", "security", "waf", "proxy"):
+		return "Security / policy change"
 	case contains("device", "resource", "cpu", "mem", "hardware", "fabric"):
 		return "Device health change"
 	default:
-		return "Network change observed"
+		// honest last resort: an unmapped signature is an anomaly with an
+		// undetermined cause — never assert "network change" without evidence.
+		return "Anomaly observed — cause undetermined"
 	}
 }

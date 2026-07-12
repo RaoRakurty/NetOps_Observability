@@ -503,8 +503,14 @@ export function CorrelationDetail({ id }: { id: string }) {
 
   const exportPdf = () => {
     if (!rcaCase) return;
-    const ok = exportRcaPdf(rcaCase, obj.correlation_id || "");
-    if (!ok) alert("Could not generate the RCA report.");
+    // Canonical server-side report first (typed states, controlled PDF headers,
+    // no browser print chrome). The legacy client-side print doc remains only
+    // as the last-resort fallback when the backend render fails entirely.
+    api.downloadRcaReport(obj.correlation_id || "", friendlyProblemId(obj.correlation_id || ""))
+      .catch(() => {
+        const ok = exportRcaPdf(rcaCase, obj.correlation_id || "");
+        if (!ok) alert("Could not generate the incident report.");
+      });
   };
 
   // Deterministic-replay control — a platform/debug tool, surfaced only in Debug View.
