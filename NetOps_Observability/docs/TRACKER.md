@@ -212,8 +212,17 @@ copy. Docs: integrations/jira.md (new, runbook + honest real-app-validation
 banner) + architecture.md diagram/read-surfaces. **Real-Atlassian validation
 owner-gated** (needs a real Jira Cloud site + token, standing directive).
 
-**Remaining in #103:** inbound PD V3 webhooks (ack-sync; needs public ingress —
-deferred, documented) · ~~Jira into the policy engine~~ ✅ 2026-07-12 (real-site
+**Remaining in #103:** ~~inbound PD V3 webhooks~~ **OUT OF SCOPE by design
+(owner decision 2026-07-12, research-verified): Correlix→PD is one-way —
+Correlix (telemetry) is the resolution authority and the ITSM is the record
+for human-response phases. Webhooks are additionally WRONG for our deployment
+model: on-prem Correlix would need public ingress, impossible at many customer
+sites. If PD ack-sync is ever customer-demanded, POLL the PD REST API
+(List Incidents filters by `incident_key` = our Events-v2 dedup_key; 960
+req/min limit is ample for the bounded open-page set at 45s cadence; needs one
+extra optional field: a read-only REST key — routing keys can't read). Mirrors
+the SN inbound poller; webhooks not planned** · ~~Jira into the policy
+engine~~ ✅ 2026-07-12 (real-site
 validation owner-gated) · Jira inbound state sync (workflow-category → ITSM
 phase mapping; syncer is SN-only today) · pgstore SKIP-LOCKED e2e
 on live PG (unit-level covered; mem+pg store parity tests exist for SN path) ·

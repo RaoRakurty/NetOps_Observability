@@ -107,6 +107,13 @@ cause, updated in place, auto-resolved on recovery.
   `custom_details.problem_id` carries the same handle (the one the RCA
   Inspector and ServiceNow tickets show). The correlation UUID stays canonical
   in `dedup_key` and `custom_details.correlation_id`.
+- **One-way by design**: Correlix drives PagerDuty; nothing syncs back.
+  Correlix (telemetry) is the resolution authority and the ITSM is the record
+  for human-response phases, so PD-side ack/resolve state is not consumed. No
+  V3 webhooks — an on-prem Correlix has no public ingress for a receiver; if
+  ack-timing is ever needed, the path is polling the PD REST API
+  (List Incidents by `incident_key` = our dedup key, read-only API key),
+  mirroring the ServiceNow inbound poller.
 
 ## 6. Platform self-health lane (the global key's ONLY job)
 

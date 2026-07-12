@@ -104,8 +104,10 @@ func (a *pagerDutyTicketAdapter) LookupByCorrelationID(_ context.Context, _ tick
 	return ticketRef{}, false, nil
 }
 
-// FetchIncident: no read API on Events v2; inbound ack/resolve sync would use
-// PD V3 webhooks (deferred — needs public ingress; documented in #103).
+// FetchIncident: no read API on Events v2. Inbound ack-sync is OUT OF SCOPE by
+// design (#103, owner 2026-07-12): Correlix→PD is one-way — telemetry is the
+// resolution authority, the ITSM records human-response phases. If ever needed,
+// poll the PD REST API with a read-only token (like the SN inbound poller).
 func (a *pagerDutyTicketAdapter) FetchIncident(_ context.Context, _ ticketSystemConfig, _ ticketRef) (snowIncident, bool, error) {
 	return snowIncident{}, false, nil
 }
