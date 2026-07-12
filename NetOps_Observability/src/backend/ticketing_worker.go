@@ -1,11 +1,11 @@
 package main
 
 import (
-	"errors"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -39,7 +39,7 @@ type ticketWorker struct {
 func newTicketWorker(store ticketingStore, resolve ticketConnResolver) *ticketWorker {
 	return &ticketWorker{
 		store:       store,
-		adapters: map[string]ticketAdapter{"servicenow": newServiceNowAdapter(), "pagerduty": newPagerDutyTicketAdapter(), "slack": newSlackTicketAdapter()},
+		adapters:    map[string]ticketAdapter{"servicenow": newServiceNowAdapter(), "pagerduty": newPagerDutyTicketAdapter(), "slack": newSlackTicketAdapter(), "jira": newJiraTicketAdapter()},
 		resolveConn: resolve,
 		workerID:    "ticket-" + randID()[:8],
 		batch:       16,
@@ -123,9 +123,10 @@ func (w *ticketWorker) process(ctx context.Context, it ticketOutboxItem, now tim
 // #103-H E6: the ticket link's lifecycle_state is the ordering authority —
 // stale or duplicate operations become AUDITED no-op successes, never
 // external calls and never infinite retries. The state machine:
-//   (none) -> open -> updated* -> resolved   (reopen only via a NEW create
-//   decision from the sweeper after the flap-suppression window, never by a
-//   stale queued row from the previous life.)
+//
+//	(none) -> open -> updated* -> resolved   (reopen only via a NEW create
+//	decision from the sweeper after the flap-suppression window, never by a
+//	stale queued row from the previous life.)
 func (w *ticketWorker) dispatch(ctx context.Context, adapter ticketAdapter, cfg ticketSystemConfig, it ticketOutboxItem, now time.Time) error {
 	link, linkFound, lerr := w.store.GetLink(ctx, it.TenantID, false, it.CorrObjectID, it.ExternalSystem)
 	if lerr != nil {
@@ -242,9 +243,9 @@ func (w *ticketWorker) linkRef(ctx context.Context, it ticketOutboxItem) (ticket
 func (w *ticketWorker) upsertLink(ctx context.Context, it ticketOutboxItem, cfg ticketSystemConfig, ref ticketRef, p ticketPayload, status string, now time.Time) {
 	t := now
 	_ = w.store.PutLink(ctx, ticketLink{
-		TenantID:        it.TenantID,
-		CorrObjectID:    it.CorrObjectID,
-		ExternalSystem:  it.ExternalSystem,
+		TenantID:       it.TenantID,
+		CorrObjectID:   it.CorrObjectID,
+		ExternalSystem: it.ExternalSystem,
 		// The BARE instance URL (not ref.URL, the full incident deep-link) —
 		// ticketStatusView appends the nav_to.do path itself.
 		InstanceURL:     cfg.InstanceURL,

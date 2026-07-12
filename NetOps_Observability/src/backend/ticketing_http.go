@@ -183,9 +183,9 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 // validateIncidentPolicy bounds the operator-supplied policy (zero-trust input).
 func validateIncidentPolicy(p incidentPolicy) error {
 	switch p.ExternalSystem {
-	case "servicenow", "pagerduty", "slack":
+	case "servicenow", "pagerduty", "slack", "jira":
 	default:
-		return errors.New("external_system must be servicenow, pagerduty, or slack")
+		return errors.New("external_system must be servicenow, pagerduty, slack, or jira")
 	}
 	if p.MinVerdict != "suspected" && p.MinVerdict != "confirmed" {
 		return errors.New("min_verdict must be suspected or confirmed")

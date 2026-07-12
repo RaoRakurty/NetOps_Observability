@@ -2831,7 +2831,7 @@ type ConnectorId = "servicenow" | "jira";
 
 const CONNECTORS: { id: ConnectorId; name: string; tagline: string; noun: string; Logo: (p: { size?: number; className?: string }) => JSX.Element }[] = [
   { id: "servicenow", name: "ServiceNow", noun: "incidents", tagline: "Promote critical incidents to ServiceNow via the Table API; auto-resolve when the alert clears.", Logo: ServiceNowLogo },
-  { id: "jira", name: "Jira", noun: "issues", tagline: "Open deduped Jira issues at or above your threshold; transition to Done on clear.", Logo: JiraLogo },
+  { id: "jira", name: "Jira", noun: "issues", tagline: "One deduped Jira issue per RCA root cause (policy-driven); transitioned to Done on resolve.", Logo: JiraLogo },
 ];
 
 const SEV = ["info", "low", "medium", "high", "critical"];
@@ -3661,8 +3661,8 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <LabeledInput label="Policy name" required value={p.name} onChange={(v) => set("name", v)}
           placeholder="e.g. Customer-impacting outages" info="A label for this policy; shown in the list and audit." />
         <LabeledSelect label="External system" value={p.external_system} onChange={(v) => set("external_system", v)}
-          options={["servicenow", "pagerduty", "slack"]}
-          info="Where this policy delivers: ServiceNow opens ITSM incidents; PagerDuty pages the on-call; Slack posts to the tenant's channel. One enabled policy per system — a tenant can run any combination." />
+          options={["servicenow", "pagerduty", "slack", "jira"]}
+          info="Where this policy delivers: ServiceNow opens ITSM incidents; PagerDuty pages the on-call; Slack posts to the tenant's channel; Jira opens issues in the tenant's project. One enabled policy per system — a tenant can run any combination." />
         <LabeledSelect label="Minimum verdict" value={p.min_verdict} onChange={(v) => set("min_verdict", v)}
           options={["suspected", "confirmed"]} info="The lowest RCA verdict that may open a ticket." />
         {p.external_system === "servicenow" && (
@@ -3688,6 +3688,13 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
           One rich message per root-cause lifecycle transition (opened / materially updated / resolved) in this tenant's
           own channel — never per raw alert. Connect the webhook under Slack channel connection on this page.
+        </p>
+      )}
+      {p.external_system === "jira" && (
+        <p className="mini-meta" style={{ margin: "var(--sp-2) 0 0" }}>
+          One deduplicated Jira issue per root cause, updated in place and transitioned to Done on resolve — never per
+          raw alert. Connect the Jira site (base URL, project, token) in <b>Incident Response → Integrations</b>. Jira
+          policies are strictly opt-in: no Jira policy, no issues.
         </p>
       )}
       {p.external_system === "servicenow" && (<>
@@ -3890,18 +3897,18 @@ export function IncidentPoliciesAdmin() {
       {sel && (
         <Modal
           title={sel.id ? "Edit incident policy" : "New incident policy"}
-          subtitle="Decide when an RCA correlation object opens a ServiceNow ticket — one ticket per root cause."
+          subtitle="Decide when an RCA correlation object reaches this destination — one ticket/page per root cause."
           wide
           onClose={() => setSel(null)}
         >
           <PolicyEditor policy={sel} canWrite={canWrite} inModal onCancel={() => setSel(null)} onSaved={() => { setSel(null); load(); }} />
         </Modal>
       )}
-      <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket or pages PagerDuty — one ticket/page per root cause, never per raw alert." />
+      <AdminHead title="RCA Auto-Ticketing" sub="Incident policies that decide when an RCA correlation object opens a ServiceNow ticket or Jira issue, pages PagerDuty, or posts to Slack — one ticket/page per root cause, never per raw alert." />
       <p className="mini-meta" style={{ marginTop: "calc(-1 * var(--sp-2))" }}>
-        Configure the ServiceNow connection in <b>Incident Response → Integrations</b>; the PagerDuty routing key below. A tenant
-        with no policy uses a safe ServiceNow default (customer-facing confirmed faults open an incident; internal / probe-only /
-        undetermined are held). PagerDuty paging is strictly opt-in: no PagerDuty policy, no pages.
+        Configure the ServiceNow and Jira connections in <b>Incident Response → Integrations</b>; the PagerDuty routing key and
+        Slack webhook below. A tenant with no policy uses a safe ServiceNow default (customer-facing confirmed faults open an
+        incident; internal / probe-only / undetermined are held). Every other destination is strictly opt-in: no policy, no delivery.
       </p>
       <PagerDutyPagingConnection />
       <SlackChannelConnection />

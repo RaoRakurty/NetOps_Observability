@@ -365,6 +365,22 @@ func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSyste
 			AuthType:    "routing_key",
 			APIToken:    pd.RoutingKey,
 		}, true
+	case "jira":
+		jr := cfg.Jira
+		if !jr.Enabled || jr.BaseURL == "" || jr.ProjectKey == "" {
+			return ticketSystemConfig{}, false
+		}
+		return ticketSystemConfig{
+			System:            "jira",
+			TenantID:          tenant,
+			InstanceURL:       jr.BaseURL,
+			AuthType:          "basic",
+			User:              jr.Email,
+			APIToken:          jr.APIToken,
+			ProjectKey:        jr.ProjectKey,
+			IssueType:         jr.IssueType,
+			ResolveTransition: jr.ResolveTransition,
+		}, true
 	}
 	return ticketSystemConfig{}, false
 }
@@ -425,7 +441,7 @@ func (s *itsmConfigStore) public(tenant string) map[string]any {
 	// (enabled + identity present) is the honest signal — it is exactly what
 	// the RCA ticketing lane resolves against.
 	snLive := cfg.ServiceNow.Enabled && cfg.ServiceNow.InstanceURL != ""
-	jrLive := cfg.Jira.Enabled && cfg.Jira.BaseURL != ""
+	jrLive := cfg.Jira.Enabled && cfg.Jira.BaseURL != "" && cfg.Jira.ProjectKey != ""
 	sn := cfg.ServiceNow
 	jr := cfg.Jira
 	return map[string]any{

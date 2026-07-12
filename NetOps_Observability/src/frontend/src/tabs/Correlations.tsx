@@ -82,8 +82,8 @@ const GROUND_NOC: Record<string, string> = { seam: "Boundary", "seam+topo": "Bou
 // NOC-recognized handles in the cell (full product name + ticket + state on the
 // tooltip). Tone follows the ticket lifecycle: live = filled blue, resolved =
 // green, failed = red, queued = amber.
-const NOTIFY_SHORT: Record<string, string> = { servicenow: "SN", pagerduty: "PD", slack: "Slack" };
-const NOTIFY_FULL: Record<string, string> = { servicenow: "ServiceNow", pagerduty: "PagerDuty", slack: "Slack" };
+const NOTIFY_SHORT: Record<string, string> = { servicenow: "SN", pagerduty: "PD", slack: "Slack", jira: "Jira" };
+const NOTIFY_FULL: Record<string, string> = { servicenow: "ServiceNow", pagerduty: "PagerDuty", slack: "Slack", jira: "Jira" };
 function notifyTone(state?: string): { tone: string; filled: boolean } {
   switch (state) {
     case "open": case "updated": return { tone: "#2563EB", filled: true };

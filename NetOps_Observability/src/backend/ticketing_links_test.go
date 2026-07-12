@@ -97,6 +97,7 @@ func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0000042", SysID: "sys42"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "pagerduty", Status: "resolved", TicketNumber: "corrA1"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "slack", Status: "open", TicketNumber: "corrA1"},
+		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "jira", Status: "open", TicketNumber: "NOC-42", SysID: "10042"},
 	} {
 		if err := s.ticketing.PutLink(ctx, l); err != nil {
 			t.Fatal(err)
@@ -115,10 +116,10 @@ func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Destinations) != 3 {
-		t.Fatalf("destinations = %d (%+v), want all 3 systems", len(out.Destinations), out.Destinations)
+	if len(out.Destinations) != len(ticketSystems) {
+		t.Fatalf("destinations = %d (%+v), want all %d systems", len(out.Destinations), out.Destinations, len(ticketSystems))
 	}
-	for i, want := range ticketSystems { // servicenow, pagerduty, slack
+	for i, want := range ticketSystems { // servicenow, pagerduty, slack, jira
 		if got := out.Destinations[i]["system"]; got != want {
 			t.Fatalf("destinations[%d].system = %v, want %s", i, got, want)
 		}

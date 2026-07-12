@@ -13,7 +13,7 @@ import { ticketStateLabel, ticketStateTone, ticketActionLabel } from "./labels";
 // A ticket is "live" (sync, not create) when it is open or updated.
 const isLive = (state?: string) => state === "open" || state === "updated";
 
-const SYSTEM_LABEL: Record<string, string> = { servicenow: "ServiceNow", pagerduty: "PagerDuty", slack: "Slack" };
+const SYSTEM_LABEL: Record<string, string> = { servicenow: "ServiceNow", pagerduty: "PagerDuty", slack: "Slack", jira: "Jira" };
 
 function fmtWhen(iso?: string | null): string {
   if (!iso) return "—";

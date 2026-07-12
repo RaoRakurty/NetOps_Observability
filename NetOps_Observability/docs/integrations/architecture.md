@@ -19,7 +19,7 @@ flowchart TB
         SN["ServiceNow adapter<br/>Table API · INC per root cause<br/>default-on MVP policy"]
         PD["PagerDuty adapter<br/>Events v2 · dedup correlix:tenant:corr:pd<br/>trigger/update/resolve one identity · OPT-IN"]
         SLK["Slack adapter<br/>tenant webhook · opened/updated/resolved<br/>messages per root cause · OPT-IN"]
-        JIRA["Jira (roadmap:<br/>same pattern)"]
+        JIRA["Jira adapter<br/>REST v2 · issue per root cause ·<br/>dedupe label correlix-id-uuid ·<br/>resolve = workflow transition · OPT-IN"]
     end
 
     subgraph PLAT["PLATFORM-GLOBAL — operator self-health lane (engine-independent)"]
@@ -30,9 +30,8 @@ flowchart TB
     end
 
     CORR --> SWEEP --> POL --> OUTBOX
-    OUTBOX --> SN & PD & SLK
-    OUTBOX -.-> JIRA
-    SN & PD & SLK --> LINKS
+    OUTBOX --> SN & PD & SLK & JIRA
+    SN & PD & SLK & JIRA --> LINKS
     RAW --> GATE
     GATE --> GPD & GSLK
     RAW -. "resolutions always pass" .-> GPD
@@ -88,7 +87,7 @@ flowchart TB
 ## Read surfaces (#103 UX-1 — "where did this go?")
 
 - `GET /api/correlations/{id}/tickets` → `destinations[]`: every destination
-  the RCA was filed to (SN + PD + Slack), plus legacy `status`/`pagerduty` keys.
+  the RCA was filed to (SN + PD + Slack + Jira), plus legacy `status`/`pagerduty` keys.
 - `GET /api/tickets/links` → all of the caller-tenant's ticket links (bounded,
   recency-first) — feeds the RCA Candidates "Notified via" column.
 - `GET /api/incidents` → `notified_via[]` per incident: RECORDED notification

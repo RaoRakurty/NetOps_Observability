@@ -74,7 +74,7 @@ const (
 // ticketSystemConfig is the connection for one external system. Secrets
 // (Password/APIToken) are write-only and never serialized back out.
 type ticketSystemConfig struct {
-	System          string `json:"system"` // servicenow | pagerduty
+	System          string `json:"system"` // servicenow | pagerduty | slack | jira
 	TenantID        string `json:"-"`      // stamped by the resolver; identity for the worker's tenant assertion + PD dedup key
 	InstanceURL     string `json:"instance_url"`
 	AuthType        string `json:"auth_type"` // basic | token
@@ -82,6 +82,11 @@ type ticketSystemConfig struct {
 	Password        string `json:"-"`
 	APIToken        string `json:"-"`
 	AssignmentGroup string `json:"assignment_group"`
+	// Jira-only (non-secret): target project, issue type, and the workflow
+	// transition (id or name) used to resolve an issue.
+	ProjectKey        string `json:"project_key,omitempty"`
+	IssueType         string `json:"issue_type,omitempty"`
+	ResolveTransition string `json:"resolve_transition,omitempty"`
 }
 
 // ticketRef identifies a created external ticket.
@@ -380,8 +385,8 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any 
 	// dedupe anchor in correlation_id / u_correlix_object_id).
 	pid := problemDisplayID(p.CorrObjectID)
 	f := map[string]any{
-		"short_description":     truncate("["+pid+"] "+p.Title, 160),
-		"description":           snowDescription(p),
+		"short_description": truncate("["+pid+"] "+p.Title, 160),
+		"description":       snowDescription(p),
 		// Every Correlix RCA ticket is a network fault — without this ServiceNow
 		// files the incident under its default category (Inquiry/Help), which
 		// misroutes it away from network queues (operator report 2026-07-11).

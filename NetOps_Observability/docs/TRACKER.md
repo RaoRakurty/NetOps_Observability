@@ -192,8 +192,30 @@ from live PG, bundle carries INC- handles. NOTE: existing incidents predate
 delivery recording → their notified_via is honestly empty; chips populate on
 new deliveries.
 
+**✅ Jira RCA policy destination SHIPPED (2026-07-12):** `jiraTicketAdapter`
+(REST v2, basic email+token, per-tenant connection reusing the existing ITSM
+Jira config — `ticketSystemConfig` case gained `jira` + ProjectKey/IssueType/
+ResolveTransition fields), quad-system `ticketSystems`, strictly OPT-IN (no
+policy → no issues). Identity: immutable issue id canonical, `[P-XXXXXX]`
+summary, dedupe label `correlix-id-<uuid>` powers crash-recovery JQL lookup
+(create adopts, never double-files); update refreshes summary/description only
+(labels/workflow untouched); resolve = workflow transition (configured hint
+else Done/Resolve/Close-like), idempotent via status-category check, no
+transition → actionable dead-letter. Priority deliberately NOT set (per-
+instance schemes 400 the create). Typed retry classes (429 Retry-After,
+400/401/403 permanent, secret-free errors), SSRF-guarded + host-pinned.
+Tests: fake Jira lifecycle/resolve semantics/adopt/retry/two-tenant isolation
++ quarantine/quad-enable/global-tenant parity (owner test extended); links
+destinations test now pins all 4 systems; full suite green. UI: policy
+dropdown + per-system explainer, RCA ticket card/notified-via chips, page
+copy. Docs: integrations/jira.md (new, runbook + honest real-app-validation
+banner) + architecture.md diagram/read-surfaces. **Real-Atlassian validation
+owner-gated** (needs a real Jira Cloud site + token, standing directive).
+
 **Remaining in #103:** inbound PD V3 webhooks (ack-sync; needs public ingress —
-deferred, documented) · Jira into the policy engine · pgstore SKIP-LOCKED e2e
+deferred, documented) · ~~Jira into the policy engine~~ ✅ 2026-07-12 (real-site
+validation owner-gated) · Jira inbound state sync (workflow-category → ITSM
+phase mapping; syncer is SN-only today) · pgstore SKIP-LOCKED e2e
 on live PG (unit-level covered; mem+pg store parity tests exist for SN path) ·
 raw-alert channel deliveries (dispatcher) are still fire-and-forget — only the
 Slack incident card is recorded; extend MarkNotified to other channels when a
