@@ -179,3 +179,57 @@ func TestPollOncePruneIsSourceScoped(t *testing.T) {
 		t.Fatalf("static device must survive netbox pruning, got %+v", devs)
 	}
 }
+
+// mergeDevices must be PURE: base/other carry the LIVE cached Labels maps
+// (Devices() returns struct copies that still share them), and dedupeDevices
+// runs under an RLock — an in-place label write is a concurrent map read/write
+// that crashes the whole API (observed in production: two records merging on
+// one IP + a collector reading dev.Labels).
+func TestMergeDevicesDoesNotMutateInputs(t *testing.T) {
+	x := models.Device{ID: "manual-1", Name: "app-host", Address: "10.60.10.10",
+		Source: "manual", Labels: map[string]string{"role": "cloud-app-host"}}
+	y := models.Device{ID: "cloud-1", Name: "app-host", Address: "10.60.10.10",
+		Source: "cloud", Labels: map[string]string{"provider": "aws"}}
+
+	got := mergeDevices(x, y)
+
+	if len(x.Labels) != 1 || x.Labels["role"] != "cloud-app-host" {
+		t.Errorf("mergeDevices mutated x.Labels: %v", x.Labels)
+	}
+	if len(y.Labels) != 1 || y.Labels["provider"] != "aws" {
+		t.Errorf("mergeDevices mutated y.Labels: %v", y.Labels)
+	}
+	if got.Labels["role"] != "cloud-app-host" || got.Labels["provider"] != "aws" {
+		t.Errorf("merge result must union labels, got %v", got.Labels)
+	}
+	if got.Labels["sources"] == "" {
+		t.Errorf("cross-source merge must record the sources label, got %v", got.Labels)
+	}
+}
+
+// Regression for the production crash: concurrent Devices() calls (dedupe/merge
+// under RLock) racing readers of the returned Labels maps. Run with -race (the
+// CI gate does): the pre-fix code fails here with a data-race report.
+func TestDevicesConcurrentMergeIsRaceFree(t *testing.T) {
+	a := NewDiscoveryAggregator()
+	// Two records that merge on the shared IP → every Devices() call folds labels.
+	a.Upsert(models.Device{ID: "manual-1", Name: "app-host", Address: "10.60.10.10",
+		Source: "manual", Labels: map[string]string{"role": "cloud-app-host"}})
+	a.Upsert(models.Device{ID: "cloud-1", Name: "app-host", Address: "10.60.10.10",
+		Source: "cloud", Labels: map[string]string{"provider": "aws"}})
+
+	done := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < 200; j++ {
+				for _, d := range a.Devices() {
+					_ = d.Labels["gnmi"] // the exact read that crashed (main.go target builder)
+				}
+			}
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		<-done
+	}
+}

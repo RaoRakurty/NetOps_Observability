@@ -366,30 +366,29 @@ func mergeDevices(x, y models.Device) models.Device {
 	if other.LastSeen.After(base.LastSeen) {
 		base.LastSeen = other.LastSeen
 	}
-	if len(other.Labels) > 0 {
-		if base.Labels == nil {
-			base.Labels = map[string]string{}
+	// COPY-ON-WRITE: base/other are struct copies, but their Labels field still
+	// points at the LIVE map in the discovery cache. dedupeDevices runs under a
+	// read lock and Devices() callers keep the returned maps past the lock, so an
+	// in-place write here is a concurrent map read/write — a fatal runtime error
+	// (crashed the API in production the moment two records merged on one IP).
+	crossSource := base.Source != other.Source && other.Source != ""
+	if len(other.Labels) > 0 || crossSource {
+		merged := make(map[string]string, len(base.Labels)+len(other.Labels)+1)
+		for k, v := range base.Labels {
+			merged[k] = v
 		}
 		for k, v := range other.Labels {
-			if _, ok := base.Labels[k]; !ok {
-				base.Labels[k] = v
+			if _, ok := merged[k]; !ok {
+				merged[k] = v
 			}
 		}
-	}
-	if base.Source != other.Source && other.Source != "" {
-		base.Labels = withSourceLabel(base.Labels, base.Source, other.Source)
+		if crossSource {
+			// Record multi-source corroboration (e.g. "snmp+netbox") for the UI.
+			merged["sources"] = base.Source + "+" + other.Source
+		}
+		base.Labels = merged
 	}
 	return base
-}
-
-// withSourceLabel records that a device was corroborated by more than one source
-// (e.g. "snmp+netbox") in the labels, for visibility in the UI.
-func withSourceLabel(labels map[string]string, a, b string) map[string]string {
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels["sources"] = a + "+" + b
-	return labels
 }
 
 func (a *DiscoveryAggregator) Get(id string) (models.Device, bool) {
