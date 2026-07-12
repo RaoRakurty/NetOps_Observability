@@ -144,11 +144,19 @@ func (p *pgStore) importFileState(ctx context.Context, dir string) error {
 }
 
 // targetEmpty reports whether the Postgres target for a backend key has no data
-// (so an import won't overwrite live state).
+// (so an import won't overwrite live state). The count MUST run under the
+// platform ('*') tenant scope — the tables are FORCE-RLS, and a bare pool query
+// carries no app.tenant_id, so every row is invisible and a populated table
+// reads as empty. That exact blindness made the "idempotent" import re-clobber
+// live api_keys/saved/snmp_profiles with the stale pre-cutover file on EVERY
+// boot (any key minted since the cutover vanished on the next restart).
 func (p *pgStore) targetEmpty(ctx context.Context, key string) (bool, error) {
 	if spec, ok := specFor(key); ok {
 		var n int
-		if err := p.db.pool.QueryRow(ctx, "SELECT count(*) FROM "+spec.table).Scan(&n); err != nil {
+		err := p.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, "SELECT count(*) FROM "+spec.table).Scan(&n)
+		})
+		if err != nil {
 			return false, err
 		}
 		return n == 0, nil
