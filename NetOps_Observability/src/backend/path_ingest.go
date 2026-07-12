@@ -51,7 +51,7 @@ func pathIngestConfigFromEnv(now time.Time) pathIngestCfg {
 	if !pathgraph.ValidDataClass(dc) {
 		dc = pathgraph.DataClassLive
 	}
-	return pathIngestCfg{
+	cfg := pathIngestCfg{
 		Tenant:         normTenant(os.Getenv("PATH_GRAPH_TENANT")),
 		DataClass:      dc,
 		Environment:    envOr("PATH_GRAPH_ENVIRONMENT", "prod"),
@@ -61,6 +61,14 @@ func pathIngestConfigFromEnv(now time.Time) pathIngestCfg {
 		VantageAddress: os.Getenv("PATH_GRAPH_VANTAGE_ADDRESS"),
 		Now:            now,
 	}
+	if cfg.VantageAddress == "" {
+		// The per-vantage map (PATH_GRAPH_VANTAGE_ADDRESSES) is the single source of
+		// truth: the default vantage's own address comes from its entry there, so the
+		// operator declares each vantage exactly once. The singular env stays as an
+		// explicit override.
+		cfg.VantageAddress = vantageAddressFor(cfg.VantageID)
+	}
+	return cfg
 }
 
 // ── network context (§2.1: an address is meaningless without one) ────────────

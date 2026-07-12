@@ -341,3 +341,19 @@ func TestOperatorEnvSeparators(t *testing.T) {
 		t.Fatalf("legacy name:cidr form: got %q", got)
 	}
 }
+
+// The default vantage's own address resolves from the per-vantage map when the
+// singular override is unset — one declaration per vantage (map is the source of
+// truth), and the explicit singular env still wins when present.
+func TestDefaultVantageAddressFromMap(t *testing.T) {
+	t.Setenv("PATH_GRAPH_VANTAGE_ID", "prober")
+	t.Setenv("PATH_GRAPH_VANTAGE_ADDRESSES", "prober=10.70.245.122")
+	t.Setenv("PATH_GRAPH_VANTAGE_ADDRESS", "")
+	if got := pathIngestConfigFromEnv(ingestNow).VantageAddress; got != "10.70.245.122" {
+		t.Fatalf("map fallback: got %q", got)
+	}
+	t.Setenv("PATH_GRAPH_VANTAGE_ADDRESS", "192.0.2.9")
+	if got := pathIngestConfigFromEnv(ingestNow).VantageAddress; got != "192.0.2.9" {
+		t.Fatalf("singular override must win: got %q", got)
+	}
+}
