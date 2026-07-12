@@ -51,6 +51,10 @@ export interface SpineNode {
   transformation?: Transformation;
   seam_id?: string;
   rtt_ms?: number;
+  // repeat_count > 1: this node stands for that many CONSECUTIVE measured TTLs
+  // with the identical answer (a dying path answers every remaining TTL from the
+  // drop point). The backend folds the ladder; the count keeps it honest.
+  repeat_count?: number;
   // OPTIONAL backend extension: which hop the RCA verdict lands on. Absent ⇒ the
   // renderer marks NO fault (it must never pick one itself).
   fault?: "broken" | "suspected" | "possible";
@@ -149,6 +153,7 @@ function readNode(v: unknown): SpineNode | null {
     transformation: oneOf(o.transformation, TRANSFORMS),
     seam_id: str(o.seam_id) || undefined,
     rtt_ms: num(o.rtt_ms),
+    repeat_count: num(o.repeat_count),
     fault: oneOf(o.fault, ["broken", "suspected", "possible"] as const),
     evidence: readEvidence(o.evidence),
   };
@@ -220,7 +225,7 @@ export function readServicePath(timeline: CorrTimeline | null | undefined): Serv
       attach_index: attach,
       class: cls,
       label: str(o.label) || branchClassLabel(cls),
-      summary: str(o.summary) || undefined,
+      summary: str(o.summary) || str(o.note) || undefined,
       count: num(o.count),
       evidence,
     });

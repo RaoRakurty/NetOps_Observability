@@ -266,6 +266,14 @@ func (s *server) buildSpineFor(ctx context.Context, tenant string, cross bool, c
 		Now:        time.Now().UTC(), Freshness: pathFreshness(),
 	}
 
+	// A partial run dies before the seam's far side can answer, so the on-path
+	// disambiguation can never stamp the seam — exactly the moment the NOC needs
+	// it. This path's OWN latest complete observation is honest evidence of which
+	// seam its terminal hop sits on; passed as a hint, rendered as inferred support.
+	if obs.Status != pathgraph.StatusComplete {
+		in.SeamHint = s.seamHintFromHistory(ctx, tenant, cross, obs, hops)
+	}
+
 	// Re-derive the rank-4/2 service tail and the rank-6 support from the CURRENT
 	// fact base, at the observation's timestamp. This is deliberate: the spine is a
 	// read model over an immutable observation, so the binding is evaluated in the
@@ -295,6 +303,48 @@ func (s *server) buildSpineFor(ctx context.Context, tenant string, cross bool, c
 		}
 	}
 	return pathgraph.BuildSpine(in)
+}
+
+// seamHintFromHistory finds the seam stamped on the current run's terminal
+// responding address by this SAME path's most recent COMPLETE observation. Same
+// path_id ⇒ same identity (tenant, endpoints, vantage, protocol, context — §2.2),
+// and same data class as the run being served, so a live spine is never hinted
+// from synthetic history. Returns nil when there is no prior complete run, when
+// its hops don't stamp a seam at that address, or when the current run has no
+// responding hop — an absent hint is an honest answer, never guessed.
+func (s *server) seamHintFromHistory(ctx context.Context, tenant string, cross bool,
+	obs pathgraph.PathObservation, hops []pathgraph.PathHop) *pathgraph.SeamHint {
+
+	var terminal string
+	for i := len(hops) - 1; i >= 0; i-- {
+		if hops[i].State == pathgraph.HopResponding && hops[i].ObservedAddress != "" {
+			terminal = strings.ToLower(strings.TrimSpace(hops[i].ObservedAddress))
+			break
+		}
+	}
+	if terminal == "" {
+		return nil
+	}
+	prior, priorHops, _, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, ObservationFilter{
+		PathID: obs.PathID, Status: pathgraph.StatusComplete,
+		DataClasses: []string{obs.DataClass}, Limit: 1,
+	})
+	if err != nil || !found {
+		return nil
+	}
+	for _, h := range priorHops {
+		if h.SeamID == "" || h.State != pathgraph.HopResponding {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(h.ObservedAddress)) == terminal {
+			return &pathgraph.SeamHint{
+				SeamID: h.SeamID, Transformation: h.Transformation,
+				EvidenceRef: firstNonEmptyStr(prior.ProvenanceID, prior.ObservationID),
+				ObservedAt:  prior.ObservedAt, DataClass: prior.DataClass,
+			}
+		}
+	}
+	return nil
 }
 
 // rcaPathBlock returns the §7 payload for embedding in the RCA read model (the

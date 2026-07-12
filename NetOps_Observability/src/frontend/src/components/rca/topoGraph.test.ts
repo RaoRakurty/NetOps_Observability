@@ -303,3 +303,60 @@ describe("network-only RCA (no service path) still renders", () => {
     expect(g.internal).toBe(true);
   });
 });
+
+// ── the C5 drill shape: the tunnel dies, the backend folds the drop-point ladder
+// into one node with repeat_count and states the terminal failure as a branch. ──
+describe("dying path (collapsed drop-point ladder)", () => {
+  const dyingTimeline = () => timeline({
+    path: {
+      status: "partial",
+      spine: [
+        { index: 0, kind: "client", label: "172.40.40.200", address: "172.40.40.200", boundary: "LAN",
+          state: "responding", evidence: ev("pv-0", "traceroute_icmp") },
+        { index: 1, kind: "lan_gateway", label: "172.40.40.1", address: "172.40.40.1", boundary: "LAN",
+          state: "responding", evidence: ev("pv-1", "traceroute_icmp", "strong") },
+        { index: 2, kind: "wan_edge", label: "10.70.245.122", address: "10.70.245.122", boundary: "SD-WAN",
+          state: "responding", transformation: "tunnel_ingress", seam_id: "sm-aws",
+          repeat_count: 28, evidence: ev("pv-2", "traceroute_icmp", "strong") },
+        { index: 3, kind: "application", label: "AWS application", boundary: "CLOUD",
+          state: "missing", entity_ref: "cloud:store-api", evidence: ev("pv-3", "transaction") },
+      ],
+      edges: [
+        { from: 0, to: 1, type: "PATH_HAS_HOP", evidence: ev("e-01", "traceroute_icmp", "strong") },
+        { from: 1, to: 2, type: "PATH_HAS_HOP", evidence: ev("e-12", "traceroute_icmp", "strong") },
+        { from: 2, to: 3, type: "SERVICE_EXPOSED_BY_ENDPOINT", evidence: ev("e-23", "transaction") },
+      ],
+      boundaries: [{ name: "LAN", from: 0, to: 1 }, { name: "SD-WAN", from: 2, to: 2 }],
+      evidence_branches: [
+        { attach_index: 2, class: "observed", note: "destination never responded in this run (partial) — the measured path terminates at this node",
+          evidence: ev("br-t", "traceroute_icmp") },
+        { attach_index: 2, class: "inferred", note: "seam sm-aws known from this path's last complete observation — the current run dies at its near endpoint; the crossing itself is not asserted",
+          evidence: ev("pv-prior", "prior_complete_observation", "candidate") },
+      ],
+    },
+    signals: [sig({ entity_type: "path", entity_id: "172.40.40.200->10.60.10.10", kind: "probe_loss" })],
+  });
+
+  it("renders the folded drop node with its repeat chip, not a ladder", () => {
+    const path = readServicePath(dyingTimeline()) as ServicePath;
+    expect(path).not.toBeNull();
+    expect(path.spine).toHaveLength(4);
+    expect(path.spine[2].repeat_count).toBe(28);
+
+    const g = layoutSpine(path, "confirmed");
+    const drop = g.nodes.find((n) => n.data.hopIndex === 2)!;
+    expect(drop.data.chips).toContain("answered 28 probes in a row");
+    expect(drop.data.chips).toContain("Tunnel start");
+  });
+
+  it("renders the unreached application as missing and keeps the terminal notes", () => {
+    const path = readServicePath(dyingTimeline()) as ServicePath;
+    const g = layoutSpine(path, "confirmed");
+    const app = g.nodes.find((n) => n.data.hopIndex === 3)!;
+    expect(app.data.hopState).toBe("missing");
+
+    const branches = path.evidence_branches.filter((b) => b.attach_index === 2);
+    expect(branches.some((b) => (b.summary ?? "").includes("destination never responded"))).toBe(true);
+    expect(branches.some((b) => (b.summary ?? "").includes("last complete observation"))).toBe(true);
+  });
+});

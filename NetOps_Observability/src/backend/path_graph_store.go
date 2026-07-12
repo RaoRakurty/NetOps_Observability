@@ -40,6 +40,7 @@ type ObservationFilter struct {
 	Protocol    string
 	VantageID   string
 	Direction   string
+	Status      string   // "" = any; e.g. StatusComplete for the seam-hint history query
 	DataClasses []string // e.g. {"live"}; empty = the store refuses (fail closed)
 	Limit       int
 }
@@ -73,6 +74,9 @@ func (f ObservationFilter) matches(o pathgraph.PathObservation, d pathgraph.Path
 		return false
 	}
 	if f.Direction != "" && d.Direction != f.Direction {
+		return false
+	}
+	if f.Status != "" && o.Status != f.Status {
 		return false
 	}
 	return true
@@ -501,7 +505,7 @@ func (s *pgchPathGraphStore) AppendObservation(ctx context.Context, def pathgrap
 func (s *pgchPathGraphStore) LatestObservation(ctx context.Context, tenant string, cross bool, f ObservationFilter) (pathgraph.PathObservation, []pathgraph.PathHop, pathgraph.PathDefinition, bool, error) {
 	obs, err := s.ListObservations(ctx, tenant, cross, ObservationFilter{
 		PathID: f.PathID, DstAddress: f.DstAddress, Protocol: f.Protocol, VantageID: f.VantageID,
-		Direction: f.Direction, DataClasses: f.DataClasses, Limit: 1,
+		Direction: f.Direction, Status: f.Status, DataClasses: f.DataClasses, Limit: 1,
 	})
 	if err != nil || len(obs) == 0 {
 		return pathgraph.PathObservation{}, nil, pathgraph.PathDefinition{}, false, err
@@ -559,6 +563,12 @@ func (s *pgchPathGraphStore) ListObservations(ctx context.Context, tenant string
 			return nil, errors.New("invalid vantage_id")
 		}
 		conds = append(conds, "vantage_id = '"+f.VantageID+"'")
+	}
+	if f.Status != "" {
+		if !isPathToken(f.Status) {
+			return nil, errors.New("invalid status")
+		}
+		conds = append(conds, "status = '"+f.Status+"'")
 	}
 	limit := f.Limit
 	if limit <= 0 || limit > 500 {

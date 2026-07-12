@@ -212,6 +212,12 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
       : faulted ? fmeta.color
       : n.kind === "client" || n.kind === "application" || n.kind === "app_endpoint" || n.kind === "service_endpoint" ? C.info
       : C.flow;
+    const chips = [
+      transform,
+      (n.repeat_count ?? 0) > 1
+        ? (blind ? `no response for ${n.repeat_count} hops` : `answered ${n.repeat_count} probes in a row`)
+        : "",
+    ].filter(Boolean) as string[];
     const sub = [
       spineKindLabel(n.kind),
       n.address && n.address !== n.label ? n.address : "",
@@ -226,7 +232,7 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
         mono: !!n.address && n.address === n.label,
         sub: sub || undefined,
         badge: faulted ? `${fmeta.sym} ${fmeta.word}` : undefined,
-        chips: transform ? [transform] : undefined,
+        chips: chips.length ? chips : undefined,
         hasIn: n.index !== path.spine[0]?.index,
         hasOut: true,
         hasBottom: (branchesByHop.get(n.index) ?? 0) > 0,

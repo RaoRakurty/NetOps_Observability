@@ -268,3 +268,151 @@ func TestUnresolvedHopStaysUnknown(t *testing.T) {
 		}
 	}
 }
+
+// ── the C5 drill shape: a tunnel dies and every remaining TTL is answered by the
+// drop point. The spine must state the fault, not draw a 28-rung ladder of it. ──
+
+func dyingPathInput(now time.Time) SpineInput {
+	at := now.Add(-time.Minute)
+	obs := labObservation(DataClassLive, at)
+	obs.Status = StatusPartial
+	hops := []PathHop{
+		{ObservationID: "ob-1", HopIndex: 1, State: HopResponding, ObservedAddress: "172.40.40.1",
+			ResolvedEntityRef: "lan-sw1", ResolutionMethod: MethodHopInventory, Confidence: ConfAuthoritative,
+			Kind: KindLANGateway, EvidenceRef: "pv-h1", ObservedAt: at, TenantID: "t_a", DataClass: DataClassLive, RTTms: 1.2},
+	}
+	// TTL 2..30: the WAN edge answers every remaining probe — packets die there.
+	for ttl := 2; ttl <= 30; ttl++ {
+		hops = append(hops, PathHop{ObservationID: "ob-1", HopIndex: ttl, State: HopResponding,
+			ObservedAddress: "10.70.245.122", ResolutionMethod: MethodUnresolved, Confidence: ConfUnknown,
+			Kind: KindUnknown, EvidenceRef: "pv-h" + ts(at), ObservedAt: at, TenantID: "t_a", DataClass: DataClassLive, RTTms: 3.9})
+	}
+	in := labSpineInput(now)
+	in.Observation = obs
+	in.Hops = hops
+	in.SeamHint = &SeamHint{SeamID: "sm-f36b592d4e76", Transformation: TransformTunnelIngress,
+		EvidenceRef: "pv-prior-complete", ObservedAt: at.Add(-10 * time.Minute), DataClass: DataClassLive}
+	return in
+}
+
+func TestDyingPathCollapsesTerminalLadder(t *testing.T) {
+	now := time.Now().UTC()
+	sp := BuildSpine(dyingPathInput(now))
+
+	// client + LAN gw + ONE collapsed drop node + app tail = 4, not 32.
+	if len(sp.Spine) != 4 {
+		t.Fatalf("ladder must collapse: want 4 spine nodes, got %d", len(sp.Spine))
+	}
+	drop := sp.Spine[2]
+	if drop.Address != "10.70.245.122" || drop.RepeatCount != 29 {
+		t.Fatalf("drop node must carry the run: got addr=%q repeat=%d", drop.Address, drop.RepeatCount)
+	}
+	if drop.State != HopResponding {
+		t.Fatalf("the drop point DID respond — state must stay responding, got %q", drop.State)
+	}
+
+	// The seam hint lands on the drop node, as membership — not as a crossing.
+	if drop.SeamID != "sm-f36b592d4e76" || drop.Transformation != TransformTunnelIngress {
+		t.Fatalf("seam hint not applied: seam=%q transform=%q", drop.SeamID, drop.Transformation)
+	}
+	for _, e := range sp.Edges {
+		if e.Type == EdgeCrossesSeam {
+			t.Fatalf("a one-sided seam must not assert a crossing edge: %+v", e)
+		}
+	}
+
+	// The app tail exists (the binding stands) but is MISSING (this run proved the
+	// destination did not answer).
+	tail := sp.Spine[3]
+	if tail.Kind != KindApplication || tail.State != HopMissing {
+		t.Fatalf("app tail must render as missing on a partial run: kind=%q state=%q", tail.Kind, tail.State)
+	}
+
+	// The honest statements ride as branches on the drop node.
+	var ladderNote, terminalNote, hintNote bool
+	for _, b := range sp.EvidenceBranches {
+		if b.Index != drop.Index {
+			continue
+		}
+		switch {
+		case b.Type == EdgeEvidenceMissing && contains(b.Note, "TTL 2–30"):
+			ladderNote = true
+		case b.Type == EdgeEvidenceMissing && contains(b.Note, "destination never responded"):
+			terminalNote = true
+		case b.Type == EdgeEvidenceSupports && b.Class == ClassInferred &&
+			contains(b.Note, "last complete observation") && b.Evidence.Ref == "pv-prior-complete":
+			hintNote = true
+		}
+	}
+	if !ladderNote || !terminalNote || !hintNote {
+		t.Fatalf("missing honest branch: ladder=%v terminal=%v hint=%v", ladderNote, terminalNote, hintNote)
+	}
+}
+
+func TestMissingRunCollapsed(t *testing.T) {
+	now := time.Now().UTC()
+	at := now.Add(-time.Minute)
+	in := labSpineInput(now)
+	in.Observation.Status = StatusPartial
+	in.SeamHint = nil
+	in.Hops = []PathHop{
+		{ObservationID: "ob-1", HopIndex: 1, State: HopResponding, ObservedAddress: "172.40.40.1",
+			Kind: KindLANGateway, ResolutionMethod: MethodHopInventory, Confidence: ConfAuthoritative,
+			EvidenceRef: "pv-h1", ObservedAt: at, TenantID: "t_a", DataClass: DataClassLive},
+		{ObservationID: "ob-1", HopIndex: 2, State: HopMissing, EvidenceRef: "pv-h2", ObservedAt: at, TenantID: "t_a", DataClass: DataClassLive},
+		{ObservationID: "ob-1", HopIndex: 3, State: HopMissing, EvidenceRef: "pv-h3", ObservedAt: at, TenantID: "t_a", DataClass: DataClassLive},
+		{ObservationID: "ob-1", HopIndex: 4, State: HopMissing, EvidenceRef: "pv-h4", ObservedAt: at, TenantID: "t_a", DataClass: DataClassLive},
+	}
+	sp := BuildSpine(in)
+	// client + LAN gw + ONE collapsed silent segment + app tail.
+	if len(sp.Spine) != 4 {
+		t.Fatalf("silent run must collapse: want 4 nodes, got %d", len(sp.Spine))
+	}
+	silent := sp.Spine[2]
+	if silent.State != HopMissing || silent.RepeatCount != 3 {
+		t.Fatalf("collapsed silent segment: state=%q repeat=%d", silent.State, silent.RepeatCount)
+	}
+	var note bool
+	for _, b := range sp.EvidenceBranches {
+		if b.Index == silent.Index && b.Type == EdgeEvidenceMissing && contains(b.Note, "hops 2–4") {
+			note = true
+		}
+	}
+	if !note {
+		t.Fatalf("collapsed silent segment must state its TTL range")
+	}
+}
+
+func TestCompleteRunIgnoresSeamHintAndKeepsTail(t *testing.T) {
+	now := time.Now().UTC()
+	in := labSpineInput(now) // status complete
+	in.SeamHint = &SeamHint{SeamID: "sm-wrong", EvidenceRef: "pv-x"}
+	sp := BuildSpine(in)
+	for _, n := range sp.Spine {
+		if n.SeamID == "sm-wrong" {
+			t.Fatalf("a complete run must never take a history hint")
+		}
+	}
+	tail := sp.Spine[len(sp.Spine)-1]
+	if tail.Kind != KindApplication || tail.State != HopResponding {
+		t.Fatalf("complete run keeps a responding app tail: %+v", tail)
+	}
+	for _, b := range sp.EvidenceBranches {
+		if contains(b.Note, "destination never responded") {
+			t.Fatalf("complete run must not carry a terminal-failure note")
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || indexOf(s, sub) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}

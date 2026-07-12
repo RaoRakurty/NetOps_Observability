@@ -56,7 +56,12 @@ type SpineNode struct {
 	State          string   `json:"state"`
 	SeamID         string   `json:"seam_id,omitempty"`
 	Transformation string   `json:"transformation,omitempty"`
-	Evidence       Evidence `json:"evidence"`
+	// RepeatCount > 1 means this node stands for that many CONSECUTIVE measured
+	// TTLs with the identical answer (same address, or the same silence). Nothing
+	// is dropped — the run is stated as a count instead of drawn as a ladder: a
+	// path dying at a gateway answers every remaining TTL from the same box.
+	RepeatCount int      `json:"repeat_count,omitempty"`
+	Evidence    Evidence `json:"evidence"`
 	// CandidateRef is surfaced for the operator, never used to build an edge (§3
 	// rank 7). It is deliberately visible: an honest "this NAME looks related" beats
 	// a silent false edge.
@@ -126,6 +131,20 @@ type ServiceTail struct {
 	DataClass   string
 }
 
+// SeamHint carries seam membership learned from THIS path's most recent COMPLETE
+// observation, for a partial run whose terminal hop is a shared seam endpoint. A
+// dying path never shows the seam's far side, so the normal on-path disambiguation
+// (path_ingest.transformAt) cannot stamp it — exactly when the NOC needs the seam
+// most. The hint is honest: it names its evidence (the prior observation) and is
+// rendered as INFERRED support, never as an asserted crossing.
+type SeamHint struct {
+	SeamID         string
+	Transformation string
+	EvidenceRef    string // the prior complete observation's provenance
+	ObservedAt     time.Time
+	DataClass      string
+}
+
 // SpineInput is everything the builder needs. The caller (the API layer) supplies
 // the immutable observation, its ORDERED hops (already resolved via §3), the client
 // endpoint that the path starts at, and — only if a rank 2/4 binding produced one —
@@ -139,6 +158,11 @@ type SpineInput struct {
 	// Supporting carries the rank-6 inferred relations keyed by hop index (1-based),
 	// so a cloud route table can EXPLAIN an observed hop without asserting it.
 	Supporting map[int][]SupportingRel
+	// SeamHint (optional) annotates the terminal responding hop of a PARTIAL
+	// observation with the seam this path is known (from its own history) to cross
+	// there. Ignored for complete observations and for hops that already carry a
+	// seam of their own.
+	SeamHint *SeamHint
 	// SessionSourceAvailable=false makes the NAT blind spot an explicit evidence
 	// gap instead of a silent absence (§4/§8).
 	SessionSourceAvailable bool
@@ -183,7 +207,13 @@ func BuildSpine(in SpineInput) Spine {
 	})
 
 	// hops 1..n — ORDERED, missing hops preserved as explicit unknown segments.
-	for _, h := range in.Hops {
+	// Consecutive TTLs with the IDENTICAL answer (same responding address, or the
+	// same silence) are folded into ONE node carrying repeat_count. A dying path
+	// answers every remaining TTL from the drop point, and a 28-rung ladder of one
+	// box HIDES the fault it proves; the fold states the same facts as a count
+	// (TTL range in the branch note) — nothing dropped, nothing bridged.
+	for _, run := range collapseHops(in.Hops) {
+		h := run.first
 		idx := len(out.Spine)
 		n := SpineNode{
 			Index: idx, Kind: hopKind(h), Label: hopLabel(h), Address: h.ObservedAddress,
@@ -194,6 +224,9 @@ func BuildSpine(in SpineInput) Spine {
 				ObservedAt: ts(h.ObservedAt), DataClass: dataClassOr(h.DataClass, obs.DataClass),
 			},
 		}
+		if run.count > 1 {
+			n.RepeatCount = run.count
+		}
 		out.Spine = append(out.Spine, n)
 
 		// off-spine evidence for this hop.
@@ -202,12 +235,24 @@ func BuildSpine(in SpineInput) Spine {
 				Type: branchProbeMetric, Index: idx, Class: ClassObserved,
 				RTTms: h.RTTms, LossPct: h.LossPct, Evidence: n.Evidence,
 			})
+			if run.count > 1 {
+				out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
+					Type: EdgeEvidenceMissing, Index: idx, Class: ClassObserved,
+					Note: fmt.Sprintf("TTL %d–%d were all answered by %s — packets did not progress past this node",
+						h.HopIndex, run.lastTTL, label(h.ObservedAddress, h.ResolvedEntityRef)),
+					Evidence: n.Evidence,
+				})
+			}
 		} else {
 			// §2.4/§8: an honest absence IS an edge. The unknown segment is recorded,
 			// not bridged.
+			note := fmt.Sprintf("hop %d did not respond (%s) — segment unknown, not bridged", h.HopIndex, h.State)
+			if run.count > 1 {
+				note = fmt.Sprintf("hops %d–%d did not respond (%s) — segment unknown, not bridged", h.HopIndex, run.lastTTL, h.State)
+			}
 			out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
 				Type: EdgeEvidenceMissing, Index: idx, Class: ClassObserved,
-				Note:     fmt.Sprintf("hop %d did not respond (%s) — segment unknown, not bridged", h.HopIndex, h.State),
+				Note:     note,
 				Evidence: n.Evidence,
 			})
 		}
@@ -237,12 +282,51 @@ func BuildSpine(in SpineInput) Spine {
 		}
 	}
 
-	// the service tail — ONLY from a rank 2/4 binding (§3/§10).
+	// A partial/failed run means the DESTINATION NEVER ANSWERED: say so, on the
+	// last hop that did. This is the §8 honest terminal statement — the path dies
+	// here, in this run, at this node.
+	if obs.Status != StatusComplete {
+		if last := lastResponding(out.Spine); last > 0 {
+			n := &out.Spine[last]
+			// The seam hint: this path's own last COMPLETE observation stamps the
+			// seam its terminal hop sits on. Applied only when the hop has none of
+			// its own — never overwritten, never asserted as a crossing edge.
+			if in.SeamHint != nil && in.SeamHint.SeamID != "" && n.SeamID == "" {
+				n.SeamID = in.SeamHint.SeamID
+				if n.Transformation == "" {
+					n.Transformation = nonNoneTransform(in.SeamHint.Transformation)
+				}
+				out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
+					Type: EdgeEvidenceSupports, Index: n.Index, Class: ClassInferred,
+					Note: "seam " + in.SeamHint.SeamID + " known from this path's last complete observation — the current run dies at its near endpoint; the crossing itself is not asserted",
+					Evidence: Evidence{
+						Ref: in.SeamHint.EvidenceRef, Method: "prior_complete_observation",
+						Confidence: ConfCandidate, ObservedAt: ts(in.SeamHint.ObservedAt),
+						DataClass: dataClassOr(in.SeamHint.DataClass, obs.DataClass),
+					},
+				})
+			}
+			out.EvidenceBranches = append(out.EvidenceBranches, EvidenceBranch{
+				Type: EdgeEvidenceMissing, Index: n.Index, Class: ClassObserved,
+				Note:     "destination never responded in this run (" + obs.Status + ") — the measured path terminates at this node",
+				Evidence: n.Evidence,
+			})
+		}
+	}
+
+	// the service tail — ONLY from a rank 2/4 binding (§3/§10). On a partial or
+	// failed run its state is MISSING: the binding says which application lives at
+	// the destination; it does not say the destination answered — this run proved
+	// it did not.
 	if in.Service != nil && Authoritative(in.Service.Method) {
 		idx := len(out.Spine)
+		tailState := HopResponding
+		if obs.Status != StatusComplete {
+			tailState = HopMissing
+		}
 		out.Spine = append(out.Spine, SpineNode{
 			Index: idx, Kind: KindApplication, Label: in.Service.Service, EntityRef: in.Service.EntityRef,
-			State: HopResponding,
+			State: tailState,
 			Evidence: Evidence{
 				Ref: in.Service.EvidenceRef, Method: in.Service.Method, Confidence: orConf(in.Service.Confidence),
 				ObservedAt: ts(in.Service.ObservedAt), DataClass: dataClassOr(in.Service.DataClass, obs.DataClass),
@@ -396,6 +480,50 @@ func boundaryOf(bs []Boundary, i int) string {
 }
 
 // ── small helpers ────────────────────────────────────────────────────────────
+
+// hopRun is a maximal run of consecutive TTLs with the identical answer.
+type hopRun struct {
+	first   PathHop
+	count   int
+	lastTTL int
+}
+
+// collapseHops folds consecutive hops that gave the identical answer — the same
+// responding address, or the same silence — into one run. Order is preserved;
+// alternating addresses (a real routing loop) are NOT folded.
+func collapseHops(hops []PathHop) []hopRun {
+	out := make([]hopRun, 0, len(hops))
+	for _, h := range hops {
+		if n := len(out); n > 0 && sameAnswer(out[n-1].first, h) {
+			out[n-1].count++
+			out[n-1].lastTTL = h.HopIndex
+			continue
+		}
+		out = append(out, hopRun{first: h, count: 1, lastTTL: h.HopIndex})
+	}
+	return out
+}
+
+func sameAnswer(a, b PathHop) bool {
+	if a.State != b.State {
+		return false
+	}
+	if a.State == HopResponding {
+		return a.ObservedAddress != "" && a.ObservedAddress == b.ObservedAddress
+	}
+	return true // two silent TTLs are the same absence
+}
+
+// lastResponding returns the index (in spine order) of the last RESPONDING hop
+// node, excluding the client at index 0; -1 when there is none.
+func lastResponding(nodes []SpineNode) int {
+	for i := len(nodes) - 1; i > 0; i-- {
+		if nodes[i].State == HopResponding {
+			return i
+		}
+	}
+	return -1
+}
 
 func hopKind(h PathHop) string {
 	if h.Kind != "" {
