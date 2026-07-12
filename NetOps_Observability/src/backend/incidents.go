@@ -100,6 +100,25 @@ type Incident struct {
 	ExternalSystem string    `json:"external_system,omitempty"`
 	SyncStatus    string     `json:"sync_status"`
 	LastSyncedAt  *time.Time `json:"last_synced_at,omitempty"`
+	// NotifiedVia lists the notification channels this incident was actually
+	// delivered to (derived from `notified` timeline events — a recorded
+	// delivery, never an intent). Feeds the UI "Notified via" column (#103 UX-1).
+	NotifiedVia   []string   `json:"notified_via,omitempty"`
+}
+
+// incidentDisplayID turns an internal incident id (16 hex chars) into the
+// human handle operators reference (INC-3FA2C1) — the incident-system sibling
+// of problemDisplayID (#103 UX-2: no raw hex in notifications or lists).
+// Byte-identical to the TS friendlyIncidentId. Display-only: the internal id
+// stays canonical for routes/dedup/buttons. Idempotent and safe on non-hex ids.
+func incidentDisplayID(id string) string {
+	if id == "" || strings.HasPrefix(id, "INC-") {
+		return id
+	}
+	if len(id) < 6 {
+		return id
+	}
+	return "INC-" + strings.ToUpper(id[:6])
 }
 
 // IncidentEvent is one append-only timeline entry.
@@ -150,6 +169,10 @@ type incidentsRepo interface {
 	Assign(ctx context.Context, tenant string, cross bool, id, owner, actor string) (Incident, error)
 	// MarkSync records the ITSM projection result (worker, platform scope).
 	MarkSync(ctx context.Context, id, system, externalID, externalURL, syncStatus string, at time.Time) error
+	// MarkNotified records a SUCCESSFUL notification delivery for the incident
+	// (platform scope, like MarkSync) as a `notified` timeline event — the
+	// source the notified_via read derives from. Never called on send failure.
+	MarkNotified(ctx context.Context, id, channel string) error
 	// FindByExternalTicket resolves an incident from its ITSM ticket id (the
 	// external_ticket_id forward link) for INBOUND reconciliation. Tenant-scoped.
 	FindByExternalTicket(ctx context.Context, tenant, system, externalID string) (Incident, bool, error)

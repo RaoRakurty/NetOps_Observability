@@ -54,10 +54,14 @@ func (s *Slack) Send(a models.Alert) error {
 // (see integration/slack.go: ack_incident/resolve_incident/escalate_incident).
 type IncidentNotice struct {
 	IncidentID string
-	Title      string
-	Severity   string
-	Status     string
-	URL        string // optional deep link into the NetOps UI
+	// DisplayID is the human handle shown in the message text (INC-XXXXXX,
+	// #103 UX-2 — no raw hex in operator-facing copy). The buttons' value stays
+	// IncidentID: that is the inbound translator's contract.
+	DisplayID string
+	Title     string
+	Severity  string
+	Status    string
+	URL       string // optional deep link into the NetOps UI
 }
 
 // SendIncident posts an interactive incident message (Block Kit) to the webhook.
@@ -84,7 +88,13 @@ func (s *Slack) SendIncident(n IncidentNotice) error {
 // unit-tested directly. action_ids MUST match integration/slack.go's slackAction.
 func BuildIncidentBlocks(n IncidentNotice) map[string]any {
 	headline := fmt.Sprintf("*[%s] %s*", strings.ToUpper(n.Severity), n.Title)
-	statusLine := fmt.Sprintf("Status: `%s`  ·  Incident `%s`", n.Status, n.IncidentID)
+	// Show the human handle when the caller supplies one; the raw id stays in
+	// the button values (the inbound translator's correlation contract).
+	shownID := n.DisplayID
+	if shownID == "" {
+		shownID = n.IncidentID
+	}
+	statusLine := fmt.Sprintf("Status: `%s`  ·  Incident `%s`", n.Status, shownID)
 
 	button := func(text, actionID, style string) map[string]any {
 		b := map[string]any{

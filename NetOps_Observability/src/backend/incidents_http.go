@@ -88,9 +88,18 @@ func (s *server) notifyIncidentSlackActions(inc Incident) {
 	}
 	go func() {
 		if err := notify.NewSlack(url).SendIncident(notify.IncidentNotice{
-			IncidentID: inc.ID, Title: inc.Title, Severity: inc.Severity, Status: inc.Status,
+			IncidentID: inc.ID, DisplayID: incidentDisplayID(inc.ID),
+			Title: inc.Title, Severity: inc.Severity, Status: inc.Status,
 		}); err != nil {
 			logError("incidents", "slack incident actions", map[string]any{"incident_id": inc.ID, "error": err.Error()})
+			return
+		}
+		// Record the delivery on the incident timeline (feeds the "Notified via"
+		// column, #103 UX-1). Best-effort: bookkeeping must never fail alerting.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.incidents.MarkNotified(ctx, inc.ID, "slack"); err != nil {
+			logError("incidents", "record slack delivery", map[string]any{"incident_id": inc.ID, "error": err.Error()})
 		}
 	}()
 }

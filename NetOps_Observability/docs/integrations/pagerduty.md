@@ -102,6 +102,11 @@ cause, updated in place, auto-resolved on recovery.
 - Delivery: transactional outbox + SKIP-LOCKED worker, backoff + jitter,
   429 honors Retry-After, 400/401/403 dead-letter (permanent), tenant-match
   asserted before every external call (mismatch = quarantined, never sent).
+- Display identity (#103 UX-2): the incident summary leads with the friendly
+  Correlix Problem ID — `[P-XXXXXX] Confirmed local link fault on edge1` — and
+  `custom_details.problem_id` carries the same handle (the one the RCA
+  Inspector and ServiceNow tickets show). The correlation UUID stays canonical
+  in `dedup_key` and `custom_details.correlation_id`.
 
 ## 6. Platform self-health lane (the global key's ONLY job)
 

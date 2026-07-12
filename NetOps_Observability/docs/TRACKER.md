@@ -171,14 +171,33 @@ returns real SN links (INC0010522…), join target present in list window,
 deployed bundle serves the new column/card. Also classified the #103
 `/api/itsm/{pagerduty,slack}-rca` routes in the isolation ledger (were
 unclassified — full suite was red on `TestEveryRouteClassified`).
-NOTE (owner decision pending): the Operational Incidents tab "Ticket" column
-(legacy alert system) was NOT reworked — deliberate, that lane was just
-deprecated; decide whether it deserves notified-via semantics at all.
+**✅ Operational-Incidents notified-via + connected-objects sweep SHIPPED
+(2026-07-12, owner-directed, live-verified):** Incidents tab "Ticket" column →
+"Notified via" (ITSM ticket chip + RECORDED notification-delivery chips, honest
+"—" when nothing recorded); new `INC-XXXXXX` display handle (Go
+`incidentDisplayID` ↔ TS `friendlyIncidentId`, byte-identical, parity-tested)
+on the list ID column, Inspector subtitle, detail header AND the Slack
+interactive incident card (buttons keep the raw id — inbound translator
+contract, pinned by `TestSlackIncidentDisplayID`); Slack card delivery now
+RECORDED as a `notified` incident-timeline event (`MarkNotified`, platform
+scope like MarkSync) and `notified_via[]` derived from those events on
+list/get (correlated subquery — no migration; timeline = source of truth;
+delivery record, never intent). PG-gated test `TestIncidentNotifiedVia_PG`
+run GREEN against real Postgres (throwaway DB `netops_pgtest` on the lab
+postgres container — NEVER point `DATABASE_URL_TEST` at the live DB, the
+harness drops schema `public`). Docs synced: architecture.md invariant 11
+(display identity) + "Read surfaces" section, pagerduty.md §5 + slack.md §6
+payload-identity notes. Live-verified: `/api/incidents` serves `notified_via`
+from live PG, bundle carries INC- handles. NOTE: existing incidents predate
+delivery recording → their notified_via is honestly empty; chips populate on
+new deliveries.
 
 **Remaining in #103:** inbound PD V3 webhooks (ack-sync; needs public ingress —
 deferred, documented) · Jira into the policy engine · pgstore SKIP-LOCKED e2e
 on live PG (unit-level covered; mem+pg store parity tests exist for SN path) ·
-Operational-Incidents-tab notified-via decision (owner).
+raw-alert channel deliveries (dispatcher) are still fire-and-forget — only the
+Slack incident card is recorded; extend MarkNotified to other channels when a
+per-incident delivery seam exists.
 
 Owner question: *"if the same customer wants auto-ticketing to Slack, PagerDuty,
 ServiceNow AND Jira — how does our system work? Have we designed this

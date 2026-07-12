@@ -159,3 +159,13 @@ PUT /api/itsm/slack-rca) + a policy with External system = slack. One rich
 message per root-cause lifecycle transition (opened / materially updated /
 resolved) — never per raw alert; update noise is bounded by the payload-hash
 gate. Strictly opt-in per tenant. Architecture: integrations/architecture.md.
+
+Message identity (#103 UX-2): every message names the incident by its friendly
+Problem ID — title `Opened: [P-XXXXXX] <cause>`, footer `Correlix RCA ·
+P-XXXXXX`, resolve `Resolved — incident P-XXXXXX cleared` — the same handle
+shown in the RCA Inspector and any ServiceNow/PagerDuty twin. No raw UUIDs or
+hash refs in operator-facing copy; the UUID stays canonical in the dedup key.
+Likewise the PLATFORM incident card (Tier 2, §3) shows `INC-XXXXXX` while its
+buttons keep the raw internal id (the inbound translator's contract), and a
+successful card delivery is recorded on the incident timeline — that record
+feeds the Incidents page "Notified via" column.

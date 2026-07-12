@@ -4,6 +4,7 @@ import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { useWorkspace } from "../context/workspace";
+import { friendlyIncidentId } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 
 // Incidents — the actionable system-of-record view. Lists incidents (deduped from
@@ -20,6 +21,25 @@ const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 type Action = "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | "assign";
 
 const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : "—");
+
+// "Notified via" chips (#103 UX-1) — same visual language as the RCA Candidates
+// column: the ITSM ticket (when one was filed) plus every RECORDED notification
+// delivery. Nothing recorded → honest "—".
+const CHANNEL_LABEL: Record<string, string> = {
+  slack: "Slack", pagerduty: "PagerDuty", email: "Email", sns: "SNS",
+  twilio: "SMS", teams: "Teams", ntfy: "Push", servicenow: "SN", jira: "Jira",
+};
+const channelLabel = (c: string) =>
+  CHANNEL_LABEL[c] ?? (c ? c.charAt(0).toUpperCase() + c.slice(1) : c);
+const ITSM_SHORT: Record<string, string> = { servicenow: "SN", jira: "Jira" };
+function notifyPill(text: string, tone: string, filled = false): React.ReactNode {
+  return <span style={{
+    fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, padding: "1px 6px", borderRadius: 4,
+    whiteSpace: "nowrap",
+    color: filled ? "#ffffff" : tone, background: filled ? tone : tone + "1c",
+    border: `1px solid ${tone}55`,
+  }}>{text}</span>;
+}
 
 export default function Incidents() {
   const [status, setStatus] = useState("open");
@@ -63,25 +83,38 @@ export default function Incidents() {
     if (ws.enabled) {
       ws.openInspector(<IncidentDetailBody incident={i} onChanged={load} />, {
         title: i.title,
-        subtitle: `${i.severity} · ${i.status}`,
+        subtitle: `${friendlyIncidentId(i.id)} · ${i.severity} · ${i.status}`,
       });
     }
   };
 
-  const ticketCell = (i: Incident) =>
-    i.external_ticket_id ? (
-      i.external_url ? (
-        <a href={i.external_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-          {i.external_system}: {i.external_ticket_id}
-        </a>
-      ) : (
-        <span>{i.external_system}: {i.external_ticket_id}</span>
-      )
-    ) : (
-      <span className="badge" title={`sync: ${i.sync_status}`}>{i.sync_status === "pending" ? "syncing…" : "—"}</span>
-    );
+  // Where this incident actually went: the ITSM ticket (linked, when the
+  // projection filed one) + every recorded notification delivery (#103 UX-1 —
+  // "Slack is a notification, not a ticket": distinct chip, same cell).
+  const notifiedCell = (i: Incident) => {
+    const chips: React.ReactNode[] = [];
+    if (i.external_ticket_id) {
+      const label = `${ITSM_SHORT[i.external_system ?? ""] ?? channelLabel(i.external_system ?? "")} ${i.external_ticket_id}`;
+      const pill = notifyPill(label, "#2563EB", true);
+      chips.push(i.external_url
+        ? <a key="itsm" href={i.external_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            title={`${i.external_system}: ${i.external_ticket_id} — open ticket`} style={{ textDecoration: "none" }}>{pill}</a>
+        : <span key="itsm" title={`${i.external_system}: ${i.external_ticket_id}`}>{pill}</span>);
+    } else if (i.sync_status === "pending") {
+      chips.push(<span key="sync" title="ITSM ticket sync in progress">{notifyPill("syncing…", "#D97706")}</span>);
+    }
+    (i.notified_via ?? []).forEach((c) => {
+      chips.push(<span key={c} title={`Notification delivered via ${channelLabel(c)}`}>{notifyPill(channelLabel(c), "#7C3AED")}</span>);
+    });
+    if (chips.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
+    return <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>{chips}</span>;
+  };
 
   const columns = useMemo<Column<Incident>[]>(() => [
+    // #103 UX-2: the human incident handle — same INC-XXXXXX the Slack card shows.
+    { key: "display_id", header: "ID", width: 96, sortable: true,
+      text: (i) => friendlyIncidentId(i.id),
+      render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }} title={i.id}>{friendlyIncidentId(i.id)}</span> },
     { key: "severity", header: "Severity", width: 84, sortable: true,
       text: (i) => i.severity, sortValue: (i) => severityRank(i.severity),
       render: (i) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span> },
@@ -93,8 +126,9 @@ export default function Incidents() {
       sortValue: (i) => Number(i.occurrences) || 0, render: (i) => i.occurrences },
     { key: "source", header: "Source", width: 92, text: (i) => i.source_type,
       render: (i) => <span style={{ fontSize: 12, color: "var(--muted)" }}>{i.source_type}</span> },
-    { key: "ticket", header: "Ticket", width: 140, text: (i) => i.external_ticket_id ?? "",
-      render: (i) => <span style={{ fontSize: 12 }}>{ticketCell(i)}</span> },
+    { key: "notified", header: "Notified via", width: 168,
+      text: (i) => [i.external_ticket_id ?? "", ...(i.notified_via ?? []).map(channelLabel)].filter(Boolean).join(" "),
+      render: (i) => notifiedCell(i) },
     { key: "last_seen", header: "Last seen", width: 170, sortable: true,
       sortValue: (i) => new Date(i.last_seen_at ?? 0).getTime() || 0,
       render: (i) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{fmt(i.last_seen_at)}</span> },
@@ -223,7 +257,8 @@ export function IncidentDetailBody({ incident, onChanged }: { incident: Incident
           <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {inc.title}
         </h2>
         <span style={{ color: "var(--muted)", fontSize: 12 }}>
-          {inc.status} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)}
+          <span style={{ fontFamily: "var(--font-mono)" }} title={inc.id}>{friendlyIncidentId(inc.id)}</span>
+          {" · "}{inc.status} · {inc.occurrences}× · opened {fmt(inc.first_seen_at)}
         </span>
       </div>
       {inc.description && <p style={{ color: "var(--muted)", fontSize: 13 }}>{inc.description}</p>}
@@ -342,6 +377,8 @@ function renderPayload(ev: TimelineEntry): string {
       return `owner → ${p.owner}`;
     case "sync":
       return `${p.system ?? ""} ${p.external_ticket_id ?? ""} (${p.sync_status ?? ""})`.trim();
+    case "notified":
+      return `notification delivered via ${channelLabel(String(p.channel ?? ""))}`;
     case "dedup":
       return "recurrence folded in";
     case "created":

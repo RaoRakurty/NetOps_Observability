@@ -303,6 +303,7 @@ export type Incident = {
   external_system?: string;
   sync_status: string;
   last_synced_at?: string;
+  notified_via?: string[]; // recorded notification deliveries (#103 UX-1)
 };
 
 export type IncidentEvent = {

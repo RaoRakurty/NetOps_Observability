@@ -76,4 +76,22 @@ flowchart TB
    discriminator in keys and the one-enabled-policy invariant. Multi-
    connection (two PD services, regional SNOW instances) extends the same
    fields with a real connection id + migration; nothing hard-codes against it.
-```
+11. **Human display identity (#103 UX-2)**: every operator-facing string leads
+   with the friendly handle — `P-XXXXXX` for RCA problems (ServiceNow
+   short-description/custom field, PagerDuty summary + `problem_id` detail,
+   Slack title/footer/resolve), `INC-XXXXXX` for operational incidents (Slack
+   incident card, Incidents list). Raw UUIDs / internal ids NEVER appear in
+   operator copy but stay canonical in dedup keys, button values, and APIs.
+   Derivations are byte-identical Go↔TS (`problemDisplayID`/`friendlyProblemId`,
+   `incidentDisplayID`/`friendlyIncidentId`).
+
+## Read surfaces (#103 UX-1 — "where did this go?")
+
+- `GET /api/correlations/{id}/tickets` → `destinations[]`: every destination
+  the RCA was filed to (SN + PD + Slack), plus legacy `status`/`pagerduty` keys.
+- `GET /api/tickets/links` → all of the caller-tenant's ticket links (bounded,
+  recency-first) — feeds the RCA Candidates "Notified via" column.
+- `GET /api/incidents` → `notified_via[]` per incident: RECORDED notification
+  deliveries (derived from `notified` timeline events; a delivery record,
+  never an intent) — feeds the Operational Incidents "Notified via" column
+  alongside the ITSM ticket chip.

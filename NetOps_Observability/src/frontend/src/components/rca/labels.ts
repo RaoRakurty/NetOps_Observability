@@ -147,6 +147,16 @@ export function friendlyProblemId(corrId: string): string {
   return "P-" + hex.slice(0, 6).toUpperCase();
 }
 
+// friendlyIncidentId is the Incident-system sibling of friendlyProblemId
+// (INC-8591A3 from a 16-hex internal id) — byte-identical to the Go backend's
+// incidentDisplayID, so Slack cards, the Incidents list and the Inspector show
+// ONE handle (#103 UX-2). Display-only; the internal id stays canonical.
+export function friendlyIncidentId(id: string): string {
+  if (!id || id.startsWith("INC-")) return id;
+  if (id.length < 6) return id;
+  return "INC-" + id.slice(0, 6).toUpperCase();
+}
+
 export function signatureNocTitle(id: string): string {
   if (SIG_NOC_TITLE[id]) return SIG_NOC_TITLE[id];
   if (/cloud/.test(id)) return "Cloud service-path change";

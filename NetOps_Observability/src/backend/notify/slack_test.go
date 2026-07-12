@@ -142,3 +142,45 @@ func TestSlackSeverityGate(t *testing.T) {
 		t.Fatalf("critical alert should pass the gate, calls = %d", calls)
 	}
 }
+
+// TestSlackIncidentDisplayID pins #103 UX-2 for the incident card: the message
+// TEXT shows the human handle (INC-XXXXXX), while every button value keeps the
+// raw internal id — that is the inbound translator's correlation contract.
+func TestSlackIncidentDisplayID(t *testing.T) {
+	blocks := BuildIncidentBlocks(IncidentNotice{
+		IncidentID: "8591a323df59f393", DisplayID: "INC-8591A3",
+		Title: "BGP down", Severity: "critical", Status: "open",
+	})
+	raw, _ := json.Marshal(blocks)
+	s := string(raw)
+	if !strings.Contains(s, "INC-8591A3") {
+		t.Errorf("card must show the human handle, got %s", s)
+	}
+	if strings.Contains(s, "Incident `8591a323df59f393`") {
+		t.Errorf("raw hex leaked into the operator-facing status line: %s", s)
+	}
+	var msg struct {
+		Blocks []struct {
+			Elements []struct {
+				Value string `json:"value"`
+			} `json:"elements"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range msg.Blocks {
+		for _, e := range b.Elements {
+			if e.Value != "" && e.Value != "8591a323df59f393" {
+				t.Errorf("button value = %q, must stay the RAW internal id", e.Value)
+			}
+		}
+	}
+	// Without a DisplayID (older callers) the card still renders the raw id.
+	fallback, _ := json.Marshal(BuildIncidentBlocks(IncidentNotice{
+		IncidentID: "inc-123", Title: "x", Severity: "info", Status: "open",
+	}))
+	if !strings.Contains(string(fallback), "inc-123") {
+		t.Errorf("fallback card lost its identifier: %s", fallback)
+	}
+}

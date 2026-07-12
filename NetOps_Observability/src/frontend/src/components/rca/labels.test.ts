@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { signatureNocTitle, friendlyProblemId } from "./labels";
+import { signatureNocTitle, friendlyProblemId, friendlyIncidentId } from "./labels";
 
 // Friendly Problem ID — the NOC handle shown in the Action Queue, RCA inspector
 // and Iris AI. MUST stay byte-identical to the Go backend problemDisplayID
@@ -13,6 +13,21 @@ describe("friendlyProblemId — P-XXXXXX handle", () => {
   it("is idempotent and safe on already-friendly / empty input", () => {
     expect(friendlyProblemId("P-5564D1")).toBe("P-5564D1");
     expect(friendlyProblemId("")).toBe("");
+  });
+});
+
+// Friendly Incident ID — the Incident-system sibling (#103 UX-2). MUST stay
+// byte-identical to the Go backend incidentDisplayID ("INC-" + first 6 of the
+// internal hex id, uppercased) so the Slack card, list and Inspector agree.
+describe("friendlyIncidentId — INC-XXXXXX handle", () => {
+  it("derives INC- + first 6 hex, uppercased", () => {
+    expect(friendlyIncidentId("8591a323df59f393")).toBe("INC-8591A3");
+    expect(friendlyIncidentId("deadbeefcafef00d")).toBe("INC-DEADBE");
+  });
+  it("is idempotent and safe on already-friendly / short / empty input", () => {
+    expect(friendlyIncidentId("INC-8591A3")).toBe("INC-8591A3");
+    expect(friendlyIncidentId("ab12")).toBe("ab12");
+    expect(friendlyIncidentId("")).toBe("");
   });
 });
 

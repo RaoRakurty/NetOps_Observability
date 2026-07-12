@@ -321,6 +321,27 @@ func (s *pgIncidentStore) MarkSync(ctx context.Context, id, system, externalID, 
 	})
 }
 
+// MarkNotified appends a `notified` delivery event (platform scope — the notify
+// path runs outside a request principal, like MarkSync). Only successful sends
+// are recorded, so notified_via is a delivery record, never an intent.
+func (s *pgIncidentStore) MarkNotified(ctx context.Context, id, channel string) error {
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	if channel == "" {
+		return nil
+	}
+	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		var tid string
+		if err := tx.QueryRow(ctx, `SELECT tenant_id FROM incidents WHERE id=$1`, id).Scan(&tid); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errIncidentNotFound
+			}
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{"channel": channel})
+		return appendIncidentEvent(ctx, tx, id, tid, "notified", payload, "system")
+	})
+}
+
 // ---- helpers ----
 
 func appendIncidentEvent(ctx context.Context, tx pgx.Tx, incidentID, tenant, evType string, payload []byte, actor string) error {
@@ -334,11 +355,18 @@ func appendIncidentEvent(ctx context.Context, tx pgx.Tx, incidentID, tenant, evT
 	return err
 }
 
+// notified_via is derived from the recorded `notified` delivery events — a
+// bounded correlated subquery (lists are capped at 500 rows) that keeps the
+// timeline as the single source of truth, no extra column/migration.
 const selectIncidentCols = `SELECT id, tenant_id, title, COALESCE(description,''), severity, status,
 	source_type, COALESCE(source_id,''), dedup_key, COALESCE(owner,''), occurrences,
 	created_at, updated_at, first_seen_at, last_seen_at, resolved_at,
 	COALESCE(external_ticket_id,''), COALESCE(external_url,''), COALESCE(external_system,''),
-	sync_status, last_synced_at`
+	sync_status, last_synced_at,
+	COALESCE((SELECT array_agg(DISTINCT e.payload->>'channel')
+	            FROM incident_events e
+	           WHERE e.incident_id = incidents.id AND e.event_type = 'notified'
+	             AND e.payload->>'channel' IS NOT NULL), '{}') AS notified_via`
 
 func scanIncident(row pgx.Row) (Incident, bool, error) {
 	var r Incident
@@ -346,7 +374,8 @@ func scanIncident(row pgx.Row) (Incident, bool, error) {
 	if err := row.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Severity, &r.Status,
 		&r.SourceType, &r.SourceID, &r.DedupKey, &r.Owner, &r.Occurrences,
 		&r.CreatedAt, &r.UpdatedAt, &r.FirstSeenAt, &r.LastSeenAt, &resolved,
-		&r.ExternalTicket, &r.ExternalURL, &r.ExternalSystem, &r.SyncStatus, &lastSync); err != nil {
+		&r.ExternalTicket, &r.ExternalURL, &r.ExternalSystem, &r.SyncStatus, &lastSync,
+		&r.NotifiedVia); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Incident{}, false, nil
 		}
