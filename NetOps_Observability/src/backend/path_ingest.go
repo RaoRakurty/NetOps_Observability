@@ -145,25 +145,46 @@ func (n netContext) Of(addr string) string {
 type seamSide struct {
 	SeamID   string
 	SeamType string
-	Near     bool // true = the enterprise-owned side (on_prem/local)
+	Near     bool     // true = the enterprise-owned side (on_prem/local/a_ip)
+	FarSide  []string // the OTHER side's addresses — the disambiguator when one address terminates several seams
 }
 
-// seamIndex is address → seam side, built from the ACTIVE seam inventory.
-type seamIndex map[string]seamSide
+// seamIndex is address → the seam sides that address terminates, built from the
+// ACTIVE seam inventory. An address may terminate SEVERAL seams (the lab edge
+// 10.70.245.122 is the near end of both the AWS and the Azure VPN) — the index
+// keeps every candidate and the stamper disambiguates per path.
+type seamIndex map[string][]seamSide
+
+// seamEndpointSide classifies a seam endpoint KEY. Only known endpoint-address
+// keys are indexed; anything else (names, interfaces, probe_target, …) is skipped —
+// indexing a non-endpoint value would fabricate seam membership (§5).
+var seamNearKeys = map[string]bool{"on_prem": true, "local": true, "a_ip": true}
+var seamFarKeys = map[string]bool{"remote": true, "b_ip": true, "b_public_ip": true, "cloud": true}
 
 func buildSeamIndex(seams []Seam) seamIndex {
 	idx := seamIndex{}
-	nearKeys := map[string]bool{"on_prem": true, "local": true}
 	for _, s := range seams {
+		var near, far []string
 		for key, addr := range s.Endpoints {
 			addr = strings.ToLower(strings.TrimSpace(addr))
 			if addr == "" {
 				continue
 			}
-			if _, taken := idx[addr]; taken {
-				continue // first active seam wins; deterministic and never merged
+			if _, err := netip.ParseAddr(addr); err != nil {
+				continue // endpoint metadata (names, hosts) is not an address
 			}
-			idx[addr] = seamSide{SeamID: s.SeamID, SeamType: s.SeamType, Near: nearKeys[key]}
+			switch {
+			case seamNearKeys[key]:
+				near = append(near, addr)
+			case seamFarKeys[key]:
+				far = append(far, addr)
+			}
+		}
+		for _, a := range near {
+			idx[a] = append(idx[a], seamSide{SeamID: s.SeamID, SeamType: s.SeamType, Near: true, FarSide: far})
+		}
+		for _, a := range far {
+			idx[a] = append(idx[a], seamSide{SeamID: s.SeamID, SeamType: s.SeamType, Near: false, FarSide: near})
 		}
 	}
 	return idx
@@ -176,11 +197,30 @@ var tunnelSeamTypes = map[string]bool{"VPN": true, "SDWAN": true, "DX": true}
 
 // transformAt returns the explicit transformation recorded on a hop that sits on a
 // seam: ingress on the near side, egress on the far side. Nothing else is inferred.
-func (si seamIndex) transformAt(addr string) (seamID, transformation string) {
-	s, ok := si[strings.ToLower(strings.TrimSpace(addr))]
-	if !ok {
+//
+// When the address terminates SEVERAL seams (a shared enterprise edge), the path
+// itself disambiguates: the seam actually crossed is the one whose far side also
+// appears among this path's hops. If that still leaves zero or several candidates,
+// NO seam is stamped — an edge that cannot state its evidence is not emitted (§5);
+// a wrong seam id would send the NOC to the wrong tunnel.
+func (si seamIndex) transformAt(addr string, hopAddrs map[string]bool) (seamID, transformation string) {
+	cands := si[strings.ToLower(strings.TrimSpace(addr))]
+	if len(cands) > 1 {
+		var onPath []seamSide
+		for _, c := range cands {
+			for _, far := range c.FarSide {
+				if hopAddrs[far] {
+					onPath = append(onPath, c)
+					break
+				}
+			}
+		}
+		cands = onPath
+	}
+	if len(cands) != 1 {
 		return "", pathgraph.TransformNone
 	}
+	s := cands[0]
 	if !tunnelSeamTypes[s.SeamType] {
 		return s.SeamID, pathgraph.TransformNone
 	}
@@ -304,6 +344,14 @@ func buildPathRecords(cfg pathIngestCfg, facts pathgraph.PathFacts, si seamIndex
 	recs := pathRecords{Definition: def, Observation: obs, SrcEndpoint: srcEP, DstEndpoint: dstEP,
 		Supporting: map[int][]pathgraph.SupportingRel{}}
 
+	// The path's own address set (hops + destination) — the seam disambiguator.
+	hopAddrs := map[string]bool{strings.ToLower(strings.TrimSpace(p.Dst)): true}
+	for _, h := range p.Hops {
+		if ip := strings.ToLower(strings.TrimSpace(h.IP)); ip != "" {
+			hopAddrs[ip] = true
+		}
+	}
+
 	firstResponding := true
 	for i, h := range p.Hops {
 		idx := h.TTL
@@ -347,15 +395,16 @@ func buildPathRecords(cfg pathIngestCfg, facts pathgraph.PathFacts, si seamIndex
 			recs.Supporting[hop.HopIndex] = res.Supporting
 		}
 
-		// seam membership + the explicit transformation at the seam.
-		seamID, transform := si.transformAt(h.IP)
+		// seam membership + the explicit transformation at the seam. The path's own
+		// hop set disambiguates a shared seam endpoint (the far side must be on-path).
+		seamID, transform := si.transformAt(h.IP, hopAddrs)
 		hop.SeamID = seamID
 		hop.Transformation = transform
 		if res.Transformation != "" && res.Transformation != pathgraph.TransformNone {
 			hop.Transformation = res.Transformation // a rank-5 session stitch is more specific
 		}
 
-		hop.Kind = hopKindFor(res, seamID, si, h.IP, hop.NetworkContext, srcCtx, p.Dst, firstResponding)
+		hop.Kind = hopKindFor(res, seamID, transform, h.IP, hop.NetworkContext, srcCtx, p.Dst, firstResponding)
 		firstResponding = false
 		recs.Hops = append(recs.Hops, hop)
 	}
@@ -377,12 +426,14 @@ func buildPathRecords(cfg pathIngestCfg, facts pathgraph.PathFacts, si seamIndex
 // and from position (the first responding hop inside the client's own context is the
 // LAN gateway). A label never creates an edge, so an inferred label is safe where an
 // inferred identity would not be.
-func hopKindFor(res pathgraph.Resolution, seamID string, si seamIndex, addr, hopCtx, srcCtx, dst string, firstResponding bool) string {
+func hopKindFor(res pathgraph.Resolution, seamID, transform string, addr, hopCtx, srcCtx, dst string, firstResponding bool) string {
 	if res.Kind != "" && res.Authoritative {
 		return res.Kind
 	}
 	if seamID != "" {
-		if s := si[strings.ToLower(addr)]; s.Near {
+		// The stamped transformation already encodes the side: ingress = the
+		// enterprise-owned near end (WAN edge), egress = the far end (cloud edge).
+		if transform == pathgraph.TransformTunnelIngress {
 			return pathgraph.KindWANEdge
 		}
 		return pathgraph.KindCloudEdge

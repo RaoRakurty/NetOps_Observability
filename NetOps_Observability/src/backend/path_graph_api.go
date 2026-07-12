@@ -37,6 +37,36 @@ func pathFreshness() time.Duration {
 	return 15 * time.Minute
 }
 
+// pickSpineObservation chooses the observation whose spine the RCA shows, from a
+// newest-first candidate list. Fresh observations (within the live-verdict window)
+// are preferred as a group; within the group the MOST COMPLETE measured view (most
+// hops) wins and ties go to the newest — so a client-side vantage that sees the
+// whole LAN→WAN→cloud path outranks the co-located prober's constant, shorter
+// re-measurements, and a single-vantage deployment degrades to plain newest. When
+// nothing is fresh, the newest historical observation is served (still rendered,
+// marked stale by the caller). Returns nil when the list is empty.
+func pickSpineObservation(cands []pathgraph.PathObservation, now time.Time, freshness time.Duration) *pathgraph.PathObservation {
+	if len(cands) == 0 {
+		return nil
+	}
+	pool := make([]pathgraph.PathObservation, 0, len(cands))
+	for _, c := range cands {
+		if now.Sub(c.ObservedAt) <= freshness {
+			pool = append(pool, c)
+		}
+	}
+	if len(pool) == 0 {
+		return &cands[0] // nothing fresh: newest history
+	}
+	best := 0
+	for i := 1; i < len(pool); i++ {
+		if pool[i].HopCount > pool[best].HopCount { // list is newest-first, so > keeps the newest on ties
+			best = i
+		}
+	}
+	return &pool[best]
+}
+
 func parsePositiveInt(s string) int {
 	n := 0
 	for _, c := range s {
@@ -173,8 +203,27 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 		return out, http.StatusOK, nil
 	}
 
-	obs, hops, def, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, ObservationFilter{
+	// Pick WHICH vantage's spine to serve. Newest-first alone is wrong with
+	// multiple vantages: the co-located prober re-measures constantly, so its
+	// (shorter, WAN-edge-started) path is always newest and a client-side LAN
+	// vantage would never render — the exact view the spine exists to show (§10:
+	// the path starts at the client). Rule: among FRESH observations of this
+	// destination, the most complete measured view (most hops) wins; ties go to
+	// the newest. With one vantage this degrades to plain newest.
+	cands, err := s.pathGraph.ListObservations(ctx, tenant, cross, ObservationFilter{
 		DstAddress: ref.DstAddress, Protocol: ref.Protocol, VantageID: ref.VantageID,
+		DataClasses: classes, Limit: 20,
+	})
+	if err != nil {
+		return out, http.StatusBadGateway, err
+	}
+	pick := pickSpineObservation(cands, time.Now().UTC(), pathFreshness())
+	if pick == nil {
+		out.Reason = "no " + strings.Join(classes, "/") + " path observation exists for " + ref.DstAddress
+		return out, http.StatusOK, nil
+	}
+	obs, hops, def, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, ObservationFilter{
+		PathID: pick.PathID, DstAddress: ref.DstAddress, VantageID: pick.VantageID,
 		DataClasses: classes, Limit: 1,
 	})
 	if err != nil {

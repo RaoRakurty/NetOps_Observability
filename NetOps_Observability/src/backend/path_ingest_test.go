@@ -306,12 +306,52 @@ func TestSeamIndexOnlyUsesTheInventory(t *testing.T) {
 		SeamID: "sm-dia", SeamType: "DIA", State: "active",
 		Endpoints: map[string]string{"on_prem": "10.70.245.122", "provider_edge": "203.0.113.1"},
 	}})
-	id, tr := si.transformAt("10.70.245.122")
+	onPath := map[string]bool{"10.70.245.122": true, "203.0.113.1": true}
+	id, tr := si.transformAt("10.70.245.122", onPath)
 	if id != "sm-dia" || tr != pathgraph.TransformNone {
 		t.Fatalf("DIA seam produced {%s %s}, want the seam id with NO tunnel transformation", id, tr)
 	}
-	if id, tr := si.transformAt("198.51.100.1"); id != "" || tr != pathgraph.TransformNone {
+	if id, tr := si.transformAt("198.51.100.1", onPath); id != "" || tr != pathgraph.TransformNone {
 		t.Fatalf("an address that is not a seam endpoint got {%s %s}", id, tr)
+	}
+}
+
+// TestSharedSeamEndpointDisambiguatedByPath — one enterprise edge terminates TWO
+// VPN seams (the live lab: 10.70.245.122 is a_ip of both the AWS and the Azure
+// tunnel). The seam stamped on a hop must be the one whose FAR side is on this
+// path; with no on-path far side, NO seam is stamped (a wrong seam id would send
+// the NOC to the wrong tunnel). Uses the live inventory's a_ip/b_ip vocabulary,
+// and non-address endpoint metadata must never index.
+func TestSharedSeamEndpointDisambiguatedByPath(t *testing.T) {
+	si := buildSeamIndex([]Seam{
+		{SeamID: "sm-aws", SeamType: "VPN", State: "active",
+			Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.60.1.10",
+				"a_name": "netops-lab-edge", "b_host": "aws-app-host-01", "b_public_ip": "100.21.102.86"}},
+		{SeamID: "sm-azure", SeamType: "VPN", State: "active",
+			Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.61.2.10",
+				"probe_target": "10.70.245.120"}},
+	})
+	awsPath := map[string]bool{"172.40.40.1": true, "10.70.245.122": true, "10.60.1.10": true, "10.60.10.10": true}
+	if id, tr := si.transformAt("10.70.245.122", awsPath); id != "sm-aws" || tr != pathgraph.TransformTunnelIngress {
+		t.Fatalf("shared edge on the AWS path = {%s %s}, want sm-aws tunnel_ingress (near side)", id, tr)
+	}
+	azurePath := map[string]bool{"172.40.40.1": true, "10.70.245.122": true, "10.61.2.10": true, "10.61.10.10": true}
+	if id, tr := si.transformAt("10.70.245.122", azurePath); id != "sm-azure" || tr != pathgraph.TransformTunnelIngress {
+		t.Fatalf("shared edge on the Azure path = {%s %s}, want sm-azure tunnel_ingress", id, tr)
+	}
+	if id, tr := si.transformAt("10.61.2.10", azurePath); id != "sm-azure" || tr != pathgraph.TransformTunnelEgress {
+		t.Fatalf("far side = {%s %s}, want sm-azure tunnel_egress", id, tr)
+	}
+	// Ambiguous (neither far side on the path) → honest omission, not a guess.
+	if id, tr := si.transformAt("10.70.245.122", map[string]bool{"192.0.2.7": true}); id != "" || tr != pathgraph.TransformNone {
+		t.Fatalf("ambiguous shared edge = {%s %s}, want NO seam", id, tr)
+	}
+	// probe_target / names must not have been indexed as seam endpoints.
+	if id, _ := si.transformAt("10.70.245.120", map[string]bool{"10.70.245.120": true}); id != "" {
+		t.Fatalf("probe_target was indexed as a seam endpoint (%s)", id)
+	}
+	if id, _ := si.transformAt("100.21.102.86", awsPath); id != "sm-aws" {
+		t.Fatalf("b_public_ip should index as the seam's far side, got %q", id)
 	}
 }
 
