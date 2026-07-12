@@ -354,6 +354,8 @@ describe("dying path (collapsed drop-point ladder)", () => {
     const g = layoutSpine(path, "confirmed");
     const app = g.nodes.find((n) => n.data.hopIndex === 3)!;
     expect(app.data.hopState).toBe("missing");
+    // The app we PROVED unreachable keeps its name — never "Unknown hop".
+    expect(app.data.label).toBe("AWS application");
 
     const branches = path.evidence_branches.filter((b) => b.attach_index === 2);
     expect(branches.some((b) => (b.summary ?? "").includes("destination never responded"))).toBe(true);

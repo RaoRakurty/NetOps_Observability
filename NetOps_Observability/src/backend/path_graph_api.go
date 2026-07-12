@@ -332,17 +332,64 @@ func (s *server) seamHintFromHistory(ctx context.Context, tenant string, cross b
 	if err != nil || !found {
 		return nil
 	}
+	var seams []Seam
+	if s.seams != nil {
+		if inv, serr := s.seams.List(ctx, tenant, cross, "active", ""); serr == nil {
+			seams = inv
+		}
+	}
+	return seamHintFrom(prior, priorHops, terminal, seams)
+}
+
+// seamHintFrom derives the hint from two evidenced facts and nothing else. Pure.
+//
+// Rule (a) — direct: the prior complete run stamped a seam on the SAME address the
+// current run dies at (a LAN vantage sees the tunnel-start hop when healthy).
+//
+// Rule (b) — endpoint: the prior run proves WHICH seam this path crosses (exactly
+// one seam id among its hop stamps — two would be ambiguous, so no hint), and the
+// seam inventory states the terminal address is one of that seam's endpoints (a
+// co-located vantage never sees its own edge as a hop when healthy, but the dying
+// run terminates on it). The transformation follows the side the inventory names,
+// tunnel types only — same rule as ingest's transformAt.
+func seamHintFrom(prior pathgraph.PathObservation, priorHops []pathgraph.PathHop, terminal string, seams []Seam) *pathgraph.SeamHint {
+	hint := func(seamID, transformation string) *pathgraph.SeamHint {
+		return &pathgraph.SeamHint{
+			SeamID: seamID, Transformation: transformation,
+			EvidenceRef: firstNonEmptyStr(prior.ProvenanceID, prior.ObservationID),
+			ObservedAt:  prior.ObservedAt, DataClass: prior.DataClass,
+		}
+	}
+	crossed := "" // the ONE seam this path is known to cross ("" = none, "*" = ambiguous)
 	for _, h := range priorHops {
 		if h.SeamID == "" || h.State != pathgraph.HopResponding {
 			continue
 		}
 		if strings.ToLower(strings.TrimSpace(h.ObservedAddress)) == terminal {
-			return &pathgraph.SeamHint{
-				SeamID: h.SeamID, Transformation: h.Transformation,
-				EvidenceRef: firstNonEmptyStr(prior.ProvenanceID, prior.ObservationID),
-				ObservedAt:  prior.ObservedAt, DataClass: prior.DataClass,
+			return hint(h.SeamID, h.Transformation) // rule (a)
+		}
+		if crossed != "" && crossed != h.SeamID {
+			crossed = "*"
+		} else if crossed != "*" {
+			crossed = h.SeamID
+		}
+	}
+	if crossed == "" || crossed == "*" {
+		return nil
+	}
+	for _, side := range buildSeamIndex(seams)[terminal] {
+		if side.SeamID != crossed {
+			continue
+		}
+		transformation := pathgraph.TransformNone
+		if tunnelSeamTypes[side.SeamType] {
+			if side.Near {
+				transformation = pathgraph.TransformTunnelIngress
+			} else {
+				transformation = pathgraph.TransformTunnelEgress
 			}
 		}
+		return hint(crossed, transformation) // rule (b)
 	}
 	return nil
 }

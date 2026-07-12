@@ -86,3 +86,62 @@ func TestSeamHintFromHistory(t *testing.T) {
 		t.Fatalf("terminal address absent from history must yield no hint, got %+v", h)
 	}
 }
+
+// Rule (b): a co-located vantage never sees its own edge as a hop when healthy
+// (the prior run stamps the seam only on the FAR side), but the dying run
+// terminates ON the edge — which the seam inventory names as the seam's near
+// endpoint. Two evidenced facts combine; ambiguity or an unknown endpoint yields
+// nothing.
+func TestSeamHintFromEndpointRule(t *testing.T) {
+	now := time.Date(2026, 7, 12, 22, 0, 0, 0, time.UTC)
+	prior := pathgraph.PathObservation{
+		ObservationID: "ob-complete", PathID: "pd-x", ObservedAt: now.Add(-10 * time.Minute),
+		Status: pathgraph.StatusComplete,
+		Provenance: pathgraph.Provenance{TenantID: "t_hint", DataClass: pathgraph.DataClassLive,
+			Environment: "lab", ProvenanceID: "pv-ob-complete", ProducerID: "test", RunID: "r1"},
+	}
+	respond := func(ttl int, addr, seam, transform string) pathgraph.PathHop {
+		if transform == "" {
+			transform = pathgraph.TransformNone
+		}
+		return pathgraph.PathHop{HopIndex: ttl, State: pathgraph.HopResponding, ObservedAddress: addr,
+			SeamID: seam, Transformation: transform}
+	}
+	// The prober's healthy path: container gw → NVA (far side, egress) → app.
+	priorHops := []pathgraph.PathHop{
+		respond(1, "172.18.0.1", "", ""),
+		respond(2, "10.60.1.10", "sm-f36b592d4e76", pathgraph.TransformTunnelEgress),
+		respond(3, "10.60.10.10", "", ""),
+	}
+	seams := []Seam{{
+		SeamID: "sm-f36b592d4e76", SeamType: "VPN",
+		Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.60.1.10", "b_public_ip": "100.21.102.86"},
+	}}
+
+	h := seamHintFrom(prior, priorHops, "10.70.245.122", seams)
+	if h == nil || h.SeamID != "sm-f36b592d4e76" || h.Transformation != pathgraph.TransformTunnelIngress {
+		t.Fatalf("terminal on the seam's NEAR endpoint must hint ingress, got %+v", h)
+	}
+	if h.EvidenceRef != "pv-ob-complete" {
+		t.Fatalf("hint must cite the prior observation, got %q", h.EvidenceRef)
+	}
+
+	// An address that is no endpoint of the crossed seam yields nothing.
+	if h := seamHintFrom(prior, priorHops, "192.0.2.99", seams); h != nil {
+		t.Fatalf("non-endpoint terminal must yield no hint, got %+v", h)
+	}
+
+	// Two distinct seams in history = ambiguous = no endpoint-rule hint.
+	twoSeams := append([]pathgraph.PathHop{}, priorHops...)
+	twoSeams = append(twoSeams, respond(4, "10.99.0.1", "sm-other", pathgraph.TransformTunnelEgress))
+	if h := seamHintFrom(prior, twoSeams, "10.70.245.122", seams); h != nil {
+		t.Fatalf("ambiguous seam history must yield no hint, got %+v", h)
+	}
+
+	// A DIA (non-tunnel) seam hints membership without a transformation.
+	diaHops := []pathgraph.PathHop{respond(1, "10.5.0.1", "sm-dia", pathgraph.TransformNone)}
+	dia := []Seam{{SeamID: "sm-dia", SeamType: "DIA", Endpoints: map[string]string{"on_prem": "172.40.40.52"}}}
+	if h := seamHintFrom(prior, diaHops, "172.40.40.52", dia); h == nil || h.SeamID != "sm-dia" || h.Transformation != pathgraph.TransformNone {
+		t.Fatalf("non-tunnel seam hints membership only, got %+v", h)
+	}
+}

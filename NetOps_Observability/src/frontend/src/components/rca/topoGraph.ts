@@ -228,7 +228,10 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
       id: id(n.index), x: n.index * COL_SPINE, y: 0,
       data: {
         kind: hopShape(n), tone, pulse: faulted,
-        label: blind && !n.address ? "Unknown hop" : n.label,
+        // A silent hop with no identity renders as "Unknown hop" — but a KNOWN
+        // endpoint that didn't answer keeps its name (the application the run
+        // proved unreachable is the headline, not a mystery).
+        label: blind && !n.address && n.kind === "unknown" ? "Unknown hop" : n.label,
         mono: !!n.address && n.address === n.label,
         sub: sub || undefined,
         badge: faulted ? `${fmeta.sym} ${fmeta.word}` : undefined,
