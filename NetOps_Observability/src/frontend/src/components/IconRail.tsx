@@ -4,6 +4,7 @@ import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
+import eyeRail from "../assets/brand/eye-rail.webp";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
@@ -163,11 +164,10 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         title={BRAND}
         aria-label={BRAND}
       >
-        {/* Interim brand mark (the eye artwork is parked while the logo
-            program lands a final mark — see the brand board). Kept at the
+        {/* Owner-supplied eye mark (2026-07-12, brand program) at the
             nav-glyph scale so the rail head stays quiet and slim. */}
         <span className="rail-brand-mark" aria-hidden="true">
-          <Icon name="logo" size={22} />
+          <img src={eyeRail} alt="" width={22} height={22} />
         </span>
         <span className="rail-brand-name">{BRAND}</span>
       </button>
