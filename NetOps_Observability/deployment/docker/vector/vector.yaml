@@ -382,7 +382,70 @@ transforms:
 # SINKS — Kafka netops.* topics, one per signal.
 # ----------------------------------------------------------------------------
 
+  # Cloud fault-lab / cloud-workload app logs arrive as RFC5424 syslog whose msg
+  # is "cloud=<provider> {json}" (json: service, app_id, level, journey_ok,
+  # trace_id, run_id). Fault lines (failed journey or error/crit) ALSO become
+  # netops.cloud cloud_health events so the correlation engine sees an APP-entity
+  # cloud signal (#81 P3G lane). Healthy lines stay syslog-only. Tenant: cloud
+  # events must carry an explicit tenant_id; the device_tenant enrichment keyed
+  # on the sending hostname decides it, "" (no match) → "global" platform view.
+  cloud_app_health:
+    type: remap
+    inputs: [syslog_normalized]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      raw = string!(.message)
+      parsed, rerr = parse_regex(raw, r'cloud=(?P<provider>[a-z0-9]+) (?P<body>\{.+\})')
+      if rerr != null { abort }
+      body, jerr = parse_json(parsed.body)
+      if jerr != null { abort }
+      lvl = downcase(string(body.level) ?? "info")
+      jok = body.journey_ok
+      journey_failed = jok == false
+      if !(journey_failed || lvl == "error" || lvl == "crit") { abort }
+      svc = string(body.service) ?? "unknown"
+      appid = string(body.app_id) ?? svc
+      host = string(.hostname) ?? "unknown"
+      tenant = string(.tenant_id) ?? ""
+      if tenant == "" { tenant = "global" }
+      sev = "high"
+      metric = "app_error"
+      if journey_failed {
+        sev = "crit"
+        metric = "journey_failed"
+      }
+      ts, tserr = format_timestamp(.timestamp, format: "%+")
+      if tserr != null { ts = format_timestamp!(now(), format: "%+") }
+      . = {
+        "kind": "cloud_health",
+        "tenant_id": tenant,
+        "app": svc,
+        "severity": sev,
+        "metric_name": metric,
+        "value": 1.0,
+        "ts": ts,
+        "entity_tokens": [host, appid, svc],
+        "attrs": {
+          "provider": parsed.provider,
+          "host": host,
+          "app_id": appid,
+          "trace_id": string(body.trace_id) ?? "",
+          "run_id": string(body.run_id) ?? "",
+          "failed_step": string(body.failed_step) ?? "",
+          "error": string(body.error) ?? ""
+        }
+      }
+
 sinks:
+  kafka_cloud:
+    type: kafka
+    inputs: [cloud_app_health]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.cloud"
+    encoding: { codec: json }
+    compression: snappy
+
   kafka_applogs:
     type: kafka
     inputs: [applogs_normalized]

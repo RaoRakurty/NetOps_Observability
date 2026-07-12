@@ -1,0 +1,62 @@
+{
+  "provider": "aws",
+  "account_id": "945714973156",
+  "resources": [
+    {
+      "region": "us-west-2",
+      "zone": "us-west-2a",
+      "resource_id": "i-0448c046139420a7f",
+      "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0448c046139420a7f",
+      "resource_type": "ec2:instance",
+      "resource_name": "correlix-app-host-01",
+      "private_ips": ["10.60.10.10"],
+      "tags": {"app": "store", "env": "lab", "owner": "correlix", "project": "correlix-faultlab"},
+      "source": "cloud_api",
+      "confidence": "confirmed"
+    },
+    {
+      "region": "us-west-2",
+      "zone": "us-west-2a",
+      "resource_id": "i-025bac7de4e6be0a6",
+      "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-025bac7de4e6be0a6",
+      "resource_type": "ec2:instance",
+      "resource_name": "correlix-data-host-01",
+      "private_ips": ["10.60.30.10"],
+      "tags": {"app": "store", "env": "lab", "owner": "correlix", "project": "correlix-faultlab"},
+      "source": "cloud_api",
+      "confidence": "confirmed"
+    },
+    {
+      "region": "us-west-2",
+      "resource_id": "compose:aws:report",
+      "resource_type": "compose:stack",
+      "resource_name": "report-processor",
+      "private_ips": ["10.60.10.10"],
+      "tags": {"app": "report", "env": "lab", "owner": "correlix"},
+      "source": "cloud_api",
+      "confidence": "confirmed"
+    },
+    {
+      "region": "us-west-2",
+      "resource_id": "compose:aws:booking",
+      "resource_type": "compose:stack",
+      "resource_name": "booking-microservices",
+      "private_ips": ["10.60.10.10"],
+      "tags": {"app": "booking", "env": "lab", "owner": "correlix"},
+      "source": "cloud_api",
+      "confidence": "confirmed"
+    },
+    {
+      "region": "us-west-2",
+      "zone": "us-west-2a",
+      "resource_id": "i-0bcbe41dc4d0e7ec8",
+      "resource_type": "ec2:instance",
+      "resource_name": "correlix-vpn-nat-01",
+      "private_ips": ["10.60.1.10"],
+      "public_ips": ["100.21.102.86"],
+      "tags": {"project": "correlix-faultlab", "env": "lab"},
+      "source": "cloud_api",
+      "confidence": "strong"
+    }
+  ]
+}
