@@ -1250,6 +1250,13 @@ async function downloadResponse(res: Response, filename: string): Promise<void> 
   URL.revokeObjectURL(url);
 }
 
+export interface CloudIngestionSource {
+  source_type: string;
+  status: string;
+  volume?: number;
+  last_seen_iso?: string;
+}
+
 export const api = {
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
@@ -2054,6 +2061,9 @@ export const api = {
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
+  // Per-source ingestion status, MEASURED from what actually landed (signals,
+  // active seams, inventory) — not a hard-coded assumption.
+  cloudIngestion: () => request<{ sources: CloudIngestionSource[]; generated_at: string }>("/api/cloud/ingestion"),
   // #81 P3G — the REAL engine-formed cloud RCA object(s) for an app (corr_objects),
   // tenant-scoped. Empty data[] when the app has no active RCA (unknown stays first-class).
   cloudAppRca: (app: string) => request<ClickHouseResponse<CloudAppRcaRow>>(`/api/cloud/app-rca?app=${encodeURIComponent(app)}`),

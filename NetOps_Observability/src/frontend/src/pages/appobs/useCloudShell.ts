@@ -7,11 +7,11 @@
 // inventory "off", not a fabricated healthy state.
 
 import { useEffect, useState } from "react";
-import { api, CloudResourceRow } from "../../services/api";
+import { api, CloudResourceRow, CloudIngestionSource } from "../../services/api";
 import { useAuth } from "../../hooks/useAuth";
 import {
   deriveScope, deriveReadiness, deriveDataMode, summarize,
-  CloudScope, DataMode, ReadinessSummary,
+  CloudScope, DataMode, ReadinessSummary, IngestionSource,
 } from "./readiness";
 
 export interface CloudShell {
@@ -24,6 +24,7 @@ export interface CloudShell {
 export function useCloudShell(): CloudShell {
   const { user } = useAuth();
   const [rows, setRows] = useState<CloudResourceRow[]>([]);
+  const [ingestion, setIngestion] = useState<CloudIngestionSource[] | undefined>(undefined);
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -32,6 +33,12 @@ export function useCloudShell(): CloudShell {
     api.cloudResources().then(
       (r) => { if (live) { setRows(r.resources ?? []); setLoading(false); } },
       () => { if (live) { setErr(true); setLoading(false); } },
+    );
+    // Per-source ingestion status. A failure here is NOT fatal: readiness falls
+    // back to inventory-only (every other source "off") rather than claiming health.
+    api.cloudIngestion().then(
+      (r) => { if (live) setIngestion(r.sources ?? []); },
+      () => { if (live) setIngestion(undefined); },
     );
     return () => { live = false; };
   }, []);
@@ -43,7 +50,10 @@ export function useCloudShell(): CloudShell {
   );
   // freshest last_seen across the inventory = the inventory's effective sync time.
   const lastSyncIso = rows.reduce((acc, r) => (r.last_seen_at > acc ? r.last_seen_at : acc), "") || undefined;
-  const readiness = deriveReadiness({ inventoryCount: rows.length, inventoryError: err, lastSyncIso });
+  const readiness = deriveReadiness({
+    inventoryCount: rows.length, inventoryError: err, lastSyncIso,
+    ingestion: ingestion as IngestionSource[] | undefined,
+  });
   const connectedAccounts = new Set(rows.map((r) => r.account_id).filter(Boolean)).size;
   const summary = summarize(readiness, connectedAccounts);
   // No real per-tenant SDK connector exists yet — inventory present ⇒ fixture/demo.

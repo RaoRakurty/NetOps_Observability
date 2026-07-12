@@ -146,11 +146,25 @@ export function deriveScope(rows: ScopeSource[], tenant: string, timeRange = "La
   };
 }
 
-// ── Readiness derivation (honest: only inventory is real today) ───────────────
+// ── Readiness derivation ──────────────────────────────────────────────────────
+// MEASURED, not assumed. Each source's status comes from GET /api/cloud/ingestion,
+// which derives it from what actually landed (signal volume + last-seen, active
+// seams, inventory rows). A source with no producer reports "off" — never invent
+// coverage — but a source that IS flowing must say so: hard-coding "off" was a
+// placeholder that could never become true, and it understated a live deployment.
+export interface IngestionSource {
+  source_type: SourceType;
+  status: SourceStatus;
+  volume?: number;
+  last_seen_iso?: string;
+}
+
 export function deriveReadiness(opts: {
   inventoryCount: number;
   inventoryError: boolean;
   lastSyncIso?: string;
+  /** Live per-source status from the backend. Absent → inventory-only (offline/legacy). */
+  ingestion?: IngestionSource[];
 }): SourceReadiness[] {
   const invStatus: SourceStatus = opts.inventoryError
     ? "off"
@@ -164,9 +178,23 @@ export function deriveReadiness(opts: {
     lastSyncIso: opts.lastSyncIso,
     freshnessSeconds: 0,
   };
-  // Everything else is not ingested yet (P3B–P3D) — reported honestly as off.
+
+  const live = new Map<SourceType, IngestionSource>(
+    (opts.ingestion ?? []).map((s) => [s.source_type, s]),
+  );
   const rest = SOURCE_TYPES.filter((t) => t !== "inventory").map(
-    (sourceType): SourceReadiness => ({ sourceType, status: "off" }),
+    (sourceType): SourceReadiness => {
+      const s = live.get(sourceType);
+      // No reading for this source (endpoint absent, or source has no producer)
+      // → "off". Honest default, same as before.
+      if (!s) return { sourceType, status: "off" };
+      return {
+        sourceType,
+        status: s.status,
+        volume: s.volume,
+        lastSyncIso: s.last_seen_iso,
+      };
+    },
   );
   return [inventory, ...rest];
 }

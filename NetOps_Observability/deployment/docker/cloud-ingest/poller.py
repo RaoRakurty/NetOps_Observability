@@ -16,6 +16,8 @@ import time
 import boto3
 from kafka import KafkaProducer
 
+import discover
+
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 LOG_GROUP = os.environ.get("FLOW_LOG_GROUP", "")  # CloudWatch lane (needs delivery role)
 FLOW_S3_BUCKET = os.environ.get("FLOW_S3_BUCKET", "")  # S3 lane (no IAM role needed)
@@ -24,6 +26,7 @@ BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
 ACCOUNT = os.environ.get("CLOUD_ACCOUNT", "945714973156")
 POLL_S = int(os.environ.get("POLL_S", "60"))
+DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
 STATE_PATH = os.path.join(OUT_DIR, ".poller-state.json")
 
 # Interesting = network/security/compute mutations (cloud_change evidence).
@@ -164,8 +167,16 @@ def main():
         acks="all", linger_ms=100, retries=5)
     jlog("cloud-ingest started", group=LOG_GROUP, brokers=BROKERS, tenant=TENANT)
     st = load_state()
+    last_discover = 0.0
     while True:
         try:
+            # Cloud inventory + in-cloud egress topology, discovered from the live
+            # APIs. Route tables are the authoritative statement of which edge a
+            # subnet leaves by (IGW / NAT / IPsec NVA) — we read it, never assume it.
+            if time.time() - last_discover >= DISCOVER_EVERY_S:
+                res, edges = discover.run()
+                last_discover = time.time()
+                jlog("cloud discovery", resources=res, route_edges=edges)
             if LOG_GROUP:
                 poll_flow_logs(logs, st)
             if FLOW_S3_BUCKET:

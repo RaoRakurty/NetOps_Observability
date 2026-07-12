@@ -26,11 +26,31 @@ describe("data mode", () => {
   });
 });
 
-describe("deriveReadiness — only inventory is real", () => {
-  it("inventory flowing when present, the rest off", () => {
+describe("deriveReadiness — measured, never assumed", () => {
+  it("without an ingestion reading, only inventory is real (honest fallback)", () => {
     const r = deriveReadiness({ inventoryCount: 12, inventoryError: false });
     expect(r.find((x) => x.sourceType === "inventory")?.status).toBe("flowing");
     expect(r.filter((x) => x.sourceType !== "inventory").every((x) => x.status === "off")).toBe(true);
+    expect(r).toHaveLength(SOURCE_TYPES.length);
+  });
+  it("reports a source that IS flowing (the hard-coded 'off' understated a live stack)", () => {
+    const r = deriveReadiness({
+      inventoryCount: 9, inventoryError: false,
+      ingestion: [
+        { source_type: "flow_logs", status: "flowing", volume: 712, last_seen_iso: "2026-07-12T08:00:00Z" },
+        { source_type: "cloud_health", status: "flowing", volume: 151 },
+        { source_type: "seam_data", status: "flowing", volume: 2 },
+        { source_type: "change_audit", status: "stale", volume: 75 },
+      ],
+    });
+    const by = (t: string) => r.find((x) => x.sourceType === t);
+    expect(by("flow_logs")?.status).toBe("flowing");
+    expect(by("flow_logs")?.volume).toBe(712);
+    expect(by("cloud_health")?.status).toBe("flowing");
+    expect(by("seam_data")?.status).toBe("flowing");
+    expect(by("change_audit")?.status).toBe("stale");
+    // a source with no producer is still honestly off
+    expect(by("traces")?.status).toBe("off");
     expect(r).toHaveLength(SOURCE_TYPES.length);
   });
   it("inventory no_data when empty (honest, not healthy)", () => {
