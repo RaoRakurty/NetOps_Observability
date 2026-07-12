@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrTimeline, Seam, ProbePath, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -10,7 +10,7 @@ import RcaTicketCard from "../components/rca/RcaTicketCard";
 import { buildRcaCase } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
-import { signatureName, ownerLabel, isInternalStackAffected } from "../components/rca/labels";
+import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
@@ -78,6 +78,23 @@ const GROUND_TONE: Record<string, string> = { seam: "#D97706", "seam+topo": "#D9
 const VERDICT_NOC: Record<string, string> = { confirmed: "Confirmed", suspected: "Suspected", undetermined: "Not confirmed" };
 const GROUND_NOC: Record<string, string> = { seam: "Boundary", "seam+topo": "Boundary + path", topo: "Same path", none: "—" };
 
+// "Notified via" chips (#103 UX-1) — compact per-destination badges. Short,
+// NOC-recognized handles in the cell (full product name + ticket + state on the
+// tooltip). Tone follows the ticket lifecycle: live = filled blue, resolved =
+// green, failed = red, queued = amber.
+const NOTIFY_SHORT: Record<string, string> = { servicenow: "SN", pagerduty: "PD", slack: "Slack" };
+const NOTIFY_FULL: Record<string, string> = { servicenow: "ServiceNow", pagerduty: "PagerDuty", slack: "Slack" };
+function notifyTone(state?: string): { tone: string; filled: boolean } {
+  switch (state) {
+    case "open": case "updated": return { tone: "#2563EB", filled: true };
+    case "resolved": return { tone: "#16A34A", filled: false };
+    case "failed": return { tone: "#DC2626", filled: true };
+    default: return { tone: "#D97706", filled: false }; // pending / queued
+  }
+}
+// live links sort above resolved above failed/pending; more destinations first
+const NOTIFY_RANK: Record<string, number> = { open: 3, updated: 3, resolved: 2, failed: 1 };
+
 // initial verdict-tier filter from a deep link (#/monitoring/correlations?tier=suspected)
 // — the Front Page KPI strip drills through with this so "Suspected RCA" lands
 // pre-filtered to suspected, not the full list.
@@ -104,6 +121,8 @@ export default function Correlations() {
   const deepId = useMemo(idFromHash, []);
   const [showInternal, setShowInternal] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
+  // corr id → external destinations it was filed to (#103 UX-1 "Notified via").
+  const [notified, setNotified] = useState<Record<string, TicketLinkRow[]>>({});
   const ws = useWorkspace();
 
   // Hide internal-stack/self-monitoring objects by default — RCA is for customer
@@ -115,6 +134,11 @@ export default function Correlations() {
   const hiddenInternal = items.length - visible.length;
 
   const columns = useMemo<Column<CorrObject>[]>(() => [
+    // UX-2: the human incident handle (same P-XXXXXX id the Inspector, Iris AI
+    // and filed tickets use) — operators reference this, never the raw UUID.
+    { key: "display_id", header: "ID", width: 84, sortable: true,
+      text: (o) => friendlyProblemId(o.correlation_id),
+      render: (o) => <span style={mono} title={o.correlation_id}>{friendlyProblemId(o.correlation_id)}</span> },
     { key: "created_at", header: "Updated", width: 160, sortable: true,
       sortValue: (o) => new Date(o.created_at + "Z").getTime() || 0,
       render: (o) => <span style={mono}>{new Date(o.created_at + "Z").toLocaleString()}</span> },
@@ -138,6 +162,25 @@ export default function Correlations() {
         : <span>{signatureName(o.top_hypothesis)}</span> },
     { key: "owner", header: "Owner", width: 96, sortable: true, text: (o) => o.owner ?? "",
       render: (o) => o.owner ? <span style={{ fontSize: 12 }}>{ownerLabel(o.owner)}</span> : "—" },
+    // UX-1: which external destinations this incident was filed/paged to.
+    { key: "notified", header: "Notified via", width: 118, sortable: true,
+      sortValue: (o) => (notified[o.correlation_id] ?? [])
+        .reduce((acc, l) => acc + (NOTIFY_RANK[l.state] ?? 0), 0),
+      text: (o) => (notified[o.correlation_id] ?? []).map((l) => NOTIFY_FULL[l.system ?? ""] ?? l.system ?? "").join(" "),
+      render: (o) => {
+        const dests = notified[o.correlation_id] ?? [];
+        if (dests.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
+        return (
+          <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+            {dests.map((l) => {
+              const { tone, filled } = notifyTone(l.state);
+              const full = NOTIFY_FULL[l.system ?? ""] ?? l.system ?? "?";
+              const tip = `${full}${l.ticket_number ? ` ${l.ticket_number}` : ""} — ${ticketStateLabel(l.state)}`;
+              return <span key={l.system} title={tip}>{pill(NOTIFY_SHORT[l.system ?? ""] ?? full, tone, filled)}</span>;
+            })}
+          </span>
+        );
+      } },
     { key: "grounding", header: "Linked by", width: 110, sortable: true, text: (o) => o.grounding ?? "none",
       render: (o) => { const g = o.grounding ?? "none"; return pill(GROUND_NOC[g] ?? g, GROUND_TONE[g] ?? "#7E8AA0"); } },
     { key: "planes", header: "Evidence types", width: 96, align: "right", sortable: true,
@@ -152,7 +195,7 @@ export default function Correlations() {
     { key: "shape", header: "Signals", width: 88, align: "right", sortable: true,
       sortValue: (o) => Number(o.signal_count ?? 0),
       render: (o) => <span style={mono} title={`${o.signal_count} signals`}>{o.signal_count}</span> },
-  ], []);
+  ], [notified]);
 
   useEffect(() => {
     let alive = true;
@@ -163,6 +206,15 @@ export default function Correlations() {
       } catch {
         if (alive) setItems([]);
       }
+      // Ticket links are a best-effort enrichment — the list renders without them.
+      try {
+        const l = await api.ticketLinks();
+        if (alive) {
+          const m: Record<string, TicketLinkRow[]> = {};
+          (l?.links ?? []).forEach((row) => { (m[row.corr_object_id] ??= []).push(row); });
+          setNotified(m);
+        }
+      } catch { /* column shows "—" */ }
     };
     tick();
     const id = setInterval(tick, 15_000);
@@ -176,7 +228,9 @@ export default function Correlations() {
       // slowdown") lives once, in the card below, where the dominant evidence
       // plane is known. Avoids a contradictory second title in the drawer header.
       ws.openInspector(<CorrelationDetail id={o.correlation_id} />, {
-        title: "Root cause analysis",
+        // UX-2: carry the human incident handle in the chrome — the precise NOC
+        // cause title still lives once, in the card below.
+        title: `Root cause analysis · ${friendlyProblemId(o.correlation_id)}`,
         subtitle: o.verdict_tier === "confirmed" ? "Confirmed" : "Not confirmed",
       });
     }

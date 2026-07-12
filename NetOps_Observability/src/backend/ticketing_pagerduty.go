@@ -134,14 +134,20 @@ func (a *pagerDutyTicketAdapter) send(ctx context.Context, cfg ticketSystemConfi
 		"dedup_key":    dedupKey,
 	}
 	if p != nil {
-		summary := p.Title
-		if summary == "" {
-			summary = "Correlix RCA incident " + p.CorrObjectID
+		// Lead with the friendly Correlix Problem ID (P-XXXXXX) — one handle
+		// across PagerDuty, ServiceNow, Slack and the RCA Inspector (#103 UX-2:
+		// no raw hex in the operator-facing summary; the UUID stays canonical in
+		// dedup_key / custom_details.correlation_id).
+		pid := problemDisplayID(p.CorrObjectID)
+		summary := orDefault(p.Title, "Correlix RCA incident")
+		if pid != "" {
+			summary = "[" + pid + "] " + summary
 		}
 		details := map[string]any{
 			"verdict":            p.Verdict,
 			"confidence":         fmt.Sprintf("%.2f", p.Confidence),
 			"correlation_id":     p.CorrObjectID,
+			"problem_id":         pid,
 			"summary":            p.Summary,
 			"recommended_action": p.RecommendedAction,
 			"suspected_owner":    p.Owner,

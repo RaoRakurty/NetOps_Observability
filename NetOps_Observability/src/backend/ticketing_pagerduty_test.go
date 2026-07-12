@@ -489,3 +489,63 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 		t.Fatalf("global dedup key missing canonical tenant: %q", k)
 	}
 }
+
+// ── #103 UX-2: human display id in notification payloads ────────────────────
+// Operators reported raw hex identifiers in notifications. Every operator-facing
+// string leads with the friendly Correlix Problem ID (P-XXXXXX — the same handle
+// the RCA Inspector and ServiceNow tickets use); the correlation UUID stays
+// canonical in dedup keys / custom details.
+func TestNotificationPayloads_CarryDisplayID(t *testing.T) {
+	ctx := context.Background()
+	const corr = "5564d1ab-1111-4111-8111-999999999999"
+	const pid = "P-5564D1"
+
+	// PagerDuty: summary leads with the id; custom_details carry both handles.
+	f := newFakePD()
+	defer f.srv.Close()
+	ref, err := f.adapter().CreateIncident(ctx, f.cfg("t_a"), pdPayload(corr))
+	if err != nil {
+		t.Fatalf("pd create: %v", err)
+	}
+	ev := f.all()[0]
+	pl, _ := ev["payload"].(map[string]any)
+	if !strings.HasPrefix(asString(pl["summary"]), "["+pid+"] ") {
+		t.Fatalf("pd summary missing display id: %q", pl["summary"])
+	}
+	det, _ := pl["custom_details"].(map[string]any)
+	if asString(det["problem_id"]) != pid || asString(det["correlation_id"]) != corr {
+		t.Fatalf("pd custom_details handles wrong: %v", det)
+	}
+	if !strings.Contains(asString(ev["dedup_key"]), corr) {
+		t.Fatalf("dedup key must keep the canonical UUID: %v", ev["dedup_key"])
+	}
+	_ = ref
+
+	// Slack: title + footer carry the id; the resolve message names the incident
+	// by the id, never the raw dedupe-hash ref.
+	fs := newFakeSlackHook()
+	defer fs.srv.Close()
+	a := &slackTicketAdapter{httpClient: fs.srv.Client()}
+	sref, err := a.CreateIncident(ctx, fs.cfg("t_a"), pdPayload(corr))
+	if err != nil {
+		t.Fatalf("slack create: %v", err)
+	}
+	if err := a.ResolveIncident(ctx, fs.cfg("t_a"), sref, ""); err != nil {
+		t.Fatalf("slack resolve: %v", err)
+	}
+	fs.mu.Lock()
+	opened, resolved := fs.bodies[0], fs.bodies[len(fs.bodies)-1]
+	fs.mu.Unlock()
+	if !strings.Contains(asString(opened["text"]), "["+pid+"]") {
+		t.Fatalf("slack open title missing display id: %q", opened["text"])
+	}
+	atts, _ := opened["attachments"].([]any)
+	att, _ := atts[0].(map[string]any)
+	if asString(att["footer"]) != "Correlix RCA · "+pid {
+		t.Fatalf("slack footer = %q, want display id (no raw UUID)", att["footer"])
+	}
+	rtxt := asString(resolved["text"])
+	if !strings.Contains(rtxt, pid) || strings.Contains(rtxt, sref.Number) {
+		t.Fatalf("slack resolve must name %s, never the raw ref %q: %q", pid, sref.Number, rtxt)
+	}
+}

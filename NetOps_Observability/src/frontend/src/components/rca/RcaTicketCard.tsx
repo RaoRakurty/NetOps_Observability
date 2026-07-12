@@ -13,6 +13,8 @@ import { ticketStateLabel, ticketStateTone, ticketActionLabel } from "./labels";
 // A ticket is "live" (sync, not create) when it is open or updated.
 const isLive = (state?: string) => state === "open" || state === "updated";
 
+const SYSTEM_LABEL: Record<string, string> = { servicenow: "ServiceNow", pagerduty: "PagerDuty", slack: "Slack" };
+
 function fmtWhen(iso?: string | null): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
@@ -66,29 +68,37 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
   const created = st.state && st.state !== "not_created";
   const live = isLive(st.state);
   const audit = data.audit ?? [];
+  // Every destination this RCA was filed to (#103): prefer the destinations
+  // array; older backends only carry the primary status (+ optional PagerDuty).
+  const dests: TicketStatus[] = data.destinations
+    ?? [...(created ? [st] : []), ...(data.pagerduty ? [data.pagerduty] : [])];
 
   return (
     <div className="rw-panel">
-      <h3>External ticket</h3>
+      <h3>{dests.length > 1 ? "External tickets & paging" : "External ticket"}</h3>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span className={`rw-pill ${ticketStateTone(st.state)}`}>{ticketStateLabel(st.state)}</span>
-        {created && st.ticket_number && (
-          st.url
-            ? <a className="rw-value mono" href={st.url} target="_blank" rel="noreferrer" style={{ color: "var(--rw-blue)" }}>{st.ticket_number} ↗</a>
-            : <span className="rw-value mono">{st.ticket_number}</span>
-        )}
-        {created && st.system && <span className="rw-note" style={{ margin: 0 }}>in {st.system === "servicenow" ? "ServiceNow" : st.system === "pagerduty" ? "PagerDuty" : st.system === "slack" ? "Slack" : st.system}</span>}
-      </div>
-
-      {created ? (
-        <div className="rw-keyval" style={{ marginTop: 12 }}>
-          <div className="rw-key">Last synced</div>
-          <div className="rw-value">{fmtWhen(st.last_synced_at)}</div>
-          {st.last_verdict && <><div className="rw-key">Verdict at sync</div><div className="rw-value">{st.last_verdict}</div></>}
-        </div>
+      {dests.length === 0 ? (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className={`rw-pill ${ticketStateTone(st.state)}`}>{ticketStateLabel(st.state)}</span>
+          </div>
+          <div className="rw-note">No external ticket has been opened for this RCA object yet.</div>
+        </>
       ) : (
-        <div className="rw-note">No external ticket has been opened for this RCA object yet.</div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {dests.map((d) => (
+            <div key={d.system ?? "servicenow"} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span className={`rw-pill ${ticketStateTone(d.state)}`}>{ticketStateLabel(d.state)}</span>
+              {d.ticket_number && (
+                d.url
+                  ? <a className="rw-value mono" href={d.url} target="_blank" rel="noreferrer" style={{ color: "var(--rw-blue)" }}>{d.ticket_number} ↗</a>
+                  : <span className="rw-value mono">{d.ticket_number}</span>
+              )}
+              {d.system && <span className="rw-note" style={{ margin: 0 }}>in {SYSTEM_LABEL[d.system] ?? d.system}</span>}
+              <span className="rw-note" style={{ margin: 0, marginLeft: "auto" }} title="last synced">{fmtWhen(d.last_synced_at)}</span>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Action — create when none/failed, sync when an open ticket exists. */}

@@ -307,14 +307,27 @@ func (s *server) handleCorrelationTickets(w http.ResponseWriter, r *http.Request
 			return
 		}
 		var pdView map[string]any
-		if pdLink, pdFound, pdErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, "pagerduty"); pdErr == nil && pdFound {
-			pdView = ticketStatusView(pdLink, true)
+		// destinations covers EVERY policy destination (ServiceNow, PagerDuty,
+		// Slack) in ticketSystems order — the card renders all of them; the
+		// status/pagerduty keys stay for older clients.
+		destinations := []map[string]any{}
+		for _, system := range ticketSystems {
+			l, lFound, lErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, system)
+			if lErr != nil || !lFound {
+				continue
+			}
+			v := ticketStatusView(l, true)
+			destinations = append(destinations, v)
+			if system == "pagerduty" {
+				pdView = v
+			}
 		}
 		audit, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":    ticketStatusView(link, found),
-			"pagerduty": pdView,
-			"audit":     audit,
+			"status":       ticketStatusView(link, found),
+			"pagerduty":    pdView,
+			"destinations": destinations,
+			"audit":        audit,
 		})
 	case sub == "ticket" && r.Method == http.MethodPost:
 		s.manualTicketAction(w, r, id, "create")
@@ -508,6 +521,34 @@ func (s *server) handleTicketsOutbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"outbox": items})
 }
 
+// handleTicketsLinks lists the caller-tenant's ticket links (UX-1 "notified
+// via"): every external destination an RCA object was filed to, with state.
+// The RCA candidate list joins these client-side by correlation id — a bounded
+// Postgres read that keeps the ClickHouse-streamed list handler untouched.
+func (s *server) handleTicketsLinks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	links, err := s.ticketing.ListLinksForTenant(r.Context(), tenant, cross, 1000)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(links))
+	for _, l := range links {
+		v := ticketStatusView(l, true)
+		v["corr_object_id"] = l.CorrObjectID
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"links": out})
+}
+
 func (s *server) handleTicketsAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
@@ -578,10 +619,15 @@ func (s *server) ticketStatusForObject(r *http.Request, id string) map[string]an
 		return map[string]any{"state": "not_created"}
 	}
 	if !found {
-		// No ITSM ticket — surface the paging link so the card isn't blind
-		// when a tenant runs PagerDuty-only.
-		if pd, pdFound, pdErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, "pagerduty"); pdErr == nil && pdFound {
-			return ticketStatusView(pd, true)
+		// No ITSM ticket — fall through the other policy destinations so the
+		// card isn't blind when a tenant runs PagerDuty- or Slack-only.
+		for _, system := range ticketSystems {
+			if system == "servicenow" {
+				continue
+			}
+			if l, lFound, lErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, system); lErr == nil && lFound {
+				return ticketStatusView(l, true)
+			}
 		}
 	}
 	return ticketStatusView(link, found)

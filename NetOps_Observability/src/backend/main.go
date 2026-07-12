@@ -902,6 +902,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/incident-policies/", s.handleIncidentPolicyByID)
 	mux.HandleFunc("/api/tickets/outbox", s.handleTicketsOutbox)
 	mux.HandleFunc("/api/tickets/audit", s.handleTicketsAudit)
+	mux.HandleFunc("/api/tickets/links", s.handleTicketsLinks)
 	mux.HandleFunc("/api/flows/flags", s.handleFlowsFlags)
 	mux.HandleFunc("/api/flows/geo", s.handleFlowsGeo)
 	mux.HandleFunc("/api/flows/by-proto", s.handleFlowsByProto)

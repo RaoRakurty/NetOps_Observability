@@ -80,8 +80,15 @@ func (a *slackTicketAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemCo
 }
 
 func (a *slackTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, _ string) error {
+	// Name the incident by its friendly Problem ID, never the raw dedupe-hash ref
+	// (#103 UX-2). The correlation UUID is the middle segment of the dedupe key
+	// (tenant:corr:system) this adapter stores as SysID.
+	handle := ref.Number
+	if parts := strings.Split(ref.SysID, ":"); len(parts) == 3 && parts[1] != "" {
+		handle = problemDisplayID(parts[1])
+	}
 	return a.post(ctx, cfg, map[string]any{
-		"text": ":white_check_mark: *Resolved* — incident " + ref.Number + " cleared in Correlix.",
+		"text": ":white_check_mark: *Resolved* — incident " + handle + " cleared in Correlix.",
 	})
 }
 
@@ -100,7 +107,14 @@ func slackTicketMessage(phase string, p ticketPayload) map[string]any {
 	if color == "" {
 		color = "#2eaa60"
 	}
+	// Lead with the friendly Correlix Problem ID (P-XXXXXX) — the SAME handle the
+	// RCA Inspector, Iris AI and ServiceNow tickets carry (#103 UX-2: no raw hex
+	// identifiers in notifications; the UUID stays canonical in the dedupe key).
+	pid := problemDisplayID(p.CorrObjectID)
 	title := strings.ToUpper(phase[:1]) + phase[1:] + ": " + p.Title
+	if pid != "" {
+		title = strings.ToUpper(phase[:1]) + phase[1:] + ": [" + pid + "] " + p.Title
+	}
 	fields := []map[string]any{
 		{"title": "Verdict", "value": p.Verdict + fmt.Sprintf(" (%.0f%%)", p.Confidence*100), "short": true},
 		{"title": "Scope", "value": orDefault(p.AffectedScope, "—"), "short": true},
@@ -114,7 +128,7 @@ func slackTicketMessage(phase string, p ticketPayload) map[string]any {
 		"title_link": p.RCAURL,
 		"text":       truncate(p.Summary, 600),
 		"fields":     fields,
-		"footer":     "Correlix RCA · " + p.CorrObjectID,
+		"footer":     "Correlix RCA · " + orDefault(pid, p.CorrObjectID),
 	}
 	return map[string]any{"text": title, "attachments": []map[string]any{att}}
 }

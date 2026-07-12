@@ -431,7 +431,15 @@ export type TicketAuditEntry = {
   error?: string;
   at: string;
 };
-export type CorrelationTickets = { status: TicketStatus; audit: TicketAuditEntry[] };
+export type CorrelationTickets = {
+  status: TicketStatus;
+  pagerduty?: TicketStatus | null;   // legacy key (older backends)
+  destinations?: TicketStatus[];     // #103 UX: every destination this RCA was filed to
+  audit: TicketAuditEntry[];
+};
+// One tenant ticket link for the "Notified via" join (#103 UX-1): a TicketStatus
+// plus the correlation it belongs to.
+export type TicketLinkRow = TicketStatus & { corr_object_id: string };
 
 // Incident policy (#78) — decides when an RCA object opens an external ticket.
 export type IncidentPolicy = {
@@ -1593,6 +1601,9 @@ export const api = {
   // RCA object, and operator-initiated create / sync (enqueued to the outbox).
   correlationTickets: (id: string) =>
     request<CorrelationTickets>(`/api/correlations/${encodeURIComponent(id)}/tickets`),
+  // All of the caller-tenant's ticket links (#103 UX-1) — the RCA candidate
+  // list joins these by correlation id for the "Notified via" column.
+  ticketLinks: () => request<{ links: TicketLinkRow[] }>(`/api/tickets/links`),
   correlationTicketCreate: (id: string) =>
     request<{ enqueued: string; corr_object_id: string; system: string }>(
       `/api/correlations/${encodeURIComponent(id)}/ticket`, { method: "POST", body: "{}" }),

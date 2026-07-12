@@ -153,10 +153,32 @@ data/api/servicenow_tickets.json.stale-20260711; public "configured" flag now
 reports config-level truth (what the RCA lane resolves against). Double-filing
 risk into the PDI: CLOSED.
 
-**Remaining in #103:** UX-1 notified-via column · UX-2 human display IDs ·
-inbound PD V3 webhooks (ack-sync; needs public ingress — deferred, documented)
-· Jira into the policy engine · pgstore SKIP-LOCKED e2e on live PG (unit-level
-covered; mem+pg store parity tests exist for SN path).
+**✅ UX-1 + UX-2 SHIPPED (2026-07-12, live-verified):** UX-1 = "Notified via"
+column on the RCA Candidates list (per-destination SN/PD/Slack chips, lifecycle
+tones) fed by new bounded tenant-scoped `GET /api/tickets/links`
+(`ListLinksForTenant` mem+pg, §3a cross-tenant test `ticketing_links_test.go`,
+route ledger entry); the per-corr tickets API + RCA ticket card now surface a
+`destinations` array covering ALL systems (fixed the Slack blind spot — a
+Slack/PD-only tenant previously saw a blind card; detail fallback now
+SN→PD→Slack). UX-2 = the existing `P-XXXXXX` handle standardized everywhere
+instead of minting a second per-tenant INC-sequence: new ID column on the RCA
+list + Inspector title, and Slack payloads (title/footer/resolve message — the
+resolve msg was printing the raw dedupe-hash ref) + PagerDuty summaries
+(`[P-XXXXXX]` prefix + `problem_id` custom detail) now carry it; UUIDs stay
+canonical in dedup keys (payload contract test
+`TestNotificationPayloads_CarryDisplayID`). Live-verified on lab: links API
+returns real SN links (INC0010522…), join target present in list window,
+deployed bundle serves the new column/card. Also classified the #103
+`/api/itsm/{pagerduty,slack}-rca` routes in the isolation ledger (were
+unclassified — full suite was red on `TestEveryRouteClassified`).
+NOTE (owner decision pending): the Operational Incidents tab "Ticket" column
+(legacy alert system) was NOT reworked — deliberate, that lane was just
+deprecated; decide whether it deserves notified-via semantics at all.
+
+**Remaining in #103:** inbound PD V3 webhooks (ack-sync; needs public ingress —
+deferred, documented) · Jira into the policy engine · pgstore SKIP-LOCKED e2e
+on live PG (unit-level covered; mem+pg store parity tests exist for SN path) ·
+Operational-Incidents-tab notified-via decision (owner).
 
 Owner question: *"if the same customer wants auto-ticketing to Slack, PagerDuty,
 ServiceNow AND Jira — how does our system work? Have we designed this

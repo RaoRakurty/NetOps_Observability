@@ -106,6 +106,9 @@ var routeIsolationLedger = map[string]string{
 	"/api/incident-policies/":     "scoped",
 	"/api/tickets/audit":          "scoped",
 	"/api/tickets/outbox":         "scoped",
+	// #103 UX-1 notified-via read: per-tenant ticket links (requirePerm +
+	// principalTenant; store-level scope). Cross-org test: ticketing_links_test.go.
+	"/api/tickets/links": "scoped",
 	"/api/integrations":           "scoped",
 	"/api/integrations/":          "scoped",
 	// NMS vendor-controller integrations (#95): per-tenant config/health/state,
@@ -115,6 +118,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/nms/integrations/": "scoped",
 	"/api/itsm/jira":              "scoped",
 	"/api/itsm/servicenow":        "scoped",
+	// #103 tenant RCA policy destinations: per-tenant connection config (routing
+	// key / webhook are write-only secrets, tenant from the principal). Isolation
+	// coverage: ticketing_pagerduty_test.go (two-tenant key isolation) +
+	// ticketing_http_test.go.
+	"/api/itsm/pagerduty-rca": "scoped",
+	"/api/itsm/slack-rca":     "scoped",
 	"/api/logs/export":            "scoped",
 	"/api/logs/export/rows":       "scoped",
 	"/api/logs/indices":           "scoped",

@@ -41,6 +41,10 @@ type ticketingStore interface {
 	// RCA object ↔ ticket links (the dedupe anchor)
 	GetLink(ctx context.Context, tenant string, cross bool, corrID, system string) (ticketLink, bool, error)
 	PutLink(ctx context.Context, l ticketLink) error
+	// ListLinksForTenant returns the caller-visible ticket links, most recently
+	// updated first, capped at limit (bounded read — the notified-via join in the
+	// RCA candidate list only needs the recent working set).
+	ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit int) ([]ticketLink, error)
 	// ListSyncableLinks returns the live, externally-filed links the inbound state
 	// syncer should poll (a real sys_id, non-terminal status, touched since `since`).
 	// Runs at platform scope (the syncer spans all tenants; each row carries its
@@ -239,6 +243,30 @@ func (m *memTicketingStore) PutLink(_ context.Context, l ticketLink) error {
 	l.UpdatedAt = time.Now().UTC()
 	m.links[memKey(l.TenantID, l.CorrObjectID, l.ExternalSystem)] = l
 	return nil
+}
+
+func (m *memTicketingStore) ListLinksForTenant(_ context.Context, tenant string, cross bool, limit int) ([]ticketLink, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []ticketLink
+	for _, l := range m.links {
+		if scopeVisible(tenant, cross, l.TenantID) {
+			out = append(out, l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+		}
+		if out[i].CorrObjectID != out[j].CorrObjectID {
+			return out[i].CorrObjectID < out[j].CorrObjectID
+		}
+		return out[i].ExternalSystem < out[j].ExternalSystem
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (m *memTicketingStore) ListSyncableLinks(_ context.Context, since time.Time) ([]ticketLink, error) {
@@ -493,6 +521,32 @@ ON CONFLICT (tenant_id, corr_object_id, external_system) DO UPDATE SET
 			l.LastConfidence, l.LastPayloadHash, l.LastSyncedAt)
 		return err
 	})
+}
+
+func (s *pgTicketingStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit int) ([]ticketLink, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if limit <= 0 {
+		limit = 1000
+	}
+	var out []ticketLink
+	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
+            ORDER BY updated_at DESC, corr_object_id, external_system LIMIT $1`, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			l, err := scanLink(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, l)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 func (s *pgTicketingStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]ticketLink, error) {
