@@ -1,5 +1,5 @@
 {
-  "name": "Teams synthetic failure + UNATTRIBUTED raw flow records — no attribution source names an app, so the flow stays interface-grounded and must NOT confirm the app object (by design; the attributed variant lives in passive_flow_drop_teams_appid.json)",
+  "name": "Teams synthetic failure + UNATTRIBUTED raw flow records \u2014 no attribution source names an app, so the flow stays interface-grounded and must NOT confirm the app object (by design; the attributed variant lives in passive_flow_drop_teams_appid.json)",
   "tenant": "acme",
   "events": [
     {
@@ -15,18 +15,39 @@
         "site_id": "frisco",
         "fail_class": "tls",
         "method": "GET",
-        "path": "/"
+        "path": "/",
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-passive_flow_drop_teams-0"
       }
     },
     {
       "lane": "flow",
       "records": [
-        {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 42000, "sampling_rate": 50,
-         "src_addr": "10.40.17.55", "dst_addr": "52.113.194.132", "dst_port": 443, "proto": "TCP"},
-        {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 9500, "sampling_rate": 50,
-         "src_addr": "10.40.17.62", "dst_addr": "52.113.194.132", "dst_port": 443, "proto": "TCP"}
+        {
+          "sampler_address": "10.40.17.1",
+          "in_if": "3",
+          "bytes": 42000,
+          "sampling_rate": 50,
+          "src_addr": "10.40.17.55",
+          "dst_addr": "52.113.194.132",
+          "dst_port": 443,
+          "proto": "TCP"
+        },
+        {
+          "sampler_address": "10.40.17.1",
+          "in_if": "3",
+          "bytes": 9500,
+          "sampling_rate": 50,
+          "src_addr": "10.40.17.62",
+          "dst_addr": "52.113.194.132",
+          "dst_port": 443,
+          "proto": "TCP"
+        }
       ],
-      "detected": {"deviation": 4.0}
+      "detected": {
+        "deviation": 4.0
+      }
     }
   ],
   "expect": {

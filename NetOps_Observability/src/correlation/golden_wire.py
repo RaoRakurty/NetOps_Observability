@@ -65,12 +65,17 @@ def load_fixture(name: str) -> dict:
 def normalize_probe_event(ev: dict, tenant: str, now: datetime) -> list[Signal]:
     """One raw ProbeEvent (the exact netops.probes wire shape) → the signals
     production emits: the generic lane (probe_signals — probe_loss / RTT
-    episodes) PLUS the semantic app-experience lane (synthetic_app_signal).
+    episodes) PLUS the semantic app-experience lane (synthetic_app_signal),
+    each classified through classify_probe (authority/scope/purpose/lineage).
     Same order, same functions as main.handle_probe."""
+    import main  # lazy: classification logic without the service wiring
+
     out = probe_signals(ev, EpisodeDetector(), tenant, now)
     app = synthetic_app_signal(ev, tenant, now)
     if app is not None:
         out.append(app)
+    for sig in out:
+        main.classify_probe(ev, sig)
     return out
 
 

@@ -29,10 +29,17 @@ TEAMS_FLOW = {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 42000,
 
 
 def teams_synthetic():
-    return synthetic_app_signal(
-        {"kind": "http", "ok": False, "fail_class": "tls", "prober": "syn-frisco",
-         "target": "https://teams.microsoft.com", "site_id": "frisco",
-         "ts": NOW.isoformat()}, "acme", NOW)
+    # Declared intent×vantage → HIGH authority: the production contract for a
+    # confirm-capable DEM vantage (classification in classify_probe, never
+    # hardcoded in the normalizer — truthfulness epic).
+    import main
+    ev = {"kind": "http", "ok": False, "fail_class": "tls", "prober": "syn-frisco",
+          "target": "https://teams.microsoft.com", "site_id": "frisco",
+          "ts": NOW.isoformat(),
+          "probe_intent": "customer_path", "vantage_type": "enterprise_agent"}
+    sig = synthetic_app_signal(ev, "acme", NOW)
+    main.classify_probe(ev, sig)
+    return sig
 
 
 def app_flow_signals(records, identities=None, tenant="acme"):

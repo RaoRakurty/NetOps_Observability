@@ -1,5 +1,5 @@
 {
-  "name": "Raw synthetic HTTPS 503 to Teams — exact collectors/probe_events.go wire shape; probe-only must NOT confirm",
+  "name": "Raw synthetic HTTPS 503 to Teams \u2014 exact collectors/probe_events.go wire shape; probe-only must NOT confirm",
   "tenant": "acme",
   "events": [
     {
@@ -23,7 +23,10 @@
         "total_ms": 842.1,
         "cert_days_to_expiry": 143.5,
         "cert_subject": "teams.microsoft.com",
-        "cert_issuer": "Microsoft Azure TLS Issuing CA 05"
+        "cert_issuer": "Microsoft Azure TLS Issuing CA 05",
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-synthetic_http_503_teams-0"
       }
     }
   ],

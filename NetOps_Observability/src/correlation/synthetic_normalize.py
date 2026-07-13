@@ -37,8 +37,6 @@ from signals import (
     ModalityClass,
     Observer,
     ObserverType,
-    ProbeAuthority,
-    ProbeScope,
     Severity,
     Signal,
     Source,
@@ -231,10 +229,12 @@ def synthetic_app_signal(
         "target_url": target,
         "host": host,
         "reason": reason,
-        # External customer-facing DEM probe → a TRUSTED, customer-path witness so
-        # it can pair with an independent modality to confirm (never self/lab).
-        "probe_authority": ProbeAuthority.HIGH.value,
-        "probe_scope": ProbeScope.CUSTOMER_PATH.value,
+        # Authority/scope are NOT set here: classification is the caller's job
+        # (classify_probe — the same fail-closed intent×vantage derivation the
+        # generic probe lane uses). Hardcoding a trusted customer-path witness
+        # here let validation canaries confirm production impact (truthfulness
+        # epic, Phase 0 finding A4) — a DEM prober earns confirm capability via
+        # the observer trust registry or a declared intent, never by default.
     }
     if app_name:
         attrs["app_name"] = app_name

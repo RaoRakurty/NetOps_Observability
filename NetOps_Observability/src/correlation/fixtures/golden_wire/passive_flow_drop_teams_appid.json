@@ -1,5 +1,5 @@
 {
-  "name": "Teams synthetic failure + raw flow records whose dst_ip joins a fused app identity (attribution level 2) — the app-grounded flow anomaly co-grounds with the synthetic signal and CONFIRMS",
+  "name": "Teams synthetic failure + raw flow records whose dst_ip joins a fused app identity (attribution level 2) \u2014 the app-grounded flow anomaly co-grounds with the synthetic signal and CONFIRMS",
   "tenant": "acme",
   "events": [
     {
@@ -15,22 +15,48 @@
         "site_id": "frisco",
         "fail_class": "tls",
         "method": "GET",
-        "path": "/"
+        "path": "/",
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-passive_flow_drop_teams_appid-0"
       }
     },
     {
       "lane": "flow",
       "identities": [
-        {"tenant_id": "acme", "app": "Microsoft Teams", "band": "authoritative",
-         "dst_ip": "52.113.194.132", "ts": "2026-07-09T08:59:30Z"}
+        {
+          "tenant_id": "acme",
+          "app": "Microsoft Teams",
+          "band": "authoritative",
+          "dst_ip": "52.113.194.132",
+          "ts": "2026-07-09T08:59:30Z"
+        }
       ],
       "records": [
-        {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 42000, "sampling_rate": 50,
-         "src_addr": "10.40.17.55", "dst_addr": "52.113.194.132", "dst_port": 443, "proto": "TCP"},
-        {"sampler_address": "10.40.17.1", "in_if": "3", "bytes": 9500, "sampling_rate": 50,
-         "src_addr": "10.40.17.62", "dst_addr": "52.113.194.132", "dst_port": 443, "proto": "TCP"}
+        {
+          "sampler_address": "10.40.17.1",
+          "in_if": "3",
+          "bytes": 42000,
+          "sampling_rate": 50,
+          "src_addr": "10.40.17.55",
+          "dst_addr": "52.113.194.132",
+          "dst_port": 443,
+          "proto": "TCP"
+        },
+        {
+          "sampler_address": "10.40.17.1",
+          "in_if": "3",
+          "bytes": 9500,
+          "sampling_rate": 50,
+          "src_addr": "10.40.17.62",
+          "dst_addr": "52.113.194.132",
+          "dst_port": 443,
+          "proto": "TCP"
+        }
       ],
-      "detected": {"deviation": 4.0}
+      "detected": {
+        "deviation": 4.0
+      }
     }
   ],
   "expect": {

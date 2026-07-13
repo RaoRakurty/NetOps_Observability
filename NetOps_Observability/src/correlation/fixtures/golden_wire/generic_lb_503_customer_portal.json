@@ -1,5 +1,5 @@
 {
-  "name": "Synthetic 503 to an internal customer portal + the SAME app's LB reporting 503/backend-unavailable — two independent app-edge witnesses on one app object: CONFIRMED",
+  "name": "Synthetic 503 to an internal customer portal + the SAME app's LB reporting 503/backend-unavailable \u2014 two independent app-edge witnesses on one app object: CONFIRMED",
   "tenant": "acme",
   "env": {
     "CORR_SAAS_HOST_MAP": "portal.acme.example=customer_portal"
@@ -19,7 +19,10 @@
         "status_code": 503,
         "method": "GET",
         "path": "/login",
-        "total_ms": 3210.4
+        "total_ms": 3210.4,
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-generic_lb_503_customer_portal-0"
       }
     },
     {

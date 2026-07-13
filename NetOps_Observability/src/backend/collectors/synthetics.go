@@ -182,6 +182,7 @@ func (s *synthetics) tick(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	prober := proberID()
 	site := proberSite()
+	decl := loadProberDeclaration()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	up := 0
 	var lines []string
@@ -205,6 +206,12 @@ func (s *synthetics) tick(ctx context.Context) {
 			DNSMs: r.dnsMs, TCPConnectMs: r.connectMs, TLSMs: r.tlsMs,
 			TTFBMs: r.ttfbMs, TotalMs: r.totalMs,
 			CertDaysToExpiry: r.certDays, CertSubject: r.certSubject, CertIssuer: r.certIssuer,
+			// One check execution = one lineage id: every signal the correlation
+			// side derives from this event must share it (§2 — never two
+			// independent observers from one execution).
+			ExecutionID: newExecutionID(),
+			ProbeIntent: decl.Intent, VantageType: decl.Vantage,
+			Environment: decl.Environment, SignalPurpose: decl.Purpose,
 		})
 		lines = append(lines, fmt.Sprintf(`synthetic_up{dst=%q,check=%q} %d %d`, r.target.dst, r.target.check, b2i(r.up), now))
 		for _, l := range r.lines {

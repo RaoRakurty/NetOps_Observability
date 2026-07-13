@@ -1,5 +1,5 @@
 {
-  "name": "Raw synthetic timeout to an internal app — customer-defined mapping, proves the lane is not SaaS-only",
+  "name": "Raw synthetic timeout to an internal app \u2014 customer-defined mapping, proves the lane is not SaaS-only",
   "tenant": "acme",
   "env": {
     "CORR_SAAS_HOST_MAP": "orders.acme.internal=acme_orders"
@@ -20,7 +20,10 @@
         "method": "GET",
         "path": "/health",
         "dns_ms": 2.4,
-        "tcp_connect_ms": 5.1
+        "tcp_connect_ms": 5.1,
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-synthetic_timeout_internal_app-0"
       }
     }
   ],

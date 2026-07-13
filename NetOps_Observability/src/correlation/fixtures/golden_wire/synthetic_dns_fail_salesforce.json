@@ -1,5 +1,5 @@
 {
-  "name": "Raw synthetic DNS failure to Salesforce (fail_class from the Go httptrace classifier) — generic app path, no Teams logic",
+  "name": "Raw synthetic DNS failure to Salesforce (fail_class from the Go httptrace classifier) \u2014 generic app path, no Teams logic",
   "tenant": "acme",
   "events": [
     {
@@ -15,7 +15,10 @@
         "site_id": "dallas",
         "fail_class": "dns",
         "method": "GET",
-        "path": "/"
+        "path": "/",
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-synthetic_dns_fail_salesforce-0"
       }
     }
   ],

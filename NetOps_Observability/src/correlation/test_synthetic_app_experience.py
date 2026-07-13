@@ -99,8 +99,17 @@ def test_synthetic_teams_failure_normalizes_to_app_impact():
 
 
 # ── Task 5.2 — synthetic + independent flow ⇒ CONFIRMED, one named object ──────
-def test_synthetic_probe_plus_flow_confirms_app_impact():
-    syn = synthetic_app_signal(teams_http_event(fail_class="tls"), "acme", T0)
+def test_synthetic_probe_plus_flow_confirms_app_impact(monkeypatch):
+    # The DEM vantage earns confirm capability from the observer trust registry
+    # (production contract since the truthfulness epic: classification happens in
+    # classify_probe, never hardcoded in the normalizer).
+    import main
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", set())
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"syn-frisco"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"syn-frisco"})
+    ev = teams_http_event(fail_class="tls")
+    syn = synthetic_app_signal(ev, "acme", T0)
+    main.classify_probe(ev, syn)
     snaps = run_window((syn, teams_flow()), CAT, ())
     assert len(snaps) == 1                                   # both attach to ONE object
     snap = snaps[0]
@@ -161,3 +170,54 @@ def test_normalizer_is_application_agnostic(monkeypatch):
     sig3 = synthetic_app_signal(ev3, "acme", T0)
     assert sig3.kind == "synthetic_tcp_connect_fail"
     assert sig3.entity_id == "mystery.example.net" and sig3.entity_type is EntityType.SERVICE
+
+
+# ── RCA truthfulness epic: unified classification + execution lineage ────────
+
+def test_app_signal_carries_no_hardcoded_trust():
+    """The normalizer must NOT stamp authority/scope — that is classify_probe's
+    job (Phase 0 finding A4: the hardcode let validation canaries confirm)."""
+    sig = synthetic_app_signal(teams_http_event(), "t1", T0)
+    assert sig is not None
+    assert "probe_authority" not in sig.attrs
+    assert "probe_scope" not in sig.attrs
+
+
+def test_both_lanes_share_execution_id_and_classification(monkeypatch):
+    """One check execution → generic probe row + semantic app row, id-linked by
+    execution_id and classified through the SAME fail-closed path (§2)."""
+    import main
+    from episodes import EpisodeDetector
+    from producers import probe_signals
+
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", set())
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"syn-frisco"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"syn-frisco"})
+
+    ev = teams_http_event()
+    ev["execution_id"] = "ex-lineage-1"
+    ev["loss_pct"] = 100.0
+
+    generic = probe_signals(ev, EpisodeDetector(), "t1", T0)
+    app = synthetic_app_signal(ev, "t1", T0)
+    assert app is not None and generic
+    for sig in [*generic, app]:
+        main.classify_probe(ev, sig)
+        assert sig.attrs["execution_id"] == "ex-lineage-1"
+        assert sig.attrs["signal_purpose"] == "production"
+    # Same execution, same vantage: identical derived authority on both lanes.
+    assert app.attrs["probe_authority"] == generic[0].attrs["probe_authority"]
+
+
+def test_validation_canary_app_signal_cannot_confirm(monkeypatch):
+    """§11 negative test: a validation-purpose canary failure classifies as
+    DEBUG_ONLY on the app lane, so it can never anchor a confirmed verdict."""
+    import main
+    from signals import ProbeAuthority
+
+    ev = teams_http_event()
+    ev["signal_purpose"] = "validation"
+    app = synthetic_app_signal(ev, "t1", T0)
+    assert app is not None
+    main.classify_probe(ev, app)
+    assert app.attrs["probe_authority"] == ProbeAuthority.DEBUG_ONLY.value

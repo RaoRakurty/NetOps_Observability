@@ -1,5 +1,5 @@
 {
-  "name": "Raw synthetic TLS failure to a customer ServiceNow instance — app identity via the customer-defined host map (CORR_SAAS_HOST_MAP), not code",
+  "name": "Raw synthetic TLS failure to a customer ServiceNow instance \u2014 app identity via the customer-defined host map (CORR_SAAS_HOST_MAP), not code",
   "tenant": "acme",
   "env": {
     "CORR_SAAS_HOST_MAP": "acme.service-now.com=servicenow"
@@ -20,7 +20,10 @@
         "method": "GET",
         "path": "/",
         "dns_ms": 9.1,
-        "tcp_connect_ms": 28.7
+        "tcp_connect_ms": 28.7,
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+        "execution_id": "ex-golden-synthetic_tls_fail_servicenow-0"
       }
     }
   ],

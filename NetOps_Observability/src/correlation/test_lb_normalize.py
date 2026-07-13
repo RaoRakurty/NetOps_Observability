@@ -37,10 +37,17 @@ def lb_event(**over):
 
 
 def portal_synthetic():
-    return synthetic_app_signal(
-        {"kind": "http", "ok": False, "status_code": 503, "prober": "syn-frisco",
-         "target": "https://portal.acme.example/login", "site_id": "frisco",
-         "app_name": "customer_portal", "ts": NOW.isoformat()}, "acme", NOW)
+    # Declared intent×vantage (the authoritative registry path) → HIGH authority,
+    # the production contract for a confirm-capable DEM vantage since the
+    # truthfulness epic (classification in classify_probe, never hardcoded).
+    import main
+    ev = {"kind": "http", "ok": False, "status_code": 503, "prober": "syn-frisco",
+          "target": "https://portal.acme.example/login", "site_id": "frisco",
+          "app_name": "customer_portal", "ts": NOW.isoformat(),
+          "probe_intent": "customer_path", "vantage_type": "enterprise_agent"}
+    sig = synthetic_app_signal(ev, "acme", NOW)
+    main.classify_probe(ev, sig)
+    return sig
 
 
 # ── A: generic LB JSON 503 normalization ──────────────────────────────────────

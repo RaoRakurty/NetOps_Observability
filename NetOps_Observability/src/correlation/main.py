@@ -1364,14 +1364,37 @@ _SERVICE_DEP_TARGETS = {
 }
 
 
+# Signal purposes that are NOT production traffic (§11): their evidence must
+# never confirm production customer impact — forced to LAB_TEST intent, which
+# derives DEBUG_ONLY authority (excluded from verdicts and marked internal).
+_NON_PRODUCTION_PURPOSES = frozenset({
+    "validation", "lab", "fault_injection", "debug", "demo", "staging",
+})
+
+
 def classify_probe(ev: dict, sig: Signal) -> None:
     """Enrich an active_probe signal IN PLACE with its derived authority/scope +
     fate fingerprint. Registry fields (`probe_intent`/`vantage_type` on the event)
     are authoritative; otherwise infer and fail closed to UNKNOWN→LOW."""
+    # Lineage + environment (§2/§11) — stamped on EVERY probe-derived signal so
+    # rows from one execution are joinable and validation traffic is marked.
+    if ev.get("execution_id"):
+        sig.attrs["execution_id"] = str(ev["execution_id"])
+    purpose = str(ev.get("signal_purpose") or "production").strip().lower() or "production"
+    sig.attrs["signal_purpose"] = purpose
+    sig.attrs["environment"] = (
+        str(ev.get("environment") or "").strip().lower()
+        or ("prod" if purpose == "production" else purpose)
+    )
     intent = str(ev.get("probe_intent") or "")
     vantage = str(ev.get("vantage_type") or "")
     src = "registry"
-    if intent and vantage:
+    if purpose in _NON_PRODUCTION_PURPOSES:
+        # A declared non-production purpose overrides everything, including a
+        # declared customer-path intent: validation/lab/fault-injection traffic
+        # is DEBUG_ONLY evidence, full stop (§11).
+        pi, vt, src = ProbeIntent.LAB_TEST, VantageType.LOCAL_CONTAINER, "declared-purpose"
+    elif intent and vantage:
         try:
             pi, vt = ProbeIntent(intent), VantageType(vantage)
         except ValueError:
@@ -1444,10 +1467,12 @@ async def handle_probe(ev: dict) -> None:
     # an HTTP/TCP/ICMP synthetic FAILURE also emits a semantic app-experience
     # signal (synthetic_http_fail / synthetic_tls_fail / …) the sig.ent.app.*
     # templates match. Additive — the generic probe signals above are unchanged.
-    # The normalizer already stamps a trusted customer-path authority/scope, so we
-    # do NOT re-run classify_probe (which would re-derive from the raw probe kind).
+    # Classified through the SAME fail-closed path as the generic lane: both
+    # rows carry the event's execution_id/purpose, and a validation canary can
+    # never arrive as a trusted customer-path witness (epic §2/§11).
     app_sig = synthetic_app_signal(ev, tenant, now)
     if app_sig is not None:
+        classify_probe(ev, app_sig)
         await ch.insert("netops.corr_signals", [app_sig.to_ch_row()])
         buffer_signal(app_sig)
         log.info("synthetic app-experience signal %s: %s reason=%s app=%s",

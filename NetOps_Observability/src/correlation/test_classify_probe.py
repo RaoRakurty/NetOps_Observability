@@ -77,3 +77,49 @@ def test_registry_fields_are_authoritative(monkeypatch):
                    ev={"probe_intent": "customer_path", "vantage_type": "enterprise_agent"})
     assert sig.attrs["classification_source"] == "registry"
     assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}
+
+
+# ── RCA truthfulness epic §2/§11: lineage + declared purpose ─────────────────
+
+def test_execution_id_and_purpose_stamped(monkeypatch):
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"prober"})
+    sig = classify("prober->10.60.10.10", "prober",
+                   {"execution_id": "ex-abc123", "environment": "prod"})
+    assert sig.attrs["execution_id"] == "ex-abc123"
+    assert sig.attrs["signal_purpose"] == "production"
+    assert sig.attrs["environment"] == "prod"
+
+
+def test_validation_purpose_is_debug_only_even_with_customer_intent():
+    # §11: a declared non-production purpose overrides EVERYTHING — a validation
+    # canary can never arrive as a trusted customer-path witness, so it can
+    # never confirm production customer impact or open production tickets.
+    sig = classify("canary->portal.rca-canary.example", "prober", {
+        "signal_purpose": "validation",
+        "probe_intent": "customer_path",
+        "vantage_type": "enterprise_agent",
+    })
+    assert sig.attrs["probe_authority"] == ProbeAuthority.DEBUG_ONLY.value
+    assert sig.attrs["probe_scope"] == ProbeScope.SYNTHETIC_LAB_PROBE.value
+    assert sig.attrs["signal_purpose"] == "validation"
+    assert sig.attrs["environment"] == "validation"  # inherits purpose when undeclared
+    assert sig.attrs["classification_source"] == "declared-purpose"
+
+
+def test_fault_injection_and_lab_purposes_demote():
+    for purpose in ("fault_injection", "lab", "debug", "demo", "staging"):
+        sig = classify("prober->10.60.10.10", "prober", {"signal_purpose": purpose})
+        assert sig.attrs["probe_authority"] == ProbeAuthority.DEBUG_ONLY.value, purpose
+
+
+def test_production_purpose_keeps_registry_trust(monkeypatch):
+    # Regression guard for the live drills: the registry-trusted prober keeps
+    # its confirm-capable authority when purpose is production/absent.
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", set())
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"prober"})
+    for ev in ({}, {"signal_purpose": "production"}):
+        sig = classify("prober->10.60.10.10", "prober", ev)
+        assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}
+        assert sig.attrs["probe_scope"] == ProbeScope.CUSTOMER_PATH.value

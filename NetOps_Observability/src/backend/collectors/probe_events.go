@@ -17,6 +17,8 @@ package collectors
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -58,6 +60,19 @@ type ProbeEvent struct {
 	CertDaysToExpiry *float64 `json:"cert_days_to_expiry,omitempty"`
 	CertSubject      string   `json:"cert_subject,omitempty"`
 	CertIssuer       string   `json:"cert_issuer,omitempty"`
+
+	// Provenance + declared classification (RCA truthfulness epic §2/§11).
+	// ExecutionID joins every signal derived from ONE check execution — the
+	// correlation side must never count two rows sharing it as independent
+	// observers. The declaration block is registry-authoritative when present:
+	// intent × vantage drive probe authority (signals.py), and a non-production
+	// SignalPurpose (validation | lab | fault_injection | debug | demo | staging)
+	// demotes the evidence so it can never confirm production customer impact.
+	ExecutionID   string `json:"execution_id,omitempty"`
+	ProbeIntent   string `json:"probe_intent,omitempty"`
+	VantageType   string `json:"vantage_type,omitempty"`
+	Environment   string `json:"environment,omitempty"`
+	SignalPurpose string `json:"signal_purpose,omitempty"`
 }
 
 // probeEventSink returns the bus ingest URL for probe events. Defaults to the
@@ -96,6 +111,39 @@ func proberID() string {
 		return h
 	}
 	return "prober"
+}
+
+// proberDeclaration is the operator-declared probe classification, stamped on
+// every emitted ProbeEvent (RCA truthfulness §11). Intent/vantage feed the
+// correlation-side authority derivation; a non-production purpose marks the
+// probe as validation/lab traffic that must never confirm production impact
+// or open production tickets. All optional — absent fields keep today's
+// registry/inference behavior on the correlation side.
+type proberDeclaration struct {
+	Intent      string
+	Vantage     string
+	Environment string
+	Purpose     string
+}
+
+func loadProberDeclaration() proberDeclaration {
+	return proberDeclaration{
+		Intent:      os.Getenv("PROBE_INTENT"),
+		Vantage:     os.Getenv("PROBE_VANTAGE_TYPE"),
+		Environment: os.Getenv("PROBE_ENVIRONMENT"),
+		Purpose:     os.Getenv("PROBE_SIGNAL_PURPOSE"),
+	}
+}
+
+// newExecutionID mints the lineage id joining every signal derived from one
+// check execution (§2). 16 random bytes, hex; empty on the (never-observed)
+// rand failure — the correlation side treats absence as "lineage unknown".
+func newExecutionID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return "ex-" + hex.EncodeToString(b[:])
 }
 
 // forwardProbeEvents POSTs each event to the bus ingest source. Best-effort:
