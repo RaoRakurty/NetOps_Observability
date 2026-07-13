@@ -168,7 +168,7 @@ export default function RcaWorkspace({
         <div className="rw-actions">
           {data.synthetic && <span className="rw-watermark">Synthetic data · example case</span>}
           <button className="rw-btn" onClick={onExportPdf} disabled={exportDisabled}
-            title="Generate a print-ready RCA report (Save as PDF)">⤓ Export PDF</button>
+            title="Download the incident report as a PDF document">⤓ Export PDF</button>
           <div className="rw-tabs" role="tablist" aria-label="View">
             <button role="tab" aria-selected={view === "operator"} className={`rw-tab${view === "operator" ? " active" : ""}`} onClick={() => onView("operator")}>Operator View</button>
             <button role="tab" aria-selected={view === "debug"} className={`rw-tab${view === "debug" ? " active" : ""}`} onClick={() => onView("debug")}>Debug View</button>
