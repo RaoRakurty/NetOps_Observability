@@ -40,6 +40,13 @@ func TestEvalTicketDecision_Guardrails(t *testing.T) {
 	}{
 		{name: "undetermined held", mutate: func(f *corrTicketFacts) { f.Verdict = "undetermined" }},
 		{name: "internal monitoring held", mutate: func(f *corrTicketFacts) { f.Internal = true }},
+		// §11 (truthfulness epic, required test 23): a CONFIRMED validation
+		// canary must never file production tickets by default...
+		{name: "validation scenario held even when confirmed", mutate: func(f *corrTicketFacts) { f.Validation = true }},
+		// ...and may act only under an explicit tenant opt-in.
+		{name: "validation allowed under explicit opt-in",
+			mutate: func(f *corrTicketFacts) { f.Validation = true },
+			policy: func(p *incidentPolicy) { p.AllowValidationScenarios = true }, create: true},
 		{name: "probe-only held", mutate: func(f *corrTicketFacts) { f.ProbeOnly = true }},
 		{name: "low-authority probe held", mutate: func(f *corrTicketFacts) { f.LowAuthorityProbe = true; f.ProbeOnly = true }},
 		{name: "no affected entity held", mutate: func(f *corrTicketFacts) { f.HasAffectedEntity = false }},

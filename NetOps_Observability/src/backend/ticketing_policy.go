@@ -37,6 +37,13 @@ func evalTicketDecision(facts corrTicketFacts, policy incidentPolicy, link *tick
 		return hold("internal monitoring only — not customer-impacting")
 	}
 
+	// §11: a validation/lab/fault-injection scenario NEVER files production
+	// tickets or pages unless the tenant explicitly opted in. This is the
+	// backstop even when the scenario reaches a confirmed verdict.
+	if facts.Validation && !policy.AllowValidationScenarios {
+		return hold("validation scenario — production ticket side effects suppressed")
+	}
+
 	// Single low-authority active check is not corroborated evidence; ticketing
 	// it would overclaim (the ≥2-independent-stream rule). Held unless allowed.
 	if facts.LowAuthorityProbe && !policy.AllowProbeOnly {

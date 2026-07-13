@@ -63,11 +63,11 @@ ch() { dc exec -T clickhouse clickhouse-client -q "$1" 2>/dev/null; }
 TS="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)"
 
 # 1) canary synthetic probe failure (exact enriched ProbeEvent wire shape)
-printf '%s\n' "{\"kind\":\"http\",\"prober\":\"rca-canary-probe\",\"target\":\"https://portal.rca-canary.example/health\",\"ok\":false,\"rtt_ms\":800,\"loss_pct\":100,\"ts\":\"$TS\",\"tenant_id\":\"$TENANT\",\"site_id\":\"canary\",\"status_code\":503,\"method\":\"GET\",\"path\":\"/health\",\"total_ms\":800,\"app_name\":\"$APP\"}" \
+printf '%s\n' "{\"kind\":\"http\",\"prober\":\"rca-canary-probe\",\"target\":\"https://portal.rca-canary.example/health\",\"ok\":false,\"rtt_ms\":800,\"loss_pct\":100,\"ts\":\"$TS\",\"tenant_id\":\"$TENANT\",\"site_id\":\"canary\",\"status_code\":503,\"method\":\"GET\",\"path\":\"/health\",\"total_ms\":800,\"app_name\":\"$APP\",\"signal_purpose\":\"validation\",\"environment\":\"validation\"}" \
     | produce netops.probes || fail "could not produce probe event onto the bus"
 
 # 2) canary LB 503 for the SAME app (independent witness class)
-printf '%s\n' "{\"source\":\"lb\",\"vendor\":\"generic\",\"product\":\"reverse_proxy\",\"tenant_id\":\"$TENANT\",\"ts\":\"$TS\",\"app_name\":\"$APP\",\"service_name\":\"canary_frontend\",\"host\":\"portal.rca-canary.example\",\"path\":\"/health\",\"status_code\":503,\"reason\":\"backend_unavailable\",\"lb_name\":\"canary-lb\",\"raw_event_id\":\"$RUN_ID\"}" \
+printf '%s\n' "{\"source\":\"lb\",\"vendor\":\"generic\",\"product\":\"reverse_proxy\",\"tenant_id\":\"$TENANT\",\"ts\":\"$TS\",\"app_name\":\"$APP\",\"service_name\":\"canary_frontend\",\"host\":\"portal.rca-canary.example\",\"path\":\"/health\",\"status_code\":503,\"reason\":\"backend_unavailable\",\"lb_name\":\"canary-lb\",\"raw_event_id\":\"$RUN_ID\",\"signal_purpose\":\"validation\",\"environment\":\"validation\"}" \
     | produce netops.app.edge || fail "could not produce app-edge event onto the bus"
 
 log "injected $RUN_ID; waiting for signals (budget ${SIGNAL_BUDGET_S}s)"

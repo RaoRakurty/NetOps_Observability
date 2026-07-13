@@ -59,6 +59,9 @@ type rcaPathView struct {
 	Verdict                string            `json:"verdict"`
 	Confidence             float64           `json:"confidence"`
 	Internal               bool              `json:"internal"`
+	// Validation: every attached signal declares a non-production purpose (§11)
+	// — the case renders (watermarked) but must not open production tickets.
+	Validation bool `json:"validation"`
 	Title                  string            `json:"title"`
 	Summary                string            `json:"summary"`
 	RecommendedAction      string            `json:"recommended_action"`
@@ -197,6 +200,32 @@ func isDebugProbe(sig map[string]any) bool {
 	return auth == "debug_only" || scope == "internal_self_probe" || scope == "synthetic_lab_probe"
 }
 
+// isValidationSignal: the signal declares a non-production purpose (§11 of the
+// truthfulness spec) — validation | lab | fault_injection | debug | demo |
+// staging, or a non-prod environment. Read from attrs; absent = production.
+func isValidationSignal(sig map[string]any) bool {
+	a, _ := sig["attrs"].(string)
+	if a == "" {
+		return false
+	}
+	var at struct {
+		Purpose string `json:"signal_purpose"`
+		Env     string `json:"environment"`
+	}
+	if json.Unmarshal([]byte(a), &at) != nil {
+		return false
+	}
+	switch strings.ToLower(at.Purpose) {
+	case "validation", "lab", "fault_injection", "debug", "demo", "staging":
+		return true
+	}
+	switch strings.ToLower(at.Env) {
+	case "", "prod", "production":
+		return false
+	}
+	return true
+}
+
 // buildRcaPathView maps object evidence → UI-ready path + overlay annotations.
 // Pure: deterministic in (meta, signals, edges), no I/O, no engine re-decision.
 func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[string]any) rcaPathView {
@@ -234,6 +263,18 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 	}
 	if probes == 0 || others > 0 {
 		internal = false
+	}
+
+	// VALIDATION SCENARIO (§11): every attached signal — ANY modality — declares
+	// a non-production purpose. A single production signal in the case keeps it
+	// production (a real fault must never be suppressed by co-attached test
+	// traffic). Validation cases render, but must never page or file tickets.
+	validation := len(attached) > 0
+	for _, sig := range attached {
+		if !isValidationSignal(sig) {
+			validation = false
+			break
+		}
 	}
 
 	// locus device: the entity the grounded topo edges converge on (shared:X).
@@ -281,7 +322,7 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 		state = "internal_only"
 	}
 
-	view := rcaPathView{CorrObjectID: id, Verdict: verdict, Confidence: conf, Internal: internal}
+	view := rcaPathView{CorrObjectID: id, Verdict: verdict, Confidence: conf, Internal: internal, Validation: validation}
 	view.EvidenceSummary, view.MissingEvidenceSummary = summarizeEvidence(attached, meta, verdict)
 	view.Annotations = mapAnnotations(attached, edgeRows, locus, src, dst, verdict, conf, internal, seamRef)
 	view.Path = buildPath(attached, locus, src, dst, state, internal)

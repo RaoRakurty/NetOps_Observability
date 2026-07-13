@@ -361,3 +361,35 @@ func TestParseAppImpact_HidesEmptyAndMalformed(t *testing.T) {
 		t.Errorf("evidence_missing-only should surface, got %+v", got)
 	}
 }
+
+// §11 (truthfulness epic): the validation fact — set only when EVERY attached
+// signal declares a non-production purpose; one production signal keeps the
+// case production (a real fault is never suppressed by co-attached test traffic).
+func TestRcaPathView_ValidationScenario(t *testing.T) {
+	meta := map[string]any{"verdict_tier": "confirmed", "top_confidence": 0.9}
+	valSig := func(kind, lane string) map[string]any {
+		return map[string]any{
+			"kind": kind, "modality_class": lane, "attached": true,
+			"entity_type": "app", "entity_id": "rca_canary_app", "severity": "high",
+			"attrs": `{"signal_purpose":"validation"}`,
+		}
+	}
+	prodSig := map[string]any{
+		"kind": "lb_5xx", "modality_class": "device_telemetry", "attached": true,
+		"entity_type": "app", "entity_id": "rca_canary_app", "severity": "high",
+		"attrs": `{}`,
+	}
+
+	allVal := buildRcaPathView("obj", meta, []map[string]any{
+		valSig("synthetic_http_5xx", "active_probe"), valSig("lb_5xx", "device_telemetry"),
+	}, nil)
+	if !allVal.Validation {
+		t.Fatal("all-validation case must set Validation")
+	}
+	mixed := buildRcaPathView("obj", meta, []map[string]any{
+		valSig("synthetic_http_5xx", "active_probe"), prodSig,
+	}, nil)
+	if mixed.Validation {
+		t.Fatal("one production signal must keep the case production")
+	}
+}

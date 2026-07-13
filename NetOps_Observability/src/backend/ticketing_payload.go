@@ -25,6 +25,7 @@ type corrTicketFacts struct {
 	Verdict            string    // undetermined | suspected | confirmed
 	Confidence         float64
 	Internal           bool      // internal/debug-only monitoring (kept out of customer tickets)
+	Validation         bool      // §11 validation/lab/fault-injection scenario — never production side effects
 	ProbeOnly          bool      // every attached signal is an active probe
 	LowAuthorityProbe  bool      // probe-only AND no probe carried real authority
 	PeakSeverity       string    // info | warn | high | crit (max over attached signals)
@@ -57,6 +58,7 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 		Verdict:    view.Verdict,
 		Confidence: view.Confidence,
 		Internal:   view.Internal,
+		Validation: view.Validation,
 		Signature:  strings.TrimSpace(fmt.Sprintf("%v", meta["top_hypothesis"])),
 	}
 	if f.Signature == "<nil>" {

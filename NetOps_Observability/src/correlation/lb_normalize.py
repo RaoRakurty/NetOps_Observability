@@ -155,7 +155,10 @@ def normalize_lb_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | N
                 "latency_ms", "p95_latency_ms", "p99_latency_ms",
                 "backend_pool", "target_group", "pool_member", "upstream_host",
                 "vip", "backend_ip", "backend_port",
-                "baseline_error_rate", "site_id", "region"):
+                "baseline_error_rate", "site_id", "region",
+                # §11 provenance: a validation/lab event carries its declared
+                # purpose into the signal so it can never file production tickets.
+                "signal_purpose", "environment", "execution_id"):
         if ev.get(key) not in (None, ""):
             attrs[key] = ev[key]
     if app:

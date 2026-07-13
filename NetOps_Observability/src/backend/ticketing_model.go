@@ -24,6 +24,9 @@ type incidentPolicy struct {
 	RequireCustomerFacing     bool           `json:"require_customer_facing"`
 	AllowProbeOnly            bool           `json:"allow_probe_only"`
 	AllowInternalMonitoring   bool           `json:"allow_internal_monitoring"`
+	// AllowValidationScenarios: explicit opt-in for a validation canary to file
+	// REAL tickets (§11 — default false: test traffic never pages production).
+	AllowValidationScenarios bool `json:"allow_validation_scenarios"`
 	SuspectedRequiresCritical bool           `json:"suspected_requires_critical"`
 	RequirePersistenceSeconds int            `json:"require_persistence_seconds"`
 	SuppressFlappingSeconds   int            `json:"suppress_flapping_seconds"`
@@ -56,6 +59,7 @@ func defaultIncidentPolicy(tenant string) incidentPolicy {
 		RequireCustomerFacing:     true,
 		AllowProbeOnly:            false,
 		AllowInternalMonitoring:   false,
+		AllowValidationScenarios:  false,
 		SuspectedRequiresCritical: true,
 		DefaultImpact:             2,
 		DefaultUrgency:            2,
