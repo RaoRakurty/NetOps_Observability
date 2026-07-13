@@ -210,18 +210,91 @@ func fmtBaseline(baseline, deviation float64) string {
 	return strconv.FormatFloat(baseline, 'g', -1, 64)
 }
 
-// evidenceReason is the one-line, human reason a signal is in the ledger. Built
-// from the signal + the object it was grounded into — no invented narrative.
-func evidenceReason(kind, metric, entity, severity, hypothesis, tier string) string {
-	what := kind
-	if metric != "" {
-		what = kind + " · " + metric
+// cloudEvidencePhrase renders a signal kind as an OPERATOR sentence — what the
+// platform observed, in the words a NOC engineer uses. Schema kinds
+// (cloud_flow_log, probe_loss, …) are implementation detail and never surface.
+func cloudEvidencePhrase(kind, metric string) string {
+	switch kind {
+	case "cloud_flow_log":
+		return "Traffic was rejected by a cloud security rule"
+	case "cloud_health":
+		return "The application reported itself unhealthy"
+	case "cloud_resource_health", "cloud_resource_anomaly":
+		return "The cloud provider reported a resource problem"
+	case "cloud_change":
+		return "A cloud configuration change was made"
+	case "cloud_audit":
+		return "A cloud administrative action was recorded"
+	case "security_policy_change":
+		return "A security policy was changed"
+	case "probe_loss", "synthetic_icmp_loss":
+		return "Active checks lost packets to this target"
+	case "probe_rtt_anomaly":
+		return "Active checks measured unusual response times"
+	case "synthetic_http_fail", "synthetic_http_5xx", "synthetic_http_4xx":
+		return "An application check returned a failing HTTP response"
+	case "synthetic_dns_fail":
+		return "An application check could not resolve the service name"
+	case "synthetic_tls_fail", "synthetic_cert_expired", "synthetic_cert_expiring":
+		return "An application check hit a TLS/certificate problem"
+	case "synthetic_timeout":
+		return "An application check timed out"
+	case "lb_5xx", "lb_target_unhealthy":
+		return "The load balancer reported failing backends"
+	case "flow_volume_anomaly":
+		return "Real traffic volume changed sharply"
+	case "ipsec_tunnel_status":
+		return "The VPN tunnel changed state"
+	case "ipsec_underlay_status":
+		return "The internet path underneath the VPN changed state"
 	}
+	// Unmapped kind: humanize rather than leak the raw token.
+	h := strings.ReplaceAll(kind, "_", " ")
+	if metric != "" {
+		h += " (" + strings.ReplaceAll(metric, "_", " ") + ")"
+	}
+	if h == "" {
+		return "An observation was recorded"
+	}
+	return strings.ToUpper(h[:1]) + h[1:]
+}
+
+// evidenceReason is the one-line, OPERATOR-readable reason a signal is in the
+// ledger. Machine identifiers (eni-…, i-…, arn:…) mean nothing to a NOC — they
+// are resolved to the resource/application they belong to, with the raw id kept
+// only as a parenthetical for the engineer who needs to click through.
+func evidenceReason(kind, metric, entity, severity, hypothesis, tier string, name func(string) string) string {
+	what := cloudEvidencePhrase(kind, metric)
+
 	on := ""
 	if entity != "" {
-		on = " on " + entity
+		label := entity
+		if name != nil {
+			if n := name(entity); n != "" && n != entity {
+				label = n + " (" + entity + ")"
+			}
+		}
+		on = " on " + label
 	}
-	return fmt.Sprintf("%s%s (severity %s) — grounded into %s (%s)", what, on, severity, hypothesis, tier)
+
+	sev := map[string]string{
+		"crit": "critical", "high": "major", "warn": "minor", "info": "informational",
+	}[strings.ToLower(severity)]
+	if sev == "" {
+		sev = strings.ToLower(severity)
+	}
+
+	verdict := map[string]string{
+		"confirmed":    "confirming",
+		"suspected":    "supporting the suspected",
+		"undetermined": "attached to the unresolved",
+	}[strings.ToLower(tier)]
+	if verdict == "" {
+		verdict = "attached to the"
+	}
+
+	return fmt.Sprintf("%s%s — %s evidence, %s %s.",
+		what, on, sev, verdict, signatureNocTitle(hypothesis))
 }
 
 // ── wire types ───────────────────────────────────────────────────────────────
@@ -262,6 +335,24 @@ type cloudEvidenceRow struct {
 	UsedInVerdict bool   `json:"used_in_verdict"`
 	RcaGroup      string `json:"rca_group"`
 	EvidenceRef   string `json:"evidence_ref"`
+	// CloudRef is the PROVIDER-native identity of what this evidence is about —
+	// the id an engineer pastes into the AWS/Azure console (eni-…, i-…, vm name,
+	// account/region). The operator text names the resource; this keeps the raw
+	// handle one click away instead of in the sentence.
+	CloudRef cloudEvidenceRef `json:"cloud_ref"`
+}
+
+// cloudEvidenceRef — provider-native identifiers for console pivot / support case.
+type cloudEvidenceRef struct {
+	Provider   string `json:"provider,omitempty"`    // aws | azure
+	ResourceID string `json:"resource_id,omitempty"` // i-… / eni-… / VM id
+	Account    string `json:"account,omitempty"`     // account id / subscription
+	Region     string `json:"region,omitempty"`
+	// LogRef is the provider's own record id where this evidence came from —
+	// CloudTrail eventID, VPC flow-log record, Azure activity-log correlation id.
+	LogRef string `json:"log_ref,omitempty"`
+	// SignalID is our internal evidence id (the platform's own audit handle).
+	SignalID string `json:"signal_id,omitempty"`
 }
 
 type cloudRcaObject struct {
@@ -361,6 +452,35 @@ func sqlList(vals []string) string {
 // appOf resolves the app a cloud signal belongs to, from its own attrs (the
 // producer stamps app/app_id) or its entity when the entity IS the app. "" when
 // unattributed — a first-class answer, never a guess.
+// cloudResourceNamer returns a resolver id → operator name, built from the
+// tenant's declared cloud inventory (ENIs, instance ids, private/public IPs all
+// map to the resource that owns them). Returns "" for anything the inventory
+// does not claim — we never invent a name.
+func (s *server) cloudResourceNamer(r *http.Request) func(string) string {
+	res, _, _, err := s.cloudResources(r)
+	if err != nil || len(res) == 0 {
+		return nil
+	}
+	byID := map[string]string{}
+	for _, rs := range res {
+		name := rs.ResourceName
+		if name == "" {
+			name = rs.AppName
+		}
+		if name == "" {
+			continue
+		}
+		byID[rs.ResourceID] = name
+		for _, eni := range rs.NetworkInterfaceIDs {
+			byID[eni] = name
+		}
+		for _, ip := range append(append([]string{}, rs.PrivateIPs...), rs.PublicIPs...) {
+			byID[ip] = name
+		}
+	}
+	return func(id string) string { return byID[strings.TrimSpace(id)] }
+}
+
 func appOf(row chSignalRow, a signalAttrs) string {
 	if a.App != "" {
 		return a.App
@@ -372,6 +492,40 @@ func appOf(row chSignalRow, a signalAttrs) string {
 		return row.EntityID
 	}
 	return ""
+}
+
+// cloudEvidenceApp names the APPLICATION this evidence concerns. When the signal
+// only knows a machine id (an ENI, an instance), the declared inventory resolves
+// it to the workload that owns it — an operator reads workloads, not handles.
+func cloudEvidenceApp(row chSignalRow, a signalAttrs, name func(string) string) string {
+	if app := appOf(row, a); app != "" {
+		return app
+	}
+	if name == nil {
+		return ""
+	}
+	for _, id := range []string{a.ResourceID, row.EntityID, a.Host} {
+		if id == "" {
+			continue
+		}
+		if n := name(id); n != "" {
+			return n
+		}
+	}
+	return ""
+}
+
+// cloudEvidenceResource renders the resource as "name (raw-id)" — the operator
+// sees what it is; the engineer keeps the id to paste into the cloud console.
+func cloudEvidenceResource(row chSignalRow, a signalAttrs, name func(string) string) string {
+	raw := resourceOf(row, a)
+	if raw == "—" || raw == "" || name == nil {
+		return raw
+	}
+	if n := name(raw); n != "" && n != raw {
+		return n + " (" + raw + ")"
+	}
+	return raw
 }
 
 // resourceOf resolves the resource a signal was measured on.
@@ -659,9 +813,14 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 			SignalCount:   o.SignalCount,
 			State:         o.State,
 			WindowStart:   isoTS(o.WindowStart),
-			Apps:          affectedApps(o.Affected),
+			Apps:          s.cloudAppsForObject(r, o.Affected),
 		})
 	}
+
+	// Resolve provider-native ids (eni-…, i-…) to the resource/app they belong to,
+	// from the tenant's DECLARED inventory. A NOC reads names; the raw handle is
+	// preserved in cloud_ref for the console pivot.
+	resourceNamer := s.cloudResourceNamer(r)
 
 	evidence := make([]cloudEvidenceRow, 0, limit)
 	if list := sqlList(ids); list != "" {
@@ -672,15 +831,23 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 				Time:       isoTS(row.TS),
 				Category:   "supporting", // attached to the object = it fed the verdict
 				SignalType: row.Kind,
-				App:        orDash(appOf(row, a)),
-				Resource:   resourceOf(row, a),
+				App:        orDash(cloudEvidenceApp(row, a, resourceNamer)),
+				Resource:   cloudEvidenceResource(row, a, resourceNamer),
 				Source:     providerOf(a),
 				Confidence: verdictConfidence(o.VerdictTier),
 				Reason: evidenceReason(row.Kind, row.MetricName, row.EntityID, row.Severity,
-					orDash(o.TopHypothesis), orDash(o.VerdictTier)),
+					o.TopHypothesis, o.VerdictTier, resourceNamer),
 				UsedInVerdict: true,
 				RcaGroup:      row.CorrelationID,
 				EvidenceRef:   row.SignalID,
+				CloudRef: cloudEvidenceRef{
+					Provider:   a.Provider,
+					ResourceID: firstNonEmptyStr(a.ResourceID, row.EntityID),
+					Account:    a.Account,
+					Region:     a.Region,
+					LogRef:     a.RequestID, // CloudTrail eventID / provider record id
+					SignalID:   row.SignalID,
+				},
 			})
 		}
 	}
@@ -715,6 +882,35 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		"count":        len(evidence),
 		"window_hours": cloudSignalWindowHours,
 	})
+}
+
+// cloudAppsForObject names the applications an object affects. The engine names
+// apps when it can; when the probes only knew an IP, the DECLARED cloud
+// inventory resolves that address to the workload living there — so the Service
+// View's Apps column reads "correlix-app-host-01", never a bare 10.60.10.10.
+func (s *server) cloudAppsForObject(r *http.Request, affectedRaw string) []string {
+	if apps := affectedApps(affectedRaw); len(apps) > 0 {
+		return apps
+	}
+	var a struct {
+		Services []string `json:"services"`
+		Paths    []string `json:"paths"`
+	}
+	if affectedRaw != "" {
+		_ = json.Unmarshal([]byte(affectedRaw), &a)
+	}
+	targets := append(append([]string{}, a.Services...), a.Paths...)
+	if len(targets) == 0 {
+		return []string{}
+	}
+	res, _, _, err := s.cloudResources(r)
+	if err != nil {
+		return []string{}
+	}
+	if names := cloudAppNamesFor(res, targets); len(names) > 0 {
+		return names
+	}
+	return []string{}
 }
 
 // affectedApps pulls the app blast radius out of an object's affected JSON.

@@ -52,7 +52,25 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "count": len(res)})
+	// Live state per resource (provider status checks, provider traffic, our
+	// active checks). Absent feeds stay "unknown" — never a fabricated healthy.
+	live := s.cloudLiveStates(r.Context(), chTenantScope(r), res)
+	out := make([]map[string]any, 0, len(res))
+	for _, rs := range res {
+		row := map[string]any{"resource": rs}
+		if st, ok := live[rs.ResourceID]; ok {
+			row["health"] = st.Health
+			row["health_basis"] = st.HealthBasis
+			if st.TrafficBytes != nil {
+				row["traffic_bytes"] = *st.TrafficBytes
+			}
+			if st.CPUPct != nil {
+				row["cpu_pct"] = *st.CPUPct
+			}
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "count": len(res)})
 }
 
 func (s *server) handleCloudIdentityMap(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +97,45 @@ func (s *server) handleCloudApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apps := cloud.DeriveApps(res)
-	writeJSON(w, http.StatusOK, map[string]any{"apps": apps, "count": len(apps)})
+	// Roll the resources' live state up to the app: worst health wins (an app is
+	// only as healthy as its unhealthiest resource), traffic sums.
+	live := s.cloudLiveStates(r.Context(), chTenantScope(r), res)
+	rank := map[string]int{"unknown": 0, "healthy": 1, "degraded": 2, "down": 3}
+	type appLive struct {
+		Health  string   `json:"health"`
+		Basis   string   `json:"health_basis"`
+		Traffic *float64 `json:"traffic_bytes,omitempty"`
+	}
+	byApp := map[string]*appLive{}
+	for _, rs := range res {
+		st, ok := live[rs.ResourceID]
+		if !ok {
+			continue
+		}
+		key := rs.AppID
+		if key == "" {
+			key = rs.AppName
+		}
+		if key == "" {
+			key = rs.ResourceName
+		}
+		cur := byApp[key]
+		if cur == nil {
+			cur = &appLive{Health: "unknown"}
+			byApp[key] = cur
+		}
+		if rank[st.Health] > rank[cur.Health] {
+			cur.Health, cur.Basis = st.Health, st.HealthBasis
+		}
+		if st.TrafficBytes != nil {
+			t := *st.TrafficBytes
+			if cur.Traffic != nil {
+				t += *cur.Traffic
+			}
+			cur.Traffic = &t
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"apps": apps, "live": byApp, "count": len(apps)})
 }
 
 func (s *server) handleCloudCoverage(w http.ResponseWriter, r *http.Request) {

@@ -309,14 +309,38 @@ func TestISOTS(t *testing.T) {
 	}
 }
 
-// The evidence ledger may only carry categories the engine actually records.
-func TestEvidenceReasonNamesTheGroundedObject(t *testing.T) {
-	got := evidenceReason("cloud_health", "app_error", "booking-service", "high",
-		"sig.ent.cloud.app-dependency-down", "suspected")
-	for _, want := range []string{"cloud_health", "app_error", "booking-service", "high",
-		"sig.ent.cloud.app-dependency-down", "suspected"} {
+// The evidence ledger speaks OPERATOR language: what was observed, on which
+// named resource, how serious, and what it supports. Schema kinds, signature
+// ids and raw machine handles must never be the operator's text (owner
+// directive 2026-07-13); the raw ids live in cloud_ref for console pivot.
+func TestEvidenceReasonIsOperatorReadable(t *testing.T) {
+	namer := func(id string) string {
+		if id == "eni-007542c1d61f44947" {
+			return "correlix-app-host-01"
+		}
+		return ""
+	}
+	got := evidenceReason("cloud_flow_log", "rejected_flow", "eni-007542c1d61f44947", "warn",
+		"sig.ent.app.saas-experience-degraded", "suspected", namer)
+
+	for _, want := range []string{
+		"Traffic was rejected by a cloud security rule", // the observation, in words
+		"correlix-app-host-01",                          // the resource, by NAME
+		"minor",                                         // severity, in words
+		"supporting the suspected",                      // what it feeds
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("evidenceReason %q missing %q", got, want)
 		}
+	}
+	// BANNED: schema kinds, signature ids, bare severity tokens.
+	for _, banned := range []string{"cloud_flow_log", "sig.ent.", "severity warn", "grounded into"} {
+		if strings.Contains(got, banned) {
+			t.Fatalf("evidenceReason %q leaks developer language %q", got, banned)
+		}
+	}
+	// The raw id may still appear as a parenthetical for the engineer.
+	if !strings.Contains(got, "(eni-007542c1d61f44947)") {
+		t.Fatalf("evidenceReason %q must keep the raw handle for console pivot", got)
 	}
 }

@@ -32,7 +32,7 @@ const (
 var cloudSourceKinds = map[string][]string{
 	"flow_logs":    {"cloud_flow_log"},
 	"lb_logs":      {"cloud_lb_log"},
-	"metrics":      {"cloud_metric", "database_metric"},
+	"metrics":      {"cloud_metric", "database_metric", "cloud_resource_anomaly"},
 	"cloud_health": {"cloud_health", "cloud_resource_health"},
 	"change_audit": {"cloud_change", "cloud_audit", "security_policy_change"},
 }
