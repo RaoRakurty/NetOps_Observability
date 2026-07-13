@@ -35,6 +35,9 @@ type rcaReport struct {
 	ReportType    string `json:"report_type"` // see reportTypeFor
 	Title         string `json:"title"`
 	Subtitle      string `json:"subtitle,omitempty"`
+	// Validation: every anomalous signal declares a non-production purpose —
+	// the document watermarks itself and claims no production severity (§11/§24).
+	Validation bool `json:"validation"`
 	GeneratedAt   string `json:"generated_at"` // UTC, canonical
 
 	States   rcaReportStates    `json:"states"`
@@ -47,6 +50,9 @@ type rcaReport struct {
 	// (the section is omitted, not rendered as healthy).
 	CloudChanges []rcaCloudChange `json:"cloud_changes,omitempty"`
 	Hypotheses   []rcaHypothesis  `json:"hypotheses"`
+	// Cascade: the top hypothesis's causal propagation ladder (§ epic D2 — the
+	// workspace had it; the exported report, a terminal consumer, did not).
+	Cascade []rcaCascadeStage `json:"cascade,omitempty"`
 	// SingleHypothesis: render "Current hypothesis", not "Hypothesis ranking".
 	SingleHypothesis bool           `json:"single_hypothesis"`
 	RootCause        rcaRootCause   `json:"root_cause"`
@@ -145,6 +151,13 @@ type rcaReportSummaries struct {
 	WhySuspected    string   `json:"why_suspected,omitempty"`
 	WhyNotConfirmed []string `json:"why_not_confirmed,omitempty"`
 	RequiredConfirm string   `json:"required_confirmation,omitempty"`
+}
+
+type rcaCascadeStage struct {
+	Stage     string `json:"stage"`
+	Witnessed bool   `json:"witnessed"`
+	Root      bool   `json:"root"`
+	Note      string `json:"note"`
 }
 
 type rcaKV struct {
@@ -435,6 +448,13 @@ type rcaHypBlob struct {
 			Satisfied       []string `json:"satisfied"`
 			Missing         []string `json:"missing"`
 			BlastRadius     string   `json:"blast_radius"`
+			CausalChain     []struct {
+				Stage     string   `json:"stage"`
+				Witnessed bool     `json:"witnessed"`
+				Root      bool     `json:"root"`
+				Note      string   `json:"note"`
+				Kinds     []string `json:"kinds"`
+			} `json:"causal_chain"`
 			Verdict         struct {
 				Tier              string   `json:"verdict_tier"`
 				Owner             string   `json:"owner"`
@@ -454,6 +474,28 @@ type rcaHypBlob struct {
 			SeamType string `json:"seam_type"`
 		} `json:"seams"`
 	} `json:"grounding_context"`
+}
+
+// cascadeStages projects the TOP hypothesis's causal chain for the report.
+// Witnessed rungs carry evidence; unwitnessed rungs stay visible and honest
+// ("not observed" is part of the propagation story, not a claim).
+func cascadeStages(hb rcaHypBlob) []rcaCascadeStage {
+	if len(hb.Ranking.Hypotheses) == 0 {
+		return nil
+	}
+	var out []rcaCascadeStage
+	for _, c := range hb.Ranking.Hypotheses[0].CausalChain {
+		note := c.Note
+		if note == "" && len(c.Kinds) > 0 {
+			parts := make([]string, 0, len(c.Kinds))
+			for _, k := range c.Kinds {
+				parts = append(parts, strings.ReplaceAll(k, "_", " "))
+			}
+			note = strings.Join(parts, " · ")
+		}
+		out = append(out, rcaCascadeStage{Stage: c.Stage, Witnessed: c.Witnessed, Root: c.Root, Note: note})
+	}
+	return out
 }
 
 func decodeHypotheses(meta map[string]any) rcaHypBlob {
@@ -703,6 +745,16 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRU = "none_detected"
 	}
 
+	// §11/§24: a case whose every anomalous signal declares a non-production
+	// purpose is a VALIDATION scenario — watermarked, production severity N/A.
+	validation := len(anomalous) > 0
+	for _, sig := range anomalous {
+		if !isValidationSignal(sig) {
+			validation = false
+			break
+		}
+	}
+
 	// §19: severity carries its basis — the signal kind at the peak plus the
 	// severity mix, so a single loud probe is visibly a single loud probe.
 	sevBasis := "no anomalous evidence attached"
@@ -715,6 +767,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 		sevBasis = fmt.Sprintf("peak of the attached evidence, carried by %s (%s of %d anomalous signals)",
 			strings.ReplaceAll(peakSevKind, "_", " "), strings.Join(mix, " / "), len(anomalous))
+	}
+	if validation {
+		sevBasis += "; validation scenario — production severity not applicable"
 	}
 
 	ticketState := "not_opened"
@@ -868,6 +923,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		ReportType:    reportTypeFor(analysis),
 		Title:         title,
 		Subtitle:      subtitle,
+		Validation:    validation,
 		GeneratedAt:   fmtUTC(in.Now),
 		States: rcaReportStates{
 			Incident: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
@@ -885,6 +941,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		CloudChanges:     changes,
 		Hypotheses:       hyps,
 		SingleHypothesis: len(hyps) <= 1,
+		Cascade:          cascadeStages(hb),
 		RootCause:        root,
 		Ownership:        ownership,
 		Decision:         decision,

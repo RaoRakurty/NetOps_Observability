@@ -187,6 +187,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 
 <h1>{{.Title}}</h1>
 <div class="badges">
+  {{if .Validation}}<span class="pill red" style="font-weight:800;letter-spacing:.4px">VALIDATION SCENARIO — NOT A PRODUCTION INCIDENT</span>{{end}}
   <span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>
   <span class="pill {{stateTone "recovery" .States.Recovery}}">Recovery: {{title (humanState .States.Recovery)}}</span>
   <span class="pill {{stateTone "analysis" .States.Analysis}}">Analysis: {{title .States.Analysis}}</span>
@@ -329,6 +330,19 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 {{end}}
 
 <section>
+  {{if .Cascade}}
+  <h2>How the failure propagated</h2>
+  <table><thead><tr><th style="width:26%">Stage</th><th style="width:16%">Observed</th><th>Evidence</th></tr></thead><tbody>
+  {{range .Cascade}}<tr{{if not .Witnessed}} style="opacity:.62"{{end}}>
+    <td><b>{{.Stage}}</b>{{if .Root}} <span class="pill red">likely origin</span>{{end}}</td>
+    <td>{{if .Witnessed}}<span class="pill green">witnessed</span>{{else}}<span class="pill gray">not observed</span>{{end}}</td>
+    <td>{{.Note}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  <div class="note">A failure at the highlighted origin propagates downward. A stage marked
+  not observed is part of the known propagation path but carried no evidence in this window
+  and is not claimed.</div>
+  {{end}}
   <h2>{{if .SingleHypothesis}}Current hypothesis{{else}}Hypothesis ranking{{end}}</h2>
   {{if .Hypotheses}}
   <table><thead><tr><th>#</th><th>Hypothesis</th><th>Confidence</th><th>Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>

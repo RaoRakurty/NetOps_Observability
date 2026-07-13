@@ -478,3 +478,35 @@ func TestRcaReportSingleObservationSeverityAndOwnership(t *testing.T) {
 			rep.Ownership.EscalationOwner)
 	}
 }
+
+// Epic D2: the causal cascade reaches the exported report (its terminal consumer).
+func TestRcaReportCarriesCascade(t *testing.T) {
+	hyp := testHyp("sig.ent.middle-mile.ipsec-underlay-down", 1.0, "confirmed",
+		[]string{"ipsec_underlay_status"}, nil, nil, "isp", false)
+	hyp["causal_chain"] = []map[string]any{
+		{"stage": "Underlay path to the tunnel peer", "witnessed": true, "root": true, "kinds": []string{"ipsec_underlay_status"}},
+		{"stage": "IKE/IPsec tunnel", "witnessed": true, "kinds": []string{"ipsec_tunnel_status"}},
+		{"stage": "Routing over the underlay (BGP)", "witnessed": false, "note": "No routing-protocol signals seen on this path"},
+	}
+	meta := testMeta("open", "confirmed", "sig.ent.middle-mile.ipsec-underlay-down", hyp)
+	sigs := []map[string]any{
+		testSig("ipsec_underlay_status", "control_plane", "ipsec:gw", "seam", "sm-1", "crit", "2026-07-12 18:12:00", true, nil),
+	}
+	rep := buildTestReport(t, meta, sigs)
+	if len(rep.Cascade) != 3 || !rep.Cascade[0].Root || !rep.Cascade[0].Witnessed {
+		t.Fatalf("cascade = %+v", rep.Cascade)
+	}
+	if rep.Cascade[1].Note != "ipsec tunnel status" {
+		t.Fatalf("witnessed rung note must humanize its kinds: %q", rep.Cascade[1].Note)
+	}
+	htmlBytes, err := renderRcaReportHTML(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+	for _, want := range []string{"How the failure propagated", "likely origin", "not observed"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("report HTML missing %q", want)
+		}
+	}
+}
