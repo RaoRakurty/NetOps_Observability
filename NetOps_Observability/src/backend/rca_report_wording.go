@@ -453,7 +453,7 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 	}
 	suffix := ""
 	switch incident {
-	case "recovered", "closed":
+	case "recovered":
 		suffix = " — recovered"
 	case "no_longer_observed":
 		// The window quiesced without recovery evidence — never claim recovery.
@@ -496,7 +496,7 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 		}
 	}
 	adj := ""
-	if incident == "recovered" || incident == "closed" {
+	if incident == "recovered" {
 		adj = "Transient "
 	}
 	title := adj + noun
