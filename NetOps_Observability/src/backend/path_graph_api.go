@@ -473,7 +473,7 @@ func seamHintFrom(prior pathgraph.PathObservation, priorHops []pathgraph.PathHop
 // correlation timeline). Errors are swallowed into a nil block on purpose: the
 // timeline must render with or without a path, and an absent spine is stated, never
 // faked.
-func (s *server) rcaPathBlock(ctx context.Context, r *http.Request, correlationID string) any {
+func (s *server) rcaPathBlock(ctx context.Context, r *http.Request, correlationID, verdictTier, topHyp string) any {
 	claims, ok := userFrom(ctx)
 	if !ok {
 		return nil
@@ -483,5 +483,56 @@ func (s *server) rcaPathBlock(ctx context.Context, r *http.Request, correlationI
 	if err != nil || status != http.StatusOK {
 		return nil
 	}
+	stampSpineFault(resp.Spine, verdictTier, topHyp)
 	return resp
+}
+
+// pathFaultFamilies: hypothesis families whose fault IS the path — only these
+// paint a drop point red. An app-layer fault must never redden the network path.
+var pathFaultFamilies = []string{
+	"underlay", "tunnel", "ipsec", "connectivity", "path", "egress",
+	"middle-mile", "dia", "wan-edge", "link", "uplink",
+}
+
+// stampSpineFault marks WHERE a dying path broke (the owner's "show me the
+// break" ask): on a PARTIAL observation embedded in an RCA whose verdict is
+// suspected/confirmed on a path-family hypothesis, the LAST RESPONDING hop is
+// the drop point. Verdict-aware on purpose: a transient partial trace on a
+// healthy case stays unpainted (the renderer never invents a fault, §2.4) —
+// the RED mark requires the engine's verdict AND the observation's own death.
+func stampSpineFault(sp *pathgraph.Spine, verdictTier, topHyp string) {
+	if sp == nil || len(sp.Spine) == 0 {
+		return
+	}
+	if sp.Status == pathgraph.StatusComplete {
+		return // the path reached its target — nothing broke on it
+	}
+	tier := strings.ToLower(verdictTier)
+	var mark string
+	switch tier {
+	case "confirmed":
+		mark = "broken"
+	case "suspected":
+		mark = "suspected"
+	default:
+		return
+	}
+	family := false
+	low := strings.ToLower(topHyp)
+	for _, f := range pathFaultFamilies {
+		if strings.Contains(low, f) {
+			family = true
+			break
+		}
+	}
+	if !family {
+		return
+	}
+	// the drop point = the last responding hop (everything after it is dark)
+	for i := len(sp.Spine) - 1; i >= 0; i-- {
+		if sp.Spine[i].State == string(pathgraph.HopResponding) {
+			sp.Spine[i].Fault = mark
+			return
+		}
+	}
 }

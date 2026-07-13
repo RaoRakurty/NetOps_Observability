@@ -55,7 +55,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		}
 	}
 
-	pathBlock := s.rcaPathBlock(r.Context(), r, id)
+	pathBlock := s.rcaPathBlock(r.Context(), r, id, fmt.Sprintf("%v", meta["verdict_tier"]), fmt.Sprintf("%v", meta["top_hypothesis"]))
 	rep := buildRcaReport(rcaReportInput{
 		ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows,
 		Ticket: ticket, Policy: pol, PolicyConfigured: configured,

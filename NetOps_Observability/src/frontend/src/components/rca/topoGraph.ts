@@ -258,7 +258,12 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
     const a = byIndex.get(e.from), b = byIndex.get(e.to);
     if (!a || !b) continue;
     const blind = a.state !== "responding" || b.state !== "responding";
-    const state: EdgeState = e.state ?? (blind ? "unknown" : "healthy");
+    // The segment LEAVING the backend-stamped drop point is where the path
+    // died — render it as the fault (red ✕), matching the hop's own mark.
+    const faultEdge = a.fault && b.state !== "responding"
+      ? (a.fault === "broken" ? "confirmed_down" : "suspected_down") as EdgeState
+      : undefined;
+    const state: EdgeState = e.state ?? faultEdge ?? (blind ? "unknown" : "healthy");
     const transform = transformationLabel(e.transformation);
     edges.push({
       from: id(e.from), to: id(e.to), state,

@@ -402,7 +402,7 @@ func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request
 		// from entity_id strings or node degree again. nil/spine_available=false is an
 		// honest "no measured path for this object" — the UI says so, it does not
 		// invent a star.
-		"path": s.rcaPathBlock(r.Context(), r, id),
+		"path": s.rcaPathBlock(r.Context(), r, id, fmt.Sprintf("%v", meta["verdict_tier"]), fmt.Sprintf("%v", meta["top_hypothesis"])),
 	})
 }
 

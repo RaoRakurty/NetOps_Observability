@@ -61,6 +61,10 @@ type SpineNode struct {
 	// the cloud resource store, never guessed from names. Empty = not a known
 	// cloud address; the UI renders the provider mark only when this is set.
 	Provider string `json:"provider,omitempty"`
+	// Fault marks the RCA drop point (broken|suspected) — stamped by the API
+	// layer ONLY when a partial observation embeds in a suspected/confirmed
+	// path-family verdict. Absent ⇒ the renderer marks no fault (§2.4).
+	Fault string `json:"fault,omitempty"`
 	// RepeatCount > 1 means this node stands for that many CONSECUTIVE measured
 	// TTLs with the identical answer (same address, or the same silence). Nothing
 	// is dropped — the run is stated as a count instead of drawn as a ladder: a
