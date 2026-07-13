@@ -83,11 +83,19 @@ type rcaTopologyView struct {
 }
 
 type rcaReportStates struct {
-	Incident string `json:"incident"` // active | recovering | recovered | closed
-	Analysis string `json:"analysis"` // observed | suspected | probable | confirmed | inconclusive
-	Impact   string `json:"impact"`   // confirmed | detected | none_detected | not_observable | unknown
-	Ticket   string `json:"ticket"`   // not_opened | held | opened | resolved | failed
-	Severity string `json:"severity"` // peak attached severity: info|warn|high|crit|unknown
+	// Incident lifecycle is separate from recovery assessment (§1/§17 of the
+	// truthfulness spec): signals aging out of the window is NOT recovery.
+	Incident string `json:"incident"` // active | recovering | recovered | no_longer_observed | closed
+	// Recovery is asserted ONLY from observed recovery evidence.
+	Recovery      string `json:"recovery"`       // explicitly_confirmed | not_observed
+	RecoveryBasis string `json:"recovery_basis"` // human sentence: what (if anything) proved recovery
+	Analysis      string `json:"analysis"`       // observed | suspected | probable | confirmed | inconclusive
+	Impact        string `json:"impact"`         // confirmed | detected | none_detected | not_observable | unknown
+	Ticket        string `json:"ticket"`         // not_opened | held | opened | resolved | failed
+	Severity      string `json:"severity"`       // peak attached severity: info|warn|high|crit|unknown
+	// Monitoring is evaluated against report-generation time — never described
+	// as running past its own end.
+	Monitoring string `json:"monitoring"` // not_started | active | completed
 	// Confidence carries its basis so "Medium" is never a bare adjective.
 	Confidence      string `json:"confidence"` // High | Medium | Low
 	ConfidenceBasis string `json:"confidence_basis"`
@@ -423,7 +431,13 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	hb := decodeHypotheses(meta)
 	verdict := strings.ToLower(fmt.Sprintf("%v", meta["verdict_tier"]))
 	state := strings.ToLower(fmt.Sprintf("%v", meta["state"]))
+	// The ranking blob is the live analysis; the scalar column can lag it
+	// (Phase 0 finding D1b: report title disagreed with the workspace on the
+	// same case). Prefer the ranking's leader whenever it is present.
 	topHyp := fmt.Sprintf("%v", meta["top_hypothesis"])
+	if len(hb.Ranking.Hypotheses) > 0 && hb.Ranking.Hypotheses[0].ID != "" {
+		topHyp = hb.Ranking.Hypotheses[0].ID
+	}
 	version := int(asFloat(meta["version"]))
 
 	// ---- classify the slice ----------------------------------------------------
@@ -511,13 +525,23 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
-	// ---- four states ------------------------------------------------------------
+	// ---- states -------------------------------------------------------------------
+	// Recovery is an ASSESSMENT, not a synonym for "the window closed": an
+	// object that quiesced because its signals aged out has merely stopped
+	// being observed (§17 — "no additional data" is not "successful recovery").
+	recoveryState, recoveryBasis := "not_observed", "No recovery evidence was captured."
+	if !recovered.IsZero() {
+		recoveryState = "explicitly_confirmed"
+		recoveryBasis = fmt.Sprintf("%s; last clear observed %s.", countNoun(len(clears), "recovery signal"), fmtUTC(recovered))
+	}
 	incident := "active"
 	switch {
 	case state == "merged":
 		incident = "closed"
-	case state == "closed":
+	case state == "closed" && recoveryState == "explicitly_confirmed":
 		incident = "recovered"
+	case state == "closed":
+		incident = "no_longer_observed"
 	case len(clears) > 0:
 		incident = "recovering"
 	}
@@ -595,7 +619,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			confidence = "Medium"
 			basis = fmt.Sprintf("%d evidence classes from %d observers align, but no fully independent confirming pair", nMod, nObs)
 		default:
-			basis = fmt.Sprintf("evidence rests on %d class(es) from %d observer(s)", maxInt(nMod, 1), maxInt(nObs, 1))
+			basis = fmt.Sprintf("evidence rests on %s from %s", countNoun(maxInt(nMod, 1), "evidence class"), strings.ToLower(countNoun(maxInt(nObs, 1), "observer")))
 		}
 	}
 
@@ -630,8 +654,18 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	if monitorWindow <= 0 {
 		monitorWindow = 30 * time.Minute
 	}
+	// Monitoring state is evaluated against report-generation time (§17): a
+	// window that ended before this report was generated is COMPLETED, never
+	// described as still running.
+	monitoring := "not_started"
 	if times.RecoveredCaptured {
-		times.MonitoringUntil = fmtUTC(recovered.Add(monitorWindow))
+		until := recovered.Add(monitorWindow)
+		times.MonitoringUntil = fmtUTC(until)
+		if in.Now.Before(until) {
+			monitoring = "active"
+		} else {
+			monitoring = "completed"
+		}
 	}
 
 	// ---- scope -------------------------------------------------------------------
@@ -682,13 +716,13 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, decision, sigSummary, monitorWindow)
+	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, monitoring, decision, sigSummary, monitorWindow)
 
 	// ---- actions -----------------------------------------------------------------------------------
 	actions := buildActions(analysis, hb, sigSummary, decision, ownership)
 
 	// ---- NOC quick-read -------------------------------------------------------------------------------
-	noc := buildNocQuickRead(incident, analysis, impact, ticketState, times, scope, sigSummary, coverage, ownership, actions)
+	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions)
 
 	rep := rcaReport{
 		ReportID:      "rr-" + strings.ReplaceAll(in.ID, "-", "")[:12] + fmt.Sprintf("-v%d", version),
@@ -700,8 +734,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		Subtitle:      subtitle,
 		GeneratedAt:   fmtUTC(in.Now),
 		States: rcaReportStates{
-			Incident: incident, Analysis: analysis, Impact: impact, Ticket: ticketState,
-			Severity: peakSev, Confidence: confidence, ConfidenceBasis: basis,
+			Incident: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
+			Analysis: analysis, Impact: impact, Ticket: ticketState,
+			Severity: peakSev, Monitoring: monitoring,
+			Confidence: confidence, ConfidenceBasis: basis,
 		},
 		Times:            times,
 		Scope:            scope,

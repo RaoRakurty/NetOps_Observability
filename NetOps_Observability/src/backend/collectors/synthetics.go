@@ -210,6 +210,10 @@ func (s *synthetics) tick(ctx context.Context) {
 			// side derives from this event must share it (§2 — never two
 			// independent observers from one execution).
 			ExecutionID: newExecutionID(),
+			// The recurring test's stable identity — with the vantage host it
+			// forms the fate fingerprint (§3): two probes sharing (seam, target,
+			// schedule) or an agent host must never corroborate each other.
+			ScheduleID:  r.target.check + "|" + r.target.dst,
 			ProbeIntent: decl.Intent, VantageType: decl.Vantage,
 			Environment: decl.Environment, SignalPurpose: decl.Purpose,
 		})

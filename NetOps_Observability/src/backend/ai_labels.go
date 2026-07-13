@@ -134,6 +134,10 @@ var sigNocTitle = map[string]string{
 	"sig.ent.cloud.private-connectivity-down": "Cloud private connectivity down",
 	"sig.ent.cloud.route-table-blackhole":     "Cloud route-table blackhole",
 	"sig.ent.cloud.sg-nacl-block":            "Cloud security-group / NACL block",
+	// Middle-mile IPsec family (truthfulness epic D1a: these fell into the
+	// substring cascade, where the bare "ipsec" token routed them to the
+	// SD-WAN group — a live report titled an underlay-root case "SD-WAN").
+	"sig.ent.middle-mile.ipsec-underlay-down": "Underlay path to VPN peer down",
 }
 
 // signatureNocTitle humanizes a signature id (server mirror of the UI). Returns
@@ -168,13 +172,17 @@ func signatureNocTitle(id string) string {
 		return "TLS / certificate issue"
 	case contains("cloud"):
 		return "Cloud service-path change"
+	// middle-mile BEFORE the tunnel group: an underlay/provider-path signature
+	// that happens to mention ipsec is a transport fault, not an SD-WAN one.
+	case contains("middle-mile", "underlay", "dia"):
+		return "WAN / provider path change"
 	case contains("sdwan", "overlay", "tunnel", "ipsec"):
 		return "SD-WAN / tunnel change"
 	case contains("dns"):
 		return "DNS resolution impairment"
 	case contains("mpls", "lsp", "l3vpn", "vrf"):
 		return "MPLS / VPN path change"
-	case contains("dia", "middle-mile", "internet", "provider", "congestion", "wan"):
+	case contains("internet", "provider", "congestion", "wan"):
 		return "WAN / provider path change"
 	case contains("bgp", "ospf", "isis", "routing", "peer"):
 		return "Routing adjacency change"

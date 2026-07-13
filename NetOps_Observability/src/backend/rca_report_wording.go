@@ -52,6 +52,18 @@ func rcaProblemFor(sigID, _ string) string {
 	return sigProblemStatement[sigID]
 }
 
+
+// countNoun renders "One automated check" / "3 automated checks" — the report
+// never prints "N thing(s)" (§2 pluralization rule).
+func countNoun(n int, noun string) string {
+	switch n {
+	case 1:
+		return "One " + noun
+	default:
+		return fmt.Sprintf("%d %ss", n, noun)
+	}
+}
+
 // ---- scope ---------------------------------------------------------------------
 
 func buildRcaScope(meta map[string]any, anomalous []map[string]any, hb rcaHypBlob) rcaReportScope {
@@ -403,7 +415,7 @@ func buildDecision(analysis, incident, impact string, pol incidentPolicy, config
 			map[bool]string{true: ", customer-facing evidence required", false: ""}[pol.RequireCustomerFacing],
 			map[bool]string{true: ", suspected additionally requires critical severity", false: ""}[pol.SuspectedRequiresCritical]),
 		MonitoringWindow: fmtDur(monitorWindow) + " after recovery",
-		AutoCloseWhen:    "no recurrence and no customer-impact evidence within the monitoring window",
+		AutoCloseWhen:    "no recurrence and no NEW customer-impact evidence arising within the monitoring window (impact already recorded for this incident stays recorded and does not block a clean close)",
 		ReopenWhen:       fmt.Sprintf("the same condition recurs within %s (flap suppression)", fmtDur(monitorWindow)),
 		EscalateWhen:     "customer impact is confirmed, or a second independent evidence class corroborates the fault",
 	}
@@ -440,8 +452,12 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 		service = aiEntityLabel(scope.Targets[0])
 	}
 	suffix := ""
-	if incident == "recovered" || incident == "closed" {
+	switch incident {
+	case "recovered", "closed":
 		suffix = " — recovered"
+	case "no_longer_observed":
+		// The window quiesced without recovery evidence — never claim recovery.
+		suffix = " — no longer observed"
 	}
 
 	// A matched signature names the condition (factual, not verdict-bearing).
@@ -505,7 +521,7 @@ func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneA
 	}
 	switch {
 	case len(lanes) == 1 && lanes[0] == "active checks" && sig.Probe != nil:
-		whySusp = fmt.Sprintf("%d active-check source(s) reported degradation to the same target during an overlapping time window.", len(sig.Probe.AffectedVantages))
+		whySusp = countNoun(len(sig.Probe.AffectedVantages), "active-check source") + " reported degradation to the same target during an overlapping time window."
 	case len(lanes) > 1:
 		whySusp = fmt.Sprintf("Anomalies in %s align in the same time window and scope.", strings.Join(lanes, ", "))
 	case len(lanes) == 1:
@@ -528,7 +544,7 @@ func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneA
 
 // ---- management summary (§3) -----------------------------------------------------------------------
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration) string {
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration) string {
 	var b strings.Builder
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
@@ -543,7 +559,7 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	}
 	src := "automated telemetry"
 	if sig.Probe != nil && sig.Probe.Failed > 0 {
-		src = fmt.Sprintf("%d automated check(s)", len(sig.Probe.AffectedVantages))
+		src = countNoun(len(sig.Probe.AffectedVantages), "automated check")
 		if len(sig.Probe.AffectedVantages) == 0 {
 			src = "automated checks"
 		}
@@ -553,8 +569,14 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	switch {
 	case times.RecoveredCaptured && times.DurationMS > 0:
 		fmt.Fprintf(&b, "The condition recovered after %s. ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
+	case incident == "no_longer_observed":
+		last := times.LastAnomalous
+		if last == "" {
+			last = times.WindowEnd + " UTC"
+		}
+		fmt.Fprintf(&b, "Anomalous signals were last observed at %s; no recovery evidence was captured, so recovery is NOT confirmed. ", last)
 	case incident == "recovered" || incident == "closed":
-		b.WriteString("The condition has ceased; the exact recovery time was not captured. ")
+		b.WriteString("The condition is no longer observed; the exact recovery time was not captured. ")
 	case times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0:
 		fmt.Fprintf(&b, "The condition is ongoing (%s elapsed). ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
 	default:
@@ -586,9 +608,14 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	}
 	// decision + next
 	fmt.Fprintf(&b, "Decision: %s — %s ", decision.Decision, decision.Reason)
-	if incident == "recovered" || incident == "recovering" {
-		fmt.Fprintf(&b, "Monitoring continues for %s, with automatic escalation if the condition recurs or customer-impact evidence appears.", fmtDur(monitorWindow))
-	} else {
+	switch {
+	case monitoring == "active":
+		fmt.Fprintf(&b, "Monitoring is active until %s, with automatic escalation if the condition recurs or customer-impact evidence appears.", times.MonitoringUntil)
+	case monitoring == "completed":
+		b.WriteString("The post-recovery monitoring window has completed without recurrence.")
+	case incident == "recovered" || incident == "recovering":
+		fmt.Fprintf(&b, "A %s monitoring window follows recovery, with automatic escalation if the condition recurs or customer-impact evidence appears.", fmtDur(monitorWindow))
+	default:
 		b.WriteString("Escalation follows the policy thresholds stated in the decision section.")
 	}
 	return b.String()
@@ -645,9 +672,10 @@ func buildActions(analysis string, hb rcaHypBlob, sig rcaSignalSummary, decision
 
 // ---- NOC quick-read (§4) ----------------------------------------------------------------------------------
 
-func buildNocQuickRead(incident, analysis, impact, ticket string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction) []rcaKV {
+func buildNocQuickRead(incident, recovery, analysis, impact, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction) []rcaKV {
 	kv := []rcaKV{
-		{K: "Incident", V: incident},
+		{K: "Incident", V: strings.ReplaceAll(incident, "_", " ")},
+		{K: "Recovery", V: strings.ReplaceAll(recovery, "_", " ")},
 		{K: "Analysis", V: analysis},
 		{K: "Impact", V: impact},
 		{K: "Ticket", V: ticket},
@@ -660,6 +688,8 @@ func buildNocQuickRead(incident, analysis, impact, ticket string, times rcaRepor
 	}
 	if times.RecoveredCaptured {
 		kv = append(kv, rcaKV{K: "Recovered at", V: times.RecoveredAt})
+	} else if incident == "no_longer_observed" {
+		kv = append(kv, rcaKV{K: "Recovered at", V: "Not confirmed — signals stopped; no recovery evidence"})
 	} else if incident == "recovered" || incident == "closed" {
 		kv = append(kv, rcaKV{K: "Recovered at", V: "Not captured"})
 	}
@@ -671,16 +701,20 @@ func buildNocQuickRead(incident, analysis, impact, ticket string, times rcaRepor
 		kv = append(kv, rcaKV{K: "Duration", V: fmtDur(time.Duration(times.DurationMS)*time.Millisecond) + basis})
 	}
 	if times.MonitoringUntil != "" {
-		kv = append(kv, rcaKV{K: "Monitoring until", V: times.MonitoringUntil})
+		label := times.MonitoringUntil
+		if monitoring == "completed" {
+			label += " (completed, no recurrence)"
+		}
+		kv = append(kv, rcaKV{K: "Monitoring until", V: label})
 	}
 	if len(scope.Services) > 0 {
 		kv = append(kv, rcaKV{K: "Service / application", V: strings.Join(scope.Services, ", ")})
 	}
 	if len(scope.Targets) > 0 {
-		kv = append(kv, rcaKV{K: "Affected target(s)", V: strings.Join(firstN(scope.Targets, 4), ", ")})
+		kv = append(kv, rcaKV{K: "Affected targets", V: strings.Join(firstN(scope.Targets, 4), ", ")})
 	}
 	if len(scope.Regions) > 0 {
-		kv = append(kv, rcaKV{K: "Region(s)", V: strings.Join(scope.Regions, ", ")})
+		kv = append(kv, rcaKV{K: "Regions", V: strings.Join(scope.Regions, ", ")})
 	}
 	if sig.Probe != nil {
 		kv = append(kv, rcaKV{K: "Checks failing", V: fmt.Sprintf("%d of %d observations", sig.Probe.Failed, sig.Probe.Observations)})
@@ -688,7 +722,7 @@ func buildNocQuickRead(incident, analysis, impact, ticket string, times rcaRepor
 			kv = append(kv, rcaKV{K: "Affected vantages", V: strings.Join(sig.Probe.AffectedVantages, ", ")})
 		}
 		if len(sig.Probe.FailureStages) > 0 {
-			kv = append(kv, rcaKV{K: "Failure stage(s)", V: strings.Join(sig.Probe.FailureStages, ", ")})
+			kv = append(kv, rcaKV{K: "Failure stages", V: strings.Join(sig.Probe.FailureStages, ", ")})
 		}
 	}
 	kv = append(kv, rcaKV{K: "Peak severity", V: sig.PeakSeverity})

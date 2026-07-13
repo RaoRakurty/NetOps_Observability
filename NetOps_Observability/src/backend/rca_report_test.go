@@ -197,15 +197,46 @@ func TestRcaReportRecoveryNotCaptured(t *testing.T) {
 	if rep.Times.DurationBasis != "to_last_observation" {
 		t.Fatalf("duration basis = %q — a recovery duration must not be fabricated", rep.Times.DurationBasis)
 	}
-	// NOC quick-read renders the explicit "Not captured"
+	// A closed window with ZERO recovery evidence is "no longer observed" —
+	// never "recovered" (truthfulness §17: signal aging is not recovery).
+	if rep.States.Incident != "no_longer_observed" {
+		t.Fatalf("incident = %q, want no_longer_observed", rep.States.Incident)
+	}
+	if rep.States.Recovery != "not_observed" {
+		t.Fatalf("recovery = %q, want not_observed", rep.States.Recovery)
+	}
+	if strings.Contains(rep.Title, "recovered") {
+		t.Fatalf("title %q must not claim recovery", rep.Title)
+	}
+	if !strings.Contains(rep.Summary.Management, "recovery is NOT confirmed") {
+		t.Fatalf("management summary must state recovery is not confirmed: %s", rep.Summary.Management)
+	}
+	// NOC quick-read renders the explicit non-confirmation
 	found := false
 	for _, kv := range rep.Summary.Noc {
-		if kv.K == "Recovered at" && kv.V == "Not captured" {
+		if kv.K == "Recovered at" && strings.HasPrefix(kv.V, "Not confirmed") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("NOC quick-read must state 'Recovered at: Not captured'")
+		t.Fatal("NOC quick-read must state recovery is not confirmed")
+	}
+}
+
+// 7b. A closed window WITH clear evidence is genuinely recovered, and the
+// monitoring state is evaluated against report-generation time.
+func TestRcaReportRecoveredWithEvidenceAndMonitoringCompleted(t *testing.T) {
+	meta := testMeta("closed", "suspected", "undetermined", nil)
+	sigs := []map[string]any{
+		testSig("probe_loss", "active_probe", "prober", "path", "p->x", "high", "2026-07-12 18:12:00", true, nil),
+		testSig("probe_loss_clear", "active_probe", "prober", "path", "p->x", "info", "2026-07-12 18:20:00", true, nil),
+	}
+	rep := buildTestReport(t, meta, sigs) // buildTestReport's Now is far after 18:20
+	if rep.States.Incident != "recovered" || rep.States.Recovery != "explicitly_confirmed" {
+		t.Fatalf("want recovered/explicitly_confirmed, got %s/%s", rep.States.Incident, rep.States.Recovery)
+	}
+	if rep.States.Monitoring != "completed" {
+		t.Fatalf("monitoring = %q — a window that ended before generation must read completed", rep.States.Monitoring)
 	}
 }
 

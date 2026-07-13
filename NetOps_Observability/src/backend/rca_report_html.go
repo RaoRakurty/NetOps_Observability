@@ -19,6 +19,7 @@ import (
 
 var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.FuncMap{
 	"stateTone": rcaStateTone,
+	"humanState": func(v string) string { return strings.ReplaceAll(v, "_", " ") },
 	"upper":     strings.ToUpper,
 	"title":     rcaTitleCase,
 	"dur":       func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
@@ -58,7 +59,17 @@ func rcaStateTone(kind, val string) string {
 			return "amber"
 		case "recovered", "closed":
 			return "green"
+		case "no_longer_observed":
+			// signals stopped without recovery evidence — neutral, not green:
+			// absence of data must never render as health (§17).
+			return "gray"
 		}
+	case "recovery":
+		switch v {
+		case "explicitly_confirmed":
+			return "green"
+		}
+		return "gray"
 	case "analysis":
 		switch v {
 		case "confirmed":
@@ -176,7 +187,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 
 <h1>{{.Title}}</h1>
 <div class="badges">
-  <span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title .States.Incident}}</span>
+  <span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>
+  <span class="pill {{stateTone "recovery" .States.Recovery}}">Recovery: {{title (humanState .States.Recovery)}}</span>
   <span class="pill {{stateTone "analysis" .States.Analysis}}">Analysis: {{title .States.Analysis}}</span>
   <span class="pill blue">Confidence: {{.States.Confidence}}</span>
   <span class="pill {{stateTone "impact" .States.Impact}}">Impact: {{title .States.Impact}}</span>

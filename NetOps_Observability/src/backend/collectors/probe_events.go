@@ -69,6 +69,7 @@ type ProbeEvent struct {
 	// SignalPurpose (validation | lab | fault_injection | debug | demo | staging)
 	// demotes the evidence so it can never confirm production customer impact.
 	ExecutionID   string `json:"execution_id,omitempty"`
+	ScheduleID    string `json:"schedule_id,omitempty"`
 	ProbeIntent   string `json:"probe_intent,omitempty"`
 	VantageType   string `json:"vantage_type,omitempty"`
 	Environment   string `json:"environment,omitempty"`
