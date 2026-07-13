@@ -441,3 +441,40 @@ func TestRcaReportImpactAxes(t *testing.T) {
 		t.Fatalf("summary must cite real traffic: %s", rep2.Summary.Management)
 	}
 }
+
+// §9/§19/§20: single-observation duration honesty, severity basis, ownership
+// restraint when the fault is not localized.
+func TestRcaReportSingleObservationSeverityAndOwnership(t *testing.T) {
+	meta := testMeta("closed", "confirmed", "sig.ent.app.saas-experience-degraded",
+		testHyp("sig.ent.app.saas-experience-degraded", 1.0, "confirmed",
+			[]string{"synthetic_http_5xx"}, nil, nil, "app_team", false))
+	sigs := []map[string]any{
+		testSig("synthetic_http_5xx", "active_probe", "canary", "app", "rca_canary_app", "high",
+			"2026-07-12 18:12:00", true, map[string]any{"probe_scope": "customer_path"}),
+	}
+	rep := buildTestReport(t, meta, sigs)
+	if rep.Times.DurationBasis != "single_observation" || rep.Times.DurationMS != 0 {
+		t.Fatalf("one sample in a closed window must not fabricate a duration: %+v", rep.Times)
+	}
+	found := false
+	for _, kv := range rep.Summary.Noc {
+		if kv.K == "Duration" && strings.Contains(kv.V, "exact duration unknown") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("NOC must state the single-observation duration honestly")
+	}
+	if !strings.Contains(rep.States.SeverityBasis, "synthetic http 5xx") ||
+		!strings.Contains(rep.States.SeverityBasis, "1 high") {
+		t.Fatalf("severity basis must name its carrier and mix: %q", rep.States.SeverityBasis)
+	}
+	// no grounded topo edges → root not identified → escalation owner restrained
+	if rep.RootCause.Identified {
+		t.Fatal("no grounded convergence — root must not be identified")
+	}
+	if rep.Ownership.EscalationOwner != "Pending localization" {
+		t.Fatalf("escalation owner = %q — a confirmed but unlocalized fault hands no one the pager",
+			rep.Ownership.EscalationOwner)
+	}
+}

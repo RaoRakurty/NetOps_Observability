@@ -359,7 +359,7 @@ func buildHypothesesView(hb rcaHypBlob) []rcaHypothesis {
 
 // ---- ownership ----------------------------------------------------------------------------
 
-func buildOwnership(analysis string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
+func buildOwnership(analysis string, rootIdentified bool, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
 	own := rcaOwnership{
 		TriageOwner:      "NOC",
 		TriageReason:     "Default triage owner until the failure stage and fault domain are identified.",
@@ -387,10 +387,17 @@ func buildOwnership(analysis string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwn
 		team := rcaOwnerTeam[top.Verdict.Owner]
 		if team != "" {
 			own.SuspectedDomain = orDefault(top.Verdict.Layer, team)
-			if analysis == "confirmed" {
+			switch {
+			case analysis == "confirmed" && rootIdentified:
 				own.EscalationOwner = team
 				own.EscalationReason = fmt.Sprintf("the confirmed leading hypothesis (%s) places the fault in this team's domain", signatureNocTitle(top.ID))
-			} else {
+			case analysis == "confirmed":
+				// §20 restraint: a confirmed CONDITION whose fault has not been
+				// localized to an object does not hand a team the pager — the
+				// hypothesis names a candidate domain, not a proven owner.
+				own.EscalationOwner = "Pending localization"
+				own.EscalationReason = fmt.Sprintf("%s is the leading candidate domain; the fault is not yet localized to a specific component", team)
+			default:
 				own.EscalationOwner = "Pending confirmation"
 				own.EscalationReason = fmt.Sprintf("%s is the leading candidate, pending independent confirmation", team)
 			}
@@ -700,6 +707,9 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 		kv = append(kv, rcaKV{K: "Recovered at", V: "Not confirmed — signals stopped; no recovery evidence"})
 	} else if incident == "recovered" || incident == "closed" {
 		kv = append(kv, rcaKV{K: "Recovered at", V: "Not captured"})
+	}
+	if times.DurationBasis == "single_observation" {
+		kv = append(kv, rcaKV{K: "Duration", V: "Single failed observation — exact duration unknown"})
 	}
 	if times.DurationMS > 0 {
 		basis := map[string]string{

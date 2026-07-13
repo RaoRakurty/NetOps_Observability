@@ -97,6 +97,8 @@ type rcaReportStates struct {
 	ImpactRealUser  string `json:"impact_real_user"` // confirmed | detected | none_detected | not_observable
 	Ticket        string `json:"ticket"`         // not_opened | held | opened | resolved | failed
 	Severity      string `json:"severity"`       // peak attached severity: info|warn|high|crit|unknown
+	// §19: severity is never a bare adjective — what carried it and how much.
+	SeverityBasis string `json:"severity_basis"`
 	// Monitoring is evaluated against report-generation time — never described
 	// as running past its own end.
 	Monitoring string `json:"monitoring"` // not_started | active | completed
@@ -502,6 +504,8 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		firstObs, lastObs, recovered time.Time
 		peakSevRank                  int
 		peakSev                      = "unknown"
+		peakSevKind                  string
+		sevCounts                    = map[string]int{}
 		impactAnomalies              int
 		impactSynthetic              int
 		impactRealUser               int
@@ -565,8 +569,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			}
 		}
 		sev := strings.ToLower(fmt.Sprintf("%v", sig["severity"]))
+		sevCounts[sev]++
 		if sevRank[sev] > peakSevRank {
 			peakSevRank, peakSev = sevRank[sev], sev
+			peakSevKind = kind
 		}
 		entityType := fmt.Sprintf("%v", sig["entity_type"])
 		probeScope := fmt.Sprintf("%v", sig["probe_scope"])
@@ -697,6 +703,20 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRU = "none_detected"
 	}
 
+	// §19: severity carries its basis — the signal kind at the peak plus the
+	// severity mix, so a single loud probe is visibly a single loud probe.
+	sevBasis := "no anomalous evidence attached"
+	if peakSevKind != "" {
+		mix := []string{}
+		for _, lv := range []string{"crit", "high", "warn"} {
+			if sevCounts[lv] > 0 {
+				mix = append(mix, fmt.Sprintf("%d %s", sevCounts[lv], lv))
+			}
+		}
+		sevBasis = fmt.Sprintf("peak of the attached evidence, carried by %s (%s of %d anomalous signals)",
+			strings.ReplaceAll(peakSevKind, "_", " "), strings.Join(mix, " / "), len(anomalous))
+	}
+
 	ticketState := "not_opened"
 	if in.Ticket != nil {
 		switch fmt.Sprintf("%v", in.Ticket["state"]) {
@@ -758,6 +778,14 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		times.DurationMS = lastObs.Sub(firstObs).Milliseconds()
 		times.DurationBasis = "to_last_observation"
 	}
+	if !firstObs.IsZero() && firstObs.Equal(lastObs) && !times.RecoveredCaptured &&
+		incident != "active" && incident != "recovering" {
+		// §9: a closed window holding ONE failed observation bounds nothing —
+		// never fabricate a zero duration. (An open incident keeps its honest
+		// elapsed-since-first-observation figure.)
+		times.DurationBasis = "single_observation"
+		times.DurationMS = 0
+	}
 	monitorWindow := time.Duration(in.Policy.SuppressFlappingSeconds) * time.Second
 	if monitorWindow <= 0 {
 		monitorWindow = 30 * time.Minute
@@ -815,7 +843,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	}
 
 	// ---- ownership ---------------------------------------------------------------------------
-	ownership := buildOwnership(analysis, hb, sigSummary)
+	ownership := buildOwnership(analysis, root.Identified, hb, sigSummary)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
 	decision := buildDecision(analysis, incident, impact, in.Policy, in.PolicyConfigured, monitorWindow)
@@ -846,7 +874,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			Analysis: analysis, Impact: impact,
 			ImpactSynthetic: impactSyn, ImpactRealUser: impactRU,
 			Ticket: ticketState,
-			Severity: peakSev, Monitoring: monitoring,
+			Severity: peakSev, SeverityBasis: sevBasis, Monitoring: monitoring,
 			Confidence: confidence, ConfidenceBasis: basis,
 		},
 		Times:            times,
