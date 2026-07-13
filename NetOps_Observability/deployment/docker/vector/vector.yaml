@@ -361,6 +361,28 @@ transforms:
         }
       }
 
+  # Cloud provider metrics (CloudWatch / Azure Monitor) → real VALUES in
+  # VictoriaMetrics, so the Service View counters render measured numbers. The
+  # SNMP collector already remote_writes device metrics itself; only the cloud
+  # lane needs this bridge, so we filter to it and convert log→metric.
+  cloud_metrics_only:
+    type: filter
+    inputs: [metrics_normalized]
+    condition: '.signal_family == "cloud_resource"'
+
+  cloud_metrics_vm:
+    type: log_to_metric
+    inputs: [cloud_metrics_only]
+    metrics:
+      - type: gauge
+        field: value
+        name: "{{ metric }}"
+        tags:
+          device: "{{ device }}"
+          resource_id: "{{ index }}"
+          provider: "{{ vendor }}"
+          tenant_id: "{{ tenant_id }}"
+
   # Bus-bridge envelopes → topic-tagged events. Zero-trust guard: only
   # netops.* topics are producible through the bridge; anything else (or a
   # non-object event) is dropped, not forwarded.
@@ -485,6 +507,12 @@ sinks:
     topic: "netops.probes"
     encoding: { codec: json }
     compression: snappy
+
+  victoria_cloud_metrics:
+    type: prometheus_remote_write
+    inputs: [cloud_metrics_vm]
+    endpoint: "${VM_REMOTE_WRITE_URL:-http://victoria:8428/api/v1/write}"
+    healthcheck: false
 
   kafka_metrics:
     type: kafka
