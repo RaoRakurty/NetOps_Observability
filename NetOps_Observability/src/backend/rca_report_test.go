@@ -380,3 +380,30 @@ func TestRcaReportEndpointRequiresPrincipal(t *testing.T) {
 		t.Fatalf("unauthenticated rca-report = %d, want 401", w.Code)
 	}
 }
+
+// 7c. Semantic up-state events are recovery evidence (§17) — but only when
+// observed AFTER the first anomaly; a pre-fault healthy assertion is not.
+func TestRcaReportSemanticUpIsRecoveryEvidence(t *testing.T) {
+	meta := testMeta("closed", "suspected", "undetermined", nil)
+	up := func(ts string) map[string]any {
+		return testSig("ipsec_tunnel_status", "control_plane", "ipsec:gw", "seam", "sm-1", "info",
+			ts, false, map[string]any{"attrs": `{"state":"up"}`})
+	}
+	down := testSig("ipsec_tunnel_status", "control_plane", "ipsec:gw", "seam", "sm-1", "crit",
+		"2026-07-12 18:10:00", true, map[string]any{"attrs": `{"state":"down"}`})
+
+	// pre-fault up ONLY → no recovery claim
+	rep := buildTestReport(t, meta, []map[string]any{up("2026-07-12 18:00:00"), down})
+	if rep.States.Recovery != "not_observed" || rep.States.Incident != "no_longer_observed" {
+		t.Fatalf("pre-fault up must not prove recovery: %s/%s", rep.States.Incident, rep.States.Recovery)
+	}
+
+	// post-fault up → genuine recovery, timestamped from the up event
+	rep = buildTestReport(t, meta, []map[string]any{down, up("2026-07-12 18:30:00")})
+	if rep.States.Incident != "recovered" || rep.States.Recovery != "explicitly_confirmed" {
+		t.Fatalf("post-fault up must prove recovery: %s/%s", rep.States.Incident, rep.States.Recovery)
+	}
+	if rep.Times.RecoveredAt != "2026-07-12 18:30:00 UTC" {
+		t.Fatalf("recovered_at = %q, want the up event's time", rep.Times.RecoveredAt)
+	}
+}

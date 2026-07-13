@@ -317,6 +317,41 @@ func rcaFailureStage(kind string) string {
 
 // App-impact / customer-facing evidence kinds (mirror of the confirmability
 // audit's APP_GROUNDABLE set, display side).
+// rcaStateUp buffers a semantic up-state event until firstObs is known.
+type rcaStateUp struct {
+	sig map[string]any
+	ts  time.Time
+}
+
+// rcaIsRecoveryStateSignal reports whether a signal is semantic recovery
+// evidence (§17): a *_status kind asserting the resource came back
+// (state up/established/…, severity info) — e.g. ipsec_tunnel_status up.
+// Status lanes signal recovery this way rather than with *_clear kinds.
+func rcaIsRecoveryStateSignal(sig map[string]any) bool {
+	kind := fmt.Sprintf("%v", sig["kind"])
+	if !strings.HasSuffix(kind, "_status") {
+		return false
+	}
+	if strings.ToLower(fmt.Sprintf("%v", sig["severity"])) != "info" {
+		return false
+	}
+	a, _ := sig["attrs"].(string)
+	if a == "" {
+		return false
+	}
+	var at struct {
+		State string `json:"state"`
+	}
+	if json.Unmarshal([]byte(a), &at) != nil {
+		return false
+	}
+	switch strings.ToLower(at.State) {
+	case "up", "established", "reachable", "healthy", "ok":
+		return true
+	}
+	return false
+}
+
 func rcaIsImpactKind(kind, entityType, probeScope string) bool {
 	switch kind {
 	case "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high", "lb_4xx_high":
@@ -452,6 +487,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactAnomalies              int
 		impactLanesPresent           bool
 		changes                      []rcaCloudChange
+		stateUps                     []rcaStateUp
 	)
 	sevRank := map[string]int{"info": 1, "warn": 2, "high": 3, "crit": 4}
 	for _, sig := range in.Signals {
@@ -468,6 +504,16 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			}
 		}
 		laneTotal[lane]++
+		// Semantic recovery evidence (§17): status lanes signal recovery as
+		// state=up/established events, not *_clear kinds. Buffer them — only
+		// an up observed AFTER the first anomaly is recovery (a healthy
+		// assertion from before the fault proves nothing about it).
+		if rcaIsRecoveryStateSignal(sig) {
+			if tsOK {
+				stateUps = append(stateUps, rcaStateUp{sig: sig, ts: ts})
+			}
+			continue
+		}
 		isClear := strings.HasSuffix(kind, "_clear")
 		if isClear {
 			clears = append(clears, sig)
@@ -529,6 +575,16 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// Recovery is an ASSESSMENT, not a synonym for "the window closed": an
 	// object that quiesced because its signals aged out has merely stopped
 	// being observed (§17 — "no additional data" is not "successful recovery").
+	// Merge buffered semantic up-events: only those after the first anomaly
+	// are recovery evidence for THIS fault.
+	for _, su := range stateUps {
+		if !firstObs.IsZero() && su.ts.After(firstObs) {
+			clears = append(clears, su.sig)
+			if su.ts.After(recovered) {
+				recovered = su.ts
+			}
+		}
+	}
 	recoveryState, recoveryBasis := "not_observed", "No recovery evidence was captured."
 	if !recovered.IsZero() {
 		recoveryState = "explicitly_confirmed"
