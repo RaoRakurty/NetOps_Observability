@@ -78,6 +78,10 @@ type rcaSpineHopView struct {
 	Boundary string `json:"boundary,omitempty"`
 	State    string `json:"state"`
 	SeamID   string `json:"seam_id,omitempty"`
+	// Fault marks the verdict-gated drop point (broken|suspected) — the path's
+	// causality, rendered red in the document exactly as on the canvas.
+	Fault    string `json:"fault,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 type rcaTopologyView struct {
@@ -87,6 +91,8 @@ type rcaTopologyView struct {
 	ObservedAt string            `json:"observed_at,omitempty"`
 	Stale      bool              `json:"stale"`
 	Hops       []rcaSpineHopView `json:"hops,omitempty"`
+	// DropPoint: the path's own causality sentence (set when a fault hop exists).
+	DropPoint string `json:"drop_point,omitempty"`
 }
 
 type rcaReportStates struct {

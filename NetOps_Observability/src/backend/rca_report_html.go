@@ -304,13 +304,14 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
   {{range .Topology.Hops}}<tr>
     <td style="font-family:ui-monospace,monospace">{{.Index}}</td>
-    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b></td>
+    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b>{{if .Provider}} <span class="pill blue" style="font-size:9px">{{upper .Provider}}</span>{{end}}{{if .Fault}} <span class="pill red">✕ {{if eq .Fault "broken"}}BREAK POINT{{else}}suspected break{{end}}</span>{{end}}</td>
     <td style="font-family:ui-monospace,monospace">{{.Address}}</td>
     <td>{{title .Kind}}</td>
     <td><span class="pill {{if eq .State "down"}}red{{else if eq .State "degraded"}}amber{{else if eq .State "unknown"}}gray{{else}}green{{end}}">{{title .State}}</span></td>
     <td>{{if .SeamID}}provider boundary ({{.Boundary}}){{else}}{{.Boundary}}{{end}}</td>
   </tr>{{end}}
   </tbody></table>
+  {{if .Topology.DropPoint}}<div class="note" style="color:#b42318;font-weight:600">{{.Topology.DropPoint}}</div>{{end}}
   <div class="note">Only the measured path is drawn. An unknown hop is preserved as unknown — never bridged. A probe source→target relationship does not by itself imply physical causality.</div>
   {{else}}
   <div class="note">{{.Topology.Reason}}</div>

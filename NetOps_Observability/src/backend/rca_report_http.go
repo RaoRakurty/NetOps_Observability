@@ -182,7 +182,14 @@ func rcaTopologyFromSpine(block any) rcaTopologyView {
 		out.Hops = append(out.Hops, rcaSpineHopView{
 			Index: n.Index, Label: n.Label, Address: n.Address,
 			Kind: n.Kind, Boundary: n.Boundary, State: n.State, SeamID: n.SeamID,
+			Fault: n.Fault, Provider: n.Provider,
 		})
+		if n.Fault != "" {
+			// The path's own causality statement: where the measurement died.
+			out.DropPoint = fmt.Sprintf(
+				"The measured path dies after %s (%s boundary) — every later hop went dark. This drop point is consistent with the propagation ladder's origin.",
+				orDefault(n.Label, n.Address), strings.ToLower(orDefault(n.Boundary, "unknown")))
+		}
 	}
 	return out
 }
