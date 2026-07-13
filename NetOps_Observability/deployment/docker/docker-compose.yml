@@ -702,6 +702,12 @@ services:
       # customer-path probe loss corroborate a control-plane fault → confirmed
       # (still requires the independent BGP signal — no overclaim).
       CORR_TRUSTED_PROBE_OBSERVERS: ${CORR_TRUSTED_PROBE_OBSERVERS:-}
+      # Which observers are measurement vantages at all (default api,prober).
+      # An enrolled client vantage (e.g. lan-vantage-1) must be listed here AND
+      # in CORR_TRUSTED_PROBE_OBSERVERS to anchor confirmed verdicts — since the
+      # truthfulness epic removed the app-lane trust hardcode, registry or
+      # declared intent×vantage are the ONLY paths to confirm-capable authority.
+      CORR_MEASUREMENT_PROBE_OBSERVERS: ${CORR_MEASUREMENT_PROBE_OBSERVERS:-api,prober}
       # #81 P3B cloud-log file source (dev/demo + on-host drops). Reads *.alb/*.vpc
       # from CLOUD_LOGS_DIR → P3B parsers → the cloud lane. Default-CLOSED: off unless
       # CLOUD_LOGS_TENANT is also set (cloud logs carry no tenant; never guessed).
