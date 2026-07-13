@@ -907,22 +907,23 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 				// Pick the seam the anomalous evidence itself names (attrs.seam_id
 				// on the ipsec signals) — a merged window can ground several
 				// seams, and only one of them died.
-				evidenceSeams := map[string]bool{}
+				evidenceSeams := map[string]int{}
 				for _, sig := range anomalous {
 					if a, ok := sig["attrs"].(string); ok && a != "" {
 						var at struct {
 							SeamID string `json:"seam_id"`
 						}
 						if json.Unmarshal([]byte(a), &at) == nil && at.SeamID != "" {
-							evidenceSeams[at.SeamID] = true
+							evidenceSeams[at.SeamID]++
 						}
 					}
 				}
-				sm := hb.GroundingContext.Seams[0]
+				// A merged window can carry faults on several seams — the one
+				// with the MOST anomalous evidence is the case's subject.
+				sm, best := hb.GroundingContext.Seams[0], 0
 				for _, cand := range hb.GroundingContext.Seams {
-					if evidenceSeams[cand.SeamID] {
-						sm = cand
-						break
+					if n := evidenceSeams[cand.SeamID]; n > best {
+						sm, best = cand, n
 					}
 				}
 				locus = sm.SeamID
