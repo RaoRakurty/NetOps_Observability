@@ -904,7 +904,27 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		if len(hb.Ranking.Hypotheses) > 0 && len(hb.GroundingContext.Seams) > 0 {
 			topID := hb.Ranking.Hypotheses[0].ID
 			if strings.Contains(topID, "underlay") || strings.Contains(topID, "tunnel") || strings.Contains(topID, "ipsec") {
+				// Pick the seam the anomalous evidence itself names (attrs.seam_id
+				// on the ipsec signals) — a merged window can ground several
+				// seams, and only one of them died.
+				evidenceSeams := map[string]bool{}
+				for _, sig := range anomalous {
+					if a, ok := sig["attrs"].(string); ok && a != "" {
+						var at struct {
+							SeamID string `json:"seam_id"`
+						}
+						if json.Unmarshal([]byte(a), &at) == nil && at.SeamID != "" {
+							evidenceSeams[at.SeamID] = true
+						}
+					}
+				}
 				sm := hb.GroundingContext.Seams[0]
+				for _, cand := range hb.GroundingContext.Seams {
+					if evidenceSeams[cand.SeamID] {
+						sm = cand
+						break
+					}
+				}
 				locus = sm.SeamID
 				root = rcaRootCause{
 					Identified: true,
@@ -913,7 +933,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 					ObjectType: strings.ToLower(orDefault(sm.SeamType, "seam")) + " seam",
 				}
 				root.Owner = rcaOwnerTeam[hb.Ranking.Hypotheses[0].Verdict.Owner]
-				root.Evidence = aiHumanizeMissing(hb.Ranking.Hypotheses[0].Satisfied)
+				root.Evidence = humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied)
 			}
 		}
 		if !root.Identified && locus != "" {
@@ -925,7 +945,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			}
 			if len(hb.Ranking.Hypotheses) > 0 {
 				root.Owner = rcaOwnerTeam[hb.Ranking.Hypotheses[0].Verdict.Owner]
-				root.Evidence = aiHumanizeMissing(hb.Ranking.Hypotheses[0].Satisfied)
+				root.Evidence = humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied)
 			}
 		}
 		if !root.Identified {

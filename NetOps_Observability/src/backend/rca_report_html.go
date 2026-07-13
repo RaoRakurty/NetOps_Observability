@@ -252,7 +252,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 
 <section class="why">
   <h2>Analysis reasoning</h2>
-  {{if .Summary.WhySuspected}}<p><b style="color:#b45309">Why suspected:</b> {{.Summary.WhySuspected}}</p>{{end}}
+  {{if .Summary.WhySuspected}}<p><b style="color:#b45309">{{if eq .States.Analysis "confirmed"}}Evidence pattern:{{else}}Why suspected:{{end}}</b> {{.Summary.WhySuspected}}</p>{{end}}
   {{range .Summary.WhyNotConfirmed}}<p><b style="color:#475467">Why not confirmed:</b> {{.}}</p>{{end}}
   {{if .Summary.RequiredConfirm}}<p><b style="color:#1d4ed8">Required confirmation:</b> {{.Summary.RequiredConfirm}}</p>{{end}}
 </section>
@@ -265,7 +265,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
     {{if .AffectedVantages}}<span class="k">Affected vantages</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
-    {{if .FailureStages}}<span class="k">Failure stage(s)</span><span class="v">{{range $i, $s := .FailureStages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
+    {{if .FailureStages}}<span class="k">Failure stages / symptoms</span><span class="v">{{range $i, $s := .FailureStages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
     {{if .PeakLossPct}}<span class="k">Packet loss (peak)</span><span class="v">{{f1 .PeakLossPct}}%</span>{{end}}
     {{if .PeakRttMs}}<span class="k">Latency</span><span class="v">{{if .BaselineRttMs}}baseline {{f1 .BaselineRttMs}} ms · {{end}}peak {{f1 .PeakRttMs}} ms</span>{{end}}
     {{if .FirstFailed}}<span class="k">First failed sample</span><span class="v">{{.FirstFailed}}</span>{{end}}
