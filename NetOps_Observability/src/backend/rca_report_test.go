@@ -407,3 +407,37 @@ func TestRcaReportSemanticUpIsRecoveryEvidence(t *testing.T) {
 		t.Fatalf("recovered_at = %q, want the up event's time", rep.Times.RecoveredAt)
 	}
 }
+
+// §5: impact axes — synthetic-only confirmation never claims real-user impact.
+func TestRcaReportImpactAxes(t *testing.T) {
+	meta := testMeta("open", "confirmed", "sig.ent.cloud.ipsec-tunnel-down",
+		testHyp("sig.ent.cloud.ipsec-tunnel-down", 0.9, "confirmed",
+			[]string{"ipsec_tunnel_status", "probe_loss"}, nil, nil, "netops", false))
+	syntheticOnly := []map[string]any{
+		testSig("ipsec_tunnel_status", "control_plane", "ipsec:gw", "seam", "sm-1", "crit", "2026-07-12 18:12:00", true,
+			map[string]any{"attrs": `{"state":"down"}`}),
+		testSig("probe_loss", "active_probe", "prober", "path", "p->10.60.10.10", "crit", "2026-07-12 18:12:30", true,
+			map[string]any{"probe_scope": "customer_path"}),
+	}
+	rep := buildTestReport(t, meta, syntheticOnly)
+	if rep.States.Impact != "confirmed" || rep.States.ImpactSynthetic != "confirmed" {
+		t.Fatalf("synthetic axis wrong: %+v", rep.States)
+	}
+	if rep.States.ImpactRealUser != "not_observable" {
+		t.Fatalf("real-user axis = %q — no real-traffic telemetry existed", rep.States.ImpactRealUser)
+	}
+	if !strings.Contains(rep.Summary.Management, "real-user impact was not directly observed") {
+		t.Fatalf("summary must qualify synthetic-only impact: %s", rep.Summary.Management)
+	}
+
+	// add real-traffic evidence (flow collapse) → real-user impact confirmed
+	withFlow := append(syntheticOnly,
+		testSig("flow_volume_anomaly", "passive_flow", "exporter1", "interface", "if1", "high", "2026-07-12 18:13:00", true, nil))
+	rep2 := buildTestReport(t, meta, withFlow)
+	if rep2.States.ImpactRealUser != "confirmed" {
+		t.Fatalf("real-user axis = %q with flow evidence", rep2.States.ImpactRealUser)
+	}
+	if !strings.Contains(rep2.Summary.Management, "including real user traffic") {
+		t.Fatalf("summary must cite real traffic: %s", rep2.Summary.Management)
+	}
+}

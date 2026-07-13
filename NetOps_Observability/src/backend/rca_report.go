@@ -91,6 +91,10 @@ type rcaReportStates struct {
 	RecoveryBasis string `json:"recovery_basis"` // human sentence: what (if anything) proved recovery
 	Analysis      string `json:"analysis"`       // observed | suspected | probable | confirmed | inconclusive
 	Impact        string `json:"impact"`         // confirmed | detected | none_detected | not_observable | unknown
+	// §5 impact axes: a failed synthetic proves the SYNTHETIC transaction failed;
+	// real-user impact needs real-traffic evidence (flow collapse, LB/app errors).
+	ImpactSynthetic string `json:"impact_synthetic"` // confirmed | none_detected | not_observable
+	ImpactRealUser  string `json:"impact_real_user"` // confirmed | detected | none_detected | not_observable
 	Ticket        string `json:"ticket"`         // not_opened | held | opened | resolved | failed
 	Severity      string `json:"severity"`       // peak attached severity: info|warn|high|crit|unknown
 	// Monitoring is evaluated against report-generation time — never described
@@ -353,12 +357,26 @@ func rcaIsRecoveryStateSignal(sig map[string]any) bool {
 }
 
 func rcaIsImpactKind(kind, entityType, probeScope string) bool {
+	return rcaIsRealUserImpactKind(kind, entityType) || rcaIsSyntheticImpactKind(kind, probeScope)
+}
+
+// rcaIsRealUserImpactKind: evidence produced by REAL traffic or the serving
+// infrastructure itself (§5) — the only kinds that may support a real-user
+// impact claim. A failed synthetic check is never in this set.
+func rcaIsRealUserImpactKind(kind, entityType string) bool {
 	switch kind {
-	case "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high", "lb_4xx_high":
+	case "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high", "lb_4xx_high",
+		"flow_volume_anomaly":
 		return true
 	case "cloud_health":
 		return entityType == "app"
 	}
+	return false
+}
+
+// rcaIsSyntheticImpactKind: a customer-path synthetic/probe failure — proves
+// the configured transaction failed from that vantage, nothing more (§5).
+func rcaIsSyntheticImpactKind(kind, probeScope string) bool {
 	if strings.HasPrefix(kind, "synthetic_") || strings.HasPrefix(kind, "probe_") {
 		return probeScope == "customer_path"
 	}
@@ -485,6 +503,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		peakSevRank                  int
 		peakSev                      = "unknown"
 		impactAnomalies              int
+		impactSynthetic              int
+		impactRealUser               int
+		realUserLanesPresent         bool
 		impactLanesPresent           bool
 		changes                      []rcaCloudChange
 		stateUps                     []rcaStateUp
@@ -549,8 +570,12 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 		entityType := fmt.Sprintf("%v", sig["entity_type"])
 		probeScope := fmt.Sprintf("%v", sig["probe_scope"])
-		if rcaIsImpactKind(kind, entityType, probeScope) {
+		if rcaIsRealUserImpactKind(kind, entityType) {
 			impactAnomalies++
+			impactRealUser++
+		} else if rcaIsSyntheticImpactKind(kind, probeScope) {
+			impactAnomalies++
+			impactSynthetic++
 		}
 		if rcaCloudChangeKinds[kind] {
 			changes = append(changes, decodeCloudChange(sig, true))
@@ -568,6 +593,15 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	for _, lane := range []string{"active_probe", "passive_flow"} {
 		if laneTotal[lane] > 0 {
 			impactLanesPresent = true
+		}
+	}
+	// real-user impact is observable only where real-traffic telemetry exists:
+	// the passive-flow lane, or LB/app-edge kinds (they ride device_telemetry).
+	realUserLanesPresent = laneTotal["passive_flow"] > 0 || impactRealUser > 0
+	for _, sig := range in.Signals {
+		switch fmt.Sprintf("%v", sig["kind"]) {
+		case "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high", "lb_4xx_high":
+			realUserLanesPresent = true
 		}
 	}
 
@@ -643,6 +677,24 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impact = "none_detected"
 	default:
 		impact = "not_observable"
+	}
+	// §5 axes. A failed configured check IS the synthetic-transaction impact —
+	// a fact, not a hypothesis. Real-user impact needs real-traffic evidence.
+	impactSyn := "not_observable"
+	switch {
+	case impactSynthetic > 0:
+		impactSyn = "confirmed"
+	case laneTotal["active_probe"] > 0:
+		impactSyn = "none_detected"
+	}
+	impactRU := "not_observable"
+	switch {
+	case impactRealUser > 0 && analysis == "confirmed":
+		impactRU = "confirmed"
+	case impactRealUser > 0:
+		impactRU = "detected"
+	case realUserLanesPresent:
+		impactRU = "none_detected"
 	}
 
 	ticketState := "not_opened"
@@ -772,13 +824,13 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, monitoring, decision, sigSummary, monitorWindow)
+	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactRU, monitoring, decision, sigSummary, monitorWindow)
 
 	// ---- actions -----------------------------------------------------------------------------------
 	actions := buildActions(analysis, hb, sigSummary, decision, ownership)
 
 	// ---- NOC quick-read -------------------------------------------------------------------------------
-	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions)
+	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, impactSyn, impactRU, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions)
 
 	rep := rcaReport{
 		ReportID:      "rr-" + strings.ReplaceAll(in.ID, "-", "")[:12] + fmt.Sprintf("-v%d", version),
@@ -791,7 +843,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		GeneratedAt:   fmtUTC(in.Now),
 		States: rcaReportStates{
 			Incident: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
-			Analysis: analysis, Impact: impact, Ticket: ticketState,
+			Analysis: analysis, Impact: impact,
+			ImpactSynthetic: impactSyn, ImpactRealUser: impactRU,
+			Ticket: ticketState,
 			Severity: peakSev, Monitoring: monitoring,
 			Confidence: confidence, ConfidenceBasis: basis,
 		},

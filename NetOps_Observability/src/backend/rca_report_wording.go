@@ -544,7 +544,7 @@ func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneA
 
 // ---- management summary (§3) -----------------------------------------------------------------------
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration) string {
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration) string {
 	var b strings.Builder
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
@@ -585,7 +585,13 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	// impact — ALWAYS telemetry-qualified (§3/§12)
 	switch impact {
 	case "confirmed":
-		b.WriteString("Customer impact is confirmed by independent evidence. ")
+		if impactRealUser == "confirmed" {
+			b.WriteString("Customer impact is confirmed by independent evidence, including real user traffic. ")
+		} else {
+			// §5: synthetic checks model a representative transaction — they do
+			// not prove real users failed the same one.
+			b.WriteString("Impact is confirmed for synthetic customer-path checks; real-user impact was not directly observed. ")
+		}
 	case "detected":
 		b.WriteString("Customer-impact indicators were detected but are not independently confirmed. ")
 	case "none_detected":
@@ -672,12 +678,14 @@ func buildActions(analysis string, hb rcaHypBlob, sig rcaSignalSummary, decision
 
 // ---- NOC quick-read (§4) ----------------------------------------------------------------------------------
 
-func buildNocQuickRead(incident, recovery, analysis, impact, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction) []rcaKV {
+func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction) []rcaKV {
 	kv := []rcaKV{
 		{K: "Incident", V: strings.ReplaceAll(incident, "_", " ")},
 		{K: "Recovery", V: strings.ReplaceAll(recovery, "_", " ")},
 		{K: "Analysis", V: analysis},
 		{K: "Impact", V: impact},
+		{K: "Synthetic impact", V: strings.ReplaceAll(impactSyn, "_", " ")},
+		{K: "Real-user impact", V: strings.ReplaceAll(impactRU, "_", " ")},
 		{K: "Ticket", V: ticket},
 	}
 	if times.FirstObserved != "" {
