@@ -36,7 +36,7 @@ function TopoNode({ data }: NodeProps) {
           label rows would otherwise pull the anchor down → crooked edges). */}
       <div style={{ position: "relative", width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {d.hasIn !== false && <Handle type="target" position={Position.Left} style={{ ...handleStyle, top: "50%" }} />}
-        <ShapeSVG kind={d.kind} tone={d.tone} size={size} pulse={d.pulse} />
+        <ShapeSVG kind={d.kind} tone={d.tone} size={size} pulse={d.pulse} provider={d.provider} />
         {d.hasOut !== false && <Handle type="source" position={Position.Right} style={{ ...handleStyle, top: "50%" }} />}
         {d.hasBottom && <Handle type="source" position={Position.Bottom} id="b" style={{ ...handleStyle, left: "50%" }} />}
       </div>

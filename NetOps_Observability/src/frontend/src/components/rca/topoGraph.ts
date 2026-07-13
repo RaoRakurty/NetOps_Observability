@@ -64,6 +64,7 @@ export interface TopoGraphNodeData {
   entityRef?: string;
   address?: string;
   hopState?: string;          // responding | missing | filtered
+  provider?: string;          // aws | azure | gcp — declared-inventory claim (backend-stamped)
   transformation?: string;    // operator label ("NAT", "Tunnel start", …)
   evidence?: SpineEvidence;   // ref · method · confidence · observed_at · data_class
   branchOf?: number;          // set on evidence-branch nodes: the hop they annotate
@@ -243,6 +244,7 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
         boundary: n.boundary,
         entityRef: n.entity_ref,
         address: n.address,
+        provider: n.provider,
         hopState: n.state,
         transformation: transform || undefined,
         evidence: n.evidence,
@@ -432,14 +434,16 @@ export function buildTopoGraph(
 
   if (model.internal) return { nodes, edges, bands: [], internal: true, mode: "internal" };
 
-  // 2) A path-focused object with no spine is an HONEST BLANK — not a star.
-  if (model.pathFocused) return { nodes, edges, bands: [], internal: false, mode: "empty" };
-
   const meta = STATUS_META[statusForVerdict(timeline.verdict_tier)];
   const { measuredDegraded, devs, locusDev, seam, peer } = model;
   void showStamp;
 
   const locus = locusDev ? devs.get(locusDev) : undefined;
+  // 2) A path-focused object with no spine AND no grounded context is an HONEST
+  //    BLANK — not a star. But when the case grounds on a device/seam/peer, the
+  //    DECLARED structure renders (context mode) so every confirmed/suspected
+  //    incident carries a topology with its fault marked — same treatment the
+  //    LAN/WAN issues get. Declared structure is evidence, not invention.
   if (!locus && !seam && !peer) return { nodes, edges, bands: [], internal: false, mode: "empty" };
 
   const faultEdgeState: EdgeState = statusForVerdict(timeline.verdict_tier) === "broken" ? "confirmed_down" : "suspected_down";

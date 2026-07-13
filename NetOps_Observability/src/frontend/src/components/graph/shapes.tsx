@@ -98,11 +98,23 @@ function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
 // highlight), a vivid toned stroke, and a soft glow so it pops on the dark NOC
 // canvas. `pulse` adds a breathing ring (for a fault). A faint type glyph hints
 // the device type.
-export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false }: {
+// Cloud-provider marks (VENDOR = the logo inside the shape, per the kit
+// convention above): a brand-colored rounded badge with the provider's
+// monogram — instantly legible at node size without logo-fidelity risk.
+const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {
+  aws:   { bg: "#232F3E", fg: "#FF9900", text: "aws" },
+  azure: { bg: "#0078D4", fg: "#FFFFFF", text: "Az" },
+  gcp:   { bg: "#FFFFFF", fg: "#4285F4", text: "G" },
+};
+
+export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, provider }: {
   kind: ShapeKind; tone: string; size?: number; glyph?: boolean; pulse?: boolean;
+  // aws | azure | gcp — declared-inventory claim, stamped by the backend.
+  provider?: string;
 }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gid = `g-${uid}`;
+  const mark = provider ? PROVIDER_MARK[provider.toLowerCase()] : undefined;
   return (
     <svg width={size} height={size} viewBox="0 0 100 100"
       style={{ filter: `drop-shadow(0 0 7px ${tone}88) drop-shadow(0 3px 5px rgba(0,0,0,.45))`, overflow: "visible" }}>
@@ -123,11 +135,23 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false }:
       {shapeEls(kind, tone, `url(#${gid})`)}
       {/* specular highlight — the "gloss" */}
       <ellipse cx="40" cy="30" rx="22" ry="13" fill="#ffffff" opacity={0.14} transform="rotate(-18 40 30)" />
-      {glyph && (
+      {glyph && !mark && (
         <text x="50" y="51" textAnchor="middle" dominantBaseline="central"
           fontSize="28" fill="#ffffff" opacity={0.92} style={{ fontWeight: 800 }}>
           {GLYPH[kind]}
         </text>
+      )}
+      {mark && (
+        <g>
+          {/* the provider mark replaces the generic glyph: centered brand badge */}
+          <rect x="28" y="36" width="44" height="28" rx="7"
+            fill={mark.bg} stroke="#ffffff" strokeOpacity={0.25} strokeWidth={1.5} />
+          <text x="50" y="50.5" textAnchor="middle" dominantBaseline="central"
+            fontSize={mark.text.length > 2 ? 16 : 18} fill={mark.fg}
+            style={{ fontWeight: 800, letterSpacing: 0.5 }}>
+            {mark.text}
+          </text>
+        </g>
       )}
     </svg>
   );

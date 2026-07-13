@@ -56,6 +56,11 @@ type SpineNode struct {
 	State          string   `json:"state"`
 	SeamID         string   `json:"seam_id,omitempty"`
 	Transformation string   `json:"transformation,omitempty"`
+	// Provider names the cloud whose DECLARED inventory (NIC/EIP bindings)
+	// claims this hop's address — aws|azure|gcp. Stamped by the API layer from
+	// the cloud resource store, never guessed from names. Empty = not a known
+	// cloud address; the UI renders the provider mark only when this is set.
+	Provider string `json:"provider,omitempty"`
 	// RepeatCount > 1 means this node stands for that many CONSECUTIVE measured
 	// TTLs with the identical answer (same address, or the same silence). Nothing
 	// is dropped — the run is stated as a count instead of drawn as a ladder: a

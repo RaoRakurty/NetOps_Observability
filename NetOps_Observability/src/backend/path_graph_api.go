@@ -302,7 +302,82 @@ func (s *server) buildSpineFor(ctx context.Context, tenant string, cross bool, c
 			}
 		}
 	}
-	return pathgraph.BuildSpine(in)
+	spine := pathgraph.BuildSpine(in)
+	s.stampSpineCloudIdentity(ctx, tenant, &spine)
+	return spine
+}
+
+// spineIPIdentity is one declared-inventory claim on an address: the cloud
+// provider that owns it and the best human name for it.
+type spineIPIdentity struct {
+	provider string
+	name     string
+}
+
+// stampSpineCloudIdentity annotates spine nodes whose address is claimed by
+// DECLARED inventory: the cloud provider (aws|azure|gcp — drives the provider
+// mark in the canvas) and a human display name, so a hop reads
+// "correlix-aws-app-host-01", never a bare IP with a vague type line.
+// Evidence-based only — cloud NIC/EIP bindings and the tenant's own device
+// inventory; an address nothing claims stays exactly as measured.
+func (s *server) stampSpineCloudIdentity(ctx context.Context, tenant string, spine *pathgraph.Spine) {
+	if spine == nil || len(spine.Spine) == 0 {
+		return
+	}
+	byIP := map[string]spineIPIdentity{}
+	if s.cloud != nil {
+		if res, err := s.cloud.ListResources(ctx, tenant, false); err == nil {
+			for _, r := range res {
+				p := strings.ToLower(string(r.Provider))
+				name := r.ResourceName
+				if name == "" {
+					name = r.AppName
+				}
+				if p == "" && name == "" {
+					continue
+				}
+				for _, ip := range r.PrivateIPs {
+					byIP[ip] = spineIPIdentity{provider: p, name: name}
+				}
+				for _, ip := range r.PublicIPs {
+					byIP[ip] = spineIPIdentity{provider: p, name: name}
+				}
+			}
+		}
+	}
+	// The device inventory names win where both claim an address: an operator's
+	// device record is the more specific identity (and covers non-cloud hops).
+	if s.discovery != nil {
+		for _, d := range s.discovery.Devices() {
+			if d.Address == "" || d.Name == "" || deviceTenant(d) != tenant {
+				continue
+			}
+			id := byIP[d.Address]
+			id.name = d.Name
+			byIP[d.Address] = id
+		}
+	}
+	if len(byIP) == 0 {
+		return
+	}
+	for i := range spine.Spine {
+		n := &spine.Spine[i]
+		if n.Address == "" {
+			continue
+		}
+		id, ok := byIP[n.Address]
+		if !ok {
+			continue
+		}
+		if id.provider != "" {
+			n.Provider = id.provider
+		}
+		// Name the hop only when it has no better identity than its address
+		// or a raw resource id (an operator reads names, not i-0abc… strings).
+		if id.name != "" && (n.Label == "" || n.Label == n.Address || n.Label == n.EntityRef) {
+			n.Label = id.name
+		}
+	}
 }
 
 // seamHintFromHistory finds the seam stamped on the current run's terminal

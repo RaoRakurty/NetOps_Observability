@@ -50,6 +50,9 @@ export interface SpineNode {
   state: HopState;
   transformation?: Transformation;
   seam_id?: string;
+  // Cloud provider whose DECLARED inventory claims this hop's address
+  // (aws | azure | gcp) — stamped by the backend, never guessed client-side.
+  provider?: string;
   rtt_ms?: number;
   // repeat_count > 1: this node stands for that many CONSECUTIVE measured TTLs
   // with the identical answer (a dying path answers every remaining TTL from the
@@ -152,6 +155,7 @@ function readNode(v: unknown): SpineNode | null {
     state,
     transformation: oneOf(o.transformation, TRANSFORMS),
     seam_id: str(o.seam_id) || undefined,
+    provider: str(o.provider) || undefined,
     rtt_ms: num(o.rtt_ms),
     repeat_count: num(o.repeat_count),
     fault: oneOf(o.fault, ["broken", "suspected", "possible"] as const),
