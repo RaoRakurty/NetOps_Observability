@@ -20,6 +20,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -129,8 +130,32 @@ type rcaReportTimes struct {
 	WindowEnd       string `json:"window_end"`
 }
 
+// classifyServiceScope derives the §12 service classification from what the
+// targets themselves are — an operator-actionable split, never a guess about
+// unobserved infrastructure: private address → customer-managed internal;
+// public address → public endpoint; DNS name → external / third-party service.
+func classifyServiceScope(targets []string) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	t := targets[0]
+	if ip := net.ParseIP(strings.Split(t, ":")[0]); ip != nil {
+		if ip.IsPrivate() || ip.IsLoopback() {
+			return "customer-managed internal application"
+		}
+		return "public endpoint"
+	}
+	if strings.Contains(t, ".") {
+		return "external / third-party service"
+	}
+	return ""
+}
+
 type rcaReportScope struct {
 	Services   []string `json:"services,omitempty"` // named apps/services (operator identifiers)
+	// §12: what KIND of service the subject is — ownership and next actions
+	// differ between a customer-managed app and a third-party SaaS.
+	ServiceClassification string `json:"service_classification,omitempty"`
 	Targets    []string `json:"targets,omitempty"`  // probe/impact targets (service name first, IP secondary)
 	Devices    []string `json:"devices,omitempty"`
 	Sites      []string `json:"sites,omitempty"`
@@ -877,6 +902,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 
 	// ---- scope -------------------------------------------------------------------
 	scope := buildRcaScope(meta, anomalous, hb)
+	scope.ServiceClassification = classifyServiceScope(scope.Targets)
 
 	// ---- signal summary ------------------------------------------------------------
 	sigSummary := buildSignalSummary(in.Signals, anomalous, clears, observers, peakSev, hb)
@@ -891,7 +917,19 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	sort.SliceStable(changes, func(i, j int) bool { return changes[i].At < changes[j].At })
 
 	// ---- hypotheses --------------------------------------------------------------------
-	hyps := buildHypothesesView(hb)
+	kindCounts := map[string]int{}
+	kindObservers := map[string]map[string]bool{}
+	for _, sig := range anomalous {
+		k := fmt.Sprintf("%v", sig["kind"])
+		kindCounts[k]++
+		if kindObservers[k] == nil {
+			kindObservers[k] = map[string]bool{}
+		}
+		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
+			kindObservers[k][o] = true
+		}
+	}
+	hyps := buildHypothesesView(hb, kindCounts, kindObservers)
 
 	// ---- root cause ----------------------------------------------------------------------
 	root := rcaRootCause{Identified: false, Statement: "Root cause has not been identified."}
@@ -955,7 +993,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	}
 
 	// ---- ownership ---------------------------------------------------------------------------
-	ownership := buildOwnership(analysis, root.Identified, hb, sigSummary)
+	ownership := buildOwnership(analysis, root.Identified, scope.ServiceClassification, hb, sigSummary)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
 	decision := buildDecision(analysis, incident, impact, in.Policy, in.PolicyConfigured, monitorWindow)

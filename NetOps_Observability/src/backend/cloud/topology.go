@@ -143,17 +143,29 @@ func (t Topology) NodeKindOf(ref string) string {
 	if r == "" {
 		return ""
 	}
+	// A route's next-hop role (nva / nat_gateway / …) is the SPECIFIC network
+	// function the control plane assigns; a node row's "instance"/"vm" is just
+	// the compute wrapper. The route role wins over a generic node kind — the
+	// discovery poller labels every EC2/VM instance "instance", which was
+	// misrendering NVAs as application endpoints in cloud paths.
+	nodeKind, nodeID := "", ""
 	for _, n := range t.Nodes {
 		if strings.ToLower(n.ID) == r || strings.ToLower(n.PrivateIP) == r {
-			return n.Kind
+			nodeKind, nodeID = n.Kind, strings.ToLower(n.ID)
+			break
 		}
 	}
-	// A route's next hop also declares a kind (nva / nat_gateway / …) even when the
-	// target is not a node row (Azure UDRs point at a bare next-hop IP).
+	if nodeKind != "" && nodeKind != "instance" && nodeKind != "vm" {
+		return nodeKind
+	}
+	// The route's next hop declares a kind even when the target is not a node
+	// row (Azure UDRs point at a bare next-hop IP). When the ref matched a node
+	// by IP, the routes may name that node by its resource id — check both.
 	for _, e := range t.Edges {
-		if strings.ToLower(e.To) == r {
+		to := strings.ToLower(e.To)
+		if (to == r || (nodeID != "" && to == nodeID)) && e.ToKind != "" {
 			return e.ToKind
 		}
 	}
-	return ""
+	return nodeKind
 }

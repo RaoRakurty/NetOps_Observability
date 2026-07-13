@@ -236,7 +236,11 @@ func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[s
 		}
 		// Independence is a verdict-gate fact, not an assumption (§20 rule 6).
 		if len(hb.Ranking.Hypotheses) > 0 && len(hb.Ranking.Hypotheses[0].Verdict.IndependentPair) == 2 {
-			p.IndependenceNote = "an independent confirming pair was established by the verdict gate"
+			// §3: name the ACTUAL confirming observers, never just assert a pair.
+			pair := hb.Ranking.Hypotheses[0].Verdict.IndependentPair
+			p.IndependenceNote = fmt.Sprintf(
+				"independent confirming pair established by the verdict gate: %s × %s",
+				strings.ReplaceAll(pair[0], "_", " "), strings.ReplaceAll(pair[1], "_", " "))
 		} else if len(p.AffectedVantages) > 1 {
 			p.IndependenceNote = "multiple vantages reported failures, but path/vantage independence has not been established"
 		}
@@ -324,7 +328,43 @@ func humanizeClauses(clauses []string) []string {
 	return out
 }
 
-func buildHypothesesView(hb rcaHypBlob) []rcaHypothesis {
+// clauseCaseEvidence renders a satisfied clause as the ACTUAL case evidence
+// that matched it (§15: matching rules are not evidence): the observed kinds
+// among the clause's alternatives, with signal + observer counts. Falls back
+// to the humanized clause only if no observed kind matches (defensive).
+func clauseCaseEvidence(clause string, kindCounts map[string]int, kindObservers map[string]map[string]bool) string {
+	var parts []string
+	for _, alt := range strings.Split(clause, "|") {
+		k := strings.TrimSpace(alt)
+		n := kindCounts[k]
+		if n == 0 {
+			continue
+		}
+		obs := len(kindObservers[k])
+		label := kindNoc(k)
+		if obs > 1 {
+			parts = append(parts, fmt.Sprintf("%s (%d signals from %d observers)", label, n, obs))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s (%s)", label, strings.ToLower(countNoun(n, "signal"))))
+		}
+	}
+	if len(parts) == 0 {
+		return humanizeClause(clause)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func supportingCaseEvidence(satisfied []string, kindCounts map[string]int, kindObservers map[string]map[string]bool) []string {
+	var out []string
+	for _, c := range satisfied {
+		if e := clauseCaseEvidence(c, kindCounts, kindObservers); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers map[string]map[string]bool) []rcaHypothesis {
 	var out []rcaHypothesis
 	for i, h := range hb.Ranking.Hypotheses {
 		// no filler (§9): a hypothesis earns a row by evidence or by having been
@@ -340,7 +380,7 @@ func buildHypothesesView(hb rcaHypBlob) []rcaHypothesis {
 			Rank: i + 1, ID: h.ID, Title: title,
 			Problem:    rcaProblemFor(h.ID, h.Title),
 			Confidence: h.Confidence, Label: h.ConfidenceLabel,
-			Supporting:    humanizeClauses(h.Satisfied),
+			Supporting:    supportingCaseEvidence(h.Satisfied, kindCounts, kindObservers),
 			Contradicted:  h.Contradicted,
 			Contradicting: aiHumanizeMissing(humanizeClauses(h.Contradictions)),
 			Missing:       humanizeClauses(h.Missing),
@@ -359,7 +399,7 @@ func buildHypothesesView(hb rcaHypBlob) []rcaHypothesis {
 
 // ---- ownership ----------------------------------------------------------------------------
 
-func buildOwnership(analysis string, rootIdentified bool, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
+func buildOwnership(analysis string, rootIdentified bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
 	own := rcaOwnership{
 		TriageOwner:      "NOC",
 		TriageReason:     "Default triage owner until the failure stage and fault domain are identified.",
@@ -388,6 +428,12 @@ func buildOwnership(analysis string, rootIdentified bool, hb rcaHypBlob, sig rca
 		if team != "" {
 			own.SuspectedDomain = orDefault(top.Verdict.Layer, team)
 			switch {
+			case analysis == "confirmed" && rootIdentified && team == "Application team" &&
+				serviceClassification == "external / third-party service":
+				// §12: the internal Application team does not own a third-party
+				// service — vendor escalation does, once the fault localizes there.
+				own.EscalationOwner = "SaaS vendor escalation (via vendor management)"
+				own.EscalationReason = fmt.Sprintf("the fault localizes to %s — an external service this platform does not operate", signatureNocTitle(top.ID))
 			case analysis == "confirmed" && rootIdentified:
 				own.EscalationOwner = team
 				own.EscalationReason = fmt.Sprintf("the confirmed leading hypothesis (%s) places the fault in this team's domain", signatureNocTitle(top.ID))
@@ -407,6 +453,35 @@ func buildOwnership(analysis string, rootIdentified bool, hb rcaHypBlob, sig rca
 	// triage owner stays NOC and the domain stays Undetermined by default.
 	_ = sig
 	return own
+}
+
+// firstStepExpectedOutput derives the concrete observable a first-step should
+// yield (§21) — keyed on what the step examines, never a circular phrase.
+func firstStepExpectedOutput(step string) string {
+	l := strings.ToLower(step)
+	switch {
+	case strings.Contains(l, "trace"):
+		return "the hop where loss begins (address, TTL, and loss percentage per hop)"
+	case strings.Contains(l, "link") || strings.Contains(l, "route"):
+		return "interface/link state, error counters, and the active route toward the target"
+	case strings.Contains(l, "reachab") || strings.Contains(l, "third vantage") || strings.Contains(l, "ping"):
+		return "reachability result from an independent vantage (reply/loss and RTT)"
+	case strings.Contains(l, "ike") || strings.Contains(l, "ipsec") || strings.Contains(l, "tunnel") || strings.Contains(l, "sa"):
+		return "IKE/child-SA state, last DPD result, and rekey timestamps from the gateway"
+	case strings.Contains(l, "dns"):
+		return "the DNS response code and resolved addresses from the configured resolver"
+	case strings.Contains(l, "cert") || strings.Contains(l, "tls"):
+		return "the TLS handshake result, certificate validity window, and issuer"
+	case strings.Contains(l, "bgp") || strings.Contains(l, "peer") || strings.Contains(l, "routing"):
+		return "session state and prefix counts for the affected peer/session"
+	case strings.Contains(l, "load balancer") || strings.Contains(l, "lb") || strings.Contains(l, "health check"):
+		return "target-health states and backend error rates on the load balancer"
+	case strings.Contains(l, "log"):
+		return "matching log lines with timestamps bracketing the incident window"
+	case strings.Contains(l, "traffic") || strings.Contains(l, "flow"):
+		return "request/flow volume and completion rate versus the pre-incident baseline"
+	}
+	return "the specific observation that isolates the fault to, or clears, this step's domain"
 }
 
 // ---- decision --------------------------------------------------------------------------------
@@ -648,7 +723,9 @@ func buildActions(analysis string, hb rcaHypBlob, sig rcaSignalSummary, decision
 			if len(out) >= 3 {
 				break
 			}
-			add(rcaAction{Action: step, Owner: own.TriageOwner, ExpectedResult: "confirm or rule out the leading hypothesis"})
+			// §21: never the generic "confirm or rule out". Each first-step names
+			// the concrete observation it should produce, derived from the step.
+			add(rcaAction{Action: step, Owner: own.TriageOwner, ExpectedResult: firstStepExpectedOutput(step)})
 		}
 	}
 	// probe forensics when the evidence is active-check-shaped
@@ -727,6 +804,9 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 	}
 	if len(scope.Services) > 0 {
 		kv = append(kv, rcaKV{K: "Service / application", V: strings.Join(scope.Services, ", ")})
+	}
+	if scope.ServiceClassification != "" {
+		kv = append(kv, rcaKV{K: "Service classification", V: scope.ServiceClassification})
 	}
 	if len(scope.Targets) > 0 {
 		kv = append(kv, rcaKV{K: "Affected targets", V: strings.Join(firstN(scope.Targets, 4), ", ")})
