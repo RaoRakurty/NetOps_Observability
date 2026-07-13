@@ -190,7 +190,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{if .Validation}}<span class="pill red" style="font-weight:800;letter-spacing:.4px">VALIDATION SCENARIO — NOT A PRODUCTION INCIDENT</span>{{end}}
   <span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>
   <span class="pill {{stateTone "recovery" .States.Recovery}}">Recovery: {{title (humanState .States.Recovery)}}</span>
-  <span class="pill {{stateTone "analysis" .States.Analysis}}">Analysis: {{title .States.Analysis}}</span>
+  <span class="pill {{stateTone "analysis" .States.FaultDomain}}">Fault domain: {{title (humanState .States.FaultDomain)}}</span>
+  <span class="pill {{stateTone "analysis" .States.RootCauseState}}">Root cause: {{title (humanState .States.RootCauseState)}}</span>
   <span class="pill blue">Confidence: {{.States.Confidence}}</span>
   <span class="pill {{stateTone "impact" .States.Impact}}">Impact: {{title .States.Impact}}</span>
   <span class="pill {{stateTone "ticket" .States.Ticket}}">Ticket: {{title .States.Ticket}}</span>
@@ -229,7 +230,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     <span class="k">Monitoring window</span><span class="v">{{.Decision.MonitoringWindow}}</span>
     <span class="k">Auto-close</span><span class="v">{{.Decision.AutoCloseWhen}}</span>
     <span class="k">Reopen</span><span class="v">{{.Decision.ReopenWhen}}</span>
-    <span class="k">Escalate</span><span class="v">{{.Decision.EscalateWhen}}</span>
+    <span class="k">Escalation</span><span class="v">{{if eq .Decision.EscalationState "triggered"}}TRIGGERED at {{.Decision.EscalationAt}} — {{.Decision.EscalateWhen}}{{else}}armed — triggers when {{.Decision.EscalateWhen}}{{end}}</span>
+  {{if .Decision.AutoCloseEligible}}<span class="k">Auto-close</span><span class="v">eligible now — monitoring completed with no recurrence (historical impact stays recorded)</span>{{end}}
   </div>
 </section>
 
@@ -265,6 +267,10 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
     {{if .AffectedVantages}}<span class="k">Affected vantages</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
+    {{with .LastTransaction}}
+    <span class="k">Last failed check</span><span class="v">{{if .Method}}{{.Method}} {{end}}{{.Target}}{{if .StatusCode}} → HTTP {{.StatusCode}}{{end}}{{if .FailClass}} ({{.FailClass}}){{end}} · {{.At}}</span>
+    <span class="k">Phase timings</span><span class="v">{{if .DNSMs}}DNS {{f1 .DNSMs}} ms · {{end}}{{if .TCPMs}}TCP {{f1 .TCPMs}} ms · {{end}}{{if .TLSMs}}TLS {{f1 .TLSMs}} ms · {{end}}{{if .TTFBMs}}TTFB {{f1 .TTFBMs}} ms · {{end}}{{if .TotalMs}}total {{f1 .TotalMs}} ms{{end}}</span>
+    {{end}}
     {{if .FailureStages}}<span class="k">Failure stages / symptoms</span><span class="v">{{range $i, $s := .FailureStages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
     {{if .PeakLossPct}}<span class="k">Packet loss (peak)</span><span class="v">{{f1 .PeakLossPct}}%</span>{{end}}
     {{if .PeakRttMs}}<span class="k">Latency</span><span class="v">{{if .BaselineRttMs}}baseline {{f1 .BaselineRttMs}} ms · {{end}}peak {{f1 .PeakRttMs}} ms</span>{{end}}
@@ -348,7 +354,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <table><thead><tr><th>#</th><th>Hypothesis</th><th>Confidence</th><th>Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
   {{range .Hypotheses}}<tr{{if .Contradicted}} style="opacity:.62"{{end}}>
     <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
-    <td><b>{{.Title}}</b>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
+    <td><b>{{.Title}}</b> <span class="pill {{if eq .Type "symptom classification"}}gray{{else}}blue{{end}}" style="font-size:9px">{{.Type}}</span>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
         {{if .Problem}}<div class="note" style="color:#334155">{{.Problem}}</div>{{end}}
         {{if .Owner}}<div class="note">would be owned by {{.Owner}}</div>{{end}}</td>
     <td>{{title .Label}}</td>
@@ -396,6 +402,5 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 
 <footer class="doc-end">
   <span>{{.ReportType}} · case {{.DisplayID}} · correlation {{.CorrelationID}}</span>
-  <span>Generated {{.GeneratedAt}} · Confidential</span>
 </footer>
 </div></body></html>`

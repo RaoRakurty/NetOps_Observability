@@ -96,7 +96,12 @@ type rcaReportStates struct {
 	// Recovery is asserted ONLY from observed recovery evidence.
 	Recovery      string `json:"recovery"`       // explicitly_confirmed | not_observed
 	RecoveryBasis string `json:"recovery_basis"` // human sentence: what (if anything) proved recovery
-	Analysis      string `json:"analysis"`       // observed | suspected | probable | confirmed | inconclusive
+	Analysis      string `json:"analysis"`       // retained for API compat: observed | suspected | probable | confirmed | inconclusive
+	// Dimensional analysis states (owner feedback: no single umbrella flag).
+	Symptom        string `json:"symptom"`         // observed | confirmed
+	FaultDomain    string `json:"fault_domain"`    // not_localized | suspected | probable | confirmed
+	Mechanism      string `json:"mechanism"`       // unknown | under_investigation | confirmed
+	RootCauseState string `json:"root_cause_state"` // not_identified | under_investigation | confirmed
 	Impact        string `json:"impact"`         // confirmed | detected | none_detected | not_observable | unknown
 	// §5 impact axes: a failed synthetic proves the SYNTHETIC transaction failed;
 	// real-user impact needs real-traffic evidence (flow collapse, LB/app errors).
@@ -214,6 +219,24 @@ type rcaProbeSummary struct {
 	LastFailed       string   `json:"last_failed,omitempty"`
 	// Independence is stated only when known (verdict gate); never assumed.
 	IndependenceNote string `json:"independence_note,omitempty"`
+	// LastTransaction: the most recent FAILED synthetic check's per-phase
+	// results — the actual protocol outcome, not just "it failed".
+	LastTransaction *rcaProbeTransaction `json:"last_transaction,omitempty"`
+}
+
+// rcaProbeTransaction is one measured check transaction (per-phase timings and
+// outcome). Absent fields were not measured — never zero.
+type rcaProbeTransaction struct {
+	Target     string   `json:"target,omitempty"`
+	Method     string   `json:"method,omitempty"`
+	StatusCode int      `json:"status_code,omitempty"`
+	FailClass  string   `json:"fail_class,omitempty"`
+	DNSMs      *float64 `json:"dns_ms,omitempty"`
+	TCPMs      *float64 `json:"tcp_ms,omitempty"`
+	TLSMs      *float64 `json:"tls_ms,omitempty"`
+	TTFBMs     *float64 `json:"ttfb_ms,omitempty"`
+	TotalMs    *float64 `json:"total_ms,omitempty"`
+	At         string   `json:"at,omitempty"`
 }
 
 type rcaEvidenceLane struct {
@@ -255,6 +278,8 @@ type rcaCloudChange struct {
 }
 
 type rcaHypothesis struct {
+	// Type separates a symptom classification from a causal hypothesis (§15).
+	Type string `json:"type"`
 	Rank          int      `json:"rank"`
 	ID            string   `json:"id"`
 	Title         string   `json:"title"`
@@ -304,6 +329,13 @@ type rcaDecision struct {
 	AutoCloseWhen    string `json:"auto_close_when"`
 	ReopenWhen       string `json:"reopen_when"`
 	EscalateWhen     string `json:"escalate_when"`
+	// Escalation as an EXECUTED state, never future-tense prose when its
+	// conditions already hold at report time (owner feedback).
+	EscalationState string `json:"escalation_state"` // triggered | armed
+	EscalationAt    string `json:"escalation_at,omitempty"`
+	// Auto-close eligibility evaluated at report time: monitoring completed
+	// without recurrence ⇒ eligible even when historical impact was confirmed.
+	AutoCloseEligible bool `json:"auto_close_eligible"`
 }
 
 type rcaAction struct {
@@ -504,6 +536,17 @@ type rcaHypBlob struct {
 // cascadeStages projects the TOP hypothesis's causal chain for the report.
 // Witnessed rungs carry evidence; unwitnessed rungs stay visible and honest
 // ("not observed" is part of the propagation story, not a claim).
+// rcaHypothesisType classifies a hypothesis for the report (§15): an
+// experience/degradation signature is a SYMPTOM CLASSIFICATION — it names what
+// was observed, never a cause. Everything else proposes a causal domain.
+func rcaHypothesisType(id string) string {
+	l := strings.ToLower(id)
+	if strings.Contains(l, "experience") || strings.Contains(l, "degraded") {
+		return "symptom classification"
+	}
+	return "causal hypothesis"
+}
+
 // providerChangeNoun renders "An AWS" / "An Azure" / "A cloud" with the right
 // article and brand casing for the change-correlation sentences.
 func providerChangeNoun(p string) string {
@@ -721,6 +764,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		incident = "recovered"
 	case state == "closed":
 		incident = "no_longer_observed"
+		// Ending only by time is an INFERENCE, stated as one — never "recovered".
+		recoveryState = "inferred"
+		recoveryBasis = "Inferred from quiescence: anomalous signals stopped and the window closed; no explicit recovery evidence was captured."
 	case len(clears) > 0:
 		incident = "recovering"
 	}
@@ -813,6 +859,31 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		sevBasis += "; validation scenario — production severity not applicable"
 	}
 
+	// ── dimensional analysis states ──
+	symptom := "observed"
+	if len(anomalous) > 0 {
+		symptom = "confirmed" // the anomaly itself is a fact once evidence exists
+	}
+	topIsSymptom := len(hb.Ranking.Hypotheses) > 0 &&
+		rcaHypothesisType(hb.Ranking.Hypotheses[0].ID) == "symptom classification"
+	faultDomain := "not_localized"
+	switch {
+	case analysis == "confirmed" && !topIsSymptom:
+		faultDomain = "confirmed"
+	case analysis == "probable" && !topIsSymptom:
+		faultDomain = "probable"
+	case analysis == "suspected" && !topIsSymptom:
+		faultDomain = "suspected"
+	}
+	mechanism := "unknown"
+	switch {
+	case analysis == "confirmed" && !topIsSymptom:
+		mechanism = "confirmed"
+	case analysis == "suspected" || analysis == "probable":
+		mechanism = "under_investigation"
+	}
+	rootState := "not_identified"
+
 	ticketState := "not_opened"
 	if in.Ticket != nil {
 		switch fmt.Sprintf("%v", in.Ticket["state"]) {
@@ -896,7 +967,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		if in.Now.Before(until) {
 			monitoring = "active"
 		} else {
-			monitoring = "completed"
+			monitoring = "completed_no_recurrence"
 		}
 	}
 
@@ -993,10 +1064,16 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	}
 
 	// ---- ownership ---------------------------------------------------------------------------
+	switch {
+	case root.Identified && analysis == "confirmed":
+		rootState = "confirmed"
+	case analysis == "suspected" || analysis == "probable":
+		rootState = "under_investigation"
+	}
 	ownership := buildOwnership(analysis, root.Identified, scope.ServiceClassification, hb, sigSummary)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
-	decision := buildDecision(analysis, incident, impact, in.Policy, in.PolicyConfigured, monitorWindow)
+	decision := buildDecision(analysis, incident, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
 
 	// ---- wording ----------------------------------------------------------------------------------
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
@@ -1022,7 +1099,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		GeneratedAt:   fmtUTC(in.Now),
 		States: rcaReportStates{
 			Incident: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
-			Analysis: analysis, Impact: impact,
+			Analysis: analysis,
+			Symptom: symptom, FaultDomain: faultDomain, Mechanism: mechanism, RootCauseState: rootState,
+			Impact: impact,
 			ImpactSynthetic: impactSyn, ImpactRealUser: impactRU,
 			Ticket: ticketState,
 			Severity: peakSev, SeverityBasis: sevBasis, Monitoring: monitoring,

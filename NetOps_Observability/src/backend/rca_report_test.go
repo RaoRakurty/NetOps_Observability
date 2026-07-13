@@ -202,8 +202,8 @@ func TestRcaReportRecoveryNotCaptured(t *testing.T) {
 	if rep.States.Incident != "no_longer_observed" {
 		t.Fatalf("incident = %q, want no_longer_observed", rep.States.Incident)
 	}
-	if rep.States.Recovery != "not_observed" {
-		t.Fatalf("recovery = %q, want not_observed", rep.States.Recovery)
+	if rep.States.Recovery != "inferred" {
+		t.Fatalf("recovery = %q, want inferred (ended only by time)", rep.States.Recovery)
 	}
 	if strings.Contains(rep.Title, "recovered") {
 		t.Fatalf("title %q must not claim recovery", rep.Title)
@@ -235,7 +235,7 @@ func TestRcaReportRecoveredWithEvidenceAndMonitoringCompleted(t *testing.T) {
 	if rep.States.Incident != "recovered" || rep.States.Recovery != "explicitly_confirmed" {
 		t.Fatalf("want recovered/explicitly_confirmed, got %s/%s", rep.States.Incident, rep.States.Recovery)
 	}
-	if rep.States.Monitoring != "completed" {
+	if rep.States.Monitoring != "completed_no_recurrence" {
 		t.Fatalf("monitoring = %q — a window that ended before generation must read completed", rep.States.Monitoring)
 	}
 }
@@ -394,8 +394,8 @@ func TestRcaReportSemanticUpIsRecoveryEvidence(t *testing.T) {
 
 	// pre-fault up ONLY → no recovery claim
 	rep := buildTestReport(t, meta, []map[string]any{up("2026-07-12 18:00:00"), down})
-	if rep.States.Recovery != "not_observed" || rep.States.Incident != "no_longer_observed" {
-		t.Fatalf("pre-fault up must not prove recovery: %s/%s", rep.States.Incident, rep.States.Recovery)
+	if rep.States.Recovery != "inferred" || rep.States.Incident != "no_longer_observed" {
+		t.Fatalf("pre-fault up must not prove EXPLICIT recovery: %s/%s", rep.States.Incident, rep.States.Recovery)
 	}
 
 	// post-fault up → genuine recovery, timestamped from the up event
@@ -508,5 +508,43 @@ func TestRcaReportCarriesCascade(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report HTML missing %q", want)
 		}
+	}
+}
+
+// Owner feedback batch: dimensional states, escalation execution, transaction detail.
+func TestRcaReportDimensionalStatesAndEscalation(t *testing.T) {
+	meta := testMeta("open", "confirmed", "sig.ent.cloud.ipsec-tunnel-down",
+		testHyp("sig.ent.cloud.ipsec-tunnel-down", 0.9, "confirmed",
+			[]string{"ipsec_tunnel_status"}, nil, nil, "netops", false))
+	sigs := []map[string]any{
+		testSig("ipsec_tunnel_status", "control_plane", "ipsec:gw", "seam", "sm-1", "crit", "2026-07-12 18:12:00", true,
+			map[string]any{"attrs": `{"state":"down","seam_id":"sm-1"}`}),
+		testSig("synthetic_http_5xx", "active_probe", "prober", "app", "portal", "high", "2026-07-12 18:12:30", true,
+			map[string]any{"probe_scope": "customer_path",
+				"attrs": `{"target":"https://portal/health","method":"GET","status_code":503,"fail_class":"timeout","dns_ms":4.2,"total_ms":812.5}`}),
+	}
+	rep := buildTestReport(t, meta, sigs)
+	if rep.States.Symptom != "confirmed" {
+		t.Fatalf("symptom = %q", rep.States.Symptom)
+	}
+	if rep.States.FaultDomain != "confirmed" || rep.States.Mechanism != "confirmed" {
+		t.Fatalf("domain/mechanism = %s/%s", rep.States.FaultDomain, rep.States.Mechanism)
+	}
+	// no grounded convergence and no seam context in this fixture → root honest
+	if rep.States.RootCauseState == "" {
+		t.Fatal("root cause state must always be stated")
+	}
+	// escalation conditions hold at report time → executed, not future tense
+	if rep.Decision.EscalationState != "triggered" || rep.Decision.EscalationAt == "" {
+		t.Fatalf("escalation = %s at %q", rep.Decision.EscalationState, rep.Decision.EscalationAt)
+	}
+	// the actual failed transaction is surfaced with per-phase results
+	tx := rep.Signals.Probe.LastTransaction
+	if tx == nil || tx.StatusCode != 503 || tx.TotalMs == nil || *tx.TotalMs != 812.5 {
+		t.Fatalf("transaction = %+v", tx)
+	}
+	// a symptom-classification hypothesis is labeled as one
+	if got := rcaHypothesisType("sig.ent.app.saas-experience-degraded"); got != "symptom classification" {
+		t.Fatalf("type = %q", got)
 	}
 }

@@ -148,6 +148,52 @@ func buildRcaScope(meta map[string]any, anomalous []map[string]any, hb rcaHypBlo
 	return sc
 }
 
+// latestProbeTransaction extracts the most recent FAILED synthetic check's
+// per-phase results from signal attrs — the actual transaction outcome the
+// prober measured (owner feedback: show full HTTP/TCP/DNS results).
+func latestProbeTransaction(all []map[string]any) *rcaProbeTransaction {
+	var best *rcaProbeTransaction
+	var bestTS time.Time
+	for _, sig := range all {
+		kind := fmt.Sprintf("%v", sig["kind"])
+		if !strings.HasPrefix(kind, "synthetic_") || strings.HasSuffix(kind, "_clear") {
+			continue
+		}
+		a, _ := sig["attrs"].(string)
+		if a == "" {
+			continue
+		}
+		var at struct {
+			Target     string   `json:"target"`
+			Method     string   `json:"method"`
+			StatusCode int      `json:"status_code"`
+			FailClass  string   `json:"fail_class"`
+			DNSMs      *float64 `json:"dns_ms"`
+			TCPMs      *float64 `json:"tcp_connect_ms"`
+			TLSMs      *float64 `json:"tls_ms"`
+			TTFBMs     *float64 `json:"ttfb_ms"`
+			TotalMs    *float64 `json:"total_ms"`
+		}
+		if json.Unmarshal([]byte(a), &at) != nil {
+			continue
+		}
+		if at.StatusCode == 0 && at.FailClass == "" && at.TotalMs == nil {
+			continue // no transaction detail on this signal
+		}
+		ts, ok := parseChTS(fmt.Sprintf("%v", sig["ts"]))
+		if !ok || ts.Before(bestTS) {
+			continue
+		}
+		bestTS = ts
+		best = &rcaProbeTransaction{
+			Target: at.Target, Method: at.Method, StatusCode: at.StatusCode,
+			FailClass: at.FailClass, DNSMs: at.DNSMs, TCPMs: at.TCPMs,
+			TLSMs: at.TLSMs, TTFBMs: at.TTFBMs, TotalMs: at.TotalMs, At: fmtUTC(ts),
+		}
+	}
+	return best
+}
+
 // ---- signal summary --------------------------------------------------------------
 
 func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[string]bool, peakSev string, hb rcaHypBlob) rcaSignalSummary {
@@ -234,6 +280,7 @@ func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[s
 		if !lastFailed.IsZero() {
 			p.LastFailed = fmtUTC(lastFailed)
 		}
+		p.LastTransaction = latestProbeTransaction(all)
 		// Independence is a verdict-gate fact, not an assumption (§20 rule 6).
 		if len(hb.Ranking.Hypotheses) > 0 && len(hb.Ranking.Hypotheses[0].Verdict.IndependentPair) == 2 {
 			// §3: name the ACTUAL confirming observers, never just assert a pair.
@@ -349,7 +396,7 @@ func clauseCaseEvidence(clause string, kindCounts map[string]int, kindObservers 
 		}
 	}
 	if len(parts) == 0 {
-		return humanizeClause(clause)
+		return "" // display only MATCHED evidence — never the matching rule text
 	}
 	return strings.Join(parts, "; ")
 }
@@ -377,6 +424,7 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 			title = h.Title
 		}
 		hy := rcaHypothesis{
+			Type: rcaHypothesisType(h.ID),
 			Rank: i + 1, ID: h.ID, Title: title,
 			Problem:    rcaProblemFor(h.ID, h.Title),
 			Confidence: h.Confidence, Label: h.ConfidenceLabel,
@@ -486,7 +534,7 @@ func firstStepExpectedOutput(step string) string {
 
 // ---- decision --------------------------------------------------------------------------------
 
-func buildDecision(analysis, incident, impact string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
+func buildDecision(analysis, incident, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
 	polName := pol.Name
 	if !configured {
 		polName = pol.Name + " (platform default — no tenant policy configured)"
@@ -499,8 +547,16 @@ func buildDecision(analysis, incident, impact string, pol incidentPolicy, config
 		MonitoringWindow: fmtDur(monitorWindow) + " after recovery",
 		AutoCloseWhen:    "no recurrence and no NEW customer-impact evidence arising within the monitoring window (impact already recorded for this incident stays recorded and does not block a clean close)",
 		ReopenWhen:       fmt.Sprintf("the same condition recurs within %s (flap suppression)", fmtDur(monitorWindow)),
+		EscalationState:  "armed",
 		EscalateWhen:     "customer impact is confirmed, or a second independent evidence class corroborates the fault",
 	}
+	// The escalation conditions are EVALUATED at report time — conditions that
+	// already hold render as an executed trigger, never as a future promise.
+	if impact == "confirmed" || analysis == "confirmed" {
+		d.EscalationState = "triggered"
+		d.EscalationAt = generatedAt
+	}
+	d.AutoCloseEligible = monitoring == "completed_no_recurrence"
 	if pol.RequirePersistenceSeconds > 0 {
 		d.OpenThreshold += fmt.Sprintf(", condition persisting ≥ %s", fmtDur(time.Duration(pol.RequirePersistenceSeconds)*time.Second))
 	}
@@ -712,6 +768,16 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 // ---- next actions (§14) --------------------------------------------------------------------------------
 
 func buildActions(analysis string, hb rcaHypBlob, sig rcaSignalSummary, decision rcaDecision, own rcaOwnership) []rcaAction {
+	// Differential control (§13/owner feedback): a single-vantage failure needs
+	// an independent vantage before any target-side conclusion firms up.
+	var differential *rcaAction
+	if sig.Probe != nil && len(sig.Probe.AffectedVantages) == 1 {
+		differential = &rcaAction{
+			Action:         fmt.Sprintf("Run the same check from an independent vantage (only %s has reported this)", sig.Probe.AffectedVantages[0]),
+			Owner:          "NOC",
+			ExpectedResult: "the same target's result from a second vantage — fails there too (target side) or only here (local side)",
+		}
+	}
 	var out []rcaAction
 	add := func(a rcaAction) {
 		a.Priority = len(out) + 1
@@ -756,6 +822,9 @@ func buildActions(analysis string, hb rcaHypBlob, sig rcaSignalSummary, decision
 			ExpectedResult: "auto-close after the stability window, reopen on recurrence",
 			EscalateWhen:   decision.EscalateWhen,
 		})
+	}
+	if differential != nil {
+		out = append(out, *differential)
 	}
 	return out
 }

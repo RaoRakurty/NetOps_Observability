@@ -123,3 +123,31 @@ def test_production_purpose_keeps_registry_trust(monkeypatch):
         sig = classify("prober->10.60.10.10", "prober", ev)
         assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}
         assert sig.attrs["probe_scope"] == ProbeScope.CUSTOMER_PATH.value
+
+
+def test_one_execution_yields_one_observer(monkeypatch):
+    """Owner feedback: one check execution must count as ONE observer — both
+    lanes of one execution share observer identity and execution lineage."""
+    import main
+    from episodes import EpisodeDetector
+    from producers import probe_signals
+    from synthetic_normalize import synthetic_app_signal
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", set())
+    monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
+    monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"prober"})
+    now = datetime(2026, 7, 13, tzinfo=timezone.utc)
+    ev = {"kind": "http", "ok": False, "prober": "prober", "loss_pct": 100.0,
+          "target": "https://portal.example/health", "ts": now.isoformat(),
+          "execution_id": "ex-one"}
+    sigs = probe_signals(ev, EpisodeDetector(), "t1", now)
+    app = synthetic_app_signal(ev, "t1", now)
+    assert app is not None
+    sigs = [*sigs, app]
+    for s in sigs:
+        main.classify_probe(ev, s)
+    observers = {s.observer.observer_id for s in sigs}
+    executions = {s.attrs.get("execution_id") for s in sigs}
+    assert observers == {"prober"}, "one execution must present exactly one observer"
+    assert executions == {"ex-one"}, "every derived signal carries the execution lineage"
