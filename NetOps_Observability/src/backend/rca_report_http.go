@@ -184,10 +184,16 @@ func rcaTopologyFromSpine(block any) rcaTopologyView {
 			Kind: n.Kind, Boundary: n.Boundary, State: n.State, SeamID: n.SeamID,
 			Fault: n.Fault, Provider: n.Provider,
 		})
-		if n.Fault != "" {
-			// The path's own causality statement: where the measurement died.
+		switch n.Fault {
+		case "broken", "suspected":
+			// CAUSAL: the case's verdict blames this path, and this is where it broke.
 			out.DropPoint = fmt.Sprintf(
-				"The measured path dies after %s (%s boundary) — every later hop went dark. This drop point is consistent with the propagation ladder's origin.",
+				"The measured path stops responding after %s (%s boundary) — every later hop went dark. This case's fault is on the path, so this drop point is where it breaks; it is consistent with the propagation ladder's origin.",
+				orDefault(n.Label, n.Address), strings.ToLower(orDefault(n.Boundary, "unknown")))
+		case "last_response":
+			// FACT ONLY: state where the measurement stopped, blame nothing.
+			out.DropPoint = fmt.Sprintf(
+				"The measurement stops responding after %s (%s boundary) — later hops did not answer. This case's fault is NOT attributed to the network path, so this is stated as a measurement boundary, not as a break.",
 				orDefault(n.Label, n.Address), strings.ToLower(orDefault(n.Boundary, "unknown")))
 		}
 	}

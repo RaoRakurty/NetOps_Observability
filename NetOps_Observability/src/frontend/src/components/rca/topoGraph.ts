@@ -206,8 +206,11 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
   for (const n of path.spine) {
     byIndex.set(n.index, n);
     const blind = n.state !== "responding";
-    const faulted = !!n.fault;
-    const fmeta = n.fault ? STATUS_META[n.fault] : meta;
+    // A measurement boundary is NOT a fault: it says where the run stopped
+    // answering, without blaming the path (the case's fault lies elsewhere).
+    const boundaryOnly = n.fault === "last_response";
+    const faulted = !!n.fault && !boundaryOnly;
+    const fmeta = faulted && n.fault ? STATUS_META[n.fault as "broken" | "suspected" | "possible"] : meta;
     const transform = transformationLabel(n.transformation);
     const tone = blind ? C.faint
       : faulted ? fmeta.color
@@ -228,14 +231,14 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
     nodes.push({
       id: id(n.index), x: n.index * COL_SPINE, y: 0,
       data: {
-        kind: hopShape(n), tone, pulse: faulted,
+        kind: hopShape(n), tone: boundaryOnly ? C.muted : tone, pulse: faulted,
         // A silent hop with no identity renders as "Unknown hop" — but a KNOWN
         // endpoint that didn't answer keeps its name (the application the run
         // proved unreachable is the headline, not a mystery).
         label: blind && !n.address && n.kind === "unknown" ? "Unknown hop" : n.label,
         mono: !!n.address && n.address === n.label,
         sub: sub || undefined,
-        badge: faulted ? `${fmeta.sym} ${fmeta.word}` : undefined,
+        badge: faulted ? `${fmeta.sym} ${fmeta.word}` : boundaryOnly ? "◍ Last response" : undefined,
         chips: chips.length ? chips : undefined,
         hasIn: n.index !== path.spine[0]?.index,
         hasOut: true,
@@ -260,7 +263,7 @@ export function layoutSpine(path: ServicePath, verdictTier = ""): TopoGraph {
     const blind = a.state !== "responding" || b.state !== "responding";
     // The segment LEAVING the backend-stamped drop point is where the path
     // died — render it as the fault (red ✕), matching the hop's own mark.
-    const faultEdge = a.fault && b.state !== "responding"
+    const faultEdge = a.fault && a.fault !== "last_response" && b.state !== "responding"
       ? (a.fault === "broken" ? "confirmed_down" : "suspected_down") as EdgeState
       : undefined;
     const state: EdgeState = e.state ?? faultEdge ?? (blind ? "unknown" : "healthy");

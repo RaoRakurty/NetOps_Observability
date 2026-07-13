@@ -494,29 +494,26 @@ var pathFaultFamilies = []string{
 	"middle-mile", "dia", "wan-edge", "link", "uplink",
 }
 
-// stampSpineFault marks WHERE a dying path broke (the owner's "show me the
-// break" ask): on a PARTIAL observation embedded in an RCA whose verdict is
-// suspected/confirmed on a path-family hypothesis, the LAST RESPONDING hop is
-// the drop point. Verdict-aware on purpose: a transient partial trace on a
-// healthy case stays unpainted (the renderer never invents a fault, §2.4) —
-// the RED mark requires the engine's verdict AND the observation's own death.
+// stampSpineFault marks WHERE the measurement stopped — and separately, whether
+// THIS case blames that point. Two different statements, never conflated:
+//
+//   "last_response"  — a MEASUREMENT FACT: this partial run's last answering hop.
+//                      Always stated (an operator must never have to guess where
+//                      a trace died), carries no blame.
+//   "broken"/"suspected" — a CAUSAL ATTRIBUTION: the case's verdict is a
+//                      path-family fault, so the drop point IS the case's break.
+//
+// An application-layer fault therefore shows where the path stopped answering
+// without the network being accused of it (the earlier gate threw the fact away
+// with the blame — owner-caught, 2026-07-13).
 func stampSpineFault(sp *pathgraph.Spine, verdictTier, topHyp string) {
 	if sp == nil || len(sp.Spine) == 0 {
 		return
 	}
 	if sp.Status == pathgraph.StatusComplete {
-		return // the path reached its target — nothing broke on it
+		return // the path reached its target — nothing stopped on it
 	}
-	tier := strings.ToLower(verdictTier)
-	var mark string
-	switch tier {
-	case "confirmed":
-		mark = "broken"
-	case "suspected":
-		mark = "suspected"
-	default:
-		return
-	}
+	mark := "last_response" // the honest default: fact without blame
 	family := false
 	low := strings.ToLower(topHyp)
 	for _, f := range pathFaultFamilies {
@@ -525,8 +522,13 @@ func stampSpineFault(sp *pathgraph.Spine, verdictTier, topHyp string) {
 			break
 		}
 	}
-	if !family {
-		return
+	if family {
+		switch strings.ToLower(verdictTier) {
+		case "confirmed":
+			mark = "broken"
+		case "suspected":
+			mark = "suspected"
+		}
 	}
 	// the drop point = the last responding hop (everything after it is dark)
 	for i := len(sp.Spine) - 1; i >= 0; i-- {

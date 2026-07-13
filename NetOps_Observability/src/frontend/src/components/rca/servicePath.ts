@@ -60,7 +60,9 @@ export interface SpineNode {
   repeat_count?: number;
   // OPTIONAL backend extension: which hop the RCA verdict lands on. Absent ⇒ the
   // renderer marks NO fault (it must never pick one itself).
-  fault?: "broken" | "suspected" | "possible";
+  // "last_response" = a measurement FACT (where the run stopped answering),
+  // carrying no blame; broken/suspected additionally attribute the case to it.
+  fault?: "broken" | "suspected" | "possible" | "last_response";
   evidence?: SpineEvidence;
 }
 
@@ -158,7 +160,7 @@ function readNode(v: unknown): SpineNode | null {
     provider: str(o.provider) || undefined,
     rtt_ms: num(o.rtt_ms),
     repeat_count: num(o.repeat_count),
-    fault: oneOf(o.fault, ["broken", "suspected", "possible"] as const),
+    fault: oneOf(o.fault, ["broken", "suspected", "possible", "last_response"] as const),
     evidence: readEvidence(o.evidence),
   };
 }
