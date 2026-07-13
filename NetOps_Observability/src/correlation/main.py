@@ -1238,6 +1238,15 @@ def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | 
         return f"{device}:{peer}", EntityType.DEVICE, "bgp_state_anomaly", (device, peer)
     if family == "device_resource":
         return device, EntityType.DEVICE, "device_resource_anomaly", (device,)
+    if family == "cloud_resource":
+        # Provider-reported health/utilization for a cloud instance (CloudWatch /
+        # Azure Monitor). The resource id is carried in `index`; tokens include it
+        # AND the app-host private IPs so a cloud-metric anomaly co-grounds with
+        # the probes and app signals that name the same host (cloud RCA needs an
+        # INDEPENDENT provider observer to reach confirmed).
+        rid = str(ev.get("index") or "")
+        tokens = tuple(t for t in (device, rid, *(str(ev.get("private_ip") or "").split(","))) if t)
+        return device, EntityType.DEVICE, "cloud_resource_anomaly", tokens
     return None
 
 

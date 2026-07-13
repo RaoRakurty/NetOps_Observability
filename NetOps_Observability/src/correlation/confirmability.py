@@ -82,6 +82,11 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "if_metric_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "bgp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "device_resource_anomaly": ModalityClass.DEVICE_TELEMETRY,
+    # Provider-reported cloud resource health/utilization (CloudWatch / Azure
+    # Monitor). DEVICE_TELEMETRY: an INDEPENDENT observer class from the active
+    # probes, so provider health + a synthetic app check can co-confirm a cloud
+    # app fault — the gap that made cloud verdicts un-confirmable.
+    "cloud_resource_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "cloud_health": ModalityClass.DEVICE_TELEMETRY,
     # app-edge lane (#98 P5 — LB/proxy/ingress reporting its own counters;
     # attrs.lane="app_gateway", independent of probes and flows in the gate)

@@ -16,6 +16,7 @@ import time
 import boto3
 from kafka import KafkaProducer
 
+import cloudmetrics
 import discover
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -27,6 +28,9 @@ TENANT = os.environ.get("CLOUD_TENANT", "global")
 ACCOUNT = os.environ.get("CLOUD_ACCOUNT", "945714973156")
 POLL_S = int(os.environ.get("POLL_S", "60"))
 DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
+# CloudWatch metric lane (Service View counters + CUSUM evidence). CloudWatch's
+# free basic resolution is 5 min, so polling faster only re-reads the same point.
+METRICS_EVERY_S = int(os.environ.get("CW_METRICS_EVERY_S", "300"))
 STATE_PATH = os.path.join(OUT_DIR, ".poller-state.json")
 
 # Interesting = network/security/compute mutations (cloud_change evidence).
@@ -161,6 +165,7 @@ def main():
     logs = session.client("logs")
     ct = session.client("cloudtrail")
     s3 = session.client("s3")
+    cw = session.client("cloudwatch")
     producer = KafkaProducer(
         bootstrap_servers=BROKERS.split(","),
         value_serializer=lambda v: json.dumps(v).encode(),
@@ -168,6 +173,8 @@ def main():
     jlog("cloud-ingest started", group=LOG_GROUP, brokers=BROKERS, tenant=TENANT)
     st = load_state()
     last_discover = 0.0
+    last_metrics = 0.0
+    inventory: list[dict] = []
     while True:
         try:
             # Cloud inventory + in-cloud egress topology, discovered from the live
@@ -176,7 +183,15 @@ def main():
             if time.time() - last_discover >= DISCOVER_EVERY_S:
                 res, edges = discover.run()
                 last_discover = time.time()
+                inventory = discover.instances_snapshot()
                 jlog("cloud discovery", resources=res, route_edges=edges)
+
+            # CloudWatch → canonical metric lane: live values for the Service View
+            # counters AND anomaly evidence via the correlation CUSUM detector.
+            if inventory and time.time() - last_metrics >= METRICS_EVERY_S:
+                n = cloudmetrics.poll(cw, inventory)
+                last_metrics = time.time()
+                jlog("cloud metrics", events=n, instances=len(inventory))
             if LOG_GROUP:
                 poll_flow_logs(logs, st)
             if FLOW_S3_BUCKET:

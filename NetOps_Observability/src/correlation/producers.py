@@ -115,6 +115,8 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "device_alarm",
     # metric episodes (main.py metric_identity + C6 flow)
     "if_metric_anomaly", "bgp_state_anomaly", "device_resource_anomaly",
+    # cloud provider metrics (CloudWatch / Azure Monitor → canonical metric lane)
+    "cloud_resource_anomaly",
     "flow_volume_anomaly",
     # cloud lane (#81 P3G — handle_cloud emits these; consumed by the cloud signatures)
     "cloud_change", "cloud_audit", "cloud_flow_log", "cloud_health",

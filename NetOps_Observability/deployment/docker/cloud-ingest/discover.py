@@ -157,6 +157,20 @@ def run() -> tuple[int, int]:
     return len(inventory["resources"]), len(topology["edges"])
 
 
+def instances_snapshot() -> list[dict]:
+    """The discovered EC2 instances (resource_id / name / app / private_ips) —
+    what the CloudWatch metric lane polls per-instance metrics for. Read from the
+    fixture the run() above just wrote, so there is ONE inventory truth."""
+    path = os.path.join(FIXTURES_DIR, "aws.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            inv = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    return [r for r in inv.get("resources", [])
+            if str(r.get("resource_id", "")).startswith("i-")]
+
+
 if __name__ == "__main__":
     r, e = run()
     print(json.dumps({"discovered_resources": r, "route_edges": e}))

@@ -1,0 +1,109 @@
+"""AWS CloudWatch → the platform's CANONICAL metric lane (Service View counters).
+
+Design decision (deliberate): continuous cloud metric VALUES do NOT go to the
+evidence store (corr_signals is fault-triggered and anti-noise). They ride the
+same lane the SNMP collector uses — MetricEvent NDJSON → Vector metrics_in
+(:8690) → netops.metrics → VictoriaMetrics (display values for the Service View
+counters) AND the correlation engine's CUSUM episode detector (so an ANOMALY in
+a cloud metric becomes evidence automatically, exactly like a device metric).
+
+One provider integration, two products: live counters and live evidence.
+
+Metrics polled per EC2 instance (5-min CloudWatch resolution, free tier):
+  CPUUtilization        → cloud_cpu_util        (percent)
+  NetworkIn / NetworkOut→ cloud_net_in/out_bytes(bytes)
+  StatusCheckFailed     → cloud_status_check    (count; >0 = provider says the
+                          instance is impaired — the provider-health signal)
+
+Provenance: observer_type=cloud_provider, modality_class=device_telemetry,
+collection_path=cloudwatch_api. That modality is INDEPENDENT of active_probe,
+so provider health + a synthetic app check can co-confirm a cloud app fault —
+the gap that made cloud verdicts un-confirmable before.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import urllib.request
+
+METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
+PERIOD_S = int(os.environ.get("CW_PERIOD_S", "300"))
+
+# CloudWatch metric name → (canonical platform metric, unit, statistic)
+CW_METRICS = {
+    "CPUUtilization": ("cloud_cpu_util", "percent", "Average"),
+    "NetworkIn": ("cloud_net_in_bytes", "bytes", "Sum"),
+    "NetworkOut": ("cloud_net_out_bytes", "bytes", "Sum"),
+    "StatusCheckFailed": ("cloud_status_check_failed", "count", "Maximum"),
+}
+
+
+def _post(events: list[dict]) -> None:
+    if not events:
+        return
+    body = "\n".join(json.dumps(e) for e in events).encode()
+    req = urllib.request.Request(METRICS_SINK, data=body,
+                                 headers={"Content-Type": "application/x-ndjson"})
+    urllib.request.urlopen(req, timeout=10).read()  # noqa: S310 - operator-configured sink
+
+
+def poll(cw, instances: list[dict], provider: str = "aws") -> int:
+    """One CloudWatch cycle → MetricEvents on the canonical metric lane.
+
+    ``instances`` is the discovered inventory ([{resource_id, resource_name,
+    app_name, private_ips}, …]). Returns the number of metric events emitted.
+    """
+    if not instances:
+        return 0
+    end = dt.datetime.now(dt.timezone.utc)
+    start = end - dt.timedelta(seconds=PERIOD_S * 2)
+
+    queries, meta = [], {}
+    for i, inst in enumerate(instances):
+        rid = inst.get("resource_id") or ""
+        if not rid.startswith("i-"):
+            continue
+        for j, (cw_name, (_canon, _unit, stat)) in enumerate(CW_METRICS.items()):
+            qid = f"q{i}_{j}"
+            meta[qid] = (inst, cw_name)
+            queries.append({
+                "Id": qid,
+                "MetricStat": {
+                    "Metric": {"Namespace": "AWS/EC2", "MetricName": cw_name,
+                               "Dimensions": [{"Name": "InstanceId", "Value": rid}]},
+                    "Period": PERIOD_S, "Stat": stat,
+                },
+                "ReturnData": True,
+            })
+    if not queries:
+        return 0
+
+    events: list[dict] = []
+    # GetMetricData caps at 500 queries per call.
+    for chunk in (queries[k:k + 500] for k in range(0, len(queries), 500)):
+        resp = cw.get_metric_data(MetricDataQueries=chunk, StartTime=start, EndTime=end,
+                                  ScanBy="TimestampDescending")
+        for r in resp.get("MetricDataResults", []):
+            vals, times = r.get("Values") or [], r.get("Timestamps") or []
+            if not vals:
+                continue  # no datapoint in the window — absent, never zero
+            inst, cw_name = meta[r["Id"]]
+            canon, unit, _stat = CW_METRICS[cw_name]
+            events.append({
+                "observer_type": "cloud_provider",
+                "modality_class": "device_telemetry",
+                "collection_path": "cloudwatch_api",
+                # The instance IS the device for this lane; its private IP is what
+                # the Service View / path graph already binds apps to.
+                "device": inst.get("resource_name") or inst["resource_id"],
+                "vendor": provider,
+                "index": inst["resource_id"],
+                "signal_family": "cloud_resource",
+                "metric": canon,
+                "value": float(vals[0]),
+                "unit": unit,
+                "ts": times[0].astimezone(dt.timezone.utc).isoformat(),
+            })
+    _post(events)
+    return len(events)

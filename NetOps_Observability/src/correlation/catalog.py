@@ -422,9 +422,14 @@ BUILTIN_TEMPLATES: list[dict] = [
             # (an SG/NSG denial shows up here as a rejected flow).
             {"kind": "cloud_flow_log", "optional": True},
             {"kind": "probe_loss|probe_rtt_anomaly", "optional": True},
+            # the PROVIDER's own view of the resource (CloudWatch / Azure Monitor
+            # status checks, CPU/network anomalies) — an observer independent of
+            # our probes and of the app's own logs.
+            {"kind": "cloud_resource_anomaly", "optional": True},
         ],
         # a cloud-only picture is one vantage → stays suspected until an
-        # independent observer (probe inside the VPC/VNet, or the underlay) agrees.
+        # independent observer (probe inside the VPC/VNet, the underlay, or the
+        # provider's resource telemetry) agrees.
         "required_modalities": ["device_telemetry"],
         # Look-alike killer: if the private link itself changed state (DX/VPN) in
         # the window, this is a CONNECTIVITY fault, not an app-dependency fault.
@@ -2862,7 +2867,10 @@ APP_EXPERIENCE_TEMPLATES: list[dict] = [
                      "synthetic_tcp_connect_fail|synthetic_timeout|synthetic_icmp_loss|"
                      "synthetic_tcp_probe_fail"},
             {"kind": "flow_volume_anomaly|lb_5xx|"
-                     "lb_target_unhealthy|app_error_rate_high", "optional": True},
+                     "lb_target_unhealthy|app_error_rate_high|"
+                     # the provider's own resource telemetry (CloudWatch / Azure
+                     # Monitor) — independent of our probes and of the app's logs
+                     "cloud_resource_anomaly", "optional": True},
             {"kind": "synthetic_cert_expired|synthetic_cert_expiring", "optional": True},
         ],
         "required_modalities": ["active_probe"],
