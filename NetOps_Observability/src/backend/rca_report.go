@@ -479,6 +479,22 @@ type rcaHypBlob struct {
 // cascadeStages projects the TOP hypothesis's causal chain for the report.
 // Witnessed rungs carry evidence; unwitnessed rungs stay visible and honest
 // ("not observed" is part of the propagation story, not a claim).
+// providerChangeNoun renders "An AWS" / "An Azure" / "A cloud" with the right
+// article and brand casing for the change-correlation sentences.
+func providerChangeNoun(p string) string {
+	switch strings.ToLower(p) {
+	case "aws":
+		return "An AWS"
+	case "azure":
+		return "An Azure"
+	case "gcp":
+		return "A GCP"
+	case "":
+		return "A cloud"
+	}
+	return "A " + p
+}
+
 func cascadeStages(hb rcaHypBlob) []rcaCascadeStage {
 	if len(hb.Ranking.Hypotheses) == 0 {
 		return nil
@@ -881,7 +897,26 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	root := rcaRootCause{Identified: false, Statement: "Root cause has not been identified."}
 	if analysis == "confirmed" {
 		locus := groundedLocus(in.Edges)
-		if locus != "" {
+		// §16: a transport-family fault (underlay/tunnel/ipsec) localizes to the
+		// SEAM — the tunnel/VPN resource — never to the application endpoint the
+		// probes happened to target. The seam is declared grounding context, so
+		// naming it is evidence, not inference.
+		if len(hb.Ranking.Hypotheses) > 0 && len(hb.GroundingContext.Seams) > 0 {
+			topID := hb.Ranking.Hypotheses[0].ID
+			if strings.Contains(topID, "underlay") || strings.Contains(topID, "tunnel") || strings.Contains(topID, "ipsec") {
+				sm := hb.GroundingContext.Seams[0]
+				locus = sm.SeamID
+				root = rcaRootCause{
+					Identified: true,
+					Statement:  fmt.Sprintf("Fault localized to the %s seam %s by independent evidence.", sm.SeamType, sm.SeamID),
+					Object:     sm.SeamID,
+					ObjectType: strings.ToLower(orDefault(sm.SeamType, "seam")) + " seam",
+				}
+				root.Owner = rcaOwnerTeam[hb.Ranking.Hypotheses[0].Verdict.Owner]
+				root.Evidence = aiHumanizeMissing(hb.Ranking.Hypotheses[0].Satisfied)
+			}
+		}
+		if !root.Identified && locus != "" {
 			root = rcaRootCause{
 				Identified: true,
 				Statement:  fmt.Sprintf("Fault localized to %s by independent evidence.", aiEntityLabel(locus)),
@@ -892,7 +927,8 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 				root.Owner = rcaOwnerTeam[hb.Ranking.Hypotheses[0].Verdict.Owner]
 				root.Evidence = aiHumanizeMissing(hb.Ranking.Hypotheses[0].Satisfied)
 			}
-		} else {
+		}
+		if !root.Identified {
 			root.Statement = "The fault condition is confirmed, but the evidence does not converge on a single root-cause object."
 		}
 	}
@@ -1068,12 +1104,12 @@ func classifyCloudChange(c *rcaCloudChange, firstObs time.Time, scope rcaReportS
 	}
 	switch c.Relationship {
 	case "same_resource":
-		c.Explanation = fmt.Sprintf("A %s change occurred %s and touched a resource mapped to the affected service. The timing and resource relationship support investigation, but causation is not confirmed.", orDefault(c.Provider, "cloud"), when)
+		c.Explanation = fmt.Sprintf("%s change occurred %s and touched a resource mapped to the affected service. The timing and resource relationship support investigation, but causation is not confirmed.", providerChangeNoun(c.Provider), when)
 	case "same_service":
-		c.Explanation = fmt.Sprintf("A %s change occurred %s and is correlated into this case as evidence. Causation is not confirmed.", orDefault(c.Provider, "cloud"), when)
+		c.Explanation = fmt.Sprintf("%s change occurred %s and is correlated into this case as evidence. Causation is not confirmed.", providerChangeNoun(c.Provider), when)
 	case "same_account_region":
-		c.Explanation = fmt.Sprintf("A %s change occurred %s in the same account/region. No direct resource relationship to the affected service was demonstrated.", orDefault(c.Provider, "cloud"), when)
+		c.Explanation = fmt.Sprintf("%s change occurred %s in the same account/region. No direct resource relationship to the affected service was demonstrated.", providerChangeNoun(c.Provider), when)
 	default:
-		c.Explanation = fmt.Sprintf("A %s change occurred %s. Only temporal proximity relates it to this incident — no resource or service relationship was demonstrated.", orDefault(c.Provider, "cloud"), when)
+		c.Explanation = fmt.Sprintf("%s change occurred %s. Only temporal proximity relates it to this incident — no resource or service relationship was demonstrated.", providerChangeNoun(c.Provider), when)
 	}
 }

@@ -201,7 +201,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <section>
   <h2>Management summary</h2>
   <div class="mgmt">{{.Summary.Management}}</div>
-  <div class="note">Confidence basis: {{.States.ConfidenceBasis}}.</div>
+  <div class="note">Confidence basis: {{.States.ConfidenceBasis}}. Severity basis: {{.States.SeverityBasis}}.</div>
 </section>
 
 <section>

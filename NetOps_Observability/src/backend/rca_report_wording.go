@@ -740,7 +740,23 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 			kv = append(kv, rcaKV{K: "Affected vantages", V: strings.Join(sig.Probe.AffectedVantages, ", ")})
 		}
 		if len(sig.Probe.FailureStages) > 0 {
-			kv = append(kv, rcaKV{K: "Failure stages", V: strings.Join(sig.Probe.FailureStages, ", ")})
+			// §7: packet loss / latency are SYMPTOMS, never protocol stages.
+			var stages, symptoms []string
+			for _, v := range sig.Probe.FailureStages {
+				switch strings.ToLower(v) {
+				case "packet loss", "latency high", "timeout", "response-time change":
+					symptoms = append(symptoms, v)
+				default:
+					stages = append(stages, v)
+				}
+			}
+			if len(stages) > 0 {
+				kv = append(kv, rcaKV{K: "Failure stages", V: strings.Join(stages, ", ")})
+			}
+			if len(symptoms) > 0 {
+				kv = append(kv, rcaKV{K: "Failure symptoms", V: strings.Join(symptoms, ", ")})
+			}
+			_ = []string{}
 		}
 	}
 	kv = append(kv, rcaKV{K: "Peak severity", V: sig.PeakSeverity})
