@@ -400,7 +400,4 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   </ol>
 </section>
 
-<footer class="doc-end">
-  <span>{{.ReportType}} · case {{.DisplayID}} · correlation {{.CorrelationID}}</span>
-</footer>
 </div></body></html>`
