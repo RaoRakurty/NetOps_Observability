@@ -31,6 +31,10 @@ export interface LadderStep { state: "done" | "active" | "next"; label: string; 
 export interface TimelineMarker { left: number; tone: Tone; label: string; detail: string; }
 export interface TimelineLane { dot: Tone; label: string; markers: TimelineMarker[]; }
 export interface HypothesisRow { rank: string; hypo: string; sub: string; conf: RcaPill; reason: string; }
+// One rung of the failure-propagation ladder (owner directive 2026-07-13): the
+// matched signature's declared cascade — how one failure caused the next — with
+// each rung either witnessed (evidence labels cited) or honestly unobserved.
+export interface CascadeStage { stage: string; root: boolean; witnessed: boolean; kinds: string[]; note: string; }
 export interface NextAction { badge: string; tone?: "red" | "green" | ""; text: string; }
 export interface DebugRow { signal: string; used: RcaPill; weight: string; reason: string; }
 
@@ -102,6 +106,9 @@ export interface RcaCase {
   timelineTicks: string[];
   timeline: TimelineLane[];
   hypotheses: HypothesisRow[];
+  // Failure-propagation ladder from the matched signature — omitted when the
+  // signature declares no cascade (most do not; render nothing, never invent).
+  cascade?: CascadeStage[];
   ticket: { callout: { tone: "confirmed" | "" | "red"; strong: string; text: string }; rows: KV[] };
   nextActions: NextAction[];
   assistant: { questions: string[]; sampleAnswer: string };
@@ -327,13 +334,27 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   let ruledOut: string[] = [];
   let whyNot: string[] = [];
   let contradicted = false;
+  let cascade: CascadeStage[] | undefined;
   try {
-    const top = JSON.parse(obj.hypotheses || "{}")?.ranking?.hypotheses?.[0];
+    const ranked = JSON.parse(obj.hypotheses || "{}")?.ranking?.hypotheses ?? [];
+    const top = ranked.find((h: any) => h.id === timeline.top_hypothesis) ?? ranked[0];
     if (top) {
       contradicted = !!top.contradicted;
       if (Array.isArray(top.contradictions)) ruledOut = top.contradictions.map((c: string) => kindLabel(c));
       const reasons: string[] = top?.verdict?.reasons ?? [];
       if (!confirmed && reasons.length) whyNot = reasons;
+      // Propagation ladder: carried verbatim from the signature (engine already
+      // marked witnessed/unobserved); only the raw kinds are humanized here —
+      // Operator View never shows schema tokens.
+      if (Array.isArray(top.causal_chain) && top.causal_chain.length) {
+        cascade = top.causal_chain.map((s: any) => ({
+          stage: String(s.stage ?? ""),
+          root: !!s.root,
+          witnessed: !!s.witnessed,
+          kinds: (Array.isArray(s.kinds) ? s.kinds : []).map((k: string) => kindLabel(k)),
+          note: String(s.note ?? ""),
+        }));
+      }
     }
   } catch { /* hypotheses absent/malformed → no ruled-out/why-not */ }
   const verdictState: VerdictState =
@@ -649,7 +670,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       { k: "Suggested ticket", v: confirmed ? "Open P2" : "Hold — policy threshold not met" },
     ],
     summary, why, impact, topology,
-    evidence, ladder, timelineTicks: ticks, timeline: timelineLanes, hypotheses,
+    evidence, ladder, timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
     ticket: {
       callout: confirmed ? { tone: "red", strong: "Open incident:", text: "Customer impact is confirmed." } : { tone: "", strong: "Not opened —", text: "impact not confirmed. Auto-ticketing holds until independent evidence confirms customer impact." },
       rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: owner || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],

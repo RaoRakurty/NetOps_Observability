@@ -163,6 +163,21 @@
 .rca-ws .rw-dot.gray { background: #98a2b3; }
 .rca-ws .rw-dot.purple { background: var(--rw-purple); }
 
+/* failure-propagation ladder (owner directive 2026-07-13) — token-based only */
+.rca-ws .rw-cascade { padding: 12px 12px 4px; }
+.rca-ws .rw-cascade-stage { display: flex; gap: 11px; }
+.rca-ws .rw-cascade-rail { display: flex; flex-direction: column; align-items: center; width: 14px; flex: 0 0 auto; }
+.rca-ws .rw-cascade-dot { width: 11px; height: 11px; border-radius: 50%; margin-top: 4px;
+  background: #fff; border: 2px solid #98a2b3; flex: 0 0 auto; }
+.rca-ws .rw-cascade-dot.orange { background: var(--rw-orange); border-color: var(--rw-orange); }
+.rca-ws .rw-cascade-dot.red { background: var(--rw-red); border-color: var(--rw-red); }
+.rca-ws .rw-cascade-line { width: 2px; flex: 1 1 auto; min-height: 14px; background: var(--rw-line); margin: 3px 0; }
+.rca-ws .rw-cascade-body { padding-bottom: 14px; min-width: 0; }
+.rca-ws .rw-cascade-stage:last-child .rw-cascade-body { padding-bottom: 4px; }
+.rca-ws .rw-cascade-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rca-ws .rw-cascade-label { font-weight: 700; color: var(--rw-muted); }
+.rca-ws .rw-cascade-stage.witnessed .rw-cascade-label { color: var(--rw-text); }
+
 /* cloud application & resources (#81 P3G 1c) — additive, token-based only */
 .rca-ws .rw-cloud { padding: 12px; }
 .rca-ws .rw-cloud-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }

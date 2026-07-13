@@ -121,6 +121,9 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # IPsec/IKE tunnel state from the enterprise VPN gateway (cloud_signal_from_event
     # kind=ipsec_tunnel_status; observer ipsec:<gw>, independent of the cloud API).
     "ipsec_tunnel_status",
+    # The gateway's off-tunnel reachability check to the peer's public address —
+    # the underlay-root witness (sig.ent.middle-mile.ipsec-underlay-down).
+    "ipsec_underlay_status",
     # synthetic application-experience lane (synthetic_normalize.py, from
     # collectors/synthetics.go via netops.probes) — external Digital-Experience,
     # NOT APM: an HTTP/TCP/ICMP synthetic outcome → a semantic app-experience kind.

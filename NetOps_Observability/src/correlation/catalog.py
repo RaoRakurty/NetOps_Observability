@@ -79,6 +79,37 @@ class Verdict(BaseModel):
     first_steps: tuple[str, ...] = Field(min_length=1, max_length=5)
 
 
+class CausalStage(BaseModel):
+    """One rung of a fault family's propagation ladder (owner directive
+    2026-07-13: the RCA must LIST how one failure causes the next — e.g.
+    link flap → underlay down → routing protocol down → IKE/IPsec down →
+    apps dark — not just name the root). The ladder is the family's KNOWN
+    propagation model, declared root→impact; at score time each stage is
+    marked witnessed (with the matching evidence kinds) or not. An
+    unwitnessed stage stays on the ladder with ``unobserved_note`` — the
+    chain never claims a stage happened without evidence.
+
+    ``stage`` is Operator-View copy: plain operator language, no product
+    branding, no schema/token jargon."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stage: str = Field(min_length=1)             # operator label, e.g. "IKE/IPsec tunnel"
+    witness: str = Field(min_length=1)           # kind alternation, Clause syntax
+    unobserved_note: str = ""                    # operator copy when no witness matched
+    root: bool = False                           # this rung is the template's root cause
+
+    @field_validator("witness")
+    @classmethod
+    def _witness_tokens_nonempty(cls, v: str) -> str:
+        if any(not t.strip() for t in v.split("|")):
+            raise ValueError(f"empty alternation token in witness {v!r}")
+        return v
+
+    def kinds(self) -> frozenset[str]:
+        return frozenset(t.strip() for t in self.witness.split("|"))
+
+
 class AppliesWhen(BaseModel):
     """Topology guard. Unknown topology context ⇒ the template still applies
     but is marked topology_unverified — skipping hypotheses because we lack a
@@ -136,6 +167,10 @@ class Template(BaseModel):
     # suspected even when the independence gate passes — confirmation needs
     # fiber-path validation or a human. Non-port templates keep True.
     allow_root_cause_confirmed: bool = True
+    # Propagation ladder (root→impact), owner directive 2026-07-13: templates
+    # whose fault family cascades across layers declare the ladder so the RCA
+    # can show HOW one failure causes the next. Optional — most templates omit.
+    causal_chain: tuple[CausalStage, ...] = ()
 
     @field_validator("requires")
     @classmethod
@@ -212,6 +247,36 @@ def load_catalog(raw: list[dict]) -> Catalog:
 # exercise the full machinery and SHOW the authoring shape; the practitioner
 # catalog replaces/extends them at P3 — same schema, hot-reloaded from PG.
 # ---------------------------------------------------------------------------
+
+# The IPsec fault family's propagation ladder (owner directive 2026-07-13):
+# a VPN outage cascades link → underlay → routing → tunnel → apps, and the RCA
+# must show that interconnection, marking each rung witnessed or not. Shared by
+# the tunnel-down and underlay-down templates — the ROOT rung differs, the
+# ladder does not. Stage labels + notes are Operator-View copy (plain language,
+# no product branding, no internals).
+_IPSEC_CASCADE: list[dict] = [
+    {"stage": "Gateway egress link",
+     "witness": "link_state_change|if_errors|if_metric_anomaly",
+     "unobserved_note": "No link signals seen on the gateway egress"},
+    {"stage": "Underlay path to the tunnel peer",
+     "witness": "ipsec_underlay_status",
+     "unobserved_note": "No underlay-path signals seen — the outer path is not implicated by any witness"},
+    {"stage": "Routing over the underlay (BGP)",
+     "witness": "bgp_peer_flap|bgp_state_anomaly|bgp_adjacency_change|route_count_drop",
+     "unobserved_note": "No routing-protocol signals seen on this path"},
+    {"stage": "IKE/IPsec tunnel",
+     "witness": "ipsec_tunnel_status|ipsec_negotiation_fail|ipsec_sa_rekey_fail",
+     "unobserved_note": "No tunnel-state signals seen"},
+    {"stage": "Applications behind the tunnel",
+     "witness": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|cloud_health|cloud_flow_log",
+     "unobserved_note": "No application-impact signals seen"},
+]
+
+
+def _cascade(root_stage: str) -> list[dict]:
+    """The family ladder with one rung marked as this template's root."""
+    return [{**s, "root": s["stage"] == root_stage} for s in _IPSEC_CASCADE]
+
 
 BUILTIN_TEMPLATES: list[dict] = [
     {
@@ -448,8 +513,15 @@ BUILTIN_TEMPLATES: list[dict] = [
             # down is scored as the competitor instead.
             {"absent": {"kind": "cloud_change|cloud_audit"},
              "else_prefer": "sig.ent.cloud.private-connectivity-down"},
+            # The gateway's own off-tunnel check to the peer's public address must
+            # NOT be reporting the outer path dead: if it IS, the root is the
+            # UNDERLAY (owner directive 2026-07-13) — the tunnel/IKE death is a
+            # downstream symptom and the middle-mile template wins ownership.
+            {"absent": {"kind": "ipsec_underlay_status"},
+             "else_prefer": "sig.ent.middle-mile.ipsec-underlay-down"},
         ],
         "direction_expect": "cloud-seam -> service",
+        "causal_chain": _cascade("IKE/IPsec tunnel"),
         "verdict": {
             "owner": "netops", "layer": "L3 (IPsec tunnel — IKE/ESP)",
             "first_steps": [
@@ -458,6 +530,50 @@ BUILTIN_TEMPLATES: list[dict] = [
                 "Check rekey/lifetime: a phase-2 lifetime or PFS mismatch drops the SA on the clock (periodic outage)",
                 "Confirm the charon/gateway process is running and the ESP SPIs match both ends (one-way SA)",
                 "If a redundant tunnel exists, confirm BGP/route failover moved traffic to it",
+            ],
+        },
+    },
+    {
+        # Owner directive 2026-07-13: when the OUTER path to the VPN peer is dead,
+        # the underlay is the root — the IPsec tunnel (and everything above it) is
+        # a downstream symptom, and a NOC chasing IKE config would be chasing the
+        # wrong layer. The root witness is the gateway's own off-tunnel
+        # reachability check to the peer's public address (kind=
+        # ipsec_underlay_status, rides the default route, not the tunnel).
+        "id": "sig.ent.middle-mile.ipsec-underlay-down",
+        "title": "Underlay path to the VPN peer down — tunnel and apps behind it are downstream symptoms",
+        "domain": "ent.middle-mile",
+        "requires": [
+            # the root: the gateway's off-tunnel check to the peer's public
+            # address fails — the transport UNDER the tunnel is dead.
+            {"kind": "ipsec_underlay_status", "entity_type": "cloud_resource"},
+            # the downstream symptom: the gateway reports the tunnel/IKE down.
+            {"kind": "ipsec_tunnel_status", "entity_type": "cloud_resource"},
+            # the impact: independent customer-path probes / app health dark.
+            {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|cloud_health"},
+            # optional corroboration: the flow lane sees the traffic vanish.
+            {"kind": "cloud_flow_log", "optional": True},
+        ],
+        # control_plane = the gateway's tunnel state; active_probe = the underlay
+        # check + the independent customer-path witness (different observers →
+        # the independence gate can confirm).
+        "required_modalities": ["control_plane", "active_probe"],
+        "discriminators": [
+            # A cloud config change in-window means a deliberate change, not an
+            # underlay death — same guard as the tunnel-down template.
+            {"absent": {"kind": "cloud_change|cloud_audit"},
+             "else_prefer": "sig.ent.cloud.private-connectivity-down"},
+        ],
+        "direction_expect": "underlay -> cloud-seam -> service",
+        "causal_chain": _cascade("Underlay path to the tunnel peer"),
+        "verdict": {
+            "owner": "isp", "layer": "L1-L3 (underlay / DIA path)",
+            "first_steps": [
+                "Check the gateway egress link and default route (local side first: link state, ARP to the next hop)",
+                "Trace toward the peer's public address from the gateway — find where the outer path dies",
+                "Check the peer side: is its public address reachable from a third vantage?",
+                "Open the provider ticket with timestamped unreachability from the gateway's own check",
+                "If a second underlay (LTE/other DIA) exists, fail the tunnel over to it",
             ],
         },
     },

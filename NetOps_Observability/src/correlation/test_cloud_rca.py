@@ -262,3 +262,103 @@ def test_ipsec_tunnel_status_is_control_plane_and_independent():
     assert tun.observer.trust_domain == "enterprise"
     # It must NOT collapse into the cloud-API observer namespace.
     assert not tun.observer.observer_id.startswith("cloud:")
+
+
+# ── Underlay root + causal cascade (owner directive 2026-07-13) ────────────────
+# "IPsec tunnel down means IPsec tunnel — underlay": when the gateway's own
+# off-tunnel check to the peer's public address is dead, the transport UNDER the
+# tunnel is the root — the tunnel/IKE death and the dark apps are downstream
+# symptoms, ownership goes to the underlay (isp), and the RCA lists HOW one
+# failure caused the next (link → underlay → routing → tunnel → apps).
+
+def _underlay_down():
+    # The gateway's off-tunnel reachability check to the peer's public address
+    # fails — same seam entity + tokens as the tunnel-state signal, but an
+    # ACTIVE measurement of the underlay.
+    return cloud_signal(
+        "acme", T0 + timedelta(seconds=5), "ipsec_underlay_status",
+        resource_id="sm-aws-vpn", region="us-west-2", gateway_id="lab-vpn-edge",
+        severity=Severity.CRIT, entity_tokens=("10.60.0.0/16", "store-api"),
+        attrs={"state": "down", "peer_outer": "100.21.102.86"},
+    )
+
+
+def _aws_seam():
+    return SeamView(
+        seam_id="sm-aws-vpn", tenant_id="acme", seam_type="VPN",
+        endpoints=(("app", "store-api"), ("remote", "10.60.0.0/16")),
+        visibility="partial", control_plane_owner="enterprise",
+    )
+
+
+def test_underlay_witness_is_active_probe_from_the_gateway_observer():
+    und = _underlay_down()
+    assert und.modality_class is ModalityClass.ACTIVE_PROBE
+    assert und.observer.observer_id == "ipsec:lab-vpn-edge"
+    assert und.observer.trust_domain == "enterprise"
+    assert not und.observer.observer_id.startswith("cloud:")
+
+
+def test_underlay_down_wins_ownership_and_contradicts_tunnel_down():
+    tun, probe = _ipsec_down_plus_probe()
+    und = _underlay_down()
+    snaps = run_window([tun, und, probe], builtin_catalog(), (_aws_seam(),))
+    objs = [s for s in snaps if s.nodes]
+    assert objs, "underlay-down + tunnel-down + probe must ground into an object"
+    ranking = objs[0].ranking
+    assert ranking.top_hypothesis == "sig.ent.middle-mile.ipsec-underlay-down", ranking.top_hypothesis
+    by_id = {h.template_id: h for h in ranking.hypotheses}
+    top = by_id["sig.ent.middle-mile.ipsec-underlay-down"]
+    assert top.owner == "isp"  # underlay root routes ownership OFF the IPsec config
+    # The IKE-flavored look-alike must be contradicted by the underlay witness
+    # and forced to point at the underlay template as its competitor.
+    tunnel = by_id.get("sig.ent.cloud.ipsec-tunnel-down")
+    assert tunnel is not None and tunnel.contradicted, "tunnel-down must be contradicted"
+    assert "sig.ent.middle-mile.ipsec-underlay-down" in tunnel.forced_competitors
+
+
+def test_raw_tunnel_death_without_underlay_witness_keeps_ipsec_tunnel_down():
+    # The C5 shape (peer daemon dead — underlay fine, so no underlay transitions):
+    # tunnel-down must stand UNcontradicted and the underlay template must be
+    # missing its root clause, never winning on tunnel+probe evidence alone.
+    tun, probe = _ipsec_down_plus_probe()
+    snaps = run_window([tun, probe], builtin_catalog(), (_aws_seam(),))
+    objs = [s for s in snaps if s.nodes]
+    assert objs
+    ranking = objs[0].ranking
+    assert ranking.top_hypothesis == "sig.ent.cloud.ipsec-tunnel-down", ranking.top_hypothesis
+    by_id = {h.template_id: h for h in ranking.hypotheses}
+    assert not by_id["sig.ent.cloud.ipsec-tunnel-down"].contradicted
+    underlay = by_id.get("sig.ent.middle-mile.ipsec-underlay-down")
+    if underlay is not None:
+        assert "ipsec_underlay_status" in underlay.missing
+
+
+def test_causal_chain_marks_witnessed_and_unobserved_rungs():
+    tun, probe = _ipsec_down_plus_probe()
+    und = _underlay_down()
+    snaps = run_window([tun, und, probe], builtin_catalog(), (_aws_seam(),))
+    objs = [s for s in snaps if s.nodes]
+    top = next(h for h in objs[0].ranking.hypotheses
+               if h.template_id == "sig.ent.middle-mile.ipsec-underlay-down")
+    chain = [dict(s) for s in top.causal_chain]
+    assert [s["stage"] for s in chain] == [
+        "Gateway egress link",
+        "Underlay path to the tunnel peer",
+        "Routing over the underlay (BGP)",
+        "IKE/IPsec tunnel",
+        "Applications behind the tunnel",
+    ]
+    by_stage = {s["stage"]: s for s in chain}
+    root = by_stage["Underlay path to the tunnel peer"]
+    assert root["root"] and root["witnessed"] and root["kinds"] == ["ipsec_underlay_status"]
+    assert by_stage["IKE/IPsec tunnel"]["witnessed"]
+    assert by_stage["Applications behind the tunnel"]["witnessed"]
+    # No BGP runs over this path and no link witness exists — the rungs stay on
+    # the ladder, honestly marked with their unobserved notes, never claimed.
+    for unseen in ("Gateway egress link", "Routing over the underlay (BGP)"):
+        assert not by_stage[unseen]["witnessed"]
+        assert by_stage[unseen]["note"], f"{unseen} must carry its unobserved note"
+    # exactly ONE root rung, and the serialized hypothesis carries the chain
+    assert sum(1 for s in chain if s["root"]) == 1
+    assert top.to_dict()["causal_chain"] == chain

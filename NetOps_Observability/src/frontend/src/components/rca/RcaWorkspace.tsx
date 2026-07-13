@@ -391,6 +391,38 @@ export default function RcaWorkspace({
             </div>
           </section>
 
+          {/* failure-propagation ladder (owner directive 2026-07-13): how one
+              failure caused the next; unwitnessed rungs stay visible but are
+              marked Not observed — the ladder never claims without evidence */}
+          {data.cascade && data.cascade.length > 0 && (
+            <>
+              <div className="rw-section-title">How the failure propagated</div>
+              <section className="rw-panel">
+                <div className="rw-cascade">
+                  {data.cascade.map((s, i) => (
+                    <div key={i} className={`rw-cascade-stage${s.witnessed ? " witnessed" : ""}`}>
+                      <div className="rw-cascade-rail">
+                        <span className={`rw-cascade-dot${s.witnessed ? (s.root ? " red" : " orange") : ""}`} />
+                        {i < (data.cascade?.length ?? 0) - 1 && <span className="rw-cascade-line" />}
+                      </div>
+                      <div className="rw-cascade-body">
+                        <div className="rw-cascade-head">
+                          <span className="rw-cascade-label">{s.stage}</span>
+                          {s.root && s.witnessed && <Pill p={{ tone: "red", text: "Likely origin" }} />}
+                          {!s.witnessed && <Pill p={{ tone: "gray", text: "Not observed" }} />}
+                        </div>
+                        <div className="rw-small">{s.witnessed ? s.kinds.join(" · ") : (s.note || "No signals seen")}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="rw-tdetail">
+                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the signals that saw it; a stage marked Not observed is part of the known propagation path but has no evidence in this window and is not claimed.
+                </div>
+              </section>
+            </>
+          )}
+
           {/* hypotheses + ticket */}
           <section className="rw-grid" style={{ marginTop: 12 }}>
             <div className="rw-panel">

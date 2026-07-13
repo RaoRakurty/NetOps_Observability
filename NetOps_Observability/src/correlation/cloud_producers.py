@@ -57,6 +57,12 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     # verdict instead of the cloud-only "suspected" ceiling. Entity is the seam
     # (the tunnel), tokens carry the CIDRs/apps behind it.
     "ipsec_tunnel_status":    (ModalityClass.CONTROL_PLANE,    ObserverType.CONTROLLER, EntityType.CLOUD_RESOURCE),
+    # The gateway's own OFF-TUNNEL reachability check to the peer's public
+    # address (rides the default route, not the tunnel). When this is down the
+    # transport UNDER the tunnel is dead — the root of the ipsec-underlay-down
+    # signature (owner directive 2026-07-13). ACTIVE_PROBE (it is a measurement,
+    # not a state report), same independent ipsec:<gw> observer as tunnel state.
+    "ipsec_underlay_status":  (ModalityClass.ACTIVE_PROBE,     ObserverType.CONTROLLER, EntityType.CLOUD_RESOURCE),
 }
 
 
@@ -143,7 +149,7 @@ def cloud_signal(
 
     observer = (
         ipsec_gateway_observer(gateway_id or entity_id, region)
-        if kind == "ipsec_tunnel_status"
+        if kind in ("ipsec_tunnel_status", "ipsec_underlay_status")
         else cloud_observer(account, region, obs_type)
     )
     return Signal(

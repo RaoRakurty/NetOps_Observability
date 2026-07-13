@@ -75,6 +75,9 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # IPsec/IKE tunnel state from the enterprise VPN gateway — control plane, but
     # an observer independent of the cloud API (ipsec:<gw>), so it corroborates.
     "ipsec_tunnel_status": ModalityClass.CONTROL_PLANE,
+    # The gateway's off-tunnel check to the peer's public address — an active
+    # measurement of the underlay (rides the default route, not the tunnel).
+    "ipsec_underlay_status": ModalityClass.ACTIVE_PROBE,
     # device-telemetry lane (metric episodes; cloud health)
     "if_metric_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "bgp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,

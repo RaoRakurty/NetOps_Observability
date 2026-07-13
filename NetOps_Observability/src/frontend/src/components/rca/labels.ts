@@ -124,6 +124,7 @@ const SIG_NOC_TITLE: Record<string, string> = {
   "sig.ent.app.dns-failover-wrong-target": "DNS failover to a wrong target",
   // ── Cloud private-path lane ──
   "sig.ent.cloud.ipsec-tunnel-down": "IPsec tunnel down — cloud private path",
+  "sig.ent.middle-mile.ipsec-underlay-down": "Underlay path to VPN peer down",
   "sig.ent.cloud.app-dependency-down": "Cloud application dependency down",
   "sig.ent.cloud.private-connectivity-down": "Cloud private connectivity down",
   "sig.ent.cloud.route-table-blackhole": "Cloud route-table blackhole",
@@ -257,6 +258,8 @@ const KIND_NOC: Record<string, string> = {
   cloud_flow_log: "Cloud flow-log change", cloud_lb_log: "Load-balancer error rate",
   cloud_change: "Cloud configuration change", cloud_audit: "Cloud audit event",
   security_policy_change: "Security policy change",
+  ipsec_tunnel_status: "IPsec/IKE tunnel state",
+  ipsec_underlay_status: "Underlay path check (gateway to peer)",
 };
 // "probe_latency_departure" → "Response-time change"; trims a trailing _clear.
 export function kindLabel(kind: string): string {

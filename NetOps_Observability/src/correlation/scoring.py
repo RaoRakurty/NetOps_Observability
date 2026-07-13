@@ -89,6 +89,11 @@ class HypothesisScore:
     manager_phrase: str = ""
     blast_radius: str = ""
     false_positives: tuple[str, ...] = ()
+    # Propagation ladder (owner directive 2026-07-13): the template's declared
+    # cascade with each rung marked witnessed (evidence kinds cited) or not
+    # (honest unobserved note). Rendered by the UI as "how one failure caused
+    # the next"; empty for templates that declare no chain.
+    causal_chain: tuple[dict, ...] = ()
 
     def confidence_label(self) -> str:
         """The lexical confidence label of the owner's taxonomy (voice contract):
@@ -122,6 +127,7 @@ class HypothesisScore:
             "manager_phrase": self.manager_phrase,
             "blast_radius": self.blast_radius,
             "false_positives": list(self.false_positives),
+            "causal_chain": [dict(s) for s in self.causal_chain],
             "verdict": {
                 "owner": self.owner,
                 "first_steps": list(self.first_steps),
@@ -174,6 +180,22 @@ def score_template(
             contradictions.append(disc.absent.kind)
             forced.append(disc.else_prefer)
 
+    # Propagation ladder: mark each declared rung witnessed/unobserved from the
+    # SAME evidence pool (and the same probe-authority filter) the clauses use.
+    # Purely descriptive — never feeds coverage or confidence: the ladder shows
+    # how the failure propagated, it must not double-count evidence.
+    causal_chain = tuple(
+        {
+            "stage": st.stage,
+            "root": st.root,
+            "witnessed": bool(hits),
+            "kinds": sorted({s.kind for s in hits}),
+            "note": "" if hits else st.unobserved_note,
+        }
+        for st in template.causal_chain
+        for hits in (_satisfying(Clause(kind=st.witness), evidence),)
+    )
+
     confidence = coverage * graph_support * direction_agreement
     if contradictions:
         confidence *= CONTRADICTION_PENALTY
@@ -215,6 +237,7 @@ def score_template(
         manager_phrase=template.manager_phrase,
         blast_radius=template.blast_radius,
         false_positives=tuple(template.false_positives),
+        causal_chain=causal_chain,
     )
 
 
