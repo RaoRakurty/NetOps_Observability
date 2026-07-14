@@ -118,10 +118,18 @@ activity-log) · identity+operator language `cdfa2e5` · discovery `9d1cca2` · 
 lies 0, live health map consumed, Ingestion "Coming soon"/"Not configured" split). All live-verified
 rendering 2026-07-14 (screenshots; fresh WU drill → CONFIRMED underlay case on screen). RCA report
 doc causality/cascade/title verified closed same night (real PDF via gotenberg).
+**Wave 3 #9 SHIPPED `733f6f4` (2026-07-14):** console deep-links — cloud_ref no longer dropped;
+server-built AWS console/CloudTrail + Azure portal/#resource links (cloud_console.go, charset-gated,
+inventory-resolved: ARM-alias case-folded keys, provider/region backfill for flow-log signals →
+evidence link coverage 6/210 → 200/210); frontend safeConsoleUrl zero-trust gate + shared ConsoleLink;
+pivots live on Evidence, Change Events, Resources (tables + drawers). Watched rendered.
 **Remaining (Wave 3/4):** provider-facet the per-account ingestion matrix (P0-7 — matrix chips are
-account-blind while the strip is truthful); `cloud_ref` console deep-links; terminology sweep + 5-tab
+account-blind while the strip is truthful); terminology sweep + 5-tab
 IA; counter tail (evidence count=LIMIT, Observers=planes, crossPlane info-free, worstHealth rank bugs);
 ALB target health, ACCEPT flows, IAM policy commit, VNet flow logs; multi-cloud app row.
+**NEW (owner 2026-07-14):** official provider icons (AWS Architecture Icons + Azure architecture
+icon set) in the RCA causality path graph + topology — licensing verified OK for diagrams, vendored
+SVGs; use official packages, NOT aws-icons.com.
 **👤 Owner:** start the 3 stopped cloud hosts (agent-blocked by classifier) · `az provider register
 --namespace Microsoft.ResourceHealth` · service-principal for Azure prod shape.
 
