@@ -67,6 +67,11 @@ def discover_aws(ec2) -> tuple[dict, dict]:
                 "resource_arn_or_uri": f"arn:aws:ec2:{REGION}:{account}:instance/{iid}",
                 "resource_type": "ec2:instance",
                 "resource_name": tags.get("Name", iid),
+                # Lifecycle truth: a STOPPED instance is not a broken one. Without
+                # this the product cannot tell "you turned it off" from "it died"
+                # (audit 2026-07-13, P1-2) — and 2 of 3 lab hosts are stopped.
+                "power_state": (inst.get("State") or {}).get("Name", ""),
+                "instance_type": inst.get("InstanceType", ""),
                 "private_ips": [ip for ip in [inst.get("PrivateIpAddress")] if ip],
                 "public_ips": [ip for ip in [inst.get("PublicIpAddress")] if ip],
                 "network_interface_ids": [n["NetworkInterfaceId"] for n in inst.get("NetworkInterfaces", [])],

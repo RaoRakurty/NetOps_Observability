@@ -58,7 +58,11 @@ type Source string
 
 const (
 	SrcCloudTag        Source = "cloud_tag"        // operator tag on the resource — authoritative
-	SrcCloudGraph      Source = "cloud_graph"      // resource-graph name (ASG/ECS/Lambda/etc) — strong
+	SrcCloudGraph      Source = "cloud_graph"      // STRUCTURAL relation (ALB→target group→instance, ASG→instance) — strong
+	// SrcSuspectedName: the resource's own name was used as a stand-in for an
+	// application. That is a GUESS, not attribution — the resource stays in the
+	// unknown bucket so the operator is prompted to tag it (audit 2026-07-13).
+	SrcSuspectedName   Source = "suspected_name"
 	SrcOperatorCatalog Source = "operator_catalog" // operator-declared override — authoritative
 	SrcFirewallAppID   Source = "firewall_appid"   // firewall on-box DPI — strong
 	SrcDomain          Source = "domain"           // DNS/SNI domain match — suspected
@@ -73,7 +77,7 @@ func (s Source) DefaultConfidence() Confidence {
 		return Confirmed
 	case SrcCloudGraph, SrcFirewallAppID:
 		return Strong
-	case SrcDomain:
+	case SrcDomain, SrcSuspectedName:
 		return Suspected
 	case SrcIPCatalog:
 		return Weak

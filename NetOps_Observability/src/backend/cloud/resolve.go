@@ -9,7 +9,16 @@ import (
 // Tag-key conventions (case-insensitive), in precedence order. Operators tag for
 // cost/governance already, so these are the common keys we read.
 var (
-	appTagKeys   = []string{"app", "application", "app_name", "app-name", "service", "workload"}
+	// app_id / component are common in the wild (and are exactly what this lab's
+	// own account uses) — omitting them made every tagged resource look untagged.
+	// TODO(connectors): make this list operator-configurable per connector;
+	// hardcoding key names guarantees we are wrong at the first customer.
+	appTagKeys   = []string{
+		"app", "application", "app_id", "app-id", "appid",
+		"app_name", "app-name", "service", "workload", "component",
+		// AWS's own first-party application tag (Service Catalog AppRegistry).
+		"awsapplication",
+	}
 	ownerTagKeys = []string{"owner", "team", "owner_team", "managed_by"}
 	envTagKeys   = []string{"env", "environment", "stage", "tier"}
 )
@@ -46,12 +55,20 @@ func AttributeResource(r *CloudResource) {
 		r.Confidence = Confirmed
 		return
 	}
-	// No app tag — fall back to the resource-graph name (ASG/ECS service/Lambda/etc).
+	// No app tag. A resource's own NAME is not an application identity — copying
+	// it and calling the result "strong resource-graph attribution" made the
+	// coverage funnel report ~100% on an account with 0% real attribution, which
+	// is precisely the lie the funnel exists to expose (audit 2026-07-13, P0-1).
+	//
+	// Real resource-graph attribution means STRUCTURE (ALB → target group →
+	// instances; ASG → instances; ECS service → tasks) — a relationship, not a
+	// string copy. Until that exists, a name-only guess is SUSPECTED at best, and
+	// the resource stays in the unknown bucket so the operator is told to tag it.
 	if r.ResourceName != "" {
 		r.AppName = r.ResourceName
-		r.AppID = appIDFromName(r.ResourceName)
-		r.Source = SrcCloudGraph
-		r.Confidence = Strong
+		r.AppID = ""      // NOT an app identity — keeps it counted as unattributed
+		r.Source = SrcSuspectedName
+		r.Confidence = Suspected
 		return
 	}
 	r.AppID = ""

@@ -35,7 +35,13 @@ CW_METRICS = {
     "CPUUtilization": ("cloud_cpu_util", "percent", "Average"),
     "NetworkIn": ("cloud_net_in_bytes", "bytes", "Sum"),
     "NetworkOut": ("cloud_net_out_bytes", "bytes", "Sum"),
+    # Composite AND its parts. The composite says "something broke"; the parts
+    # say WHOSE fault it is — _System = AWS's (host/hypervisor/network),
+    # _Instance = the customer's (OS/kernel/resource exhaustion). That blame
+    # boundary is the whole reason a NOC opens the console (audit P1-1).
     "StatusCheckFailed": ("cloud_status_check_failed", "count", "Maximum"),
+    "StatusCheckFailed_System": ("cloud_status_check_failed_system", "count", "Maximum"),
+    "StatusCheckFailed_Instance": ("cloud_status_check_failed_instance", "count", "Maximum"),
 }
 
 
@@ -56,13 +62,24 @@ def poll(cw, instances: list[dict], provider: str = "aws") -> int:
     """
     if not instances:
         return 0
-    end = dt.datetime.now(dt.timezone.utc)
-    start = end - dt.timedelta(seconds=PERIOD_S * 2)
+    # NEVER read the in-flight bucket. CloudWatch's newest period is still
+    # filling; for Sum statistics (NetworkIn/Out) that returns a FRACTION of the
+    # true value — which, fed to the CUSUM detector, manufactures false
+    # "traffic collapsed" evidence on healthy instances, on a schedule
+    # (audit 2026-07-13, P0-2). End the window one full period in the past.
+    now = dt.datetime.now(dt.timezone.utc)
+    end = now - dt.timedelta(seconds=PERIOD_S)
+    start = end - dt.timedelta(seconds=PERIOD_S * 3)
 
     queries, meta = [], {}
     for i, inst in enumerate(instances):
         rid = inst.get("resource_id") or ""
         if not rid.startswith("i-"):
+            continue
+        # A stopped instance publishes no CloudWatch data. Polling it wastes
+        # queries and — worse — makes "stopped" indistinguishable from "broken".
+        # The lifecycle state carries that truth instead (audit P1-2).
+        if str(inst.get("power_state") or "").lower() not in ("", "running"):
             continue
         for j, (cw_name, (_canon, _unit, stat)) in enumerate(CW_METRICS.items()):
             qid = f"q{i}_{j}"

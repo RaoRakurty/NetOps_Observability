@@ -18,11 +18,28 @@ func TestAttributeResource_TagConfirmed(t *testing.T) {
 	}
 }
 
-func TestAttributeResource_GraphStrong(t *testing.T) {
+// A resource's own NAME is a GUESS at an application, never attribution. It must
+// stay unattributed (AppID empty) so the coverage funnel counts it as a gap and
+// the operator is prompted to tag it — the old "name → Strong resource-graph"
+// path made the funnel report ~100% coverage on a 0%-attributed account
+// (audit 2026-07-13, P0-1).
+func TestAttributeResource_NameOnlyIsSuspectedNotAttributed(t *testing.T) {
 	r := CloudResource{ResourceName: "legacy-reports-worker", ResourceType: "AWS::EC2::Instance"}
 	AttributeResource(&r)
-	if r.Source != SrcCloudGraph || r.Confidence != Strong || r.AppID != "legacy-reports-worker" {
-		t.Fatalf("graph name should be strong, got %+v", r)
+	if r.Source != SrcSuspectedName || r.Confidence != Suspected {
+		t.Fatalf("name-only must be SUSPECTED, got %+v", r)
+	}
+	if r.AppID != "" {
+		t.Fatalf("name-only must NOT claim an app identity, got app_id=%q", r.AppID)
+	}
+}
+
+// The tag the lab's own account actually uses must be read (it was omitted).
+func TestAttributeResource_AppIDTagIsConfirmed(t *testing.T) {
+	r := CloudResource{ResourceName: "host-1", Tags: map[string]string{"app_id": "checkout"}}
+	AttributeResource(&r)
+	if r.Source != SrcCloudTag || r.Confidence != Confirmed || r.AppID != "checkout" {
+		t.Fatalf("app_id tag must be authoritative, got %+v", r)
 	}
 }
 
@@ -101,14 +118,15 @@ func TestFixtureProvider_AWSBillingBehindALBECSRDS(t *testing.T) {
 		switch {
 		case r.AppID == "billing" && r.Confidence == Confirmed:
 			billing++ // ALB + ECS + RDS, all tagged app=billing
-		case r.Source == SrcCloudGraph && r.Confidence == Strong:
-			strong++ // legacy-reports-worker
+		case r.Source == SrcSuspectedName && r.Confidence == Suspected:
+			strong++ // legacy-reports-worker — a NAME guess, not attribution
 		case r.Confidence == Unknown:
 			unknown++ // untagged EC2
 		}
 	}
+	// The name-only resource is SUSPECTED (a guess), never Strong.
 	if billing != 3 || strong != 1 || unknown != 1 {
-		t.Fatalf("attribution mix wrong: billing=%d strong=%d unknown=%d", billing, strong, unknown)
+		t.Fatalf("attribution mix wrong: billing=%d suspected-name=%d unknown=%d", billing, strong, unknown)
 	}
 
 	// the ALB's two private IPs resolve to billing via the identity map

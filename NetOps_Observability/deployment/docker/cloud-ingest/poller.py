@@ -32,6 +32,27 @@ DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
 # free basic resolution is 5 min, so polling faster only re-reads the same point.
 METRICS_EVERY_S = int(os.environ.get("CW_METRICS_EVERY_S", "300"))
 STATE_PATH = os.path.join(OUT_DIR, ".poller-state.json")
+# The flow-log sink is APPENDED to forever today. At real flow volume that fills
+# the disk and takes the poller (and the correlation tailer) down with it
+# (audit 2026-07-13, P0-4). Roll it when it crosses the cap; the tailer reads
+# from the head, so a roll is safe and bounded.
+FLOW_FILE_MAX_MB = int(os.environ.get("FLOW_FILE_MAX_MB", "256"))
+
+
+def _roll_if_large(path: str) -> None:
+    try:
+        if os.path.getsize(path) < FLOW_FILE_MAX_MB * 1024 * 1024:
+            return
+    except OSError:
+        return
+    prev = path + ".1"
+    try:
+        if os.path.exists(prev):
+            os.remove(prev)
+        os.replace(path, prev)
+        jlog("flow log rolled", path=path, cap_mb=FLOW_FILE_MAX_MB)
+    except OSError as exc:
+        jlog("flow log roll failed", error=str(exc)[:120])
 
 # Interesting = network/security/compute mutations (cloud_change evidence).
 TRAIL_PREFIXES = ("Modify", "Create", "Delete", "Revoke", "Authorize", "Stop",
@@ -73,6 +94,7 @@ def poll_flow_logs(logs, st: dict) -> None:
             resp = logs.filter_log_events(**kwargs)
             events = resp.get("events", [])
             if events:
+                _roll_if_large(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"))
                 with open(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"), "a") as f:
                     for e in events:
                         f.write(e["message"].rstrip("\n") + "\n")
@@ -107,6 +129,7 @@ def poll_flow_logs_s3(s3, st: dict) -> None:
             continue
         body = s3.get_object(Bucket=FLOW_S3_BUCKET, Key=key)["Body"].read()
         text = gzip.decompress(body).decode()
+        _roll_if_large(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"))
         with open(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"), "a") as f:
             for line in text.splitlines():
                 if line.startswith("version ") or not line.strip():
@@ -126,8 +149,26 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
     start_dt = datetime.datetime.fromtimestamp(start + 0.001, datetime.timezone.utc)
     newest = start
     sent = 0
-    resp = ct.lookup_events(StartTime=start_dt, MaxResults=50)
-    for e in resp.get("Events", []):
+    # Paginate to EXHAUSTION before advancing the checkpoint. lookup_events
+    # returns newest-first; reading only the first 50 and then moving trail_ts
+    # past the rest silently DROPS every older event in the window — precisely
+    # during a deploy or Terraform apply, i.e. exactly when the change that
+    # caused the incident is in that window (audit 2026-07-13, P0-3).
+    events = []
+    token = None
+    for _ in range(20):  # bounded: 20 pages x 50 = 1000 events/cycle ceiling
+        kw = {"StartTime": start_dt, "MaxResults": 50}
+        if token:
+            kw["NextToken"] = token
+        resp = ct.lookup_events(**kw)
+        events.extend(resp.get("Events", []))
+        token = resp.get("NextToken")
+        if not token:
+            break
+    else:
+        jlog("cloudtrail page ceiling hit — window truncated", pages=20)
+
+    for e in events:
         name = e.get("EventName", "")
         if not name.startswith(TRAIL_PREFIXES) or name in TRAIL_EXCLUDE:
             continue
