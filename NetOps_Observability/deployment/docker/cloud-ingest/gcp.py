@@ -48,7 +48,9 @@ GCP_METRICS = [
 ]
 
 # audit-log methods that are telemetry chatter, never a change a NOC acts on.
-CHANGE_EXCLUDE_SUBSTR = ("setIamPolicy.get", "compute.instances.list", ".get",)
+# SUFFIX match — a bare ".get" substring also killed legitimate method names
+# that merely contain it (telemetry-audit finding, 2026-07-14).
+CHANGE_EXCLUDE_SUFFIXES = (".get", ".list", ".aggregatedList", ".getIamPolicy")
 
 
 def configured() -> bool:
@@ -206,13 +208,29 @@ def poll_metrics(tok: str, instances: list[dict]) -> int:
     return len(events)
 
 
-def poll_audit_log(tok: str, producer, tenant: str, since: str) -> tuple[int, str]:
+def _overlap_since(since: str, seconds: int = 120) -> str:
+    """Cursor minus a trailing overlap window. Cloud Logging entries can arrive
+    LATE (receiveTimestamp > timestamp); a bare newest-timestamp cursor silently
+    drops them forever — the same checkpoint bug class CloudTrail P0-3 fixed.
+    The overlap re-reads the tail; insertId dedup keeps re-reads idempotent."""
+    try:
+        t = dt.datetime.fromisoformat(since.replace("Z", "+00:00"))
+        return (t - dt.timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+    except ValueError:
+        return since
+
+
+def poll_audit_log(tok: str, producer, tenant: str, since: str,
+                   seen_ids: list | None = None) -> tuple[int, str, list]:
     """Admin-activity audit log → cloud_change (the CloudTrail/Activity Log
-    equivalent). Checkpointed on the newest timestamp seen."""
+    equivalent). Checkpointed on the newest timestamp seen, with a trailing
+    overlap + insertId dedup so late-arriving entries are neither dropped nor
+    double-emitted. `seen_ids` is the caller-persisted dedup window."""
+    seen = set(seen_ids or [])
     body = json.dumps({
         "resourceNames": [f"projects/{PROJECT}"],
         "filter": (f'logName="projects/{PROJECT}/logs/cloudaudit.googleapis.com%2Factivity" '
-                   f'AND timestamp>"{since}"'),
+                   f'AND timestamp>"{_overlap_since(since)}"'),
         "orderBy": "timestamp asc",
         "pageSize": 200,
     }).encode()
@@ -222,10 +240,16 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str) -> tuple[int, st
     with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
         res = json.loads(resp.read().decode())
     n, newest = 0, since
+    new_seen: list = []
     for e in res.get("entries") or []:
+        insert_id = str(e.get("insertId", ""))
+        if insert_id:
+            new_seen.append(insert_id)
+            if insert_id in seen:
+                continue  # overlap re-read: already emitted
         proto = e.get("protoPayload", {}) or {}
         method = str(proto.get("methodName", ""))
-        if not method or any(x in method for x in CHANGE_EXCLUDE_SUBSTR):
+        if not method or method.endswith(CHANGE_EXCLUDE_SUFFIXES):
             continue
         ts = str(e.get("timestamp", ""))
         newest = max(newest, ts)
@@ -247,4 +271,5 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str) -> tuple[int, st
             },
         })
         n += 1
-    return n, newest
+    # trim the dedup window to the entries the next overlap can re-read
+    return n, newest, new_seen[-500:]

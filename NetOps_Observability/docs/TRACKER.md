@@ -122,6 +122,17 @@ capability=available, `gcp.py` (inventory/metrics/audit lanes mirroring azure.py
 in poller container), compose env + GCP CREDENTIALS roles. 573 correlation+parser tests green.
 **Owner-gated:** GCP project + SA key + lab VMs; AWS fidelity Terraform apply (~$2–3/drill day);
 Azure VNet flow-log enablement.
+**Telemetry audit 2026-07-14 (3 web-verified agents):** full surface catalog =
+`docs/design/cloud-telemetry-catalog.md` (canonical; per-provider top-10s). Headline: hybrid-seam
+gateway plane (DX/ER/VPN-GW BGP, TGW/Router drops, NAT exhaustion) drawn-not-measured on ALL
+providers = top gap, mostly FREE metrics. Key corrections: AWS Health events are FREE via
+EventBridge (prior n/a wrong); VPC flow logs at v11 (traffic-path/tcp-flags/next-hop; parser ready,
+config missing); GCP flow logs have NO reject field (REJECT lane = Firewall Rules Logging);
+GCP provider-verdict = synthesize status+system_event (uptime metric disqualified); Azure metric
+dims are poll-only (BgpPeerStatus) → $filter support is the keystone. **Cost-tier policy (owner):
+FREE lanes always-on; metered reads = customer toggle (AWS_METERED_METRICS/GCP_METERED_METRICS,
+shipped in poller); Edge Cloud Collector ON HOLD.** gcp.py audit-poller overlap+insertId dedup +
+suffix-exclude bugs fixed same-day.
 **Also queued:** stale "DEMO TENANT · SYNTHETIC SIGNALS" badge (fixtures are live poller data now —
 stamp collection mode, surface via API).
 

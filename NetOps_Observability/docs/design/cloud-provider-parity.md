@@ -13,13 +13,21 @@ Legend: ✅ live-validated · 🔧 built, awaiting live validation (owner-gated
 infra/creds) · 🕳 not built · n/a provider has no equivalent (documented, not
 skipped silently).
 
+**2026-07-14 telemetry audit:** the full per-provider surface + ranked gaps now
+live in `cloud-telemetry-catalog.md` (three web-verified audits). Its headline:
+the **hybrid-seam gateway plane** (DX/ER/VPN-GW BGP state, TGW/Router drops,
+NAT exhaustion) is drawn in our topology but not measured on ANY provider —
+rows added below. Corrections from the audit are folded in.
+
 | Capability | AWS | Azure | GCP |
 |---|---|---|---|
-| Inventory (live poller-written fixture, stable ids, power_state) | ✅ `discover.py` | ✅ `azure.write_inventory` | 🔧 `gcp.write_inventory` |
+| Inventory (live poller-written fixture, stable ids, power_state) | ✅ `discover.py` | ✅ `azure.write_inventory` | 🔧 `gcp.write_inventory` (instances only — seam devices queued) |
 | Canonical metrics (cpu/net in/out) | ✅ CloudWatch | ✅ Azure Monitor | 🔧 Cloud Monitoring |
-| Provider health verdict (status checks) | ✅ StatusCheckFailed (+System/Instance split) | ✅ VmAvailabilityMetric (inverted) | n/a — no equivalent platform metric; uptime-liveness refinement queued |
+| Provider health verdict (status checks) | ✅ StatusCheckFailed (+System/Instance; `_AttachedEBS` queued) | ✅ VmAvailabilityMetric (inverted; `Context` dim queued) | 🕳 SYNTHESIZED: control-plane status + system_event `hostError` (uptime metric disqualified by Google; REPAIRING→degraded) |
+| **Hybrid-seam gateway metrics (BGP state, tunnel state, drops, NAT exhaustion)** | 🕳 AWS/DX + AWS/VPN + AWS/TransitGateway + AWS/NATGateway (TOP GAP) | 🕳 ER `BgpAvailability`/`ArpAvailability` + VPN-GW `BgpPeerStatus` (poll-only!) + NAT SNAT (TOP GAP; needs `$filter` dims) | 🕳 Cloud Router `getRouterStatus` per-peer + VPN/Interconnect (incl light levels) + NAT (TOP GAP) |
+| **Provider incident/maintenance events** | 🕳 `aws.health` via EventBridge — **FREE, prior "needs paid API" claim was WRONG** | 🕳 Service Health events API (free) | 🕳 Personalized Service Health (free — build) |
 | Burstable credit visibility | ✅ CPUCreditBalance | n/a (B-series credits metric: queued check) | n/a (no burstable credit metric) |
-| Resource health lane | n/a (needs paid Health API) | ✅ Resource Health | 🕳 (Personalized Service Health — evaluate) |
+| Resource health lane | 🕳 (= the Health events row above) | ✅ Resource Health | 🕳 system_event lane (S) |
 | Change/audit lane | ✅ CloudTrail (paginated, filtered) | ✅ Activity Log | 🔧 Audit Logs (`poll_audit_log`) |
 | Flow logs → REJECT faults | ✅ VPC flow logs (S3+CW lanes) | 🕳 **VNet flow logs** (queued next after GCP) | 🕳 VPC Flow Logs (via Logging sink) |
 | Flow logs → ACCEPT volume rollup | ✅ `vpc_accept_rollup` | 🕳 (with VNet flow logs) | 🕳 |

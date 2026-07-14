@@ -36,6 +36,15 @@ OUT_DIR = os.environ.get("CLOUD_LOGS_OUT", "/out")
 BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
 ACCOUNT = os.environ.get("CLOUD_ACCOUNT", "945714973156")
+# Cost-tier policy (owner direction 2026-07-14): lanes that are FREE or
+# near-free (inventory describes, audit/change events, health events, S3/
+# storage-delivered logs) always run. Lanes whose READS the provider METERS
+# are an explicit customer choice: AWS GetMetricData ($0.01/1k values) and
+# GCP Monitoring reads ($0.50/M series past the free tier). Azure metric
+# reads are not billed — no toggle needed. Off = the matrix shows the lane
+# honestly disabled, never silently missing.
+AWS_METERED_METRICS = os.environ.get("AWS_METERED_METRICS", "on").lower() != "off"
+GCP_METERED_METRICS = os.environ.get("GCP_METERED_METRICS", "on").lower() != "off"
 POLL_S = int(os.environ.get("POLL_S", "60"))
 DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
 # CloudWatch metric lane (Service View counters + CUSUM evidence). CloudWatch's
@@ -289,7 +298,7 @@ def main():
 
             # CloudWatch → canonical metric lane: live values for the Service View
             # counters AND anomaly evidence via the correlation CUSUM detector.
-            if inventory and time.time() - last_metrics >= METRICS_EVERY_S:
+            if AWS_METERED_METRICS and inventory and time.time() - last_metrics >= METRICS_EVERY_S:
                 n = cloudmetrics.poll(cw, inventory)
                 last_metrics = time.time()
                 jlog("cloud metrics", events=n, instances=len(inventory))
@@ -314,16 +323,18 @@ def main():
                     ninv = gcp.write_inventory(gtok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
                     last_gcp_inventory = now
                     jlog("gcp inventory", resources=ninv)
-                if now - last_gcp_metrics >= METRICS_EVERY_S:
+                if GCP_METERED_METRICS and now - last_gcp_metrics >= METRICS_EVERY_S:
                     g_insts = gcp.list_instances(gtok)
                     n = gcp.poll_metrics(gtok, g_insts)
                     last_gcp_metrics = now
                     jlog("gcp metrics", events=n, instances=len(g_insts),
                          running=sum(1 for i in g_insts if i.get("power_state") == "running"))
                 since = st.get("gcp_audit_ts") or _iso_minutes_ago(15)
-                nc, newest = gcp.poll_audit_log(gtok, producer, TENANT, since)
-                if newest != since:
+                nc, newest, seen = gcp.poll_audit_log(
+                    gtok, producer, TENANT, since, st.get("gcp_audit_seen") or [])
+                if newest != since or seen != (st.get("gcp_audit_seen") or []):
                     st["gcp_audit_ts"] = newest
+                    st["gcp_audit_seen"] = seen
                     save_state(st)
                 if nc:
                     jlog("gcp control plane", changes=nc)
