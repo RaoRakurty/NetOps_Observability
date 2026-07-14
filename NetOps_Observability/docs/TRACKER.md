@@ -127,9 +127,13 @@ pivots live on Evidence, Change Events, Resources (tables + drawers). Watched re
 account-blind while the strip is truthful); terminology sweep + 5-tab
 IA; counter tail (evidence count=LIMIT, Observers=planes, crossPlane info-free, worstHealth rank bugs);
 ALB target health, ACCEPT flows, IAM policy commit, VNet flow logs; multi-cloud app row.
-**NEW (owner 2026-07-14):** official provider icons (AWS Architecture Icons + Azure architecture
-icon set) in the RCA causality path graph + topology — licensing verified OK for diagrams, vendored
-SVGs; use official packages, NOT aws-icons.com.
+**Official provider icons SHIPPED `eb64fc5` (2026-07-14):** OFFICIAL marks (AWS Icon-package_04302026
+AWS-Cloud-logo + Azure Public Service Icons V24 Azure-A — official packages, NOT aws-icons.com;
+terms documented in asset READMEs) vendored to `src/backend/cloudicons/` (go:embed → report pathGraph
+data-URI `<image>` + provider name, text fallback, BREAK label keeps priority) and
+`src/frontend/src/assets/cloud/` (ShapeSVG official mark replaces aws/azure monograms; Azure
+composited on white tile; gcp keeps monogram). Watched rendered on BOTH surfaces both providers
+(report SVG + workspace canvas cloud-edge diamonds). Keep both asset copies in sync.
 **👤 Owner:** start the 3 stopped cloud hosts (agent-blocked by classifier) · `az provider register
 --namespace Microsoft.ResourceHealth` · service-principal for Azure prod shape.
 
