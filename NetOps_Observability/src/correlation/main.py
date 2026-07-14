@@ -48,7 +48,10 @@ from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
 from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
-from cloud_log_parsers import cloud_log_event, parse_vpc_flow_log, vpc_accept_rollup, vpc_flow_signal
+from cloud_log_parsers import (
+    cloud_log_event, dns_error_rollup, parse_aws_waf_log, parse_r53_dns_log,
+    parse_vpc_flow_log, vpc_accept_rollup, vpc_flow_signal, waf_block_rollup,
+)
 from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
 from controller_events import controller_event_to_signal
@@ -1110,7 +1113,7 @@ async def _scan_cloud_logs() -> int:
     a truncated/rotated file (size < offset) restarts from 0."""
     fed = 0
     for path in sorted(glob.glob(os.path.join(CLOUD_LOGS_DIR, "*"))):
-        if not (path.endswith(".alb") or path.endswith(".vpc")):
+        if not path.endswith((".alb", ".vpc", ".waf", ".dns")):
             continue
         try:
             size = os.path.getsize(path)
@@ -1131,6 +1134,8 @@ async def _scan_cloud_logs() -> int:
             continue
         fname = os.path.basename(path)
         accept_recs: list[dict] = []
+        waf_recs: list[dict] = []
+        dns_recs: list[dict] = []
         for line in data.splitlines():
             if fname.endswith(".vpc"):
                 rec = parse_vpc_flow_log(line)
@@ -1140,6 +1145,16 @@ async def _scan_cloud_logs() -> int:
                     accept_recs.append(rec)  # volume lane: aggregated below
                     continue
                 ev = vpc_flow_signal(rec)
+            elif fname.endswith(".waf"):
+                rec = parse_aws_waf_log(line)
+                if rec is not None:
+                    waf_recs.append(rec)  # aggregated below, never per-request
+                continue
+            elif fname.endswith(".dns"):
+                rec = parse_r53_dns_log(line)
+                if rec is not None:
+                    dns_recs.append(rec)  # aggregated below, errors only
+                continue
             else:
                 ev = cloud_log_event(fname, line)
             if ev is None:
@@ -1147,9 +1162,13 @@ async def _scan_cloud_logs() -> int:
             ev["tenant_id"] = CLOUD_LOGS_TENANT
             await handle_cloud(ev)
             fed += 1
-        # ACCEPT flows → at most one cloud_flow_volume signal per ENI per scan
-        # (audit P1-6): traffic becomes observable without per-flow firehose.
-        for ev in vpc_accept_rollup(accept_recs):
+        # Batch rollups — one signal per aggregation key per scan, never a
+        # per-record firehose (audit P1-6 discipline, applied to every lane):
+        # ACCEPT flows → per-ENI volume; WAF BLOCKs → per (ACL, rule);
+        # DNS errors → per (query name, rcode).
+        for ev in (vpc_accept_rollup(accept_recs)
+                   + waf_block_rollup(waf_recs)
+                   + dns_error_rollup(dns_recs)):
             ev["tenant_id"] = CLOUD_LOGS_TENANT
             await handle_cloud(ev)
             fed += 1

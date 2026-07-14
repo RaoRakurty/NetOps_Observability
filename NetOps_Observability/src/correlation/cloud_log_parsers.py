@@ -249,3 +249,149 @@ def vpc_accept_rollup(records: list[dict]) -> list[dict]:
             },
         })
     return out
+
+
+# ── AWS WAF logs (.waf — JSON, one record per line, Firehose/S3 delivery) ────
+# WAF sits in front of practically every serious cloud web workload, and "our
+# own WAF rule is blocking legitimate traffic" is a classic self-inflicted
+# outage whose only evidence is here + the CloudTrail rule change. BLOCKs are
+# the signal; ALLOW/COUNT are volume and are ignored (anti-noise). Aggregated
+# per (web ACL, terminating rule) per scan batch — never one event per request.
+
+import json as _json
+
+
+def parse_aws_waf_log(line: str) -> dict | None:
+    """One AWS WAF JSON log record → dict, or None when it isn't one."""
+    s = (line or "").strip()
+    if not s or not s.startswith("{"):
+        return None
+    try:
+        rec = _json.loads(s)
+    except ValueError:
+        return None
+    if "webaclId" not in rec or "action" not in rec:
+        return None
+    return rec
+
+
+def waf_block_rollup(records: list[dict]) -> list[dict]:
+    """BLOCKed requests from one scan batch → at most one cloud_waf_log signal
+    per (web ACL, terminating rule). value = blocked count; the sample URI and
+    client make the evidence concrete without per-request firehose."""
+    agg: dict[tuple[str, str], dict] = {}
+    for rec in records:
+        if not rec or str(rec.get("action") or "").upper() != "BLOCK":
+            continue
+        acl = str(rec.get("webaclId") or "")
+        rule = str(rec.get("terminatingRuleId") or "")
+        if not acl:
+            continue
+        http = rec.get("httpRequest") or {}
+        a = agg.setdefault((acl, rule), {
+            "count": 0, "ts_ms": 0, "uri": "", "client": "", "host": "",
+        })
+        a["count"] += 1
+        ts = int(rec.get("timestamp") or 0)
+        if ts > a["ts_ms"]:
+            a["ts_ms"] = ts
+        if not a["uri"]:
+            a["uri"] = str(http.get("uri") or "")
+            a["client"] = str(http.get("clientIp") or "")
+            for h in http.get("headers") or []:
+                if str(h.get("name", "")).lower() == "host":
+                    a["host"] = str(h.get("value") or "")
+    out: list[dict] = []
+    for (acl, rule), a in sorted(agg.items()):
+        ts = ""
+        if a["ts_ms"]:
+            ts = (datetime.fromtimestamp(a["ts_ms"] / 1000, tz=timezone.utc)
+                  .isoformat().replace("+00:00", "Z"))
+        out.append({
+            "kind": "cloud_waf_log",
+            # the web ACL is the resource whose behavior changed; its ARN is
+            # the console pivot and the CloudTrail join key.
+            "resource_id": acl,
+            "account": "",
+            "region": "",
+            "severity": "warn",
+            "metric_name": "waf_blocked_requests",
+            "value": float(a["count"]),
+            "ts": ts,
+            "attrs": {
+                "provider": "aws",
+                "rule": rule,
+                "sample_uri": a["uri"][:200],
+                "sample_client": a["client"],
+                "host": a["host"],
+                "action": "BLOCK",
+            },
+        })
+    return out
+
+
+# ── Route 53 Resolver query logs (.dns — JSON, one query per line) ───────────
+# DNS is the classic invisible root cause: the service is healthy but its NAME
+# is broken (failover flipped a record, NXDOMAIN after a config change). Error
+# rcodes are the signal; NOERROR answers are volume and are ignored here.
+
+_DNS_ERROR_RCODES = ("NXDOMAIN", "SERVFAIL", "REFUSED")
+
+
+def parse_r53_dns_log(line: str) -> dict | None:
+    """One Route 53 Resolver query-log JSON record → dict, or None."""
+    s = (line or "").strip()
+    if not s or not s.startswith("{"):
+        return None
+    try:
+        rec = _json.loads(s)
+    except ValueError:
+        return None
+    if "query_name" not in rec or "rcode" not in rec:
+        return None
+    return rec
+
+
+def dns_error_rollup(records: list[dict]) -> list[dict]:
+    """Failed resolutions from one scan batch → at most one cloud_dns_log signal
+    per (query name, rcode). Entity is the NAME being resolved — that is what
+    an investigation correlates against a service's symptoms."""
+    agg: dict[tuple[str, str], dict] = {}
+    for rec in records:
+        if not rec:
+            continue
+        rcode = str(rec.get("rcode") or "").upper()
+        if rcode not in _DNS_ERROR_RCODES:
+            continue
+        name = str(rec.get("query_name") or "").rstrip(".")
+        if not name:
+            continue
+        a = agg.setdefault((name, rcode), {"count": 0, "ts": "", "src": "", "vpc": "", "qtype": ""})
+        a["count"] += 1
+        ts = str(rec.get("query_timestamp") or "")
+        if ts > a["ts"]:
+            a["ts"] = ts
+        if not a["src"]:
+            a["src"] = str(rec.get("srcaddr") or "")
+            a["vpc"] = str(rec.get("vpc_id") or "")
+            a["qtype"] = str(rec.get("query_type") or "")
+    out: list[dict] = []
+    for (name, rcode), a in sorted(agg.items()):
+        out.append({
+            "kind": "cloud_dns_log",
+            "resource_id": name,
+            "account": str(a["vpc"]),
+            "region": "",
+            "severity": "warn",
+            "metric_name": "dns_resolution_failed",
+            "value": float(a["count"]),
+            "ts": a["ts"],
+            "attrs": {
+                "provider": "aws",
+                "rcode": rcode,
+                "query_type": a["qtype"],
+                "sample_client": a["src"],
+                "vpc": a["vpc"],
+            },
+        })
+    return out

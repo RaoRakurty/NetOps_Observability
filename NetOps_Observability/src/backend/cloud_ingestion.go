@@ -30,11 +30,13 @@ const (
 // Kinds come from the correlation contract (cloud_producers.CLOUD_KINDS); a source
 // with no kind here has no producer today and is reported "off".
 var cloudSourceKinds = map[string][]string{
-	"flow_logs":    {"cloud_flow_log", "cloud_flow_volume"},
-	"lb_logs":      {"cloud_lb_log"},
-	"metrics":      {"cloud_metric", "database_metric", "cloud_resource_anomaly"},
-	"cloud_health": {"cloud_health", "cloud_resource_health"},
-	"change_audit": {"cloud_change", "cloud_audit", "security_policy_change"},
+	"flow_logs":     {"cloud_flow_log", "cloud_flow_volume"},
+	"lb_logs":       {"cloud_lb_log"},
+	"metrics":       {"cloud_metric", "database_metric", "cloud_resource_anomaly"},
+	"cloud_health":  {"cloud_health", "cloud_resource_health"},
+	"change_audit":  {"cloud_change", "cloud_audit", "security_policy_change"},
+	"firewall_logs": {"cloud_waf_log"}, // WAF BLOCK rollups (log-fidelity lane)
+	"dns_logs":      {"cloud_dns_log"}, // resolver failure rollups
 }
 
 // cloudSourceOrder is the display order the UI expects (readiness.SOURCE_TYPES).

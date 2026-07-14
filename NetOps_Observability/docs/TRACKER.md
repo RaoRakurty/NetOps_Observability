@@ -109,6 +109,22 @@ B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
 
+## #105 — Cloud provider parity program (owner directive 2026-07-14 eve) — 🟡 IN FLIGHT
+
+**Directive:** whatever is achieved/tested on one provider must exist and be tested on ALL.
+Order: GCP up to AWS/Azure level FIRST → Azure VNet flow logs → log-fidelity families (LB/WAF/DNS)
+everywhere → 7-drill acceptance suite per provider. Close only on a full-green matrix.
+**Canonical matrix + acceptance suite = `docs/design/cloud-provider-parity.md`** (keep current).
+**Landed this session:** WAF + Route53 DNS parsers/rollups (`cloud_waf_log`/`cloud_dns_log`,
+per-(ACL,rule) and per-(name,rcode) — never per-record), tailer .waf/.dns lanes, generalized S3
+pickup (`_poll_s3_lane` + ALB/WAF/DNS prefixes), matrix rows firewall_logs/dns_logs now
+capability=available, `gcp.py` (inventory/metrics/audit lanes mirroring azure.py; google-auth dep
+in poller container), compose env + GCP CREDENTIALS roles. 573 correlation+parser tests green.
+**Owner-gated:** GCP project + SA key + lab VMs; AWS fidelity Terraform apply (~$2–3/drill day);
+Azure VNet flow-log enablement.
+**Also queued:** stale "DEMO TENANT · SYNTHETIC SIGNALS" badge (fixtures are live poller data now —
+stamp collection mode, surface via API).
+
 ## #104 — Service View cloud lane to world-class (owner demand 2026-07-14) — 🟡 W1+W2+W2.5 SHIPPED+LIVE
 
 Canonical worklist = four-expert audit `docs/design/audits/service-view-audit-2026-07-13.md`.

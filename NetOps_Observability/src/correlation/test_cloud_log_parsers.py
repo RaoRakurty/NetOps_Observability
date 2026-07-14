@@ -14,10 +14,14 @@ from datetime import datetime, timezone
 from cloud_log_parsers import (
     alb_lb_signal,
     cloud_log_event,
+    dns_error_rollup,
     parse_alb_access_log,
+    parse_aws_waf_log,
+    parse_r53_dns_log,
     parse_vpc_flow_log,
     vpc_accept_rollup,
     vpc_flow_signal,
+    waf_block_rollup,
 )
 from cloud_producers import cloud_signal_from_event
 from signals import EntityType, ModalityClass, Source
@@ -149,3 +153,57 @@ def test_vpc_accept_rollup_aggregates_per_eni():
 
 def test_vpc_accept_rollup_empty_batch_is_empty():
     assert vpc_accept_rollup([]) == []
+
+
+# ── WAF + DNS lanes (log-fidelity program) ────────────────────────────────────
+
+WAF_BLOCK = ('{"timestamp":1719352800000,"formatVersion":1,"webaclId":'
+             '"arn:aws:wafv2:us-west-2:123456789012:regional/webacl/correlix/abc",'
+             '"action":"BLOCK","terminatingRuleId":"rate-limit-api",'
+             '"httpRequest":{"clientIp":"203.0.113.9","uri":"/api/pay","httpMethod":"POST",'
+             '"headers":[{"name":"Host","value":"billing.example.com"}]}}')
+WAF_ALLOW = WAF_BLOCK.replace('"action":"BLOCK"', '"action":"ALLOW"')
+
+DNS_NX = ('{"version":"1.1","account_id":"123456789012","region":"us-west-2",'
+          '"vpc_id":"vpc-01","query_timestamp":"2026-06-25T22:00:30Z",'
+          '"query_name":"db.internal.example.com.","query_type":"A","query_class":"IN",'
+          '"rcode":"NXDOMAIN","answers":[],"srcaddr":"10.60.10.10","srcport":"53511"}')
+DNS_OK = DNS_NX.replace('"rcode":"NXDOMAIN"', '"rcode":"NOERROR"')
+
+
+def test_waf_block_rollup_aggregates_per_rule():
+    recs = [parse_aws_waf_log(WAF_BLOCK) for _ in range(4)]
+    recs.append(parse_aws_waf_log(WAF_ALLOW))  # ALLOW is volume, never a signal
+    out = waf_block_rollup(recs)
+    assert len(out) == 1
+    ev = out[0]
+    assert ev["kind"] == "cloud_waf_log" and ev["value"] == 4.0
+    assert ev["attrs"]["rule"] == "rate-limit-api"
+    assert ev["attrs"]["provider"] == "aws"
+    assert ev["attrs"]["host"] == "billing.example.com"
+    assert ev["ts"] == "2024-06-25T22:00:00Z"
+    sig = cloud_signal_from_event(ev, "acme", TS)
+    assert sig.kind == "cloud_waf_log" and sig.entity_id.endswith("/webacl/correlix/abc")
+
+
+def test_dns_error_rollup_aggregates_per_name_and_rcode():
+    recs = [parse_r53_dns_log(DNS_NX) for _ in range(3)]
+    recs.append(parse_r53_dns_log(DNS_OK))  # NOERROR is volume, never a signal
+    out = dns_error_rollup(recs)
+    assert len(out) == 1
+    ev = out[0]
+    assert ev["kind"] == "cloud_dns_log" and ev["value"] == 3.0
+    assert ev["resource_id"] == "db.internal.example.com"  # trailing dot stripped
+    assert ev["attrs"]["rcode"] == "NXDOMAIN"
+    sig = cloud_signal_from_event(ev, "acme", TS)
+    assert sig.kind == "cloud_dns_log"
+    assert str(sig.entity_type).endswith("SERVICE")  # the NAME is the entity
+    assert sig.entity_id == "db.internal.example.com"
+
+
+def test_waf_dns_malformed_lines_return_none():
+    assert parse_aws_waf_log("not json") is None
+    assert parse_aws_waf_log('{"no":"waf fields"}') is None
+    assert parse_r53_dns_log("garbage") is None
+    assert dns_error_rollup([]) == []
+    assert waf_block_rollup([]) == []

@@ -19,10 +19,19 @@ from kafka import KafkaProducer
 import azure
 import cloudmetrics
 import discover
+import gcp
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 LOG_GROUP = os.environ.get("FLOW_LOG_GROUP", "")  # CloudWatch lane (needs delivery role)
 FLOW_S3_BUCKET = os.environ.get("FLOW_S3_BUCKET", "")  # S3 lane (no IAM role needed)
+FLOW_S3_PREFIX = os.environ.get("FLOW_S3_PREFIX", "")
+# Log-fidelity lanes (ALB access / WAF / Route 53 Resolver query logs): each is
+# an S3 prefix, empty = lane off. LOGS_S3_BUCKET falls back to FLOW_S3_BUCKET
+# so a single fidelity bucket serves every lane.
+LOGS_S3_BUCKET = os.environ.get("LOGS_S3_BUCKET", "")
+ALB_S3_PREFIX = os.environ.get("ALB_S3_PREFIX", "")
+WAF_S3_PREFIX = os.environ.get("WAF_S3_PREFIX", "")
+DNS_S3_PREFIX = os.environ.get("DNS_S3_PREFIX", "")
 OUT_DIR = os.environ.get("CLOUD_LOGS_OUT", "/out")
 BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
@@ -117,35 +126,65 @@ def poll_flow_logs(logs, st: dict) -> None:
         jlog("flow events appended", count=written)
 
 
-def poll_flow_logs_s3(s3, st: dict) -> None:
-    """VPC flow logs delivered to S3: fetch objects newer than the checkpoint key,
-    strip the header line, append raw v2 records for the correlation tailer."""
+def _poll_s3_lane(s3, st: dict, bucket: str, prefix: str, state_key: str,
+                  out_name: str, skip_prefixes: tuple = ()) -> int:
+    """One S3 log lane: fetch .gz objects under `prefix` newer than the
+    checkpoint, decompress, append raw lines to OUT_DIR/out_name for the
+    correlation tailer (which owns parsing/rollup). Shared by VPC flow, ALB
+    access, WAF and Resolver query logs — same checkpoint discipline (P0-3),
+    same rotation guard (P0-4)."""
     import gzip
-    last_key = st.get("flow_s3_key", "")
-    kwargs = {"Bucket": FLOW_S3_BUCKET, "MaxKeys": 200}
+    last_key = st.get(state_key, "")
+    kwargs = {"Bucket": bucket, "MaxKeys": 200}
+    if prefix:
+        kwargs["Prefix"] = prefix
     if last_key:
         kwargs["StartAfter"] = last_key
     written = 0
     resp = s3.list_objects_v2(**kwargs)
+    out_path = os.path.join(OUT_DIR, out_name)
     for obj in resp.get("Contents", []):
         key = obj["Key"]
-        if not key.endswith(".log.gz"):
+        if not (key.endswith(".log.gz") or key.endswith(".gz")):
             last_key = max(last_key, key)
             continue
-        body = s3.get_object(Bucket=FLOW_S3_BUCKET, Key=key)["Body"].read()
+        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         text = gzip.decompress(body).decode()
-        _roll_if_large(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"))
-        with open(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"), "a") as f:
+        _roll_if_large(out_path)
+        with open(out_path, "a") as f:
             for line in text.splitlines():
-                if line.startswith("version ") or not line.strip():
+                if not line.strip() or line.startswith(skip_prefixes or ("\x00",)):
                     continue
                 f.write(line + "\n")
                 written += 1
         last_key = max(last_key, key)
     if last_key:
-        st["flow_s3_key"] = last_key
-    if written:
-        jlog("flow records appended from s3", count=written)
+        st[state_key] = last_key
+    return written
+
+
+def poll_flow_logs_s3(s3, st: dict) -> None:
+    """VPC flow logs delivered to S3 (header line stripped)."""
+    n = _poll_s3_lane(s3, st, FLOW_S3_BUCKET, FLOW_S3_PREFIX, "flow_s3_key",
+                      "aws-vpc-flow.vpc", skip_prefixes=("version ",))
+    if n:
+        jlog("flow records appended from s3", count=n)
+
+
+def poll_fidelity_logs_s3(s3, st: dict) -> None:
+    """The log-fidelity lanes (ALB access / WAF / Resolver query logs), each an
+    opt-in S3 prefix. Absent prefix = lane off — nothing is guessed."""
+    lanes = [
+        (ALB_S3_PREFIX, "alb_s3_key", "aws-alb-access.alb"),
+        (WAF_S3_PREFIX, "waf_s3_key", "aws-waf.waf"),
+        (DNS_S3_PREFIX, "dns_s3_key", "aws-r53-resolver.dns"),
+    ]
+    for prefix, state_key, out_name in lanes:
+        if not prefix:
+            continue
+        n = _poll_s3_lane(s3, st, LOGS_S3_BUCKET or FLOW_S3_BUCKET, prefix, state_key, out_name)
+        if n:
+            jlog("fidelity records appended from s3", lane=out_name, count=n)
 
 
 def poll_cloudtrail(ct, producer, st: dict) -> None:
@@ -233,6 +272,10 @@ def main():
     az_vms: list[dict] = []
     az_ready = azure.configured()
     jlog("azure lane", configured=az_ready)
+    gcp_ready = gcp.configured()
+    jlog("gcp lane", configured=gcp_ready)
+    last_gcp_inventory = 0.0
+    last_gcp_metrics = 0.0
     while True:
         try:
             # Cloud inventory + in-cloud egress topology, discovered from the live
@@ -254,10 +297,38 @@ def main():
                 poll_flow_logs(logs, st)
             if FLOW_S3_BUCKET:
                 poll_flow_logs_s3(s3, st)
+            poll_fidelity_logs_s3(s3, st)  # opt-in prefixes; no-op when unset
             poll_cloudtrail(ct, producer, st)
             save_state(st)
         except Exception as exc:  # noqa: BLE001 - poller must survive transient API errors
             jlog("poll cycle error", error=str(exc)[:200])
+
+        # ── GCP (provider-parity program #105) ─────────────────────────────
+        # Same separate-failure-domain rule as Azure (audit P1-11): a GCP
+        # hiccup must never roll back the AWS/Azure checkpoints.
+        if gcp_ready:
+            try:
+                gtok = gcp.token()
+                now = time.time()
+                if now - last_gcp_inventory >= DISCOVER_EVERY_S:
+                    ninv = gcp.write_inventory(gtok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                    last_gcp_inventory = now
+                    jlog("gcp inventory", resources=ninv)
+                if now - last_gcp_metrics >= METRICS_EVERY_S:
+                    g_insts = gcp.list_instances(gtok)
+                    n = gcp.poll_metrics(gtok, g_insts)
+                    last_gcp_metrics = now
+                    jlog("gcp metrics", events=n, instances=len(g_insts),
+                         running=sum(1 for i in g_insts if i.get("power_state") == "running"))
+                since = st.get("gcp_audit_ts") or _iso_minutes_ago(15)
+                nc, newest = gcp.poll_audit_log(gtok, producer, TENANT, since)
+                if newest != since:
+                    st["gcp_audit_ts"] = newest
+                    save_state(st)
+                if nc:
+                    jlog("gcp control plane", changes=nc)
+            except Exception as exc:  # noqa: BLE001 - lane isolation
+                jlog("gcp cycle error", error=str(exc)[:200])
 
         # ── AZURE ───────────────────────────────────────────────────────────
         # A separate failure domain on purpose: an Azure hiccup must never roll

@@ -47,6 +47,13 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     # Aggregated ACCEPT-flow volume per ENI (audit P1-6): observed traffic as
     # evidence, one rollup per ENI per scan — never per-flow firehose.
     "cloud_flow_volume":      (ModalityClass.PASSIVE_FLOW,     ObserverType.FLOW_EXPORTER, EntityType.CLOUD_RESOURCE),
+    # WAF BLOCKs aggregated per (web ACL, rule) — the "our own WAF rule is
+    # eating legitimate traffic" evidence class; joins CloudTrail rule changes.
+    "cloud_waf_log":          (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    # DNS resolution failures aggregated per (query name, rcode) — the service
+    # is healthy but its NAME is broken (failover/record/TTL faults). Entity is
+    # the name being resolved: what an investigation joins to app symptoms.
+    "cloud_dns_log":          (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.SERVICE),
     "cloud_lb_log":           (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.APP),
     "cloud_change":           (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_audit":            (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
@@ -131,6 +138,9 @@ def cloud_signal(
 
     if default_entity is EntityType.APP and app:
         entity_type, entity_id = EntityType.APP, app
+    elif default_entity is EntityType.SERVICE and resource_id:
+        # DNS kinds: the entity is the NAME being resolved, not a cloud resource.
+        entity_type, entity_id = EntityType.SERVICE, resource_id
     elif resource_id:
         entity_type, entity_id = EntityType.CLOUD_RESOURCE, resource_id
     elif app:

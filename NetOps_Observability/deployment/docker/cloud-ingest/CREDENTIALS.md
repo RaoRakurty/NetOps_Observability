@@ -43,3 +43,25 @@ az role assignment create --assignee <appId> --role Reader \
 
 Prod shape replaces the env-var secret with the tenant-scoped connector store
 (encrypted Vault, Task #15).
+
+## GCP (parity program #105)
+
+Service account key file mounted read-only; env `GCP_PROJECT` +
+`GOOGLE_APPLICATION_CREDENTIALS` (both empty = lane self-disabled). Roles,
+scoped to the project — read-only, no mutation permission anywhere:
+
+| Role | Lane |
+|---|---|
+| `roles/compute.viewer` | inventory writer (`gcp.write_inventory`) |
+| `roles/monitoring.viewer` | Cloud Monitoring metric lane |
+| `roles/logging.viewer` | admin-activity Audit Logs → cloud_change |
+
+Create (owner command, one-off):
+
+```bash
+gcloud iam service-accounts create correlix-telemetry --project <project>
+for r in compute.viewer monitoring.viewer logging.viewer; do
+  gcloud projects add-iam-policy-binding <project>     --member serviceAccount:correlix-telemetry@<project>.iam.gserviceaccount.com     --role roles/$r
+done
+gcloud iam service-accounts keys create correlix-gcp.json   --iam-account correlix-telemetry@<project>.iam.gserviceaccount.com
+```
