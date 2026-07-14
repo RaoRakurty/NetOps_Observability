@@ -25,6 +25,9 @@ scripts/docker-hygiene.log
 scripts/rca-canary.log
 scripts/ch-query-budget-check.log
 scripts/ch-cold-export.log
+scripts/host-hygiene.log
+scripts/.host-hygiene.state
+scripts/.host-hygiene.heartbeat
 
 # Editor / OS
 .idea/

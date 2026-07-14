@@ -147,6 +147,17 @@ if [ -f "$hyg_log" ]; then
   fi
 fi
 
+# host-hygiene (10-min threshold sweeper + OpenSearch block healer) must be
+# alive for the same reason: a dead hygiene cron is invisible until the next
+# disk-full outage. Quiet runs append nothing, so track a heartbeat marker the
+# script's cron line touches — the log alone can legitimately stay silent.
+hh_beat="$(dirname "${BASH_SOURCE[0]}")/.host-hygiene.heartbeat"
+if [ -f "$hh_beat" ]; then
+  hh_age_min=$(( ($(date +%s) - $(stat -c %Y "$hh_beat" 2>/dev/null || echo 0)) / 60 ))
+  [ "$hh_age_min" -gt "${HOST_HYGIENE_MAX_AGE_MIN:-45}" ] &&
+    problems+=("host-hygiene cron stale: heartbeat ${hh_age_min}m old (10-min cron dead? disk-full protection is OFF)")
+fi
+
 # Ingestion liveness — a pipeline that stops silently is invisible until someone
 # looks at an empty dashboard. Container logs (applogs) flow continuously, so
 # zero docs in the recent window means the log bus stalled (disk block, dead
