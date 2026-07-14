@@ -96,20 +96,53 @@ def discover_aws(ec2) -> tuple[dict, dict]:
                       "name": _tags(nat.get("Tags")).get("Name", nat["NatGatewayId"]),
                       "subnet_id": nat.get("SubnetId", "")})
 
+    # Subnets with NO explicit route-table association implicitly use the VPC's
+    # MAIN route table. Collecting only explicit associations left every such
+    # subnet with ZERO egress edges — a hole in the path graph exactly where the
+    # default route lives (audit 2026-07-13, P1-8).
+    explicit = {a["SubnetId"] for rt in rts for a in rt.get("Associations", [])
+                if a.get("SubnetId")}
+    subnets_by_vpc: dict[str, list[str]] = {}
+    for sid, sn in subnets.items():
+        subnets_by_vpc.setdefault(sn.get("VpcId", ""), []).append(sid)
+
     # THE ROUTE TABLES: the authoritative statement of how a subnet egresses.
     for rt in rts:
         rt_id = rt["RouteTableId"]
         rt_name = _tags(rt.get("Tags")).get("Name", rt_id)
         assoc = [a["SubnetId"] for a in rt.get("Associations", []) if a.get("SubnetId")]
+        is_main = any(a.get("Main") for a in rt.get("Associations", []))
+        if is_main:
+            # the main table serves every subnet in the VPC that named no other
+            assoc = sorted(set(assoc) | {
+                sid for sid in subnets_by_vpc.get(rt.get("VpcId", ""), [])
+                if sid not in explicit
+            })
         for route in rt.get("Routes", []):
             dst = route.get("DestinationCidrBlock") or route.get("DestinationPrefixListId")
             if not dst:
                 continue
+            gw = route.get("GatewayId", "") or ""
             target, kind = "", ""
-            if route.get("GatewayId", "").startswith("igw-"):
-                target, kind = route["GatewayId"], "internet_gateway"
-            elif route.get("GatewayId", "").startswith("vpce-"):
-                target, kind = route["GatewayId"], "vpc_endpoint"
+            if gw.startswith("igw-"):
+                target, kind = gw, "internet_gateway"
+            elif gw.startswith("vpce-"):
+                target, kind = gw, "vpc_endpoint"
+            # HYBRID EDGES — these were silently dropped. For a product whose
+            # story is hybrid connectivity, losing the VPN/Direct-Connect edge
+            # meant the path graph had no idea how traffic left for on-prem.
+            elif gw.startswith("vgw-"):
+                target, kind = gw, "vpn_gateway"          # AWS Site-to-Site VPN / DX
+            elif route.get("TransitGatewayId"):
+                target, kind = route["TransitGatewayId"], "transit_gateway"
+            elif route.get("VpcPeeringConnectionId"):
+                target, kind = route["VpcPeeringConnectionId"], "vpc_peering"
+            elif route.get("EgressOnlyInternetGatewayId"):
+                target, kind = route["EgressOnlyInternetGatewayId"], "egress_only_igw"
+            elif route.get("CarrierGatewayId"):
+                target, kind = route["CarrierGatewayId"], "carrier_gateway"
+            elif route.get("LocalGatewayId"):
+                target, kind = route["LocalGatewayId"], "local_gateway"   # Outposts
             elif route.get("NatGatewayId"):
                 target, kind = route["NatGatewayId"], "nat_gateway"
             elif route.get("NetworkInterfaceId"):
@@ -117,10 +150,15 @@ def discover_aws(ec2) -> tuple[dict, dict]:
                 # Resolve the ENI to its instance: an NVA is a real box, not an id.
                 target = eni_owner.get(eni, eni)
                 kind = "nva"  # network virtual appliance (our IPsec device)
-            elif route.get("GatewayId") == "local":
+            elif gw == "local":
                 continue  # intra-VPC, not an edge
             else:
                 continue
+
+            # A BLACKHOLE route means its target is gone and traffic to this CIDR
+            # is being silently discarded — a live, actionable fault sitting in a
+            # field we already fetch. Carry it; never render it as a working edge.
+            state = route.get("State", "active")
             for subnet_id in assoc:
                 edges.append({
                     "from_subnet": subnet_id,
@@ -128,6 +166,7 @@ def discover_aws(ec2) -> tuple[dict, dict]:
                     "to": target,
                     "to_kind": kind,
                     "destination": dst,
+                    "state": state,
                     "via_route_table": rt_id,
                     "route_table_name": rt_name,
                 })
