@@ -2089,7 +2089,7 @@ export const api = {
   // The IDENTITY surfaces are live from the cloud inventory; health/change/flow
   // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
   // mirror src/backend/cloud/{model,derive}.go.
-  cloudResources: () => request<{ resources: CloudResourceRow[]; count: number }>("/api/cloud/resources"),
+  cloudResources: () => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; count: number }>("/api/cloud/resources"),
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
@@ -2124,14 +2124,22 @@ export type CloudHealthSignalRow = {
   time: string; app: string; resource: string; signal: string; state: string;
   metric: string; current: string; baseline: string; severity: string; source: string;
 };
+// Provider-native identity + server-built console deep-links for a row — the
+// id an engineer pastes into the AWS/Azure console, one click away from the
+// operator sentence (backend cloudEvidenceRef, cloud_console.go).
+export type CloudRefWire = {
+  provider?: string; resource_id?: string; account?: string; region?: string;
+  log_ref?: string; signal_id?: string; console_url?: string; log_url?: string;
+};
 export type CloudChangeRow = {
   time: string; app: string; resource: string; change_type: string; actor: string;
   source: string; confidence: string; related_symptoms: string[];
+  cloud_ref?: CloudRefWire;
 };
 export type CloudEvidenceRow = {
   time: string; category: string; signal_type: string; app: string; resource: string;
   source: string; confidence: string; reason: string; used_in_verdict: boolean;
-  rca_group: string; evidence_ref: string;
+  rca_group: string; evidence_ref: string; cloud_ref?: CloudRefWire;
 };
 export type CloudRcaObjectRow = {
   correlation_id: string; verdict_tier: string; confidence: number; top_hypothesis: string;

@@ -14,7 +14,7 @@ vi.mock("../../services/api", () => ({
   },
 }));
 
-import { loadHealthSignals, loadChangeEvents, loadEvidence } from "./api";
+import { loadHealthSignals, loadChangeEvents, loadEvidence, safeConsoleUrl } from "./api";
 
 beforeEach(() => {
   cloudHealth.mockReset();
@@ -110,6 +110,48 @@ describe("loadEvidence", () => {
     expect(rows[1].usedInVerdict).toBe(false);
   });
 
+  // The console pivot (audit Wave 3 #9): cloud_ref must survive the mapping, and
+  // only https URLs on the two provider console hosts may reach an <a href>.
+  it("maps cloud_ref with its server-built console links", async () => {
+    cloudEvidence.mockResolvedValue({
+      objects: [],
+      evidence: [{
+        time: "2026-07-12T13:10:00.000Z", category: "supporting", signal_type: "cloud_health",
+        app: "shared", resource: "correlix-app-host-01 (i-0448c)", source: "aws",
+        confidence: "suspected", reason: "r", used_in_verdict: true,
+        rca_group: "g", evidence_ref: "sig-1",
+        cloud_ref: {
+          provider: "aws", resource_id: "i-0448c", account: "945714973156", region: "us-west-2",
+          console_url: "https://us-west-2.console.aws.amazon.com/ec2/home?region=us-west-2#InstanceDetails:instanceId=i-0448c",
+          log_url: "https://us-west-2.console.aws.amazon.com/cloudtrailv2/home?region=us-west-2#/events/ev-1",
+        },
+      }],
+    });
+    const { rows } = await loadEvidence();
+    expect(rows[0].cloudRef?.resourceId).toBe("i-0448c");
+    expect(rows[0].cloudRef?.consoleUrl).toContain("console.aws.amazon.com");
+    expect(rows[0].cloudRef?.logUrl).toContain("cloudtrailv2");
+  });
+
+  it("refuses console links off the provider hosts or off https", async () => {
+    cloudEvidence.mockResolvedValue({
+      objects: [],
+      evidence: [{
+        time: "t", category: "supporting", signal_type: "cloud_health", app: "a",
+        resource: "r", source: "aws", confidence: "suspected", reason: "r",
+        used_in_verdict: true, rca_group: "g", evidence_ref: "e",
+        cloud_ref: {
+          provider: "aws", resource_id: "i-1",
+          console_url: "https://evil.example.com/phish",
+          log_url: "javascript:alert(1)",
+        },
+      }],
+    });
+    const { rows } = await loadEvidence();
+    expect(rows[0].cloudRef?.consoleUrl).toBe("");
+    expect(rows[0].cloudRef?.logUrl).toBe("");
+  });
+
   // The engine records no contradicting/discriminating role — a category we did not
   // measure must never be claimed by the UI.
   it("never invents an evidence category", async () => {
@@ -124,5 +166,18 @@ describe("loadEvidence", () => {
     expect(objects).toEqual([]);
     expect(rows).toEqual([]);
     expect(cloudEvidence).toHaveBeenCalledWith("store-api");
+  });
+});
+
+// Zero-trust gate on server-built links: only https on the two console hosts.
+describe("safeConsoleUrl", () => {
+  it("admits only https on the two console hosts", () => {
+    expect(safeConsoleUrl("https://portal.azure.com/#resource/subscriptions/x")).toContain("portal.azure.com");
+    expect(safeConsoleUrl("https://us-west-2.console.aws.amazon.com/ec2/home")).toContain("aws.amazon.com");
+    expect(safeConsoleUrl("http://portal.azure.com/#resource/x")).toBe("");
+    expect(safeConsoleUrl("https://portal.azure.com.evil.io/x")).toBe("");
+    expect(safeConsoleUrl("https://fakeconsole.aws.amazon.com.evil.io/x")).toBe("");
+    expect(safeConsoleUrl("not a url")).toBe("");
+    expect(safeConsoleUrl(undefined)).toBe("");
   });
 });

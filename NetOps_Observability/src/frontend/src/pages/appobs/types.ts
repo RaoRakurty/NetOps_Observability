@@ -71,6 +71,7 @@ export interface CloudResource {
   missingTags: string[];  // e.g. ["app","owner"]
   tags?: Record<string, string>;
   resourceId?: string;    // the raw cloud id/ARN (drawer identity)
+  consoleUrl?: string;    // server-built provider console deep-link ("" = none)
 }
 
 export interface HealthSignal {
@@ -97,6 +98,7 @@ export interface ChangeEvent {
   source: string;         // cloudtrail | azure_activity_log | cloud_audit
   confidence: Confidence;
   relatedSymptoms: string[];
+  cloudRef?: CloudRef;    // console pivot to the provider's audit record
 }
 
 // How a piece of evidence relates to a verdict — the anti-black-box ledger.
@@ -104,6 +106,18 @@ export interface ChangeEvent {
 // separates competing root domains · missing = a signal we'd want but don't have
 // (honest gap) · recovery = confirmed the fix/return-to-baseline.
 export type EvidenceCategory = "supporting" | "contradicting" | "discriminating" | "missing" | "recovery";
+
+// The provider-native identity behind a row: the raw handle (i-…, eni-…, ARM id)
+// an engineer pastes into a support case, plus the server-built console pivot.
+// consoleUrl/logUrl are "" when unresolvable — the UI shows no link over a guess.
+export interface CloudRef {
+  provider: string;
+  resourceId: string;
+  account: string;
+  region: string;
+  consoleUrl: string;  // the resource in the AWS console / Azure portal
+  logUrl: string;      // the provider's log record (CloudTrail event / Activity Log)
+}
 
 export interface EvidenceRow {
   time: string;
@@ -117,6 +131,7 @@ export interface EvidenceRow {
   usedInVerdict: boolean; // did this row feed the verdict, or is it context/gap?
   rcaGroup: string;       // "" when none
   evidenceRef: string;    // opaque ref to the raw record
+  cloudRef?: CloudRef;    // console pivot (absent for engine-generated gap rows)
 }
 
 export interface Coverage {

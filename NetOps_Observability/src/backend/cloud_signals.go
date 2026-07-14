@@ -38,8 +38,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
-	"netops/backend/cloud"
 )
 
 const (
@@ -321,6 +319,9 @@ type cloudChangeEvent struct {
 	Source          string   `json:"source"`
 	Confidence      string   `json:"confidence"`
 	RelatedSymptoms []string `json:"related_symptoms"`
+	// CloudRef carries the provider-native identity + console deep-links —
+	// a change row's pivot to the CloudTrail event / Activity Log record.
+	CloudRef cloudEvidenceRef `json:"cloud_ref"`
 }
 
 type cloudEvidenceRow struct {
@@ -353,6 +354,11 @@ type cloudEvidenceRef struct {
 	LogRef string `json:"log_ref,omitempty"`
 	// SignalID is our internal evidence id (the platform's own audit handle).
 	SignalID string `json:"signal_id,omitempty"`
+	// ConsoleURL / LogURL are server-built provider console deep-links (the
+	// resource, and the provider's own log record). Empty when unresolvable —
+	// a URL is never guessed. See cloud_console.go.
+	ConsoleURL string `json:"console_url,omitempty"`
+	LogURL     string `json:"log_url,omitempty"`
 }
 
 type cloudRcaObject struct {
@@ -452,35 +458,6 @@ func sqlList(vals []string) string {
 // appOf resolves the app a cloud signal belongs to, from its own attrs (the
 // producer stamps app/app_id) or its entity when the entity IS the app. "" when
 // unattributed — a first-class answer, never a guess.
-// cloudResourceNamer returns a resolver id → operator name, built from the
-// tenant's declared cloud inventory (ENIs, instance ids, private/public IPs all
-// map to the resource that owns them). Returns "" for anything the inventory
-// does not claim — we never invent a name.
-func (s *server) cloudResourceNamer(r *http.Request) func(string) string {
-	res, _, _, err := s.cloudResources(r)
-	if err != nil || len(res) == 0 {
-		return nil
-	}
-	byID := map[string]string{}
-	for _, rs := range res {
-		name := rs.ResourceName
-		if name == "" {
-			name = rs.AppName
-		}
-		if name == "" {
-			continue
-		}
-		byID[rs.ResourceID] = name
-		for _, eni := range rs.NetworkInterfaceIDs {
-			byID[eni] = name
-		}
-		for _, ip := range append(append([]string{}, rs.PrivateIPs...), rs.PublicIPs...) {
-			byID[ip] = name
-		}
-	}
-	return func(id string) string { return byID[strings.TrimSpace(id)] }
-}
-
 func appOf(row chSignalRow, a signalAttrs) string {
 	if a.App != "" {
 		return a.App
@@ -729,18 +706,15 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
 
-	// resource → (app, name, confidence) from the tenant-scoped cloud inventory.
-	inv := map[string]cloud.CloudResource{}
-	if res, _, _, err := s.cloudResources(r); err == nil {
-		for _, c := range res {
-			inv[c.ResourceID] = c
-		}
-	}
+	// resource → (app, name, confidence) from the tenant-scoped cloud inventory,
+	// keyed by every handle a signal can carry (id, ENI, IP).
+	inv := s.cloudResourceIndex(r)
 
 	filter := appFilterSQL(app)
 	if app != "" {
 		// A change is stamped on a RESOURCE; the app link comes from the inventory.
-		// Widen the app filter with that app's resource ids (empty ⇒ attrs-only).
+		// Widen the app filter with every handle of that app's resources — a
+		// change stamped on the ENI/IP belongs to the app too (empty ⇒ attrs-only).
 		ids := make([]string, 0, len(inv))
 		for id, c := range inv {
 			if c.AppName == app || c.AppID == app {
@@ -761,7 +735,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		resID := resourceOf(row, a)
 		appName := appOf(row, a)
 		resName := resID
-		if c, ok := inv[resID]; ok {
+		if c, ok := lookupCloudResource(inv, resID); ok {
 			if appName == "" {
 				appName = c.AppName
 			}
@@ -773,6 +747,14 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		if src == "" {
 			src = providerOf(a)
 		}
+		ref := enrichCloudRef(cloudEvidenceRef{
+			Provider:   a.Provider,
+			ResourceID: resID,
+			Account:    a.Account,
+			Region:     a.Region,
+			LogRef:     a.RequestID, // CloudTrail eventID / Activity Log correlation id
+			SignalID:   row.SignalID,
+		}, inv)
 		out = append(out, cloudChangeEvent{
 			Time:       isoTS(row.TS),
 			App:        orDash(appName),
@@ -785,6 +767,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 			// with the symptoms it "caused". We report none rather than invent one —
 			// the Evidence tab shows what a change was actually grounded with.
 			RelatedSymptoms: []string{},
+			CloudRef:        ref,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"changes": out, "count": len(out), "window_hours": cloudSignalWindowHours})
@@ -835,13 +818,22 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	// Resolve provider-native ids (eni-…, i-…) to the resource/app they belong to,
 	// from the tenant's DECLARED inventory. A NOC reads names; the raw handle is
 	// preserved in cloud_ref for the console pivot.
-	resourceNamer := s.cloudResourceNamer(r)
+	inventoryIdx := s.cloudResourceIndex(r)
+	resourceNamer := namerFromIndex(inventoryIdx)
 
 	evidence := make([]cloudEvidenceRow, 0, limit)
 	if list := sqlList(ids); list != "" {
 		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(list, limit, scope)) {
 			o := byID[row.CorrelationID]
 			a := parseAttrs(row.Attrs)
+			ref := enrichCloudRef(cloudEvidenceRef{
+				Provider:   a.Provider,
+				ResourceID: firstNonEmptyStr(a.ResourceID, row.EntityID),
+				Account:    a.Account,
+				Region:     a.Region,
+				LogRef:     a.RequestID, // CloudTrail eventID / provider record id
+				SignalID:   row.SignalID,
+			}, inventoryIdx)
 			evidence = append(evidence, cloudEvidenceRow{
 				Time:       isoTS(row.TS),
 				Category:   "supporting", // attached to the object = it fed the verdict
@@ -855,14 +847,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 				UsedInVerdict: true,
 				RcaGroup:      row.CorrelationID,
 				EvidenceRef:   row.SignalID,
-				CloudRef: cloudEvidenceRef{
-					Provider:   a.Provider,
-					ResourceID: firstNonEmptyStr(a.ResourceID, row.EntityID),
-					Account:    a.Account,
-					Region:     a.Region,
-					LogRef:     a.RequestID, // CloudTrail eventID / provider record id
-					SignalID:   row.SignalID,
-				},
+				CloudRef:      ref,
 			})
 		}
 	}

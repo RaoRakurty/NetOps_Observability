@@ -18,7 +18,7 @@ import DataTable from "../components/DataTable";
 import {
   ConfidenceBadge, HealthBadge, AppIdentityPill, MetricCard,
   CardGroup, EmptyState, FilterBar, EvidenceDrawer,
-  EvidenceCategoryBadge, fmtBps, fmtBytes, ago,
+  EvidenceCategoryBadge, ConsoleLink, consoleName, fmtBps, fmtBytes, ago,
 } from "./appobs/badges";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
@@ -394,7 +394,7 @@ function Resources() {
       <div className="ao-panel">
         <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
           columns={[
-            { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
+            { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <><strong>{r.name}</strong>{r.consoleUrl && <ConsoleLink compact href={r.consoleUrl} label={`Open in ${consoleName(r.provider)}`} />}</> },
             { key: "type", header: "Type", width: 120, render: (r) => r.type },
             { key: "power", header: "State", width: 90, sortable: true, sortValue: (r) => r.powerState, render: (r) => r.powerState === "—" ? DASH : (
               <span style={{ color: r.powerState === "running" ? "var(--ok)" : "var(--warn)", fontWeight: 600 }}>
@@ -429,7 +429,10 @@ function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void 
       onClose={onClose}>
       <table className="ao-kv"><tbody>
         <tr><td>Type</td><td>{r.type}</td></tr>
-        <tr><td>Resource id</td><td><span className="ao-mono ao-muted">{r.resourceId}</span></td></tr>
+        <tr><td>Resource id</td><td>
+          <span className="ao-mono ao-muted">{r.resourceId}</span>
+          {r.consoleUrl && <> · <ConsoleLink href={r.consoleUrl} label={`Open in ${consoleName(r.provider)}`} /></>}
+        </td></tr>
         <tr><td>Cloud</td><td>{r.provider === "—" ? "—" : r.provider.toUpperCase()} · {r.account} · {r.region}</td></tr>
         <tr><td>App attribution</td><td><AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> {r.app ? `(by ${r.source})` : "— unattributed"}</td></tr>
         <tr><td>Owner / Env</td><td>{r.owner} · {r.env}</td></tr>
@@ -637,10 +640,10 @@ function HealthChanges() {
             columns={[
               { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
               { key: "app", header: "App", width: 130, render: (r) => <strong>{r.app}</strong> },
-              { key: "res", header: "Resource", width: 190, render: (r) => <span className="ao-mono">{r.resource}</span> },
+              { key: "res", header: "Resource", width: 190, render: (r) => <><span className="ao-mono">{r.resource}</span>{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
               { key: "type", header: "Change type", width: 170, sortable: true, sortValue: (r) => r.changeType, render: (r) => <Chip label={r.changeType.replace(/_/g, " ")} tone="var(--warn)" /> },
               { key: "actor", header: "Actor", width: 190, render: (r) => <span className="ao-mono">{r.actor}</span> },
-              { key: "src", header: "Source", width: 160, render: (r) => r.source },
+              { key: "src", header: "Source", width: 160, render: (r) => <>{r.source}{r.cloudRef?.logUrl && <ConsoleLink compact href={r.cloudRef.logUrl} label={r.cloudRef.provider === "aws" ? "View CloudTrail event" : "View Activity Log"} />}</> },
               { key: "conf", header: "Confidence", width: 110, render: (r) => <ConfidenceBadge level={r.confidence} /> },
               { key: "sym", header: "Related symptoms", width: 180, render: (r) => r.relatedSymptoms.length ? r.relatedSymptoms.join(", ") : DASH },
             ]} />
@@ -781,7 +784,7 @@ function Evidence() {
             { key: "cat", header: "Category", width: 130, sortable: true, sortValue: (r) => r.category, render: (r) => <EvidenceCategoryBadge category={r.category} /> },
             { key: "sig", header: "Signal type", width: 140, render: (r) => r.signalType },
             { key: "app", header: "App", width: 110, render: (r) => <strong>{r.app}</strong> },
-            { key: "res", header: "Resource", width: 130, render: (r) => r.resource },
+            { key: "res", header: "Resource", width: 130, render: (r) => <>{r.resource}{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
             { key: "src", header: "Source", width: 130, render: (r) => r.source },
             { key: "conf", header: "Confidence", width: 104, render: (r) => <ConfidenceBadge level={r.confidence} /> },
             { key: "reason", header: "Reason", width: 320, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
@@ -801,6 +804,18 @@ function Evidence() {
             <tr><td>Reason</td><td>{sel.reason}</td></tr>
             <tr><td>RCA group</td><td>{sel.rcaGroup || "—"}</td></tr>
             <tr><td>Evidence ref</td><td><span className="ao-mono ao-muted">{sel.evidenceRef}</span></td></tr>
+            {sel.cloudRef && (
+              <tr><td>Cloud resource</td><td>
+                <span className="ao-mono ao-muted">{sel.cloudRef.resourceId || "—"}</span>
+                {sel.cloudRef.consoleUrl && <> · <ConsoleLink href={sel.cloudRef.consoleUrl} label={`Open in ${consoleName(sel.cloudRef.provider)}`} /></>}
+              </td></tr>
+            )}
+            {sel.cloudRef?.logUrl && (
+              <tr><td>Provider record</td><td>
+                <ConsoleLink href={sel.cloudRef.logUrl}
+                  label={sel.cloudRef.provider === "aws" ? "View CloudTrail event" : "View Activity Log"} />
+              </td></tr>
+            )}
           </tbody></table>
         </EvidenceDrawer>
       )}

@@ -4451,6 +4451,13 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-pill-src { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-subtle);
   border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
 
+/* console pivot — the deep-link into the AWS console / Azure portal */
+.ao-console-link { color: var(--accent-bright, var(--accent)); font-size: 12px; text-decoration: none;
+  white-space: nowrap; transition: opacity .12s ease; }
+.ao-console-link:hover { text-decoration: underline; }
+.ao-console-link.is-compact { margin-left: 6px; opacity: .55; font-size: 12px; }
+.ao-console-link.is-compact:hover { opacity: 1; text-decoration: none; }
+
 /* empty state */
 .ao-empty { text-align: center; padding: var(--sp-6) var(--sp-4); color: var(--fg-muted); }
 .ao-empty-t { font-size: var(--fs-sm, 14px); font-weight: 600; }

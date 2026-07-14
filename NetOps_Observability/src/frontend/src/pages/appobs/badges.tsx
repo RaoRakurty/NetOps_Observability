@@ -96,6 +96,29 @@ export function UnderlayCell({ u }: { u: UnderlayState }) {
   return <span className="ao-underlay" style={{ color: d.tone }}>{d.text}</span>;
 }
 
+// Console pivot — the deep-link from a Correlix row into the provider's own
+// console. The URL is server-built and re-validated at the mapping layer
+// (safeConsoleUrl); an empty href renders nothing rather than a dead link.
+// stopPropagation keeps the row's drawer from opening under the click.
+export function consoleName(provider: string): string {
+  switch (provider.toLowerCase()) {
+    case "aws": return "AWS Console";
+    case "azure": return "Azure Portal";
+    default: return "cloud console";
+  }
+}
+
+export function ConsoleLink({ href, label, compact }: { href: string; label: string; compact?: boolean }) {
+  if (!href) return null;
+  return (
+    <a className={`ao-console-link${compact ? " is-compact" : ""}`} href={href}
+      target="_blank" rel="noopener noreferrer" title={compact ? label : undefined}
+      onClick={(e) => e.stopPropagation()}>
+      {compact ? "↗" : <>{label} <span aria-hidden="true">↗</span></>}
+    </a>
+  );
+}
+
 // Identity pill — app name + the source that attributed it, so identity is never a
 // bare label without its provenance.
 const SRC_LABEL: Record<AttrSource, string> = {

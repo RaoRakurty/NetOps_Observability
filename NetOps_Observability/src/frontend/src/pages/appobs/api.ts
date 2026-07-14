@@ -10,11 +10,11 @@
 import { api } from "../../services/api";
 import type {
   CloudAppRow, CloudResourceRow, CloudCoverageReport, CloudConfidence, CloudSource,
-  CloudHealthSignalRow, CloudChangeRow, CloudEvidenceRow, CloudRcaObjectRow,
+  CloudHealthSignalRow, CloudChangeRow, CloudEvidenceRow, CloudRcaObjectRow, CloudRefWire,
 } from "../../services/api";
 import type {
   App, CloudResource, Coverage, UnknownContributor, Provider, Confidence, AttrSource, AppRca,
-  HealthSignal, ChangeEvent, EvidenceRow, EvidenceCategory, Health,
+  HealthSignal, ChangeEvent, EvidenceRow, EvidenceCategory, Health, CloudRef,
 } from "./types";
 
 // Sentinel for a numeric metric the platform does not measure yet (P3B–D).
@@ -171,7 +171,11 @@ export async function loadApps(): Promise<App[]> {
 
 export async function loadResources(): Promise<CloudResource[]> {
   const r = await api.cloudResources();
-  return (r.resources ?? []).map(toResource);
+  const consoleUrls = r.console_urls ?? {};
+  return (r.resources ?? []).map((row) => ({
+    ...toResource(row),
+    consoleUrl: safeConsoleUrl(consoleUrls[row.resource_id]),
+  }));
 }
 
 // The REAL engine RCA for an app (#81 P3G). Returns the most recent grounded
@@ -243,11 +247,35 @@ function toHealthSignal(r: CloudHealthSignalRow): HealthSignal {
   };
 }
 
+// Zero-trust gate on server-built console links: only https URLs on the two
+// provider console hosts ever reach an <a href>. Anything else renders no link.
+export function safeConsoleUrl(u: string | undefined): string {
+  if (!u) return "";
+  try {
+    const p = new URL(u);
+    if (p.protocol !== "https:") return "";
+    if (p.hostname === "portal.azure.com" || p.hostname.endsWith(".console.aws.amazon.com")) return u;
+  } catch { /* not parseable — no link */ }
+  return "";
+}
+
+function toCloudRef(r: CloudRefWire | undefined): CloudRef | undefined {
+  if (!r) return undefined;
+  const consoleUrl = safeConsoleUrl(r.console_url);
+  const logUrl = safeConsoleUrl(r.log_url);
+  if (!r.resource_id && !consoleUrl && !logUrl) return undefined; // nothing to pivot on
+  return {
+    provider: r.provider ?? "", resourceId: r.resource_id ?? "",
+    account: r.account ?? "", region: r.region ?? "", consoleUrl, logUrl,
+  };
+}
+
 function toChangeEvent(r: CloudChangeRow): ChangeEvent {
   return {
     time: r.time, app: r.app, resource: r.resource, changeType: changeType(r.change_type),
     actor: r.actor, source: r.source, confidence: conf(r.confidence),
     relatedSymptoms: r.related_symptoms ?? [],
+    cloudRef: toCloudRef(r.cloud_ref),
   };
 }
 
@@ -257,6 +285,7 @@ function toEvidenceRow(r: CloudEvidenceRow): EvidenceRow {
     app: r.app, resource: r.resource, source: r.source, confidence: conf(r.confidence),
     reason: r.reason, usedInVerdict: !!r.used_in_verdict,
     rcaGroup: r.rca_group, evidenceRef: r.evidence_ref,
+    cloudRef: toCloudRef(r.cloud_ref),
   };
 }
 

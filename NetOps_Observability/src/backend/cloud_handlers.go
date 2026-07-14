@@ -71,7 +71,15 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, row)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "count": len(res)})
+	// Console deep-links, resource id → provider console URL (see cloud_console.go).
+	// Only resolvable resources appear — an absent entry means "no honest link".
+	consoleURLs := make(map[string]string, len(res))
+	for _, rs := range res {
+		if u := resourceConsoleURL(rs); u != "" {
+			consoleURLs[rs.ResourceID] = u
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "count": len(res)})
 }
 
 func (s *server) handleCloudIdentityMap(w http.ResponseWriter, r *http.Request) {
