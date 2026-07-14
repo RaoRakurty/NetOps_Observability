@@ -1255,6 +1255,15 @@ export interface CloudIngestionSource {
   status: string;
   volume?: number;
   last_seen_iso?: string;
+  capability?: "available" | "planned";
+}
+
+// Live per-app health/traffic enrichment served alongside the app inventory —
+// measured from provider status checks, probe outcomes and flow bytes.
+export interface CloudAppLive {
+  health?: string;
+  health_basis?: string;
+  traffic_bytes?: number;
 }
 
 export const api = {
@@ -2081,7 +2090,7 @@ export const api = {
   // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
   // mirror src/backend/cloud/{model,derive}.go.
   cloudResources: () => request<{ resources: CloudResourceRow[]; count: number }>("/api/cloud/resources"),
-  cloudApps: () => request<{ apps: CloudAppRow[]; count: number }>("/api/cloud/apps"),
+  cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
   // Per-source ingestion status, MEASURED from what actually landed (signals,

@@ -61,7 +61,10 @@ describe("SourceStatusBadge", () => {
     expect(screen.getByText("Permission denied")).toBeTruthy();
     cleanup();
     render(<SourceStatusBadge status="off" />);
-    expect(screen.getByText("Off")).toBeTruthy();
+    expect(screen.getByText("Not configured")).toBeTruthy();
+    cleanup();
+    render(<SourceStatusBadge status="not_supported" />);
+    expect(screen.getByText("Coming soon")).toBeTruthy();
     cleanup();
     render(<SourceStatusBadge status="flowing" />);
     expect(screen.getByText("Flowing")).toBeTruthy();

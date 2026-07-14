@@ -578,22 +578,29 @@ SELECT toString(ts)            AS ts_s,
  FORMAT JSONEachRow`, cloudSignalWindowHours, appFilter, limit, scope)
 }
 
+// cloudChangesSQL — ONE ROW PER CHANGE. The ingester re-emits the same provider
+// event on every poll cycle (same signal_id), so a raw SELECT counted a single
+// security-group edit 19 times (audit 2026-07-13, P0-3: "Recent Cloud Changes"
+// read 33 for 2 real events). The evidence store is append-only by design, so
+// the READ must collapse the re-emissions: one row per signal_id, keeping the
+// earliest observation of it (when the change actually happened).
 func cloudChangesSQL(appFilter string, limit int, scope string) string {
 	return fmt.Sprintf(`
-SELECT toString(ts)            AS ts_s,
-       kind                    AS kind,
-       toString(entity_type)   AS entity_type_s,
-       entity_id               AS entity_id,
-       toString(severity)      AS severity_s,
-       metric_name             AS metric_name,
-       value                   AS value,
-       attrs                   AS attrs,
-       observer_id             AS observer_id
+SELECT toString(min(ts))        AS ts_s,
+       any(kind)                AS kind,
+       toString(any(entity_type)) AS entity_type_s,
+       any(entity_id)           AS entity_id,
+       toString(any(severity))  AS severity_s,
+       any(metric_name)         AS metric_name,
+       any(value)               AS value,
+       any(attrs)               AS attrs,
+       any(observer_id)         AS observer_id
   FROM netops.corr_signals
  WHERE source = 'cloud'
    AND kind IN ('cloud_change','cloud_audit','security_policy_change')
    AND ts > now() - INTERVAL %d HOUR%s
- ORDER BY ts DESC
+ GROUP BY signal_id
+ ORDER BY ts_s DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
  FORMAT JSONEachRow`, cloudSignalWindowHours, appFilter, limit, scope)
@@ -616,7 +623,8 @@ SELECT toString(correlation_id)  AS cid,
        affected                  AS affected,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL
- WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)%s
+ WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)
+   AND state = 'open'%s
  ORDER BY window_start DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'

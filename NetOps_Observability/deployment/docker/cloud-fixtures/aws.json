@@ -9,6 +9,8 @@
       "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0448c046139420a7f",
       "resource_type": "ec2:instance",
       "resource_name": "correlix-app-host-01",
+      "power_state": "stopped",
+      "instance_type": "t3.small",
       "private_ips": [
         "10.60.10.10"
       ],
@@ -39,6 +41,8 @@
       "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-025bac7de4e6be0a6",
       "resource_type": "ec2:instance",
       "resource_name": "correlix-data-host-01",
+      "power_state": "stopped",
+      "instance_type": "t3.small",
       "private_ips": [
         "10.60.30.10"
       ],
@@ -69,6 +73,8 @@
       "resource_arn_or_uri": "arn:aws:ec2:us-west-2:945714973156:instance/i-0e8acbf8493d037f9",
       "resource_type": "ec2:instance",
       "resource_name": "correlix-vpn-nat-01",
+      "power_state": "running",
+      "instance_type": "t3.micro",
       "private_ips": [
         "10.60.1.10"
       ],

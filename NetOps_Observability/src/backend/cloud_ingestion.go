@@ -48,6 +48,11 @@ type cloudSourceStatus struct {
 	Status      string `json:"status"` // flowing | stale | off
 	Volume      int64  `json:"volume"`
 	LastSeenISO string `json:"last_seen_iso,omitempty"`
+	// Capability distinguishes WHY a source can be "off" — the UI must never
+	// paint "no producer exists yet" (planned) the same as "a producer exists
+	// but nothing is configured/landing" (available). Conflating them made the
+	// whole Ingestion matrix read as broken.
+	Capability string `json:"capability"` // available | planned
 }
 
 // ingestStatusFor turns (volume, lastSeen) into the honest status.
@@ -107,7 +112,10 @@ SELECT kind, count() AS volume, toString(max(ts)) AS last_seen
 
 	out := make([]cloudSourceStatus, 0, len(cloudSourceOrder))
 	for _, src := range cloudSourceOrder {
-		st := cloudSourceStatus{SourceType: src, Status: "off"}
+		st := cloudSourceStatus{SourceType: src, Status: "off", Capability: "available"}
+		if _, hasProducer := cloudSourceKinds[src]; !hasProducer && src != "inventory" && src != "seam_data" {
+			st.Capability = "planned" // no producer ships these kinds today
+		}
 
 		switch src {
 		case "inventory":

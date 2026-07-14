@@ -59,11 +59,11 @@ export type SourceStatus =
 export const STATUS_META: Record<SourceStatus, { label: string; tone: string }> = {
   flowing: { label: "Flowing", tone: "var(--ok)" },
   stale: { label: "Stale", tone: "var(--warn)" },
-  off: { label: "Off", tone: "var(--fg-subtle)" },
+  off: { label: "Not configured", tone: "var(--fg-subtle)" },
   permission_denied: { label: "Permission denied", tone: "var(--crit)" },
   misconfigured: { label: "Misconfigured", tone: "var(--crit)" },
   no_data: { label: "No data received", tone: "var(--warn)" },
-  not_supported: { label: "Not supported", tone: "var(--fg-subtle)" },
+  not_supported: { label: "Coming soon", tone: "var(--fg-subtle)" },
 };
 
 export interface SourceReadiness {
@@ -157,6 +157,8 @@ export interface IngestionSource {
   status: SourceStatus;
   volume?: number;
   last_seen_iso?: string;
+  /** available = a producer exists for this source; planned = nothing ships it yet. */
+  capability?: "available" | "planned";
 }
 
 export function deriveReadiness(opts: {
@@ -188,9 +190,13 @@ export function deriveReadiness(opts: {
       // No reading for this source (endpoint absent, or source has no producer)
       // → "off". Honest default, same as before.
       if (!s) return { sourceType, status: "off" };
+      // "off" means three different things; the backend now says which. A source
+      // no producer ships yet is "Coming soon", not a broken feed.
+      const status: SourceStatus =
+        s.status === "off" && s.capability === "planned" ? "not_supported" : s.status;
       return {
         sourceType,
-        status: s.status,
+        status,
         volume: s.volume,
         lastSyncIso: s.last_seen_iso,
       };

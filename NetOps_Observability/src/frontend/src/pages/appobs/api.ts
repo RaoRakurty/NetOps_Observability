@@ -152,7 +152,20 @@ function toCoverage(c: CloudCoverageReport): Coverage {
 // ── Loaders (what the tabs call) ─────────────────────────────────────────────
 export async function loadApps(): Promise<App[]> {
   const r = await api.cloudApps();
-  return (r.apps ?? []).map(toApp);
+  const live = r.live ?? {};
+  return (r.apps ?? []).map((row) => {
+    const app = toApp(row);
+    // Merge the backend's measured live enrichment (provider status checks,
+    // probe outcomes). Without this the page hard-coded health "unknown" and
+    // rendered a degraded cloud as all-grey — the exact lie the audit flagged.
+    const l = live[app.name] ?? live[app.id];
+    if (l?.health === "healthy" || l?.health === "degraded" || l?.health === "down") {
+      app.health = l.health;
+      // failing status checks / probe failures are an availability symptom
+      if (l.health !== "healthy") app.primarySymptom = "availability";
+    }
+    return app;
+  });
 }
 
 export async function loadResources(): Promise<CloudResource[]> {

@@ -30,6 +30,7 @@ import {
   NOT_MEASURED,
 } from "./appobs/api";
 import type { CloudRcaObject } from "./appobs/api";
+import { signatureNocTitle } from "../components/rca/labels";
 import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES } from "./appobs/attribution";
 import { useCloudShell } from "./appobs/useCloudShell";
 import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell";
@@ -216,7 +217,14 @@ function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: Readin
   }
 
   const { apps, resources, coverage, health, changes, objects } = data;
-  const degraded = degradedApps(health);
+  // Degraded = health-signal verdicts ∪ live measured app health (provider status
+  // checks + probe outcomes). A dead health feed must never render as "0 degraded"
+  // = "all healthy": with nothing measured at all we say "—", not 0.
+  const degraded = [...new Set([
+    ...degradedApps(health),
+    ...apps.filter((a) => a.health === "degraded" || a.health === "down").map((a) => a.name),
+  ])];
+  const healthMeasured = health.length > 0 || apps.some((a) => a.health !== "unknown");
   const openRca = objects.filter((o) => o.state === "open");
   const unknownPct = coverage.total ? Math.round((coverage.unknown / coverage.total) * 100) : NOT_MEASURED;
 
@@ -229,7 +237,9 @@ function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: Readin
       {/* A. grouped operational cards — each one measured, or an explicit "—". */}
       <div className="ao-groups">
         <CardGroup title="Impact">
-          <MetricCard label="Apps Degraded" value={degraded.length} trend="from cloud health signals · 24h" tone={degraded.length ? "warn" : "good"} />
+          <MetricCard label="Apps Degraded" value={healthMeasured ? degraded.length : DASH}
+            trend={healthMeasured ? "provider status + health signals · 24h" : "no health feed measured"}
+            tone={!healthMeasured ? undefined : degraded.length ? "warn" : "good"} />
           <MetricCard label="Active App RCA" value={openRca.length} trend="open cloud correlation objects" tone={openRca.length ? "warn" : "good"} />
           <MetricCard label="Underlay Impacted" value={DASH} trend="app→seam correlation not ingested" />
         </CardGroup>
@@ -263,11 +273,11 @@ function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: Readin
             columns={[
               { key: "apps", header: "Apps", width: 220, render: (o) => o.apps.length ? <strong>{o.apps.join(", ")}</strong> : DASH },
               { key: "verdict", header: "Verdict", width: 120, sortable: true, sortValue: (o) => o.verdictTier, render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
-              { key: "hyp", header: "Top hypothesis", width: 300, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis}</span> },
+              { key: "hyp", header: "Probable cause", width: 300, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis.startsWith("sig.") ? signatureNocTitle(o.topHypothesis) : o.topHypothesis}</span> },
               { key: "conf", header: "Confidence", width: 96, align: "right", render: (o) => `${Math.round(o.confidence * 100)}%` },
               { key: "sig", header: "Signals", width: 80, align: "right", sortable: true, sortValue: (o) => o.signalCount, render: (o) => o.signalCount },
               { key: "state", header: "State", width: 80, render: (o) => o.state },
-              { key: "start", header: "Window start", width: 110, render: (o) => ago(o.windowStart) },
+              { key: "start", header: "Started", width: 110, render: (o) => ago(o.windowStart) },
               { key: "act", header: "Evidence", width: 110, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goTab("evidence"); }}>Evidence</button> },
             ]} />
         )}
