@@ -107,6 +107,35 @@ def test_vpn_tunnels_are_distinct_keys_never_aggregate():
     assert evs[0]["attrs"]["vpn_id"] == "vpn-0abc"
 
 
+def test_route_collapse_while_tunnel_up_is_route_change_not_outage():
+    tr = SeamStateTracker()
+    prev, cur = {}, {}
+    seam_aws.seam_state_events(SEAMS, tr, 0.0, T0, prev, cur)   # baseline: t1 up w/ 4 routes
+    assert cur["vpnroutes:vpn-0abc:52.0.0.1"] == 4
+    seams2 = {**SEAMS, "vpn": [{**SEAMS["vpn"][0], "tunnels": [
+        {"outside_ip": "52.0.0.1", "status": "up", "status_message": "", "accepted_routes": 0},
+        SEAMS["vpn"][0]["tunnels"][1],
+    ]}]}
+    evs = seam_aws.seam_state_events(seams2, tr, 120.0, T1, cur, {})
+    drops = [e for e in evs if e["kind"] == "cloud_route_count_drop"]
+    assert len(drops) == 1
+    assert drops[0]["attrs"]["evidence_class"] == "route_change"
+    assert drops[0]["attrs"]["tunnel_ip"] == "52.0.0.1"
+    assert drops[0]["attrs"]["previous"] == "4"
+    # and no tunnel-down was fabricated: the session stayed up
+    assert not [e for e in evs if e["kind"] == "cloud_vpn_tunnel_down"]
+
+
+def test_route_drop_on_down_tunnel_stays_silent():
+    # tunnel 2 is DOWN with 0 routes; collapse must not double-report as a
+    # route fault (the down transition owns that story), and no-baseline → no claim.
+    tr = SeamStateTracker()
+    prev, cur = {}, {}
+    seam_aws.seam_state_events(SEAMS, tr, 0.0, T0, prev, cur)
+    evs = seam_aws.seam_state_events(SEAMS, tr, 120.0, T1, cur, {})
+    assert [e for e in evs if e["kind"] == "cloud_route_count_drop"] == []
+
+
 def test_dx_bgp_down_transition_carries_native_ids():
     tr = SeamStateTracker()
     seam_aws.seam_state_events(SEAMS, tr, 0.0, T0)

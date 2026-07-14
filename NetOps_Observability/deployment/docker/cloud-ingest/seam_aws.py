@@ -44,7 +44,7 @@ import os
 import time
 import urllib.request
 
-from seam_state import SeamStateTracker, counter_delta
+from seam_state import SeamStateTracker, counter_delta, material_route_drop
 
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -157,10 +157,17 @@ def discover_seams(session) -> dict:
 # ── state → transition signals (pure given a tracker) ────────────────────────
 
 def seam_state_events(seams: dict, tracker: SeamStateTracker, now: float,
-                      observed_at: str) -> list[dict]:
+                      observed_at: str, route_prev: dict | None = None,
+                      route_new: dict | None = None) -> list[dict]:
     """Feed the current describe-API state into the tracker; map transitions to
-    the canonical seam signal kinds. Pure aside from tracker mutation."""
+    the canonical seam signal kinds. Pure aside from tracker mutation.
+    route_prev/route_new carry per-tunnel AcceptedRouteCount across cycles so a
+    material collapse WHILE THE TUNNEL IS UP emits route_change evidence — the
+    "session up, advertisements gone" case is route policy, never an outage."""
     events: list[dict] = []
+    route_prev = route_prev or {}
+    if route_new is None:
+        route_new = {}
 
     def emit(kind: str, resource_id: str, sev: str, attrs: dict, tr: dict) -> None:
         events.append({
@@ -195,6 +202,24 @@ def seam_state_events(seams: dict, tracker: SeamStateTracker, now: float,
                     attrs["flap"] = "true"
                     attrs["transitions_15m"] = str(tr.get("transitions_15m", ""))
                 emit(kind, key, "crit" if to == "down" else "info", attrs, tr)
+            # Route-count collapse while the tunnel is UP (BGP VPNs): route
+            # policy / advertisement evidence, deliberately gated on up so a
+            # tunnel-down never double-reports as a route fault too.
+            rkey = f"vpnroutes:{v['vpn_id']}:{t['outside_ip']}"
+            routes = int(t.get("accepted_routes", 0) or 0)
+            route_new[rkey] = routes
+            if t["status"] == "up" and material_route_drop(route_prev.get(rkey), routes):
+                events.append({
+                    "kind": "cloud_route_count_drop", "resource_id": rkey,
+                    "account": "", "region": REGION, "severity": "high",
+                    "metric_name": "accepted_routes", "value": float(routes),
+                    "ts": observed_at,
+                    "attrs": {"provider": "aws", "evidence_class": "route_change",
+                              "vpn_id": v["vpn_id"], "tunnel_ip": t["outside_ip"],
+                              "tgw_id": v.get("tgw_id", ""),
+                              "previous": str(route_prev.get(rkey, "")),
+                              "tunnel_state": "up"},
+                })
 
     for vif in seams.get("dx_vifs", []):
         for p in vif["peers"]:
@@ -296,7 +321,10 @@ def run(session, producer, tenant: str, st: dict, metered: bool) -> dict:
     observed_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     seams = discover_seams(session)
     tracker = SeamStateTracker.from_state(st.get("seam_tracker"))
-    events = seam_state_events(seams, tracker, now, observed_at)
+    route_new: dict = {}
+    events = seam_state_events(seams, tracker, now, observed_at,
+                               st.get("aws_route_counts") or {}, route_new)
+    st["aws_route_counts"] = route_new
     # freshness: a state not re-confirmed within 3 cycles is unknown, not "up".
     for tr in tracker.expire(freshness_s=3 * max(int(st.get("seam_every_s", 120)), 60), now=now):
         events.append({
