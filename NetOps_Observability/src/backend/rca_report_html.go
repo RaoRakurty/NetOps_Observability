@@ -99,7 +99,17 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 			}
 			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8.5" font-weight="800" letter-spacing=".08em" fill="%s">%s</text>`, x, stroke, label)
 		} else if h.Provider != "" {
-			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8" font-weight="700" letter-spacing=".08em" fill="#475569">%s</text>`, x, esc(strings.ToUpper(h.Provider)))
+			prov := strings.ToUpper(h.Provider)
+			if uri := cloudIconDataURI(h.Provider); uri != "" {
+				// official provider mark + name (the icon terms recommend the
+				// name near the icon). Centered as one group above the node.
+				tw := 5 * len(prov) // ≈ bold 8px glyph width
+				left := x - (14+4+tw)/2
+				fmt.Fprintf(&b, `<image href="%s" x="%d" y="4" width="14" height="14"/>`, uri, left)
+				fmt.Fprintf(&b, `<text x="%d" y="14" font-size="8" font-weight="700" letter-spacing=".08em" fill="#475569">%s</text>`, left+18, esc(prov))
+			} else {
+				fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8" font-weight="700" letter-spacing=".08em" fill="#475569">%s</text>`, x, esc(prov))
+			}
 		}
 		// zone above, name + boundary below — the same reading order as the table.
 		fmt.Fprintf(&b, `<text x="%d" y="32" text-anchor="middle" font-size="8" fill="#64748b">%s</text>`, x, esc(rcaTitleCase(h.Kind)))

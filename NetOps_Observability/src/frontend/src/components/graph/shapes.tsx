@@ -1,4 +1,6 @@
 import { useId } from "react";
+import awsMark from "../../assets/cloud/aws.svg";
+import azureMark from "../../assets/cloud/azure.svg";
 
 // shapes.tsx — a small network-topology shape kit. Following the universal
 // convention (Cisco/Kentik/Auvik/Lucidchart): DEVICE TYPE = shape, HEALTH =
@@ -99,11 +101,16 @@ function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
 // canvas. `pulse` adds a breathing ring (for a fault). A faint type glyph hints
 // the device type.
 // Cloud-provider marks (VENDOR = the logo inside the shape, per the kit
-// convention above): a brand-colored rounded badge with the provider's
-// monogram — instantly legible at node size without logo-fidelity risk.
+// convention above). aws/azure use the OFFICIAL icons vendored from the
+// providers' architecture-icon packages (source + terms in
+// src/assets/cloud/README.md) — rendered as-is, only composited onto a tile
+// for contrast. Providers without a vendored official mark (gcp) keep the
+// monogram badge fallback.
+const PROVIDER_ICON: Record<string, { href: string; tile?: string }> = {
+  aws:   { href: awsMark },                // ships its own navy tile
+  azure: { href: azureMark, tile: "#FFFFFF" }, // transparent mark → white tile
+};
 const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {
-  aws:   { bg: "#232F3E", fg: "#FF9900", text: "aws" },
-  azure: { bg: "#0078D4", fg: "#FFFFFF", text: "Az" },
   gcp:   { bg: "#FFFFFF", fg: "#4285F4", text: "G" },
 };
 
@@ -114,7 +121,8 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, p
 }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gid = `g-${uid}`;
-  const mark = provider ? PROVIDER_MARK[provider.toLowerCase()] : undefined;
+  const icon = provider ? PROVIDER_ICON[provider.toLowerCase()] : undefined;
+  const mark = provider && !icon ? PROVIDER_MARK[provider.toLowerCase()] : undefined;
   return (
     <svg width={size} height={size} viewBox="0 0 100 100"
       style={{ filter: `drop-shadow(0 0 7px ${tone}88) drop-shadow(0 3px 5px rgba(0,0,0,.45))`, overflow: "visible" }}>
@@ -135,15 +143,27 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, p
       {shapeEls(kind, tone, `url(#${gid})`)}
       {/* specular highlight — the "gloss" */}
       <ellipse cx="40" cy="30" rx="22" ry="13" fill="#ffffff" opacity={0.14} transform="rotate(-18 40 30)" />
-      {glyph && !mark && (
+      {glyph && !mark && !icon && (
         <text x="50" y="51" textAnchor="middle" dominantBaseline="central"
           fontSize="28" fill="#ffffff" opacity={0.92} style={{ fontWeight: 800 }}>
           {GLYPH[kind]}
         </text>
       )}
+      {icon && (
+        <g>
+          {/* the OFFICIAL provider mark replaces the generic glyph. The tile
+              (when the mark is transparent) sits BEHIND it for contrast — the
+              icon itself is untouched, per the providers' icon terms. */}
+          {icon.tile && (
+            <rect x="31" y="31" width="38" height="38" rx="7" fill={icon.tile}
+              stroke="#ffffff" strokeOpacity={0.25} strokeWidth={1.5} />
+          )}
+          <image href={icon.href} x="34" y="34" width="32" height="32" />
+        </g>
+      )}
       {mark && (
         <g>
-          {/* the provider mark replaces the generic glyph: centered brand badge */}
+          {/* monogram badge fallback for providers without a vendored official mark */}
           <rect x="28" y="36" width="44" height="28" rx="7"
             fill={mark.bg} stroke="#ffffff" strokeOpacity={0.25} strokeWidth={1.5} />
           <text x="50" y="50.5" textAnchor="middle" dominantBaseline="central"
