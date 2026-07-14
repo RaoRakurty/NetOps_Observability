@@ -9,11 +9,11 @@ import { ReactNode, useEffect } from "react";
 import { Chip } from "../../components/noc";
 import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory } from "./types";
 
-// Evidence-category badge — the anti-black-box ledger. Discriminating (the
+// Finding-category badge — the anti-black-box ledger. Discriminating (the
 // differentiator) reads as accent; contradicting as crit; missing stays muted
-// (an honest gap, not an alarm); recovery and supporting read calm-positive.
+// (an honest gap, not an alarm); recovery and grounded read calm-positive.
 const EV_CAT_META: Record<EvidenceCategory, { label: string; tone: string }> = {
-  supporting: { label: "Supporting", tone: "var(--ok)" },
+  grounded: { label: "Grounded", tone: "var(--ok)" },
   contradicting: { label: "Contradicting", tone: "var(--crit)" },
   discriminating: { label: "Discriminating", tone: "var(--accent)" },
   missing: { label: "Missing", tone: "var(--fg-subtle)" },

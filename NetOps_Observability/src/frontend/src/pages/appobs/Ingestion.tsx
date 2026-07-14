@@ -12,9 +12,9 @@ import { Skeleton } from "../../components/ui";
 import { EmptyState } from "./badges";
 import { ReadinessStrip, SourceStatusBadge, FreshnessBadge } from "./shell";
 import {
-  SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, STATUS_META, summarize, freshnessLabel, isMeasured,
+  SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, IngestionSource, STATUS_META, summarize, freshnessLabel, isMeasured,
 } from "./readiness";
-import { buildAccounts, buildMatrix, CloudAccount, RegionReadiness } from "./ingestion";
+import { buildAccounts, buildMatrix, CloudAccount, ProviderIngestion, RegionReadiness } from "./ingestion";
 
 type Sub = "accounts" | "sources" | "status";
 const PROVIDER = (p: string) => (p ? p.toUpperCase() : "—");
@@ -23,12 +23,23 @@ const goIntegrations = () => { location.hash = "#/incident/integrations"; };
 export default function Ingestion() {
   const [sub, setSub] = useState<Sub>("status");
   const [rows, setRows] = useState<CloudResourceRow[]>([]);
+  const [byProvider, setByProvider] = useState<ProviderIngestion>({});
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     let live = true;
-    api.cloudResources().then(
-      (r) => { if (live) { setRows(r.resources ?? []); setState("ready"); } },
+    Promise.all([
+      api.cloudResources(),
+      // measured per-provider statuses (audit P0-7); failure keeps the honest
+      // inventory-only default — never a fabricated "flowing".
+      api.cloudIngestion().catch(() => ({ providers: {} as Record<string, IngestionSource[]> })),
+    ]).then(
+      ([r, ing]) => {
+        if (!live) return;
+        setRows(r.resources ?? []);
+        setByProvider((ing.providers ?? {}) as ProviderIngestion);
+        setState("ready");
+      },
       () => { if (live) setState("error"); },
     );
     return () => { live = false; };
@@ -41,8 +52,8 @@ export default function Ingestion() {
     return <div className="ao-panel"><EmptyState title="Unable to load ingestion status" hint="retry, or open Admin → Integrations to check the cloud connectors" action={<button className="ao-btn" onClick={goIntegrations}>Open Integrations</button>} /></div>;
   }
 
-  const accounts = buildAccounts(rows);
-  const matrix = buildMatrix(rows);
+  const accounts = buildAccounts(rows, byProvider);
+  const matrix = buildMatrix(rows, byProvider);
 
   return (
     <div className="ao-stack">
@@ -65,12 +76,10 @@ function Accounts({ accounts }: { accounts: CloudAccount[] }) {
     <div className="ao-stack">
       <div className="ao-cta">
         <span className="ao-cta-h">Connect and scope AWS, Azure, and GCP accounts for observability.</span>
+        {/* ONE button that does exactly what it says (audit C: five buttons all
+            opened the same page while promising provider-specific flows). */}
         <div className="ao-cta-btns">
-          <button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Connect AWS</button>
-          <button className="ao-btn" onClick={goIntegrations}>Connect Azure</button>
-          <button className="ao-btn" onClick={goIntegrations}>Connect GCP</button>
-          <button className="ao-btn" onClick={goIntegrations}>View IAM Instructions</button>
-          <button className="ao-btn" onClick={goIntegrations}>Open Admin → Integrations</button>
+          <button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Connect a cloud account · Integrations</button>
         </div>
       </div>
       {accounts.length === 0 ? (
@@ -85,7 +94,7 @@ function Accounts({ accounts }: { accounts: CloudAccount[] }) {
             <table className="ao-tbl">
               <thead><tr>
                 <th>Provider</th><th>Account / Subscription / Project</th><th>Tenant</th><th>Regions</th>
-                <th>Enabled sources</th><th>Connection</th><th>Permission</th><th>Last sync</th><th>Actions</th>
+                <th>Flowing sources</th><th>Connection</th><th>Last sync</th><th>Actions</th>
               </tr></thead>
               <tbody>
                 {accounts.map((a) => (
@@ -96,7 +105,6 @@ function Accounts({ accounts }: { accounts: CloudAccount[] }) {
                     <td>{a.regions.join(", ") || "—"}</td>
                     <td>{a.enabledSources} of {SOURCE_TYPES.length}</td>
                     <td><SourceStatusBadge status={a.status} /></td>
-                    <td className="ao-muted" title="permission probing arrives with the live cloud connector">not checked</td>
                     <td><FreshnessBadge iso={a.lastSyncIso} status={a.status} /></td>
                     <td><button className="ao-rowaction" onClick={goIntegrations}>Manage</button></td>
                   </tr>
@@ -116,7 +124,7 @@ function Sources({ matrix }: { matrix: RegionReadiness[] }) {
   return (
     <div className="ao-stack">
       <div className="ao-panel">
-        <div className="ao-panel-h">Sources by account &amp; region <span className="ao-panel-meta">what Correlix ingests · only inventory is live today</span></div>
+        <div className="ao-panel-h">Sources by account &amp; region <span className="ao-panel-meta">what Correlix ingests · each chip is measured per provider</span></div>
         <SourceMatrix rows={matrix} detailed={false} />
       </div>
     </div>
@@ -142,13 +150,13 @@ function Status({ matrix }: { matrix: RegionReadiness[] }) {
       </div>
       <div className="ao-panel ao-remediation">
         <div className="ao-panel-h">Remediation</div>
-        <p className="ao-set-d">When a source is off, stale or permission-denied, fix it at the connector — Correlix never fabricates the missing signal.</p>
+        <p className="ao-set-d">
+          When a source is off, stale or permission-denied, fix it at the connector —
+          IAM/permissions, source enablement and log-bucket settings all live there.
+          Correlix never fabricates the missing signal.
+        </p>
         <div className="ao-cta-btns">
-          <button className="ao-btn" onClick={goIntegrations}>Fix IAM / permissions</button>
-          <button className="ao-btn" onClick={goIntegrations}>Enable a source</button>
-          <button className="ao-btn" onClick={goIntegrations}>Check log bucket</button>
-          <button className="ao-btn" onClick={goIntegrations}>Re-run sync</button>
-          <button className="ao-btn" onClick={goIntegrations}>Open integration</button>
+          <button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Open Integrations</button>
         </div>
       </div>
     </div>

@@ -67,18 +67,11 @@ function verdictConf(tier: string): Confidence {
   return tier === "confirmed" ? "confirmed" : tier === "suspected" ? "suspected" : "unknown";
 }
 
-// a surface with no ingested source says so plainly — it never falls back to samples.
-function NotIngested({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div className="ao-panel">
-      <div className="ao-preview-note">
-        <Chip label="not ingested" tone="var(--fg-subtle)" />
-        <span>This view stays empty until the source below is connected — Correlix never fabricates the missing signal.</span>
-      </div>
-      <EmptyState title={title} hint={hint} />
-    </div>
-  );
-}
+// developer identity-source enum → the operator words (audit C: "Mapped by").
+const MAPPED_BY: Record<string, string> = {
+  cloud_tag: "Tag", cloud_graph: "Resource graph", operator_catalog: "Operator",
+  firewall_appid: "Firewall", domain: "Domain", ip_catalog: "IP catalog", unknown: "—",
+};
 
 // shared loading / error / empty states for the live cloud surfaces.
 function TableSkeleton() {
@@ -97,36 +90,44 @@ function CloudEmpty() {
     hint="connect an AWS / Azure / GCP account in Settings (or load inventory fixtures) — identity attribution appears as resources are discovered" /></div>;
 }
 
-const TABS = [
-  "overview", "ingestion", "applications", "appmap", "resources", "attribution",
-  "health", "underlay", "unknowns", "evidence", "settings",
-] as const;
+// 5-tab IA (audit C): Overview | Services | Investigations | Resources |
+// Data sources (+ Settings). The old 11 tab ids stay valid as deep-link
+// aliases so every existing bookmark/flyout link lands on the right sub-view.
+const TABS = ["overview", "services", "investigations", "resources", "datasources", "settings"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
-  overview: "Overview", ingestion: "Ingestion", applications: "Applications", appmap: "App Map",
-  resources: "Cloud Resources", attribution: "Attribution", health: "Health & Changes",
-  underlay: "Underlay Impact", unknowns: "Unknowns", evidence: "Evidence", settings: "Settings",
+  overview: "Overview", services: "Services", investigations: "Investigations",
+  resources: "Resources", datasources: "Data sources", settings: "Settings",
 };
-// Every tab is backed by live, tenant-scoped cloud data except Underlay, which has
-// no ingested source yet (app→seam correlation) and says so instead of showing rows.
-const LIVE_TABS = new Set<Tab>([
-  "overview", "ingestion", "applications", "appmap", "resources", "attribution",
-  "health", "unknowns", "evidence",
-]);
+const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
+  applications: { tab: "services", sub: "applications" },
+  appmap: { tab: "services", sub: "map" },
+  attribution: { tab: "resources", sub: "mapping" },
+  unknowns: { tab: "resources", sub: "untagged" },
+  health: { tab: "investigations", sub: "alerts" },
+  evidence: { tab: "investigations", sub: "findings" },
+  underlay: { tab: "investigations", sub: "network" },
+  ingestion: { tab: "datasources" },
+};
 
 export default function AppObservability() {
   const [tab, setTab] = useState<Tab>("overview");
+  const [sub, setSub] = useState<string>("");
   const [sel, setSel] = useState<App | null>(null);
   const shell = useCloudShell();
 
-  // deep-link: #/monitoring/appobs/applications → opens that tab. Re-read on
-  // hashchange too, so clicking a flyout sub-item while ALREADY on this page
-  // switches tabs (the leaf component stays mounted, so a mount-only effect
-  // would never see the new suffix → the click looked dead).
+  // deep-link: #/monitoring/appobs/<tab-or-alias> → opens that (sub-)view.
+  // Re-read on hashchange too, so clicking a flyout sub-item while ALREADY on
+  // this page switches tabs (the leaf component stays mounted, so a mount-only
+  // effect would never see the new suffix → the click looked dead).
   useEffect(() => {
     const apply = () => {
-      const suffix = location.hash.split("?")[0].split("/").pop() as Tab;
-      if (TABS.includes(suffix)) setTab(suffix);
+      const suffix = location.hash.split("?")[0].split("/").pop() ?? "";
+      if ((TABS as readonly string[]).includes(suffix)) {
+        setTab(suffix as Tab); setSub("");
+      } else if (TAB_ALIAS[suffix]) {
+        setTab(TAB_ALIAS[suffix].tab); setSub(TAB_ALIAS[suffix].sub ?? "");
+      }
     };
     apply();
     window.addEventListener("hashchange", apply);
@@ -138,33 +139,91 @@ export default function AppObservability() {
   return (
     <div className="ao">
       <NocHeader
-        title="App Observability"
-        subtitle="Cloud app identity, health, change & app-to-underlay RCA — evidence-grounded"
+        title="Service View"
+        subtitle="Cloud service identity, health, change & network RCA — evidence-grounded"
       />
       <CloudScopeBar scope={shell.scope} mode={shell.mode} summary={shell.summary} />
 
-      <nav className="ao-tabs" role="tablist" aria-label="App Observability">
+      <nav className="ao-tabs" role="tablist" aria-label="Service View">
         {TABS.map((tk) => (
           <button key={tk} role="tab" aria-selected={tab === tk}
-            className={`ao-tab${tab === tk ? " is-active" : ""}`} onClick={() => setTab(tk)}
-            title={LIVE_TABS.has(tk) ? "Live cloud telemetry" : "No source ingested yet"}>
+            className={`ao-tab${tab === tk ? " is-active" : ""}`}
+            onClick={() => { setTab(tk); setSub(""); }} title="Live cloud telemetry">
             {TAB_LABEL[tk]}
-            {!LIVE_TABS.has(tk) && tk !== "settings" && <span className="ao-tab-dot" aria-label="no source ingested" />}
           </button>
         ))}
       </nav>
 
-      {tab === "overview" && <Overview goTab={setTab} summary={shell.summary} />}
-      {tab === "ingestion" && <Ingestion />}
-      {tab === "applications" && <Applications onOpen={setSel} />}
-      {tab === "appmap" && <AppMap />}
-      {tab === "resources" && <Resources />}
-      {tab === "attribution" && <Attribution />}
-      {tab === "health" && <HealthChanges />}
-      {tab === "underlay" && <Underlay />}
-      {tab === "unknowns" && <Unknowns />}
-      {tab === "evidence" && <Evidence />}
+      {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} />}
+      {tab === "services" && <Services initialSub={sub} onOpen={setSel} />}
+      {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} />}
+      {tab === "resources" && <ResourcesGroup initialSub={sub} />}
+      {tab === "datasources" && <Ingestion />}
       {tab === "settings" && <Settings />}
+    </div>
+  );
+}
+
+// shared sub-tab bar for the grouped views.
+function SubTabs<T extends string>({ value, onChange, items }: {
+  value: T; onChange: (v: T) => void; items: { key: T; label: string }[];
+}) {
+  return (
+    <div className="ao-tabs ao-tabs--sub">
+      {items.map((it) => (
+        <button key={it.key} className={`ao-tab${value === it.key ? " is-active" : ""}`}
+          onClick={() => onChange(it.key)}>{it.label}</button>
+      ))}
+    </div>
+  );
+}
+
+// ── Services (Applications + Service map) ────────────────────────────────────
+function Services({ initialSub, onOpen }: { initialSub: string; onOpen: (a: App) => void }) {
+  const [sub, setSub] = useState<"applications" | "map">(initialSub === "map" ? "map" : "applications");
+  return (
+    <div className="ao-stack">
+      <SubTabs value={sub} onChange={setSub}
+        items={[{ key: "applications", label: "Applications" }, { key: "map", label: "Service map" }]} />
+      {sub === "applications" ? <Applications onOpen={onOpen} /> : <AppMap />}
+    </div>
+  );
+}
+
+// ── Investigations (Timeline · Alerts · Changes · Findings · Network) ────────
+function Investigations({ initialSub, goDataSources }: { initialSub: string; goDataSources: () => void }) {
+  const first = (["alerts", "changes", "findings", "network"].includes(initialSub)
+    ? initialSub : "timeline") as "timeline" | "alerts" | "changes" | "findings" | "network";
+  const [sub, setSub] = useState(first);
+  return (
+    <div className="ao-stack">
+      <SubTabs value={sub} onChange={setSub} items={[
+        { key: "timeline", label: "Timeline" }, { key: "alerts", label: "Alerts" },
+        { key: "changes", label: "Changes" }, { key: "findings", label: "Findings" },
+        { key: "network", label: "Network connectivity" },
+      ]} />
+      {(sub === "timeline" || sub === "alerts" || sub === "changes") && <HealthChanges view={sub} />}
+      {sub === "findings" && <Evidence />}
+      {sub === "network" && <Underlay goDataSources={goDataSources} />}
+    </div>
+  );
+}
+
+// ── Resources group (Resources · Service mapping · Untagged) ─────────────────
+function ResourcesGroup({ initialSub }: { initialSub: string }) {
+  const first = (initialSub === "mapping" || initialSub === "untagged" ? initialSub : "resources") as
+    "resources" | "mapping" | "untagged";
+  const [sub, setSub] = useState(first);
+  return (
+    <div className="ao-stack">
+      <SubTabs value={sub} onChange={setSub} items={[
+        { key: "resources", label: "Resources" },
+        { key: "mapping", label: "Service mapping" },
+        { key: "untagged", label: "Untagged" },
+      ]} />
+      {sub === "resources" && <Resources />}
+      {sub === "mapping" && <Attribution />}
+      {sub === "untagged" && <Unknowns />}
     </div>
   );
 }
@@ -181,13 +240,18 @@ interface OverviewData {
   health: HealthSignal[];
   changes: ChangeEvent[];
   objects: CloudRcaObject[];
+  openCount: number;         // dedicated COUNT — never the list length (D-P1-7)
+  objectsTruncated: boolean;
 }
 
 async function loadOverview(): Promise<OverviewData> {
   const [apps, resources, cov, health, changes, ev] = await Promise.all([
     loadApps(), loadResources(), loadCoverage(), loadHealthSignals(), loadChangeEvents(), loadEvidence(),
   ]);
-  return { apps, resources, coverage: cov.coverage, health, changes, objects: ev.objects };
+  return {
+    apps, resources, coverage: cov.coverage, health, changes,
+    objects: ev.objects, openCount: ev.openCount, objectsTruncated: ev.objectsTruncated,
+  };
 }
 
 // apps with a health signal that says degraded/down in the window — measured from
@@ -197,7 +261,7 @@ function degradedApps(health: HealthSignal[]): string[] {
     .map((h) => h.app).filter((a) => a && a !== "—"))];
 }
 
-function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: ReadinessSummary }) {
+function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; summary: ReadinessSummary }) {
   const { data, status } = useAsync(loadOverview);
 
   if (status === "loading") {
@@ -213,10 +277,10 @@ function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: Readin
     );
   }
   if (status === "error" || !data) {
-    return <div className="ao-panel"><EmptyState title="Unable to load App Observability summary" hint="retry, or check the cloud connector status in Settings" /></div>;
+    return <div className="ao-panel"><EmptyState title="Unable to load the Service View summary" hint="retry, or check the cloud connector status in Settings" /></div>;
   }
 
-  const { apps, resources, coverage, health, changes, objects } = data;
+  const { apps, resources, coverage, health, changes, objects, openCount, objectsTruncated } = data;
   // Degraded = health-signal verdicts ∪ live measured app health (provider status
   // checks + probe outcomes). A dead health feed must never render as "0 degraded"
   // = "all healthy": with nothing measured at all we say "—", not 0.
@@ -237,16 +301,16 @@ function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: Readin
       {/* A. grouped operational cards — each one measured, or an explicit "—". */}
       <div className="ao-groups">
         <CardGroup title="Impact">
-          <MetricCard label="Apps Degraded" value={healthMeasured ? degraded.length : DASH}
+          <MetricCard label="Services Degraded" value={healthMeasured ? degraded.length : DASH}
             trend={healthMeasured ? "provider status + health signals · 24h" : "no health feed measured"}
             tone={!healthMeasured ? undefined : degraded.length ? "warn" : "good"} />
-          <MetricCard label="Active App RCA" value={openRca.length} trend="open cloud correlation objects" tone={openRca.length ? "warn" : "good"} />
-          <MetricCard label="Underlay Impacted" value={DASH} trend="app→seam correlation not ingested" />
+          <MetricCard label="Open Investigations" value={openCount} trend="engine-formed · dedicated count" tone={openCount ? "warn" : "good"} />
+          <MetricCard label="Network Impact" value={DASH} trend="service→connection correlation not ingested" />
         </CardGroup>
         <CardGroup title="Coverage">
-          <MetricCard label="Apps Observed" value={apps.length.toLocaleString()} trend="from cloud inventory" tone="accent" />
+          <MetricCard label="Services Observed" value={apps.length.toLocaleString()} trend="from cloud inventory" tone="accent" />
           <MetricCard label="Resources Mapped" value={resources.length.toLocaleString()} trend="discovered + attributed" />
-          <MetricCard label="Unknown Attribution"
+          <MetricCard label="Untagged Resources"
             value={unknownPct < 0 ? DASH : `${unknownPct}%`}
             trend={coverage.total ? `${coverage.unknown} of ${coverage.total}` : undefined}
             tone={unknownPct > 10 ? "warn" : unknownPct < 0 ? undefined : "good"} />
@@ -257,28 +321,35 @@ function Overview({ goTab, summary }: { goTab: (t: Tab) => void; summary: Readin
         </CardGroup>
       </div>
 
-      {/* B. the REAL cloud RCA objects the engine formed — no heuristic verdicts. */}
+      {/* B. the REAL investigations the engine formed — no heuristic verdicts. */}
       <div className="ao-panel">
-        <div className="ao-panel-h">Active cloud RCA
-          <span className="ao-panel-meta">correlation objects grounded on cloud signals · click for the full RCA</span></div>
+        <div className="ao-panel-h">Open investigations
+          <span className="ao-panel-meta">
+            grounded on cloud signals · click for the full analysis
+            {objectsTruncated && openRca.length < openCount &&
+              ` · showing ${openRca.length} of ${openCount} open`}
+          </span></div>
         {objects.length === 0 ? (
-          <EmptyState title="No cloud RCA in the last 24h"
+          <EmptyState title="No open investigations in the last 24 hours"
             hint={health.length || changes.length
-              ? "cloud signals are landing but the engine has not grounded a correlation object — unknown stays first-class"
-              : "no cloud health or change signals have landed yet — check Ingestion"} />
+              ? "cloud signals are landing; none has grounded into an investigation yet"
+              : "no cloud health or change signals have landed yet"}
+            action={!(health.length || changes.length)
+              ? <button className="ao-btn ao-btn--primary" onClick={() => goTab("datasources")}>Check data sources</button>
+              : undefined} />
         ) : (
           <DataTable<CloudRcaObject> rows={objects} rowKey={(o) => o.correlationId}
-            height={Math.min(460, 56 + objects.length * 34)} ariaLabel="Active cloud RCA"
+            height={Math.min(460, 56 + objects.length * 34)} ariaLabel="Open investigations"
             onRowClick={(o) => { location.hash = `#/monitoring/correlations?id=${encodeURIComponent(o.correlationId)}`; }}
             columns={[
-              { key: "apps", header: "Apps", width: 220, render: (o) => o.apps.length ? <strong>{o.apps.join(", ")}</strong> : DASH },
-              { key: "verdict", header: "Verdict", width: 120, sortable: true, sortValue: (o) => o.verdictTier, render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
+              { key: "apps", header: "Services", width: 220, render: (o) => o.apps.length ? <strong>{o.apps.join(", ")}</strong> : DASH },
+              { key: "verdict", header: "Assessment", width: 120, sortable: true, sortValue: (o) => o.verdictTier, render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
               { key: "hyp", header: "Probable cause", width: 300, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis.startsWith("sig.") ? signatureNocTitle(o.topHypothesis) : o.topHypothesis}</span> },
               { key: "conf", header: "Confidence", width: 96, align: "right", render: (o) => `${Math.round(o.confidence * 100)}%` },
               { key: "sig", header: "Signals", width: 80, align: "right", sortable: true, sortValue: (o) => o.signalCount, render: (o) => o.signalCount },
               { key: "state", header: "State", width: 80, render: (o) => o.state },
               { key: "start", header: "Started", width: 110, render: (o) => ago(o.windowStart) },
-              { key: "act", header: "Evidence", width: 110, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goTab("evidence"); }}>Evidence</button> },
+              { key: "act", header: "Findings", width: 110, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goTab("investigations", "findings"); }}>Findings</button> },
             ]} />
         )}
       </div>
@@ -295,36 +366,40 @@ function Applications({ onOpen }: { onOpen: (a: App) => void }) {
   const apps = data ?? [];
   if (apps.length === 0) return <CloudEmpty />;
   const rows = apps.filter((a) =>
-    (!f.provider || a.provider === f.provider) &&
+    (!f.provider || a.providers.includes(f.provider as App["providers"][number])) &&
     (!f.env || a.env === f.env) &&
     (!f.confidence || a.confidence === f.confidence) &&
     (!f.source || a.source === f.source));
+  // provider options come from the DATA — a cloud with no connected inventory is
+  // not offered as a dead filter (GCP appears here the day it lands).
+  const providerOpts = [...new Set(apps.flatMap((a) => a.providers))]
+    .map((p) => ({ value: p, label: p.toUpperCase() }));
   return (
     <div className="ao-stack">
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
-          { key: "provider", label: "Provider", options: [{ value: "aws", label: "AWS" }, { value: "azure", label: "Azure" }, { value: "gcp", label: "GCP" }] },
+          { key: "provider", label: "Provider", options: providerOpts },
           { key: "env", label: "Env", options: [...new Set(apps.map((a) => a.env))].filter((e) => e && e !== "—").map((e) => ({ value: e, label: e })) },
           { key: "confidence", label: "Confidence", options: [{ value: "confirmed", label: "confirmed" }, { value: "strong", label: "strong" }, { value: "suspected", label: "suspected" }, { value: "unknown", label: "unknown" }] },
-          { key: "source", label: "Identity src", options: [{ value: "cloud_tag", label: "cloud tag" }, { value: "cloud_graph", label: "resource graph" }, { value: "operator_catalog", label: "operator" }, { value: "firewall_appid", label: "firewall" }] },
+          { key: "source", label: "Mapped by", options: [{ value: "cloud_tag", label: "tag" }, { value: "cloud_graph", label: "resource graph" }, { value: "operator_catalog", label: "operator" }, { value: "firewall_appid", label: "firewall" }] },
         ]} />
       <div className="ao-panel">
         <DataTable<App> rows={rows} rowKey={(a) => a.id} height={Math.min(520, 44 + rows.length * 30)}
           ariaLabel="Applications" onRowClick={onOpen} initialSort={{ key: "name", dir: "asc" }}
           columns={[
-            { key: "name", header: "App", width: 160, sortable: true, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
+            { key: "name", header: "Service", width: 160, sortable: true, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
             { key: "health", header: "Health", width: 100, render: (a) => <HealthBadge status={a.health} /> },
             { key: "owner", header: "Owner", width: 100, render: (a) => a.owner },
             { key: "env", header: "Env", width: 60, render: (a) => a.env },
             { key: "conf", header: "Confidence", width: 110, sortable: true, sortValue: (a) => a.confidence, render: (a) => <ConfidenceBadge level={a.confidence} /> },
-            { key: "src", header: "Identity src", width: 120, render: (a) => a.source },
-            { key: "provider", header: "Cloud", width: 70, render: (a) => a.provider === "—" ? "—" : a.provider.toUpperCase() },
+            { key: "src", header: "Mapped by", width: 120, render: (a) => MAPPED_BY[a.source] ?? a.source },
+            { key: "provider", header: "Cloud", width: 90, render: (a) => a.providers.length ? a.providers.map((p) => p.toUpperCase()).join(" + ") : "—" },
             { key: "acct", header: "Account", width: 130, render: (a) => <span className="ao-mono ao-muted">{a.account}</span> },
             { key: "region", header: "Region", width: 100, render: (a) => a.region },
             { key: "res", header: "Res", width: 50, align: "right", sortable: true, sortValue: (a) => a.resources, render: (a) => a.resources },
             { key: "traffic", header: "Traffic", width: 95, align: "right", render: (a) => NM(a.trafficBps, fmtBps) },
             { key: "err", header: "Err%", width: 60, align: "right", render: (a) => NM(a.errorPct, (n) => `${n}%`) },
-            { key: "p95", header: "P95", width: 70, align: "right", render: (a) => a.p95ms ? `${a.p95ms}ms` : <span className="ao-muted">—</span> },
+            { key: "p95", header: "P95", width: 70, align: "right", render: (a) => NM(a.p95ms, (n) => `${n}ms`) },
           ]} />
       </div>
     </div>
@@ -383,13 +458,15 @@ function Resources() {
     (!f.missing || r.missingTags.includes(f.missing)) &&
     (!f.unknown || (f.unknown === "yes") === (r.app === "")) &&
     (!f.provider || r.provider === f.provider));
+  const providerOpts = [...new Set(all.map((r) => r.provider))]
+    .filter((p) => p !== "—").map((p) => ({ value: p, label: p.toUpperCase() }));
   return (
     <div className="ao-stack">
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
-          { key: "provider", label: "Provider", options: [{ value: "aws", label: "AWS" }, { value: "azure", label: "Azure" }, { value: "gcp", label: "GCP" }] },
+          { key: "provider", label: "Provider", options: providerOpts },
           { key: "missing", label: "Missing tag", options: [{ value: "app", label: "app" }, { value: "owner", label: "owner" }, { value: "env", label: "env" }] },
-          { key: "unknown", label: "Unknown app", options: [{ value: "yes", label: "yes" }] },
+          { key: "unknown", label: "Untagged service", options: [{ value: "yes", label: "yes" }] },
         ]} />
       <div className="ao-panel">
         <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
@@ -404,9 +481,9 @@ function Resources() {
             { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
             { key: "acct", header: "Account", width: 130, render: (r) => <span className="ao-mono ao-muted">{r.account}</span> },
             { key: "region", header: "Region", width: 100, render: (r) => r.region },
-            { key: "app", header: "App", width: 150, render: (r) => <AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> },
+            { key: "app", header: "Service", width: 150, render: (r) => <AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> },
             { key: "owner", header: "Owner", width: 90, render: (r) => r.owner },
-            { key: "src", header: "Identity src", width: 120, render: (r) => r.source },
+            { key: "src", header: "Mapped by", width: 120, render: (r) => MAPPED_BY[r.source] ?? r.source },
             { key: "conf", header: "Confidence", width: 110, sortable: true, sortValue: (r) => r.confidence, render: (r) => <ConfidenceBadge level={r.confidence} /> },
             { key: "health", header: "Health", width: 100, render: (r) => <HealthBadge status={r.health} /> },
             { key: "traffic", header: "Traffic", width: 95, align: "right", render: (r) => NM(r.trafficBps, fmtBps) },
@@ -434,10 +511,10 @@ function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void 
           {r.consoleUrl && <> · <ConsoleLink href={r.consoleUrl} label={`Open in ${consoleName(r.provider)}`} /></>}
         </td></tr>
         <tr><td>Cloud</td><td>{r.provider === "—" ? "—" : r.provider.toUpperCase()} · {r.account} · {r.region}</td></tr>
-        <tr><td>App attribution</td><td><AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> {r.app ? `(by ${r.source})` : "— unattributed"}</td></tr>
+        <tr><td>Service mapping</td><td><AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> {r.app ? `(mapped by ${MAPPED_BY[r.source] ?? r.source})` : "— untagged"}</td></tr>
         <tr><td>Owner / Env</td><td>{r.owner} · {r.env}</td></tr>
-        <tr><td>Health</td><td><HealthBadge status={r.health} /> <span className="ao-muted">— not measured (cloud health)</span></td></tr>
-        <tr><td>Traffic</td><td>{NM(r.trafficBps, fmtBps)} <span className="ao-muted">— not measured (flow logs)</span></td></tr>
+        <tr><td>Health</td><td><HealthBadge status={r.health} />{r.health === "unknown" && <span className="ao-muted"> — not measured</span>}</td></tr>
+        <tr><td>Traffic</td><td>{NM(r.trafficBps, fmtBps)}{r.trafficBps < 0 && <span className="ao-muted"> — not measured (flow logs)</span>}</td></tr>
         <tr><td>Last seen</td><td>{ago(r.lastSeen)}</td></tr>
       </tbody></table>
 
@@ -470,15 +547,15 @@ function Attribution() {
     <div className="ao-stack">
       <div className="ao-cards">
         <MetricCard label="Confirmed by tag" value={`${pct(c.confirmedTag)}%`} sub={`${c.confirmedTag}`} tone="good" />
-        <MetricCard label="Strong by resource graph" value={`${pct(c.strongGraph)}%`} sub={`${c.strongGraph}`} tone="accent" />
+        <MetricCard label="From resource relationships" value={`${pct(c.strongGraph)}%`} sub={`${c.strongGraph}`} tone="accent" />
         <MetricCard label="Confirmed by firewall App-ID" value={`${pct(c.firewallAppId)}%`} sub={`${c.firewallAppId}`} tone="good" />
         <MetricCard label="Suspected by domain/IP" value={`${pct(c.suspectedDomainIp)}%`} sub={`${c.suspectedDomainIp}`} tone="warn" />
-        <MetricCard label="Unknown" value={`${pct(c.unknown)}%`} sub={`${c.unknown}`} tone={pct(c.unknown) > 10 ? "warn" : undefined} />
+        <MetricCard label="Untagged" value={`${pct(c.unknown)}%`} sub={`${c.unknown}`} tone={pct(c.unknown) > 10 ? "warn" : undefined} />
       </div>
 
       {/* coverage funnel — total → confirmed → strong → firewall → suspected → unknown */}
       <div className="ao-panel">
-        <div className="ao-panel-h">Attribution coverage funnel <span className="ao-panel-meta">{c.total} observed · how each was identified</span></div>
+        <div className="ao-panel-h">Service-mapping coverage <span className="ao-panel-meta">{c.total} observed · how each was identified</span></div>
         <div className="ao-funnel">
           {funnelSteps(c).map((s) => (
             <div className="ao-funnel-row" key={s.label}>
@@ -511,13 +588,14 @@ function Attribution() {
       </div>
 
       <div className="ao-panel">
-        <div className="ao-panel-h">Top unknown contributors <span className="ao-panel-meta">tag these to lift coverage · traffic ranking arrives with cloud flow logs</span></div>
+        <div className="ao-panel-h">Untagged resources <span className="ao-panel-meta">tag these to complete your service map · traffic ranking arrives with cloud flow logs</span></div>
         {unknowns.length === 0 ? (
-          <EmptyState title="No unattributed resources" hint="every discovered resource has an app identity — coverage is complete" />
+          <EmptyState title="Every discovered resource is mapped to a service"
+            hint="untagged resources appear here with a fix path when discovery finds one" />
         ) : (
-          <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Top unknown contributors"
+          <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Untagged resources"
             columns={[
-              { key: "entity", header: "Resource / IP / ENI", width: 220, render: (r) => <span className="ao-mono">{r.entity}</span> },
+              { key: "entity", header: "Resource", width: 220, render: (r) => <><strong>{r.name}</strong>{r.address && <span className="ao-mono ao-muted"> {r.address}</span>}</> },
               { key: "kind", header: "Type", width: 120, render: (r) => r.kind },
               { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
               { key: "region", header: "Region", width: 100, render: (r) => r.region },
@@ -589,9 +667,7 @@ async function loadHealthChanges(): Promise<{ health: HealthSignal[]; changes: C
   return { health, changes };
 }
 
-function HealthChanges() {
-  const [view, setView] = useState<"timeline" | "table">("timeline");
-  const [sub, setSub] = useState<"health" | "changes">("health");
+function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
   const { data, status } = useAsync(loadHealthChanges);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error" || !data) return <LoadError what="cloud health & change signals" />;
@@ -599,26 +675,17 @@ function HealthChanges() {
   return (
     <div className="ao-stack">
       <SourceFreshnessStrip />
-      <div className="ao-tabs ao-tabs--sub">
-        <button className={`ao-tab${view === "timeline" ? " is-active" : ""}`} onClick={() => setView("timeline")}>Timeline</button>
-        <button className={`ao-tab${view === "table" ? " is-active" : ""}`} onClick={() => setView("table")}>Table</button>
-      </div>
       {view === "timeline" && <HCTimeline health={health} changes={changes} />}
-      {view === "table" && (<>
-      <div className="ao-tabs ao-tabs--sub">
-        <button className={`ao-tab${sub === "health" ? " is-active" : ""}`} onClick={() => setSub("health")}>Health Signals</button>
-        <button className={`ao-tab${sub === "changes" ? " is-active" : ""}`} onClick={() => setSub("changes")}>Change Events</button>
-      </div>
-      {sub === "health" ? (
+      {view === "alerts" && (
         <div className="ao-panel">
           {health.length === 0 ? (
-            <EmptyState title="No cloud health signals in the last 24h"
-              hint="cloud_health / cloud_resource_health signals appear here when a connected account reports a problem" />
+            <EmptyState title="No cloud alerts in the last 24 hours"
+              hint="provider health reports appear here when a connected account reports a problem" />
           ) : (
           <DataTable<HealthSignal> rows={health} rowKey={(r) => r.time + r.signal + r.app + r.metric} height={Math.min(480, 44 + health.length * 30)} ariaLabel="Health signals"
             columns={[
               { key: "time", header: "Time", width: 84, render: (r) => ago(r.time) },
-              { key: "app", header: "App", width: 130, render: (r) => <strong>{r.app}</strong> },
+              { key: "app", header: "Service", width: 130, render: (r) => <strong>{r.app}</strong> },
               { key: "res", header: "Resource", width: 160, render: (r) => r.resource },
               { key: "sig", header: "Signal", width: 150, render: (r) => r.signal },
               { key: "state", header: "State", width: 96, render: (r) => <HealthBadge status={r.state} /> },
@@ -630,16 +697,17 @@ function HealthChanges() {
             ]} />
           )}
         </div>
-      ) : (
+      )}
+      {view === "changes" && (
         <div className="ao-panel">
           {changes.length === 0 ? (
-            <EmptyState title="No cloud change events in the last 24h"
+            <EmptyState title="No cloud change events in the last 24 hours"
               hint="management-plane changes (CloudTrail / Activity Log) appear here as the provider audits them" />
           ) : (
           <DataTable<ChangeEvent> rows={changes} rowKey={(r) => r.time + r.changeType + r.resource + r.actor} height={Math.min(480, 44 + changes.length * 30)} ariaLabel="Change events"
             columns={[
               { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-              { key: "app", header: "App", width: 130, render: (r) => <strong>{r.app}</strong> },
+              { key: "app", header: "Service", width: 130, render: (r) => <strong>{r.app}</strong> },
               { key: "res", header: "Resource", width: 190, render: (r) => <><span className="ao-mono">{r.resource}</span>{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
               { key: "type", header: "Change type", width: 170, sortable: true, sortValue: (r) => r.changeType, render: (r) => <Chip label={r.changeType.replace(/_/g, " ")} tone="var(--warn)" /> },
               { key: "actor", header: "Actor", width: 190, render: (r) => <span className="ao-mono">{r.actor}</span> },
@@ -650,35 +718,32 @@ function HealthChanges() {
           )}
         </div>
       )}
-      </>)}
     </div>
   );
 }
 
-// ── Underlay Impact ──────────────────────────────────────────────────────────
-// App→underlay correlation has NO ingested source today: it needs the cloud seam
-// telemetry (DX / VPN / ExpressRoute state + per-seam path metrics) joined to the
-// app's symptoms. Until that lands this tab shows the gap — it does not show rows.
-function Underlay() {
+// ── Network connectivity (Investigations sub-view) ──────────────────────────
+// Service→network correlation has NO ingested source today. AWS/Azure never
+// ship an empty tab as an apology — this is an ENABLEMENT card (audit C): what
+// the view will show, what it needs, and the one button that starts setup.
+function Underlay({ goDataSources }: { goDataSources: () => void }) {
   return (
-    <div className="ao-stack">
-      <NotIngested
-        title="App-to-underlay correlation is not ingested yet"
-        hint="needs cloud seam telemetry (Direct Connect / VPN / ExpressRoute state + per-seam path metrics) joined to app symptoms — connect the seam source in Ingestion, then this tab lights up with real seams only" />
+    <div className="ao-panel">
+      <div className="ao-panel-h">Network connectivity</div>
+      <p className="ao-set-d">
+        Correlates a service's symptoms with the network connections it rides —
+        Direct Connect, VPN, ExpressRoute — so a connection fault names the
+        services it degrades. Shows real connections only; nothing is simulated.
+      </p>
+      <div className="ao-set-v">Needs: connection telemetry (tunnel/link state + per-connection path metrics) joined to service health.</div>
+      <div className="ao-cta-btns">
+        <button className="ao-btn ao-btn--primary" onClick={goDataSources}>Set up in Data sources</button>
+      </div>
     </div>
   );
 }
 
-// ── Unknowns (first-class · LIVE) ────────────────────────────────────────────
-// remediation actions for an unknown entity — a real queue, not just a report.
-const REMEDIATIONS = [
-  "Tag resource (app / owner / env)",
-  "Assign owner",
-  "Create attribution rule",
-  "Suppress known shared service",
-  "Mark as external dependency",
-  "Open resource in cloud console",
-];
+// ── Untagged resources (first-class · LIVE) ──────────────────────────────────
 function openIntegrations() { location.hash = "#/incident/integrations"; }
 
 function Unknowns() {
@@ -703,19 +768,19 @@ function Unknowns() {
         <MetricCard key={c.label} label={c.label} value={c.measured ? c.n : "—"} tone={c.measured && c.n ? "warn" : undefined} />
       ))}</div>
       <div className="ao-panel">
-        <div className="ao-panel-h">Remediation queue <span className="ao-panel-meta">unknown is a real answer — never a guess · resolve each to lift coverage</span></div>
+        <div className="ao-panel-h">Remediation queue <span className="ao-panel-meta">tag these resources to complete your service map</span></div>
         {unknowns.length === 0 ? (
-          <EmptyState title="No unattributed entities" hint="every discovered resource resolved to an app identity" />
+          <EmptyState title="Every discovered resource is mapped to a service"
+            hint="untagged resources appear here with a fix path when discovery finds one" />
         ) : (
-          <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Unknowns" onRowClick={setFix}
+          <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Untagged resources" onRowClick={setFix}
             columns={[
-              { key: "entity", header: "Entity", width: 210, render: (r) => <span className="ao-mono">{r.entity}</span> },
+              { key: "entity", header: "Resource", width: 210, render: (r) => <><strong>{r.name}</strong>{r.address && <span className="ao-mono ao-muted"> {r.address}</span>}</> },
               { key: "kind", header: "Type", width: 116, render: (r) => r.kind },
               { key: "provider", header: "Cloud", width: 60, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
               { key: "region", header: "Region", width: 96, render: (r) => r.region },
               { key: "bytes", header: "Traffic", width: 86, align: "right", render: (r) => NM(r.bytes, fmtBytes) },
-              { key: "guess", header: "Current guess", width: 200, render: (r) => r.likelyResource },
-              { key: "why", header: "Why unknown", width: 170, render: (r) => r.missingFields.length ? <Chip label={`missing ${r.missingFields.join("/")}`} tone="var(--fg-subtle)" /> : <span className="ao-muted">—</span> },
+              { key: "why", header: "Why untagged", width: 170, render: (r) => r.missingFields.length ? <Chip label={`missing ${r.missingFields.join("/")}`} tone="var(--fg-subtle)" /> : <span className="ao-muted">—</span> },
               { key: "fix", header: "Recommended fix", width: 240, render: (r) => r.recommendation },
               { key: "act", header: "Action", width: 110, render: (r) => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); setFix(r); }}>Remediate</button> },
             ]} />
@@ -723,21 +788,36 @@ function Unknowns() {
       </div>
 
       {fix && (
-        <EvidenceDrawer title={`Remediate · ${fix.entity}`} subtitle={<span className="ao-muted">{fix.kind} · {fix.provider === "—" ? "—" : fix.provider.toUpperCase()} · {fix.region}</span>} onClose={() => setFix(null)}>
+        <EvidenceDrawer title={`Remediate · ${fix.name}`} subtitle={<span className="ao-muted">{fix.kind} · {fix.provider === "—" ? "—" : fix.provider.toUpperCase()} · {fix.region}</span>} onClose={() => setFix(null)}>
           <table className="ao-kv"><tbody>
-            <tr><td>Current guess</td><td>{fix.likelyResource}</td></tr>
-            <tr><td>Why unknown</td><td>{fix.missingFields.length ? `missing ${fix.missingFields.join(", ")}` : "—"}</td></tr>
+            <tr><td>Resource</td><td><strong>{fix.name}</strong>{fix.address && <> · <span className="ao-mono ao-muted">{fix.address}</span></>}</td></tr>
+            <tr><td>Resource id</td><td><span className="ao-mono ao-muted">{fix.resourceId}</span></td></tr>
+            <tr><td>Why untagged</td><td>{fix.missingFields.length ? `missing ${fix.missingFields.join(", ")}` : "—"}</td></tr>
             <tr><td>Recommended fix</td><td>{fix.recommendation}</td></tr>
           </tbody></table>
           <div className="ao-ev-h">Actions</div>
+          {/* Only buttons that DO what they say (audit C: six buttons all led to
+              one page — and "open in console" didn't open the console). Tagging
+              happens in the provider console; rules/precedence live in
+              Integrations. Everything else is guidance, not a fake button. */}
           <div className="ao-cta-btns">
-            {REMEDIATIONS.map((a) => <button key={a} className="ao-btn" onClick={openIntegrations}>{a}</button>)}
-            <button className="ao-btn ao-btn--primary" onClick={openIntegrations}>Open Integrations</button>
+            {(() => {
+              const url = consoleUrlFor(fix, resources);
+              return url ? <ConsoleLink href={url} label={`Tag in ${consoleName(fix.provider)}`} /> : null;
+            })()}
+            <button className="ao-btn ao-btn--primary" onClick={openIntegrations}>Attribution rules · Integrations</button>
           </div>
         </EvidenceDrawer>
       )}
     </div>
   );
+}
+
+// the console pivot for an untagged row — resolved from the resources list the
+// tab already loaded (same server-built, safeConsoleUrl-gated links).
+function consoleUrlFor(u: UnknownContributor, resources: CloudResource[]): string {
+  const hit = resources.find((r) => r.id === u.resourceId);
+  return hit?.consoleUrl ?? "";
 }
 
 // ── Evidence Explorer (LIVE: /api/cloud/evidence) ────────────────────────────
@@ -755,8 +835,8 @@ function Evidence() {
   if (all.length === 0) {
     return (
       <div className="ao-panel">
-        <EmptyState title="No cloud evidence in the last 24h"
-          hint="evidence appears when the correlation engine grounds a cloud signal into an RCA object — check Ingestion if no cloud signals are landing at all" />
+        <EmptyState title="No findings in the last 24 hours"
+          hint="findings appear when the engine grounds a cloud signal into an investigation — check Data sources if no cloud signals are landing at all" />
       </div>
     );
   }
@@ -764,32 +844,40 @@ function Evidence() {
     (!f.signal || e.signalType === f.signal) &&
     (!f.confidence || e.confidence === f.confidence) &&
     (!f.category || e.category === f.category) &&
-    (!f.verdict || (f.verdict === "yes") === e.usedInVerdict) &&
+    (!f.grounded || (f.grounded === "yes") === e.grounded) &&
     (!f.app || e.app === f.app));
   return (
     <div className="ao-stack">
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
-          { key: "app", label: "App", options: [...new Set(all.map((e) => e.app))].map((a) => ({ value: a, label: a })) },
+          { key: "app", label: "Service", options: [...new Set(all.map((e) => e.app))].map((a) => ({ value: a, label: a })) },
           { key: "category", label: "Category", options: [...new Set(all.map((e) => e.category))].map((c) => ({ value: c, label: c })) },
           { key: "signal", label: "Signal type", options: [...new Set(all.map((e) => e.signalType))].map((s) => ({ value: s, label: s })) },
           { key: "confidence", label: "Confidence", options: [...new Set(all.map((e) => e.confidence))].map((c) => ({ value: c, label: c })) },
-          { key: "verdict", label: "Used in verdict", options: [{ value: "yes", label: "yes" }, { value: "no", label: "no" }] },
+          { key: "grounded", label: "Grounded", options: [{ value: "yes", label: "yes" }, { value: "no", label: "gap" }] },
         ]} />
       <div className="ao-panel">
+        {data.total > rows.length && (
+          <div className="ao-panel-meta" style={{ marginBottom: 6 }}>
+            showing {rows.length} of {data.total.toLocaleString()} findings (true count — the page is bounded)
+          </div>
+        )}
         <DataTable<EvidenceRow> rows={rows} rowKey={(r) => `${r.evidenceRef}|${r.rcaGroup}|${r.time}|${r.reason}`} height={Math.min(480, 44 + rows.length * 30)}
-          ariaLabel="Evidence" onRowClick={setSel}
+          ariaLabel="Findings" onRowClick={setSel}
           columns={[
             { key: "time", header: "Time", width: 84, render: (r) => ago(r.time) },
             { key: "cat", header: "Category", width: 130, sortable: true, sortValue: (r) => r.category, render: (r) => <EvidenceCategoryBadge category={r.category} /> },
             { key: "sig", header: "Signal type", width: 140, render: (r) => r.signalType },
-            { key: "app", header: "App", width: 110, render: (r) => <strong>{r.app}</strong> },
+            { key: "app", header: "Service", width: 110, render: (r) => <strong>{r.app}</strong> },
             { key: "res", header: "Resource", width: 130, render: (r) => <>{r.resource}{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
             { key: "src", header: "Source", width: 130, render: (r) => r.source },
             { key: "conf", header: "Confidence", width: 104, render: (r) => <ConfidenceBadge level={r.confidence} /> },
             { key: "reason", header: "Reason", width: 320, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
-            { key: "verdict", header: "In verdict", width: 90, render: (r) => r.usedInVerdict ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">context</span> },
-            { key: "rca", header: "RCA group", width: 130, render: (r) => r.rcaGroup ? <Chip label={r.rcaGroup.slice(0, 8)} tone="var(--accent)" title={r.rcaGroup} /> : DASH },
+            { key: "grounded", header: "Grounded", width: 90, render: (r) => r.grounded ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">gap</span> },
+            { key: "rca", header: "Investigation", width: 130, render: (r) => r.rcaGroup ? (
+              <a className="ao-rowaction" href={`#/monitoring/correlations?id=${encodeURIComponent(r.rcaGroup)}`}
+                onClick={(e) => e.stopPropagation()} title={r.rcaGroup}>Open</a>
+            ) : DASH },
           ]} />
       </div>
       {sel && (
@@ -797,12 +885,14 @@ function Evidence() {
           <table className="ao-kv"><tbody>
             <tr><td>Time</td><td>{new Date(sel.time).toLocaleString()}</td></tr>
             <tr><td>Category</td><td><EvidenceCategoryBadge category={sel.category} /></td></tr>
-            <tr><td>App / Resource</td><td>{sel.app} · {sel.resource}</td></tr>
+            <tr><td>Service / Resource</td><td>{sel.app} · {sel.resource}</td></tr>
             <tr><td>Source</td><td>{sel.source}</td></tr>
             <tr><td>Confidence</td><td><ConfidenceBadge level={sel.confidence} /></td></tr>
-            <tr><td>Used in verdict</td><td>{sel.usedInVerdict ? "yes — fed the RCA verdict" : "no — context / gap only"}</td></tr>
+            <tr><td>Grounded</td><td>{sel.grounded ? "yes — attached to the investigation by the engine" : "no — a declared gap"}</td></tr>
             <tr><td>Reason</td><td>{sel.reason}</td></tr>
-            <tr><td>RCA group</td><td>{sel.rcaGroup || "—"}</td></tr>
+            <tr><td>Investigation</td><td>{sel.rcaGroup
+              ? <a href={`#/monitoring/correlations?id=${encodeURIComponent(sel.rcaGroup)}`}>Open the full analysis</a>
+              : "—"}</td></tr>
             <tr><td>Evidence ref</td><td><span className="ao-mono ao-muted">{sel.evidenceRef}</span></td></tr>
             {sel.cloudRef && (
               <tr><td>Cloud resource</td><td>

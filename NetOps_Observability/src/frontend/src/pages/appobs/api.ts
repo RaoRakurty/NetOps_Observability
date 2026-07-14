@@ -71,6 +71,7 @@ function missingTags(tags?: Record<string, string>): string[] {
 
 // ── App (Applications tab) ───────────────────────────────────────────────────
 function toApp(r: CloudAppRow): App {
+  const p = provider(r.cloud_provider);
   return {
     id: r.app_id || r.app_name,
     name: r.app_name || r.app_id,
@@ -79,19 +80,47 @@ function toApp(r: CloudAppRow): App {
     env: r.env || "—",
     confidence: conf(r.confidence),
     source: src(r.source),
-    provider: provider(r.cloud_provider),
+    provider: p,
+    providers: p === "—" ? [] : [p],
     account: r.account_id || "—",
     region: r.region || "—",
     resources: r.resources,
     trafficBps: NOT_MEASURED,    // not measured (P3B cloud_flow)
     errorPct: NOT_MEASURED,      // not measured (P3C)
-    p95ms: 0,                    // renders "—" via existing column logic
+    p95ms: NOT_MEASURED,         // ONE sentinel for "not measured" (audit C)
     unknownPct: NOT_MEASURED,    // not measured
     lastSeen: new Date().toISOString(),
     primarySymptom: "—",
     rootDomain: "unknown",       // no RCA engine over cloud yet (P3D)
     underlayImpacted: false,
   };
+}
+
+// One service, however many clouds it spans: rows sharing an app_id merge into
+// a single App carrying the provider SET (a dual-cloud app must never collapse
+// to one provider or collide as duplicate row keys — audit D-P0-4 sibling).
+function mergeApps(rows: App[]): App[] {
+  const byId = new Map<string, App>();
+  for (const a of rows) {
+    const cur = byId.get(a.id);
+    if (!cur) {
+      byId.set(a.id, a);
+      continue;
+    }
+    for (const p of a.providers) {
+      if (!cur.providers.includes(p)) cur.providers.push(p);
+    }
+    if (a.account !== "—" && !cur.account.includes(a.account)) {
+      cur.account = cur.account === "—" ? a.account : `${cur.account} · ${a.account}`;
+    }
+    if (a.region !== "—" && !cur.region.includes(a.region)) {
+      cur.region = cur.region === "—" ? a.region : `${cur.region} · ${a.region}`;
+    }
+    cur.resources += a.resources;
+    if (cur.owner === "—") cur.owner = a.owner;
+    if (cur.env === "—") cur.env = a.env;
+  }
+  return [...byId.values()];
 }
 
 // ── CloudResource (Cloud Resources tab) ──────────────────────────────────────
@@ -122,10 +151,13 @@ function toResource(r: CloudResourceRow): CloudResource {
 // Built from an unattributed resource (app_id == ""). Traffic/flows/errors are
 // NOT_MEASURED until cloud_flow lands — the recommendation is the actionable bit.
 function toUnknown(r: CloudResourceRow): UnknownContributor {
-  const ip = r.private_ips?.[0];
+  const ip = r.private_ips?.[0] ?? "";
   const label = r.resource_name || r.resource_id;
   return {
     entity: ip ? `${label} (${ip})` : label,
+    name: label,
+    address: ip,
+    resourceId: r.resource_id,
     kind: shortType(r.resource_type),
     provider: provider(r.cloud_provider),
     account: r.account_id || "—",
@@ -133,7 +165,8 @@ function toUnknown(r: CloudResourceRow): UnknownContributor {
     bytes: NOT_MEASURED,
     flows: NOT_MEASURED,
     errors: NOT_MEASURED,
-    likelyResource: `${r.resource_id} (${shortType(r.resource_type)})`,
+    // name-first, never the raw handle as the human answer (audit C):
+    likelyResource: `${label} (${shortType(r.resource_type)})`,
     missingFields: missingTags(r.tags),
     recommendation: `Tag ${label} with app/owner/env`,
   };
@@ -154,8 +187,7 @@ function toCoverage(c: CloudCoverageReport): Coverage {
 export async function loadApps(): Promise<App[]> {
   const r = await api.cloudApps();
   const live = r.live ?? {};
-  return (r.apps ?? []).map((row) => {
-    const app = toApp(row);
+  return mergeApps((r.apps ?? []).map(toApp)).map((app) => {
     // Merge the backend's measured live enrichment (provider status checks,
     // probe outcomes). Without this the page hard-coded health "unknown" and
     // rendered a degraded cloud as all-grey — the exact lie the audit flagged.
@@ -193,6 +225,9 @@ export async function loadAppRca(appId: string): Promise<AppRca | null> {
     signalCount: row.signal_count ?? 0,
     state: row.state || "open",
     crossPlane: row.cross_plane === 1 || row.cross_plane === true,
+    planeCount: typeof row.plane_count === "number" ? row.plane_count : 0,
+    observerCount: typeof row.observer_count === "number" ? row.observer_count : 0,
+    observers: Array.isArray(row.observers) ? row.observers : [],
     sources: Array.isArray(row.sources) ? row.sources : [],
   };
 }
@@ -233,10 +268,10 @@ function changeType(t: string | undefined): ChangeEvent["changeType"] {
   return hit ?? "unknown";
 }
 // The engine records only two evidence roles today: a signal it GROUNDED into an
-// object (supporting) and its own declared gaps (missing). Anything else would be
-// a category we invented — it degrades to "supporting" rather than being claimed.
+// object and its own declared gaps (missing). Anything else would be a category
+// we invented — it degrades to "grounded" rather than being claimed.
 function evidenceCategory(c: string | undefined): EvidenceCategory {
-  return c === "missing" ? "missing" : "supporting";
+  return c === "missing" ? "missing" : "grounded";
 }
 
 function toHealthSignal(r: CloudHealthSignalRow): HealthSignal {
@@ -283,7 +318,7 @@ function toEvidenceRow(r: CloudEvidenceRow): EvidenceRow {
   return {
     time: r.time, category: evidenceCategory(r.category), signalType: r.signal_type,
     app: r.app, resource: r.resource, source: r.source, confidence: conf(r.confidence),
-    reason: r.reason, usedInVerdict: !!r.used_in_verdict,
+    reason: r.reason, grounded: !!r.grounded,
     rcaGroup: r.rca_group, evidenceRef: r.evidence_ref,
     cloudRef: toCloudRef(r.cloud_ref),
   };
@@ -320,12 +355,27 @@ export async function loadChangeEvents(app?: string): Promise<ChangeEvent[]> {
   return (r.changes ?? []).map(toChangeEvent);
 }
 
-export type EvidenceBundle = { objects: CloudRcaObject[]; rows: EvidenceRow[] };
+export type EvidenceBundle = {
+  objects: CloudRcaObject[];
+  rows: EvidenceRow[];
+  // TRUE counts from the backend (audit D-P1-7 / D-P2-13): openCount is a real
+  // COUNT of open investigations (never the LIMIT-capped list length); total is
+  // the full ledger size; the rows above are one LIMIT-bounded page.
+  openCount: number;
+  total: number;
+  objectsTruncated: boolean;
+};
 
 export async function loadEvidence(app?: string): Promise<EvidenceBundle> {
   const r = await api.cloudEvidence(app);
+  const objects = (r.objects ?? []).map(toRcaObject);
   return {
-    objects: (r.objects ?? []).map(toRcaObject),
+    objects,
     rows: (r.evidence ?? []).map(toEvidenceRow),
+    openCount: typeof r.open_object_count === "number"
+      ? r.open_object_count
+      : objects.filter((o) => o.state === "open").length,
+    total: typeof r.count === "number" ? r.count : (r.evidence ?? []).length,
+    objectsTruncated: !!r.objects_truncated,
   };
 }

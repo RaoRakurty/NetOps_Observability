@@ -29,11 +29,13 @@ const NM = (v: number, fmt: (n: number) => string): ReactNode =>
 
 // the app's health, measured from its OWN signals: the worst state any cloud health
 // signal reported in the window. No signals ⇒ whatever identity gave us (unknown) —
-// silence is never upgraded to "healthy".
+// silence is never upgraded to "healthy", and neither is a signal whose own state
+// is "unknown" (audit D-P2-9: only an explicit healthy report may say healthy).
 function worstHealth(health: HealthSignal[], app: App): App["health"] {
   if (health.some((h) => h.state === "down")) return "down";
   if (health.some((h) => h.state === "degraded")) return "degraded";
-  if (health.length > 0) return "healthy";
+  if (health.some((h) => h.state === "healthy")) return "healthy";
+  if (health.length > 0) return "unknown"; // signals exist but none states a health
   return app.health;
 }
 
@@ -81,7 +83,7 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
         </div>
         <div className="ao-detail-meta">
           <span>{app.owner} · {app.env}</span>
-          <span>{app.provider.toUpperCase()} · {app.account} · {app.region}</span>
+          <span>{(app.providers.length ? app.providers.map((p) => p.toUpperCase()).join(" + ") : "—")} · {app.account} · {app.region}</span>
           {app.rootDomain !== "unknown" && <span>RCA: <RootDomainBadge domain={app.rootDomain} /></span>}
         </div>
       </div>
@@ -106,7 +108,7 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
             <MetricCard label="Health" value={<HealthBadge status={worstHealth(health, app)} />} tone={worstHealth(health, app) === "down" ? "bad" : worstHealth(health, app) === "degraded" ? "warn" : "good"} />
             <MetricCard label="Health signals (24h)" value={health.length} tone={health.length ? "warn" : "good"} />
             <MetricCard label="Cloud changes (24h)" value={changes.length} />
-            <MetricCard label="P95 latency" value={app.p95ms ? `${app.p95ms} ms` : <span className="ao-muted">—</span>} sub="not ingested" />
+            <MetricCard label="P95 latency" value={NM(app.p95ms, (n) => `${n} ms`)} sub="not ingested" />
             <MetricCard label="Traffic" value={NM(app.trafficBps, fmtBps)} sub="not ingested" tone="accent" />
             <MetricCard label="Last change" value={changes.length ? ago(changes[0].time) : <span className="ao-muted">—</span>} sub={changes.length ? changes[0].changeType.replace(/_/g, " ") : undefined} />
             <MetricCard label="Impacted seams" value={<span className="ao-muted">—</span>} sub="not ingested" />
@@ -132,7 +134,7 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
               <tr><td>Attributed by</td><td>{app.source} <ConfidenceBadge level={app.confidence} /></td></tr>
               <tr><td>Why this identity</td><td>{identityWhy(app)}</td></tr>
               <tr><td>Owner / Env</td><td>{app.owner} · {app.env}</td></tr>
-              <tr><td>Cloud</td><td>{app.provider.toUpperCase()} · {app.account} · {app.region}</td></tr>
+              <tr><td>Cloud</td><td>{(app.providers.length ? app.providers.map((p) => p.toUpperCase()).join(" + ") : "—")} · {app.account} · {app.region}</td></tr>
               <tr><td>Resources mapped</td><td>{app.resources}</td></tr>
               <tr><td>Unknown traffic</td><td>{NM(app.unknownPct, (n) => `${n}%`)} <span className="ao-muted">— not ingested (cloud flow logs)</span></td></tr>
             </tbody>
@@ -225,9 +227,13 @@ function EngineRcaBanner({ rca }: { rca: AppRca }) {
         />
       </div>
       <div className="ao-rca-grid">
-        <div><div className="ao-rca-l">Verdict</div><div className="ao-rca-v">{VERDICT_LABEL[rca.verdictTier] ?? rca.verdictTier}</div></div>
+        <div><div className="ao-rca-l">Assessment</div><div className="ao-rca-v">{VERDICT_LABEL[rca.verdictTier] ?? rca.verdictTier}</div></div>
         <div><div className="ao-rca-l">Signals</div><div className="ao-rca-v">{rca.signalCount}</div></div>
-        <div><div className="ao-rca-l">Observers</div><div className="ao-rca-v">{rca.sources.length ? rca.sources.join(" · ") : "—"}</div></div>
+        {/* Observers = distinct observer identities (audit D-P2-12: the old cell
+            printed the source PLANES and called them observers). */}
+        <div><div className="ao-rca-l">Observers</div><div className="ao-rca-v"
+          title={rca.observers.join(", ")}>{rca.observerCount || "—"}</div></div>
+        <div><div className="ao-rca-l">Planes</div><div className="ao-rca-v">{rca.planeCount || rca.sources.length || "—"}</div></div>
         <div><div className="ao-rca-l">State</div><div className="ao-rca-v">{rca.state}</div></div>
       </div>
       <a className="ao-rca-link" href={`#/monitoring/correlations?id=${encodeURIComponent(rca.correlationId)}`}>
@@ -251,7 +257,7 @@ function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
   const engineRca = useAppRca(app.id);
   const banner = engineRca ? <EngineRcaBanner rca={engineRca} /> : null;
   const byCat = (c: EvidenceCategory) => evidence.filter((e) => e.category === c);
-  const supporting = byCat("supporting");
+  const grounded = byCat("grounded");
   const missing = byCat("missing");
 
   // The engine is the ONLY source of a cloud verdict. No engine object ⇒ no verdict:
@@ -260,8 +266,8 @@ function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
     return (
       <div className="ao-panel ao-rca">
         <div className="ao-panel-h">RCA</div>
-        <EmptyState title="No active RCA for this app"
-          hint="the correlation engine has not grounded a cloud RCA object here — unknown is first-class; we don't guess a root cause" />
+        <EmptyState title="No investigation for this service in the last 24 hours"
+          hint="an investigation opens automatically when correlated signals point at this service" />
       </div>
     );
   }
@@ -273,9 +279,9 @@ function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
       {/* the evidence ledger, exactly as the engine recorded it: what it grounded,
           and the gaps it itself declared. No invented categories. */}
       <div className="ao-chain">
-        <EvBlock title="Evidence used in the verdict" rows={supporting.slice(0, 12)} mark="✓" tone="var(--ok)" />
+        <EvBlock title="Grounded findings" rows={grounded.slice(0, 12)} mark="✓" tone="var(--ok)" />
         <EvBlock title="Missing evidence (the engine's own gaps)" rows={missing} mark="–" tone="var(--fg-subtle)" />
-        {!supporting.length && !missing.length && (
+        {!grounded.length && !missing.length && (
           <div className="ao-muted ao-chain-empty">No cloud signals are attached to this RCA object yet.</div>
         )}
       </div>

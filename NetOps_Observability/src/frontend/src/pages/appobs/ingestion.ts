@@ -6,7 +6,12 @@
 // per region — the matrix shows the truth, never a fabricated "flowing".
 
 import type { CloudResourceRow } from "../../services/api";
-import { SourceReadiness, SourceStatus, deriveReadiness } from "./readiness";
+import { IngestionSource, SourceReadiness, SourceStatus, deriveReadiness, isMeasured } from "./readiness";
+
+// Per-provider live source statuses from GET /api/cloud/ingestion (audit Azure
+// P0-7): a provider's matrix row is only credited with ITS OWN signals — AWS
+// flow logs landing must never light the Azure chips.
+export type ProviderIngestion = Record<string, IngestionSource[]>;
 
 // freshest of two ISO timestamps (string compare is correct for RFC3339/UTC).
 function maxIso(a: string | undefined, b: string | undefined): string | undefined {
@@ -35,7 +40,7 @@ export interface RegionReadiness {
   readiness: SourceReadiness[]; // one per SOURCE_TYPES, inventory first
 }
 
-export function buildMatrix(rows: CloudResourceRow[]): RegionReadiness[] {
+export function buildMatrix(rows: CloudResourceRow[], byProvider?: ProviderIngestion): RegionReadiness[] {
   const groups = groupBy(rows, (r) => `${r.cloud_provider}|${r.account_id}|${r.region}`);
   const out: RegionReadiness[] = [];
   for (const [key, rs] of groups) {
@@ -46,7 +51,12 @@ export function buildMatrix(rows: CloudResourceRow[]): RegionReadiness[] {
       accountId,
       region,
       resourceCount: rs.length,
-      readiness: deriveReadiness({ inventoryCount: rs.length, inventoryError: false, lastSyncIso }),
+      readiness: deriveReadiness({
+        inventoryCount: rs.length, inventoryError: false, lastSyncIso,
+        // THIS provider's measured statuses only (audit P0-7) — absent map or
+        // unknown provider keeps the honest inventory-only default.
+        ingestion: byProvider?.[provider.toLowerCase()],
+      }),
     });
   }
   out.sort((a, b) =>
@@ -68,13 +78,17 @@ export interface CloudAccount {
   enabledSources: number; // sources currently flowing for this account (inventory only today)
 }
 
-export function buildAccounts(rows: CloudResourceRow[]): CloudAccount[] {
+export function buildAccounts(rows: CloudResourceRow[], byProvider?: ProviderIngestion): CloudAccount[] {
   const groups = groupBy(rows, (r) => `${r.cloud_provider}|${r.account_id}`);
   const out: CloudAccount[] = [];
   for (const [key, rs] of groups) {
     const [provider, accountId] = key.split("|");
     const regions = [...new Set(rs.map((r) => r.region).filter(Boolean))].sort();
     const lastSyncIso = rs.reduce<string | undefined>((acc, r) => maxIso(acc, r.last_seen_at), undefined);
+    // enabled = sources MEASURED flowing/stale for this provider (+ inventory,
+    // proven by the rows themselves) — never the hardcoded "1" placeholder.
+    const measured = (byProvider?.[provider.toLowerCase()] ?? [])
+      .filter((s) => s.source_type !== "inventory" && isMeasured(s.status)).length;
     out.push({
       provider,
       accountId,
@@ -83,7 +97,7 @@ export function buildAccounts(rows: CloudResourceRow[]): CloudAccount[] {
       resourceCount: rs.length,
       lastSyncIso,
       status: rs.length ? "flowing" : "no_data",
-      enabledSources: 1, // only the inventory source is live today
+      enabledSources: (rs.length ? 1 : 0) + measured,
     });
   }
   out.sort((a, b) => a.provider.localeCompare(b.provider) || a.accountId.localeCompare(b.accountId));

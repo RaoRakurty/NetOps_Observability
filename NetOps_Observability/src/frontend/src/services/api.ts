@@ -2095,7 +2095,14 @@ export const api = {
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
   // Per-source ingestion status, MEASURED from what actually landed (signals,
   // active seams, inventory) — not a hard-coded assumption.
-  cloudIngestion: () => request<{ sources: CloudIngestionSource[]; generated_at: string }>("/api/cloud/ingestion"),
+  cloudIngestion: () => request<{
+    sources: CloudIngestionSource[];
+    // per-provider matrices (audit Azure P0-7): keyed "aws" | "azure" | … —
+    // GCP appears automatically once connected. A provider row is only
+    // credited with signals that carry that provider's own attribution.
+    providers?: Record<string, CloudIngestionSource[]>;
+    generated_at: string;
+  }>("/api/cloud/ingestion"),
   // #81 P3G — the REAL engine-formed cloud RCA object(s) for an app (corr_objects),
   // tenant-scoped. Empty data[] when the app has no active RCA (unknown stays first-class).
   cloudAppRca: (app: string) => request<ClickHouseResponse<CloudAppRcaRow>>(`/api/cloud/app-rca?app=${encodeURIComponent(app)}`),
@@ -2107,7 +2114,13 @@ export const api = {
   cloudChanges: (app?: string, limit?: number) =>
     request<{ changes: CloudChangeRow[]; count: number; window_hours: number }>(`/api/cloud/changes${cloudQS(app, limit)}`),
   cloudEvidence: (app?: string, limit?: number) =>
-    request<{ objects: CloudRcaObjectRow[]; evidence: CloudEvidenceRow[]; count: number; window_hours: number }>(`/api/cloud/evidence${cloudQS(app, limit)}`),
+    request<{
+      objects: CloudRcaObjectRow[]; evidence: CloudEvidenceRow[];
+      // count = the TRUE ledger size; returned = this page; open_object_count =
+      // a dedicated COUNT of open investigations (audit D-P1-7 / D-P2-13).
+      count: number; returned?: number; open_object_count?: number;
+      objects_truncated?: boolean; window_hours: number;
+    }>(`/api/cloud/evidence${cloudQS(app, limit)}`),
 };
 
 // shared query string for the cloud signal surfaces (optional app + limit).
@@ -2138,7 +2151,7 @@ export type CloudChangeRow = {
 };
 export type CloudEvidenceRow = {
   time: string; category: string; signal_type: string; app: string; resource: string;
-  source: string; confidence: string; reason: string; used_in_verdict: boolean;
+  source: string; confidence: string; reason: string; grounded: boolean;
   rca_group: string; evidence_ref: string; cloud_ref?: CloudRefWire;
 };
 export type CloudRcaObjectRow = {
@@ -2157,6 +2170,9 @@ export type CloudAppRcaRow = {
   created_at: string;
   affected: string;
   sources: string[];
+  observer_count?: number;
+  observers?: string[];
+  plane_count?: number;
   cross_plane: number | boolean;
 };
 

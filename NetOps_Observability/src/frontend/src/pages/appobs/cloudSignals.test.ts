@@ -78,7 +78,7 @@ describe("loadChangeEvents", () => {
 });
 
 describe("loadEvidence", () => {
-  it("maps grounded signals (supporting) and the engine's own gaps (missing)", async () => {
+  it("maps grounded signals and the engine's own gaps (missing)", async () => {
     cloudEvidence.mockResolvedValue({
       objects: [{
         correlation_id: "96c16a06", verdict_tier: "suspected", confidence: 0.5,
@@ -88,26 +88,26 @@ describe("loadEvidence", () => {
       }],
       evidence: [
         {
-          time: "2026-07-12T13:10:00.000Z", category: "supporting", signal_type: "cloud_health",
+          time: "2026-07-12T13:10:00.000Z", category: "grounded", signal_type: "cloud_health",
           app: "booking-service", resource: "azure-host-01", source: "azure",
-          confidence: "suspected", reason: "cloud_health · app_error …", used_in_verdict: true,
+          confidence: "suspected", reason: "cloud_health · app_error …", grounded: true,
           rca_group: "96c16a06", evidence_ref: "sig-1",
         },
         {
           time: "2026-07-12T13:00:00.000Z", category: "missing", signal_type: "gap",
           app: "booking-service", resource: "—", source: "correlation engine",
           confidence: "unknown", reason: "single observer (cloud:…); need ≥2",
-          used_in_verdict: false, rca_group: "96c16a06", evidence_ref: "—",
+          grounded: false, rca_group: "96c16a06", evidence_ref: "—",
         },
       ],
     });
     const { objects, rows } = await loadEvidence();
     expect(objects[0].topHypothesis).toBe("sig.ent.cloud.app-dependency-down");
     expect(objects[0].apps).toEqual(["booking-service", "journey"]);
-    expect(rows[0].category).toBe("supporting");
-    expect(rows[0].usedInVerdict).toBe(true);
+    expect(rows[0].category).toBe("grounded");
+    expect(rows[0].grounded).toBe(true);
     expect(rows[1].category).toBe("missing");
-    expect(rows[1].usedInVerdict).toBe(false);
+    expect(rows[1].grounded).toBe(false);
   });
 
   // The console pivot (audit Wave 3 #9): cloud_ref must survive the mapping, and
@@ -116,9 +116,9 @@ describe("loadEvidence", () => {
     cloudEvidence.mockResolvedValue({
       objects: [],
       evidence: [{
-        time: "2026-07-12T13:10:00.000Z", category: "supporting", signal_type: "cloud_health",
+        time: "2026-07-12T13:10:00.000Z", category: "grounded", signal_type: "cloud_health",
         app: "shared", resource: "correlix-app-host-01 (i-0448c)", source: "aws",
-        confidence: "suspected", reason: "r", used_in_verdict: true,
+        confidence: "suspected", reason: "r", grounded: true,
         rca_group: "g", evidence_ref: "sig-1",
         cloud_ref: {
           provider: "aws", resource_id: "i-0448c", account: "945714973156", region: "us-west-2",
@@ -137,9 +137,9 @@ describe("loadEvidence", () => {
     cloudEvidence.mockResolvedValue({
       objects: [],
       evidence: [{
-        time: "t", category: "supporting", signal_type: "cloud_health", app: "a",
+        time: "t", category: "grounded", signal_type: "cloud_health", app: "a",
         resource: "r", source: "aws", confidence: "suspected", reason: "r",
-        used_in_verdict: true, rca_group: "g", evidence_ref: "e",
+        grounded: true, rca_group: "g", evidence_ref: "e",
         cloud_ref: {
           provider: "aws", resource_id: "i-1",
           console_url: "https://evil.example.com/phish",
@@ -157,7 +157,7 @@ describe("loadEvidence", () => {
   it("never invents an evidence category", async () => {
     cloudEvidence.mockResolvedValue({ objects: [], evidence: [{ category: "contradicting" }] });
     const { rows } = await loadEvidence();
-    expect(rows[0].category).toBe("supporting");
+    expect(rows[0].category).toBe("grounded");
   });
 
   it("returns an empty ledger when the engine grounded nothing", async () => {

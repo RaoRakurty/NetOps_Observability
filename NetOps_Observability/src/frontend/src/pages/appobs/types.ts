@@ -37,8 +37,11 @@ export interface App {
   env: string;
   confidence: Confidence;
   source: AttrSource;
-  provider: Provider;
-  account: string;
+  provider: Provider;   // primary (first seen) — kept for single-provider surfaces
+  // ALL providers this service spans (a dual-cloud app is one service in two
+  // clouds, never two rows and never a row that silently drops one cloud).
+  providers: Provider[];
+  account: string;      // joined with " · " when the service spans accounts
   region: string;
   resources: number;
   trafficBps: number;
@@ -101,11 +104,13 @@ export interface ChangeEvent {
   cloudRef?: CloudRef;    // console pivot to the provider's audit record
 }
 
-// How a piece of evidence relates to a verdict — the anti-black-box ledger.
-// supporting = argues for · contradicting = argues against · discriminating =
-// separates competing root domains · missing = a signal we'd want but don't have
-// (honest gap) · recovery = confirmed the fix/return-to-baseline.
-export type EvidenceCategory = "supporting" | "contradicting" | "discriminating" | "missing" | "recovery";
+// How a finding relates to an investigation — the anti-black-box ledger.
+// grounded = the engine attached it to the investigation (a fact we hold) ·
+// contradicting = argues against · discriminating = separates competing root
+// domains · missing = a signal we'd want but don't have (honest gap) ·
+// recovery = confirmed the fix/return-to-baseline. Per-signal verdict
+// participation is NOT recorded, so it is never claimed (audit D-P2-13).
+export type EvidenceCategory = "grounded" | "contradicting" | "discriminating" | "missing" | "recovery";
 
 // The provider-native identity behind a row: the raw handle (i-…, eni-…, ARM id)
 // an engineer pastes into a support case, plus the server-built console pivot.
@@ -128,7 +133,7 @@ export interface EvidenceRow {
   source: AttrSource | string;
   confidence: Confidence;
   reason: string;
-  usedInVerdict: boolean; // did this row feed the verdict, or is it context/gap?
+  grounded: boolean;      // the engine attached this row to the investigation (vs a declared gap)
   rcaGroup: string;       // "" when none
   evidenceRef: string;    // opaque ref to the raw record
   cloudRef?: CloudRef;    // console pivot (absent for engine-generated gap rows)
@@ -144,7 +149,10 @@ export interface Coverage {
 }
 
 export interface UnknownContributor {
-  entity: string;         // resource / IP / ENI / NIC
+  entity: string;         // stable row key (name + address)
+  name: string;           // the resource NAME leads every cell (audit C: never a bare id)
+  address: string;        // primary private IP ("" when none)
+  resourceId: string;     // the raw provider handle — secondary, mono, drawer-only
   kind: string;           // "ENI" | "private_ip" | "resource_id" | ...
   provider: Provider;
   account: string;
@@ -239,6 +247,12 @@ export interface AppRca {
   confidence: number;      // 0..1
   signalCount: number;
   state: string;           // open | closed
-  crossPlane: boolean;     // an independent (non-cloud) observer corroborates
+  // corroboration facts (audit D-P2-12): crossPlane = the engine's own
+  // plane_count ≥ 2 (the ≥2-independent-streams standard), observers = the
+  // DISTINCT observer identities that actually saw it (not source planes).
+  crossPlane: boolean;
+  planeCount: number;
+  observerCount: number;
+  observers: string[];     // up to 8 observer ids
   sources: string[];       // observed signal planes (cloud, probe, …)
 }
