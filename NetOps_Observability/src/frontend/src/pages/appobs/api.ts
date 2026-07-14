@@ -109,6 +109,7 @@ function toResource(r: CloudResourceRow): CloudResource {
     source: src(r.source),
     confidence: conf(r.confidence),
     health: "unknown",           // not measured (P3C)
+    powerState: r.power_state || "—", // provider lifecycle; stopped ≠ broken
     trafficBps: NOT_MEASURED,    // not measured (P3B)
     lastSeen: r.last_seen_at,
     missingTags: missingTags(r.tags),

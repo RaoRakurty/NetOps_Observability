@@ -65,6 +65,7 @@ export interface CloudResource {
   source: AttrSource;
   confidence: Confidence;
   health: Health;
+  powerState: string;     // provider lifecycle (running | stopped | …); "—" unknown
   trafficBps: number;
   lastSeen: string;
   missingTags: string[];  // e.g. ["app","owner"]

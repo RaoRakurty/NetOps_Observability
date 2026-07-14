@@ -585,20 +585,27 @@ SELECT toString(ts)            AS ts_s,
 // the READ must collapse the re-emissions: one row per signal_id, keeping the
 // earliest observation of it (when the change actually happened).
 func cloudChangesSQL(appFilter string, limit int, scope string) string {
+	// The filter runs in a subquery: an output alias that shadows a source column
+	// (any(kind) AS kind) is substituted into WHERE by ClickHouse and throws
+	// ILLEGAL_AGGREGATION — the exact bug that made this endpoint answer 0.
 	return fmt.Sprintf(`
-SELECT toString(min(ts))        AS ts_s,
-       any(kind)                AS kind,
+SELECT toString(min(ts))          AS ts_s,
+       any(kind)                  AS kind,
        toString(any(entity_type)) AS entity_type_s,
-       any(entity_id)           AS entity_id,
-       toString(any(severity))  AS severity_s,
-       any(metric_name)         AS metric_name,
-       any(value)               AS value,
-       any(attrs)               AS attrs,
-       any(observer_id)         AS observer_id
-  FROM netops.corr_signals
- WHERE source = 'cloud'
-   AND kind IN ('cloud_change','cloud_audit','security_policy_change')
-   AND ts > now() - INTERVAL %d HOUR%s
+       any(entity_id)             AS entity_id,
+       toString(any(severity))    AS severity_s,
+       any(metric_name)           AS metric_name,
+       any(value)                 AS value,
+       any(attrs)                 AS attrs,
+       any(observer_id)           AS observer_id
+  FROM (
+       SELECT signal_id, ts, kind, entity_type, entity_id, severity,
+              metric_name, value, attrs, observer_id
+         FROM netops.corr_signals
+        WHERE source = 'cloud'
+          AND kind IN ('cloud_change','cloud_audit','security_policy_change')
+          AND ts > now() - INTERVAL %d HOUR%s
+  )
  GROUP BY signal_id
  ORDER BY ts_s DESC
  LIMIT %d

@@ -131,6 +131,10 @@ type CloudResource struct {
 	PublicIPs           []string          `json:"public_ips,omitempty"`
 	NetworkInterfaceIDs []string          `json:"network_interface_ids,omitempty"`
 	Tags                map[string]string `json:"tags,omitempty"`
+	// PowerState is the provider-reported lifecycle state (running | stopped |
+	// deallocated | …). Stopped ≠ broken: the audit found 2 stopped hosts being
+	// read as failures because the product didn't know their lifecycle state.
+	PowerState          string            `json:"power_state,omitempty"`
 	Owner               string            `json:"owner,omitempty"`
 	Env                 string            `json:"env,omitempty"`
 	AppID               string            `json:"app_id,omitempty"`

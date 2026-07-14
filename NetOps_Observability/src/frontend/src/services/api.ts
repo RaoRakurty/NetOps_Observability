@@ -2822,6 +2822,7 @@ export type CloudResourceRow = {
   public_ips?: string[];
   network_interface_ids?: string[];
   tags?: Record<string, string>;
+  power_state?: string; // provider lifecycle: running | stopped | deallocated…
   owner?: string;
   env?: string;
   app_id?: string;

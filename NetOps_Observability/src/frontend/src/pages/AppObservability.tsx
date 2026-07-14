@@ -396,6 +396,11 @@ function Resources() {
           columns={[
             { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
             { key: "type", header: "Type", width: 120, render: (r) => r.type },
+            { key: "power", header: "State", width: 90, sortable: true, sortValue: (r) => r.powerState, render: (r) => r.powerState === "—" ? DASH : (
+              <span style={{ color: r.powerState === "running" ? "var(--ok)" : "var(--warn)", fontWeight: 600 }}>
+                {r.powerState.charAt(0).toUpperCase() + r.powerState.slice(1)}
+              </span>
+            ) },
             { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
             { key: "acct", header: "Account", width: 130, render: (r) => <span className="ao-mono ao-muted">{r.account}</span> },
             { key: "region", header: "Region", width: 100, render: (r) => r.region },

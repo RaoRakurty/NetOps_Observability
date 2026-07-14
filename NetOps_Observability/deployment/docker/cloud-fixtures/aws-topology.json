@@ -24,14 +24,14 @@
       "name": "subnet-0dc195a7472b46f17"
     },
     {
-      "id": "subnet-0f10f603845b9c617",
-      "cidr": "172.31.32.0/20",
-      "name": "subnet-0f10f603845b9c617"
-    },
-    {
       "id": "subnet-0dacf6578cc3c4f09",
       "cidr": "172.31.0.0/20",
       "name": "subnet-0dacf6578cc3c4f09"
+    },
+    {
+      "id": "subnet-0f10f603845b9c617",
+      "cidr": "172.31.32.0/20",
+      "name": "subnet-0f10f603845b9c617"
     },
     {
       "id": "subnet-043e7c67c239c83be",
