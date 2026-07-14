@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"netops/backend/cloud"
 )
@@ -217,9 +218,13 @@ SELECT toString(o.correlation_id)            AS correlation_id,
 }
 
 // startCloudInventory loads the cloud inventory from the fixture provider into the
-// store at boot (opt-in: CLOUD_FIXTURES_DIR). Real per-tenant SDK connectors replace
-// this loader later; the store + API are unchanged. Stamps CLOUD_FIXTURE_TENANT
-// (default "" = platform/global, visible to the owner) — never a tenant from a fixture.
+// store and keeps it FRESH (opt-in: CLOUD_FIXTURES_DIR). The cloud-ingest poller
+// rewrites the fixture files from the live provider APIs every discovery cycle;
+// loading only at boot served a stale lifecycle state (a started instance still
+// read "stopped") until the next api restart — the exact 33h-staleness class the
+// audit flagged on Azure (P0-2), on the consumer side. Real per-tenant SDK
+// connectors replace this loader later; the store + API are unchanged. Stamps
+// CLOUD_FIXTURE_TENANT (default "" = platform/global) — never a tenant from a fixture.
 func (s *server) startCloudInventory(ctx context.Context) {
 	dir := os.Getenv("CLOUD_FIXTURES_DIR")
 	if dir == "" || s.cloud == nil {
@@ -227,15 +232,34 @@ func (s *server) startCloudInventory(ctx context.Context) {
 	}
 	tenant := os.Getenv("CLOUD_FIXTURE_TENANT") // "" = global
 	prov := cloud.NewFixtureProvider(dir)
-	res, err := prov.ListResources(ctx, tenant, "")
-	if err != nil {
-		logError("cloud", "fixture inventory load failed", map[string]any{"err": err.Error()})
-		return
+	lastCount := -1
+	load := func() {
+		res, err := prov.ListResources(ctx, tenant, "")
+		if err != nil {
+			logError("cloud", "fixture inventory load failed", map[string]any{"err": err.Error()})
+			return
+		}
+		maps, _ := prov.ListIdentityMappings(ctx, tenant, "")
+		if e := s.cloud.ReplaceInventory(ctx, tenant, res, maps); e != nil {
+			logError("cloud", "inventory store failed", map[string]any{"err": e.Error()})
+			return
+		}
+		if len(res) != lastCount {
+			logInfo("cloud", "loaded fixture inventory", map[string]any{"resources": len(res), "mappings": len(maps)})
+			lastCount = len(res)
+		}
 	}
-	maps, _ := prov.ListIdentityMappings(ctx, tenant, "")
-	if e := s.cloud.ReplaceInventory(ctx, tenant, res, maps); e != nil {
-		logError("cloud", "inventory store failed", map[string]any{"err": e.Error()})
-		return
-	}
-	logInfo("cloud", "loaded fixture inventory", map[string]any{"resources": len(res), "mappings": len(maps)})
+	load()
+	go func() {
+		t := time.NewTicker(2 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				load()
+			}
+		}
+	}()
 }

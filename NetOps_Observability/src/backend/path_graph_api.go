@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -109,11 +110,16 @@ func (c chCorrPathRef) PathRefFor(ctx context.Context, scope, id string) (pathQu
 	if !isUUIDToken(id) {
 		return pathQueryRef{}, false, errors.New("invalid correlation id")
 	}
-	sql := `SELECT entity_id, tenant_id
+	// A merged/wide object can carry path entities to SEVERAL destinations;
+	// "newest single row" picked an arbitrary one (a netbox case answered with
+	// 1.1.1.1's path). Rank candidates instead: prefer a destination the object
+	// itself names in its affected set, then the dominant (most-grounded) path.
+	sql := `SELECT entity_id, any(tenant_id) AS tenant_id, count() AS n, max(ts) AS last
   FROM netops.corr_signals_archive
  WHERE archived_for = '` + id + `' AND entity_type = 'path' AND entity_id != ''
- ORDER BY ts DESC
- LIMIT 1
+ GROUP BY entity_id
+ ORDER BY n DESC, last DESC
+ LIMIT 20
  FORMAT JSON`
 	rows, err := chSelect(ctx, scope, sql, "api:/api/rca/path")
 	if err != nil {
@@ -122,12 +128,37 @@ func (c chCorrPathRef) PathRefFor(ctx context.Context, scope, id string) (pathQu
 	if len(rows) == 0 {
 		return pathQueryRef{}, false, nil
 	}
-	entity := str(rows[0]["entity_id"])
-	_, dst, found := strings.Cut(entity, "->")
-	if !found {
+	subjects := map[string]bool{}
+	if aff, aerr := chSelect(ctx, scope, `SELECT affected FROM netops.corr_current FINAL
+ WHERE correlation_id = '`+id+`' LIMIT 1 FORMAT JSON`, "api:/api/rca/path"); aerr == nil && len(aff) > 0 {
+		var a struct {
+			Services []string `json:"services"`
+		}
+		if json.Unmarshal([]byte(str(aff[0]["affected"])), &a) == nil {
+			for _, svc := range a.Services {
+				subjects[strings.TrimSpace(svc)] = true
+			}
+		}
+	}
+	pick := -1
+	for i, row := range rows {
+		_, dst, found := strings.Cut(str(row["entity_id"]), "->")
+		if !found {
+			continue
+		}
+		if pick < 0 {
+			pick = i // dominant path = default
+		}
+		if subjects[strings.TrimSpace(dst)] {
+			pick = i // the object's own subject wins
+			break
+		}
+	}
+	if pick < 0 {
 		return pathQueryRef{}, false, nil
 	}
-	return pathQueryRef{DstAddress: strings.TrimSpace(dst), Tenant: str(rows[0]["tenant_id"])}, true, nil
+	_, dst, _ := strings.Cut(str(rows[pick]["entity_id"]), "->")
+	return pathQueryRef{DstAddress: strings.TrimSpace(dst), Tenant: str(rows[pick]["tenant_id"])}, true, nil
 }
 
 // pathSpineResponse is the §7 payload plus the honest "no spine" case.

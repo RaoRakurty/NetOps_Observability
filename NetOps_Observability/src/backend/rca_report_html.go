@@ -44,7 +44,80 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 			"same_account_region": "Same account/region only", "temporal_only": "Temporal correlation only",
 		}[rel]
 	},
+	"pathGraph": rcaPathGraphSVG,
 }).Parse(rcaReportTmplSrc))
+
+// rcaPathGraphSVG draws the measured path as the same causal picture the
+// workspace canvas shows — nodes left→right, provider boundaries named, the
+// verdict-gated break point red — so the exported document carries the path's
+// causality VISUALLY, not only as a table. Only measured hops are drawn; an
+// unknown hop renders dashed-grey, never bridged.
+func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
+	n := len(t.Hops)
+	if n == 0 {
+		return ""
+	}
+	const step, x0, cy = 148, 74, 52
+	w := x0*2 + step*(n-1)
+	var b strings.Builder
+	esc := func(s string) string { return template.HTMLEscapeString(s) }
+	short := func(s string, max int) string {
+		if len(s) > max {
+			return s[:max-1] + "…"
+		}
+		return s
+	}
+	fmt.Fprintf(&b, `<svg viewBox="0 0 %d 128" width="100%%" style="max-width:%dpx;display:block;margin:8px auto 2px" role="img" aria-label="Network path causality">`, w, min(w, 760))
+	// edges first (under the nodes); an edge into/after a dark hop is dashed.
+	for i := 1; i < n; i++ {
+		x1, x2 := x0+step*(i-1), x0+step*i
+		dark := t.Hops[i].State == "down" || t.Hops[i].State == "unknown" ||
+			t.Hops[i-1].State == "down" || t.Hops[i-1].State == "unknown"
+		style := `stroke="#94a3b8" stroke-width="1.6"`
+		if dark {
+			style = `stroke="#cbd5e1" stroke-width="1.6" stroke-dasharray="5 4"`
+		}
+		fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" %s/>`, x1+15, cy, x2-15, cy, style)
+	}
+	for i, h := range t.Hops {
+		x := x0 + step*i
+		fill, stroke, dash := "#ecfdf5", "#0f9f4f", ""
+		switch {
+		case h.Fault == "broken" || h.State == "down":
+			fill, stroke = "#fee2e2", "#dc2626"
+		case h.Fault == "suspected" || h.State == "degraded":
+			fill, stroke = "#fef3c7", "#b45309"
+		case h.State == "unknown":
+			fill, stroke, dash = "#f1f5f9", "#94a3b8", ` stroke-dasharray="4 3"`
+		}
+		fmt.Fprintf(&b, `<circle cx="%d" cy="%d" r="13" fill="%s" stroke="%s" stroke-width="2"%s/>`, x, cy, fill, stroke, dash)
+		if h.Fault == "broken" || h.Fault == "suspected" {
+			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="13" font-weight="800" fill="%s">✕</text>`, x, cy+5, stroke)
+			label := "BREAK POINT"
+			if h.Fault == "suspected" {
+				label = "SUSPECTED BREAK"
+			}
+			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8.5" font-weight="800" letter-spacing=".08em" fill="%s">%s</text>`, x, stroke, label)
+		} else if h.Provider != "" {
+			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8" font-weight="700" letter-spacing=".08em" fill="#475569">%s</text>`, x, esc(strings.ToUpper(h.Provider)))
+		}
+		// zone above, name + boundary below — the same reading order as the table.
+		fmt.Fprintf(&b, `<text x="%d" y="32" text-anchor="middle" font-size="8" fill="#64748b">%s</text>`, x, esc(rcaTitleCase(h.Kind)))
+		name := h.Label
+		if name == "" {
+			name = "unknown hop"
+		}
+		fmt.Fprintf(&b, `<text x="%d" y="82" text-anchor="middle" font-size="9.5" font-weight="700" fill="#0f172a">%s</text>`, x, esc(short(name, 20)))
+		if h.Address != "" && h.Address != h.Label {
+			fmt.Fprintf(&b, `<text x="%d" y="94" text-anchor="middle" font-size="8" font-family="ui-monospace,monospace" fill="#64748b">%s</text>`, x, esc(short(h.Address, 22)))
+		}
+		if h.SeamID != "" || (h.Boundary != "" && h.Boundary != "LAN" && h.Boundary != "WAN") {
+			fmt.Fprintf(&b, `<text x="%d" y="106" text-anchor="middle" font-size="8" font-weight="600" fill="#7c3aed">%s</text>`, x, esc(short(h.Boundary+" boundary", 24)))
+		}
+	}
+	b.WriteString(`</svg>`)
+	return template.HTML(b.String()) // #nosec G203 — built above from escaped fields only
+}
 
 // rcaStateTone — badge tone per state WORD (§18 colour rules). The word always
 // renders; the tone only reinforces it (grayscale-safe).
@@ -298,9 +371,10 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 
 <section>
-  <h2>Network path (measured)</h2>
+  <h2>Network path &amp; causality (measured)</h2>
   {{if .Topology.Available}}
   <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
+  {{pathGraph .Topology}}
   <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
   {{range .Topology.Hops}}<tr>
     <td style="font-family:ui-monospace,monospace">{{.Index}}</td>
