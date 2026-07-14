@@ -54,6 +54,27 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     # is healthy but its NAME is broken (failover/record/TTL faults). Entity is
     # the name being resolved: what an investigation joins to app symptoms.
     "cloud_dns_log":          (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.SERVICE),
+    # ── hybrid-seam kinds (#105 P0): the gateway plane, measured ─────────────
+    # State TRANSITIONS on the cloud side of a seam (BGP session, VPN tunnel,
+    # physical link), plus forwarding-drop and route evidence. All CONTROL_PLANE
+    # except forwarding drops (the data plane speaking) — each is one half of a
+    # two-sided correlation with the on-prem device's own telemetry. attrs carry
+    # evidence_class + the provider-native ids (tunnel IP, VIF, peer, circuit).
+    # `ts` is the provider's OWN observation time; a state past its freshness
+    # budget arrives as cloud_state_unknown, never as an eternal "up".
+    "cloud_bgp_session_down": (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_bgp_session_up":   (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_bgp_flap":         (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_route_count_drop": (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_vpn_tunnel_down":  (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_vpn_tunnel_up":    (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_vpn_packet_drop":  (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_physical_link_down": (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_link_error":       (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_gateway_blackhole_drop": (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_gateway_no_route_drop":  (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_nat_port_exhaustion":    (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    "cloud_state_unknown":    (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_lb_log":           (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.APP),
     "cloud_change":           (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_audit":            (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),

@@ -273,3 +273,94 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
         n += 1
     # trim the dedup window to the entries the next overlap can re-read
     return n, newest, new_seen[-500:]
+
+
+# ── hybrid-seam lane (#105 P1): Cloud Router BGP/BFD via FREE REST ───────────
+# getRouterStatus returns live per-peer BGP state (status UP/DOWN, session
+# state, numLearnedRoutes) with zero Monitoring-API metering — the strongest
+# free seam-state source of any provider. Transitions ride the shared
+# SeamStateTracker; route-count collapse uses material_route_drop (expected-
+# count context, never a fixed threshold).
+
+from seam_state import SeamStateTracker, material_route_drop  # noqa: E402
+
+
+def list_routers(tok: str) -> list[dict]:
+    out: list[dict] = []
+    url = (f"https://compute.googleapis.com/compute/v1/projects/{PROJECT}"
+           f"/aggregated/routers?returnPartialSuccess=true")
+    while url:
+        res = _get_json(url, tok)
+        for scope, wrap in (res.get("items") or {}).items():
+            for r in wrap.get("routers") or []:
+                region = scope.split("/")[-1]
+                out.append({"name": r.get("name", ""), "region": region,
+                            "id": f"projects/{PROJECT}/regions/{region}/routers/{r.get('name', '')}"})
+        nxt = res.get("nextPageToken")
+        url = (url.split("&pageToken=")[0] + "&pageToken=" + nxt) if nxt else ""
+    return out
+
+
+def poll_router_seams(tok: str, producer, tenant: str, st: dict, now: float,
+                      observed_at: str) -> int:
+    """Per-peer BGP state + learned-route counts for every Cloud Router.
+    Emits transition + route-drop signals; persists tracker/counts via st."""
+    tracker = SeamStateTracker.from_state(st.get("gcp_seam_tracker"))
+    route_prev: dict = st.get("gcp_route_counts") or {}
+    route_new: dict = {}
+    n = 0
+    for router in list_routers(tok):
+        try:
+            res = _get_json(
+                f"https://compute.googleapis.com/compute/v1/{router['id']}/getRouterStatus", tok)
+        except Exception:  # noqa: BLE001 - one router's failure never kills the rest
+            continue
+        for peer in (res.get("result") or {}).get("bgpPeerStatus") or []:
+            key = f"gcprouter:{router['id']}:{peer.get('name', '')}"
+            status = str(peer.get("status", "")).lower()  # UP | DOWN | UNKNOWN
+            learned = int(peer.get("numLearnedRoutes", 0) or 0)
+            for tr in tracker.observe(key, status or "unknown", observed_at, now):
+                to = tr["to"]
+                kind = ("cloud_bgp_session_down" if to == "down"
+                        else "cloud_bgp_session_up" if to == "up"
+                        else "cloud_state_unknown")
+                if tr.get("flap"):
+                    kind = "cloud_bgp_flap"
+                producer.send("netops.cloud", {
+                    "kind": kind, "tenant_id": tenant,
+                    "resource_id": key, "region": router["region"],
+                    "severity": "crit" if to == "down" else "info",
+                    "metric_name": kind, "value": 1.0, "ts": observed_at,
+                    "attrs": {"provider": "gcp", "evidence_class": "state_transition",
+                              "router": router["id"], "peer": peer.get("name", ""),
+                              "peer_address": peer.get("peerIpAddress", ""),
+                              "session_state": peer.get("state", ""),
+                              "from_state": tr.get("from", ""), "to_state": to},
+                })
+                n += 1
+            route_new[key] = learned
+            if material_route_drop(route_prev.get(key), learned):
+                producer.send("netops.cloud", {
+                    "kind": "cloud_route_count_drop", "tenant_id": tenant,
+                    "resource_id": key, "region": router["region"],
+                    "severity": "high", "metric_name": "learned_routes",
+                    "value": float(learned), "ts": observed_at,
+                    "attrs": {"provider": "gcp", "evidence_class": "route_change",
+                              "router": router["id"], "peer": peer.get("name", ""),
+                              "previous": str(route_prev.get(key, "")),
+                              "bgp_state": tracker.current(key)},
+                })
+                n += 1
+    for tr in tracker.expire(freshness_s=3 * 300, now=now):
+        producer.send("netops.cloud", {
+            "kind": "cloud_state_unknown", "tenant_id": tenant,
+            "resource_id": tr["key"], "region": "",
+            "severity": "warn", "metric_name": "cloud_state_unknown",
+            "value": 1.0, "ts": tr["observed_at"],
+            "attrs": {"provider": "gcp", "evidence_class": "state",
+                      "from_state": tr["from"], "stale_after_s": str(tr["stale_after_s"])},
+        })
+        n += 1
+    st["gcp_seam_tracker"] = tracker.to_state()
+    st["gcp_route_counts"] = route_new
+    return n

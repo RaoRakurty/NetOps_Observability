@@ -133,6 +133,17 @@ dims are poll-only (BgpPeerStatus) → $filter support is the keystone. **Cost-t
 FREE lanes always-on; metered reads = customer toggle (AWS_METERED_METRICS/GCP_METERED_METRICS,
 shipped in poller); Edge Cloud Collector ON HOLD.** gcp.py audit-poller overlap+insertId dedup +
 suffix-exclude bugs fixed same-day.
+**Hybrid-seam lane SHIPPED (2026-07-14/15, all 3 providers):** shared pure core `seam_state.py`
+(SeamStateTracker: first-sight-silent, transition dedup, flap ≥3/15m, freshness decay→`unknown`,
+restart-safe persistence; `counter_delta` reset-safe; `material_route_drop` expected-context) +
+`seam_aws.py` (per-tunnel VPN VgwTelemetry + per-VIF DX BGP free; TGW blackhole vs no-route
+DISTINCT + NAT port-exhaustion + DX errors metered/gated) + `azure.poll_seams` (ER Bgp/Arp
+availability per PeeringType + VPN-GW BgpPeerStatus per peer via `$filter` dims + tunnel drops) +
+`gcp.poll_router_seams` (getRouterStatus per-peer BGP + learned-route drop, free REST). All three
+wired into poller (own failure domains, `CLOUD_SEAM_TELEMETRY`/`SEAM_EVERY_S`), seam kinds
+registered in `cloud_producers.py`, 18 unit tests (`test_seam_state.py`). **Not yet watched
+rendered** — lab has no managed seam resources (AWS VPN/TGW/NAT-GW, Azure ER/VPN-GW) and GCP is
+cred-gated; render validation rides the acceptance drills.
 **Also queued:** stale "DEMO TENANT · SYNTHETIC SIGNALS" badge (fixtures are live poller data now —
 stamp collection mode, surface via API).
 

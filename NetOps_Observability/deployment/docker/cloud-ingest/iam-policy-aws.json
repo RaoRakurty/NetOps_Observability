@@ -12,6 +12,10 @@
         "ec2:DescribeNatGateways",
         "ec2:DescribeNetworkInterfaces",
         "ec2:DescribeInstances",
+        "ec2:DescribeVpnConnections",
+        "ec2:DescribeTransitGateways",
+        "directconnect:DescribeConnections",
+        "directconnect:DescribeVirtualInterfaces",
         "sts:GetCallerIdentity"
       ],
       "Resource": "*"

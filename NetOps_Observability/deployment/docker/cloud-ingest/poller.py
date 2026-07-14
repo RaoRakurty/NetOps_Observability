@@ -20,6 +20,7 @@ import azure
 import cloudmetrics
 import discover
 import gcp
+import seam_aws
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 LOG_GROUP = os.environ.get("FLOW_LOG_GROUP", "")  # CloudWatch lane (needs delivery role)
@@ -44,6 +45,11 @@ ACCOUNT = os.environ.get("CLOUD_ACCOUNT", "945714973156")
 # reads are not billed — no toggle needed. Off = the matrix shows the lane
 # honestly disabled, never silently missing.
 AWS_METERED_METRICS = os.environ.get("AWS_METERED_METRICS", "on").lower() != "off"
+# Hybrid-seam lanes (#105 P1): describe-API/REST state is FREE and always on
+# unless explicitly disabled; the metered drop counters inside each lane honor
+# the per-provider metered toggles above.
+CLOUD_SEAM_TELEMETRY = os.environ.get("CLOUD_SEAM_TELEMETRY", "on").lower() != "off"
+SEAM_EVERY_S = int(os.environ.get("SEAM_EVERY_S", "120"))
 GCP_METERED_METRICS = os.environ.get("GCP_METERED_METRICS", "on").lower() != "off"
 POLL_S = int(os.environ.get("POLL_S", "60"))
 DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
@@ -285,6 +291,9 @@ def main():
     jlog("gcp lane", configured=gcp_ready)
     last_gcp_inventory = 0.0
     last_gcp_metrics = 0.0
+    last_seam = 0.0
+    last_gcp_seam = 0.0
+    last_az_seam = 0.0
     while True:
         try:
             # Cloud inventory + in-cloud egress topology, discovered from the live
@@ -308,6 +317,17 @@ def main():
                 poll_flow_logs_s3(s3, st)
             poll_fidelity_logs_s3(s3, st)  # opt-in prefixes; no-op when unset
             poll_cloudtrail(ct, producer, st)
+            # Seam lane in its OWN guard: a seam hiccup must never block the
+            # flow/cloudtrail lanes' save_state below (P1-11, seen live on the
+            # Azure side 2026-07-15).
+            if CLOUD_SEAM_TELEMETRY and time.time() - last_seam >= SEAM_EVERY_S:
+                try:
+                    st["seam_every_s"] = SEAM_EVERY_S
+                    counts = seam_aws.run(session, producer, TENANT, st, AWS_METERED_METRICS)
+                    jlog("aws seams", **counts)
+                except Exception as exc:  # noqa: BLE001 - lane isolation
+                    jlog("aws seam error", error=str(exc)[:200])
+                last_seam = time.time()
             save_state(st)
         except Exception as exc:  # noqa: BLE001 - poller must survive transient API errors
             jlog("poll cycle error", error=str(exc)[:200])
@@ -338,6 +358,16 @@ def main():
                     save_state(st)
                 if nc:
                     jlog("gcp control plane", changes=nc)
+                if CLOUD_SEAM_TELEMETRY and now - last_gcp_seam >= SEAM_EVERY_S:
+                    try:
+                        ns = gcp.poll_router_seams(
+                            gtok, producer, TENANT, st, now, _iso_minutes_ago(0))
+                        save_state(st)
+                        if ns:
+                            jlog("gcp seams", signals=ns)
+                    except Exception as exc:  # noqa: BLE001 - lane isolation
+                        jlog("gcp seam error", error=str(exc)[:200])
+                    last_gcp_seam = now
             except Exception as exc:  # noqa: BLE001 - lane isolation
                 jlog("gcp cycle error", error=str(exc)[:200])
 
@@ -362,6 +392,16 @@ def main():
                     last_az_metrics = now
                     jlog("azure metrics", events=n, vms=len(az_vms),
                          running=sum(1 for v in az_vms if v.get("power_state") == "running"))
+                if CLOUD_SEAM_TELEMETRY and now - last_az_seam >= SEAM_EVERY_S:
+                    try:
+                        ns = azure.poll_seams(
+                            tok, producer, TENANT, st, now, _iso_minutes_ago(0))
+                        save_state(st)
+                        if ns:
+                            jlog("azure seams", signals=ns)
+                    except Exception as exc:  # noqa: BLE001 - lane isolation
+                        jlog("azure seam error", error=str(exc)[:200])
+                    last_az_seam = now
                 if now - last_az_health >= AZ_HEALTH_EVERY_S:
                     h = azure.poll_resource_health(tok, producer, TENANT)
                     since = st.get("azure_activity_ts") or _iso_minutes_ago(15)

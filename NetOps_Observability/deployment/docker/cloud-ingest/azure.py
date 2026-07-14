@@ -353,3 +353,124 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
         json.dump(inventory, f, indent=2)
     os.replace(tmp, path)
     return len(resources)
+
+
+# ── hybrid-seam lane (#105 P1): ER/VPN-GW metrics WITH dimensions ────────────
+# The seam truths on Azure are dimension-split, poll-only metrics (BgpPeerStatus
+# per BgpPeerAddress; ER BgpAvailability/ArpAvailability per PeeringType) —
+# diagnostic-settings export flattens or omits them, so the Metrics REST API
+# with $filter is the only honest path. Transitions ride the shared tracker.
+
+from seam_state import SeamStateTracker  # noqa: E402
+
+
+def list_network_resources(tok: str, rtype: str) -> list[str]:
+    """Subscription-wide ids of one Microsoft.Network resource type (paged)."""
+    ids: list[str] = []
+    # $filter value must be percent-encoded — a raw space in the URL is a
+    # control-character error in urllib (live poller failure 2026-07-15).
+    flt = urllib.parse.quote(f"resourceType eq '{rtype}'")
+    url = (f"{ARM}/subscriptions/{SUBSCRIPTION}/resources"
+           f"?$filter={flt}&api-version=2021-04-01")
+    while url:
+        res = _get_json(url, tok)
+        ids.extend(str(r.get("id", "")) for r in res.get("value", []) if r.get("id"))
+        url = res.get("nextLink") or ""
+    return ids
+
+
+def _metric_series(tok: str, rid: str, metric: str, agg: str,
+                   dim: str | None = None) -> list[dict]:
+    """One metric on one resource, per-dimension series preserved. Returns
+    [{dim_value, value, ts}] for the latest point of each series."""
+    q = f"metricnames={metric}&aggregation={agg}&interval=PT5M&api-version=2023-10-01"
+    if dim:
+        dim_filter = dim + " eq '*'"
+        q += "&$filter=" + urllib.parse.quote(dim_filter)
+    try:
+        res = _get_json(f"{ARM}{rid}/providers/Microsoft.Insights/metrics?{q}", tok)
+    except Exception:  # noqa: BLE001 - one resource never kills the lane
+        return []
+    out: list[dict] = []
+    for val in res.get("value", []):
+        for series in val.get("timeseries", []):
+            dv = ""
+            for mv in series.get("metadatavalues", []) or []:
+                dv = str(mv.get("value", ""))
+            points = [p for p in series.get("data", []) or [] if p.get(agg.lower()) is not None]
+            if not points:
+                continue  # absence stays absence
+            p = points[-1]
+            out.append({"dim_value": dv, "value": float(p[agg.lower()]),
+                        "ts": str(p.get("timeStamp", ""))})
+    return out
+
+
+def poll_seams(tok: str, producer, tenant: str, st: dict, now: float,
+               observed_at: str) -> int:
+    """ER circuits (BgpAvailability/ArpAvailability per PeeringType) + VPN
+    gateways (BgpPeerStatus per peer, tunnel packet drops). Emits transitions
+    and forwarding-drop signals. Empty subscriptions degrade to zero work."""
+    tracker = SeamStateTracker.from_state(st.get("az_seam_tracker"))
+    n = 0
+
+    def send(kind: str, rid: str, sev: str, value: float, attrs: dict, ts: str) -> None:
+        nonlocal n
+        producer.send("netops.cloud", {
+            "kind": kind, "tenant_id": tenant, "resource_id": rid, "region": REGION,
+            "severity": sev, "metric_name": kind, "value": value,
+            "ts": ts or observed_at, "attrs": {"provider": "azure", **attrs},
+        })
+        n += 1
+
+    for cid in list_network_resources(tok, "Microsoft.Network/expressRouteCircuits"):
+        for metric, evidence in (("BgpAvailability", "state"), ("ArpAvailability", "state")):
+            for s in _metric_series(tok, cid, metric, "Average", dim="PeeringType"):
+                key = f"er:{cid}:{metric}:{s['dim_value']}"
+                state = "up" if s["value"] >= 99.0 else ("down" if s["value"] < 95.0 else "degraded")
+                for tr in tracker.observe(key, state, s["ts"] or observed_at, now):
+                    kind = ("cloud_bgp_session_down" if tr["to"] in ("down", "degraded")
+                            and metric == "BgpAvailability"
+                            else "cloud_link_error" if metric == "ArpAvailability"
+                            and tr["to"] in ("down", "degraded")
+                            else "cloud_bgp_session_up" if tr["to"] == "up"
+                            else "cloud_state_unknown")
+                    send(kind, key, "crit" if tr["to"] == "down" else "warn" if tr["to"] == "degraded" else "info",
+                         s["value"],
+                         {"evidence_class": "state_transition", "circuit": cid,
+                          "peering_type": s["dim_value"], "availability_pct": str(s["value"]),
+                          "layer": "l3" if metric == "BgpAvailability" else "l2",
+                          "from_state": tr.get("from", ""), "to_state": tr["to"]},
+                         s["ts"])
+
+    for gid in list_network_resources(tok, "Microsoft.Network/virtualNetworkGateways"):
+        for s in _metric_series(tok, gid, "BgpPeerStatus", "Minimum", dim="BgpPeerAddress"):
+            key = f"vpngw:{gid}:{s['dim_value']}"
+            state = "up" if s["value"] >= 1.0 else "down"
+            for tr in tracker.observe(key, state, s["ts"] or observed_at, now):
+                kind = ("cloud_bgp_session_down" if tr["to"] == "down"
+                        else "cloud_bgp_session_up" if tr["to"] == "up"
+                        else "cloud_state_unknown")
+                if tr.get("flap"):
+                    kind = "cloud_bgp_flap"
+                send(kind, key, "crit" if tr["to"] == "down" else "info", s["value"],
+                     {"evidence_class": "state_transition", "gateway": gid,
+                      "peer_address": s["dim_value"],
+                      "from_state": tr.get("from", ""), "to_state": tr["to"]},
+                     s["ts"])
+        for metric, direction in (("TunnelEgressPacketDropCount", "egress"),
+                                  ("TunnelIngressPacketDropCount", "ingress")):
+            for s in _metric_series(tok, gid, metric, "Total", dim="ConnectionName"):
+                if s["value"] > 0:
+                    send("cloud_vpn_packet_drop", f"vpngw:{gid}:{s['dim_value']}", "high",
+                         s["value"],
+                         {"evidence_class": "forwarding_drop", "gateway": gid,
+                          "connection": s["dim_value"], "direction": direction},
+                         s["ts"])
+
+    for tr in tracker.expire(freshness_s=3 * 300, now=now):
+        send("cloud_state_unknown", tr["key"], "warn", 1.0,
+             {"evidence_class": "state", "from_state": tr["from"],
+              "stale_after_s": str(tr["stale_after_s"])}, tr["observed_at"])
+    st["az_seam_tracker"] = tracker.to_state()
+    return n
