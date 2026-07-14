@@ -16,6 +16,7 @@ import time
 import boto3
 from kafka import KafkaProducer
 
+import azure
 import cloudmetrics
 import discover
 
@@ -31,6 +32,10 @@ DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
 # CloudWatch metric lane (Service View counters + CUSUM evidence). CloudWatch's
 # free basic resolution is 5 min, so polling faster only re-reads the same point.
 METRICS_EVERY_S = int(os.environ.get("CW_METRICS_EVERY_S", "300"))
+# Azure platform metrics are 1-minute and FREE (richer than CloudWatch's 5-min
+# free tier), so the Azure lane polls faster.
+AZ_METRICS_EVERY_S = int(os.environ.get("AZ_METRICS_EVERY_S", "60"))
+AZ_HEALTH_EVERY_S = int(os.environ.get("AZ_HEALTH_EVERY_S", "120"))
 STATE_PATH = os.path.join(OUT_DIR, ".poller-state.json")
 # The flow-log sink is APPENDED to forever today. At real flow volume that fills
 # the disk and takes the poller (and the correlation tailer) down with it
@@ -200,6 +205,12 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
         jlog("cloudtrail changes produced", count=sent)
 
 
+def _iso_minutes_ago(minutes: int) -> str:
+    import datetime as _dt
+    t = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=minutes)
+    return t.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     session = boto3.Session(region_name=REGION)
@@ -215,7 +226,12 @@ def main():
     st = load_state()
     last_discover = 0.0
     last_metrics = 0.0
+    last_az_metrics = 0.0
+    last_az_health = 0.0
     inventory: list[dict] = []
+    az_vms: list[dict] = []
+    az_ready = azure.configured()
+    jlog("azure lane", configured=az_ready)
     while True:
         try:
             # Cloud inventory + in-cloud egress topology, discovered from the live
@@ -241,6 +257,33 @@ def main():
             save_state(st)
         except Exception as exc:  # noqa: BLE001 - poller must survive transient API errors
             jlog("poll cycle error", error=str(exc)[:200])
+
+        # ── AZURE ───────────────────────────────────────────────────────────
+        # A separate failure domain on purpose: an Azure hiccup must never roll
+        # back the AWS checkpoints (audit P1-11 — the four AWS lanes shared one
+        # try/except and one save_state).
+        if az_ready:
+            try:
+                tok = azure.token()
+                now = time.time()
+                if now - last_az_metrics >= AZ_METRICS_EVERY_S:
+                    az_vms = azure.list_vms(tok)
+                    n = azure.poll_metrics(tok, az_vms)
+                    last_az_metrics = now
+                    jlog("azure metrics", events=n, vms=len(az_vms),
+                         running=sum(1 for v in az_vms if v.get("power_state") == "running"))
+                if now - last_az_health >= AZ_HEALTH_EVERY_S:
+                    h = azure.poll_resource_health(tok, producer, TENANT)
+                    since = st.get("azure_activity_ts") or _iso_minutes_ago(15)
+                    c, newest = azure.poll_activity_log(tok, producer, TENANT, since)
+                    st["azure_activity_ts"] = newest
+                    last_az_health = now
+                    if h or c:
+                        jlog("azure control plane", health=h, changes=c)
+                    save_state(st)
+            except Exception as exc:  # noqa: BLE001
+                jlog("azure cycle error", error=str(exc)[:200])
+
         time.sleep(POLL_S)
 
 
