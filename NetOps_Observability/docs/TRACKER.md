@@ -123,10 +123,25 @@ server-built AWS console/CloudTrail + Azure portal/#resource links (cloud_consol
 inventory-resolved: ARM-alias case-folded keys, provider/region backfill for flow-log signals →
 evidence link coverage 6/210 → 200/210); frontend safeConsoleUrl zero-trust gate + shared ConsoleLink;
 pivots live on Evidence, Change Events, Resources (tables + drawers). Watched rendered.
-**Remaining (Wave 3/4):** provider-facet the per-account ingestion matrix (P0-7 — matrix chips are
-account-blind while the strip is truthful); terminology sweep + 5-tab
-IA; counter tail (evidence count=LIMIT, Observers=planes, crossPlane info-free, worstHealth rank bugs);
-ALB target health, ACCEPT flows, IAM policy commit, VNet flow logs; multi-cloud app row.
+**Wave 3/4 SHIPPED `3174f00`+`3392b1b` (2026-07-14, watched rendered):** counter tail closed
+(evidence count=TRUE COUNT + open_object_count dedicated COUNT; used_in_verdict→`grounded`;
+rollup rank unknown>healthy; info→degraded; Observers=uniqExact(observer_id)+plane_count≥2
+corroboration; probe double-count fixed per-vantage-first; vmQuery resource_id-only — device-name
+fallback was ACTIVE cross-cloud contamination, both clouds run a correlix-vpn-nat-01); ingestion
+matrix provider-faceted (P0-7; VM per-provider metrics freshness D-P1-8; parsers stamp provider=aws);
+5-tab IA (Overview|Services|Investigations|Resources|Data sources; old ids = deep-link aliases);
+full terminology sweep + 6 empty-state CTAs + name-first id columns + lying buttons removed;
+multi-cloud service row (provider SET per app_id); ACCEPT flows → cloud_flow_volume per-ENI rollup
++ flow event timestamps (P1-6/7); CPUCreditBalance polled (P1-13); describe_* paginated (P1-9);
+iam-policy-aws.json + CREDENTIALS.md committed (P1-15); azure.py write_inventory — azure.json now
+poller-written, ARM-id keyed, power_state live (P1-3, D-P0-4 phantom dead).
+**Remaining (blocked/owner):** ALB target health (NO ALB exists in the lab — owner topology
+decision + ~$16/mo); Azure VNet flow logs (real engineering + storage account — next big lane);
+multi-account sts:AssumeRole (prod connector shape, Task #15 Vault); GCP connector (owner: coming
+soon — all provider surfaces are now set-based/data-driven so GCP lights up on connect).
+**⚠️ ops note:** azure.json is now poller-rewritten like aws.json — tracked fixtures churn the
+working tree; decide gitignore+seed. 2026-07-14 disk-full incident (Go build cache): 80 OS indices
+went read-only + kafka crash-looped — cleared blocks + recovered; watch `go clean -cache` hygiene.
 **Official provider icons SHIPPED `eb64fc5` (2026-07-14):** OFFICIAL marks (AWS Icon-package_04302026
 AWS-Cloud-logo + Azure Public Service Icons V24 Azure-A — official packages, NOT aws-icons.com;
 terms documented in asset READMEs) vendored to `src/backend/cloudicons/` (go:embed → report pathGraph
