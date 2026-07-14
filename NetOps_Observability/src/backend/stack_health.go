@@ -198,12 +198,18 @@ func (s *server) handleStackHealth(w http.ResponseWriter, r *http.Request) {
 		subsystems["alerts"] = s.alerts.Health()
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"overall":    overall,
 		"up":         up,
 		"degraded":   degraded,
 		"down":       down,
 		"components": results,
 		"subsystems": subsystems,
-	})
+	}
+	// Appliance self-health guard state (disk watermark + search-store read-only
+	// blocks + last heal action) — a heal is an event the operator must SEE.
+	if s.selfHeal != nil {
+		out["self_heal"] = s.selfHeal.snapshot()
+	}
+	writeJSON(w, http.StatusOK, out)
 }

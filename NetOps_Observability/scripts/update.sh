@@ -254,6 +254,15 @@ if [[ -x "$ROOT/scripts/bootstrap-opensearch.sh" ]]; then
         || warn "template apply failed; check manually."
 fi
 
+# ---- 8: reclaim superseded images --------------------------------------------
+# Every upgrade loads new image versions and the old ones stay on disk forever —
+# the ONE real docker-debris growth vector on an appliance (nothing builds
+# there). Dangling-only prune: the running stack's images are referenced and
+# untouchable; only layers no tag points at any more are removed.
+
+step "removing superseded image layers"
+docker image prune -f >/dev/null 2>&1 || warn "image prune failed (non-fatal)"
+
 # ---- done -------------------------------------------------------------------
 
 step "status"

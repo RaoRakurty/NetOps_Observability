@@ -44,6 +44,7 @@ type server struct {
 	alerts           *alerts.Engine
 	userRules        *userRulesStore
 	notifier         *notify.Dispatcher
+	selfHeal         *selfHealer
 	users            usersRepo
 	roles            *roleStore
 	tenants          *tenantStore
@@ -457,6 +458,7 @@ func newServer() *server {
 		alerts:           engine,
 		userRules:        userRules,
 		notifier:         notifier,
+		selfHeal:         newSelfHealer(notifier),
 		users:            users,
 		roles:            roles,
 		tenants:          tenants,
@@ -613,6 +615,9 @@ func main() {
 	// Cloud App Observability inventory (#81 P3A): load fixtures into the store.
 	// No-op unless CLOUD_FIXTURES_DIR set (real per-tenant SDK connectors come later).
 	srv.startCloudInventory(ctx)
+	// Appliance self-health guard: watches disk + OpenSearch read-only blocks,
+	// heals ingest after disk pressure, pages via the platform lane (self_heal.go).
+	go srv.selfHeal.run(ctx)
 	// Service Path Graph ingest (contract v1): the prober's traceroutes → immutable
 	// PathObservations + ordered PathHops, each hop resolved through the §3 ranked
 	// resolver. Opt-in (FEATURE_PATH_GRAPH=true), dormant by default.

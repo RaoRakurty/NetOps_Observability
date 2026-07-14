@@ -139,7 +139,10 @@ func TestCloudHealthStateAndSeverity(t *testing.T) {
 		{"crit", "down", "critical"},
 		{"high", "degraded", "warning"},
 		{"warn", "degraded", "warning"},
-		{"info", "healthy", "info"},
+		// info is still a REPORTED problem — the health table is problems-only
+		// (Available states are never emitted), so it must not read "healthy"
+		// (audit D-P2-11).
+		{"info", "degraded", "info"},
 		{"", "unknown", "info"},
 	}
 	for _, tc := range cases {

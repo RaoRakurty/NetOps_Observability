@@ -407,6 +407,11 @@ cmd_install() {
     exit 1
   fi
   if wait_healthy; then
+    # Reclaim superseded image layers from any previous version this host ran —
+    # upgrades load new tags and the old layers otherwise sit on the appliance
+    # disk forever. Dangling-only: everything the running stack references is
+    # untouchable by definition.
+    docker image prune -f >/dev/null 2>&1 || true
     print_success
   else
     print_failure
