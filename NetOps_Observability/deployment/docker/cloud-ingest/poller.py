@@ -228,6 +228,7 @@ def main():
     last_metrics = 0.0
     last_az_metrics = 0.0
     last_az_health = 0.0
+    last_az_inventory = 0.0
     inventory: list[dict] = []
     az_vms: list[dict] = []
     az_ready = azure.configured()
@@ -266,6 +267,13 @@ def main():
             try:
                 tok = azure.token()
                 now = time.time()
+                # Live inventory on the discover cadence — azure.json is poller-
+                # written like aws.json, never a rotting hand-written fixture
+                # (audit D-P0-4 / P1-3: ARM-id keyed, power_state carried).
+                if now - last_az_inventory >= DISCOVER_EVERY_S:
+                    ninv = azure.write_inventory(tok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                    last_az_inventory = now
+                    jlog("azure inventory", resources=ninv)
                 if now - last_az_metrics >= AZ_METRICS_EVERY_S:
                     az_vms = azure.list_vms(tok)
                     n = azure.poll_metrics(tok, az_vms)

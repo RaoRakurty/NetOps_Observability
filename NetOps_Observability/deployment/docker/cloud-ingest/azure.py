@@ -257,3 +257,99 @@ def poll_activity_log(tok: str, producer, tenant: str, since: str) -> tuple[int,
             n += 1
         url = res.get("nextLink") or ""
     return n, newest
+
+
+# ── inventory writer ─────────────────────────────────────────────────────────
+
+# Tag keys that name the workload — the same set the AWS discover lane honours,
+# plus app_id (audit P0-1/P0-6: the tag the lab fleet actually carries).
+APP_TAG_KEYS = ("app_id", "app", "application", "app_name", "app-name", "service", "workload")
+
+
+def write_inventory(tok: str, fixtures_dir: str) -> int:
+    """Discover VMs + their NIC addresses and REWRITE azure.json — the same live
+    loop the AWS lane has (discover.py). Kills the audit's phantom fixture
+    (D-P0-4): the hand-written azure.json rotted from the moment it was saved
+    (no power_state, name-keyed ids, 33h-stale addresses). resource_id is the
+    ARM id — names collide across clouds AND resource groups (audit P1-3), and
+    the metric join (VictoriaMetrics resource_id label) is ARM-id keyed.
+    Returns the number of resources written."""
+    vms = {v["resource_id"].lower(): v for v in list_vms(tok)}
+
+    # VM model list (sizes + NIC refs); one call, paged via nextLink.
+    models: dict[str, dict] = {}
+    url = (f"{ARM}/subscriptions/{SUBSCRIPTION}/providers/Microsoft.Compute"
+           f"/virtualMachines?api-version=2023-09-01")
+    while url:
+        res = _get_json(url, tok)
+        for vm in res.get("value", []):
+            models[str(vm.get("id", "")).lower()] = vm
+        url = res.get("nextLink") or ""
+
+    # NICs: private IPs + public-IP refs + owning VM; public IPs: ref → address.
+    nics: list[dict] = []
+    url = (f"{ARM}/subscriptions/{SUBSCRIPTION}/providers/Microsoft.Network"
+           f"/networkInterfaces?api-version=2023-09-01")
+    while url:
+        res = _get_json(url, tok)
+        nics.extend(res.get("value", []))
+        url = res.get("nextLink") or ""
+    pub_by_ref: dict[str, str] = {}
+    url = (f"{ARM}/subscriptions/{SUBSCRIPTION}/providers/Microsoft.Network"
+           f"/publicIPAddresses?api-version=2023-09-01")
+    while url:
+        res = _get_json(url, tok)
+        for p in res.get("value", []):
+            addr = (p.get("properties", {}) or {}).get("ipAddress", "")
+            if addr:
+                pub_by_ref[str(p.get("id", "")).lower()] = addr
+        url = res.get("nextLink") or ""
+
+    nics_by_vm: dict[str, list[dict]] = {}
+    for nic in nics:
+        owner = str(((nic.get("properties", {}) or {}).get("virtualMachine") or {}).get("id", "")).lower()
+        if owner:
+            nics_by_vm.setdefault(owner, []).append(nic)
+
+    resources = []
+    for arm_id_l, vm in sorted(vms.items()):
+        model = models.get(arm_id_l, {})
+        props = model.get("properties", {}) or {}
+        tags = vm.get("tags") or {}
+        private_ips, public_ips, nic_ids = [], [], []
+        for nic in nics_by_vm.get(arm_id_l, []):
+            nic_ids.append(str(nic.get("id", "")))
+            for cfg in (nic.get("properties", {}) or {}).get("ipConfigurations", []):
+                cp = cfg.get("properties", {}) or {}
+                if cp.get("privateIPAddress"):
+                    private_ips.append(cp["privateIPAddress"])
+                pref = str((cp.get("publicIPAddress") or {}).get("id", "")).lower()
+                if pref and pref in pub_by_ref:
+                    public_ips.append(pub_by_ref[pref])
+        arm_id = str(model.get("id") or vm["resource_id"])
+        resources.append({
+            "region": vm.get("location") or REGION,
+            "resource_id": arm_id,
+            "resource_arn_or_uri": arm_id,
+            "resource_type": "compute:virtualMachine",
+            "resource_name": vm.get("name", ""),
+            "power_state": vm.get("power_state", ""),
+            "instance_type": ((props.get("hardwareProfile") or {}).get("vmSize", "")),
+            "private_ips": private_ips,
+            "public_ips": public_ips,
+            "network_interface_ids": nic_ids,
+            "tags": tags,
+            "owner": tags.get("owner", ""),
+            "env": tags.get("environment", tags.get("env", "")),
+            "source": "cloud_api",
+            "confidence": "confirmed" if any(k in tags for k in APP_TAG_KEYS) else "strong",
+        })
+
+    inventory = {"provider": "azure", "account_id": SUBSCRIPTION, "resources": resources}
+    os.makedirs(fixtures_dir, exist_ok=True)
+    path = os.path.join(fixtures_dir, "azure.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(inventory, f, indent=2)
+    os.replace(tmp, path)
+    return len(resources)

@@ -48,7 +48,7 @@ from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
 from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
-from cloud_log_parsers import cloud_log_event
+from cloud_log_parsers import cloud_log_event, parse_vpc_flow_log, vpc_accept_rollup, vpc_flow_signal
 from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
 from controller_events import controller_event_to_signal
@@ -1130,10 +1130,26 @@ async def _scan_cloud_logs() -> int:
             log.warning("cloud-log read failed %s: %s", path, exc)
             continue
         fname = os.path.basename(path)
+        accept_recs: list[dict] = []
         for line in data.splitlines():
-            ev = cloud_log_event(fname, line)
+            if fname.endswith(".vpc"):
+                rec = parse_vpc_flow_log(line)
+                if rec is None:
+                    continue
+                if str(rec.get("action") or "").upper() == "ACCEPT":
+                    accept_recs.append(rec)  # volume lane: aggregated below
+                    continue
+                ev = vpc_flow_signal(rec)
+            else:
+                ev = cloud_log_event(fname, line)
             if ev is None:
                 continue
+            ev["tenant_id"] = CLOUD_LOGS_TENANT
+            await handle_cloud(ev)
+            fed += 1
+        # ACCEPT flows → at most one cloud_flow_volume signal per ENI per scan
+        # (audit P1-6): traffic becomes observable without per-flow firehose.
+        for ev in vpc_accept_rollup(accept_recs):
             ev["tenant_id"] = CLOUD_LOGS_TENANT
             await handle_cloud(ev)
             fed += 1

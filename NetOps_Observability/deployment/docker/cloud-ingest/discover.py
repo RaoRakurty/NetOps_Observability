@@ -33,19 +33,26 @@ def _tags(raw) -> dict:
     return {t["Key"]: t["Value"] for t in (raw or [])}
 
 
+def _pages(client, op: str, key: str, **kw) -> list:
+    """Every page of a describe_* call (audit P1-9: single-page reads silently
+    truncate inventory past ~1000 objects — truncated inventory is wrong
+    attribution, not just missing rows)."""
+    return [item for page in client.get_paginator(op).paginate(**kw) for item in page.get(key, [])]
+
+
 def discover_aws(ec2) -> tuple[dict, dict]:
-    vpcs = ec2.describe_vpcs()["Vpcs"]
+    vpcs = _pages(ec2, "describe_vpcs", "Vpcs")
     account = boto3.client("sts", region_name=REGION).get_caller_identity()["Account"]
 
-    subnets = {s["SubnetId"]: s for s in ec2.describe_subnets()["Subnets"]}
-    rts = ec2.describe_route_tables()["RouteTables"]
-    igws = ec2.describe_internet_gateways()["InternetGateways"]
-    nats = ec2.describe_nat_gateways().get("NatGateways", [])
+    subnets = {s["SubnetId"]: s for s in _pages(ec2, "describe_subnets", "Subnets")}
+    rts = _pages(ec2, "describe_route_tables", "RouteTables")
+    igws = _pages(ec2, "describe_internet_gateways", "InternetGateways")
+    nats = _pages(ec2, "describe_nat_gateways", "NatGateways")
 
     # ENI -> the instance it belongs to, so an eni-* route target resolves to a real
     # appliance node (our NVA) rather than an opaque id.
     eni_owner = {}
-    for eni in ec2.describe_network_interfaces()["NetworkInterfaces"]:
+    for eni in _pages(ec2, "describe_network_interfaces", "NetworkInterfaces"):
         att = eni.get("Attachment") or {}
         if att.get("InstanceId"):
             eni_owner[eni["NetworkInterfaceId"]] = att["InstanceId"]
@@ -53,7 +60,7 @@ def discover_aws(ec2) -> tuple[dict, dict]:
     resources, nodes, edges = [], [], []
     instances = {}
 
-    for res in ec2.describe_instances()["Reservations"]:
+    for res in _pages(ec2, "describe_instances", "Reservations"):
         for inst in res["Instances"]:
             if inst["State"]["Name"] in ("terminated", "shutting-down"):
                 continue

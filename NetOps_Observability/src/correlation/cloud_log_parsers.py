@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from datetime import datetime, timezone
 
 # arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/billing-tg/abc
 _ARN_RE = re.compile(r"^arn:aws[^:]*:[^:]*:([^:]*):([^:]*):")
@@ -102,6 +103,9 @@ def alb_lb_signal(rec: dict) -> dict | None:
         "value": _f(code),
         "ts": rec.get("time", ""),
         "attrs": {
+            # ALB access logs are an AWS-only format — the provider is a parse
+            # fact, and the ingestion matrix facets by it (audit Azure P0-7).
+            "provider": "aws",
             "elb_status_code": code,
             "target_status_code": str(rec.get("target_status_code") or ""),
             "target": str(rec.get("target") or ""),
@@ -153,11 +157,26 @@ def cloud_log_event(fname: str, line: str) -> dict | None:
     return None
 
 
+def _flow_ts(rec: dict) -> str:
+    """RFC3339 event time from the record's own 'end' epoch (when the provider
+    closed the aggregation window) — the flow's observation time, not our ingest
+    time (audit P1-7: a flow replayed hours later must not look current)."""
+    for key in ("end", "start"):
+        raw = str(rec.get(key) or "")
+        if raw.isdigit():
+            return (
+                datetime.fromtimestamp(int(raw), tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+    return ""
+
+
 def vpc_flow_signal(rec: dict) -> dict | None:
     """Parsed VPC flow record → a cloud_flow_log event WHEN signal-worthy: a REJECT
     (security-group/NACL drop at a boundary — the cloud-side of a reachability fault).
-    ACCEPT flows are volume, not faults, and are suppressed here (the policy engine /
-    aggregation owns volume anomalies). Entity is the ENI resource."""
+    ACCEPT flows are volume, not per-record faults — vpc_accept_rollup aggregates
+    them (audit P1-6). Entity is the ENI resource."""
     if not rec:
         return None
     if str(rec.get("action") or "").upper() != "REJECT":
@@ -174,8 +193,10 @@ def vpc_flow_signal(rec: dict) -> dict | None:
         "severity": "warn",
         "metric_name": "rejected_flow",
         "value": _f(str(rec.get("bytes") or "0")),
-        "ts": "",  # 'start'/'end' are epoch seconds; the source stamps RFC3339 ts
+        "ts": _flow_ts(rec),
         "attrs": {
+            # VPC flow logs are an AWS-only format — a parse fact (audit P0-7).
+            "provider": "aws",
             "srcaddr": str(rec.get("srcaddr") or ""),
             "dstaddr": str(rec.get("dstaddr") or ""),
             "dstport": str(rec.get("dstport") or ""),
@@ -184,3 +205,47 @@ def vpc_flow_signal(rec: dict) -> dict | None:
             "packets": str(rec.get("packets") or ""),
         },
     }
+
+
+def vpc_accept_rollup(records: list[dict]) -> list[dict]:
+    """ACCEPT flows from one scan batch → AT MOST one cloud_flow_volume signal per
+    ENI (audit P1-6: discarding them made observed traffic structurally invisible).
+    Aggregated here — never one event per record — because unsampled per-flow
+    emission is exactly the volume that has taken the stack down before. Pure:
+    the tailer owns IO and tenancy."""
+    agg: dict[str, dict] = {}
+    for rec in records:
+        if str(rec.get("action") or "").upper() != "ACCEPT":
+            continue
+        eni = str(rec.get("interface-id") or "")
+        if not eni:
+            continue
+        a = agg.setdefault(eni, {
+            "bytes": 0, "packets": 0, "flows": 0,
+            "account": str(rec.get("account-id") or ""), "end": "",
+        })
+        a["bytes"] += int(str(rec.get("bytes") or "0") or 0)
+        a["packets"] += int(str(rec.get("packets") or "0") or 0)
+        a["flows"] += 1
+        end = str(rec.get("end") or "")
+        if end.isdigit() and end > a["end"]:
+            a["end"] = end
+    out: list[dict] = []
+    for eni, a in sorted(agg.items()):
+        out.append({
+            "kind": "cloud_flow_volume",
+            "resource_id": eni,
+            "account": a["account"],
+            "region": "",
+            "severity": "info",
+            "metric_name": "accepted_flow_bytes",
+            "value": float(a["bytes"]),
+            "ts": _flow_ts({"end": a["end"]}),
+            "attrs": {
+                "provider": "aws",
+                "flows": str(a["flows"]),
+                "packets": str(a["packets"]),
+                "action": "ACCEPT",
+            },
+        })
+    return out

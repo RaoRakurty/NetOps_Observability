@@ -30,7 +30,7 @@ const (
 // Kinds come from the correlation contract (cloud_producers.CLOUD_KINDS); a source
 // with no kind here has no producer today and is reported "off".
 var cloudSourceKinds = map[string][]string{
-	"flow_logs":    {"cloud_flow_log"},
+	"flow_logs":    {"cloud_flow_log", "cloud_flow_volume"},
 	"lb_logs":      {"cloud_lb_log"},
 	"metrics":      {"cloud_metric", "database_metric", "cloud_resource_anomaly"},
 	"cloud_health": {"cloud_health", "cloud_resource_health"},
@@ -71,89 +71,173 @@ func ingestStatusFor(volume int64, lastSeen time.Time, now time.Time) string {
 	}
 }
 
+// kindStat is one (provider, kind) bucket's proof-of-life.
+type kindStat struct {
+	volume   int64
+	lastSeen time.Time
+}
+
 // handleCloudIngestion serves GET /api/cloud/ingestion.
+//
+// PROVIDER-FACETED (audit Azure P0-7): the matrix used to group by kind alone,
+// so AWS flow logs landing made "metrics" read flowing for a NOC looking at the
+// Azure account. Every proof is now bucketed by the signal's own provider attr;
+// the global `sources` list (any provider) is kept for the summary strip, and
+// `providers` carries the per-provider matrices. A signal whose producer did
+// not stamp a provider counts ONLY toward the global list — provider rows are
+// never inflated by unattributed data.
 func (s *server) handleCloudIngestion(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
 	now := time.Now().UTC()
 
-	// Per-kind volume + last-seen over the stale horizon, tenant-scoped by the
-	// caller's scope (the corr_signals row policy enforces it in the DB too).
-	byKind := map[string]struct {
-		volume   int64
-		lastSeen time.Time
-	}{}
+	// Per (provider, kind) volume + last-seen over the stale horizon, tenant-
+	// scoped by the caller's scope (the corr_signals row policy enforces it in
+	// the DB too). Provider '' = the producer didn't stamp one.
+	byProvKind := map[string]map[string]kindStat{} // provider → kind → stat
+	globalKind := map[string]kindStat{}            // any provider
 	sql := fmt.Sprintf(`
-SELECT kind, count() AS volume, toString(max(ts)) AS last_seen
+SELECT JSONExtractString(attrs,'provider') AS prov, kind,
+       count() AS volume, toString(max(ts)) AS last_seen
   FROM netops.corr_signals
  WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR
- GROUP BY kind
+ GROUP BY prov, kind
  SETTINGS tenant_scope = '%s'
  FORMAT TSV`, int(ingestStaleWindow/time.Hour), chTenantScope(r))
 	for _, line := range chQuery(sql) {
 		f := strings.Split(line, "\t")
-		if len(f) < 3 {
+		if len(f) < 4 {
 			continue
 		}
-		vol, err := strconv.ParseInt(strings.TrimSpace(f[1]), 10, 64)
+		prov := strings.ToLower(strings.TrimSpace(f[0]))
+		kind := strings.TrimSpace(f[1])
+		vol, err := strconv.ParseInt(strings.TrimSpace(f[2]), 10, 64)
 		if err != nil {
 			continue
 		}
-		ts, err := time.Parse("2006-01-02 15:04:05", strings.TrimSpace(f[2]))
+		ts, err := time.Parse("2006-01-02 15:04:05", strings.TrimSpace(f[3]))
 		if err != nil {
 			continue
 		}
-		byKind[strings.TrimSpace(f[0])] = struct {
-			volume   int64
-			lastSeen time.Time
-		}{vol, ts.UTC()}
+		g := globalKind[kind]
+		g.volume += vol
+		if ts.UTC().After(g.lastSeen) {
+			g.lastSeen = ts.UTC()
+		}
+		globalKind[kind] = g
+		if prov == "" {
+			continue // unattributed: global only, never credited to a provider
+		}
+		if byProvKind[prov] == nil {
+			byProvKind[prov] = map[string]kindStat{}
+		}
+		byProvKind[prov][kind] = kindStat{vol, ts.UTC()}
 	}
 
-	out := make([]cloudSourceStatus, 0, len(cloudSourceOrder))
-	for _, src := range cloudSourceOrder {
-		st := cloudSourceStatus{SourceType: src, Status: "off", Capability: "available"}
-		if _, hasProducer := cloudSourceKinds[src]; !hasProducer && src != "inventory" && src != "seam_data" {
-			st.Capability = "planned" // no producer ships these kinds today
-		}
+	// The metric lane's canonical store is VictoriaMetrics, not ClickHouse
+	// (audit D-P1-8): live series prove "metrics flowing" even when no anomaly
+	// signal reached the bus. Per-provider last-sample + series count.
+	vmLast := vmQueryBy(r.Context(),
+		`max by (provider) (timestamp(last_over_time({__name__=~"cloud_.+"}[24h])))`, "provider")
+	vmSeries := vmQueryBy(r.Context(),
+		`count by (provider) (last_over_time({__name__=~"cloud_.+"}[24h]))`, "provider")
 
-		switch src {
-		case "inventory":
-			// Inventory is real whenever the store has resources for this caller.
-			if res, _, _, err := s.cloudResources(r); err == nil && len(res) > 0 {
-				st.Status = "flowing"
-				st.Volume = int64(len(res))
-			}
-		case "seam_data":
-			// Network seam data = the ACTIVE seam inventory the engine grounds on
-			// (VPN / DX / SDWAN / DIA / CLOUD_BACKBONE). Suggested seams don't count.
-			if s.seams != nil {
-				claims, _ := userFrom(r.Context())
-				tenant, cross := principalTenant(claims)
-				if active, err := s.seams.List(r.Context(), tenant, cross, "active", ""); err == nil && len(active) > 0 {
-					st.Status = "flowing"
-					st.Volume = int64(len(active))
-				}
-			}
-		default:
-			// Everything else is proven by signals actually landing on the bus.
-			for _, kind := range cloudSourceKinds[src] {
-				k, ok := byKind[kind]
-				if !ok {
-					continue
-				}
-				st.Volume += k.volume
-				if k.lastSeen.After(mustParseZero(st.LastSeenISO)) {
-					st.LastSeenISO = k.lastSeen.Format(time.RFC3339)
-				}
-			}
-			st.Status = ingestStatusFor(st.Volume, mustParseZero(st.LastSeenISO), now)
+	// Inventory per provider (declared resources).
+	invByProv := map[string]int64{}
+	var invTotal int64
+	if res, _, _, err := s.cloudResources(r); err == nil {
+		invTotal = int64(len(res))
+		for _, rs := range res {
+			invByProv[strings.ToLower(string(rs.Provider))]++
 		}
-		out = append(out, st)
+	}
+
+	// Providers worth a matrix: anything the inventory declares or a signal /
+	// metric series proves. (GCP appears here automatically once connected.)
+	provSet := map[string]bool{}
+	for p := range invByProv {
+		if p != "" {
+			provSet[p] = true
+		}
+	}
+	for p := range byProvKind {
+		provSet[p] = true
+	}
+	for p := range vmLast {
+		provSet[strings.ToLower(p)] = true
+	}
+
+	buildRows := func(kinds map[string]kindStat, inv int64, provider string) []cloudSourceStatus {
+		rows := make([]cloudSourceStatus, 0, len(cloudSourceOrder))
+		for _, src := range cloudSourceOrder {
+			st := cloudSourceStatus{SourceType: src, Status: "off", Capability: "available"}
+			if _, hasProducer := cloudSourceKinds[src]; !hasProducer && src != "inventory" && src != "seam_data" {
+				st.Capability = "planned" // no producer ships these kinds today
+			}
+			switch src {
+			case "inventory":
+				if inv > 0 {
+					st.Status = "flowing"
+					st.Volume = inv
+				}
+			case "seam_data":
+				// Network seam data = the ACTIVE seam inventory the engine grounds
+				// on (VPN / DX / SDWAN / DIA / CLOUD_BACKBONE) — not provider-
+				// attributable; reported on the global row only.
+				if provider == "" && s.seams != nil {
+					claims, _ := userFrom(r.Context())
+					tenant, cross := principalTenant(claims)
+					if active, err := s.seams.List(r.Context(), tenant, cross, "active", ""); err == nil && len(active) > 0 {
+						st.Status = "flowing"
+						st.Volume = int64(len(active))
+					}
+				}
+			default:
+				for _, kind := range cloudSourceKinds[src] {
+					k, ok := kinds[kind]
+					if !ok {
+						continue
+					}
+					st.Volume += k.volume
+					if k.lastSeen.After(mustParseZero(st.LastSeenISO)) {
+						st.LastSeenISO = k.lastSeen.Format(time.RFC3339)
+					}
+				}
+				// Metrics: merge the metric store's own proof-of-life.
+				if src == "metrics" {
+					keys := []string{provider}
+					if provider == "" { // global row: any provider's series count
+						keys = keys[:0]
+						for p := range vmLast {
+							keys = append(keys, p)
+						}
+					}
+					for _, p := range keys {
+						if tsSec, ok := vmLast[p]; ok {
+							t := time.Unix(int64(tsSec), 0).UTC()
+							if t.After(mustParseZero(st.LastSeenISO)) {
+								st.LastSeenISO = t.Format(time.RFC3339)
+							}
+							st.Volume += int64(vmSeries[p])
+						}
+					}
+				}
+				st.Status = ingestStatusFor(st.Volume, mustParseZero(st.LastSeenISO), now)
+			}
+			rows = append(rows, st)
+		}
+		return rows
+	}
+
+	providers := map[string][]cloudSourceStatus{}
+	for p := range provSet {
+		providers[p] = buildRows(byProvKind[p], invByProv[p], p)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sources":      out,
+		"sources":      buildRows(globalKind, invTotal, ""),
+		"providers":    providers,
 		"generated_at": now.Format(time.RFC3339),
 	})
 }

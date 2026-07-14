@@ -108,10 +108,15 @@ def test_cloud_log_tailer_feeds_and_is_offset_tracked(tmp_path):
 
 def test_cloud_log_tailer_skips_non_signal_lines(tmp_path):
     ch = _reset()
-    # a 2xx ALB line (not a fault) + an ACCEPT flow (volume, not a fault) → no signals
+    # a 2xx ALB line is not a fault → no signal. ACCEPT flows are no longer
+    # dropped (audit P1-6): the batch rolls up to ONE cloud_flow_volume signal
+    # per ENI — volume evidence, never a per-flow firehose.
     (tmp_path / "ok.alb").write_text(ALB_5XX.replace(" 502 502 ", " 200 200 ") + "\n")
-    (tmp_path / "ok.vpc").write_text(VPC_REJECT.replace("REJECT", "ACCEPT") + "\n")
+    (tmp_path / "ok.vpc").write_text(
+        VPC_REJECT.replace("REJECT", "ACCEPT") + "\n"
+        + VPC_REJECT.replace("REJECT", "ACCEPT") + "\n")
     main.CLOUD_LOGS_DIR = str(tmp_path)
     main.CLOUD_LOGS_TENANT = "acme"
-    assert asyncio.run(main._scan_cloud_logs()) == 0
-    assert _cloud_rows(ch) == []
+    assert asyncio.run(main._scan_cloud_logs()) == 1  # 2 ACCEPT records → 1 rollup
+    rows = _cloud_rows(ch)
+    assert len(rows) == 1 and rows[0]["kind"] == "cloud_flow_volume"

@@ -42,6 +42,11 @@ CW_METRICS = {
     "StatusCheckFailed": ("cloud_status_check_failed", "count", "Maximum"),
     "StatusCheckFailed_System": ("cloud_status_check_failed_system", "count", "Maximum"),
     "StatusCheckFailed_Instance": ("cloud_status_check_failed_instance", "count", "Maximum"),
+    # Burstable-instance brownout is invisible without the credit balance: a
+    # t-class host at 0 credits crawls while CPUUtilization reads a calm ~20%
+    # (the throttled ceiling). The lab fleet is t3 — this is a live blind spot,
+    # not a nice-to-have (audit P1-13).
+    "CPUCreditBalance": ("cloud_cpu_credit_balance", "count", "Average"),
 }
 
 

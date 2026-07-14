@@ -109,7 +109,11 @@ func (s *server) handleCloudApps(w http.ResponseWriter, r *http.Request) {
 	// Roll the resources' live state up to the app: worst health wins (an app is
 	// only as healthy as its unhealthiest resource), traffic sums.
 	live := s.cloudLiveStates(r.Context(), chTenantScope(r), res)
-	rank := map[string]int{"unknown": 0, "healthy": 1, "degraded": 2, "down": 3}
+	// Worst-wins rank with unknown ABOVE healthy (audit D-P2-10): an app holding
+	// an unmeasured resource must not read plain "healthy" — silence is not
+	// health. Faults still outrank blindness. "" seeds the fold so the first
+	// real state (including healthy) always lands with its basis.
+	rank := map[string]int{"": 0, "healthy": 1, "unknown": 2, "degraded": 3, "down": 4}
 	type appLive struct {
 		Health  string   `json:"health"`
 		Basis   string   `json:"health_basis"`
@@ -130,7 +134,7 @@ func (s *server) handleCloudApps(w http.ResponseWriter, r *http.Request) {
 		}
 		cur := byApp[key]
 		if cur == nil {
-			cur = &appLive{Health: "unknown"}
+			cur = &appLive{}
 			byApp[key] = cur
 		}
 		if rank[st.Health] > rank[cur.Health] {
@@ -193,29 +197,38 @@ func (s *server) handleCloudAppRca(w http.ResponseWriter, r *http.Request) {
 	// #100 hardening: pick from the corr_current HOT projection with NAMED
 	// narrow columns (never SELECT * — column pruning through a view is an
 	// optimizer behavior, not a contract; one added reference re-widens it).
+	// Corroboration facts (audit D-P2-12): observers = DISTINCT observer_ids
+	// (who actually saw it), not source planes; the "corroborated" bit is the
+	// engine's own plane_count ≥ 2 (the platform-wide ≥2-independent-streams
+	// standard) — a countIf(source != 'cloud') fired on every flow-touched
+	// object and carried no information.
 	sql := `
 WITH picked AS (
      SELECT correlation_id, version, state, verdict_tier, top_confidence,
-            top_hypothesis, signal_count, window_start, created_at, affected
+            top_hypothesis, signal_count, window_start, created_at, affected,
+            plane_count
        FROM netops.corr_current FINAL
       WHERE has(JSONExtract(affected,'apps','Array(String)'), '` + app + `')
       ORDER BY created_at DESC
       LIMIT 10
 )
-SELECT toString(o.correlation_id)            AS correlation_id,
-       any(o.verdict_tier)                   AS verdict_tier,
-       any(o.top_confidence)                 AS confidence,
-       any(o.top_hypothesis)                 AS top_hypothesis,
-       any(o.signal_count)                   AS signal_count,
-       any(o.state)                          AS state,
-       toString(any(o.window_start))         AS window_start,
-       toString(any(o.created_at))           AS created_at,
-       any(o.affected)                       AS affected,
-       arraySort(groupUniqArray(a.source))   AS sources,
-       countIf(a.source != 'cloud') > 0      AS cross_plane
+SELECT toString(o.correlation_id)                   AS correlation_id,
+       any(o.verdict_tier)                          AS verdict_tier,
+       any(o.top_confidence)                        AS confidence,
+       any(o.top_hypothesis)                        AS top_hypothesis,
+       any(o.signal_count)                          AS signal_count,
+       any(o.state)                                 AS state,
+       toString(any(o.window_start))                AS window_start,
+       toString(any(o.created_at))                  AS created_at,
+       any(o.affected)                              AS affected,
+       arraySort(groupUniqArray(a.source))          AS sources,
+       uniqExact(a.observer_id)                     AS observer_count,
+       arraySort(groupUniqArray(8)(a.observer_id))  AS observers,
+       any(o.plane_count)                           AS plane_count,
+       any(o.plane_count) >= 2                      AS cross_plane
   FROM picked AS o
   INNER JOIN (
-       SELECT archived_for, source FROM netops.corr_signals_archive
+       SELECT archived_for, source, observer_id FROM netops.corr_signals_archive
         WHERE archived_for IN (SELECT correlation_id FROM picked)
   ) AS a
        ON a.archived_for = o.correlation_id

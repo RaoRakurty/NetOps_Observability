@@ -38,9 +38,15 @@ type cloudLiveState struct {
 }
 
 // vmQuery runs one instant PromQL query against VictoriaMetrics and returns
-// metric-labels → value. Failure is degradation, never an error the UI sees:
+// resource_id → value. Failure is degradation, never an error the UI sees:
 // an unreachable metric store means "unknown", not "healthy".
 func vmQuery(ctx context.Context, q string) map[string]float64 {
+	return vmQueryBy(ctx, q, "resource_id")
+}
+
+// vmQueryBy is vmQuery keyed by an arbitrary result label (e.g. "provider"
+// for the ingestion matrix's per-provider freshness).
+func vmQueryBy(ctx context.Context, q, keyLabel string) map[string]float64 {
 	base := os.Getenv("VM_QUERY_URL")
 	if base == "" {
 		base = "http://victoria:8428"
@@ -74,10 +80,10 @@ func vmQuery(ctx context.Context, q string) map[string]float64 {
 	}
 	res := map[string]float64{}
 	for _, r := range out.Data.Result {
-		id := r.Metric["resource_id"]
-		if id == "" {
-			id = r.Metric["device"]
-		}
+		// The key label ONLY — no device-name fallback: names collide across
+		// clouds (both providers run a "correlix-vpn-nat-01"), and joining on
+		// one would let a cloud's series masquerade as another's resource.
+		id := r.Metric[keyLabel]
 		if id == "" || len(r.Value) < 2 {
 			continue
 		}
@@ -103,7 +109,13 @@ func (s *server) cloudLiveStates(ctx context.Context, scope string, res []cloud.
 	cpu := vmQuery(ctx, `last_over_time(cloud_cpu_util[30m])`)
 
 	// Active-check failures per target address in the recent window.
-	probeFail := map[string]int{}
+	// entity_id comes in TWO shapes for the same executions: per-vantage rows
+	// ("vantage->target") and a bare rollup row ("target") the pipeline derives
+	// FROM them. Summing both double-counts every failure (audit D: 150 real
+	// failures printed as 300). Per-vantage rows are the ground truth; the bare
+	// row is used only when no per-vantage row exists for that target.
+	probeFail := map[string]int{}  // per-vantage sums (real executions)
+	rollupFail := map[string]int{} // bare rollup rows (fallback only)
 	sql := fmt.Sprintf(`
 SELECT entity_id, count() AS n
   FROM netops.corr_signals
@@ -117,14 +129,12 @@ SELECT entity_id, count() AS n
 		if len(f) < 2 {
 			continue
 		}
-		// entity_id is "vantage->target" for path probes; the target is what a
-		// resource owns.
-		target := f[0]
-		if _, dst, ok := strings.Cut(target, "->"); ok {
-			target = strings.TrimSpace(dst)
-		}
 		n, _ := strconv.Atoi(strings.TrimSpace(f[1]))
-		probeFail[target] += n
+		if _, dst, ok := strings.Cut(f[0], "->"); ok {
+			probeFail[strings.TrimSpace(dst)] += n
+		} else {
+			rollupFail[strings.TrimSpace(f[0])] += n
+		}
 	}
 
 	for _, r := range res {
@@ -157,7 +167,11 @@ SELECT entity_id, count() AS n
 		//    can be dead on a healthy VM).
 		fails := 0
 		for _, ip := range append(append([]string{}, r.PrivateIPs...), r.PublicIPs...) {
-			fails += probeFail[ip]
+			if n := probeFail[ip]; n > 0 {
+				fails += n
+			} else {
+				fails += rollupFail[ip]
+			}
 		}
 		if fails > 0 {
 			switch st.Health {

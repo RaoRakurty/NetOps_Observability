@@ -16,6 +16,7 @@ from cloud_log_parsers import (
     cloud_log_event,
     parse_alb_access_log,
     parse_vpc_flow_log,
+    vpc_accept_rollup,
     vpc_flow_signal,
 )
 from cloud_producers import cloud_signal_from_event
@@ -117,3 +118,34 @@ def test_cloud_log_event_dispatch_by_extension():
     assert cloud_log_event("prod.vpc", VPC_REJECT)["kind"] == "cloud_flow_log"
     assert cloud_log_event("billing.alb", ALB_200) is None    # non-5xx → no signal
     assert cloud_log_event("notes.txt", ALB_5XX) is None       # unknown extension ignored
+
+
+# ── ACCEPT volume rollup + event time + provider stamp (audit P1-6/P1-7/P0-7) ─
+
+def test_vpc_reject_carries_event_time_and_provider():
+    ev = vpc_flow_signal(parse_vpc_flow_log(VPC_REJECT))
+    assert ev["ts"] == "2024-06-25T22:00:30Z"      # the record's own 'end' epoch
+    assert ev["attrs"]["provider"] == "aws"        # parse fact, facets the matrix
+
+
+def test_alb_signal_carries_provider():
+    assert alb_lb_signal(parse_alb_access_log(ALB_5XX))["attrs"]["provider"] == "aws"
+
+
+def test_vpc_accept_rollup_aggregates_per_eni():
+    recs = [parse_vpc_flow_log(VPC_ACCEPT) for _ in range(3)]
+    recs.append(parse_vpc_flow_log(VPC_ACCEPT.replace("eni-0abc123", "eni-0other1")))
+    recs.append(parse_vpc_flow_log(VPC_REJECT))  # REJECT never enters the volume lane
+    out = vpc_accept_rollup(recs)
+    assert [e["resource_id"] for e in out] == ["eni-0abc123", "eni-0other1"]
+    first = out[0]
+    assert first["kind"] == "cloud_flow_volume" and first["severity"] == "info"
+    assert first["value"] == 3 * 480.0 and first["attrs"]["flows"] == "3"
+    assert first["ts"] == "2024-06-25T22:00:30Z"
+    assert first["attrs"]["provider"] == "aws"
+    sig = cloud_signal_from_event(first, "acme", TS)
+    assert sig.kind == "cloud_flow_volume" and sig.entity_id == "eni-0abc123"
+
+
+def test_vpc_accept_rollup_empty_batch_is_empty():
+    assert vpc_accept_rollup([]) == []

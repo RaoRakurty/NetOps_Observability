@@ -83,16 +83,15 @@ func safeScopeLiteral(scope string) string {
 }
 
 // cloudHealthState maps a signal severity onto the UI's health state. A cloud
-// health signal only EXISTS because the provider reported a problem, so "info"
-// is the mildest reading — we never upgrade silence into "healthy".
+// health signal only EXISTS because the provider reported a problem, so even
+// "info" is a reported event — it renders "degraded", never "healthy" (audit
+// D-P2-11: a problems-only table must not contain a "healthy" row).
 func cloudHealthState(severity string) string {
 	switch strings.ToLower(strings.TrimSpace(severity)) {
 	case "crit":
 		return "down"
-	case "high", "warn":
+	case "high", "warn", "info":
 		return "degraded"
-	case "info":
-		return "healthy"
 	default:
 		return "unknown"
 	}
@@ -331,11 +330,14 @@ type cloudEvidenceRow struct {
 	App           string `json:"app"`
 	Resource      string `json:"resource"`
 	Source        string `json:"source"`
-	Confidence    string `json:"confidence"`
-	Reason        string `json:"reason"`
-	UsedInVerdict bool   `json:"used_in_verdict"`
-	RcaGroup      string `json:"rca_group"`
-	EvidenceRef   string `json:"evidence_ref"`
+	Confidence string `json:"confidence"`
+	Reason     string `json:"reason"`
+	// Grounded = the engine attached this signal to the investigation (archive
+	// membership — a fact we hold). Whether it fed the VERDICT specifically is
+	// not recorded per-signal, so the API no longer claims it (audit D-P2-13).
+	Grounded    bool   `json:"grounded"`
+	RcaGroup    string `json:"rca_group"`
+	EvidenceRef string `json:"evidence_ref"`
 	// CloudRef is the PROVIDER-native identity of what this evidence is about —
 	// the id an engineer pastes into the AWS/Azure console (eni-…, i-…, vm name,
 	// account/region). The operator text names the resource; this keeps the raw
@@ -637,6 +639,48 @@ SELECT toString(archived_for)   AS cid,
  FORMAT JSONEachRow`, cloudSignalWindowHours, idList, limit, scope)
 }
 
+// cloudOpenObjectCountSQL counts ALL open cloud objects — the Active-RCA tile
+// must be a real COUNT, never the length of the LIMIT-bounded list above
+// (audit D-P1-7: 10 open rendered as 2).
+func cloudOpenObjectCountSQL(appPred, scope string) string {
+	return fmt.Sprintf(`
+WITH cloud_objs AS (
+     SELECT DISTINCT archived_for
+       FROM netops.corr_signals_archive
+      WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR
+)
+SELECT count()
+  FROM netops.corr_current FINAL
+ WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)
+   AND state = 'open'%s
+ SETTINGS tenant_scope = '%s'
+ FORMAT TSV`, cloudSignalWindowHours, appPred, scope)
+}
+
+// cloudArchivedSignalCountSQL counts ALL grounded signals for the picked
+// objects — the ledger's `count` header (the page itself stays LIMIT-bounded).
+func cloudArchivedSignalCountSQL(idList, scope string) string {
+	return fmt.Sprintf(`
+SELECT count()
+  FROM netops.corr_signals_archive
+ WHERE source = 'cloud'
+   AND ts > now() - INTERVAL %d HOUR
+   AND archived_for IN (%s)
+ SETTINGS tenant_scope = '%s'
+ FORMAT TSV`, cloudSignalWindowHours, idList, scope)
+}
+
+// chScalarInt runs a single-value TSV query and returns the integer (0 on any
+// failure — counts degrade to "0 known", never an invented number).
+func chScalarInt(sql string) int {
+	for _, line := range chQuery(sql) {
+		if n, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // ── handlers ─────────────────────────────────────────────────────────────────
 
 // appFilterSQL builds the (validated) app predicate for the signal tables.
@@ -822,7 +866,9 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	resourceNamer := namerFromIndex(inventoryIdx)
 
 	evidence := make([]cloudEvidenceRow, 0, limit)
+	totalGrounded := 0
 	if list := sqlList(ids); list != "" {
+		totalGrounded = chScalarInt(cloudArchivedSignalCountSQL(list, scope))
 		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(list, limit, scope)) {
 			o := byID[row.CorrelationID]
 			a := parseAttrs(row.Attrs)
@@ -836,7 +882,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 			}, inventoryIdx)
 			evidence = append(evidence, cloudEvidenceRow{
 				Time:       isoTS(row.TS),
-				Category:   "supporting", // attached to the object = it fed the verdict
+				Category:   "grounded", // attached to the investigation by the engine
 				SignalType: row.Kind,
 				App:        orDash(cloudEvidenceApp(row, a, resourceNamer)),
 				Resource:   cloudEvidenceResource(row, a, resourceNamer),
@@ -844,15 +890,16 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 				Confidence: verdictConfidence(o.VerdictTier),
 				Reason: evidenceReason(row.Kind, row.MetricName, row.EntityID, row.Severity,
 					o.TopHypothesis, o.VerdictTier, resourceNamer),
-				UsedInVerdict: true,
-				RcaGroup:      row.CorrelationID,
-				EvidenceRef:   row.SignalID,
-				CloudRef:      ref,
+				Grounded:    true,
+				RcaGroup:    row.CorrelationID,
+				EvidenceRef: row.SignalID,
+				CloudRef:    ref,
 			})
 		}
 	}
 
 	// The engine's OWN gaps — the only "missing" evidence we are entitled to show.
+	gaps := 0
 	for _, o := range objRows {
 		apps := affectedApps(o.Affected)
 		appName := "—"
@@ -860,27 +907,36 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 			appName = apps[0]
 		}
 		for _, gap := range missingEvidence(o.EvidenceMissing) {
+			gaps++
 			evidence = append(evidence, cloudEvidenceRow{
-				Time:          isoTS(o.WindowStart),
-				Category:      "missing",
-				SignalType:    "gap",
-				App:           appName,
-				Resource:      "—",
-				Source:        "correlation engine",
-				Confidence:    "unknown",
-				Reason:        gap,
-				UsedInVerdict: false,
-				RcaGroup:      o.CorrelationID,
-				EvidenceRef:   "—",
+				Time:        isoTS(o.WindowStart),
+				Category:    "missing",
+				SignalType:  "gap",
+				App:         appName,
+				Resource:    "—",
+				Source:      "correlation engine",
+				Confidence:  "unknown",
+				Reason:      gap,
+				Grounded:    false,
+				RcaGroup:    o.CorrelationID,
+				EvidenceRef: "—",
 			})
 		}
 	}
 
+	// count = the TRUE ledger size (all grounded signals + gaps), not the page
+	// length; `returned` is what this page carries (audit D-P2-13). The open-
+	// object count is a dedicated COUNT so the Active tile can never be capped
+	// by the 10-object evidence join (audit D-P1-7).
+	openCount := chScalarInt(cloudOpenObjectCountSQL(appPred, scope))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"objects":      objects,
-		"evidence":     evidence,
-		"count":        len(evidence),
-		"window_hours": cloudSignalWindowHours,
+		"objects":           objects,
+		"evidence":          evidence,
+		"count":             totalGrounded + gaps,
+		"returned":          len(evidence),
+		"open_object_count": openCount,
+		"objects_truncated": openCount > len(objects),
+		"window_hours":      cloudSignalWindowHours,
 	})
 }
 
