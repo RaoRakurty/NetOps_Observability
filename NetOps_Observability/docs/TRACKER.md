@@ -109,6 +109,22 @@ B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
 
+## #104 — Service View cloud lane to world-class (owner demand 2026-07-14) — 🟡 W1+W2+W2.5 SHIPPED+LIVE
+
+Canonical worklist = four-expert audit `docs/design/audits/service-view-audit-2026-07-13.md`.
+Wave 1 `378a11c` (stop asserting false things) · Wave 2 `e6a115d` (Azure real: metrics/resource-health/
+activity-log) · identity+operator language `cdfa2e5` · discovery `9d1cca2` · **Wave 2.5 `ee1964b`**
+(open-only Active RCA, apps named, sig.ent.* banned from panel, change dedup, Apps-Degraded never
+lies 0, live health map consumed, Ingestion "Coming soon"/"Not configured" split). All live-verified
+rendering 2026-07-14 (screenshots; fresh WU drill → CONFIRMED underlay case on screen). RCA report
+doc causality/cascade/title verified closed same night (real PDF via gotenberg).
+**Remaining (Wave 3/4):** provider-facet the per-account ingestion matrix (P0-7 — matrix chips are
+account-blind while the strip is truthful); `cloud_ref` console deep-links; terminology sweep + 5-tab
+IA; counter tail (evidence count=LIMIT, Observers=planes, crossPlane info-free, worstHealth rank bugs);
+ALB target health, ACCEPT flows, IAM policy commit, VNet flow logs; multi-cloud app row.
+**👤 Owner:** start the 3 stopped cloud hosts (agent-blocked by classifier) · `az provider register
+--namespace Microsoft.ResourceHealth` · service-principal for Azure prod shape.
+
 ## #103 — Notification/ticketing framework revalidation (owner task 2026-07-11 eve) — 🟡 CORE SHIPPED (PD policy lane LIVE)
 
 **SHIPPED `f2c2609` + UI/docs (2026-07-11 late):** PagerDuty is a tenant-scoped
