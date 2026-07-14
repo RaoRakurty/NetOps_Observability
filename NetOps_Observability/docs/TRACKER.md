@@ -139,6 +139,11 @@ poller-written, ARM-id keyed, power_state live (P1-3, D-P0-4 phantom dead).
 decision + ~$16/mo); Azure VNet flow logs (real engineering + storage account — next big lane);
 multi-account sts:AssumeRole (prod connector shape, Task #15 Vault); GCP connector (owner: coming
 soon — all provider surfaces are now set-based/data-driven so GCP lights up on connect).
+**Self-health (2026-07-14 eve, `16ea8c4`+`bc9f81b`):** lab tier = host-hygiene.sh 10-min cron
+(INSTALLED: cache sweep ≥85%, escalation ≥92%, OS block healing, watchdog heartbeat check);
+product tier SHIPS = self_heal.go in-api guard (disk watermark + OS read-only block healing +
+platform-lane paging + /api/stack/health surface, SELF_HEAL env) + installer superseded-image
+pruning. rules.yaml HostDiskAlmostFull already shipped the pre-cliff alert.
 **⚠️ ops note:** azure.json is now poller-rewritten like aws.json — tracked fixtures churn the
 working tree; decide gitignore+seed. 2026-07-14 disk-full incident (Go build cache): 80 OS indices
 went read-only + kafka crash-looped — cleared blocks + recovered; watch `go clean -cache` hygiene.
