@@ -43,9 +43,14 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     "cloud_resource_health":  (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_metric":           (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "database_metric":        (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
+    # The flow/lb/waf/dns kinds below are PROVIDER-BLIND: the AWS lanes (the
+    # CLOUD_LOGS_DIR tailer in main.py) and the Azure storage-blob lanes
+    # (cloud-ingest azure_logs.py — VNet flow / AppGW+FrontDoor / WAF / DNS
+    # rollups, produced straight onto netops.cloud) emit the SAME kinds;
+    # attrs.provider carries the parse fact that facets the ingestion matrix.
     "cloud_flow_log":         (ModalityClass.PASSIVE_FLOW,     ObserverType.FLOW_EXPORTER, EntityType.APP),
-    # Aggregated ACCEPT-flow volume per ENI (audit P1-6): observed traffic as
-    # evidence, one rollup per ENI per scan — never per-flow firehose.
+    # Aggregated ACCEPT-flow volume per ENI / NIC (audit P1-6): observed traffic
+    # as evidence, one rollup per interface per scan — never per-flow firehose.
     "cloud_flow_volume":      (ModalityClass.PASSIVE_FLOW,     ObserverType.FLOW_EXPORTER, EntityType.CLOUD_RESOURCE),
     # WAF BLOCKs aggregated per (web ACL, rule) — the "our own WAF rule is
     # eating legitimate traffic" evidence class; joins CloudTrail rule changes.

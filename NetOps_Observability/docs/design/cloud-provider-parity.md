@@ -29,12 +29,12 @@ rows added below. Corrections from the audit are folded in.
 | Burstable credit visibility | ✅ CPUCreditBalance | n/a (B-series credits metric: queued check) | n/a (no burstable credit metric) |
 | Resource health lane | 🕳 (= the Health events row above) | ✅ Resource Health | 🕳 system_event lane (S) |
 | Change/audit lane | ✅ CloudTrail (paginated, filtered) | ✅ Activity Log | 🔧 Audit Logs (`poll_audit_log`) |
-| Flow logs → REJECT faults | ✅ VPC flow logs (S3+CW lanes) | 🕳 **VNet flow logs** (queued next after GCP) | 🕳 VPC Flow Logs (via Logging sink) |
-| Flow logs → ACCEPT volume rollup | ✅ `vpc_accept_rollup` | 🕳 (with VNet flow logs) | 🕳 |
-| LB access logs → LB-plane 5xx | 🔧 parser live-unvalidated (fidelity drill) | 🕳 App Gateway/Front Door access logs | 🕳 Cloud Load Balancing logs |
+| Flow logs → REJECT faults | ✅ VPC flow logs (S3+CW lanes) | 🔧 **VNet flow logs** `azure_logs.py` storage-blob reader (v4 flowTuples, flowState D → deny rollup); live validation owner-gated (flow-log enablement + storage account) | 🕳 VPC Flow Logs (via Logging sink) |
+| Flow logs → ACCEPT volume rollup | ✅ `vpc_accept_rollup` | 🔧 same reader → per-NIC `cloud_flow_volume` | 🕳 |
+| LB access logs → LB-plane 5xx | 🔧 parser live-unvalidated (fidelity drill) | 🔧 AppGW/Front Door access-log reader → per-(gateway, status) 5xx rollup (`AZURE_LB_LOGS_CONTAINERS`); live validation owner-gated (diag settings → storage) | 🕳 Cloud Load Balancing logs |
 | LB target health | 🕳 blocked: no ALB in lab (owner infra) | 🕳 App Gateway backend health | 🕳 backend service health |
-| WAF blocks → `cloud_waf_log` | 🔧 parser+rollup built (fidelity drill) | 🕳 Azure WAF logs | 🕳 Cloud Armor logs |
-| DNS failures → `cloud_dns_log` | 🔧 R53 Resolver parser built (fidelity drill) | 🕳 DNS Analytics / Resolver logs | 🕳 Cloud DNS logging |
+| WAF blocks → `cloud_waf_log` | 🔧 parser+rollup built (fidelity drill) | 🔧 AppGW `ApplicationGatewayFirewallLog` + FD WAF log → per-(policy, rule) BLOCK rollup (`AZURE_WAF_LOGS_CONTAINERS`); owner-gated | 🕳 Cloud Armor logs |
+| DNS failures → `cloud_dns_log` | 🔧 R53 Resolver parser built (fidelity drill) | 🔧 DNS security-policy `DnsResponse` reader → per-(name, rcode) rollup (`AZURE_DNS_LOGS_CONTAINERS`); owner-gated | 🕳 Cloud DNS logging |
 | Console deep-links | ✅ | ✅ | 🕳 `cloud_console.go` GCP formats |
 | Provider mark (official icon) | ✅ | ✅ | 🕳 official GCP icon set (vendor + terms doc) |
 | Ingestion matrix facet | ✅ | ✅ | 🔧 automatic once signals stamp `provider:gcp` (done in lanes) |
@@ -65,8 +65,17 @@ captured as test fixtures:
 1. **GCP to AWS/Azure level** — inventory/metrics/audit lanes (built, this
    commit), then live validation (owner: project + SA key), console links,
    official icon, flow logs.
-2. **Azure VNet flow logs** — storage-account reader → the same REJECT/volume
-   rollups (NSG flow logs retire 2027-09; VNet flow logs only).
+2. **Azure VNet flow logs** — ✅ BUILT 2026-07-15 (`azure_logs.py`):
+   storage-account block-blob reader (incremental byte-offset checkpoints that
+   never cross into the blob's mutable `]}` tail) → the same REJECT/volume
+   rollup kinds the AWS lane emits (NSG flow logs retire 2027-09; VNet flow
+   logs only — NSG shapes are deliberately not parsed). The Azure LB/WAF/DNS
+   fidelity readers landed in the same module (build-order #3's Azure column).
+   Auth: the existing SP client-credentials flow with the storage audience
+   (`https://storage.azure.com/.default`) — no second secret, no SharedKey
+   HMAC; needs "Storage Blob Data Reader" on the storage account
+   (CREDENTIALS.md). Live validation owner-gated: storage account + VNet
+   flow-log enablement + diagnostic settings don't exist in the lab yet.
 3. **Log-fidelity families everywhere** — LB / WAF / DNS per provider, each
    validated with real traffic once (Terraform apply → drill → capture goldens
    → destroy).
@@ -79,7 +88,11 @@ captured as test fixtures:
   roles/monitoring.viewer, roles/logging.viewer), lab VMs mirroring the
   AWS/Azure hosts (app + NVA shape) for drills.
 - AWS: ALB/WAF/R53-resolver-logging Terraform apply windows (~$2–3/drill day).
-- Azure: VNet flow-log enablement + storage account (pennies at lab volume).
+- Azure: VNet flow-log enablement + storage account (pennies at lab volume);
+  readers are built and env-gated (`AZURE_LOGS_STORAGE_ACCOUNT` +
+  `AZURE_{LB,WAF,DNS}_LOGS_CONTAINERS`) — the LB/WAF/DNS drills additionally
+  need an App Gateway or Front Door in the lab (Terraform apply windows, like
+  the AWS fidelity drills).
 
 ## Standing honesty rules for this program
 

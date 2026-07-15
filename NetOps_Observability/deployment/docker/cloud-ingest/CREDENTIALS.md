@@ -47,6 +47,20 @@ read role; grant them only if you want that enrichment.
 | Diagnostic settings | `Microsoft.Insights/diagnosticSettings/read` | Reader | optional |
 | Resource Graph | `Microsoft.ResourceGraph/resources/read` | Reader | optional |
 | Cost management | `Microsoft.CostManagement/query/read` | Cost Management Reader | optional |
+| Storage log lanes (VNet flow / LB / WAF / DNS) | `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read` (data action) | Storage Blob Data Reader | optional |
+
+The storage-log lanes (`azure_logs.py` — VNet flow logs + AppGW/Front Door
+access, WAF and DNS `DnsResponse` logs delivered to a storage account) reuse
+the SAME service principal with the **storage audience**
+(`https://storage.azure.com/.default`) — deliberately no storage account key
+and no SAS (no second secret to custody, no hand-rolled SharedKey HMAC).
+That is a DATA-plane read: control-plane Reader is **not** sufficient; grant
+**Storage Blob Data Reader** scoped to the one logs storage account:
+
+```bash
+az role assignment create --assignee <appId> --role "Storage Blob Data Reader" \
+   --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<logs-account>
+```
 
 A missing OPTIONAL capability is a coverage gap, not a failure — the two required
 capabilities are the only hard gate. Correlix never auto-broadens its own grant;
