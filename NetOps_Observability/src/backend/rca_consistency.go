@@ -228,6 +228,16 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 			}
 		}
 	}
+	// ---- management-summary length discipline (P2) --------------------------------
+	if rep.mgmtTrimmed {
+		warnf("management_summary_trimmed", "summary.management",
+			"summary exceeded the %d-word cap; lower-priority sentences were dropped", rcaMgmtWordCap)
+	}
+	if n := len(strings.Fields(rep.Summary.Management)); n > rcaMgmtWordCap {
+		warnf("management_summary_over_length", "summary.management",
+			"summary is %d words after trimming (cap %d) — protected sentences alone exceed the cap", n, rcaMgmtWordCap)
+	}
+
 	scan("summary.management", rep.Summary.Management)
 	for _, kv := range rep.Summary.Noc {
 		scan("summary.noc", kv.V)

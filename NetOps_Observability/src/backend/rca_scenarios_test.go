@@ -207,6 +207,19 @@ func assertRcaInvariants(t *testing.T, rep rcaReport) {
 	if rep.Times.DurationBasis == "to_recovery" && !rep.Times.RecoveredCaptured {
 		fail("duration to_recovery without captured recovery")
 	}
+	// management-summary length discipline: over-cap only when protected
+	// sentences alone exceed the cap, and then only with a quality warning
+	if n := len(strings.Fields(rep.Summary.Management)); n > rcaMgmtWordCap {
+		warned := false
+		for _, w := range rep.Quality.Warnings {
+			if w.Code == "management_summary_over_length" {
+				warned = true
+			}
+		}
+		if !warned {
+			fail("management summary %d words over cap %d without a quality warning", n, rcaMgmtWordCap)
+		}
+	}
 	// banned wording in rendered HTML (raw rule syntax, banned phrases)
 	html, err := renderRcaReportHTML(rep)
 	if err != nil {

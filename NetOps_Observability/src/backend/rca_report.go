@@ -80,6 +80,10 @@ type rcaReport struct {
 	// service/vantage names primary, addresses secondary, seam + state per hop.
 	// Available=false renders as an honest absence, never an invented diagram.
 	Topology rcaTopologyView `json:"topology"`
+
+	// mgmtTrimmed: the management summary exceeded the word cap and dropped
+	// lower-priority sentences — surfaced as a P2 quality warning.
+	mgmtTrimmed bool
 }
 
 type rcaSpineHopView struct {
@@ -1367,7 +1371,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
+	mgmt, mgmtTrimmed := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
 
 	// ---- actions (contextual planner, P1.13) --------------------------------------------------------
 	actions := planActions(rcaActionInput{
@@ -1420,6 +1424,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		Actions:           actions,
 		Ticket:            in.Ticket,
 		Path:              in.Path,
+		mgmtTrimmed:       mgmtTrimmed,
 	}
 	// ReportQualityGate: the StateConsistencyValidator runs on the FINISHED
 	// document. Errors downgrade the report type — a contradictory document is
