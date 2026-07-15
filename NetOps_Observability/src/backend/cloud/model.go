@@ -67,6 +67,13 @@ const (
 	SrcFirewallAppID   Source = "firewall_appid"   // firewall on-box DPI — strong
 	SrcDomain          Source = "domain"           // DNS/SNI domain match — suspected
 	SrcIPCatalog       Source = "ip_catalog"       // vendor IP-range — weak (public egress only)
+	// SrcInferredService: built-in service mapping inferred a BusinessService
+	// from resource RELATIONSHIPS (resource-group naming + subnet/hostname
+	// structure) with NO tag and NO write access. Its confidence comes from the
+	// inference itself (strong when structurally corroborated, else suspected/
+	// weak) — never confirmed. This is what attributes the read-only, untagged
+	// Azure fleet without asking the operator to tag first.
+	SrcInferredService Source = "inferred_service"
 	SrcUnknown         Source = "unknown"
 )
 
@@ -77,7 +84,7 @@ func (s Source) DefaultConfidence() Confidence {
 		return Confirmed
 	case SrcCloudGraph, SrcFirewallAppID:
 		return Strong
-	case SrcDomain, SrcSuspectedName:
+	case SrcDomain, SrcSuspectedName, SrcInferredService:
 		return Suspected
 	case SrcIPCatalog:
 		return Weak
@@ -139,6 +146,14 @@ type CloudResource struct {
 	Env                 string            `json:"env,omitempty"`
 	AppID               string            `json:"app_id,omitempty"`
 	AppName             string            `json:"app_name,omitempty"`
+	// Inferred* carry the built-in service-mapping guess written by the poller
+	// (service_infer.py) when the resource has no app tag: the service name, its
+	// confidence ("strong"|"suspected"|"weak"), and a human basis. Optional —
+	// absent when nothing could be inferred. The resolver consumes these to
+	// attribute the untagged fleet; reports surface them as "(inferred)".
+	InferredService           string `json:"inferred_service,omitempty"`
+	InferredServiceConfidence string `json:"inferred_service_confidence,omitempty"`
+	InferredServiceBasis      string `json:"inferred_service_basis,omitempty"`
 	DiscoveredAt        time.Time         `json:"discovered_at"`
 	LastSeenAt          time.Time         `json:"last_seen_at"`
 	Source              Source            `json:"source"`
