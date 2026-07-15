@@ -22,20 +22,20 @@ import (
 // object: enough for the policy to decide ticket-worthiness without re-running
 // correlation. Derived from the same (meta, signals) the RCA view consumes.
 type corrTicketFacts struct {
-	Verdict            string    // undetermined | suspected | confirmed
-	Confidence         float64
-	Internal           bool      // internal/debug-only monitoring (kept out of customer tickets)
-	Validation         bool      // §11 validation/lab/fault-injection scenario — never production side effects
-	ProbeOnly          bool      // every attached signal is an active probe
-	LowAuthorityProbe  bool      // probe-only AND no probe carried real authority
-	PeakSeverity       string    // info | warn | high | crit (max over attached signals)
-	HasAffectedEntity  bool      // a meaningful affected device/interface/path/app exists
-	AffectedScope      string    // human scope, e.g. "leaf1 → wan-r2" or "edge1 Gi0/1"
-	AffectedEntities   []string
-	ImpactedApps       []string
-	Signature          string
-	WindowStart        time.Time
-	WindowEnd          time.Time
+	Verdict           string // undetermined | suspected | confirmed
+	Confidence        float64
+	Internal          bool   // internal/debug-only monitoring (kept out of customer tickets)
+	Validation        bool   // §11 validation/lab/fault-injection scenario — never production side effects
+	ProbeOnly         bool   // every attached signal is an active probe
+	LowAuthorityProbe bool   // probe-only AND no probe carried real authority
+	PeakSeverity      string // info | warn | high | crit (max over attached signals)
+	HasAffectedEntity bool   // a meaningful affected device/interface/path/app exists
+	AffectedScope     string // human scope, e.g. "leaf1 → wan-r2" or "edge1 Gi0/1"
+	AffectedEntities  []string
+	ImpactedApps      []string
+	Signature         string
+	WindowStart       time.Time
+	WindowEnd         time.Time
 }
 
 // persistenceSeconds is how long the incident has been observed (window span).
@@ -70,9 +70,14 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 	attached := attachedTicketSignals(sigRows)
 	probes, others, authority := 0, 0, false
 	peak := -1
+	lanes, observers := map[string]bool{}, map[string]bool{}
 	for _, sig := range attached {
 		if r, ok := corrSevRank[strings.ToLower(fmt.Sprintf("%v", sig["severity"]))]; ok && r > peak {
 			peak = r
+		}
+		lanes[fmt.Sprintf("%v", sig["modality_class"])] = true
+		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
+			observers[o] = true
 		}
 		if fmt.Sprintf("%v", sig["modality_class"]) == "active_probe" {
 			probes++
@@ -82,6 +87,13 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 		} else {
 			others++
 		}
+	}
+	// P1.11 severity discipline on the ticketing path too: a single
+	// uncorroborated evidence stream (one modality class, one observer) never
+	// carries CRIT into the ticket policy for an unconfirmed verdict — the same
+	// generic cap the report's incident-severity model applies.
+	if peak == corrSevRank["crit"] && f.Verdict != "confirmed" && len(lanes) <= 1 && len(observers) <= 1 {
+		peak = corrSevRank["high"]
 	}
 	for sev, r := range corrSevRank {
 		if r == peak {

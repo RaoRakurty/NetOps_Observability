@@ -38,8 +38,8 @@ type rcaReport struct {
 	Subtitle      string `json:"subtitle,omitempty"`
 	// Validation: every anomalous signal declares a non-production purpose —
 	// the document watermarks itself and claims no production severity (§11/§24).
-	Validation bool `json:"validation"`
-	GeneratedAt   string `json:"generated_at"` // UTC, canonical
+	Validation  bool   `json:"validation"`
+	GeneratedAt string `json:"generated_at"` // UTC, canonical
 
 	States   rcaReportStates    `json:"states"`
 	Times    rcaReportTimes     `json:"times"`
@@ -55,12 +55,21 @@ type rcaReport struct {
 	// workspace had it; the exported report, a terminal consumer, did not).
 	Cascade []rcaCascadeStage `json:"cascade,omitempty"`
 	// SingleHypothesis: render "Current hypothesis", not "Hypothesis ranking".
-	SingleHypothesis bool           `json:"single_hypothesis"`
-	RootCause        rcaRootCause   `json:"root_cause"`
-	Ownership        rcaOwnership   `json:"ownership"`
-	Decision         rcaDecision    `json:"decision"`
-	Actions          []rcaAction    `json:"next_actions"`
-	Ticket           map[string]any `json:"ticket,omitempty"` // ticketStatusView passthrough
+	SingleHypothesis bool `json:"single_hypothesis"`
+	// Phases: the generic incident phase ladder (P1.2) — detection through
+	// component recovery, residual degradation, service recovery, monitoring.
+	Phases []rcaIncidentPhase `json:"phases,omitempty"`
+	// FaultLocalization is WHERE the evidence converges (a domain/seam/object
+	// boundary). It is never the root cause: localization narrows, cause explains.
+	FaultLocalization rcaFaultLocalization `json:"fault_localization"`
+	RootCause         rcaRootCause         `json:"root_cause"`
+	Ownership         rcaOwnership         `json:"ownership"`
+	Decision          rcaDecision          `json:"decision"`
+	Actions           []rcaAction          `json:"next_actions"`
+	// Quality: the StateConsistencyValidator's record for this document. Errors
+	// downgrade the report type — a contradictory document never ships as final.
+	Quality rcaReportQuality `json:"quality"`
+	Ticket  map[string]any   `json:"ticket,omitempty"` // ticketStatusView passthrough
 	// The §7 ordered spine block (rcaPathBlock passthrough) — the topology
 	// section renders ONLY measured/declared structure, never invented paths.
 	Path any `json:"path,omitempty"`
@@ -85,36 +94,81 @@ type rcaSpineHopView struct {
 }
 
 type rcaTopologyView struct {
-	Available  bool              `json:"available"`
-	Reason     string            `json:"reason,omitempty"`
-	VantageID  string            `json:"vantage_id,omitempty"`
-	ObservedAt string            `json:"observed_at,omitempty"`
-	Stale      bool              `json:"stale"`
-	Hops       []rcaSpineHopView `json:"hops,omitempty"`
+	Available  bool   `json:"available"`
+	Reason     string `json:"reason,omitempty"`
+	VantageID  string `json:"vantage_id,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
+	Stale      bool   `json:"stale"`
+	// RelationToIncident (P1.8): pre_incident | incident_time |
+	// post_recovery_validation | historical_context | unknown. A path captured
+	// after recovery is recovery VALIDATION — it can never establish
+	// incident-time root cause; the note states so explicitly.
+	RelationToIncident string            `json:"relation_to_incident,omitempty"`
+	TemporalNote       string            `json:"temporal_note,omitempty"`
+	Hops               []rcaSpineHopView `json:"hops,omitempty"`
 	// DropPoint: the path's own causality sentence (set when a fault hop exists).
 	DropPoint string `json:"drop_point,omitempty"`
+}
+
+// stampTopologyTemporalRole classifies the attached path observation's
+// temporal role against the incident window (P1.8, audit D9).
+func stampTopologyTemporalRole(rep *rcaReport) {
+	t := &rep.Topology
+	if !t.Available || t.ObservedAt == "" {
+		return
+	}
+	obs, ok := parseChTS(strings.TrimSuffix(t.ObservedAt, " UTC"))
+	if !ok {
+		t.RelationToIncident = "unknown"
+		return
+	}
+	first, okF := parseChTS(strings.TrimSuffix(rep.Times.FirstObserved, " UTC"))
+	last, okL := parseChTS(strings.TrimSuffix(rep.Times.LastAnomalous, " UTC"))
+	switch {
+	case okF && obs.Before(first):
+		t.RelationToIncident = "pre_incident"
+		t.TemporalNote = "This path was measured BEFORE the incident began — historical context, not incident-time evidence."
+	case okL && obs.After(last):
+		t.RelationToIncident = "post_recovery_validation"
+		t.TemporalNote = "This path was measured AFTER the last anomalous observation — it validates the current/recovered state and cannot establish incident-time root cause."
+	case okF:
+		t.RelationToIncident = "incident_time"
+	default:
+		t.RelationToIncident = "unknown"
+	}
 }
 
 type rcaReportStates struct {
 	// Incident lifecycle is separate from recovery assessment (§1/§17 of the
 	// truthfulness spec): signals aging out of the window is NOT recovery.
 	Incident string `json:"incident"` // active | recovering | recovered | no_longer_observed | closed
-	// Recovery is asserted ONLY from observed recovery evidence.
-	Recovery      string `json:"recovery"`       // explicitly_confirmed | not_observed
+	// Recovery is asserted ONLY from observed recovery evidence, reconciled
+	// across scopes (P1.1): component recovery never recovers the service.
+	Recovery      string `json:"recovery"`       // explicitly_confirmed | component_only | failed_validation | inferred | not_observed
 	RecoveryBasis string `json:"recovery_basis"` // human sentence: what (if anything) proved recovery
-	Analysis      string `json:"analysis"`       // retained for API compat: observed | suspected | probable | confirmed | inconclusive
+	// Per-scope recovery assessments (RecoveryReconciler output).
+	RecoveryComponent rcaRecoveryScopeState `json:"recovery_component"`
+	RecoveryService   rcaRecoveryScopeState `json:"recovery_service"`
+	Analysis          string                `json:"analysis"` // retained for API compat: observed | suspected | probable | confirmed | inconclusive
 	// Dimensional analysis states (owner feedback: no single umbrella flag).
-	Symptom        string `json:"symptom"`         // observed | confirmed
-	FaultDomain    string `json:"fault_domain"`    // not_localized | suspected | probable | confirmed
-	Mechanism      string `json:"mechanism"`       // unknown | under_investigation | confirmed
+	Symptom        string `json:"symptom"`          // observed | confirmed
+	FaultDomain    string `json:"fault_domain"`     // not_localized | suspected | probable | confirmed
+	Mechanism      string `json:"mechanism"`        // unknown | under_investigation | confirmed
 	RootCauseState string `json:"root_cause_state"` // not_identified | under_investigation | confirmed
-	Impact        string `json:"impact"`         // confirmed | detected | none_detected | not_observable | unknown
+	Impact         string `json:"impact"`           // confirmed | detected | none_detected | not_observable | unknown
 	// §5 impact axes: a failed synthetic proves the SYNTHETIC transaction failed;
 	// real-user impact needs real-traffic evidence (flow collapse, LB/app errors).
 	ImpactSynthetic string `json:"impact_synthetic"` // confirmed | none_detected | not_observable
-	ImpactRealUser  string `json:"impact_real_user"` // confirmed | detected | none_detected | not_observable
-	Ticket        string `json:"ticket"`         // not_opened | held | opened | resolved | failed
-	Severity      string `json:"severity"`       // peak attached severity: info|warn|high|crit|unknown
+	// Real-user impact is observability-aware (P1.5): a flow-volume change is an
+	// INDICATOR, never confirmation; "none_detected" requires sufficient coverage.
+	ImpactRealUser string `json:"impact_real_user"` // confirmed | detected | indicator_detected | none_detected | not_observable
+	Ticket         string `json:"ticket"`           // not_opened | held | opened | resolved | failed
+	// Severity is the peak ATTACHED-EVIDENCE severity (a fact about signals).
+	Severity string `json:"severity"` // info|warn|high|crit|unknown
+	// SeverityIncident is the INCIDENT severity (P1.11): policy-derived from
+	// corroboration, impact and confidence — never bare max-signal severity.
+	SeverityIncident    string   `json:"severity_incident"` // info|warn|high|crit|not_applicable|unknown
+	SeverityReasonCodes []string `json:"severity_reason_codes,omitempty"`
 	// §19: severity is never a bare adjective — what carried it and how much.
 	SeverityBasis string `json:"severity_basis"`
 	// Monitoring is evaluated against report-generation time — never described
@@ -128,11 +182,15 @@ type rcaReportStates struct {
 type rcaReportTimes struct {
 	FirstObserved string `json:"first_observed,omitempty"` // earliest anomalous evidence
 	LastAnomalous string `json:"last_anomalous,omitempty"` // latest anomalous evidence
-	// RecoveredAt is set ONLY from observed clear evidence (clear_ts / clear
-	// signal timestamps). Never inferred from report-generation or close time.
+	// RecoveredAt is set ONLY when the incident-level recovery gate passed:
+	// observed recovery evidence at/after the last qualifying anomaly in every
+	// participating scope. A component-up time never lands here (P1.1).
 	RecoveredAt       string `json:"recovered_at,omitempty"`
 	RecoveredCaptured bool   `json:"recovered_captured"`
-	DurationMS        int64  `json:"duration_ms,omitempty"`
+	// ComponentRecoveredAt: the last observed component-status recovery. It is
+	// reported separately and never presented as incident recovery.
+	ComponentRecoveredAt string `json:"component_recovered_at,omitempty"`
+	DurationMS           int64  `json:"duration_ms,omitempty"`
 	// DurationBasis states what the duration measures:
 	// to_recovery | to_last_observation | elapsed_still_active | unknown
 	DurationBasis   string `json:"duration_basis"`
@@ -163,18 +221,18 @@ func classifyServiceScope(targets []string) string {
 }
 
 type rcaReportScope struct {
-	Services   []string `json:"services,omitempty"` // named apps/services (operator identifiers)
+	Services []string `json:"services,omitempty"` // named apps/services (operator identifiers)
 	// §12: what KIND of service the subject is — ownership and next actions
 	// differ between a customer-managed app and a third-party SaaS.
-	ServiceClassification string `json:"service_classification,omitempty"`
-	Targets    []string `json:"targets,omitempty"`  // probe/impact targets (service name first, IP secondary)
-	Devices    []string `json:"devices,omitempty"`
-	Sites      []string `json:"sites,omitempty"`
-	Regions    []string `json:"regions,omitempty"`
-	Accounts   []string `json:"accounts,omitempty"`
-	Vantages   []string `json:"vantages,omitempty"` // observing vantages that saw anomalies
-	Seams      []string `json:"seams,omitempty"`    // provider boundaries in the grounding context
-	PathsCount int      `json:"paths_count,omitempty"`
+	ServiceClassification string   `json:"service_classification,omitempty"`
+	Targets               []string `json:"targets,omitempty"` // probe/impact targets (service name first, IP secondary)
+	Devices               []string `json:"devices,omitempty"`
+	Sites                 []string `json:"sites,omitempty"`
+	Regions               []string `json:"regions,omitempty"`
+	Accounts              []string `json:"accounts,omitempty"`
+	Vantages              []string `json:"vantages,omitempty"` // observing vantages that saw anomalies
+	Seams                 []string `json:"seams,omitempty"`    // provider boundaries in the grounding context
+	PathsCount            int      `json:"paths_count,omitempty"`
 }
 
 type rcaReportSummaries struct {
@@ -202,10 +260,14 @@ type rcaKV struct {
 }
 
 type rcaSignalSummary struct {
-	Total           int    `json:"total"`
-	Attached        int    `json:"attached"`
-	Anomalous       int    `json:"anomalous"` // attached, non-clear
-	Clears          int    `json:"clears"`
+	Total     int `json:"total"`
+	Attached  int `json:"attached"`
+	Anomalous int `json:"anomalous"` // attached, non-clear
+	Clears    int `json:"clears"`
+	// EvidenceGroups (P1.7): distinct (observer, entity) groups among the
+	// anomalous evidence — derived signals from one measurement source count
+	// once. Signal counts are volume; groups are the deduplicated evidence.
+	EvidenceGroups  int    `json:"evidence_group_count"`
 	UniqueObservers int    `json:"unique_observers"`
 	PeakSeverity    string `json:"peak_severity"`
 	// Probe detail — present only when active-probe evidence exists. Values are
@@ -286,24 +348,45 @@ type rcaCloudChange struct {
 type rcaHypothesis struct {
 	// Type separates a symptom classification from a causal hypothesis (§15).
 	Type string `json:"type"`
-	Rank          int      `json:"rank"`
-	ID            string   `json:"id"`
-	Title         string   `json:"title"`
-	Problem       string   `json:"problem"` // what the possible problem is → the suspect
-	Domain        string   `json:"domain,omitempty"`
-	Confidence    float64  `json:"confidence"`
-	Label         string   `json:"label"` // engine confidence_label
-	Supporting    []string `json:"supporting,omitempty"`
-	Contradicted  bool     `json:"contradicted"`
-	Contradicting []string `json:"contradicting,omitempty"`
-	Missing       []string `json:"missing,omitempty"`
-	ConfirmWhen   []string `json:"confirm_when,omitempty"`
-	Owner         string   `json:"owner,omitempty"`
+	// Taxonomy (P1.9): the observation and the causal role are INDEPENDENT
+	// axes — a condition can be confirmed as observed AND ruled out as origin.
+	ObservationState string   `json:"observation_state"` // not_observed | observed | confirmed
+	CausalRole       string   `json:"causal_role"`       // possible_origin | probable_origin | downstream_consequence | symptom | ruled_out_as_origin
+	CandidacyState   string   `json:"candidacy_state"`   // active | ruled_out | not_ranked_as_cause
+	Rank             int      `json:"rank"`
+	ID               string   `json:"id"`
+	Title            string   `json:"title"`
+	Problem          string   `json:"problem"` // what the possible problem is → the suspect
+	Domain           string   `json:"domain,omitempty"`
+	Confidence       float64  `json:"confidence"`
+	Label            string   `json:"label"` // engine confidence_label
+	Supporting       []string `json:"supporting,omitempty"`
+	Contradicted     bool     `json:"contradicted"`
+	Contradicting    []string `json:"contradicting,omitempty"`
+	Missing          []string `json:"missing,omitempty"`
+	ConfirmWhen      []string `json:"confirm_when,omitempty"`
+	Owner            string   `json:"owner,omitempty"`
 }
 
+// rcaFaultLocalization (P1.3/P1.4): where the evidence converges — a seam,
+// domain or object boundary. Localization NARROWS the fault; it never names
+// the cause. The seam/locus that used to be presented as "root cause" lives
+// here now.
+type rcaFaultLocalization struct {
+	Localized  bool     `json:"localized"`
+	Statement  string   `json:"statement"`
+	Object     string   `json:"object,omitempty"`
+	ObjectType string   `json:"object_type,omitempty"` // e.g. "ipsec seam (localization domain)"
+	Evidence   []string `json:"evidence,omitempty"`
+}
+
+// rcaRootCause may claim identification ONLY when a causal mechanism AND a
+// causal object are established (P1.3). A confirmed fault condition, a
+// confirmed signature, seam grounding or high confidence never set it.
 type rcaRootCause struct {
 	Identified bool     `json:"identified"`
 	Statement  string   `json:"statement"` // "Root cause has not been identified." when false
+	Mechanism  string   `json:"mechanism,omitempty"`
 	Object     string   `json:"object,omitempty"`
 	ObjectType string   `json:"object_type,omitempty"`
 	Owner      string   `json:"owner,omitempty"`
@@ -316,12 +399,19 @@ type rcaOwnerCandidate struct {
 }
 
 type rcaOwnership struct {
-	TriageOwner      string              `json:"triage_owner"` // NOC unless evidence says otherwise
-	TriageReason     string              `json:"triage_reason"`
-	SuspectedDomain  string              `json:"suspected_domain"` // Undetermined until evidence
-	Candidates       []rcaOwnerCandidate `json:"candidates,omitempty"`
-	EscalationOwner  string              `json:"escalation_owner"`
-	EscalationReason string              `json:"escalation_reason"`
+	TriageOwner     string              `json:"triage_owner"` // NOC unless evidence says otherwise
+	TriageReason    string              `json:"triage_reason"`
+	SuspectedDomain string              `json:"suspected_domain"` // Undetermined until evidence
+	Candidates      []rcaOwnerCandidate `json:"candidates,omitempty"`
+	// TechnicalOwner: the internal team investigating. An external provider is
+	// never handed accountability without demarcation (P1.10).
+	TechnicalOwner    string `json:"technical_owner,omitempty"`
+	ExternalCandidate string `json:"external_candidate,omitempty"`
+	// Demarcation: not_started | local_checks_pending | provider_boundary_confirmed
+	Demarcation      string `json:"demarcation,omitempty"`
+	DemarcationBasis string `json:"demarcation_basis,omitempty"`
+	EscalationOwner  string `json:"escalation_owner"`
+	EscalationReason string `json:"escalation_reason"`
 }
 
 type rcaDecision struct {
@@ -342,14 +432,25 @@ type rcaDecision struct {
 	// Auto-close eligibility evaluated at report time: monitoring completed
 	// without recurrence ⇒ eligible even when historical impact was confirmed.
 	AutoCloseEligible bool `json:"auto_close_eligible"`
+	// Ticket RECOMMENDATION vs EXECUTION are separate states (P1.12): the
+	// policy's recommendation, its reason, and — when they disagree with the
+	// executed ticket state — an explicit explanation. Never a silent split.
+	TicketRecommended     string `json:"ticket_recommended"` // open | hold
+	TicketRecommendReason string `json:"ticket_recommend_reason"`
+	TicketExecutionNote   string `json:"ticket_execution_note,omitempty"`
 }
 
 type rcaAction struct {
-	Priority       int    `json:"priority"`
-	Action         string `json:"action"`
-	Owner          string `json:"owner"`
-	ExpectedResult string `json:"expected_result,omitempty"`
-	EscalateWhen   string `json:"escalate_when,omitempty"`
+	Priority int    `json:"priority"`
+	Action   string `json:"action"`
+	Owner    string `json:"owner"`
+	// OperationalPriority (P1 model): "P1" = immediate restoration/containment,
+	// must be worked now; "P2" = diagnostic/corrective/prevention after
+	// stabilization. Labelled separately from incident severity by design.
+	OperationalPriority string `json:"operational_priority"`
+	Purpose             string `json:"purpose,omitempty"` // restoration | discrimination | validation | monitoring
+	ExpectedResult      string `json:"expected_result,omitempty"`
+	EscalateWhen        string `json:"escalate_when,omitempty"`
 }
 
 // ---- vocabulary --------------------------------------------------------------
@@ -438,18 +539,30 @@ func rcaIsImpactKind(kind, entityType, probeScope string) bool {
 	return rcaIsRealUserImpactKind(kind, entityType) || rcaIsSyntheticImpactKind(kind, probeScope)
 }
 
-// rcaIsRealUserImpactKind: evidence produced by REAL traffic or the serving
-// infrastructure itself (§5) — the only kinds that may support a real-user
-// impact claim. A failed synthetic check is never in this set.
+// rcaIsRealUserImpactKind: evidence produced by REAL user sessions or the
+// serving infrastructure itself (§5) — the only kinds that may support a
+// real-user impact CLAIM. A failed synthetic check is never in this set, and
+// neither is a flow-volume delta (see rcaIsRealUserIndicatorKind).
 func rcaIsRealUserImpactKind(kind, entityType string) bool {
 	switch kind {
-	case "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high", "lb_4xx_high",
-		"flow_volume_anomaly":
+	case "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high", "lb_4xx_high":
 		return true
 	case "cloud_health":
 		return entityType == "app"
 	}
 	return false
+}
+
+// rcaIsRealUserIndicatorKind: real-traffic INDICATORS (P1.5). A traffic-volume
+// change shows real traffic behaved differently; it does not prove failed user
+// transactions — demand shifts, routing changes and collection loss all
+// produce the same delta. Indicator, never confirmation.
+func rcaIsRealUserIndicatorKind(kind string) bool {
+	switch kind {
+	case "flow_volume_anomaly", "flow_reset_anomaly", "flow_completion_anomaly":
+		return true
+	}
+	return strings.HasPrefix(kind, "flow_") && !strings.HasSuffix(kind, "_clear")
 }
 
 // rcaIsSyntheticImpactKind: a customer-path synthetic/probe failure — proves
@@ -518,7 +631,7 @@ type rcaHypBlob struct {
 				Note      string   `json:"note"`
 				Kinds     []string `json:"kinds"`
 			} `json:"causal_chain"`
-			Verdict         struct {
+			Verdict struct {
 				Tier              string   `json:"verdict_tier"`
 				Owner             string   `json:"owner"`
 				Layer             string   `json:"layer"`
@@ -629,22 +742,24 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 
 	// ---- classify the slice ----------------------------------------------------
 	var (
-		anomalous, clears            []map[string]any
-		observers                    = map[string]bool{}
-		laneTotal, laneAnomalous     = map[string]int{}, map[string]int{}
-		laneMin, laneMax             = map[string]time.Time{}, map[string]time.Time{}
-		firstObs, lastObs, recovered time.Time
-		peakSevRank                  int
-		peakSev                      = "unknown"
-		peakSevKind                  string
-		sevCounts                    = map[string]int{}
-		impactAnomalies              int
-		impactSynthetic              int
-		impactRealUser               int
-		realUserLanesPresent         bool
-		impactLanesPresent           bool
-		changes                      []rcaCloudChange
-		stateUps                     []rcaStateUp
+		anomalous, clears        []map[string]any
+		observers                = map[string]bool{}
+		anomObservers            = map[string]bool{}
+		laneTotal, laneAnomalous = map[string]int{}, map[string]int{}
+		laneMin, laneMax         = map[string]time.Time{}, map[string]time.Time{}
+		firstObs, lastObs        time.Time
+		peakSevRank              int
+		peakSev                  = "unknown"
+		peakSevKind              string
+		sevCounts                = map[string]int{}
+		impactAnomalies          int
+		impactSynthetic          int
+		impactRealUser           int
+		impactRealUserIndicator  int
+		realUserLanesPresent     bool
+		impactLanesPresent       bool
+		changes                  []rcaCloudChange
+		stateUps                 []rcaStateUp
 	)
 	sevRank := map[string]int{"info": 1, "warn": 2, "high": 3, "crit": 4}
 	for _, sig := range in.Signals {
@@ -671,17 +786,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			}
 			continue
 		}
-		isClear := strings.HasSuffix(kind, "_clear")
-		if isClear {
+		if strings.HasSuffix(kind, "_clear") {
+			// observed recovery evidence; the RecoveryReconciler reads clear_ts/ts
 			clears = append(clears, sig)
-			// recovery time = observed clear evidence only (clear_ts wins over ts)
-			ct, ok := parseChTS(fmt.Sprintf("%v", sig["clear_ts"]))
-			if !ok {
-				ct, ok = ts, tsOK
-			}
-			if ok && ct.After(recovered) {
-				recovered = ct
-			}
 			continue
 		}
 		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
@@ -692,6 +799,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 		anomalous = append(anomalous, sig)
 		laneAnomalous[lane]++
+		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
+			anomObservers[o] = true
+		}
 		if tsOK {
 			if firstObs.IsZero() || ts.Before(firstObs) {
 				firstObs = ts
@@ -708,10 +818,14 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 		entityType := fmt.Sprintf("%v", sig["entity_type"])
 		probeScope := fmt.Sprintf("%v", sig["probe_scope"])
-		if rcaIsRealUserImpactKind(kind, entityType) {
+		switch {
+		case rcaIsRealUserImpactKind(kind, entityType):
 			impactAnomalies++
 			impactRealUser++
-		} else if rcaIsSyntheticImpactKind(kind, probeScope) {
+		case rcaIsRealUserIndicatorKind(kind):
+			impactAnomalies++
+			impactRealUserIndicator++
+		case rcaIsSyntheticImpactKind(kind, probeScope):
 			impactAnomalies++
 			impactSynthetic++
 		}
@@ -752,29 +866,53 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	for _, su := range stateUps {
 		if !firstObs.IsZero() && su.ts.After(firstObs) {
 			clears = append(clears, su.sig)
-			if su.ts.After(recovered) {
-				recovered = su.ts
-			}
 		}
 	}
+	// RecoveryReconciler (P1.1): component recovery vs service recovery are
+	// reconciled per scope; incident-level recovery exists only when the last
+	// recovery evidence is at/after the last qualifying anomaly in every
+	// participating scope. A tunnel-up while probes keep failing is component
+	// recovery + residual degradation, never incident recovery.
+	ra := reconcileRecovery(anomalous, clears)
+	recovered := ra.At // zero unless the incident-level gate passed
 	recoveryState, recoveryBasis := "not_observed", "No recovery evidence was captured."
-	if !recovered.IsZero() {
+	switch {
+	case ra.Confirmed:
 		recoveryState = "explicitly_confirmed"
-		recoveryBasis = fmt.Sprintf("%s; last clear observed %s.", countNoun(len(clears), "recovery signal"), fmtUTC(recovered))
+		recoveryBasis = fmt.Sprintf("%s; last recovery evidence observed %s, at/after the final qualifying anomaly in every participating scope.",
+			countNoun(len(clears), "recovery signal"), fmtUTC(ra.At))
+	case ra.Service.State == "failed_validation":
+		recoveryState = "failed_validation"
+		recoveryBasis = ra.Service.Basis
+	case ra.Component.State == "explicitly_confirmed":
+		recoveryState = "component_only"
+		recoveryBasis = ra.Component.Basis + " End-to-end service recovery is not confirmed."
+	case ra.Component.State == "failed_validation":
+		recoveryState = "failed_validation"
+		recoveryBasis = ra.Component.Basis
 	}
 	incident := "active"
 	switch {
 	case state == "merged":
 		incident = "closed"
-	case state == "closed" && recoveryState == "explicitly_confirmed":
+		// a merged tombstone tracks recovery on the SURVIVING case
+		recoveryState = "not_applicable"
+		recoveryBasis = "This case was merged into another; lifecycle and recovery are tracked on the surviving case."
+	case state == "closed" && ra.Confirmed:
 		incident = "recovered"
 	case state == "closed":
 		incident = "no_longer_observed"
 		// Ending only by time is an INFERENCE, stated as one — never "recovered".
-		recoveryState = "inferred"
-		recoveryBasis = "Inferred from quiescence: anomalous signals stopped and the window closed; no explicit recovery evidence was captured."
-	case len(clears) > 0:
+		// Partial (component-only / failed-validation) recovery keeps its more
+		// specific basis; pure silence is stated as inference.
+		if recoveryState == "not_observed" {
+			recoveryState = "inferred"
+			recoveryBasis = "Inferred from quiescence: anomalous signals stopped and the window closed; no explicit recovery evidence was captured."
+		}
+	case ra.Confirmed:
 		incident = "recovering"
+		// Recovery evidence exists but anomalies continued after it, or a scope's
+		// validation failed → the incident is STILL FAILING; it stays active.
 	}
 
 	analysis := "observed"
@@ -808,24 +946,26 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
-	impact := "unknown"
-	switch {
-	case analysis == "confirmed" && impactAnomalies > 0:
-		impact = "confirmed"
-	case impactAnomalies > 0:
-		impact = "detected"
-	case impactLanesPresent:
-		impact = "none_detected"
-	default:
-		impact = "not_observable"
+	// Coverage sufficiency (P1.6): "no anomaly detected" is a claim about the
+	// window — it is valid only when the lane actually observed the window.
+	laneCovers := func(lane string) bool {
+		if laneTotal[lane] == 0 || firstObs.IsZero() || lastObs.IsZero() {
+			return false
+		}
+		slack := lastObs.Sub(firstObs) / 5
+		if slack < 2*time.Minute {
+			slack = 2 * time.Minute
+		}
+		return !laneMin[lane].After(firstObs.Add(slack)) && !laneMax[lane].Before(lastObs.Add(-slack))
 	}
 	// §5 axes. A failed configured check IS the synthetic-transaction impact —
-	// a fact, not a hypothesis. Real-user impact needs real-traffic evidence.
+	// a fact, not a hypothesis. Real-user impact needs real-traffic evidence,
+	// and a flow-volume delta is an INDICATOR, never confirmation (P1.5).
 	impactSyn := "not_observable"
 	switch {
 	case impactSynthetic > 0:
 		impactSyn = "confirmed"
-	case laneTotal["active_probe"] > 0:
+	case laneTotal["active_probe"] > 0 && laneCovers("active_probe"):
 		impactSyn = "none_detected"
 	}
 	impactRU := "not_observable"
@@ -834,8 +974,25 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRU = "confirmed"
 	case impactRealUser > 0:
 		impactRU = "detected"
-	case realUserLanesPresent:
+	case impactRealUserIndicator > 0:
+		impactRU = "indicator_detected"
+	case realUserLanesPresent && laneCovers("passive_flow"):
 		impactRU = "none_detected"
+	}
+	// Overall impact summarizes the axes; it never claims more than the
+	// strongest axis. "Missing evidence is not evidence of no impact."
+	impact := "unknown"
+	switch {
+	case impactRU == "confirmed":
+		impact = "confirmed"
+	case impactSyn == "confirmed" || impactRU == "detected":
+		impact = "detected"
+	case impactRU == "indicator_detected":
+		impact = "indicator_detected"
+	case impactLanesPresent && (impactSyn == "none_detected" || impactRU == "none_detected"):
+		impact = "none_detected"
+	default:
+		impact = "not_observable"
 	}
 
 	// §11/§24: a case whose every anomalous signal declares a non-production
@@ -865,6 +1022,56 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		sevBasis += "; validation scenario — production severity not applicable"
 	}
 
+	// Incident severity (P1.11): NEVER the bare maximum of attached signal
+	// severities. Derived from corroboration (evidence classes + observers),
+	// analysis maturity and impact; capped with explicit reason codes when a
+	// single uncorroborated signal carries the peak. Evidence-peak severity
+	// stays reported separately as a fact about the signals.
+	sevIncident := peakSev
+	var sevCodes []string
+	anomLanes := 0
+	for _, n := range laneAnomalous {
+		if n > 0 {
+			anomLanes++
+		}
+	}
+	switch {
+	case validation:
+		sevIncident = "not_applicable"
+		sevCodes = append(sevCodes, "validation_scenario_production_severity_suppressed")
+	case len(anomalous) == 0:
+		sevIncident = "unknown"
+		sevCodes = append(sevCodes, "no_anomalous_evidence")
+	default:
+		sevCodes = append(sevCodes, "peak_signal_severity_"+peakSev)
+		corroborated := anomLanes >= 2 && len(anomObservers) >= 2
+		// only CONFIRMED real-user impact exempts from the single-stream cap; a
+		// synthetic failure is one uncorroborated stream like any other
+		impactBacked := impactRU == "confirmed"
+		switch {
+		case corroborated || analysis == "confirmed":
+			sevCodes = append(sevCodes, "corroborated_evidence")
+		case sevRank[peakSev] >= sevRank["crit"] && !impactBacked:
+			// one uncorroborated signal stream cannot declare a production CRIT
+			sevIncident = "high"
+			sevCodes = append(sevCodes, "capped_single_stream_uncorroborated")
+			if anomLanes <= 1 {
+				sevCodes = append(sevCodes, "single_evidence_class")
+			}
+			if len(anomObservers) <= 1 {
+				sevCodes = append(sevCodes, "single_observer")
+			}
+			if anomLanes <= 1 && len(anomObservers) <= 1 && analysis != "probable" {
+				sevIncident = "warn"
+				sevCodes = append(sevCodes, "capped_pending_validation")
+			}
+		case anomLanes <= 1 && len(anomObservers) <= 1 && sevRank[peakSev] >= sevRank["high"] &&
+			analysis != "probable" && !impactBacked:
+			sevIncident = "warn"
+			sevCodes = append(sevCodes, "single_evidence_class", "single_observer", "capped_pending_validation")
+		}
+	}
+
 	// ── dimensional analysis states ──
 	symptom := "observed"
 	if len(anomalous) > 0 {
@@ -881,15 +1088,20 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	case analysis == "suspected" && !topIsSymptom:
 		faultDomain = "suspected"
 	}
+	// P1.3: a confirmed fault CONDITION or DOMAIN never confirms the failure
+	// mechanism — "tunnel down" is confirmed; WHY it went down (auth, rekey,
+	// peer outage, underlay…) requires its own causal evidence, which the
+	// engine does not yet collect. Mechanism therefore caps at investigation.
 	mechanism := "unknown"
 	switch {
 	case analysis == "confirmed" && !topIsSymptom:
-		mechanism = "confirmed"
+		mechanism = "under_investigation"
 	case analysis == "suspected" || analysis == "probable":
 		mechanism = "under_investigation"
 	}
 	rootState := "not_identified"
 
+	// Ticket EXECUTION state — what actually happened (the persisted link).
 	ticketState := "not_opened"
 	if in.Ticket != nil {
 		switch fmt.Sprintf("%v", in.Ticket["state"]) {
@@ -903,8 +1115,35 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			ticketState = "not_opened"
 		}
 	}
-	if ticketState == "not_opened" && analysis != "confirmed" && len(anomalous) > 0 {
-		ticketState = "held" // policy hold, stated with its policy below
+	// Ticket RECOMMENDATION (P1.12) — the same pure policy decision the sweeper
+	// uses, evaluated on this report's facts, so recommendation and execution
+	// are reconciled ON the document instead of contradicting each other.
+	probeOnly := len(anomalous) > 0
+	for _, sig := range anomalous {
+		if fmt.Sprintf("%v", sig["modality_class"]) != "active_probe" {
+			probeOnly = false
+			break
+		}
+	}
+	wStart, _ := parseChTS(fmt.Sprintf("%v", meta["window_start"]))
+	wEnd, _ := parseChTS(fmt.Sprintf("%v", meta["window_end"]))
+	// The policy consumes the RECONCILED incident severity (P1.11) — a capped
+	// single-stream anomaly must not open tickets as if it were CRIT.
+	ticketRec := evalTicketDecision(corrTicketFacts{
+		Verdict: verdict, Validation: validation, ProbeOnly: probeOnly,
+		PeakSeverity: sevIncident, HasAffectedEntity: len(anomalous) > 0,
+		WindowStart: wStart, WindowEnd: wEnd,
+	}, in.Policy, nil, in.Now)
+	ticketRecommended, ticketRecReason := "hold", ticketRec.Reason
+	if ticketRec.Create {
+		ticketRecommended = "open"
+	}
+	ticketExecNote := ""
+	switch {
+	case ticketState == "not_opened" && ticketRecommended == "hold" && len(anomalous) > 0:
+		ticketState = "held" // policy hold, with the policy's own reason below
+	case ticketState == "not_opened" && ticketRecommended == "open":
+		ticketExecNote = "Policy recommends opening a ticket, but no ticket exists yet — creation is pending execution or the ticketing integration is not connected for this tenant."
 	}
 
 	// ---- confidence (engine-derived, basis stated) -------------------------------
@@ -940,6 +1179,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		times.RecoveredAt = fmtUTC(recovered)
 		times.RecoveredCaptured = true
 	}
+	// Component recovery time is reported SEPARATELY (P1.1) — it bounds the
+	// component outage, never the incident.
+	times.ComponentRecoveredAt = ra.Component.At
 	switch {
 	case times.RecoveredCaptured && !firstObs.IsZero():
 		times.DurationMS = recovered.Sub(firstObs).Milliseconds()
@@ -1008,8 +1250,12 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	}
 	hyps := buildHypothesesView(hb, kindCounts, kindObservers)
 
-	// ---- root cause ----------------------------------------------------------------------
-	root := rcaRootCause{Identified: false, Statement: "Root cause has not been identified."}
+	// ---- fault localization vs root cause (P1.3/P1.4, audit D2) -------------------
+	// The seam/locus the evidence converges on is the FAULT LOCALIZATION DOMAIN.
+	// It narrows where the fault lives; it never names the cause. Root cause
+	// stays unidentified until a causal mechanism AND causal object are
+	// established — which a signature verdict alone can never do.
+	loc := rcaFaultLocalization{Statement: "The fault has not been localized to a specific domain or object."}
 	if analysis == "confirmed" {
 		locus := groundedLocus(in.Edges)
 		// §16: a transport-family fault (underlay/tunnel/ipsec) localizes to the
@@ -1042,93 +1288,127 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 					}
 				}
 				locus = sm.SeamID
-				root = rcaRootCause{
-					Identified: true,
-					Statement:  fmt.Sprintf("Fault localized to the %s seam %s by independent evidence.", sm.SeamType, sm.SeamID),
+				loc = rcaFaultLocalization{
+					Localized:  true,
+					Statement:  fmt.Sprintf("Fault localized to the %s seam %s by independent evidence. The seam is a localization domain — it narrows the fault; it is not the root-cause object.", sm.SeamType, sm.SeamID),
 					Object:     sm.SeamID,
-					ObjectType: strings.ToLower(orDefault(sm.SeamType, "seam")) + " seam",
+					ObjectType: strings.ToLower(orDefault(sm.SeamType, "seam")) + " seam (localization domain)",
+					Evidence:   humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied),
 				}
-				root.Owner = rcaOwnerTeam[hb.Ranking.Hypotheses[0].Verdict.Owner]
-				root.Evidence = humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied)
 			}
 		}
-		if !root.Identified && locus != "" {
-			root = rcaRootCause{
-				Identified: true,
+		if !loc.Localized && locus != "" {
+			loc = rcaFaultLocalization{
+				Localized:  true,
 				Statement:  fmt.Sprintf("Fault localized to %s by independent evidence.", aiEntityLabel(locus)),
 				Object:     locus,
-				ObjectType: "grounded entity",
+				ObjectType: "grounded entity (localization boundary)",
 			}
 			if len(hb.Ranking.Hypotheses) > 0 {
-				root.Owner = rcaOwnerTeam[hb.Ranking.Hypotheses[0].Verdict.Owner]
-				root.Evidence = humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied)
+				loc.Evidence = humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied)
 			}
 		}
-		if !root.Identified {
-			root.Statement = "The fault condition is confirmed, but the evidence does not converge on a single root-cause object."
+		if !loc.Localized {
+			loc.Statement = "The fault condition is confirmed, but the evidence does not converge on a single fault object."
 		}
+	}
+	root := rcaRootCause{Identified: false, Statement: "Root cause has not been identified."}
+	switch {
+	case analysis == "confirmed" && loc.Localized:
+		root.Statement = fmt.Sprintf("The fault condition is confirmed and localized to %s. The underlying root cause — the causal mechanism and originating object — remains under investigation.", loc.Object)
+	case analysis == "confirmed":
+		root.Statement = "The fault condition is confirmed. The underlying root cause remains under investigation."
 	}
 
 	// ---- ownership ---------------------------------------------------------------------------
+	// Root-cause state may reach "confirmed" ONLY via an identified mechanism +
+	// causal object (root.Identified). Fault-domain confirmation, seam
+	// grounding and verdict tier all cap at under_investigation (P1.3).
 	switch {
-	case root.Identified && analysis == "confirmed":
+	case root.Identified && root.Mechanism != "" && root.Object != "":
 		rootState = "confirmed"
-	case analysis == "suspected" || analysis == "probable":
+	case analysis == "confirmed" || analysis == "suspected" || analysis == "probable":
 		rootState = "under_investigation"
 	}
-	ownership := buildOwnership(analysis, root.Identified, scope.ServiceClassification, hb, sigSummary)
+	ownership := buildOwnership(analysis, loc.Localized, scope.ServiceClassification, hb, sigSummary)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
 	decision := buildDecision(analysis, incident, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
+	decision.TicketRecommended = ticketRecommended
+	decision.TicketRecommendReason = ticketRecReason
+	if ticketExecNote == "" && decision.EscalationState == "triggered" &&
+		(ticketState == "not_opened" || ticketState == "held") {
+		// Escalation and ticketing reached different states — say why, never
+		// leave "Ticket: not opened / Escalation: TRIGGERED" unexplained.
+		ticketExecNote = "Escalation conditions are met while the ticket is " + strings.ReplaceAll(ticketState, "_", " ") +
+			": " + orDefault(ticketRecReason, "the ticket decision is governed by the ticketing policy shown above") + "."
+	}
+	decision.TicketExecutionNote = ticketExecNote
+
+	// ---- incident phases (P1.2) ----------------------------------------------------------------
+	phases := buildIncidentPhases(firstObs, ra, times.MonitoringUntil)
 
 	// ---- wording ----------------------------------------------------------------------------------
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactRU, monitoring, decision, sigSummary, monitorWindow)
+	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
 
-	// ---- actions -----------------------------------------------------------------------------------
-	actions := buildActions(analysis, hb, sigSummary, decision, ownership)
+	// ---- actions (contextual planner, P1.13) --------------------------------------------------------
+	actions := planActions(rcaActionInput{
+		Analysis: analysis, Incident: incident, Hyp: hb, Signals: sigSummary,
+		Decision: decision, Ownership: ownership,
+		LaneAnomalous: laneAnomalous, KindCounts: rcaKindCounts(anomalous),
+		Residual: ra.ResidualAfterComponent, Validation: validation,
+	})
 
 	// ---- NOC quick-read -------------------------------------------------------------------------------
-	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, impactSyn, impactRU, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions)
+	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, impactSyn, impactRU, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions, ra)
 
 	rep := rcaReport{
 		ReportID:      "rr-" + strings.ReplaceAll(in.ID, "-", "")[:12] + fmt.Sprintf("-v%d", version),
 		CorrelationID: in.ID,
 		DisplayID:     problemDisplayID(in.ID),
 		Version:       version,
-		ReportType:    reportTypeFor(analysis),
+		ReportType:    reportTypeFor(rootState, analysis),
 		Title:         title,
 		Subtitle:      subtitle,
 		Validation:    validation,
 		GeneratedAt:   fmtUTC(in.Now),
 		States: rcaReportStates{
 			Incident: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
+			RecoveryComponent: ra.Component, RecoveryService: ra.Service,
 			Analysis: analysis,
-			Symptom: symptom, FaultDomain: faultDomain, Mechanism: mechanism, RootCauseState: rootState,
-			Impact: impact,
+			Symptom:  symptom, FaultDomain: faultDomain, Mechanism: mechanism, RootCauseState: rootState,
+			Impact:          impact,
 			ImpactSynthetic: impactSyn, ImpactRealUser: impactRU,
-			Ticket: ticketState,
-			Severity: peakSev, SeverityBasis: sevBasis, Monitoring: monitoring,
+			Ticket:   ticketState,
+			Severity: peakSev, SeverityIncident: sevIncident, SeverityReasonCodes: sevCodes,
+			SeverityBasis: sevBasis, Monitoring: monitoring,
 			Confidence: confidence, ConfidenceBasis: basis,
 		},
-		Times:            times,
-		Scope:            scope,
-		Summary:          rcaReportSummaries{Management: mgmt, Noc: noc, WhySuspected: whySusp, WhyNotConfirmed: whyNot, RequiredConfirm: required},
-		Signals:          sigSummary,
-		Coverage:         coverage,
-		CloudChanges:     changes,
-		Hypotheses:       hyps,
-		SingleHypothesis: len(hyps) <= 1,
-		Cascade:          cascadeStages(hb),
-		RootCause:        root,
-		Ownership:        ownership,
-		Decision:         decision,
-		Actions:          actions,
-		Ticket:           in.Ticket,
-		Path:             in.Path,
+		Times:             times,
+		Scope:             scope,
+		Summary:           rcaReportSummaries{Management: mgmt, Noc: noc, WhySuspected: whySusp, WhyNotConfirmed: whyNot, RequiredConfirm: required},
+		Signals:           sigSummary,
+		Coverage:          coverage,
+		CloudChanges:      changes,
+		Hypotheses:        hyps,
+		SingleHypothesis:  len(hyps) <= 1,
+		Cascade:           cascadeStages(hb),
+		Phases:            phases,
+		FaultLocalization: loc,
+		RootCause:         root,
+		Ownership:         ownership,
+		Decision:          decision,
+		Actions:           actions,
+		Ticket:            in.Ticket,
+		Path:              in.Path,
 	}
+	// ReportQualityGate: the StateConsistencyValidator runs on the FINISHED
+	// document. Errors downgrade the report type — a contradictory document is
+	// never emitted as a final assessment (P1 gate).
+	applyReportQualityGate(&rep, in.Now)
 	return rep
 }
 
@@ -1139,19 +1419,31 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// reportTypeFor — the document may only call itself an RCA when a root cause
-// analysis actually concluded (§2 of the directive).
-func reportTypeFor(analysis string) string {
-	switch analysis {
-	case "confirmed":
+// reportTypeFor — the document may only call itself an RCA when the ROOT CAUSE
+// actually concluded (mechanism + causal object, P1.3). A confirmed fault
+// condition alone yields a fault-confirmed incident analysis, never an "RCA".
+func reportTypeFor(rootState, analysis string) string {
+	switch {
+	case rootState == "confirmed":
 		return "Root Cause Analysis"
-	case "probable":
-		return "Preliminary Root Cause Analysis"
-	case "inconclusive":
+	case analysis == "confirmed":
+		return "Incident Analysis — Fault Confirmed"
+	case analysis == "probable":
+		return "Preliminary Incident Analysis"
+	case analysis == "inconclusive":
 		return "Incident Analysis — Cause Inconclusive"
 	default:
 		return "Incident Assessment"
 	}
+}
+
+// rcaKindCounts — anomalous evidence kind → count (action-planner context).
+func rcaKindCounts(anomalous []map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, sig := range anomalous {
+		out[fmt.Sprintf("%v", sig["kind"])]++
+	}
+	return out
 }
 
 // groundedLocus — the entity the grounded topo edges converge on (same rule the

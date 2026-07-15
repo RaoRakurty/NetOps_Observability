@@ -18,11 +18,11 @@ import (
 )
 
 var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.FuncMap{
-	"stateTone": rcaStateTone,
+	"stateTone":  rcaStateTone,
 	"humanState": func(v string) string { return strings.ReplaceAll(v, "_", " ") },
-	"upper":     strings.ToUpper,
-	"title":     rcaTitleCase,
-	"dur":       func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
+	"upper":      strings.ToUpper,
+	"title":      rcaTitleCase,
+	"dur":        func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
 	"f1": func(f *float64) string {
 		if f == nil {
 			return ""
@@ -278,7 +278,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <span class="pill blue">Confidence: {{.States.Confidence}}</span>
   <span class="pill {{stateTone "impact" .States.Impact}}">Impact: {{title .States.Impact}}</span>
   <span class="pill {{stateTone "ticket" .States.Ticket}}">Ticket: {{title .States.Ticket}}</span>
-  <span class="pill {{stateTone "severity" .States.Severity}}">Severity: {{upper .States.Severity}}</span>
+  <span class="pill {{stateTone "severity" .States.SeverityIncident}}">Severity: {{upper (humanState .States.SeverityIncident)}}</span>
 </div>
 <div class="meta">Report <b>{{.ReportID}}</b> · Case <b>{{.DisplayID}}</b> · Generated <b>{{.GeneratedAt}}</b>{{if .Subtitle}} · {{.Subtitle}}{{end}}</div>
 
@@ -292,6 +292,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <h2>Key facts</h2>
   <div class="kv">
     {{if .Times.FirstObserved}}<span class="k">First observed</span><span class="v">{{.Times.FirstObserved}}</span>{{end}}
+    {{if .Times.ComponentRecoveredAt}}<span class="k">Component recovered</span><span class="v">{{.Times.ComponentRecoveredAt}} (component scope only)</span>{{end}}
     {{if .Times.RecoveredCaptured}}<span class="k">Recovered at</span><span class="v">{{.Times.RecoveredAt}}</span>
     {{else if or (eq .States.Incident "recovered") (eq .States.Incident "closed")}}<span class="k">Recovered at</span><span class="v">Not captured</span>{{end}}
     {{if .Times.DurationMS}}<span class="k">Duration</span><span class="v">{{dur .Times.DurationMS}}{{if eq .Times.DurationBasis "elapsed_still_active"}} (elapsed — still active){{end}}{{if eq .Times.DurationBasis "to_last_observation"}} (to last observation){{end}}</span>{{end}}
@@ -313,10 +314,26 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     <span class="k">Monitoring window</span><span class="v">{{.Decision.MonitoringWindow}}</span>
     <span class="k">Auto-close</span><span class="v">{{.Decision.AutoCloseWhen}}</span>
     <span class="k">Reopen</span><span class="v">{{.Decision.ReopenWhen}}</span>
-    <span class="k">Escalation</span><span class="v">{{if eq .Decision.EscalationState "triggered"}}TRIGGERED at {{.Decision.EscalationAt}} — {{.Decision.EscalateWhen}}{{else}}armed — triggers when {{.Decision.EscalateWhen}}{{end}}</span>
+    <span class="k">Escalation</span><span class="v">{{if eq .Decision.EscalationState "triggered"}}TRIGGERED at {{.Decision.EscalationAt}} — further escalate if {{.Decision.EscalateWhen}}{{else}}armed — triggers when {{.Decision.EscalateWhen}}{{end}}</span>
+    <span class="k">Ticket recommendation</span><span class="v">{{title .Decision.TicketRecommended}} — {{.Decision.TicketRecommendReason}}</span>
+    {{if .Decision.TicketExecutionNote}}<span class="k">Ticket execution</span><span class="v" style="font-weight:400">{{.Decision.TicketExecutionNote}}</span>{{end}}
   {{if .Decision.AutoCloseEligible}}<span class="k">Auto-close</span><span class="v">eligible now — monitoring completed with no recurrence (historical impact stays recorded)</span>{{end}}
   </div>
 </section>
+
+{{if .Phases}}
+<section>
+  <h2>Incident phases</h2>
+  <table><thead><tr><th style="width:22%">Phase</th><th style="width:30%">When</th><th>What happened</th></tr></thead><tbody>
+  {{range .Phases}}<tr>
+    <td><b>{{title (humanState .Type)}}</b></td>
+    <td>{{.StartAt}}{{if .EndAt}} → {{.EndAt}}{{end}}</td>
+    <td>{{.Summary}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  <div class="note">Component recovery and service recovery are tracked separately; a component coming back never closes a service that is still failing.</div>
+</section>
+{{end}}
 
 {{if .CloudChanges}}
 <section>
@@ -346,6 +363,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <h2>Signal measurements</h2>
   <div class="kv">
     <span class="k">Observations (window)</span><span class="v">{{.Signals.Total}} total · {{.Signals.Attached}} tied to this case · {{.Signals.Clears}} recovery signals</span>
+    <span class="k">Evidence groups</span><span class="v">{{.Signals.EvidenceGroups}} (derived signals from one measurement source count once)</span>
     <span class="k">Independent observers</span><span class="v">{{.Signals.UniqueObservers}}</span>
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
@@ -383,7 +401,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <section>
   <h2>Network path &amp; causality (measured)</h2>
   {{if .Topology.Available}}
-  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
+  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.RelationToIncident}} · temporal role: <b>{{humanState .Topology.RelationToIncident}}</b>{{end}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
+  {{if .Topology.TemporalNote}}<div class="note" style="color:#b45309;font-weight:600">{{.Topology.TemporalNote}}</div>{{end}}
   {{pathGraph .Topology}}
   <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
   {{range .Topology.Hops}}<tr>
@@ -441,7 +460,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
     <td><b>{{.Title}}</b> <span class="pill {{if eq .Type "symptom classification"}}gray{{else}}blue{{end}}" style="font-size:9px">{{.Type}}</span>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
         {{if .Problem}}<div class="note" style="color:#334155">{{.Problem}}</div>{{end}}
-        {{if .Owner}}<div class="note">would be owned by {{.Owner}}</div>{{end}}</td>
+        <div class="note">condition: {{humanState .ObservationState}} · causal role: {{humanState .CausalRole}}</div>
+        {{if .Owner}}<div class="note">candidate owner: {{.Owner}}</div>{{end}}</td>
     <td>{{title .Label}}</td>
     <td>{{range $i, $s := .Supporting}}{{if $i}}; {{end}}{{$s}}{{end}}{{if .Contradicting}}<div class="note">contradicted by: {{range $i, $s := .Contradicting}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}</td>
     <td>{{range $i, $s := .ConfirmWhen}}{{if $i}}; {{end}}{{$s}}{{end}}</td>
@@ -451,10 +471,23 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 
 <section>
+  <h2>Fault localization</h2>
+  <p>{{.FaultLocalization.Statement}}</p>
+  {{if .FaultLocalization.Localized}}
+  <div class="kv">
+    <span class="k">Localization boundary</span><span class="v" style="font-family:ui-monospace,monospace">{{.FaultLocalization.Object}}</span>
+    <span class="k">Boundary type</span><span class="v">{{.FaultLocalization.ObjectType}}</span>
+  </div>
+  {{if .FaultLocalization.Evidence}}<div class="note">Localizing evidence: {{range $i, $s := .FaultLocalization.Evidence}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}
+  {{end}}
+</section>
+
+<section>
   <h2>Root cause</h2>
   <p>{{.RootCause.Statement}}</p>
   {{if .RootCause.Identified}}
   <div class="kv">
+    <span class="k">Mechanism</span><span class="v">{{.RootCause.Mechanism}}</span>
     <span class="k">Object</span><span class="v" style="font-family:ui-monospace,monospace">{{.RootCause.Object}}</span>
     {{if .RootCause.Owner}}<span class="k">Owner</span><span class="v">{{.RootCause.Owner}}</span>{{end}}
   </div>
@@ -468,6 +501,10 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     <span class="k">Triage owner</span><span class="v">{{.Ownership.TriageOwner}}</span>
     <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.TriageReason}}</span>
     <span class="k">Suspected fault domain</span><span class="v">{{.Ownership.SuspectedDomain}}</span>
+    {{if .Ownership.TechnicalOwner}}<span class="k">Technical owner</span><span class="v">{{.Ownership.TechnicalOwner}}</span>{{end}}
+    {{if .Ownership.ExternalCandidate}}<span class="k">External provider candidate</span><span class="v">{{.Ownership.ExternalCandidate}} — accountability pending demarcation</span>
+    <span class="k">Demarcation</span><span class="v">{{title (humanState .Ownership.Demarcation)}}</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.DemarcationBasis}}</span>{{end}}
     <span class="k">Escalation owner</span><span class="v">{{.Ownership.EscalationOwner}}</span>
     <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.EscalationReason}}</span>
   </div>
@@ -480,7 +517,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <section>
   <h2>Next actions</h2>
   <ol class="actions">
-  {{range .Actions}}<li><b>{{.Action}}</b> — owner: {{.Owner}}{{if .ExpectedResult}}<div class="note">Expected output: {{.ExpectedResult}}</div>{{end}}{{if .EscalateWhen}}<div class="note">Escalate when: {{.EscalateWhen}}</div>{{end}}</li>
+  {{range .Actions}}<li><span class="pill {{if eq .OperationalPriority "P1"}}red{{else}}blue{{end}}" style="font-size:9px">{{.OperationalPriority}}</span> <b>{{.Action}}</b> — owner: {{.Owner}}{{if .ExpectedResult}}<div class="note">Expected output: {{.ExpectedResult}}</div>{{end}}{{if .EscalateWhen}}<div class="note">Escalate when: {{.EscalateWhen}}</div>{{end}}</li>
   {{end}}
   </ol>
 </section>

@@ -1,0 +1,244 @@
+package main
+
+// rca_consistency.go — the generic StateConsistencyValidator and
+// ReportQualityGate (P1 gate, audit D11).
+//
+// The validator runs on the FINISHED report before it is emitted in any form
+// (JSON, HTML, PDF). It is generic: every check is a cross-field invariant,
+// never a case/signature/title match. Errors mean the document contradicts
+// itself and must not ship as a final assessment — the gate downgrades the
+// report type and the record travels inside the document (quality_gate_passed,
+// errors, warnings, model/rule version, evaluated_at).
+//
+// The same banned-wording rules apply to all incident types; issue-family
+// adapters cannot bypass them.
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+const rcaConsistencyModelVersion = "rca-consistency/1"
+
+type rcaQualityIssue struct {
+	Code   string `json:"code"`
+	Field  string `json:"field"`
+	Detail string `json:"detail"`
+}
+
+type rcaReportQuality struct {
+	Passed       bool              `json:"quality_gate_passed"`
+	Errors       []rcaQualityIssue `json:"p1_errors,omitempty"`
+	Warnings     []rcaQualityIssue `json:"p2_warnings,omitempty"`
+	ModelVersion string            `json:"model_version"`
+	EvaluatedAt  string            `json:"evaluated_at"`
+}
+
+// rcaBannedPhrases — the NOC wording standard's banned vocabulary. Checked
+// against every customer-facing sentence the report carries.
+var rcaBannedPhrases = []string{
+	"went dark", "where it breaks", "real network issue",
+	"matches this issue type", "evidence changed", "would be owned by",
+	"check(s)", "signal(s)", "confirm or rule out the hypothesis",
+}
+
+// validateRcaReport is the pure StateConsistencyValidator.
+func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
+	q := rcaReportQuality{ModelVersion: rcaConsistencyModelVersion, EvaluatedAt: fmtUTC(now)}
+	errf := func(code, field, detail string, args ...any) {
+		q.Errors = append(q.Errors, rcaQualityIssue{Code: code, Field: field, Detail: fmt.Sprintf(detail, args...)})
+	}
+	warnf := func(code, field, detail string, args ...any) {
+		q.Warnings = append(q.Warnings, rcaQualityIssue{Code: code, Field: field, Detail: fmt.Sprintf(detail, args...)})
+	}
+	st := rep.States
+	parse := func(s string) (time.Time, bool) {
+		return parseChTS(strings.TrimSuffix(s, " UTC"))
+	}
+
+	// ---- P1.1 lifecycle × recovery ------------------------------------------------
+	closedLike := st.Incident == "closed" || st.Incident == "recovered"
+	if closedLike && st.Recovery == "not_observed" {
+		errf("closed_without_recovery", "states.incident",
+			"incident is %q while recovery is not_observed — closure requires recovery evidence or an explicit no-longer-observed state", st.Incident)
+	}
+	if st.Incident == "recovered" && st.Recovery == "failed_validation" {
+		errf("recovered_with_failed_validation", "states.recovery",
+			"incident claims recovered while a recovery scope failed validation")
+	}
+	if st.Incident == "recovered" && st.Recovery == "component_only" {
+		errf("component_recovery_presented_as_incident_recovery", "states.recovery",
+			"component-level recovery must never recover the whole incident")
+	}
+	if closedLike && st.Monitoring == "active" {
+		errf("closed_while_monitoring_active", "states.monitoring",
+			"a closed incident cannot still be inside its monitoring window")
+	}
+	if rep.Times.MonitoringUntil != "" && !rep.Times.RecoveredCaptured {
+		errf("monitoring_without_recovery_trigger", "times.monitoring_until",
+			"a monitoring window exists without a valid recovery trigger")
+	}
+	// recovered_at must never precede the last qualifying anomaly
+	if rep.Times.RecoveredCaptured {
+		if rec, ok := parse(rep.Times.RecoveredAt); ok {
+			if last, ok2 := parse(rep.Times.LastAnomalous); ok2 && rec.Before(last) {
+				errf("recovered_before_last_anomaly", "times.recovered_at",
+					"recovered_at %s precedes the last qualifying anomaly %s", rep.Times.RecoveredAt, rep.Times.LastAnomalous)
+			}
+		}
+	}
+	if rep.Times.DurationBasis == "to_recovery" && !rep.Times.RecoveredCaptured {
+		errf("duration_claims_uncaptured_recovery", "times.duration_basis",
+			"duration measures to_recovery but no recovery was captured")
+	}
+	if st.RecoveryService.State == "explicitly_confirmed" && rep.States.Incident == "active" {
+		warnf("service_recovered_but_active", "states.recovery_service",
+			"service recovery is confirmed while the incident is still active — verify scope completeness")
+	}
+
+	// ---- P1.3 fault vs root cause ---------------------------------------------------
+	if st.RootCauseState == "confirmed" && (rep.RootCause.Mechanism == "" || rep.RootCause.Object == "") {
+		errf("root_cause_without_mechanism_and_object", "states.root_cause_state",
+			"root cause may be confirmed only with an identified causal mechanism AND causal object")
+	}
+	if rep.RootCause.Identified && (rep.RootCause.Mechanism == "" || rep.RootCause.Object == "") {
+		errf("root_cause_identified_without_basis", "root_cause.identified",
+			"root_cause.identified requires mechanism and object")
+	}
+	if st.RootCauseState != "confirmed" && strings.HasPrefix(rep.ReportType, "Root Cause Analysis") {
+		errf("rca_title_without_confirmed_root_cause", "report_type",
+			"the document may call itself an RCA only when the root cause concluded")
+	}
+	if strings.Contains(rep.FaultLocalization.ObjectType, "seam") && rep.RootCause.Object == rep.FaultLocalization.Object && rep.RootCause.Object != "" {
+		errf("seam_promoted_to_root_cause", "root_cause.object",
+			"a seam is a localization domain, never the root-cause object")
+	}
+
+	// ---- P1.5 impact observability ---------------------------------------------------
+	if st.ImpactRealUser == "confirmed" && st.Analysis != "confirmed" {
+		errf("real_user_impact_without_confirmed_analysis", "states.impact_real_user",
+			"real-user impact confirmation requires confirmed corroborated evidence")
+	}
+	if st.Impact == "confirmed" && st.ImpactRealUser != "confirmed" {
+		errf("impact_confirmed_without_real_user_evidence", "states.impact",
+			"overall impact may be confirmed only when real-user impact is confirmed; a synthetic failure proves only its own scope")
+	}
+
+	// ---- P1.9 hypothesis taxonomy ------------------------------------------------------
+	for i, h := range rep.Hypotheses {
+		if h.Contradicted && strings.EqualFold(h.Label, "confirmed") {
+			errf("hypothesis_confirmed_and_ruled_out", fmt.Sprintf("hypotheses[%d]", i),
+				"a hypothesis cannot render a live confirmed label while ruled out — use observation_state × causal_role")
+		}
+		if h.Type == "symptom classification" && (h.CausalRole == "possible_origin" || h.CausalRole == "probable_origin" || h.CausalRole == "confirmed_origin") {
+			errf("symptom_ranked_as_cause", fmt.Sprintf("hypotheses[%d]", i),
+				"a symptom classification must not be ranked as a causal origin")
+		}
+	}
+
+	// ---- P1.10 ownership / demarcation -------------------------------------------------
+	if rcaExternalOwnerTeams[rep.Ownership.EscalationOwner] &&
+		rep.Ownership.Demarcation != "provider_boundary_confirmed" {
+		errf("external_owner_without_demarcation", "ownership.escalation_owner",
+			"an external provider/carrier cannot own escalation before demarcation is confirmed")
+	}
+
+	// ---- P1.11 severity ------------------------------------------------------------------
+	if st.SeverityIncident == "crit" {
+		single := false
+		for _, c := range st.SeverityReasonCodes {
+			if c == "single_evidence_class" || c == "single_observer" {
+				single = true
+			}
+		}
+		if single {
+			errf("crit_from_single_uncorroborated_stream", "states.severity_incident",
+				"a CRIT incident severity cannot rest on a single uncorroborated evidence stream")
+		}
+	}
+	if rep.Validation && st.SeverityIncident != "not_applicable" {
+		errf("validation_with_production_severity", "states.severity_incident",
+			"a validation scenario carries no production severity")
+	}
+
+	// ---- P1.12 ticket / escalation consistency ---------------------------------------------
+	if rep.Decision.EscalationState == "triggered" &&
+		(st.Ticket == "not_opened" || st.Ticket == "held") && rep.Decision.TicketExecutionNote == "" {
+		errf("ticket_escalation_contradiction_unexplained", "decision.ticket_execution_note",
+			"escalation triggered while the ticket is %s and no explanation is rendered", st.Ticket)
+	}
+	if rep.Validation && st.Ticket == "opened" {
+		warnf("validation_scenario_opened_ticket", "states.ticket",
+			"a validation scenario has an open production ticket — verify the tenant opted in (policy allow_validation_scenarios)")
+	}
+
+	// ---- P1.13 action applicability -----------------------------------------------------------
+	for i, a := range rep.Actions {
+		if a.OperationalPriority != "P1" && a.OperationalPriority != "P2" {
+			errf("action_missing_operational_priority", fmt.Sprintf("next_actions[%d]", i),
+				"every action carries an operational priority (P1/P2), separate from incident severity")
+		}
+		// instruction ↔ expected-output family agreement: an expected output
+		// whose protocol family is absent from the instruction's families is
+		// cross-issue contamination (the IKE-output-on-flow-action defect).
+		stepFams := map[string]bool{}
+		for _, f := range rcaStepFamilies(a.Action) {
+			stepFams[f.Name] = true
+		}
+		outFams := rcaStepFamilies(a.ExpectedResult)
+		if len(stepFams) > 0 && len(outFams) > 0 {
+			match := false
+			for _, f := range outFams {
+				if stepFams[f.Name] {
+					match = true
+					break
+				}
+			}
+			// generic transaction-forensics outputs legitimately span several
+			// protocol stages; require agreement only when both sides are
+			// single-family and disjoint.
+			if !match && len(outFams) == 1 && !stepFams[outFams[0].Name] {
+				errf("action_output_family_mismatch", fmt.Sprintf("next_actions[%d]", i),
+					"expected output interrogates %q but the instruction does not", outFams[0].Name)
+			}
+		}
+	}
+
+	// ---- wording standard -------------------------------------------------------------------------
+	scan := func(field, text string) {
+		l := strings.ToLower(text)
+		for _, banned := range rcaBannedPhrases {
+			if strings.Contains(l, banned) {
+				errf("banned_wording", field, "banned phrase %q in customer-facing text", banned)
+			}
+		}
+	}
+	scan("summary.management", rep.Summary.Management)
+	for _, kv := range rep.Summary.Noc {
+		scan("summary.noc", kv.V)
+	}
+	for i, a := range rep.Actions {
+		scan(fmt.Sprintf("next_actions[%d]", i), a.Action+" "+a.ExpectedResult)
+	}
+	scan("topology.drop_point", rep.Topology.DropPoint)
+	scan("root_cause.statement", rep.RootCause.Statement)
+
+	q.Passed = len(q.Errors) == 0
+	return q
+}
+
+// applyReportQualityGate runs the validator and downgrades a contradictory
+// document: P1 errors block "final" status — the report renders as a draft
+// assessment with its quality record attached, and downstream emitters
+// (ticketing, notification) can refuse on q.Passed == false.
+func applyReportQualityGate(rep *rcaReport, now time.Time) {
+	rep.Quality = validateRcaReport(rep, now)
+	if !rep.Quality.Passed {
+		rep.ReportType = "Draft Incident Assessment — Consistency Review"
+		if rep.Subtitle != "" {
+			rep.Subtitle += " · "
+		}
+		rep.Subtitle += countNoun(len(rep.Quality.Errors), "consistency error") + " held this document at draft"
+	}
+}
