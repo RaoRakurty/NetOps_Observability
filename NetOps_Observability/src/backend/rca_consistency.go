@@ -28,11 +28,11 @@ type rcaQualityIssue struct {
 }
 
 type rcaReportQuality struct {
-	Passed      bool              `json:"quality_gate_passed"`
-	Errors      []rcaQualityIssue `json:"p1_errors,omitempty"`
-	Warnings    []rcaQualityIssue `json:"p2_warnings,omitempty"`
-	ModelVersion string           `json:"model_version"`
-	EvaluatedAt  string           `json:"evaluated_at"`
+	Passed       bool              `json:"quality_gate_passed"`
+	Errors       []rcaQualityIssue `json:"p1_errors,omitempty"`
+	Warnings     []rcaQualityIssue `json:"p2_warnings,omitempty"`
+	ModelVersion string            `json:"model_version"`
+	EvaluatedAt  string            `json:"evaluated_at"`
 }
 
 // rcaBannedPhrases — the NOC wording standard's banned vocabulary. Checked

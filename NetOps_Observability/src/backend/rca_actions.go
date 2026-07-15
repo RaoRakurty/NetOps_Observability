@@ -53,7 +53,6 @@ var rcaActionFamilies = []rcaActionFamily{
 		Name:           "bgp",
 		StepTokens:     []string{"bgp", "prefix", "prefixes", "adjacency", "neighbor", "neighbour"},
 		EvidenceKinds:  []string{"bgp", "route", "routing"},
-		Lanes:          []string{"control_plane"},
 		ExpectedOutput: "session state, last reset reason, and prefix counts for the affected peer/session",
 	},
 	{
@@ -82,7 +81,7 @@ var rcaActionFamilies = []rcaActionFamily{
 	},
 	{
 		Name:           "flow",
-		StepTokens:     []string{"flow", "netflow", "traffic", "sampling", "collector"},
+		StepTokens:     []string{"flow", "flows", "netflow", "traffic", "sampling", "collector"},
 		EvidenceKinds:  []string{"flow"},
 		Lanes:          []string{"passive_flow"},
 		ExpectedOutput: "source/destination/application breakdown, observed volume versus baseline, sampling rate, and collector health for the affected flows",
@@ -103,14 +102,14 @@ var rcaActionFamilies = []rcaActionFamily{
 	},
 	{
 		Name:           "path",
-		StepTokens:     []string{"trace", "traceroute", "hop", "vantage", "ping", "reachability"},
+		StepTokens:     []string{"trace", "traceroute", "hop", "vantage", "ping", "reachability", "synthetic", "probe"},
 		EvidenceKinds:  []string{"probe", "synthetic", "path"},
 		Lanes:          []string{"active_probe"},
 		ExpectedOutput: "the last responding hop and the first non-responding boundary (address, TTL, loss percentage per hop)",
 	},
 	{
 		Name:           "cloud_route",
-		StepTokens:     []string{"vpc", "vnet", "gateway", "transit", "propagated", "blackhole"},
+		StepTokens:     []string{"vpc", "vnet", "transit", "propagated", "blackhole"},
 		EvidenceKinds:  []string{"cloud", "route"},
 		ExpectedOutput: "the route-table entries for the affected prefix, next-hop/attachment state, and any recent route changes",
 	},
@@ -213,15 +212,20 @@ func planActions(in rcaActionInput) []rcaAction {
 			if len(out) >= 3 {
 				break
 			}
+			// Strict gate: EVERY family the step's wording interrogates must
+			// have participating evidence. A step that mixes a present family
+			// with an absent one (e.g. "examine the flow … verify IKE output")
+			// is cross-issue contamination and is dropped whole.
 			fams := rcaStepFamilies(step)
-			applicable := len(fams) == 0 // a family-neutral step stays applicable
+			applicable := true
 			expected := ""
 			for _, f := range fams {
-				if rcaFamilyEvidencePresent(f, in.KindCounts, in.LaneAnomalous) {
-					applicable = true
-					if expected == "" {
-						expected = f.ExpectedOutput
-					}
+				if !rcaFamilyEvidencePresent(f, in.KindCounts, in.LaneAnomalous) {
+					applicable = false
+					break
+				}
+				if expected == "" {
+					expected = f.ExpectedOutput
 				}
 			}
 			if !applicable {
@@ -275,8 +279,8 @@ func planActions(in rcaActionInput) []rcaAction {
 	// (c) probe forensics when the evidence is active-check-shaped
 	if in.Signals.Probe != nil && in.Signals.Probe.Failed > 0 {
 		add(rcaAction{
-			Action: "Inspect the most recent failed check transaction",
-			Owner:  "NOC",
+			Action:              "Inspect the most recent failed check transaction",
+			Owner:               "NOC",
 			OperationalPriority: map[bool]string{true: "P1", false: "P2"}[stillFailing],
 			Purpose:             "discrimination",
 			ExpectedResult:      "DNS result, resolved IP, TCP status, TLS status, HTTP status, response time, and the failure stage",

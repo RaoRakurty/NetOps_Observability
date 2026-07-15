@@ -18,11 +18,11 @@ import (
 )
 
 var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.FuncMap{
-	"stateTone": rcaStateTone,
+	"stateTone":  rcaStateTone,
 	"humanState": func(v string) string { return strings.ReplaceAll(v, "_", " ") },
-	"upper":     strings.ToUpper,
-	"title":     rcaTitleCase,
-	"dur":       func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
+	"upper":      strings.ToUpper,
+	"title":      rcaTitleCase,
+	"dur":        func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
 	"f1": func(f *float64) string {
 		if f == nil {
 			return ""

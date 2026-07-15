@@ -52,7 +52,6 @@ func rcaProblemFor(sigID, _ string) string {
 	return sigProblemStatement[sigID]
 }
 
-
 // countNoun renders "One automated check" / "3 automated checks" — the report
 // never prints "N thing(s)" (§2 pluralization rule).
 func countNoun(n int, noun string) string {
@@ -508,7 +507,7 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 		if team != "" {
 			own.SuspectedDomain = orDefault(top.Verdict.Layer, team)
 			switch {
-			case analysis == "confirmed" && faultLocalized && rcaExternalOwnerTeams[team]:
+			case analysis == "confirmed" && rcaExternalOwnerTeams[team]:
 				// P1.10: an external provider/carrier is never handed
 				// accountability from a hypothesis token. The internal network
 				// team owns the investigation; the provider is a CANDIDATE
