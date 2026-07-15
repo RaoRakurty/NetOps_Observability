@@ -23,22 +23,74 @@ principal must never be able to change the fleet.
 
 ## Azure
 
+**Correlix operates READ-ONLY.** It never requires Contributor, Owner, or
+Tag-Contributor, and it never writes to your cloud — tags are optional enrichment
+(their absence never fails discovery), and manual service overrides are stored
+INSIDE Correlix, never written back as Azure tags. Service inference works with no
+tags at all, from resource relationships the read roles already expose.
+
 Service principal (env `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` /
-`AZURE_CLIENT_SECRET` / `AZURE_SUBSCRIPTION_ID`), two built-in roles scoped to
-the subscription — no custom role needed:
+`AZURE_CLIENT_SECRET` / `AZURE_SUBSCRIPTION_ID`), two built-in roles scoped to the
+subscription — no custom role needed. Optional capabilities may need one extra
+read role; grant them only if you want that enrichment.
 
-| Role | Lane |
-|---|---|
-| `Reader` | inventory writer (`write_inventory`), Resource Health |
-| `Monitoring Reader` | Azure Monitor metrics, Activity Log |
+### Capability → permission matrix (all reads)
 
-Create (owner command, one-off):
+| Capability | Azure action (read) | Built-in role | Required? |
+|---|---|---|---|
+| Resource inventory | `Microsoft.Resources/subscriptions/resources/read` | Reader | **required** |
+| Platform metrics | `Microsoft.Insights/metrics/read` | Monitoring Reader | **required** |
+| Resource health | `Microsoft.ResourceHealth/availabilityStatuses/read` | Reader | optional |
+| Activity log (changes) | `Microsoft.Insights/eventtypes/values/read` | Monitoring Reader | optional |
+| Network topology | `Microsoft.Network/virtualNetworks/read` | Reader | optional |
+| Network Watcher | `Microsoft.Network/networkWatchers/read` | Reader | optional |
+| Diagnostic settings | `Microsoft.Insights/diagnosticSettings/read` | Reader | optional |
+| Resource Graph | `Microsoft.ResourceGraph/resources/read` | Reader | optional |
+| Cost management | `Microsoft.CostManagement/query/read` | Cost Management Reader | optional |
+
+A missing OPTIONAL capability is a coverage gap, not a failure — the two required
+capabilities are the only hard gate. Correlix never auto-broadens its own grant;
+the permission-test harness (`capabilities.py` / `azure_permissions.py`) reports
+each capability's live status (Available / Missing permission / Scope not granted /
+Not configured / API disabled / Not applicable) so gaps are visible, not silent.
+
+### Grant (owner command, one-off — the two required roles)
 
 ```bash
 az ad sp create-for-rbac --name correlix-telemetry --role "Monitoring Reader" \
    --scopes /subscriptions/<subscription-id>
 az role assignment create --assignee <appId> --role Reader \
    --scope /subscriptions/<subscription-id>
+```
+
+### Sample custom read-only role (RBAC JSON)
+
+If you prefer one narrow custom role over the two built-ins, this grants exactly
+the required + common-optional reads and NO writes (`notActions`/`notDataActions`
+empty; no `*/write`):
+
+```json
+{
+  "Name": "Correlix Telemetry Reader",
+  "IsCustom": true,
+  "Description": "Read-only cloud discovery + telemetry for Correlix. No writes.",
+  "Actions": [
+    "Microsoft.Resources/subscriptions/resources/read",
+    "Microsoft.Insights/metrics/read",
+    "Microsoft.Insights/metricDefinitions/read",
+    "Microsoft.Insights/eventtypes/values/read",
+    "Microsoft.ResourceHealth/availabilityStatuses/read",
+    "Microsoft.Network/virtualNetworks/read",
+    "Microsoft.Network/networkInterfaces/read",
+    "Microsoft.Network/publicIPAddresses/read",
+    "Microsoft.Network/loadBalancers/read",
+    "Microsoft.Compute/virtualMachines/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": ["/subscriptions/<subscription-id>"]
+}
 ```
 
 Prod shape replaces the env-var secret with the tenant-scoped connector store
