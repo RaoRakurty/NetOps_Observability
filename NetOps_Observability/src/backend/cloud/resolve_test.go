@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,56 @@ func TestAttributeResource_Unknown(t *testing.T) {
 	AttributeResource(&r)
 	if r.Confidence != Unknown || r.AppID != "" || r.Source != SrcUnknown {
 		t.Fatalf("untagged/unnamed must be unknown, got %+v", r)
+	}
+}
+
+// The read-only, untagged Azure fleet must attribute from the built-in service
+// inference — a strong (structurally corroborated) guess sets a real AppID so
+// the resource stops reading as "Untagged", but stays honestly labeled as an
+// inference, not a confirmed tag.
+func TestAttributeResource_InferredStrongAttributes(t *testing.T) {
+	r := CloudResource{
+		ResourceName: "web01", ResourceType: "compute:virtualMachine",
+		InferredService: "payments", InferredServiceConfidence: "strong",
+		InferredServiceBasis: "resource-group name 'rg-payments'; 2 resources share subnet 'app-tier'",
+	}
+	AttributeResource(&r)
+	if r.Source != SrcInferredService || r.Confidence != Strong || r.AppID != "payments" {
+		t.Fatalf("strong inference must attribute payments, got %+v", r)
+	}
+	if reason := attributionReason(r); !strings.Contains(reason, "inferred service") {
+		t.Fatalf("reason must name the inference, got %q", reason)
+	}
+}
+
+// A tag always beats an inference — inference is the fallback, never an override.
+func TestAttributeResource_TagBeatsInference(t *testing.T) {
+	r := CloudResource{
+		ResourceName: "web01", Tags: map[string]string{"app": "checkout"},
+		InferredService: "payments", InferredServiceConfidence: "strong",
+	}
+	AttributeResource(&r)
+	if r.Source != SrcCloudTag || r.AppID != "checkout" {
+		t.Fatalf("tag must win over inference, got %+v", r)
+	}
+}
+
+// A weak inference is a display hint, not an attribution: AppName carries it but
+// AppID stays empty so the coverage funnel does not over-claim.
+func TestAttributeResource_InferredWeakIsHintOnly(t *testing.T) {
+	r := CloudResource{
+		ResourceName: "grafana01", InferredService: "grafana",
+		InferredServiceConfidence: "weak",
+	}
+	AttributeResource(&r)
+	if r.Source != SrcInferredService || r.Confidence != Weak {
+		t.Fatalf("weak inference source/confidence wrong, got %+v", r)
+	}
+	if r.AppID != "" {
+		t.Fatalf("weak inference must NOT claim an app id, got %q", r.AppID)
+	}
+	if r.AppName != "grafana" {
+		t.Fatalf("weak inference should still carry the display hint, got %q", r.AppName)
 	}
 }
 

@@ -35,6 +35,7 @@ import os
 import urllib.parse
 import urllib.request
 
+import cloud_events
 import trail_state
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
@@ -212,25 +213,18 @@ def poll_metrics(tok: str, instances: list[dict]) -> int:
                 v = float(val.get("doubleValue", val.get("int64Value", 0)) or 0)
                 if is_fraction:
                     v *= 100.0  # fraction → percent (canonical form)
-                # MetricEvent contract (identical to cloudmetrics.py/azure.py —
-                # the field names the Vector metrics lane keys on). This lane was
-                # never live-tested (cred-gated) and had drifted: it emitted
-                # "name" instead of "metric" and omitted vendor/signal_family/
+                # MetricEvent contract via the shared builder (cloud_events.py)
+                # so AWS/Azure/GCP are provably one shape. This lane was never
+                # live-tested (cred-gated) and had drifted: it emitted "name"
+                # instead of "metric" and omitted vendor/signal_family/
                 # collection_path, so the sink dropped the metric name and no GCP
-                # series ever formed. Fixed 2026-07-15 on the first live GCP VM.
-                events.append({
-                    "observer_type": "cloud_provider",
-                    "modality_class": "device_telemetry",
-                    "collection_path": "gcp_monitoring_api",
-                    "device": inst["name"],
-                    "vendor": "gcp",
-                    "index": inst["resource_id"],
-                    "signal_family": "cloud_resource",
-                    "metric": canon,
-                    "value": v,
-                    "unit": unit,
-                    "ts": latest.get("interval", {}).get("endTime", ""),
-                })
+                # series ever formed. Fixed 2026-07-15 on the first live GCP VM;
+                # the shared builder makes that drift a ValueError, not a silent
+                # drop.
+                events.append(cloud_events.metric_event(
+                    vendor="gcp", device=inst["name"], index=inst["resource_id"],
+                    metric=canon, value=v, unit=unit,
+                    ts=latest.get("interval", {}).get("endTime", "")))
             token_next = res.get("nextPageToken")
             url = (url.split("&pageToken=")[0] + "&pageToken=" + token_next) if token_next else ""
     _post_ndjson(events)
@@ -288,23 +282,16 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
         if not method or method.endswith(CHANGE_EXCLUDE_SUFFIXES):
             continue
         ts = str(e.get("timestamp", ""))
-        producer.send("netops.cloud", {
-            "kind": "cloud_change",
-            "tenant_id": tenant,
-            "resource_id": str(proto.get("resourceName", "")),
-            "region": "",
-            "severity": "info",
-            "metric_name": method,
-            "ts": ts,
-            "attrs": {
-                "provider": "gcp",
-                "account": PROJECT,
+        producer.send("netops.cloud", cloud_events.change_event(
+            provider="gcp", tenant=tenant,
+            resource_id=str(proto.get("resourceName", "")),
+            region="", severity="info", metric_name=method, ts=ts, account=PROJECT,
+            attrs={
                 "event_name": method,
                 "actor": str((proto.get("authenticationInfo") or {}).get("principalEmail", "")),
                 "event_source": "gcp_audit_log",
                 "request_id": str(e.get("insertId", "")),
-            },
-        })
+            }))
         n += 1
     # A cleanly-fetched EMPTY window still advances (delivery-lagged now) so
     # quiet periods stay one page wide instead of growing without bound.

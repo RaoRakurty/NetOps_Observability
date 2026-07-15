@@ -193,6 +193,13 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/identity-map":         "scoped",
 	"/api/cloud/attribution/coverage": "scoped",
 	"/api/cloud/app-rca":              "scoped",
+	// Business Service mapping + manual overrides (migration 0024): tenant DATA,
+	// requirePerm + principalTenant + FORCE-RLS; cross-org proof in
+	// business_service_isolation_test.go.
+	"/api/cloud/business-services":     "scoped",
+	"/api/cloud/business-services/":    "scoped",
+	"/api/cloud/resource-mappings":     "scoped",
+	"/api/cloud/resource-mappings/":    "scoped",
 	// #81 P3H cloud telemetry reads — every query carries the caller's tenant_scope,
 	// which the corr_signals / corr_signals_archive / corr_objects FORCE row policies
 	// enforce in ClickHouse (see cloud_signals.go, cloud_ingestion.go).

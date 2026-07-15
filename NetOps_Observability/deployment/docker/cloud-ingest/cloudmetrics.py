@@ -27,6 +27,8 @@ import json
 import os
 import urllib.request
 
+import cloud_events
+
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
 PERIOD_S = int(os.environ.get("CW_PERIOD_S", "300"))
 
@@ -112,20 +114,12 @@ def poll(cw, instances: list[dict], provider: str = "aws") -> int:
                 continue  # no datapoint in the window — absent, never zero
             inst, cw_name = meta[r["Id"]]
             canon, unit, _stat = CW_METRICS[cw_name]
-            events.append({
-                "observer_type": "cloud_provider",
-                "modality_class": "device_telemetry",
-                "collection_path": "cloudwatch_api",
+            events.append(cloud_events.metric_event(
+                vendor=provider,
                 # The instance IS the device for this lane; its private IP is what
                 # the Service View / path graph already binds apps to.
-                "device": inst.get("resource_name") or inst["resource_id"],
-                "vendor": provider,
-                "index": inst["resource_id"],
-                "signal_family": "cloud_resource",
-                "metric": canon,
-                "value": float(vals[0]),
-                "unit": unit,
-                "ts": times[0].astimezone(dt.timezone.utc).isoformat(),
-            })
+                device=inst.get("resource_name") or inst["resource_id"],
+                index=inst["resource_id"], metric=canon, value=float(vals[0]),
+                unit=unit, ts=times[0].astimezone(dt.timezone.utc).isoformat()))
     _post(events)
     return len(events)

@@ -55,6 +55,31 @@ func AttributeResource(r *CloudResource) {
 		r.Confidence = Confirmed
 		return
 	}
+	// No app tag — but a tag is not the ONLY way to attribute. The built-in
+	// service mapping (service_infer.py) may have inferred a BusinessService from
+	// the resource's RELATIONSHIPS (resource-group naming + subnet/hostname
+	// structure) with no tag and no write access. That is a real, confidence-
+	// tagged attribution (unlike a bare name copy) — honor it so the read-only,
+	// untagged Azure fleet stops reading as "Untagged". strong/suspected count as
+	// attributed (AppID set); weak carries the display hint only (AppID stays ""
+	// so the coverage funnel does not over-claim on the weakest signal).
+	if svc := strings.TrimSpace(r.InferredService); svc != "" {
+		conf := confidenceFromInference(r.InferredServiceConfidence)
+		if conf.rank() >= Suspected.rank() {
+			r.AppName = svc
+			r.AppID = appIDFromName(svc)
+			r.Source = SrcInferredService
+			r.Confidence = conf
+			return
+		}
+		if conf == Weak {
+			r.AppName = svc
+			r.AppID = "" // display hint only — not counted as attributed
+			r.Source = SrcInferredService
+			r.Confidence = Weak
+			return
+		}
+	}
 	// No app tag. A resource's own NAME is not an application identity — copying
 	// it and calling the result "strong resource-graph attribution" made the
 	// coverage funnel report ~100% on an account with 0% real attribution, which
@@ -138,12 +163,34 @@ func Resolve(candidates []CloudIdentityMapping) (CloudIdentityMapping, bool) {
 	return sorted[0], true
 }
 
+// confidenceFromInference maps the poller's inference-confidence string to the
+// Confidence ladder. Unknown/empty/"none" → Unknown (no attribution). Inference
+// NEVER reaches Confirmed — a tag is the only confirmed source.
+func confidenceFromInference(s string) Confidence {
+	switch Confidence(strings.ToLower(strings.TrimSpace(s))) {
+	case Strong:
+		return Strong
+	case Suspected:
+		return Suspected
+	case Weak:
+		return Weak
+	default:
+		return Unknown
+	}
+}
+
 func attributionReason(r CloudResource) string {
 	switch r.Source {
 	case SrcCloudTag:
 		return "cloud tag → app=" + r.AppName
 	case SrcCloudGraph:
 		return "cloud resource-graph name → " + r.AppName + " (" + r.ResourceType + ")"
+	case SrcInferredService:
+		basis := r.InferredServiceBasis
+		if basis == "" {
+			basis = "resource relationships"
+		}
+		return "inferred service → " + r.AppName + " (" + string(r.Confidence) + "; " + basis + ")"
 	default:
 		return "no tag or resource-graph name — unattributed"
 	}
@@ -173,6 +220,10 @@ func sourceTrust(s Source) int {
 		return 0
 	}
 }
+
+// AppIDFromName is the exported slug normalizer, so callers outside the package
+// (e.g. the manual-override overlay) derive an app id the same way attribution does.
+func AppIDFromName(name string) string { return appIDFromName(name) }
 
 func appIDFromName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))

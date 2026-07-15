@@ -17,6 +17,7 @@ import boto3
 from kafka import KafkaProducer
 
 import azure
+import cloud_events
 import cloudmetrics
 import discover
 import gcp
@@ -244,22 +245,15 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
         detail = json.loads(e.get("CloudTrailEvent", "{}"))
         resources = e.get("Resources") or []
         rid = resources[0]["ResourceName"] if resources else name
-        producer.send("netops.cloud", {
-            "kind": "cloud_change",
-            "tenant_id": TENANT,
-            "resource_id": rid,
-            "account": ACCOUNT,
-            "region": REGION,
-            "severity": "medium",
-            "metric_name": name,
-            "ts": e["EventTime"].isoformat(),
-            "attrs": {
-                "provider": "aws",
+        producer.send("netops.cloud", cloud_events.change_event(
+            provider="aws", tenant=TENANT, resource_id=rid, account=ACCOUNT,
+            region=REGION, severity="medium", metric_name=name,
+            ts=e["EventTime"].isoformat(),
+            attrs={
                 "event_source": detail.get("eventSource", ""),
                 "actor": (detail.get("userIdentity") or {}).get("arn", ""),
                 "request_id": detail.get("requestID", ""),
-            },
-        })
+            }))
         sent += 1
     if sent:
         producer.flush(10)

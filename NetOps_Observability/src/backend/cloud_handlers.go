@@ -53,6 +53,12 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Manual overrides win over inference: a human who confirmed/assigned a
+	// resource→service mapping (resource_mappings, migration 0024) is
+	// authoritative. Overlay it onto the inventory's inferred attribution so the
+	// operator's decision actually takes effect on this surface. Tenant-scoped
+	// like everything else; absent store (file backend) = no overlay.
+	s.overlayManualMappings(r, tenant, cross, res)
 	// Inventory-source provenance (live poller vs hand fixture) — drives the
 	// UI's honest data-mode badge. Tenant-scoped like the resources themselves.
 	connectors, err := s.cloud.ListConnectors(r.Context(), tenant, cross)
@@ -87,6 +93,32 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "connectors": connectors, "count": len(res)})
+}
+
+// overlayManualMappings applies confirmed operator overrides (resource_mappings)
+// onto the attributed inventory in place: a manual mapping sets AppName/AppID to
+// the assigned service, marks it operator-authoritative (SrcOperatorCatalog,
+// Confirmed), so the human decision beats both a tag and an inference. No-op when
+// the store is off (file backend) or the query fails (best-effort overlay — the
+// inventory read must still succeed).
+func (s *server) overlayManualMappings(r *http.Request, tenant string, cross bool, res []cloud.CloudResource) {
+	if s.bizServices == nil {
+		return
+	}
+	byID, err := s.bizServices.mappingsByResource(r.Context(), tenant, cross)
+	if err != nil || len(byID) == 0 {
+		return
+	}
+	for i := range res {
+		m, ok := byID[res[i].ResourceID]
+		if !ok || strings.TrimSpace(m.ServiceName) == "" {
+			continue
+		}
+		res[i].AppName = m.ServiceName
+		res[i].AppID = cloud.AppIDFromName(m.ServiceName)
+		res[i].Source = cloud.SrcOperatorCatalog
+		res[i].Confidence = cloud.Confirmed
+	}
 }
 
 func (s *server) handleCloudIdentityMap(w http.ResponseWriter, r *http.Request) {
