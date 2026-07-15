@@ -362,6 +362,72 @@ def test_fate_shared_probes_collapse_to_one_observer():
     assert not a.independent_of(b)
 
 
+# ── Verdict-gate independence AUDIT (evidence-accounting Phase B, constraint 3) ──
+# These pin the four independence behaviors the Phase A audit flagged for proof
+# before the Go accounting layer builds on the gate. See
+# docs/design/rca-evidence-accounting-phaseA-audit.md §7 (audit findings).
+
+
+def test_audit_a_same_host_observers_not_independent():
+    """(a) api container + prober, both on the lab host → NOT independent. When
+    co-location is stamped (shared agent_host), the fate check catches it; and
+    because both are active_probe they can never form a cross-modality confirming
+    pair anyway (defense in depth)."""
+    api = witness_of(_probe("api", probe_authority="low", agent_host="lab-host"))
+    prober = witness_of(_probe("prober", probe_authority="low", agent_host="lab-host"))
+    assert not api.independent_of(prober)
+    assert not prober.independent_of(api)
+    # Same modality → no confirming pair regardless of independence.
+    assert assess([
+        _probe("api", probe_authority="low", agent_host="lab-host"),
+        _probe("prober", probe_authority="low", agent_host="lab-host"),
+    ]).tier is not VerdictTier.CONFIRMED
+
+
+def test_audit_b_rtt_and_loss_from_one_stream_not_independent():
+    """(b) RTT and loss from ONE probe stream (same observer) are one observation,
+    not two — never independent (same observer_id)."""
+    rtt = witness_of(make_signal("prober", ModalityClass.ACTIVE_PROBE, kind="probe_rtt_anomaly",
+                                 agent_host="lab-host"))
+    loss = witness_of(make_signal("prober", ModalityClass.ACTIVE_PROBE, kind="probe_loss",
+                                  agent_host="lab-host"))
+    assert not rtt.independent_of(loss)
+    cov = coverage([
+        make_signal("prober", ModalityClass.ACTIVE_PROBE, kind="probe_rtt_anomaly", agent_host="lab-host"),
+        make_signal("prober", ModalityClass.ACTIVE_PROBE, kind="probe_loss", agent_host="lab-host"),
+    ])
+    assert cov.observer_count == 1 and cov.independent_pair is None
+
+
+def test_audit_c_control_plane_and_lan_vantage_are_independent():
+    """(c) A control-plane source (tunnel state) and a LAN vantage probe on a
+    different host ARE independent and confirm — the P-027379 pair."""
+    v = assess([
+        make_signal("ipsec:lab-vpn-edge", ModalityClass.CONTROL_PLANE,
+                    observer_type=ObserverType.DEVICE, kind="ipsec_tunnel_down"),
+        _probe("lan-vantage-1", probe_authority="high", agent_host="lan-vantage-host"),
+    ])
+    assert v.tier is VerdictTier.CONFIRMED
+    assert v.coverage.independent_pair == ("ipsec:lab-vpn-edge", "lan-vantage-1")
+
+
+def test_audit_d_absent_colocation_never_fabricates_a_confirm():
+    """(d) Fail-closed: when provenance is UNKNOWN the gate must not manufacture a
+    confirmation. Two signals whose collection_path is unrecognized share one
+    conservative authority bucket → not independent → cannot confirm, even across
+    modalities. (Absence of co-location can only WEAKEN evidence, never strengthen
+    it.)"""
+    a = make_signal("x1", ModalityClass.ACTIVE_PROBE, collection_path="via_mystery",
+                    probe_authority="high", observer_type=ObserverType.VANTAGE_AGENT)
+    b = make_signal("x2", ModalityClass.CONTROL_PLANE, collection_path="via_mystery")
+    v = assess([a, b])
+    assert v.tier is not VerdictTier.CONFIRMED
+    assert v.coverage.independent_pair is None
+    # And a lone low-authority probe with no co-location info never anchors a
+    # confirm (it lacks a trusted witness), so unknown provenance stays suspected.
+    assert assess([_probe("p", probe_authority="low")]).tier is not VerdictTier.CONFIRMED
+
+
 def test_duplicate_evidence_does_not_inflate_confidence():
     """Spec P3 #9 — the SAME event duplicated many times must NOT promote a verdict.
     Coverage counts UNIQUE witnesses (observer × modality), never the raw signal count,

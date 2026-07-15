@@ -88,6 +88,23 @@ type rcaReport struct {
 	// mgmtTrimmed: the management summary exceeded the word cap and dropped
 	// lower-priority sentences — surfaced as a P2 quality warning.
 	mgmtTrimmed bool
+
+	// accounting: the canonical EvidenceAccounting for this case (Phase B). Not
+	// rendered this phase — Phases D/E consume it (presentation + quality gate).
+	accounting EvidenceAccounting
+	// accountingErr: non-nil when the accounting model derived contradictory counts
+	// (an invariant violation). The Phase E gate blocks a report carrying this.
+	accountingErr error
+}
+
+// rcaObserverRegistry is the package-level observer classification registry
+// (env-driven global defaults; per-tenant structured policy injected when wired).
+var rcaObserverRegistry = newObserverRegistry(nil)
+
+// evidenceAccounting exposes the derived accounting (and any invariant error) for
+// the quality gate and tests. Kept a method so the unexported fields have a reader.
+func (r *rcaReport) evidenceAccounting() (EvidenceAccounting, error) {
+	return r.accounting, r.accountingErr
 }
 
 type rcaSpineHopView struct {
@@ -1309,6 +1326,19 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// ---- signal summary ------------------------------------------------------------
 	sigSummary := buildSignalSummary(in.Signals, anomalous, clears, observers, peakSev, hb)
 
+	// ---- evidence accounting (Phase B) ---------------------------------------------
+	// Derive the canonical evidence counts ONCE from the stored records (window
+	// slice + verdict blob + observer registry). Computed here so it runs on real
+	// data and its invariant error can feed the Phase E quality gate; renderers/gate
+	// (Phases D/E) consume `accounting` — this phase changes no rendered output.
+	accounting, accountingErr := buildEvidenceAccounting(accountingInput{
+		TenantID:      fmt.Sprintf("%v", meta["tenant_id"]),
+		CorrelationID: in.ID,
+		Signals:       in.Signals,
+		Hyp:           hb,
+		Registry:      rcaObserverRegistry,
+	})
+
 	// ---- evidence coverage ----------------------------------------------------------
 	coverage := buildEvidenceCoverage(laneTotal, laneAnomalous, laneMin, laneMax, hb, firstObs, lastObs)
 
@@ -1491,6 +1521,8 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		Ticket:            in.Ticket,
 		Path:              in.Path,
 		mgmtTrimmed:       mgmtTrimmed,
+		accounting:        accounting,
+		accountingErr:     accountingErr,
 	}
 	// ReportQualityGate: the StateConsistencyValidator runs on the FINISHED
 	// document. Errors downgrade the report type — a contradictory document is

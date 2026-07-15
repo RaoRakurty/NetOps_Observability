@@ -103,3 +103,59 @@ gaps, both of which the approved constraints already prescribe honest handling
 for: `configured_test_count` → "unavailable" on pre-model cases (constraint
 4/9); collector-health history → `unknown` coverage dimension on legacy lanes.
 No fabrication required anywhere.
+
+## 7. Verdict-gate independence AUDIT (Phase B constraint 3 — DONE)
+
+Full end-to-end read of the Witness independence model
+(`src/correlation/verdicts.py` `Witness.independent_of` :96-109, `witness_of`
+:144-177, `coverage` :215-303, `assess` :324-399) and its fate primitive
+(`src/correlation/signals.py` `ProbeFate.shares_fate_with` :180-189,
+`derive_probe_authority` :139-152). **Verdict: the gate is SOUND for its purpose
+(gating `confirmed`); it under-claims rather than over-claims.** No confirming
+defect found; one bounded residual is documented and mitigated by Phase B. The
+four required behaviors are now pinned by regression tests
+(`test_verdicts.py::test_audit_a…d`, green):
+
+- **(a) same-host observers not independent.** `independent_of` returns False on
+  equal `observer_id`, on shared measurement `authority`, and on shared `fate`
+  (`shares_fate_with`: equal `agent_host` **or** `source_egress` **or**
+  seam+target+schedule). api + prober stamped the same `agent_host` collapse via
+  fate; and both are `active_probe`, so the cross-modality requirement
+  (`a.modality != b.modality`, verdicts.py :255) makes them unable to form a
+  confirming pair regardless — defense in depth. Test `test_audit_a…`.
+- **(b) RTT + loss from one stream not independent.** Same `observer_id` →
+  `independent_of` False at :102; `coverage` dedups to one witness. Test
+  `test_audit_b…`.
+- **(c) control-plane × LAN vantage IS independent.** Different observer,
+  different modality, control-plane carries no fate key so the fate check is
+  skipped (both-non-None guard, :106-108) → independent → `confirmed`. This is
+  exactly the P-027379 pair `ipsec:lab-vpn-edge × lan-vantage-1`. Test
+  `test_audit_c…`.
+- **(d) absent co-location never fabricates a confirm (fail-closed).** Unknown
+  `collection_path` collapses to one conservative authority bucket
+  (`authority = f"unknown:{kind}"`, :167-169) → not independent; a lone
+  low/unclassified probe lacks a trusted witness (`Witness.trusted` :87-94) →
+  never confirms. Unknown provenance can only WEAKEN evidence. Test
+  `test_audit_d…`.
+
+**Residual (documented, not a defect):** the fate primitive is *subtractive* —
+it removes independence when co-location is KNOWN (stamped `agent_host`/egress),
+and treats two `None`-fate witnesses as independent (`_fate_of` :120-137, by
+design). So two genuinely co-located sources of DIFFERENT modality that fail to
+stamp `agent_host` would be deemed independent. This is a data-completeness gap,
+not a fabrication: independence is anchored by observer + modality + authority
+(all fail-closed on the unknown), with fate as a refinement. Phase B closes it
+from both ends — the additive `observer_kind`/co-location ingest stamp
+(`signals.py::classify_observer_kind`, `to_ch_row`) makes co-location knowable
+go-forward, and the Go accounting layer re-derives the SAME fate relation
+(`rca_independence.go::sourceProvenance.sharesFateWith`) so a shared
+host/egress collapses api+prober into one independence group at read time even
+for legacy rows.
+
+**Misclassification note (a Go/presentation concern, NOT a gate defect):**
+`verdicts.py` never reads `observer_type`, so `api`'s ingest mis-stamp
+(`observer_type=vantage_agent`) does **not** affect the verdict — it only
+corrupted the report layer's flat vantage list. Fixed structurally in Phase B by
+the observer classification registry (`rca_observer_registry.go`), whose hard
+rule bars `api`/collectors/workers from `logical_vantage` even against a policy
+override (`TestAccounting_ApiNeverVantage`).
