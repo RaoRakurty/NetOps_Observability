@@ -72,7 +72,11 @@ type rcaReport struct {
 	// Quality: the StateConsistencyValidator's record for this document. Errors
 	// downgrade the report type — a contradictory document never ships as final.
 	Quality rcaReportQuality `json:"quality"`
-	Ticket  map[string]any   `json:"ticket,omitempty"` // ticketStatusView passthrough
+	// Merge: present ONLY when this is a merged/superseded source case. It carries
+	// the surviving incident id, the transferred side-effect responsibilities and
+	// the authoritative-state record (P1 merged-incident lifecycle).
+	Merge  *rcaIncidentMerge `json:"merge,omitempty"`
+	Ticket map[string]any    `json:"ticket,omitempty"` // ticketStatusView passthrough
 	// The §7 ordered spine block (rcaPathBlock passthrough) — the topology
 	// section renders ONLY measured/declared structure, never invented paths.
 	Path any `json:"path,omitempty"`
@@ -148,7 +152,11 @@ func stampTopologyTemporalRole(rep *rcaReport) {
 type rcaReportStates struct {
 	// Incident lifecycle is separate from recovery assessment (§1/§17 of the
 	// truthfulness spec): signals aging out of the window is NOT recovery.
-	Incident string `json:"incident"` // active | recovering | recovered | no_longer_observed | closed
+	Incident string `json:"incident"` // active | recovering | recovered | no_longer_observed | closed | merged | superseded
+	// Lifecycle is the canonical lifecycle state (rcaCanonicalLifecycles). It is
+	// the same value as Incident today; the field exists so "merged" is a first-
+	// class lifecycle, never free-text prose (P1 merged-incident lifecycle).
+	Lifecycle string `json:"lifecycle"`
 	// Recovery is asserted ONLY from observed recovery evidence, reconciled
 	// across scopes (P1.1): component recovery never recovers the service.
 	Recovery      string `json:"recovery"`       // explicitly_confirmed | component_only | failed_validation | inferred | not_observed
@@ -177,7 +185,12 @@ type rcaReportStates struct {
 	SeverityIncident    string   `json:"severity_incident"` // info|warn|high|crit|not_applicable|unknown
 	SeverityReasonCodes []string `json:"severity_reason_codes,omitempty"`
 	// §19: severity is never a bare adjective — what carried it and how much.
+	// SeverityBasis describes the EVIDENCE-peak severity (a fact about signals).
 	SeverityBasis string `json:"severity_basis"`
+	// SeverityIncidentBasis explains the INCIDENT severity from policy inputs
+	// (environment, impact, corroboration, recovery/residual state) — never the
+	// circular "peak of the attached evidence" (P1 severity basis).
+	SeverityIncidentBasis string `json:"severity_incident_basis"`
 	// Monitoring is evaluated against report-generation time — never described
 	// as running past its own end.
 	Monitoring string `json:"monitoring"` // not_started | active | completed
@@ -327,6 +340,11 @@ type rcaEvidenceLane struct {
 	Finding      string `json:"finding"`
 	From         string `json:"from,omitempty"`
 	To           string `json:"to,omitempty"`
+	// Coverage quality (P1): full | partial | none | not_applicable. A lane that
+	// observed cleanly but did not span the full incident window is PARTIAL —
+	// "no anomaly observed during available coverage", never a clean green Normal.
+	Coverage        string `json:"coverage"`
+	MissingInterval string `json:"missing_interval,omitempty"`
 	// CountsTowardConfidence: this lane is among the verdict gate's trusted /
 	// covering modalities for the top hypothesis.
 	CountsTowardConfidence bool `json:"counts_toward_confidence"`
@@ -727,6 +745,10 @@ type rcaReportInput struct {
 	PolicyConfigured bool
 	Path             any // rcaPathBlock output (may be nil)
 	Now              time.Time
+	// SurvivingIncidentID: for a merged/superseded source case, the terminal
+	// surviving correlation id the handler resolved (resolveMergeChain, tenant-
+	// scoped). Empty in unit tests → the builder falls back to meta["merged_into"].
+	SurvivingIncidentID string
 }
 
 func buildRcaReport(in rcaReportInput) rcaReport {
@@ -888,12 +910,15 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		recoveryBasis = ra.Component.Basis
 	}
 	incident := "active"
+	mergedLifecycle, isMerged := rcaMergeIncidentState(state)
 	switch {
-	case state == "merged":
-		incident = "closed"
-		// a merged tombstone tracks recovery on the SURVIVING case
-		recoveryState = "not_applicable"
-		recoveryBasis = "This case was merged into another; lifecycle and recovery are tracked on the surviving case."
+	case isMerged:
+		// A merged/superseded source is a TOMBSTONE, never "closed": lifecycle,
+		// monitoring, ticketing and restoration transfer to the surviving
+		// incident. Recovery is NOT overridden to "not applicable" — the
+		// reconciled service-recovery state at merge time is a fact the survivor
+		// inherits and the report must state (P1 merged-incident lifecycle).
+		incident = mergedLifecycle
 	case state == "closed" && ra.Confirmed:
 		incident = "recovered"
 	case state == "closed":
@@ -1078,6 +1103,8 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			sevCodes = append(sevCodes, "single_evidence_class", "single_observer", "capped_pending_validation")
 		}
 	}
+	// Incident-severity basis (P1): policy inputs, never "peak of the evidence".
+	sevIncidentBasis := rcaSeverityIncidentBasis(sevIncident, validation, impactSyn, impactRU, analysis, len(anomObservers), anomLanes, ra)
 
 	// ---- scope + issue context (the single resolver) ----------------------------
 	// The IssueContextResolver consolidates what used to be distributed across
@@ -1103,6 +1130,29 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		Anomalous: anomalous, Changes: changes,
 	})
 	scope.ServiceClassification = ictx.ServiceClassification
+
+	// ── merged-incident lifecycle (P1) ──────────────────────────────────────
+	// A merged/superseded source is a tombstone that transfers every operational
+	// side effect to the surviving incident. The merge record is derived here so
+	// downstream wording (decision, ownership, actions, NOC) reads one resolved
+	// authority instead of re-deriving fragments.
+	var merge *rcaIncidentMerge
+	if isMerged {
+		evidenceIDs := make([]string, 0, len(anomalous))
+		for _, sig := range anomalous {
+			if sid := fmt.Sprintf("%v", sig["signal_id"]); sid != "" && sid != "<nil>" {
+				evidenceIDs = append(evidenceIDs, sid)
+			}
+		}
+		merge = buildIncidentMerge(in.ID, asString(meta["merged_into"]), in.SurvivingIncidentID,
+			ra.Service.State, scope, evidenceIDs)
+		if mv := asString(meta["merged_at"]); mv != "" {
+			merge.MergedAt = mv
+		}
+		if mv := asString(meta["merge_reason"]); mv != "" {
+			merge.MergeReason = mv
+		}
+	}
 
 	// ── dimensional analysis states ──
 	symptom := "observed"
@@ -1145,6 +1195,12 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		default:
 			ticketState = "not_opened"
 		}
+	}
+	// Ticket state after a merge (P1): responsibility transfers to the surviving
+	// incident. The source report never shows an ambiguous "Not opened" — the
+	// meaning is "ticket responsibility transferred", an explicit execution state.
+	if isMerged && ticketState != "opened" && ticketState != "resolved" {
+		ticketState = "transferred_to_survivor"
 	}
 	// Ticket RECOMMENDATION (P1.12) — the same pure policy decision the sweeper
 	// uses, evaluated on this report's facts, so recommendation and execution
@@ -1254,7 +1310,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	sigSummary := buildSignalSummary(in.Signals, anomalous, clears, observers, peakSev, hb)
 
 	// ---- evidence coverage ----------------------------------------------------------
-	coverage := buildEvidenceCoverage(laneTotal, laneAnomalous, laneMin, laneMax, hb)
+	coverage := buildEvidenceCoverage(laneTotal, laneAnomalous, laneMin, laneMax, hb, firstObs, lastObs)
 
 	// ---- cloud change correlation -----------------------------------------------------
 	for i := range changes {
@@ -1308,7 +1364,11 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 					Statement:  fmt.Sprintf("Fault localized to the %s seam %s by independent evidence. The seam is a localization domain — it narrows the fault; it is not the root-cause object.", sm.SeamType, sm.SeamID),
 					Object:     sm.SeamID,
 					ObjectType: strings.ToLower(orDefault(sm.SeamType, "seam")) + " seam (localization domain)",
-					Evidence:   humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied),
+					// P1: render the ACTUAL matched case evidence (kinds + signal /
+					// observer counts), never the humanized signature CLAUSE — a
+					// Boolean rule expression ("Packet loss or … or Cloud health") is
+					// the matching rule, not evidence.
+					Evidence: supportingCaseEvidence(hb.Ranking.Hypotheses[0].Satisfied, kindCounts, kindObservers),
 				}
 			}
 		}
@@ -1320,7 +1380,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 				ObjectType: "grounded entity (localization boundary)",
 			}
 			if len(hb.Ranking.Hypotheses) > 0 {
-				loc.Evidence = humanizeClauses(hb.Ranking.Hypotheses[0].Satisfied)
+				loc.Evidence = supportingCaseEvidence(hb.Ranking.Hypotheses[0].Satisfied, kindCounts, kindObservers)
 			}
 		}
 		if !loc.Localized {
@@ -1351,14 +1411,24 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
 	decision.TicketRecommended = ticketRecommended
 	decision.TicketRecommendReason = ticketRecReason
-	if ticketExecNote == "" && decision.EscalationState == "triggered" &&
-		(ticketState == "not_opened" || ticketState == "held") {
-		// Escalation and ticketing reached different states — say why, never
-		// leave "Ticket: not opened / Escalation: TRIGGERED" unexplained.
-		ticketExecNote = "Escalation conditions are met while the ticket is " + strings.ReplaceAll(ticketState, "_", " ") +
-			": " + orDefault(ticketRecReason, "the ticket decision is governed by the ticketing policy shown above") + "."
+	if isMerged {
+		// A merged source neither monitors nor tickets nor escalates on its own —
+		// every side effect is the surviving incident's (P1 merge ownership). The
+		// decision, ticket recommendation and escalation are all TRANSFERRED, never
+		// left as ambiguous local states.
+		applyMergeToDecision(&decision, merge)
+		ticketRecommended = decision.TicketRecommended
+		ticketExecNote = decision.TicketExecutionNote
+	} else {
+		if ticketExecNote == "" && decision.EscalationState == "triggered" &&
+			(ticketState == "not_opened" || ticketState == "held") {
+			// Escalation and ticketing reached different states — say why, never
+			// leave "Ticket: not opened / Escalation: TRIGGERED" unexplained.
+			ticketExecNote = "Escalation conditions are met while the ticket is " + strings.ReplaceAll(ticketState, "_", " ") +
+				": " + orDefault(ticketRecReason, "the ticket decision is governed by the ticketing policy shown above") + "."
+		}
+		decision.TicketExecutionNote = ticketExecNote
 	}
-	decision.TicketExecutionNote = ticketExecNote
 
 	// ---- incident phases (P1.2) ----------------------------------------------------------------
 	phases := buildIncidentPhases(firstObs, ra, times.MonitoringUntil)
@@ -1367,7 +1437,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt, mgmtTrimmed := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
+	mgmt, mgmtTrimmed := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra, merge)
 
 	// ---- actions (contextual planner, P1.13) --------------------------------------------------------
 	actions := planActions(rcaActionInput{
@@ -1375,23 +1445,25 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		Decision: decision, Ownership: ownership, Ctx: ictx,
 		LaneAnomalous: laneAnomalous, KindCounts: kindCounts,
 		Residual: ra.ResidualAfterComponent, Validation: validation,
+		Merge: merge,
 	})
 
 	// ---- NOC quick-read -------------------------------------------------------------------------------
-	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, impactSyn, impactRU, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions, ra)
+	noc := buildNocQuickRead(incident, recoveryState, analysis, impact, impactSyn, impactRU, ticketState, monitoring, times, scope, sigSummary, coverage, ownership, actions, ra, merge)
 
 	rep := rcaReport{
 		ReportID:      "rr-" + strings.ReplaceAll(in.ID, "-", "")[:12] + fmt.Sprintf("-v%d", version),
 		CorrelationID: in.ID,
 		DisplayID:     problemDisplayID(in.ID),
 		Version:       version,
-		ReportType:    reportTypeFor(rootState, analysis),
+		ReportType:    reportTypeFor(rootState, analysis, incident),
 		Title:         title,
 		Subtitle:      subtitle,
 		Validation:    validation,
 		GeneratedAt:   fmtUTC(in.Now),
+		Merge:         merge,
 		States: rcaReportStates{
-			Incident: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
+			Incident: incident, Lifecycle: incident, Recovery: recoveryState, RecoveryBasis: recoveryBasis,
 			RecoveryComponent: ra.Component, RecoveryService: ra.Service,
 			Analysis: analysis,
 			Symptom:  symptom, FaultDomain: faultDomain, Mechanism: mechanism, RootCauseState: rootState,
@@ -1399,7 +1471,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			ImpactSynthetic: impactSyn, ImpactRealUser: impactRU,
 			Ticket:   ticketState,
 			Severity: peakSev, SeverityIncident: sevIncident, SeverityReasonCodes: sevCodes,
-			SeverityBasis: sevBasis, Monitoring: monitoring,
+			SeverityBasis: sevBasis, SeverityIncidentBasis: sevIncidentBasis, Monitoring: monitoring,
 			Confidence: confidence, ConfidenceBasis: basis,
 		},
 		Times:             times,
@@ -1439,7 +1511,17 @@ func maxInt(a, b int) int {
 // reportTypeFor — the document may only call itself an RCA when the ROOT CAUSE
 // actually concluded (mechanism + causal object, P1.3). A confirmed fault
 // condition alone yields a fault-confirmed incident analysis, never an "RCA".
-func reportTypeFor(rootState, analysis string) string {
+func reportTypeFor(rootState, analysis, incident string) string {
+	if incident == "merged" || incident == "superseded" {
+		// A merged source report is an incident analysis handed to the survivor —
+		// it names the merge in its type so the state is unmissable (P1 header).
+		switch {
+		case analysis == "confirmed":
+			return "Incident Analysis — Merged / Fault Confirmed"
+		default:
+			return "Incident Analysis — Merged"
+		}
+	}
 	switch {
 	case rootState == "confirmed":
 		return "Root Cause Analysis"

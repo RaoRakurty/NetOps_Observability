@@ -183,11 +183,29 @@ type rcaActionInput struct {
 	KindCounts    map[string]int
 	Residual      bool // anomalies continued after a component recovery
 	Validation    bool
+	// Merge: set on a merged/superseded source case. A merged source must NOT
+	// continue issuing restoration actions — they belong to the surviving
+	// incident (P1 merge ownership of side effects).
+	Merge *rcaIncidentMerge
 }
 
 // planActions builds the ordered action list. Every emitted action passed the
 // evidence-applicability gate; expected outputs are family-derived.
 func planActions(in rcaActionInput) []rcaAction {
+	// A merged source case issues no independent restoration/diagnostic work —
+	// the surviving incident owns every action. The only action is coordination:
+	// track the incident on the survivor (P1 merge ownership of side effects).
+	if in.Merge != nil {
+		survivor := "the surviving incident"
+		if in.Merge.SurvivorResolved {
+			survivor = "surviving incident " + in.Merge.SurvivingDisplayID
+		}
+		return []rcaAction{{
+			Priority: 1, Action: "Track restoration, monitoring and ticketing on " + survivor,
+			Owner: "NOC (incident coordination)", OperationalPriority: "P2", Purpose: "monitoring",
+			ExpectedResult: "the surviving incident carries the transferred evidence, current phase, service-recovery state and ticket/escalation ownership from this merge forward",
+		}}
+	}
 	stillFailing := in.Incident == "active" || in.Residual
 	// P1 only for restoration work on a live, evidence-backed fault.
 	runbookPriority := "P2"

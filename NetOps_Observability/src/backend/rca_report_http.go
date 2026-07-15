@@ -56,11 +56,22 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	}
 
 	pathBlock := s.rcaPathBlock(r.Context(), r, id, fmt.Sprintf("%v", meta["verdict_tier"]), fmt.Sprintf("%v", meta["top_hypothesis"]))
+	// Merged/superseded source case: resolve the TERMINAL surviving incident,
+	// tenant-scoped and cycle-safe (resolveMergeChain never crosses the owning
+	// tenant boundary). The builder derives the merge record from this + meta.
+	survivingID := ""
+	if _, isMerged := rcaMergeIncidentState(asString(meta["state"])); isMerged {
+		if first := asString(meta["merged_into"]); first != "" {
+			owner := canonicalCorrTenant(asString(meta["tenant_id"]))
+			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first)
+		}
+	}
 	rep := buildRcaReport(rcaReportInput{
 		ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows,
 		Ticket: ticket, Policy: pol, PolicyConfigured: configured,
-		Path: pathBlock,
-		Now:  time.Now().UTC(),
+		Path:                pathBlock,
+		Now:                 time.Now().UTC(),
+		SurvivingIncidentID: survivingID,
 	})
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
 	stampTopologyTemporalRole(&rep)

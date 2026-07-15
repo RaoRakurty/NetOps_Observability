@@ -57,6 +57,38 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 		return parseChTS(strings.TrimSuffix(s, " UTC"))
 	}
 
+	// ---- merged-incident lifecycle (P1) -------------------------------------------
+	// For a merged/superseded source, closure validation is replaced by MERGE
+	// validation: the survivor must resolve, the source must not remain
+	// authoritative, and no independent side effect may run on the source.
+	merged := st.Incident == "merged" || st.Incident == "superseded"
+	if merged {
+		if rep.Merge == nil || rep.Merge.SurvivingIncidentID == "" {
+			errf("merged_without_surviving_incident", "merge.surviving_incident_id",
+				"a merged/superseded incident must resolve its surviving incident — merge target missing")
+		}
+		if rep.Merge != nil && rep.Merge.IsAuthoritative {
+			errf("merged_source_remains_authoritative", "merge.is_authoritative",
+				"a merged source incident cannot remain authoritative for lifecycle/side effects")
+		}
+		if rep.Merge != nil && !rep.Merge.SideEffectsTransferred && rep.Merge.SurvivorResolved {
+			errf("merged_source_side_effects_not_transferred", "merge.side_effects_transferred",
+				"a merged source with a resolved survivor must transfer ticket/monitoring/escalation/action ownership")
+		}
+		if st.Monitoring == "active" {
+			errf("merged_source_monitoring_active", "states.monitoring",
+				"a merged source cannot run its own monitoring window — monitoring belongs to the survivor")
+		}
+		if st.Ticket == "opened" {
+			errf("merged_source_independent_ticket", "states.ticket",
+				"a merged source cannot hold its own open ticket — ticket responsibility transfers to the survivor")
+		}
+		if rep.Decision.EscalationState == "triggered" {
+			errf("merged_source_independent_escalation", "decision.escalation_state",
+				"a merged source cannot trigger its own escalation — escalation is the survivor's")
+		}
+	}
+
 	// ---- P1.1 lifecycle × recovery ------------------------------------------------
 	closedLike := st.Incident == "closed" || st.Incident == "recovered"
 	if closedLike && st.Recovery == "not_observed" {
@@ -148,6 +180,12 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 		if h.Type == "symptom classification" && (h.CausalRole == "possible_origin" || h.CausalRole == "probable_origin" || h.CausalRole == "confirmed_origin") {
 			errf("symptom_ranked_as_cause", fmt.Sprintf("hypotheses[%d]", i),
 				"a symptom classification must not be ranked as a causal origin")
+		}
+		// P1 issue-family confirmation gate: a hypothesis whose required evidence is
+		// still outstanding cannot render as CONFIRMED (observed).
+		if h.ObservationState == "confirmed" && len(h.Missing) > 0 {
+			errf("hypothesis_confirmed_with_missing_evidence", fmt.Sprintf("hypotheses[%d]", i),
+				"a hypothesis cannot be confirmed while its required confirmation evidence is still missing")
 		}
 	}
 
@@ -247,6 +285,17 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 	}
 	scan("topology.drop_point", rep.Topology.DropPoint)
 	scan("root_cause.statement", rep.RootCause.Statement)
+	scan("fault_localization.statement", rep.FaultLocalization.Statement)
+	// P1: customer-facing fault-localization evidence must be ACTUAL case evidence,
+	// never a humanized signature CLAUSE — a Boolean rule expression ("… or …")
+	// among the localizing evidence is the matching rule leaking through.
+	for i, e := range rep.FaultLocalization.Evidence {
+		scan(fmt.Sprintf("fault_localization.evidence[%d]", i), e)
+		if strings.Contains(e, " or ") {
+			errf("rule_expression_in_fault_localization", fmt.Sprintf("fault_localization.evidence[%d]", i),
+				"localizing evidence %q reads as a Boolean rule expression, not measured case evidence", e)
+		}
+	}
 
 	q.Passed = len(q.Errors) == 0
 	return q

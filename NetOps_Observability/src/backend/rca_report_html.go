@@ -44,7 +44,8 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 			"same_account_region": "Same account/region only", "temporal_only": "Temporal correlation only",
 		}[rel]
 	},
-	"pathGraph": rcaPathGraphSVG,
+	"pathGraph":      rcaPathGraphSVG,
+	"respondingMark": rcaHopRespondingWithMark,
 }).Parse(rcaReportTmplSrc))
 
 // rcaPathGraphSVG draws the measured path as the same causal picture the
@@ -81,24 +82,44 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 	}
 	for i, h := range t.Hops {
 		x := x0 + step*i
+		// Node colour is carried by the hop's OWN response STATE — never by the
+		// case's fault verdict. A responding object is drawn responding even when
+		// the case's fault is on the path; the failure/visibility boundary is drawn
+		// AFTER it (P1 path-boundary rendering: no red on a responding hop).
 		fill, stroke, dash := "#ecfdf5", "#0f9f4f", ""
-		switch {
-		case h.Fault == "broken" || h.State == "down":
+		switch h.State {
+		case "down", "missing":
 			fill, stroke = "#fee2e2", "#dc2626"
-		case h.Fault == "suspected" || h.State == "degraded":
+		case "degraded":
 			fill, stroke = "#fef3c7", "#b45309"
-		case h.State == "unknown":
+		case "unknown":
 			fill, stroke, dash = "#f1f5f9", "#94a3b8", ` stroke-dasharray="4 3"`
 		}
 		fmt.Fprintf(&b, `<circle cx="%d" cy="%d" r="13" fill="%s" stroke="%s" stroke-width="2"%s/>`, x, cy, fill, stroke, dash)
-		if h.Fault == "broken" || h.Fault == "suspected" {
-			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="13" font-weight="800" fill="%s">✕</text>`, x, cy+5, stroke)
-			label := "BREAK POINT"
-			if h.Fault == "suspected" {
-				label = "SUSPECTED BREAK"
+		respondingMark := rcaHopRespondingWithMark(h)
+		faultedFailedNode := (h.Fault == "broken" || h.Fault == "suspected") && !respondingMark
+		switch {
+		case respondingMark:
+			// last responding hop: a fact, not a failure. Label it, and draw the
+			// failure/visibility boundary on the outgoing edge (after this hop).
+			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8" font-weight="700" letter-spacing=".06em" fill="#475569">LAST RESPONDING HOP</text>`, x)
+			bx := x + step/2
+			if i == n-1 {
+				bx = x + 34
 			}
-			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8.5" font-weight="800" letter-spacing=".08em" fill="%s">%s</text>`, x, stroke, label)
-		} else if h.Provider != "" {
+			bcolor := "#dc2626"
+			blabel := "✕ failure boundary"
+			if h.Fault == "suspected" || h.Fault == "last_response" {
+				bcolor, blabel = "#b45309", "✕ visibility boundary"
+			}
+			fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1.8" stroke-dasharray="4 3"/>`, bx, cy-11, bx, cy+11, bcolor)
+			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="8" font-weight="800" fill="%s">%s</text>`, bx, cy+24, bcolor, blabel)
+		case faultedFailedNode:
+			// a genuinely non-responding hop the case blames — red is warranted.
+			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="13" font-weight="800" fill="%s">✕</text>`, x, cy+5, stroke)
+			fmt.Fprintf(&b, `<text x="%d" y="18" text-anchor="middle" font-size="8.5" font-weight="800" letter-spacing=".08em" fill="%s">FAILED HOP</text>`, x, stroke)
+		}
+		if !respondingMark && !faultedFailedNode && h.Provider != "" {
 			prov := strings.ToUpper(h.Provider)
 			if uri := cloudIconDataURI(h.Provider); uri != "" {
 				// official provider mark + name (the icon terms recommend the
@@ -129,6 +150,21 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 	return template.HTML(b.String()) // #nosec G203 — built above from escaped fields only
 }
 
+// rcaHopRespondingWithMark reports whether a hop is the last RESPONDING hop that
+// carries the case's causal/visibility mark. Such a hop is a fact ("this is the
+// last hop that answered"), never a failed object — it is never styled red, and
+// the failure/visibility boundary is drawn AFTER it (P1 path-boundary rendering).
+func rcaHopRespondingWithMark(h rcaSpineHopView) bool {
+	if h.Fault != "broken" && h.Fault != "suspected" && h.Fault != "last_response" {
+		return false
+	}
+	switch h.State {
+	case "responding", "up", "healthy", "":
+		return true
+	}
+	return false
+}
+
 // rcaStateTone — badge tone per state WORD (§18 colour rules). The word always
 // renders; the tone only reinforces it (grayscale-safe).
 func rcaStateTone(kind, val string) string {
@@ -146,6 +182,9 @@ func rcaStateTone(kind, val string) string {
 			// signals stopped without recovery evidence — neutral, not green:
 			// absence of data must never render as health (§17).
 			return "gray"
+		case "merged", "superseded":
+			// a merged source is neither healthy nor active — informational.
+			return "blue"
 		}
 	case "recovery":
 		switch v {
@@ -201,6 +240,10 @@ func rcaStateTone(kind, val string) string {
 			return "red"
 		case "normal":
 			return "green"
+		case "inconclusive":
+			// partial coverage — observed cleanly but not across the full relevant
+			// phase; never green (P1 evidence-coverage quality).
+			return "amber"
 		}
 		return "gray"
 	}
@@ -271,7 +314,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <h1>{{.Title}}</h1>
 <div class="badges">
   {{if .Validation}}<span class="pill red" style="font-weight:800;letter-spacing:.4px">VALIDATION SCENARIO — NOT A PRODUCTION INCIDENT</span>{{end}}
-  <span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>
+  {{if .Merge}}<span class="pill blue" style="font-weight:800">Incident: Merged{{if .Merge.SurvivorResolved}} into {{.Merge.SurvivingDisplayID}}{{end}}</span>{{else}}<span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>{{end}}
   <span class="pill {{stateTone "recovery" .States.Recovery}}">Recovery: {{title (humanState .States.Recovery)}}</span>
   <span class="pill {{stateTone "analysis" .States.FaultDomain}}">Fault domain: {{title (humanState .States.FaultDomain)}}</span>
   <span class="pill {{stateTone "analysis" .States.RootCauseState}}">Root cause: {{title (humanState .States.RootCauseState)}}</span>
@@ -282,10 +325,27 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </div>
 <div class="meta">Report <b>{{.ReportID}}</b> · Case <b>{{.DisplayID}}</b> · Generated <b>{{.GeneratedAt}}</b>{{if .Subtitle}} · {{.Subtitle}}{{end}}</div>
 
+{{if .Merge}}
+<section>
+  <div class="decision blue">
+    <b>Merged case</b> — {{.Merge.Statement}}
+  </div>
+  <div class="kv">
+    <span class="k">Source case</span><span class="v">{{.Merge.SourceDisplayID}}</span>
+    <span class="k">Surviving incident</span><span class="v">{{if .Merge.SurvivorResolved}}{{.Merge.SurvivingDisplayID}}{{else}}Unresolved — see consistency review{{end}}</span>
+    <span class="k">Service recovery at merge</span><span class="v">{{title (humanState .Merge.ServiceRecoveryAtMerge)}}</span>
+    <span class="k">Lifecycle owner</span><span class="v">Surviving incident (lifecycle, monitoring, ticketing, restoration)</span>
+    <span class="k">Ticket responsibility</span><span class="v">{{humanState .Merge.TicketResponsibility}}</span>
+    <span class="k">Monitoring responsibility</span><span class="v">{{humanState .Merge.MonitoringResponsibility}}</span>
+    <span class="k">Escalation responsibility</span><span class="v">{{humanState .Merge.EscalationResponsibility}}</span>
+  </div>
+</section>
+{{end}}
+
 <section>
   <h2>Management summary</h2>
   <div class="mgmt">{{.Summary.Management}}</div>
-  <div class="note">Confidence basis: {{.States.ConfidenceBasis}}. Severity basis: {{.States.SeverityBasis}}.</div>
+  <div class="note">Confidence basis: {{.States.ConfidenceBasis}}. Incident severity: {{.States.SeverityIncidentBasis}} <span style="color:#94a3b8">(evidence-peak severity: {{.States.SeverityBasis}})</span></div>
 </section>
 
 <section>
@@ -388,11 +448,11 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <table><thead><tr><th>Evidence class</th><th>Coverage</th><th>State</th><th>Obs.</th><th>Finding</th><th>Time coverage</th></tr></thead><tbody>
   {{range .Coverage}}<tr>
     <td><b>{{.Label}}</b>{{if .CountsTowardConfidence}}<div class="note">counts toward confidence</div>{{end}}</td>
-    <td>{{title .Availability}}</td>
+    <td>{{title .Availability}}{{if .Coverage}}<div class="note">coverage: {{title .Coverage}}</div>{{end}}</td>
     <td><span class="pill {{stateTone "lane" .State}}">{{title .State}}</span></td>
     <td>{{if .Observations}}{{.Observations}}{{else}}—{{end}}</td>
     <td>{{.Finding}}</td>
-    <td>{{if .From}}{{.From}} → {{.To}}{{else}}—{{end}}</td>
+    <td>{{if .From}}{{.From}} → {{.To}}{{else}}—{{end}}{{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}</td>
   </tr>{{end}}
   </tbody></table>
   <div class="note">“No data” is a coverage gap, not evidence of health. Missing telemetry never supports or contradicts a hypothesis.</div>
@@ -407,7 +467,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
   {{range .Topology.Hops}}<tr>
     <td style="font-family:ui-monospace,monospace">{{.Index}}</td>
-    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b>{{if .Provider}} <span class="pill blue" style="font-size:9px">{{upper .Provider}}</span>{{end}}{{if eq .Fault "broken"}} <span class="pill red">✕ BREAK POINT</span>{{else if eq .Fault "suspected"}} <span class="pill amber">✕ suspected break</span>{{else if eq .Fault "last_response"}} <span class="pill gray">◍ last response</span>{{end}}</td>
+    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b>{{if .Provider}} <span class="pill blue" style="font-size:9px">{{upper .Provider}}</span>{{end}}{{if respondingMark .}} <span class="pill gray">◍ last responding hop — boundary after</span>{{else if eq .Fault "broken"}} <span class="pill red">✕ failed hop</span>{{else if eq .Fault "suspected"}} <span class="pill amber">✕ suspected failed hop</span>{{end}}</td>
     <td style="font-family:ui-monospace,monospace">{{.Address}}</td>
     <td>{{title .Kind}}</td>
     <td><span class="pill {{if eq .State "down"}}red{{else if eq .State "degraded"}}amber{{else if eq .State "unknown"}}gray{{else}}green{{end}}">{{title .State}}</span></td>
