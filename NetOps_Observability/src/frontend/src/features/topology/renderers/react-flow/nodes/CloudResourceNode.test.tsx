@@ -34,10 +34,9 @@ describe("CloudResourceNode", () => {
     expect(container.querySelector("img")).toBeTruthy();
   });
 
-  it("uses the monogram fallback for GCP", () => {
+  it("renders the official provider mark for a GCP resource", () => {
     const { container } = renderNode("gcp", "subnet");
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.textContent).toContain("G");
+    expect(container.querySelector("img")).toBeTruthy();
   });
 
   it("cloud registry SWAPS cloudNode but leaves the default registry untouched", () => {

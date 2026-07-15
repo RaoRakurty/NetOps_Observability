@@ -1,6 +1,7 @@
 import { useId } from "react";
 import awsMark from "../../assets/cloud/aws.svg";
 import azureMark from "../../assets/cloud/azure.svg";
+import gcpMark from "../../assets/cloud/gcp.svg";
 
 // shapes.tsx — a small network-topology shape kit. Following the universal
 // convention (Cisco/Kentik/Auvik/Lucidchart): DEVICE TYPE = shape, HEALTH =
@@ -101,18 +102,17 @@ function shapeEls(kind: ShapeKind, tone: string, fill: string): JSX.Element {
 // canvas. `pulse` adds a breathing ring (for a fault). A faint type glyph hints
 // the device type.
 // Cloud-provider marks (VENDOR = the logo inside the shape, per the kit
-// convention above). aws/azure use the OFFICIAL icons vendored from the
-// providers' architecture-icon packages (source + terms in
+// convention above). aws/azure/gcp use the OFFICIAL icons vendored from the
+// providers' official packages (source + terms in
 // src/assets/cloud/README.md) — rendered as-is, only composited onto a tile
-// for contrast. Providers without a vendored official mark (gcp) keep the
-// monogram badge fallback.
+// for contrast. Providers without a vendored official mark keep the
+// monogram badge fallback (none today).
 const PROVIDER_ICON: Record<string, { href: string; tile?: string }> = {
   aws:   { href: awsMark },                // ships its own navy tile
   azure: { href: azureMark, tile: "#FFFFFF" }, // transparent mark → white tile
+  gcp:   { href: gcpMark, tile: "#FFFFFF" },   // transparent mark → white tile
 };
-const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {
-  gcp:   { bg: "#FFFFFF", fg: "#4285F4", text: "G" },
-};
+const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {};
 
 export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, provider }: {
   kind: ShapeKind; tone: string; size?: number; glyph?: boolean; pulse?: boolean;

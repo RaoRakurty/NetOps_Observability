@@ -20,12 +20,12 @@ var cloudIconURIOnce sync.Once
 var cloudIconURIs map[string]string
 
 // cloudIconDataURI returns a data: URI for the official mark of a provider we
-// have vendored (aws, azure), or "" — callers fall back to a text label, never
-// to an unofficial approximation.
+// have vendored (aws, azure, gcp), or "" — callers fall back to a text label,
+// never to an unofficial approximation.
 func cloudIconDataURI(provider string) string {
 	cloudIconURIOnce.Do(func() {
 		cloudIconURIs = map[string]string{}
-		for _, name := range []string{"aws", "azure"} {
+		for _, name := range []string{"aws", "azure", "gcp"} {
 			b, err := cloudIconFiles.ReadFile("cloudicons/" + name + ".svg")
 			if err != nil {
 				continue // embed guarantees presence; stay safe, fall back to text

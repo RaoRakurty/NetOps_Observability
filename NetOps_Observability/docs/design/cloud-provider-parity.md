@@ -35,8 +35,8 @@ rows added below. Corrections from the audit are folded in.
 | LB target health | 🕳 blocked: no ALB in lab (owner infra) | 🕳 App Gateway backend health | 🕳 backend service health (`backendServices.getHealth`, no lab infra needed — next slice) |
 | WAF blocks → `cloud_waf_log` | 🔧 parser+rollup built (fidelity drill) | 🔧 AppGW `ApplicationGatewayFirewallLog` + FD WAF log → per-(policy, rule) BLOCK rollup (`AZURE_WAF_LOGS_CONTAINERS`); owner-gated | 🔧 Cloud Armor DENY rollup per (policy, rule priority) — rides the SAME LB request-log fetch (gate `GCP_LB_LOGS`) |
 | DNS failures → `cloud_dns_log` | 🔧 R53 Resolver parser built (fidelity drill) | 🔧 DNS security-policy `DnsResponse` reader → per-(name, rcode) rollup (`AZURE_DNS_LOGS_CONTAINERS`); owner-gated | 🔧 `dns_queries` error rollup per (name, rcode), entity = the queried NAME (gate `GCP_DNS_LOGS`) |
-| Console deep-links | ✅ | ✅ | 🕳 `cloud_console.go` GCP formats |
-| Provider mark (official icon) | ✅ | ✅ | 🕳 official GCP icon set (vendor + terms doc) |
+| Console deep-links | ✅ | ✅ | ✅ `cloud_console.go`: instance / Cloud Router (incl. seam key) / VPC network / subnet / firewall rule / route + per-entry Logs Explorer pivot (insertId); path-parsed, unparseable ⇒ no link; unit-tested. Drill 7 click-through owner-gated |
+| Provider mark (official icon) | ✅ | ✅ | ✅ official four-color cloud symbol vendored (`assets/cloud/gcp.svg` + `cloudicons/gcp.svg`, terms in READMEs) — topology nodes, RCA canvas + PDF |
 | Ingestion matrix facet | ✅ | ✅ | 🔧 automatic once signals stamp `provider:gcp` (done in lanes) |
 | IAM/credential contract committed | ✅ `iam-policy-aws.json` | ✅ CREDENTIALS.md roles | 🔧 CREDENTIALS.md roles (added) |
 | Least-privilege posture | lab: ambient creds (interim) | SP, 2 reader roles | SA file, 3 viewer roles |
@@ -58,7 +58,8 @@ captured as test fixtures:
    the rule. (all 🕳)
 6. **DNS breakage** — NXDOMAIN spike joins app symptom. (all 🕳)
 7. **Provider console pivot** — every row's deep-link opens the right page.
-   (AWS ✅ · Azure ✅ · GCP 🕳)
+   (AWS ✅ · Azure ✅ · GCP 🔧 formats built + unit-tested 2026-07-15; drill is
+   now runnable — owner click-through pending)
 
 ## Build order (agreed)
 
