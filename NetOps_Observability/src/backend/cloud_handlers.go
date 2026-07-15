@@ -62,12 +62,8 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	// Manual overrides win over inference: a human who confirmed/assigned a
-	// resource→service mapping (resource_mappings, migration 0024) is
-	// authoritative. Overlay it onto the inventory's inferred attribution so the
-	// operator's decision actually takes effect on this surface. Tenant-scoped
-	// like everything else; absent store (file backend) = no overlay.
-	s.overlayManualMappings(r, tenant, cross, res)
+	// Manual operator overrides are already applied by s.cloudResources (the one
+	// shared inventory read — so Resources / Apps / Coverage / Untagged all agree).
 	// Inventory-source provenance (live poller vs hand fixture) — drives the
 	// UI's honest data-mode badge. Tenant-scoped like the resources themselves.
 	connectors, err := s.cloud.ListConnectors(r.Context(), tenant, cross)
