@@ -51,9 +51,8 @@ import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
-import { filterViewByDomain, type NetworkDomain } from "../../utils/topologyDomains";
+import { filterViewByDomain, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
-import TopologyDomainTabs from "../../components/TopologyDomainTabs";
 import CloudTopologyView from "./CloudTopologyView";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
 import {
@@ -102,7 +101,17 @@ function mostActionableIncident(incidents: CorrObject[]): string {
   return best?.correlation_id ?? "";
 }
 
-function CanvasInner({ domain = "lan", carrier = false }: { domain?: NetworkDomain; carrier?: boolean }) {
+function CanvasInner({
+  domain = "lan",
+  carrier = false,
+  onDomain,
+  onCarrier,
+}: {
+  domain?: NetworkDomain;
+  carrier?: boolean;
+  onDomain?: (d: NetworkDomain) => void;
+  onCarrier?: (v: boolean) => void;
+}) {
   const rf = useReactFlow();
 
   const [mode, setMode] = useState<WorkflowMode>("explore");
@@ -505,6 +514,33 @@ function CanvasInner({ domain = "lan", carrier = false }: { domain?: NetworkDoma
         onResetLayout={onResetLayout}
         layoutPinned={layoutPinned}
       >
+        {/* Network domain (LAN · SD-WAN · DC · Cloud) — the primary "where am I
+            looking" control, rendered as the SAME native segmented toggle as Data
+            source / Renderer so it reads as part of one toolbar, not a bolted-on
+            strip. Carrier is the cross-cutting transport overlay. */}
+        <div className="topo-render-toggle" role="tablist" aria-label="Network domain">
+          {DOMAINS.map((d) => (
+            <button
+              key={d.id}
+              role="tab"
+              aria-selected={domain === d.id}
+              className={domain === d.id ? "on" : ""}
+              onClick={() => onDomain?.(d.id)}
+              title={d.blurb}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+        <button
+          className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}
+          role="switch"
+          aria-checked={carrier}
+          onClick={() => onCarrier?.(!carrier)}
+          title="Overlay the shared carrier / transport network — the fabric that ties LAN, SD-WAN, DC and Cloud together."
+        >
+          Carrier
+        </button>
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
         {/* Data source: live per-mode projection vs the persistent reconciled graph. */}
         <div className="topo-render-toggle" role="tablist" aria-label="Data source">
@@ -590,6 +626,12 @@ function CanvasInner({ domain = "lan", carrier = false }: { domain?: NetworkDoma
         </div>
       </TopologyToolbar>
 
+      {domain === "cloud" ? (
+        /* Cloud tab: the SAME toolbar above; only the stage content is the cloud
+           network canvas (own nodeTypes/official icons, but the shared ELK layout,
+           node-card shell, legend and drawer — so it looks and behaves natively). */
+        <CloudTopologyView carrier={carrier} />
+      ) : (
       <div className="topo-stage">
         <button
           className="topo-fs-btn"
@@ -721,6 +763,7 @@ function CanvasInner({ domain = "lan", carrier = false }: { domain?: NetworkDoma
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -877,23 +920,16 @@ function PlaceholderWorkflow({ label, blurb }: { label: string; blurb: string })
 }
 
 export default function TopologyCanvas() {
-  // Network-DOMAIN tabs (LAN · SD-WAN · DC · Cloud) — the primary "where am I
-  // looking" control, orthogonal to the workflow selector inside the canvas.
-  // LAN (default) + carrier-off renders the existing canvas unchanged.
+  // Network domain (LAN · SD-WAN · DC · Cloud) — the primary "where am I looking"
+  // control. It lives INSIDE the canvas toolbar (see CanvasInner) as the same
+  // native segmented toggle as Data source / Renderer, so the cloud additions
+  // read as one seamless canvas, not a bolted-on strip. LAN (default) +
+  // carrier-off renders the existing canvas byte-for-byte unchanged.
   const [domain, setDomain] = useState<NetworkDomain>("lan");
   const [carrier, setCarrier] = useState(false);
   return (
-    <div className="topo-domain-shell">
-      <TopologyDomainTabs value={domain} onChange={setDomain} carrier={carrier} onToggleCarrier={setCarrier} />
-      <ReactFlowProvider>
-        {domain === "cloud" ? (
-          <div className="topo-root">
-            <CloudTopologyView carrier={carrier} />
-          </div>
-        ) : (
-          <CanvasInner domain={domain} carrier={carrier} />
-        )}
-      </ReactFlowProvider>
-    </div>
+    <ReactFlowProvider>
+      <CanvasInner domain={domain} carrier={carrier} onDomain={setDomain} onCarrier={setCarrier} />
+    </ReactFlowProvider>
   );
 }
