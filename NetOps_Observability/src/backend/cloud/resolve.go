@@ -221,6 +221,10 @@ func sourceTrust(s Source) int {
 	}
 }
 
+// AppIDFromName is the exported slug normalizer, so callers outside the package
+// (e.g. the manual-override overlay) derive an app id the same way attribution does.
+func AppIDFromName(name string) string { return appIDFromName(name) }
+
 func appIDFromName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = strings.Map(func(r rune) rune {

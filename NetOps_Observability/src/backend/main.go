@@ -103,6 +103,7 @@ type server struct {
 	fusion              *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
 	appOverrides        appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
 	cloud               cloudStore               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	bizServices         *pgBusinessServiceStore  // Business Service mapping + manual overrides #0024 (nil on file backend)
 	cloudApp            *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	// Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md):
 	// the ordered LAN→SD-WAN→carrier/cloud→application RCA spine. pathGraph is the
@@ -509,6 +510,7 @@ func newServer() *server {
 	srv.ngfw = newNgfwAppResolver()                         // Application Identification NGFW app-id overlay (#81 P-NGFW pt2)
 	srv.appOverrides = newAppCatalogStore()                 // Application Identification operator-defined overrides (#81 P1c)
 	srv.cloud = newCloudStore()                             // Cloud App Observability inventory (#81 P3A)
+	srv.bizServices = newBusinessServiceStore()             // Business Service mapping + manual overrides (migration 0024)
 	srv.cloudApp = newCloudAppResolver(srv.cloud)           // Cloud identity-map → appid bridge (#81 P3F+1)
 	srv.pathGraph = newPathGraphStore()                     // Service Path Graph storage (contract v1); ingester starts in main()
 	srv.remotePaths = newRemotePathStore()                  // remote-vantage path pushes (the LAN vantage's transport)
@@ -976,6 +978,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/identity-map", s.handleCloudIdentityMap)
 	mux.HandleFunc("/api/cloud/apps", s.handleCloudApps)
 	mux.HandleFunc("/api/cloud/attribution/coverage", s.handleCloudCoverage)
+	// Business Service mapping + manual overrides (Azure optional-tags epic, 0024).
+	mux.HandleFunc("/api/cloud/business-services", s.handleBusinessServices)
+	mux.HandleFunc("/api/cloud/business-services/", s.handleBusinessServiceByID)
+	mux.HandleFunc("/api/cloud/resource-mappings", s.handleResourceMappings)
+	mux.HandleFunc("/api/cloud/resource-mappings/", s.handleResourceMappingByID)
 	mux.HandleFunc("/api/cloud/ingestion", s.handleCloudIngestion)
 	mux.HandleFunc("/api/cloud/app-rca", s.handleCloudAppRca)
 	mux.HandleFunc("/api/cloud/health", s.handleCloudHealth)
