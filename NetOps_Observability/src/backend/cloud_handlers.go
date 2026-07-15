@@ -48,7 +48,14 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	res, _, _, err := s.cloudResources(r)
+	res, tenant, cross, err := s.cloudResources(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Inventory-source provenance (live poller vs hand fixture) — drives the
+	// UI's honest data-mode badge. Tenant-scoped like the resources themselves.
+	connectors, err := s.cloud.ListConnectors(r.Context(), tenant, cross)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -79,7 +86,7 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 			consoleURLs[rs.ResourceID] = u
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "count": len(res)})
+	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "connectors": connectors, "count": len(res)})
 }
 
 func (s *server) handleCloudIdentityMap(w http.ResponseWriter, r *http.Request) {
@@ -264,6 +271,13 @@ func (s *server) startCloudInventory(ctx context.Context) {
 		if e := s.cloud.ReplaceInventory(ctx, tenant, res, maps); e != nil {
 			logError("cloud", "inventory store failed", map[string]any{"err": e.Error()})
 			return
+		}
+		// Provenance of each inventory file (live-poller stamp vs hand fixture) —
+		// the UI's data-mode badge is derived from this, never assumed.
+		if conns, e := prov.Connectors(ctx); e == nil {
+			if e := s.cloud.ReplaceConnectors(ctx, tenant, conns); e != nil {
+				logError("cloud", "connector provenance store failed", map[string]any{"err": e.Error()})
+			}
 		}
 		if len(res) != lastCount {
 			logInfo("cloud", "loaded fixture inventory", map[string]any{"resources": len(res), "mappings": len(maps)})

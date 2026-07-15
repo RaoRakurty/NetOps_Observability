@@ -1258,6 +1258,17 @@ export interface CloudIngestionSource {
   capability?: "available" | "planned";
 }
 
+// Provenance of each inventory source file, measured by the backend from the
+// live-poller collection stamp (cloud/provider.go ConnectorInfo). Drives the
+// data-mode badge: "live" only when the poller actually wrote the inventory.
+export interface CloudConnectorInfo {
+  provider: string;
+  account_id: string;
+  kind: "live" | "fixture";
+  collected_at?: string;
+  resource_count: number;
+}
+
 // Live per-app health/traffic enrichment served alongside the app inventory —
 // measured from provider status checks, probe outcomes and flow bytes.
 export interface CloudAppLive {
@@ -2089,7 +2100,7 @@ export const api = {
   // The IDENTITY surfaces are live from the cloud inventory; health/change/flow
   // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
   // mirror src/backend/cloud/{model,derive}.go.
-  cloudResources: () => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; count: number }>("/api/cloud/resources"),
+  cloudResources: () => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number }>("/api/cloud/resources"),
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),

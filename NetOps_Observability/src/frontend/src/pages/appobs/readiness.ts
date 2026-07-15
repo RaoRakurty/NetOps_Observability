@@ -97,14 +97,30 @@ export const DATA_MODE_TONE: Record<DataMode, string> = {
   empty: "var(--fg-subtle)",
 };
 
-// connectorKind reflects what the backend is actually serving: a real per-tenant
-// SDK connector ("live") vs the bootstrap fixture provider ("fixture") vs nothing.
+// connectorKind reflects what the backend is actually serving: a live-poller-
+// written inventory ("live") vs a hand-authored fixture ("fixture") vs nothing.
 export type ConnectorKind = "live" | "fixture" | "none";
 
 export function deriveDataMode(opts: { inventoryCount: number; connector: ConnectorKind }): DataMode {
   if (opts.connector === "live") return "live";
   if (opts.inventoryCount > 0) return "demo"; // fixtures present ⇒ demo tenant w/ synthetic signals
   return "empty";
+}
+
+// Aggregate the per-file provenance the backend measures (collection stamps,
+// GET /api/cloud/resources "connectors") into ONE ConnectorKind. Default-closed:
+// the view only claims "live" when EVERY file contributing resources was
+// written by a live poller — one hand fixture in the mix demotes the whole
+// view to demo rather than overclaiming. A backend that predates the stamp
+// (no connectors array) keeps the old honest assumption: fixture.
+export function deriveConnectorKind(
+  connectors: { kind: string; resource_count: number }[] | undefined,
+  inventoryCount: number,
+): ConnectorKind {
+  if (inventoryCount <= 0) return "none";
+  const contributing = (connectors ?? []).filter((c) => c.resource_count > 0);
+  if (contributing.length === 0) return "fixture";
+  return contributing.every((c) => c.kind === "live") ? "live" : "fixture";
 }
 
 // ── Scope ────────────────────────────────────────────────────────────────────

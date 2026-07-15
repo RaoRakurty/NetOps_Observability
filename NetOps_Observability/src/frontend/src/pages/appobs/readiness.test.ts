@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveDataMode, DATA_MODE_LABEL, deriveReadiness, summarize, deriveScope,
+  deriveConnectorKind,
   getMeasurementState, isMeasured, deriveHealthFromAvailableSignals, freshnessLabel,
   SOURCE_TYPES,
 } from "./readiness";
@@ -23,6 +24,27 @@ describe("data mode", () => {
     for (const label of Object.values(DATA_MODE_LABEL)) {
       expect(label.toLowerCase()).not.toContain("mock");
     }
+  });
+});
+
+describe("deriveConnectorKind — provenance is measured, default-closed (#105)", () => {
+  const live = { kind: "live", resource_count: 3 };
+  const fixture = { kind: "fixture", resource_count: 1 };
+  it("is live when every contributing inventory file is live-poller written", () => {
+    expect(deriveConnectorKind([live, { kind: "live", resource_count: 2 }], 5)).toBe("live");
+  });
+  it("one hand fixture in the mix demotes the whole view (never overclaim live)", () => {
+    expect(deriveConnectorKind([live, fixture], 4)).toBe("fixture");
+  });
+  it("a backend without provenance info keeps the old honest assumption", () => {
+    expect(deriveConnectorKind(undefined, 4)).toBe("fixture");
+    expect(deriveConnectorKind([], 4)).toBe("fixture");
+  });
+  it("empty files carry no provenance weight", () => {
+    expect(deriveConnectorKind([{ kind: "fixture", resource_count: 0 }, live], 3)).toBe("live");
+  });
+  it("no inventory ⇒ none, regardless of stamps", () => {
+    expect(deriveConnectorKind([live], 0)).toBe("none");
   });
 });
 

@@ -18,6 +18,7 @@ The cloud edge for a given destination is whatever the subnet's route table says
   0.0.0.0/0 -> eni-*   ⇒ a network virtual appliance (our strongSwan IPsec NVA)
   <on-prem> -> eni-*   ⇒ the IPsec NVA (the private/tunnelled path)
 """
+import datetime as dt
 import json
 import os
 
@@ -178,7 +179,15 @@ def discover_aws(ec2) -> tuple[dict, dict]:
                     "route_table_name": rt_name,
                 })
 
-    inventory = {"provider": "aws", "account_id": account, "resources": resources}
+    # "collection" = the live-poller provenance stamp (contract pinned by
+    # cloud/provider_test.go): the API derives the UI's "Live telemetry" vs
+    # "Demo tenant" badge from it — an unstamped file reads as a hand fixture.
+    inventory = {
+        "provider": "aws", "account_id": account,
+        "collection": {"mode": "live_poller",
+                       "collected_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+        "resources": resources,
+    }
     topology = {
         "provider": "aws", "account_id": account, "region": REGION,
         "vpcs": [{"id": v["VpcId"], "cidr": v["CidrBlock"]} for v in vpcs],

@@ -345,7 +345,14 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
             "confidence": "confirmed" if any(k in tags for k in APP_TAG_KEYS) else "strong",
         })
 
-    inventory = {"provider": "azure", "account_id": SUBSCRIPTION, "resources": resources}
+    # Live-poller provenance stamp — same contract as discover.py/gcp.py
+    # (pinned by cloud/provider_test.go); drives the UI's honest data-mode badge.
+    inventory = {
+        "provider": "azure", "account_id": SUBSCRIPTION,
+        "collection": {"mode": "live_poller",
+                       "collected_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+        "resources": resources,
+    }
     os.makedirs(fixtures_dir, exist_ok=True)
     path = os.path.join(fixtures_dir, "azure.json")
     tmp = path + ".tmp"

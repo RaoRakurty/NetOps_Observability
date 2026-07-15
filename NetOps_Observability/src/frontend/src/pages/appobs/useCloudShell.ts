@@ -7,10 +7,10 @@
 // inventory "off", not a fabricated healthy state.
 
 import { useEffect, useState } from "react";
-import { api, CloudResourceRow, CloudIngestionSource } from "../../services/api";
+import { api, CloudResourceRow, CloudIngestionSource, CloudConnectorInfo } from "../../services/api";
 import { useAuth } from "../../hooks/useAuth";
 import {
-  deriveScope, deriveReadiness, deriveDataMode, summarize,
+  deriveScope, deriveReadiness, deriveDataMode, deriveConnectorKind, summarize,
   CloudScope, DataMode, ReadinessSummary, IngestionSource,
 } from "./readiness";
 
@@ -24,6 +24,7 @@ export interface CloudShell {
 export function useCloudShell(): CloudShell {
   const { user } = useAuth();
   const [rows, setRows] = useState<CloudResourceRow[]>([]);
+  const [connectors, setConnectors] = useState<CloudConnectorInfo[] | undefined>(undefined);
   const [ingestion, setIngestion] = useState<CloudIngestionSource[] | undefined>(undefined);
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,7 +32,7 @@ export function useCloudShell(): CloudShell {
   useEffect(() => {
     let live = true;
     api.cloudResources().then(
-      (r) => { if (live) { setRows(r.resources ?? []); setLoading(false); } },
+      (r) => { if (live) { setRows(r.resources ?? []); setConnectors(r.connectors); setLoading(false); } },
       () => { if (live) { setErr(true); setLoading(false); } },
     );
     // Per-source ingestion status. A failure here is NOT fatal: readiness falls
@@ -56,8 +57,13 @@ export function useCloudShell(): CloudShell {
   });
   const connectedAccounts = new Set(rows.map((r) => r.account_id).filter(Boolean)).size;
   const summary = summarize(readiness, connectedAccounts);
-  // No real per-tenant SDK connector exists yet — inventory present ⇒ fixture/demo.
-  const mode: DataMode = deriveDataMode({ inventoryCount: rows.length, connector: rows.length ? "fixture" : "none" });
+  // Data mode from MEASURED provenance: the backend reports which inventory
+  // files carry the live-poller collection stamp (hard-coding "fixture" here
+  // understated a live deployment — #105).
+  const mode: DataMode = deriveDataMode({
+    inventoryCount: rows.length,
+    connector: deriveConnectorKind(connectors, rows.length),
+  });
 
   return { scope, mode, summary, loading };
 }

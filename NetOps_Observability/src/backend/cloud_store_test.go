@@ -45,3 +45,32 @@ func TestCloudStoreIsolation(t *testing.T) {
 		t.Fatalf("replace should swap the whole inventory, got %+v", a)
 	}
 }
+
+// Connector provenance obeys the same isolation contract as the inventory it
+// describes: own-only for a scoped tenant, all for cross, full refresh on replace.
+func TestCloudStoreConnectorIsolation(t *testing.T) {
+	ctx := context.Background()
+	st := newCloudStore()
+	_ = st.ReplaceConnectors(ctx, "org-a", []cloud.ConnectorInfo{
+		{Provider: cloud.AWS, AccountID: "111", Kind: cloud.ConnectorKindLive, ResourceCount: 3}})
+	_ = st.ReplaceConnectors(ctx, "org-b", []cloud.ConnectorInfo{
+		{Provider: cloud.Azure, AccountID: "222", Kind: cloud.ConnectorKindFixture, ResourceCount: 1}})
+
+	a, _ := st.ListConnectors(ctx, "org-a", false)
+	if len(a) != 1 || a[0].AccountID != "111" {
+		t.Fatalf("org-a should see only its own connector, got %+v", a)
+	}
+	b, _ := st.ListConnectors(ctx, "org-b", false)
+	if len(b) != 1 || b[0].AccountID != "222" {
+		t.Fatalf("org-b leak: %+v", b)
+	}
+	all, _ := st.ListConnectors(ctx, "", true)
+	if len(all) != 2 {
+		t.Fatalf("cross should see 2 connectors, got %d", len(all))
+	}
+	_ = st.ReplaceConnectors(ctx, "org-a", nil)
+	a, _ = st.ListConnectors(ctx, "org-a", false)
+	if len(a) != 0 {
+		t.Fatalf("replace should swap all connectors, got %+v", a)
+	}
+}
