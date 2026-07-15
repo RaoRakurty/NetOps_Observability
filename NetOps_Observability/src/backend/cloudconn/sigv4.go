@@ -49,7 +49,7 @@ const (
 	sigv4TimeFormat  = "20060102T150405Z"
 	sigv4DateFormat  = "20060102"
 	amzDateHeader    = "x-amz-date"
-	amzTokenHeader   = "x-amz-security-token" //nolint:gosec // header NAME, not a credential
+	amzTokenHeader   = "x-amz-security-token" // #nosec G101 -- header NAME, not a credential
 	amzContentSHA256 = "x-amz-content-sha256"
 )
 
