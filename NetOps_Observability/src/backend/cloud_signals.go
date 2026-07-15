@@ -324,12 +324,12 @@ type cloudChangeEvent struct {
 }
 
 type cloudEvidenceRow struct {
-	Time          string `json:"time"`
-	Category      string `json:"category"`
-	SignalType    string `json:"signal_type"`
-	App           string `json:"app"`
-	Resource      string `json:"resource"`
-	Source        string `json:"source"`
+	Time       string `json:"time"`
+	Category   string `json:"category"`
+	SignalType string `json:"signal_type"`
+	App        string `json:"app"`
+	Resource   string `json:"resource"`
+	Source     string `json:"source"`
 	Confidence string `json:"confidence"`
 	Reason     string `json:"reason"`
 	// Grounded = the engine attached this signal to the investigation (archive
@@ -519,6 +519,17 @@ func resourceOf(row chSignalRow, a signalAttrs) string {
 		return a.Host
 	}
 	return "—"
+}
+
+// shortCloudName reduces a raw provider id (ARM path, GCP resource path, ARN) to
+// its last path segment — the human-readable resource name — when the inventory
+// doesn't resolve it. "/subscriptions/…/virtualMachines/correlix-app-host-01"
+// → "correlix-app-host-01". A bare id (no "/") is returned unchanged.
+func shortCloudName(id string) string {
+	if i := strings.LastIndex(id, "/"); i >= 0 && i < len(id)-1 {
+		return id[i+1:]
+	}
+	return id
 }
 
 func providerOf(a signalAttrs) string {
@@ -716,19 +727,47 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	// Resolve each signal's raw resource id → the clean resource NAME + its owning
+	// app from the tenant-scoped inventory, exactly like handleCloudChanges. Health
+	// signals are stamped on a raw provider id (an ARM path, an instance id); the
+	// operator reads a name, not a path.
+	inv := s.cloudResourceIndex(r)
 	rows := chJSONRows[chSignalRow](cloudHealthSQL(appFilterSQL(app), limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudHealthSignal, 0, len(rows))
 	for _, row := range rows {
 		a := parseAttrs(row.Attrs)
+		resID := resourceOf(row, a)
+		resName := resID
+		appName := appOf(row, a)
+		if c, ok := lookupCloudResource(inv, resID); ok {
+			if c.ResourceName != "" {
+				resName = c.ResourceName
+			}
+			if appName == "" {
+				appName = c.AppName
+			}
+		}
+		if resName == resID { // not in inventory — fall back to the last path segment
+			resName = shortCloudName(resID)
+		}
+		// Metric / Current / Baseline apply ONLY to metric-anomaly signals. A
+		// health-STATUS event (cloud_resource_health with no metric_name) has no
+		// value or baseline — render "—", never a misleading "0".
+		metric, current, baseline := "—", "—", "—"
+		if row.MetricName != "" {
+			metric = row.MetricName
+			current = fmtSignalValue(row.Value)
+			baseline = fmtBaseline(row.Baseline, row.Deviation)
+		}
 		out = append(out, cloudHealthSignal{
 			Time:     isoTS(row.TS),
-			App:      orDash(appOf(row, a)),
-			Resource: resourceOf(row, a),
+			App:      orDash(appName),
+			Resource: resName,
 			Signal:   row.Kind,
 			State:    cloudHealthState(row.Severity),
-			Metric:   orDash(row.MetricName),
-			Current:  fmtSignalValue(row.Value),
-			Baseline: fmtBaseline(row.Baseline, row.Deviation),
+			Metric:   metric,
+			Current:  current,
+			Baseline: baseline,
 			Severity: cloudHealthSeverity(row.Severity),
 			Source:   providerOf(a),
 		})

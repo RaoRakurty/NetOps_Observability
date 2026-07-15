@@ -207,6 +207,26 @@ func TestShortActor(t *testing.T) {
 	}
 }
 
+// The Alerts/health table showed raw provider ids as the "Resource" — an ARM
+// path or a full resource path, not a name. shortCloudName reduces any
+// slash-delimited id to its last segment (the human name) as the inventory-miss
+// fallback, and leaves a bare id untouched.
+func TestShortCloudName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/subscriptions/8d0f/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01", "correlix-app-host-01"},
+		{"projects/proj/zones/us-west1-a/instances/correlix-gcp-app-01", "correlix-gcp-app-01"},
+		{"i-0448c046139420a7f", "i-0448c046139420a7f"}, // bare id — unchanged
+		{"eni-01830be2f44b23cb2", "eni-01830be2f44b23cb2"},
+		{"trailing/", "trailing/"}, // no segment after the slash — unchanged
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := shortCloudName(tc.in); got != tc.want {
+			t.Fatalf("shortCloudName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCloudChangeConfidence(t *testing.T) {
 	if got := cloudChangeConfidence("arn:...:user/x", "ec2.amazonaws.com", "req-1"); got != "confirmed" {
 		t.Fatalf("full provenance = %q, want confirmed", got)
