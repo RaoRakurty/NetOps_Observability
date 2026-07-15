@@ -201,6 +201,59 @@ def probe_authority_of(sig: "Signal") -> "ProbeAuthority | None":
         return ProbeAuthority.LOW
 
 
+# ── Observer kind (evidence-accounting Phase B) ──────────────────────────────
+# An ADDITIVE ingest hint stamped on every new signal so the accounting layer can
+# say how many logical vantages vs control-plane sources vs collectors an incident
+# rests on. Backward-compatible: legacy rows carry no `observer_kind` and are
+# classified by the Go registry at READ time; the per-tenant structured policy is
+# canonical — this hint is only the default. Hard rules (rca-evidence-accounting-
+# plan.md constraint 1): `api`/collectors/workers are NEVER logical_vantage;
+# unclassified → `unknown` (never silently a collector or vantage).
+
+OBSERVER_KIND_LOGICAL_VANTAGE = "logical_vantage"
+OBSERVER_KIND_CONTROL_PLANE = "control_plane_source"
+OBSERVER_KIND_COLLECTOR = "collector"
+OBSERVER_KIND_UNKNOWN = "unknown"
+
+# Identities that can NEVER be a logical vantage (mirrors the Go registry defaults).
+_NEVER_VANTAGE_IDS = frozenset({
+    "api", "backend", "correlation", "collector",
+    "vector", "telegraf", "goflow", "goflow2",
+    "snmp", "gnmi", "netconf", "syslog", "otel", "otel-collector",
+})
+_NEVER_VANTAGE_MARKERS = ("-worker", "worker-", "collector", "-exporter", "exporter-",
+                          "-poller", "poller-", "sidecar")
+
+
+def _is_never_vantage(observer_id: str) -> bool:
+    oid = (observer_id or "").strip().lower()
+    if oid in _NEVER_VANTAGE_IDS:
+        return True
+    return any(m in oid for m in _NEVER_VANTAGE_MARKERS)
+
+
+def classify_observer_kind(
+    observer_id: str, observer_type: "ObserverType | str",
+    modality: "ModalityClass | str", probe_authority: str = "",
+) -> str:
+    """Default observer-kind hint from provenance. Fail-closed (constraint 1):
+    a low/debug/unclassified probe is `unknown`, never assumed a vantage; a
+    denylisted identity is never a vantage. The Go per-tenant registry may
+    override this hint at read, but never to violate the never-vantage rule."""
+    mod = modality.value if isinstance(modality, ModalityClass) else str(modality or "").strip().lower()
+    if mod in ("control_plane", "management_plane"):
+        return OBSERVER_KIND_CONTROL_PLANE
+    if mod in ("device_telemetry", "passive_flow"):
+        return OBSERVER_KIND_COLLECTOR
+    if mod == "active_probe":
+        if _is_never_vantage(observer_id):
+            return OBSERVER_KIND_COLLECTOR
+        if (probe_authority or "").strip().lower() in ("high", "medium"):
+            return OBSERVER_KIND_LOGICAL_VANTAGE
+        return OBSERVER_KIND_UNKNOWN
+    return OBSERVER_KIND_UNKNOWN
+
+
 class DeadLetter(ValueError):
     """Record cannot become a Signal (missing mandatory provenance, malformed
     fields). Counted + parked by the caller — never guessed around, never a
@@ -287,7 +340,18 @@ class Signal:
 
     def to_ch_row(self) -> dict:
         """JSONEachRow shape for netops.corr_signals (frozen schema)."""
-        attrs_json = json.dumps(self.attrs, separators=(",", ":"), sort_keys=True)
+        # Additive observer-kind hint (evidence-accounting Phase B). Stamped into
+        # attrs — no schema change — so NEW signals carry their default kind while
+        # legacy rows classify at read. Never overrides a value a producer already
+        # set. The signal_id is unaffected (it derives from source|native_id|ts).
+        attrs = self.attrs if isinstance(self.attrs, dict) else {}
+        if "observer_kind" not in attrs:
+            attrs = dict(attrs)
+            attrs["observer_kind"] = classify_observer_kind(
+                self.observer.observer_id, self.observer.observer_type,
+                self.modality_class, str(attrs.get("probe_authority", "")),
+            )
+        attrs_json = json.dumps(attrs, separators=(",", ":"), sort_keys=True)
         if len(attrs_json.encode()) > ATTRS_MAX_BYTES:
             # Bounded by design: oversize attrs are a producer bug, not data.
             raise DeadLetter(f"attrs exceed {ATTRS_MAX_BYTES} bytes")
