@@ -12,7 +12,11 @@ import (
 // certificate credential is the non-federated fallback; a client secret is a
 // labeled legacy option. Runtime uses the app/workload identity, NEVER delegated
 // user tokens (admin-consent OAuth is a SETUP step that grants app roles).
-type azureAdapter struct{}
+// Live token acquisition is delegated to the injected TokenExchanger
+// (AzureEntraExchanger in production).
+type azureAdapter struct {
+	exchange TokenExchanger
+}
 
 func (azureAdapter) Provider() Provider { return ProviderAzure }
 
@@ -123,12 +127,18 @@ func azureAdminConsent(pack CapabilityPack) string {
 		"4. Return to Correlix and run Validate Trust.\n"
 }
 
-func (a azureAdapter) ExchangeCredential(_ context.Context, _ ExchangeRequest) (ScopedToken, error) {
-	// Runtime path (documented follow-up): present the Correlix workload OIDC
-	// assertion to Entra (client_assertion_type=jwt-bearer, federated credential)
-	// → short-lived Azure AD token for management.azure.com. Certificate/secret
-	// variants use the same token endpoint with the respective client credential.
-	return ScopedToken{}, ErrProviderExchangeDeferred
+// ExchangeCredential acquires a short-lived Entra access token: the Correlix
+// workload OIDC assertion (client_assertion, federated credential) for WIF, or
+// the Vault-decrypted client secret for the legacy method. The configuration is
+// re-validated first — an invalid config never reaches the wire (zero trust).
+func (a azureAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest) (ScopedToken, error) {
+	if a.exchange == nil {
+		return ScopedToken{}, ErrProviderExchangeDeferred
+	}
+	if res := a.ValidateConfiguration(req.Identity); !res.OK {
+		return ScopedToken{}, &ExchangeError{Provider: ProviderAzure, Code: "request_invalid", Msg: "identity configuration has blocking findings"}
+	}
+	return a.exchange.Exchange(ctx, req)
 }
 
 func (a azureAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {
