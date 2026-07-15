@@ -17,6 +17,7 @@ import boto3
 from kafka import KafkaProducer
 
 import azure
+import azure_logs
 import azure_topology
 import cloud_events
 import cloudmetrics
@@ -68,6 +69,10 @@ METRICS_EVERY_S = int(os.environ.get("CW_METRICS_EVERY_S", "300"))
 # free tier), so the Azure lane polls faster.
 AZ_METRICS_EVERY_S = int(os.environ.get("AZ_METRICS_EVERY_S", "60"))
 AZ_HEALTH_EVERY_S = int(os.environ.get("AZ_HEALTH_EVERY_S", "120"))
+# Azure storage-delivered log lanes (#105 build order #2: VNet flow logs + the
+# AppGW/FD/WAF/DNS fidelity families). Gated inside azure_logs (storage account
+# env unset = every lane off — honest absence, mirroring the AWS S3 lanes).
+AZ_LOGS_EVERY_S = int(os.environ.get("AZ_LOGS_EVERY_S", "60"))
 STATE_PATH = os.path.join(OUT_DIR, ".poller-state.json")
 # The flow-log sink is APPENDED to forever today. At real flow volume that fills
 # the disk and takes the poller (and the correlation tailer) down with it
@@ -295,6 +300,9 @@ def main():
     az_vms: list[dict] = []
     az_ready = azure.configured()
     jlog("azure lane", configured=az_ready)
+    jlog("azure storage-log lanes", configured=az_ready and azure_logs.configured(),
+         lanes=sorted(azure_logs.lanes()) if az_ready else [])
+    last_az_logs = 0.0
     gcp_ready = gcp.configured()
     jlog("gcp lane", configured=gcp_ready)
     last_gcp_inventory = 0.0
@@ -434,6 +442,20 @@ def main():
                     except Exception as exc:  # noqa: BLE001 - lane isolation
                         jlog("azure seam error", error=str(exc)[:200])
                     last_az_seam = now
+                # Storage-delivered log lanes (VNet flow / LB access / WAF /
+                # DNS → bounded rollups on netops.cloud). Own guard: a storage
+                # hiccup must never block metrics/health/activity (P1-11);
+                # azure_logs.run additionally isolates each container inside.
+                if azure_logs.configured() and now - last_az_logs >= AZ_LOGS_EVERY_S:
+                    try:
+                        stok = azure.token(scope=azure_logs.STORAGE_SCOPE)
+                        counts = azure_logs.run(stok, producer, TENANT, st)
+                        save_state(st)
+                        if any(counts.values()):
+                            jlog("azure log lanes", **counts)
+                    except Exception as exc:  # noqa: BLE001 - lane isolation
+                        jlog("azure logs error", error=str(exc)[:200])
+                    last_az_logs = now
                 if now - last_az_health >= AZ_HEALTH_EVERY_S:
                     h = azure.poll_resource_health(tok, producer, TENANT)
                     since = st.get("azure_activity_ts") or _iso_minutes_ago(15)

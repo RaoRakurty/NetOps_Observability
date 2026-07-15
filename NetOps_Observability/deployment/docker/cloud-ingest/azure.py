@@ -87,13 +87,16 @@ def _get_json(url: str, token: str) -> dict:
         return json.loads(r.read() or b"{}")
 
 
-def token() -> str:
-    """Client-credentials token for ARM. One form POST — no SDK required."""
+def token(scope: str = "https://management.azure.com/.default") -> str:
+    """Client-credentials token — one form POST, no SDK required. Default
+    audience is ARM; the storage-log lanes pass the STORAGE audience
+    (azure_logs.STORAGE_SCOPE) — same SP, different resource (the documented
+    auth choice for the blob reader: no second secret, no SharedKey HMAC)."""
     body = urllib.parse.urlencode({
         "grant_type": "client_credentials",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "scope": "https://management.azure.com/.default",
+        "scope": scope,
     }).encode()
     out = _post_json(
         f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
