@@ -4,4 +4,12 @@ FROM python:3.12-slim
 # container, not the stdlib-only Go backend).
 RUN pip install --no-cache-dir boto3 kafka-python-ng==2.2.3 google-auth requests
 COPY poller.py discover.py cloudmetrics.py azure.py gcp.py seam_state.py seam_aws.py trail_state.py /
+# Non-root by design (SC-008 / Trivy DS-0002). This lab poller reads AWS creds
+# from a mounted ~/.aws (mode 600, owned by the lab operator uid/gid 1000) and
+# writes the live inventory + flow logs into host bind-mounts owned by that same
+# 1000:1000. Running as 1000:1000 reads/writes all of them with NO root — the
+# creds mount is remapped to this user's home (see the compose override).
+RUN groupadd -g 1000 poller && useradd -u 1000 -g 1000 -m -d /home/poller poller
+ENV HOME=/home/poller
+USER poller
 CMD ["python", "-u", "/poller.py"]
