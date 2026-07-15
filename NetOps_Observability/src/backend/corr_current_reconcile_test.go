@@ -53,6 +53,63 @@ func TestCorrCurrentBackfillIsIdempotent(t *testing.T) {
 	}
 }
 
+// Orphaned-open sweep (2026-07-15 Command Center pollution): engine restarts
+// abandon open objects forever; the janitor closes them through HISTORY
+// (auditable), wide columns never crossing the narrow fold.
+func TestOrphanClosePickIsNarrowAndBounded(t *testing.T) {
+	sql := corrOrphanClosePickSQL(24)
+	if !strings.Contains(sql, "LIMIT 1 BY tenant_id, correlation_id") {
+		t.Fatal("orphan pick lost its latest-version fold")
+	}
+	for _, wide := range []string{"hypotheses", "layer_coverage", "app_impact"} {
+		if strings.Contains(sql, wide) {
+			t.Errorf("orphan pick folds wide column %q — narrow keys only (#100)", wide)
+		}
+	}
+	if !strings.Contains(sql, "FROM netops.corr_current FINAL") ||
+		!strings.Contains(sql, "state = 'open'") ||
+		!strings.Contains(sql, "INTERVAL 24 HOUR") {
+		t.Fatalf("orphan pick must be keyed to stale OPEN projection rows:\n%s", sql)
+	}
+	// The fold must be bounded to the orphan set, never a whole-history scan.
+	foldAt := strings.Index(sql, "ORDER BY")
+	inAt := strings.Index(sql, "IN (")
+	if inAt == -1 || foldAt == -1 || inAt > foldAt {
+		t.Fatal("orphan pick's history fold is not pre-keyed by the projection orphan set")
+	}
+}
+
+func TestOrphanCloseWritesAuditableHistoryVersion(t *testing.T) {
+	sql := corrOrphanCloseSQL(24)
+	for _, want := range []string{
+		"INSERT INTO netops.corr_objects",
+		"version + 1, 'closed'",
+		corrOrphanCloseMarker,
+		"now64(3)",
+		// exact-row keying: version-counter resets after engine restarts mean
+		// (tenant,id,version) alone can match two rows — created_at disambiguates.
+		"(tenant_id, correlation_id, version, created_at) IN (",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("orphan close SQL missing %q:\n%s", want, sql)
+		}
+	}
+	// Every history column must be carried into the closing version (a dropped
+	// column silently zeroes data on the object's terminal row).
+	for _, col := range []string{"trigger_signal", "hypotheses", "layer_coverage",
+		"app_impact", "merged_into", "topology_version", "catalog_version"} {
+		if !strings.Contains(sql, col) {
+			t.Errorf("closing version drops history column %q", col)
+		}
+	}
+}
+
+func TestOrphanCountMatchesPick(t *testing.T) {
+	if !strings.Contains(corrOrphanCountSQL(6), "INTERVAL 6 HOUR") {
+		t.Fatal("orphan count does not honor the configured threshold")
+	}
+}
+
 func TestCHWorkloadProfileRouting(t *testing.T) {
 	cases := map[string]string{
 		"api:/api/correlations":         "hot_ui",

@@ -31,8 +31,11 @@ func TestIngestStatusFor(t *testing.T) {
 }
 
 // A source with no producer must never report coverage we do not have.
+// dns_logs/firewall_logs left this list with the #105 log-fidelity lanes
+// (`4974ca0`): the correlation tailer's .waf/.dns lanes produce
+// cloud_waf_log/cloud_dns_log, so they are "available" (off until fed).
 func TestSourcesWithoutProducersHaveNoKinds(t *testing.T) {
-	for _, src := range []string{"traces", "dns_logs", "firewall_logs", "nat_logs"} {
+	for _, src := range []string{"traces", "nat_logs"} {
 		if kinds, ok := cloudSourceKinds[src]; ok && len(kinds) > 0 {
 			t.Fatalf("%s claims kinds %v but has no producer — it would report false coverage", src, kinds)
 		}

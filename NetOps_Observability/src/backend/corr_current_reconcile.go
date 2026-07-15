@@ -103,9 +103,77 @@ func corrCurrentDriftCountSQL(lookbackDays int) string {
 	return `SELECT count() AS drifted FROM (` + corrCurrentDriftSelect(lookbackDays) + `) FORMAT JSON`
 }
 
+// ── Orphaned-open sweep ───────────────────────────────────────────────────────
+//
+// The engine closes an object when its window quiesces — but only for objects
+// it TRACKS. An engine restart drops the in-memory windows, so any object that
+// was open at restart time never receives a closing version: it sits "open"
+// on the Command Center forever (live incident 2026-07-15: open+confirmed rows
+// from June still in the action queue). A live open object is re-persisted at
+// least every CORR_VERSION_HEARTBEAT_S (900s), so an open projection row with
+// no persist for many hours is definitively abandoned. The sweep writes an
+// AUDITABLE closing version into history (engine_version marks the janitor),
+// then the drift repair re-projects it — Command Center state stays backed by
+// corr_objects history, never a projection-only edit.
+
+// corrOrphanCloseMarker identifies janitor-authored closing versions in history.
+const corrOrphanCloseMarker = "reconciler/orphan-close"
+
+// corrOrphanCloseInsertHead copies every history column of the picked latest
+// versions into a closing version (state='closed', version+1, fresh
+// created_at). Wide columns are carried VERBATIM — no fold in this literal
+// (#100 rule 2: the fold lives in corrOrphanClosePickSQL, narrow keys only).
+const corrOrphanCloseInsertHead = `INSERT INTO netops.corr_objects
+    (tenant_id, correlation_id, version, state, window_start, window_end, trigger_signal,
+     top_hypothesis, top_confidence, verdict_tier, hypotheses, evidence_missing, affected,
+     signal_count, node_count, engine_version, topology_version, catalog_version,
+     layer_coverage, app_impact, merged_into, created_at)
+SELECT tenant_id, correlation_id, version + 1, 'closed', window_start, window_end, trigger_signal,
+       top_hypothesis, top_confidence, verdict_tier, hypotheses, evidence_missing, affected,
+       signal_count, node_count, '` + corrOrphanCloseMarker + `', topology_version, catalog_version,
+       layer_coverage, app_impact, merged_into, now64(3)
+  FROM netops.corr_objects
+ WHERE (tenant_id, correlation_id, version, created_at) IN (`
+
+// corrOrphanClosePickSQL picks the exact latest history row of every orphaned
+// open object: projection rows still 'open' whose last persist is older than
+// the threshold. Narrow fold, keyed to the (small) orphan set — never a
+// whole-history scan; created_at ordering because engine restarts reset
+// version counters. The outer state filter skips objects whose history is
+// already terminal (a lost projection write — the drift repair owns those).
+func corrOrphanClosePickSQL(hours int) string {
+	h := strconv.Itoa(hours)
+	return `
+       SELECT tenant_id, correlation_id, version, created_at
+         FROM (
+              SELECT tenant_id, correlation_id, version, state, created_at
+                FROM netops.corr_objects
+               WHERE (tenant_id, correlation_id) IN (
+                     SELECT tenant_id, correlation_id
+                       FROM netops.corr_current FINAL
+                      WHERE state = 'open'
+                        AND created_at < now() - INTERVAL ` + h + ` HOUR)
+               ORDER BY tenant_id, correlation_id, created_at DESC
+               LIMIT 1 BY tenant_id, correlation_id
+         )
+        WHERE state = 'open'`
+}
+
+// corrOrphanCloseSQL writes the closing versions for every orphaned open object.
+func corrOrphanCloseSQL(hours int) string {
+	return corrOrphanCloseInsertHead + corrOrphanClosePickSQL(hours) + `)`
+}
+
+// corrOrphanCountSQL measures the orphan backlog without writing (logging +
+// dry-run; the runbook's verify step).
+func corrOrphanCountSQL(hours int) string {
+	return `SELECT count() AS orphaned FROM (` + corrOrphanClosePickSQL(hours) + `) FORMAT JSON`
+}
+
 // corrCurrentReconcileLoop runs the drift detect/repair on a timer.
 // CORR_CURRENT_RECONCILE_INTERVAL (default 1h, 0 = disabled) /
-// CORR_CURRENT_RECONCILE_LOOKBACK_DAYS (default 7, floor 1).
+// CORR_CURRENT_RECONCILE_LOOKBACK_DAYS (default 7, floor 1) /
+// CORR_ORPHAN_OPEN_CLOSE_HOURS (default 24, 0 = orphan sweep disabled).
 func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 	interval := durationOr("CORR_CURRENT_RECONCILE_INTERVAL", time.Hour)
 	if interval <= 0 {
@@ -116,6 +184,12 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 	if raw := envOr("CORR_CURRENT_RECONCILE_LOOKBACK_DAYS", ""); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 1 {
 			lookback = n
+		}
+	}
+	orphanHours := 24
+	if raw := envOr("CORR_ORPHAN_OPEN_CLOSE_HOURS", ""); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			orphanHours = n
 		}
 	}
 	base := envOr("CLICKHOUSE_URL", "")
@@ -129,6 +203,26 @@ func (s *server) corrCurrentReconcileLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+		// Orphaned-open sweep FIRST: the closing versions it writes are exactly
+		// what the drift repair below re-projects in the same tick.
+		if orphanHours > 0 {
+			rows, err := s.chRowsScope(ctx, "__all__", corrOrphanCountSQL(orphanHours),
+				"worker:corr-current-reconcile")
+			n := 0
+			if err == nil && len(rows) == 1 {
+				n = int(asFloat(rows[0]["orphaned"]))
+			}
+			if err != nil {
+				log.Printf("corr-current-reconcile: orphan count failed: %v", err)
+			} else if n > 0 {
+				log.Printf("corr-current-reconcile: orphaned_open=%d threshold_hours=%d action=close", n, orphanHours)
+				if msg := chExecErr(base, corrOrphanCloseSQL(orphanHours)); msg != "" {
+					log.Printf("corr-current-reconcile: orphan close failed: %s", msg)
+				} else {
+					log.Printf("corr-current-reconcile: orphan_closed=%d (janitor closing versions written to history)", n)
+				}
+			}
 		}
 		rows, err := s.chRowsScope(ctx, "__all__", corrCurrentDriftCountSQL(lookback),
 			"worker:corr-current-reconcile")
