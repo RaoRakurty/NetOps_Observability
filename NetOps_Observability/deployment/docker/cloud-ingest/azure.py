@@ -189,23 +189,16 @@ def poll_resource_health(tok: str, producer, tenant: str) -> int:
             continue  # healthy is the absence of a fault signal (anti-noise)
         rid = str(st.get("id", "")).split("/providers/Microsoft.ResourceHealth")[0]
         sev = {"Unavailable": "crit", "Degraded": "high"}.get(state, "warn")
-        producer.send("netops.cloud", {
-            "kind": "cloud_resource_health",
-            "tenant_id": tenant,
-            "resource_id": rid,
-            "region": REGION,
-            "severity": sev,
-            "ts": props.get("occuredTime") or dt.datetime.now(dt.timezone.utc).isoformat(),
-            "attrs": {
-                "provider": "azure",
-                "account": SUBSCRIPTION,
+        producer.send("netops.cloud", cloud_events.health_event(
+            provider="azure", tenant=tenant, resource_id=rid, region=REGION,
+            severity=sev, state=state, account=SUBSCRIPTION,
+            ts=props.get("occuredTime") or dt.datetime.now(dt.timezone.utc).isoformat(),
+            attrs={
                 "region": REGION,
-                "state": state,
                 # WHOSE fault: the platform's or the customer's.
                 "reason": props.get("reasonType", ""),
                 "summary": props.get("summary", "")[:300],
-            },
-        })
+            }))
         n += 1
     return n
 
@@ -246,23 +239,19 @@ def poll_activity_log(tok: str, producer, tenant: str, since: str) -> tuple[int,
                 continue
             if str((e.get("status") or {}).get("value", "")) not in ("Succeeded", "Failed"):
                 continue  # 'Started' is bookkeeping, not a completed change
-            producer.send("netops.cloud", {
-                "kind": "cloud_change",
-                "tenant_id": tenant,
-                "resource_id": e.get("resourceId", ""),
-                "region": e.get("resourceGroupName", "") or REGION,
-                "severity": "medium",
-                "metric_name": (e.get("operationName") or {}).get("value", ""),
-                "ts": ts,
-                "attrs": {
-                    "provider": "azure",
-                    "account": SUBSCRIPTION,
+            producer.send("netops.cloud", cloud_events.change_event(
+                provider="azure", tenant=tenant,
+                resource_id=e.get("resourceId", ""),
+                region=e.get("resourceGroupName", "") or REGION,
+                severity="medium",
+                metric_name=(e.get("operationName") or {}).get("value", ""),
+                ts=ts, account=SUBSCRIPTION,
+                attrs={
                     "actor": (e.get("caller") or ""),
                     "event_source": (e.get("resourceProviderName") or {}).get("value", ""),
                     "request_id": e.get("correlationId", ""),
                     "status": (e.get("status") or {}).get("value", ""),
-                },
-            })
+                }))
             n += 1
         url = res.get("nextLink") or ""
     # A cleanly-fetched EMPTY window still advances (to the delivery-lagged

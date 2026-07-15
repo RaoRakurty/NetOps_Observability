@@ -79,3 +79,75 @@ def metric_event(
         "unit": unit,
         "ts": ts,
     }
+
+
+# ── netops.cloud control-plane events (change / health) ──────────────────────
+# These ride Kafka netops.cloud (not the field-filtered Vector metrics lane), but
+# the SAME normalization discipline applies: AWS/Azure/GCP historically buried the
+# ROUTING fields (provider, account) in the `attrs` bag and disagreed on which
+# top-level keys they set. The correlation ingest reads top-level `provider`
+# (app_producers.py), so these builders promote provider + account to top-level
+# (never buried) while keeping them in `attrs` too for back-compat, and guarantee
+# the three providers emit an IDENTICAL top-level key set. `attrs` is the
+# provider-specific DIMENSION bag — legitimately varies, not part of the contract.
+
+# Canonical top-level fields common to every cloud control-plane event.
+CHANGE_EVENT_FIELDS: tuple[str, ...] = (
+    "kind", "tenant_id", "provider", "account", "resource_id", "region",
+    "severity", "metric_name", "observed_at", "ts", "attrs",
+)
+HEALTH_EVENT_FIELDS: tuple[str, ...] = (
+    "kind", "tenant_id", "provider", "account", "resource_id", "region",
+    "severity", "state", "observed_at", "ts", "attrs",
+)
+
+_VALID_SEVERITY = frozenset(("info", "low", "medium", "warn", "high", "crit"))
+
+
+def _base_cloud_event(kind: str, *, provider: str, tenant: str, resource_id: str,
+                      region: str, severity: str, ts: str, account: str,
+                      attrs: dict | None) -> dict:
+    if not provider.strip():
+        raise ValueError("cloud event: missing provider")
+    if severity not in _VALID_SEVERITY:
+        raise ValueError(f"cloud event: bad severity {severity!r}")
+    dims = dict(attrs or {})
+    # Routing fields stay in attrs too (back-compat) but are NOT the truth there.
+    dims.setdefault("provider", provider)
+    dims.setdefault("account", account)
+    return {
+        "kind": kind,
+        "tenant_id": tenant,
+        "provider": provider,
+        "account": account,
+        "resource_id": resource_id,
+        "region": region,
+        "severity": severity,
+        "observed_at": ts,
+        "ts": ts,
+        "attrs": dims,
+    }
+
+
+def change_event(*, provider: str, tenant: str, resource_id: str, region: str,
+                 severity: str, metric_name: str, ts: str, account: str = "",
+                 attrs: dict | None = None) -> dict:
+    """A CloudChangeEvent (kind=cloud_change) — a control-plane mutation. Routing
+    fields top-level; attrs carries provider-specific dimensions."""
+    ev = _base_cloud_event("cloud_change", provider=provider, tenant=tenant,
+                           resource_id=resource_id, region=region, severity=severity,
+                           ts=ts, account=account, attrs=attrs)
+    ev["metric_name"] = metric_name
+    return ev
+
+
+def health_event(*, provider: str, tenant: str, resource_id: str, region: str,
+                 severity: str, state: str, ts: str, account: str = "",
+                 attrs: dict | None = None) -> dict:
+    """A CloudHealthEvent (kind=cloud_resource_health) — a provider-declared
+    resource-health state. `state` is promoted top-level (a routing fact)."""
+    ev = _base_cloud_event("cloud_resource_health", provider=provider, tenant=tenant,
+                           resource_id=resource_id, region=region, severity=severity,
+                           ts=ts, account=account, attrs=attrs)
+    ev["state"] = state
+    return ev

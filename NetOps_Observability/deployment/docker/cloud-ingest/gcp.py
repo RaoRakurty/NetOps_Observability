@@ -282,23 +282,16 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
         if not method or method.endswith(CHANGE_EXCLUDE_SUFFIXES):
             continue
         ts = str(e.get("timestamp", ""))
-        producer.send("netops.cloud", {
-            "kind": "cloud_change",
-            "tenant_id": tenant,
-            "resource_id": str(proto.get("resourceName", "")),
-            "region": "",
-            "severity": "info",
-            "metric_name": method,
-            "ts": ts,
-            "attrs": {
-                "provider": "gcp",
-                "account": PROJECT,
+        producer.send("netops.cloud", cloud_events.change_event(
+            provider="gcp", tenant=tenant,
+            resource_id=str(proto.get("resourceName", "")),
+            region="", severity="info", metric_name=method, ts=ts, account=PROJECT,
+            attrs={
                 "event_name": method,
                 "actor": str((proto.get("authenticationInfo") or {}).get("principalEmail", "")),
                 "event_source": "gcp_audit_log",
                 "request_id": str(e.get("insertId", "")),
-            },
-        })
+            }))
         n += 1
     # A cleanly-fetched EMPTY window still advances (delivery-lagged now) so
     # quiet periods stay one page wide instead of growing without bound.

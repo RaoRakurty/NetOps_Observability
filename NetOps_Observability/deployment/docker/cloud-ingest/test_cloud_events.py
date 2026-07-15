@@ -18,7 +18,9 @@ import json
 import pathlib
 import unittest
 
-from cloud_events import METRIC_EVENT_FIELDS, metric_event
+from cloud_events import (CHANGE_EVENT_FIELDS, HEALTH_EVENT_FIELDS,
+                          METRIC_EVENT_FIELDS, change_event, health_event,
+                          metric_event)
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -67,6 +69,45 @@ class TestBuilder(unittest.TestCase):
         with self.assertRaises(ValueError):
             metric_event(vendor="aws", device="d", index="i", metric="m",
                          value=True, unit="count", ts="t")  # type: ignore[arg-type]
+
+
+def _change(vendor: str) -> dict:
+    return change_event(provider=vendor, tenant="t", resource_id="r", region="reg",
+                        severity="medium", metric_name="Modify", ts="2026-07-15T00:00:00Z",
+                        account="acct", attrs={"actor": "u"})
+
+
+def _health(vendor: str) -> dict:
+    return health_event(provider=vendor, tenant="t", resource_id="r", region="reg",
+                        severity="crit", state="Unavailable", ts="2026-07-15T00:00:00Z",
+                        account="acct")
+
+
+class TestControlPlaneContract(unittest.TestCase):
+    def test_change_event_identical_across_providers(self):
+        aws, az, g = _change("aws"), _change("azure"), _change("gcp")
+        self.assertEqual(set(aws), set(CHANGE_EVENT_FIELDS))
+        self.assertEqual(set(aws), set(az))
+        self.assertEqual(set(az), set(g))
+
+    def test_health_event_identical_across_providers(self):
+        aws, az, g = _health("aws"), _health("azure"), _health("gcp")
+        self.assertEqual(set(aws), set(HEALTH_EVENT_FIELDS))
+        self.assertEqual(set(aws), set(az))
+        self.assertEqual(set(az), set(g))
+
+    def test_routing_fields_top_level_not_only_in_attrs(self):
+        # provider + account must be readable WITHOUT digging into the label bag.
+        ev = _change("azure")
+        self.assertEqual(ev["provider"], "azure")
+        self.assertEqual(ev["account"], "acct")
+        # kept in attrs too (back-compat), but the top-level is the routing truth.
+        self.assertEqual(ev["attrs"]["provider"], "azure")
+
+    def test_bad_severity_rejected(self):
+        with self.assertRaises(ValueError):
+            change_event(provider="aws", tenant="t", resource_id="r", region="reg",
+                         severity="BOGUS", metric_name="m", ts="t")
 
 
 class _FakeCW:
@@ -145,6 +186,13 @@ class TestNoHandRolledEvents(unittest.TestCase):
             src = (HERE / fn).read_text()
             self.assertNotIn('"observer_type"', src,
                              f"{fn} hand-rolls a MetricEvent — route it through cloud_events.metric_event")
+        # Change/health events must also go through the shared builders so every
+        # provider stays key-identical (the exact drift that split AWS/Azure/GCP).
+        for fn in ("azure.py", "gcp.py", "poller.py"):
+            src = (HERE / fn).read_text()
+            for lit in ('"kind": "cloud_change"', '"kind": "cloud_resource_health"'):
+                self.assertNotIn(lit, src,
+                                 f"{fn} hand-rolls {lit} — route it through cloud_events.change_event/health_event")
 
 
 if __name__ == "__main__":
