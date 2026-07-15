@@ -757,7 +757,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRealUser           int
 		impactRealUserIndicator  int
 		realUserLanesPresent     bool
-		impactLanesPresent       bool
 		changes                  []rcaCloudChange
 		stateUps                 []rcaStateUp
 	)
@@ -839,12 +838,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		attached, _ := sig["attached"].(bool)
 		if rcaCloudChangeKinds[kind] && !attached && !strings.HasSuffix(kind, "_clear") {
 			changes = append(changes, decodeCloudChange(sig, false))
-		}
-	}
-	// any lane that could carry customer impact present at all?
-	for _, lane := range []string{"active_probe", "passive_flow"} {
-		if laneTotal[lane] > 0 {
-			impactLanesPresent = true
 		}
 	}
 	// real-user impact is observable only where real-traffic telemetry exists:
@@ -974,13 +967,22 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRU = "confirmed"
 	case impactRealUser > 0:
 		impactRU = "detected"
-	case impactRealUserIndicator > 0:
+	case impactRealUserIndicator > 0 || laneAnomalous["passive_flow"] > 0:
+		// P1.5: ANY anomalous real-traffic observation is an INDICATOR — the
+		// classification is lane-based, never kind-name-based, so provider flow
+		// kinds (cloud_flow_log, …) can never fall through to a no-impact claim.
+		// One uncorroborated traffic class from one observer NEVER grounds
+		// "none detected": the lane that raised the case cannot also clear it.
 		impactRU = "indicator_detected"
 	case realUserLanesPresent && laneCovers("passive_flow"):
 		impactRU = "none_detected"
 	}
 	// Overall impact summarizes the axes; it never claims more than the
 	// strongest axis. "Missing evidence is not evidence of no impact."
+	// A "none detected" CLAIM additionally requires sufficient multi-class
+	// coverage (P1.6): both the synthetic and the real-traffic axis observed
+	// the window and neither carried an anomaly. A single covering class is
+	// partial coverage — it can honestly report its own axis, never the claim.
 	impact := "unknown"
 	switch {
 	case impactRU == "confirmed":
@@ -989,8 +991,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impact = "detected"
 	case impactRU == "indicator_detected":
 		impact = "indicator_detected"
-	case impactLanesPresent && (impactSyn == "none_detected" || impactRU == "none_detected"):
+	case impactSyn == "none_detected" && impactRU == "none_detected":
 		impact = "none_detected"
+	case impactSyn == "none_detected" || impactRU == "none_detected":
+		impact = "unknown" // partial coverage — cannot ground a no-impact claim
 	default:
 		impact = "not_observable"
 	}
@@ -1333,7 +1337,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	ownership := buildOwnership(analysis, loc.Localized, scope.ServiceClassification, hb, sigSummary)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
-	decision := buildDecision(analysis, incident, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
+	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
 	decision.TicketRecommended = ticketRecommended
 	decision.TicketRecommendReason = ticketRecReason
 	if ticketExecNote == "" && decision.EscalationState == "triggered" &&
@@ -1352,7 +1356,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
+	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
 
 	// ---- actions (contextual planner, P1.13) --------------------------------------------------------
 	actions := planActions(rcaActionInput{

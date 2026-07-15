@@ -158,6 +158,14 @@ func assertRcaInvariants(t *testing.T, rep rcaReport) {
 	if st.Impact == "confirmed" && st.ImpactRealUser != "confirmed" {
 		fail("impact confirmed without confirmed real-user impact")
 	}
+	// no "no impact" claim without sufficient multi-class coverage (P1.6)
+	if st.Impact == "none_detected" && (st.ImpactSynthetic != "none_detected" || st.ImpactRealUser != "none_detected") {
+		fail("impact none_detected without multi-class coverage (syn=%s ru=%s)", st.ImpactSynthetic, st.ImpactRealUser)
+	}
+	// monitoring/decision copy never claims recovery without recovery evidence
+	if strings.Contains(strings.ToLower(rep.Decision.Reason), "has recovered") && st.Recovery != "explicitly_confirmed" {
+		fail("decision copy claims recovery while recovery is %q: %s", st.Recovery, rep.Decision.Reason)
+	}
 	// no CRIT solely from a single uncorroborated stream
 	if st.SeverityIncident == "crit" {
 		for _, c := range st.SeverityReasonCodes {
@@ -289,6 +297,28 @@ func TestScenarioFlowOnlyCloudConnectivity(t *testing.T) {
 			}
 			if !has {
 				t.Fatalf("severity codes missing cap basis: %v", rep.States.SeverityReasonCodes)
+			}
+			// P1.5/P1.6 residue: one uncorroborated flow class must NEVER render
+			// a "no impact" claim — badge or management sentence.
+			if rep.States.Impact == "none_detected" {
+				t.Fatalf("flow-only case claims impact none_detected")
+			}
+			if rep.States.Impact != "indicator_detected" {
+				t.Fatalf("flow-only impact = %q, want indicator_detected", rep.States.Impact)
+			}
+			if strings.Contains(rep.Summary.Management, "No customer impact") {
+				t.Fatalf("management summary claims no impact from one flow class: %s", rep.Summary.Management)
+			}
+			// no recovery evidence → monitoring copy states "no longer observed",
+			// never a recovery claim.
+			if rep.Decision.Decision != "Monitor" {
+				t.Fatalf("decision = %q, want Monitor", rep.Decision.Decision)
+			}
+			if !strings.Contains(rep.Decision.Reason, "no recovery evidence was captured") {
+				t.Fatalf("monitoring copy missing no-recovery statement: %s", rep.Decision.Reason)
+			}
+			if strings.Contains(strings.ToLower(rep.Decision.Reason), "has recovered") {
+				t.Fatalf("monitoring copy claims recovery: %s", rep.Decision.Reason)
 			}
 		},
 	}
@@ -810,6 +840,80 @@ func TestScenarioMatrixGeneric(t *testing.T) {
 			custom: func(t *testing.T, rep rcaReport) {
 				if len(rep.Hypotheses) != 0 || rep.States.Severity != "unknown" {
 					t.Fatalf("empty slice fabricated content: %+v", rep.States)
+				}
+			},
+		}),
+		// (31) provider-named flow kind (cloud_flow_log rides passive_flow but has
+		// no flow_ prefix) — the live P-261D09 residue: the indicator
+		// classification is LANE-based, so a provider kind can never fall
+		// through to a "none detected" impact claim.
+		mk(rcaScenario{
+			name: "provider flow kind indicator",
+			meta: testMeta("closed", "suspected", "sig.ent.cloud.private-connectivity-down",
+				testHyp("sig.ent.cloud.private-connectivity-down", 0.45, "suspected",
+					[]string{"cloud_flow_log"}, nil, nil, "cloud_provider", false)),
+			sigs: []map[string]any{
+				testSig("cloud_flow_log", "passive_flow", "cloud:acct:usw2", "app", "portal", "crit", "2026-07-12 18:10:00", true, nil),
+			},
+			incident: "no_longer_observed", recovery: "inferred",
+			impactRU: "indicator_detected", sevIncident: "warn",
+			custom: func(t *testing.T, rep rcaReport) {
+				if rep.States.Impact != "indicator_detected" {
+					t.Fatalf("impact = %q, want indicator_detected", rep.States.Impact)
+				}
+				if strings.Contains(rep.Summary.Management, "No customer impact") {
+					t.Fatalf("no-impact claim from one provider flow class: %s", rep.Summary.Management)
+				}
+				if !strings.Contains(rep.Decision.Reason, "no recovery evidence was captured") {
+					t.Fatalf("monitoring copy: %s", rep.Decision.Reason)
+				}
+			},
+		}),
+		// (32) sufficient multi-class coverage, no impact anomalies — the honest
+		// "none detected within coverage" claim is KEPT when both the synthetic
+		// and real-traffic axes covered the window cleanly.
+		mk(rcaScenario{
+			name: "multi-class clean coverage none detected",
+			meta: testMeta("open", "confirmed", "sig.ent.access.uplink-down",
+				testHypSteps("sig.ent.access.uplink-down", 0.9, "confirmed",
+					[]string{"interface_down"}, "netops",
+					"Validate interface admin/oper state and error counters on the access switch")),
+			sigs: []map[string]any{
+				testSig("interface_down", "control_plane", "lan-sw1", "interface", "lan-sw1:Gi0/1", "high", "2026-07-12 18:00:00", true, nil),
+				// covering, non-anomalous impact telemetry on BOTH axes
+				testSig("probe_rtt", "active_probe", "prober-1", "path", "prober-1->10.10.1.1", "info", "2026-07-12 18:00:00", false, nil),
+				testSig("flow_volume", "passive_flow", "exp-1", "interface", "if1", "info", "2026-07-12 18:00:00", false, nil),
+			},
+			incident: "active", impactRU: "none_detected",
+			mgmtMustContain: []string{"No customer impact was detected within available telemetry coverage"},
+			custom: func(t *testing.T, rep rcaReport) {
+				if rep.States.Impact != "none_detected" {
+					t.Fatalf("impact = %q (syn=%s ru=%s), want none_detected",
+						rep.States.Impact, rep.States.ImpactSynthetic, rep.States.ImpactRealUser)
+				}
+			},
+		}),
+		// (33) partial coverage — only the synthetic axis observed cleanly: the
+		// overall no-impact claim is NOT made.
+		mk(rcaScenario{
+			name: "partial coverage no no-impact claim",
+			meta: testMeta("open", "confirmed", "sig.ent.access.uplink-down",
+				testHyp("sig.ent.access.uplink-down", 0.9, "confirmed",
+					[]string{"interface_down"}, nil, nil, "netops", false)),
+			sigs: []map[string]any{
+				testSig("interface_down", "control_plane", "lan-sw1", "interface", "lan-sw1:Gi0/1", "high", "2026-07-12 18:00:00", true, nil),
+				testSig("probe_rtt", "active_probe", "prober-1", "path", "prober-1->10.10.1.1", "info", "2026-07-12 18:00:00", false, nil),
+			},
+			incident: "active",
+			custom: func(t *testing.T, rep rcaReport) {
+				if rep.States.Impact == "none_detected" {
+					t.Fatal("partial coverage must not ground a no-impact claim")
+				}
+				if rep.States.ImpactSynthetic != "none_detected" {
+					t.Fatalf("synthetic axis = %q, want its own honest none_detected", rep.States.ImpactSynthetic)
+				}
+				if strings.Contains(rep.Summary.Management, "No customer impact was detected") {
+					t.Fatalf("management claims no impact on partial coverage: %s", rep.Summary.Management)
 				}
 			},
 		}),

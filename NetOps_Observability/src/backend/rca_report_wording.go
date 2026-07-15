@@ -557,7 +557,7 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 
 // ---- decision --------------------------------------------------------------------------------
 
-func buildDecision(analysis, incident, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
+func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
 	polName := pol.Name
 	if !configured {
 		polName = pol.Name + " (platform default — no tenant policy configured)"
@@ -587,9 +587,21 @@ func buildDecision(analysis, incident, impact, monitoring string, generatedAt st
 	case analysis == "confirmed" && incident == "active":
 		d.Decision = "Open incident"
 		d.Reason = "Customer impact and fault are confirmed by independent evidence; restoration workflow should begin."
-	case incident == "recovered" || incident == "closed":
+	case incident == "recovered" || incident == "closed" || incident == "no_longer_observed":
+		// Monitoring copy is RECOVERY-STATE-AWARE (P1.5/P1.6 residue): "has
+		// recovered" may only ever render on observed recovery evidence. A
+		// window that merely quiesced is "no longer observed" — never recovered.
 		d.Decision = "Monitor"
-		d.Reason = "The condition has recovered. The case is held in a monitoring window; it reopens on recurrence and closes clean otherwise."
+		switch recoveryState {
+		case "explicitly_confirmed":
+			d.Reason = "The condition has recovered. The case is held in a monitoring window; it reopens on recurrence and closes clean otherwise."
+		case "not_applicable":
+			d.Reason = "This case was merged into another; lifecycle and monitoring continue on the surviving case."
+		case "component_only", "failed_validation":
+			d.Reason = "The condition is no longer observed, but recovery is not confirmed end-to-end — recovery evidence did not cover every participating scope. The case reopens on recurrence."
+		default: // inferred | not_observed — no recovery evidence: never claim recovery
+			d.Reason = "The condition is no longer observed; no recovery evidence was captured. The case reopens on recurrence."
+		}
 	case analysis == "probable" || (analysis == "suspected" && impact == "detected"):
 		d.Decision = "Investigate"
 		d.Reason = "Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident."
@@ -705,7 +717,7 @@ func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneA
 
 // ---- management summary (§3) -----------------------------------------------------------------------
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment) string {
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment) string {
 	var b strings.Builder
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
@@ -769,7 +781,14 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	case "not_observable":
 		b.WriteString("Customer impact could not be assessed — impact telemetry coverage was unavailable or insufficient for this window. ")
 	default:
-		b.WriteString("Customer impact is unknown. ")
+		if impactSyn == "none_detected" || impactRealUser == "none_detected" {
+			// Partial coverage (P1.6): one axis observed cleanly, the other did
+			// not cover the window — the covered axis is reported honestly, the
+			// overall no-impact CLAIM is not made.
+			b.WriteString("No impact signature appeared in the covered evidence, but impact-relevant coverage was incomplete for this window, so absence of customer impact is not established. ")
+		} else {
+			b.WriteString("Customer impact is unknown. ")
+		}
 	}
 	// cause status — a confirmed FAULT is never called a confirmed ROOT CAUSE (P1.3)
 	switch analysis {

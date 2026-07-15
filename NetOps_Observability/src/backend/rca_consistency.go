@@ -124,6 +124,20 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 		errf("impact_confirmed_without_real_user_evidence", "states.impact",
 			"overall impact may be confirmed only when real-user impact is confirmed; a synthetic failure proves only its own scope")
 	}
+	// P1.6: a "no impact" CLAIM requires sufficient multi-class coverage — every
+	// impact-relevant axis observed the window and none carried an anomaly. One
+	// covering class is partial coverage; one anomalous class is an indicator.
+	if st.Impact == "none_detected" && (st.ImpactSynthetic != "none_detected" || st.ImpactRealUser != "none_detected") {
+		errf("no_impact_claim_without_sufficient_coverage", "states.impact",
+			"impact none_detected requires every impact axis to have covered the window cleanly (synthetic=%s, real_user=%s)",
+			st.ImpactSynthetic, st.ImpactRealUser)
+	}
+	// P1.5 residue: monitoring/decision copy may claim "has recovered" ONLY on
+	// observed, reconciled recovery evidence — a quiesced window never recovered.
+	if strings.Contains(strings.ToLower(rep.Decision.Reason), "has recovered") && st.Recovery != "explicitly_confirmed" {
+		errf("recovery_claim_without_evidence", "decision.reason",
+			"decision/monitoring copy claims recovery while recovery is %q", st.Recovery)
+	}
 
 	// ---- P1.9 hypothesis taxonomy ------------------------------------------------------
 	for i, h := range rep.Hypotheses {

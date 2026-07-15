@@ -128,10 +128,15 @@ func TestRcaReportActiveCheckOnlyRecovered(t *testing.T) {
 	}
 	// impact telemetry-qualified: no bare "no impact" — synthetic-only evidence
 	// states the synthetic scope and the unconfirmed real-user axis explicitly.
+	// (P1.6: a single covering axis is PARTIAL coverage — the overall no-impact
+	// claim is not made; the covered axis is reported honestly instead.)
 	if !strings.Contains(rep.Summary.Management, "Synthetic path impact is confirmed") &&
-		!strings.Contains(rep.Summary.Management, "within available telemetry coverage") &&
+		!strings.Contains(rep.Summary.Management, "coverage was incomplete") &&
 		!strings.Contains(rep.Summary.Management, "could not be assessed") {
 		t.Fatalf("management impact wording not telemetry-qualified: %q", rep.Summary.Management)
+	}
+	if rep.States.Impact == "none_detected" {
+		t.Fatal("single-axis coverage must not ground a no-impact claim (P1.6)")
 	}
 }
 
