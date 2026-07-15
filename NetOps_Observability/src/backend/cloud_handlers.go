@@ -12,8 +12,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,16 +56,32 @@ func (s *server) cloudResources(r *http.Request) ([]cloud.CloudResource, string,
 }
 
 func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
-	res, tenant, cross, err := s.cloudResources(r)
+	// Server-side filters + keyset pagination (rev #2): the store filters and pages
+	// in SQL, so a scale-out tenant's inventory is never loaded whole into memory.
+	filter, err := parseCloudResourceFilter(r)
 	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	page, err := s.cloud.QueryResources(r.Context(), tenant, cross, filter)
+	if err != nil {
+		if errors.Is(err, errBadCursor) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	// Manual operator overrides are already applied by s.cloudResources (the one
-	// shared inventory read — so Resources / Apps / Coverage / Untagged all agree).
+	res := page.Resources
+	// Manual operator overrides win over inference EVERYWHERE this inventory is read
+	// (2026-07 review): one shared read = one truth, so the page agrees with
+	// Apps / Coverage / Untagged. Applied to the returned page here.
+	s.overlayManualMappings(r, tenant, cross, res)
 	// Inventory-source provenance (live poller vs hand fixture) — drives the
 	// UI's honest data-mode badge. Tenant-scoped like the resources themselves.
 	connectors, err := s.cloud.ListConnectors(r.Context(), tenant, cross)
@@ -97,7 +115,88 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 			consoleURLs[rs.ResourceID] = u
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "connectors": connectors, "count": len(res)})
+	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "connectors": connectors, "count": len(res), "next_cursor": page.NextCursor})
+}
+
+// parseCloudResourceFilter reads the /api/cloud/resources filter + pagination query
+// params, validating every one at the boundary (§3 zero-trust) so a bad value is a
+// clean 400 rather than a silently-empty result. Values are bounded and control-char
+// free; provider/attribution are enum-checked; limit is clamped to cloudPageMax.
+func parseCloudResourceFilter(r *http.Request) (cloudResourceFilter, error) {
+	q := r.URL.Query()
+	f := cloudResourceFilter{Cursor: strings.TrimSpace(q.Get("cursor"))}
+	if len(f.Cursor) > 2048 {
+		return f, errBadCursor
+	}
+	get := func(key string) (string, error) {
+		v := strings.TrimSpace(q.Get(key))
+		if !boundedFilterVal(v) {
+			return "", fmt.Errorf("invalid %s filter", key)
+		}
+		return v, nil
+	}
+	var err error
+	if f.Provider, err = get("provider"); err != nil {
+		return f, err
+	}
+	if f.Provider != "" && !cloud.ValidProvider(cloud.Provider(strings.ToLower(f.Provider))) {
+		return f, errors.New("invalid provider (want aws|azure|gcp)")
+	}
+	if f.Account, err = get("account"); err != nil {
+		return f, err
+	}
+	if f.Region, err = get("region"); err != nil {
+		return f, err
+	}
+	if f.Type, err = get("type"); err != nil {
+		return f, err
+	}
+	if f.Tag, err = get("tag"); err != nil {
+		return f, err
+	}
+	if f.Attribution, err = get("attribution"); err != nil {
+		return f, err
+	}
+	if f.Attribution != "" && !validAttribution(f.Attribution) {
+		return f, errors.New("invalid attribution")
+	}
+	if lim := strings.TrimSpace(q.Get("limit")); lim != "" {
+		n, e := strconv.Atoi(lim)
+		if e != nil || n <= 0 {
+			return f, errors.New("invalid limit")
+		}
+		if n > cloudPageMax {
+			n = cloudPageMax
+		}
+		f.Limit = n
+	}
+	return f, nil
+}
+
+// boundedFilterVal rejects an over-long or control-char-bearing filter value — the
+// values are used as parameterized query args (never interpolated), this is
+// belt-and-braces input hygiene at the boundary.
+func boundedFilterVal(s string) bool {
+	if len(s) > 256 {
+		return false
+	}
+	for _, c := range s {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// validAttribution bounds the attribution filter to the confidence ladder plus the
+// two roll-up buckets.
+func validAttribution(s string) bool {
+	switch s {
+	case "confirmed", "strong", "suspected", "weak", "unknown", "attributed", "unattributed":
+		return true
+	default:
+		return false
+	}
 }
 
 // overlayManualMappings applies confirmed operator overrides (resource_mappings)
