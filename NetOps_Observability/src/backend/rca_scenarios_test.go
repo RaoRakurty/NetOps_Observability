@@ -37,7 +37,10 @@ type rcaScenario struct {
 	actionMustHave  []string // substrings that must appear in some action
 	actionMustNot   []string // substrings that must appear in NO action text/output
 	mgmtMustContain []string
-	custom          func(t *testing.T, rep rcaReport)
+	// survivingID: the terminal surviving correlation id for a merged source
+	// scenario (mirrors the handler's resolveMergeChain result). Empty otherwise.
+	survivingID string
+	custom      func(t *testing.T, rep rcaReport)
 }
 
 func runRcaScenario(t *testing.T, sc rcaScenario) rcaReport {
@@ -45,6 +48,7 @@ func runRcaScenario(t *testing.T, sc rcaScenario) rcaReport {
 	rep := buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: sc.meta, Signals: sc.sigs,
 		Ticket: sc.ticket, Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		SurvivingIncidentID: sc.survivingID,
 	})
 	if sc.incident != "" && rep.States.Incident != sc.incident {
 		t.Fatalf("incident = %q, want %q", rep.States.Incident, sc.incident)
@@ -1065,10 +1069,19 @@ func TestRcaReportPropertyInvariants(t *testing.T) {
 				[]string{"ipsec_tunnel_status"}, nil, nil,
 				[]string{"netops", "isp", "app_team", "cloud_provider"}[rng.Intn(4)], rng.Intn(6) == 0)
 		}
-		meta := testMeta(states[rng.Intn(len(states))], verdict, "sig.ent.cloud.ipsec-tunnel-down", hyp)
+		state := states[rng.Intn(len(states))]
+		meta := testMeta(state, verdict, "sig.ent.cloud.ipsec-tunnel-down", hyp)
+		// a merged source always has a resolved survivor in production (the handler
+		// runs resolveMergeChain before compose) — mirror that here.
+		survivingID := ""
+		if state == "merged" {
+			meta["merged_into"] = "99998888-7777-6666-5555-444433332222"
+			survivingID = "99998888-7777-6666-5555-444433332222"
+		}
 		rep := buildRcaReport(rcaReportInput{
 			ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: sigs,
 			Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+			SurvivingIncidentID: survivingID,
 		})
 		assertRcaInvariants(t, rep)
 	}

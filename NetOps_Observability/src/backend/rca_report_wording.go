@@ -304,7 +304,7 @@ func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[s
 
 // ---- evidence coverage --------------------------------------------------------------
 
-func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map[string]time.Time, hb rcaHypBlob) []rcaEvidenceLane {
+func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map[string]time.Time, hb rcaHypBlob, firstObs, lastObs time.Time) []rcaEvidenceLane {
 	trusted := map[string]bool{}
 	if len(hb.Ranking.Hypotheses) > 0 {
 		v := hb.Ranking.Hypotheses[0].Verdict
@@ -336,20 +336,64 @@ func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map
 		}
 		switch {
 		case an > 0:
-			l.Availability, l.State = "available", "anomalous"
+			l.Availability, l.State, l.Coverage = "available", "anomalous", "full"
 			l.Finding = fmt.Sprintf("%d of %d observations in this window are anomalous and tied to this case.", an, n)
 		case n > 0:
-			l.Availability, l.State = "available", "normal"
-			l.Finding = fmt.Sprintf("%d observations in this window; none tied to this case as anomalous.", n)
+			// P1 coverage quality: "no anomaly" is a claim about the window — it is
+			// only clean when the lane actually SPANNED the incident window. A lane
+			// that stopped before the last anomaly (or started after the first) has
+			// PARTIAL coverage and is inconclusive, never a green Normal.
+			full, missing := rcaLaneWindowCoverage(laneMin[lane], laneMax[lane], firstObs, lastObs)
+			l.Availability = "available"
+			if full {
+				l.State, l.Coverage = "normal", "full"
+				l.Finding = fmt.Sprintf("%d observations spanning the incident window; none tied to this case as anomalous.", n)
+			} else {
+				l.State, l.Coverage = "inconclusive", "partial"
+				l.MissingInterval = missing
+				l.Finding = fmt.Sprintf("%d observations, but coverage did not span the full incident window — no anomaly observed during available coverage. Missing interval: %s. Insufficient to confirm or exclude impact for the full incident.", n, orDefault(missing, "unknown"))
+			}
 		default:
 			// §7: "No data" is coverage ABSENCE. It is never healthy evidence and
 			// we do not claim to know whether the lane is unconfigured or broken.
-			l.Availability, l.State = "no_data", "no_data"
+			l.Availability, l.State, l.Coverage = "no_data", "no_data", "none"
 			l.Finding = "No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health."
 		}
 		out = append(out, l)
 	}
 	return out
+}
+
+// rcaLaneWindowCoverage reports whether a lane's observation span [laneMin,
+// laneMax] covered the incident window [firstObs, lastObs], and (when partial)
+// the missing interval. A small slack (the greater of 2 min or a fifth of the
+// window) absorbs sampling jitter — the same tolerance the impact-axis coverage
+// check uses. When the incident window is a single instant, any observation
+// counts as full coverage (there is no interval to miss).
+func rcaLaneWindowCoverage(laneMin, laneMax, firstObs, lastObs time.Time) (bool, string) {
+	if firstObs.IsZero() || lastObs.IsZero() || laneMin.IsZero() || laneMax.IsZero() {
+		return true, "" // insufficient timing to make a partial-coverage claim
+	}
+	if !lastObs.After(firstObs) {
+		return true, ""
+	}
+	slack := lastObs.Sub(firstObs) / 5
+	if slack < 2*time.Minute {
+		slack = 2 * time.Minute
+	}
+	lateStart := laneMin.After(firstObs.Add(slack))
+	earlyEnd := laneMax.Before(lastObs.Add(-slack))
+	if !lateStart && !earlyEnd {
+		return true, ""
+	}
+	switch {
+	case lateStart && earlyEnd:
+		return false, fmt.Sprintf("%s–%s and %s–%s", fmtUTC(firstObs), fmtUTC(laneMin), fmtUTC(laneMax), fmtUTC(lastObs))
+	case lateStart:
+		return false, fmt.Sprintf("%s–%s", fmtUTC(firstObs), fmtUTC(laneMin))
+	default:
+		return false, fmt.Sprintf("%s–%s", fmtUTC(laneMax), fmtUTC(lastObs))
+	}
 }
 
 // ---- hypotheses view -------------------------------------------------------------------
@@ -446,7 +490,12 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 		hy.ObservationState = "not_observed"
 		if len(hy.Supporting) > 0 {
 			hy.ObservationState = "observed"
-			if strings.ToLower(h.Verdict.Tier) == "confirmed" && !h.Contradicted {
+			// P1 issue-family confirmation gate: a hypothesis cannot be CONFIRMED
+			// while its own required confirmation evidence is still missing (the
+			// "underlay confirmed while missing = observe underlay status" defect).
+			// Confirmation requires a confirmed verdict AND no outstanding required
+			// evidence — otherwise it stays observed/suspected.
+			if strings.ToLower(h.Verdict.Tier) == "confirmed" && !h.Contradicted && len(h.Missing) == 0 {
 				hy.ObservationState = "confirmed"
 			}
 		}
@@ -617,6 +666,47 @@ func buildDecision(analysis, incident, recoveryState, impact, monitoring string,
 	return d
 }
 
+// rcaSeverityIncidentBasis renders the INCIDENT severity's reasoning from policy
+// inputs — environment, current end-to-end impact, corroboration, analysis
+// maturity and recovery/residual state — never the circular "peak of the
+// attached evidence". Generic across issue families.
+func rcaSeverityIncidentBasis(sevIncident string, validation bool, impactSyn, impactRU, analysis string, observers, anomLanes int, ra rcaRecoveryAssessment) string {
+	if validation {
+		return "Validation scenario — production severity not applicable; simulated severity reflects the injected condition only."
+	}
+	var parts []string
+	if impactSyn == "confirmed" {
+		parts = append(parts, "complete synthetic path loss")
+	}
+	switch impactRU {
+	case "confirmed":
+		parts = append(parts, "confirmed real-user impact")
+	case "detected", "indicator_detected":
+		parts = append(parts, "real-traffic impact indicators")
+	}
+	switch analysis {
+	case "confirmed":
+		parts = append(parts, "confirmed fault condition")
+	case "probable":
+		parts = append(parts, "probable fault, not yet independently confirmed")
+	}
+	if anomLanes >= 2 && observers >= 2 {
+		parts = append(parts, fmt.Sprintf("corroborated across %d evidence classes and %d observers", anomLanes, observers))
+	} else {
+		parts = append(parts, "single uncorroborated evidence stream (severity capped)")
+	}
+	if ra.Service.State == "failed_validation" {
+		parts = append(parts, "service recovery failed validation")
+	}
+	if ra.ResidualAfterComponent {
+		parts = append(parts, "residual degradation persisted after component recovery")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "no corroborated impact or fault evidence")
+	}
+	return strings.ToUpper(sevIncident) + " — " + strings.Join(parts, "; ") + "."
+}
+
 // ---- titles -----------------------------------------------------------------------------------
 
 // buildRcaTitle: evidence-based, deterministic, service-name-first (§2).
@@ -775,7 +865,7 @@ func rcaComposeSummary(sents []rcaSummarySentence, capWords int) (string, bool) 
 	return strings.Join(parts, " "), trimmed
 }
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment) (string, bool) {
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment, merge *rcaIncidentMerge) (string, bool) {
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
 		subject = scope.Services[0]
@@ -829,6 +919,12 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	default:
 		addP("The condition is under observation.")
 	}
+	// merged source (P1): the merge and the surviving incident's ownership are
+	// PROTECTED — a merged case's most load-bearing fact is that it no longer owns
+	// its own lifecycle.
+	if merge != nil {
+		addP(merge.Statement)
+	}
 	// impact — ALWAYS telemetry-qualified (§3/§12); axes never conflated (P1.5)
 	switch impact {
 	case "confirmed":
@@ -868,7 +964,12 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	default:
 		add(2, "The cause remains unconfirmed because independent evidence classes did not corroborate the observations.")
 	}
-	// decision + next
+	// decision + next. A merged source's decision IS the merge statement (already
+	// added, protected) — avoid repeating it; state where work continues instead.
+	if merge != nil {
+		add(1, "Restoration, monitoring and ticketing continue on the surviving incident.")
+		return rcaComposeSummary(sents, rcaMgmtWordCap)
+	}
 	add(1, fmt.Sprintf("Decision: %s — %s", decision.Decision, decision.Reason))
 	switch {
 	case monitoring == "active":
@@ -885,11 +986,24 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 
 // ---- NOC quick-read (§4) ----------------------------------------------------------------------------------
 
-func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction, ra rcaRecoveryAssessment) []rcaKV {
-	kv := []rcaKV{
-		{K: "Incident", V: strings.ReplaceAll(incident, "_", " ")},
-		{K: "Recovery", V: strings.ReplaceAll(recovery, "_", " ")},
+func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction, ra rcaRecoveryAssessment, merge *rcaIncidentMerge) []rcaKV {
+	var kv []rcaKV
+	// A merged source's quick-read leads with the merge: source-case lifecycle,
+	// the surviving incident, and where operational ownership now lives (P1).
+	if merge != nil {
+		survivor := "unresolved"
+		if merge.SurvivorResolved {
+			survivor = merge.SurvivingDisplayID
+		}
+		kv = append(kv,
+			rcaKV{K: "Incident state", V: "Merged into " + survivor},
+			rcaKV{K: "Surviving incident", V: survivor},
+			rcaKV{K: "Operational ownership", V: "Surviving incident owns lifecycle, monitoring, ticketing and restoration"},
+		)
+	} else {
+		kv = append(kv, rcaKV{K: "Incident", V: strings.ReplaceAll(incident, "_", " ")})
 	}
+	kv = append(kv, rcaKV{K: "Recovery", V: strings.ReplaceAll(recovery, "_", " ")})
 	// Recovery BY SCOPE (P1.1) — the NOC sees component vs service recovery as
 	// separate rows, never one blended state.
 	if ra.Component.State != "not_applicable" {
@@ -906,12 +1020,20 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 		}
 		kv = append(kv, rcaKV{K: "Service recovery", V: v})
 	}
+	ticketV := strings.ReplaceAll(ticket, "_", " ")
+	if merge != nil {
+		if merge.SurvivorResolved {
+			ticketV = "Managed by surviving incident " + merge.SurvivingDisplayID
+		} else {
+			ticketV = "Transferred — surviving incident unresolved"
+		}
+	}
 	kv = append(kv,
 		rcaKV{K: "Analysis", V: analysis},
 		rcaKV{K: "Impact", V: strings.ReplaceAll(impact, "_", " ")},
 		rcaKV{K: "Synthetic impact", V: strings.ReplaceAll(impactSyn, "_", " ")},
 		rcaKV{K: "Real-user impact", V: strings.ReplaceAll(impactRU, "_", " ")},
-		rcaKV{K: "Ticket", V: strings.ReplaceAll(ticket, "_", " ")},
+		rcaKV{K: "Ticket", V: ticketV},
 	)
 	if times.FirstObserved != "" {
 		kv = append(kv, rcaKV{K: "First observed", V: times.FirstObserved})
@@ -983,9 +1105,12 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 	kv = append(kv, rcaKV{K: "Peak severity", V: sig.PeakSeverity})
 	var present, absent []string
 	for _, l := range coverage {
-		if l.State == "anomalous" || l.State == "normal" {
+		switch {
+		case l.Availability == "available" && l.Coverage == "partial":
+			present = append(present, l.Label+" (partial)")
+		case l.Availability == "available":
 			present = append(present, l.Label)
-		} else {
+		default:
 			absent = append(absent, l.Label)
 		}
 	}
